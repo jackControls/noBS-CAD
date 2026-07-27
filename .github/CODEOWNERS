@@ -1,0 +1,6 @@
+# Soft ownership until a larger maintainer set exists.
+# Replace with real GitHub handles when ready.
+
+*       @jackControls
+/mcp-server/ @jackControls
+/crates/ @jackControls

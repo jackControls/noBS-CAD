@@ -1,0 +1,41 @@
+name: Feature / proposal
+description: Enhancement, agent workflow, or architecture proposal
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: track
+    attributes:
+      label: Track
+      options:
+        - modeling
+        - mcp-agent
+        - process
+        - docs-okf
+        - packaging
+        - viewport-bevy
+        - export-3mf
+        - rename
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is blocked and why
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checklist for a PR to close this issue
+    validations:
+      required: true
