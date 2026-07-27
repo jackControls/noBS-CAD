@@ -35,6 +35,7 @@ Keep `main` checked out in the primary clone; do all feature work in the worktre
 - Keep diffs focused. Prefer small PRs over multi-week branches.
 - Add or extend tests for geometry/MCP regressions when you change behavior.
 - Do not commit secrets, local OCCT paths, or machine-specific config.
+- Do not commit personal Cursor/editor state (see Shared vs local below).
 - Do not claim MCP↔UI co-link, focus-aware tools, or multi-window agent control
   until those issues are done ([#22](https://github.com/jackControls/noBS-CAD/issues/22)).
 
@@ -75,6 +76,26 @@ do not exist yet.
 
 See [docs/branch-protection.md](docs/branch-protection.md) and
 [docs/process.md](docs/process.md).
+
+## Shared vs local agent / editor files
+
+**Commit these** (shared agentic tooling):
+
+- `AGENTS.md` at the **repo root** only
+- `.cursor/rules/*.mdc` (project Cursor rules)
+- `.cursor/skills/**` when adding intentional shared skills
+- `docs/goals.md`, `docs/mcp-harness.md`, `docs/adr/`, process docs
+- `.github/` templates and workflows
+
+**Never commit** (ignored by `.gitignore`):
+
+- Nested `**/AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `.claude/`, `.agents/`, `.codex/`
+- Personal Cursor state under `.cursor/` (e.g. `mcp.json`, plans, chats)
+- `.env*` (except a future `.env.example`), key material (`*.pem`, `credentials.json`, …)
+- Local continuity docs (`docs/HANDOFF.md`, qa captures, probe scripts)
+- Machine OCCT/vcpkg trees (`vcpkg_installed`, `.vcpkg`, `occt-libs`, …)
+
+If you need a personal agent note, keep it outside the repo or in an ignored path.
 
 ## License / borrow
 
