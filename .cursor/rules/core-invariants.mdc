@@ -1,0 +1,14 @@
+---
+description: Core CAD/agent invariants for noBS CAD
+alwaysApply: true
+---
+
+# noBS CAD — always-on agent rules
+
+- Local-first: no cloud backends or account systems.
+- Geometry truth is Rust + OCCT (`crates/*`, `mcp-server`). UI/Three/Bevy are views.
+- Prefer MCP reproduction for modeling bugs; keep one stateful MCP process per part.
+- Preserve stable edge/face/sketch IDs across history ops.
+- Issue-first: search/dedupe issues; branch `issue/<n>-slug` in a worktree; babysit PRs to merge.
+- New engine/export/MCP code: Rust. Do not reimplement B-rep in TypeScript.
+- Do not weaken CI or force-push `main` to land changes.

@@ -1,0 +1,13 @@
+---
+description: MCP server and agent harness conventions
+globs: mcp-server/**/*
+alwaysApply: false
+---
+
+# MCP server rules
+
+- One persistent document/history per process.
+- Tool changes need matching docs in `mcp-server/README.md` and ideally a golden scenario note in `docs/agent-mcp.md`.
+- Return stable IDs usable by later tools; do not reshuffle IDs on no-op recomputes.
+- Prefer additive tools; deprecate carefully with README notes.
+- Native OCCT only for solid truth — no silent mesh approximations for CAD ops.

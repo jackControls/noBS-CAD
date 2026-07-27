@@ -1,0 +1,12 @@
+---
+description: Rust engine crate conventions
+globs: crates/**/*
+alwaysApply: false
+---
+
+# Engine crate rules
+
+- Workspace members: `core`, `sketch`, `solid`, `occt`, `wasm` — keep host-neutral semantics out of UI crates.
+- OCCT FFI and native adapters stay in `crates/occt`.
+- History/replay changes require tests under the owning crate.
+- Avoid breaking `.nbcad` / DTO shapes without a migration note in the PR.
