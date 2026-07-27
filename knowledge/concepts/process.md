@@ -20,3 +20,8 @@ issue (dedupe) → worktree/branch → implement → prove ran → PR → babysi
 
 Canonical detail: `CONTRIBUTING.md`, `docs/process.md`, `docs/branch-protection.md`
 (process docs PR).
+
+## Shared vs local files
+
+Track: root `AGENTS.md`, `.cursor/rules/`, optional `.cursor/skills/`, docs harness/ADRs, `.github/` templates.
+Ignore: personal `.cursor/` state, nested agent files, `.env`, secrets, HANDOFF/qa captures, vcpkg/OCCT local trees. See root `.gitignore`.
