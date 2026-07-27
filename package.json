@@ -19,6 +19,7 @@
     "preview": "vite preview",
     "stage:occt": "node scripts/stage-occt-macos.mjs",
     "bundle:macos": "node scripts/bundle-macos.mjs",
+    "bundle:windows:portable": "pwsh -NoProfile -File scripts/bundle-windows-portable.ps1",
     "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/engine-wasm/pkg --out-name nbcad_wasm",
     "smoke:wasm": "node scripts/smoke-wasm.mjs",
     "audit:icons": "node scripts/audit-icons.mjs",
