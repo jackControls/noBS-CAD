@@ -1,0 +1,8 @@
+# noBS CAD engine workspace. The host-neutral crates own document and
+# history semantics; `crates/occt` is the native B-rep adapter (D1/D8).
+# The Tauri shell in src-tauri/ is intentionally its own workspace so that
+# `cargo test` at the repo root only builds/tests the engine crates.
+
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/sketch", "crates/solid", "crates/occt", "crates/wasm"]

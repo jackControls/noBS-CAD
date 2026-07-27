@@ -1,0 +1,16 @@
+[package]
+name = "nbcad-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "wasm-bindgen facade over the noBS CAD engine crates"
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+nbcad-core = { path = "../core" }
+nbcad-sketch = { path = "../sketch" }
+nbcad-solid = { path = "../solid" }

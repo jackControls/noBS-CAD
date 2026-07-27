@@ -1,0 +1,1368 @@
+/**
+ * Global app state (zustand).
+ *
+ * Holds the application mode, ribbon state, browser-tree UI state, sketch
+ * palette options, the document snapshot, and the live sketch-session
+ * snapshot (entities/constraints mirrored from the engine after every op).
+ * Sketch behavior itself lives in the Rust engine — this store only keeps
+ * its latest DTO plus frontend-only interaction state (selection, hover,
+ * active tool).
+ */
+import { create } from 'zustand';
+import type {
+  DatumPlaneDefinitionDto,
+  DatumPlaneUpdateDto,
+  OriginPlane,
+  Point3Dto,
+  ProfileCatalogItemDto,
+  ProfileRefDto,
+  SketchDto,
+  SketchPointRefDto,
+  SolidSceneDto,
+  SolidUpdateDto,
+} from '../engine/types';
+import { getEngine } from '../engine';
+import {
+  applyThemePreference,
+  persistThemePreference,
+  readThemePreference,
+  resolveTheme,
+  type ResolvedTheme,
+  type ThemePreference,
+} from '../theme';
+import type { DocumentDto, NodeId } from '../types/document';
+
+function bodyBrowserNode(document: DocumentDto | null, bodyId: number | null): NodeId | null {
+  if (!document || bodyId === null) return null;
+  const stack = [...document.browser];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node.kind === 'body' && node.reference_id === bodyId) return node.id;
+    stack.push(...node.children);
+  }
+  return null;
+}
+
+/**
+ * App modes:
+ * - `solid`: default modeling mode.
+ * - `pickPlane`: Create Sketch is armed; origin planes are pickable in the
+ *   viewport (and browser), Esc cancels.
+ * - `sketch`: a sketch session is active in the engine.
+ */
+export type AppMode = 'solid' | 'pickPlane' | 'sketch';
+
+/** Sketch tools (M1a–M1c). `null` = select/edit. */
+export type SketchTool =
+  | 'line'
+  | 'midpointLine'
+  | 'point'
+  | 'rect2pt'
+  | 'rectCenter'
+  | 'circleCenter'
+  | 'circle2pt'
+  | 'arc3pt'
+  | 'arcCenter'
+  | 'dimension'
+  | 'fillet'
+  | 'chamfer'
+  | 'offset'
+  | 'trim'
+  | 'extend'
+  | 'break'
+  | 'mirror'
+  | 'moveCopy'
+  | 'scale'
+  | 'polygon'
+  | 'slot'
+  | 'splineFit'
+  | null;
+
+/**
+ * Modal navigation tools. `select` = normal left-button
+ * behavior (sketch tools/selection). The others capture left-drag:
+ * orbit/pan/zoom apply continuously, zoomWindow frames a dragged rect.
+ */
+export type NavTool = 'select' | 'orbit' | 'pan' | 'zoom' | 'zoomWindow';
+
+/** Sketch palette option keys (labels live in i18n under palette.*). */
+export const PALETTE_OPTION_KEYS = [
+  'linetype',
+  'lookAt',
+  'sketchGrid',
+  'snap',
+  'slice',
+  'profile',
+  'points',
+  'dimensions',
+  'constraints',
+  'projectedGeometries',
+  'constructionGeometries',
+  'threeDSketch',
+] as const;
+
+export type PaletteOptionKey = (typeof PALETTE_OPTION_KEYS)[number];
+
+/** One dynamic-input field (length / angle / width / height / diameter). */
+export interface DynField {
+  key: string;
+  /** Currently shown text (live-computed or user-typed). */
+  value: string;
+  /** User typed a value → locked (the rubber band respects it). */
+  locked: boolean;
+  /** Per-key visibility (angle hides on axis-aligned segments). */
+  visible: boolean;
+}
+
+/** Floating dynamic-input cluster state (next to the cursor). */
+export interface DynInput {
+  active: boolean;
+  /** Viewport-relative px position of the cluster. */
+  x: number;
+  y: number;
+  fields: DynField[];
+  /** Index of the keyboard-focused field, null when none. */
+  focus: number | null;
+  /** The focused field's complete value is selected for replacement. */
+  selectAll: boolean;
+  /** Debounce pending (~200 ms live preview while typing, D10). */
+  pending: boolean;
+}
+
+/** Modal shown for invalid constraint combos and D4.2 conflicts. */
+export interface ConstraintDialog {
+  titleKey: string;
+  message: string;
+  /** Structured D4.2 conflict report when available. */
+  conflicts?: {
+    rejected: { kind: string; entities: Array<{ label: string }> };
+    conflicts_with: Array<{ kind: string; entities: Array<{ label: string }> }>;
+  };
+}
+
+export interface FinishedSketchLineRef {
+  sketchName: string;
+  entityId: number;
+}
+
+export interface FinishedSketchCurveRef {
+  sketchName: string;
+  entityId: number;
+}
+
+export type FinishedSketchPointPick = SketchPointRefDto & {
+  world: Point3Dto;
+};
+
+export type SolidProfilePickOwner = 'extrude' | 'revolve' | 'sweep' | 'loft';
+export type SolidCurvePickOwner =
+  | 'sweep_path'
+  | 'sweep_guide'
+  | 'loft_centerline'
+  | 'loft_guide'
+  | 'rib_centerline';
+
+export interface SolidProfilePicker {
+  owner: SolidProfilePickOwner;
+  catalog: ProfileCatalogItemDto[];
+  selected: ProfileRefDto[];
+  hovered: ProfileRefDto | null;
+  sketchName: string;
+}
+
+export interface SolidCurvePicker {
+  owner: SolidCurvePickOwner;
+  catalog: ProfileCatalogItemDto[];
+  selected: FinishedSketchCurveRef[];
+  hovered: FinishedSketchCurveRef | null;
+  sketchName: string;
+}
+
+export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
+export type BodyFeatureKind =
+  | 'shell'
+  | 'mirror'
+  | 'rectangular_pattern'
+  | 'circular_pattern'
+  | 'combine'
+  | 'split_body';
+
+export type SolidSelectionKind = 'body' | 'face' | 'edge';
+
+/** Default check states for the sketch palette. */
+const DEFAULT_PALETTE: Record<PaletteOptionKey, boolean> = {
+  linetype: false,
+  lookAt: false,
+  sketchGrid: true,
+  snap: true,
+  slice: false,
+  profile: true,
+  points: true,
+  dimensions: true,
+  constraints: true,
+  projectedGeometries: true,
+  constructionGeometries: true,
+  threeDSketch: false,
+};
+
+const INITIAL_THEME_PREFERENCE = readThemePreference();
+const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
+
+interface AppState {
+  mode: AppMode;
+  /** Active ribbon tab id ('solid', 'sketch', ...). */
+  activeTab: string;
+  document: DocumentDto | null;
+  /** Unsaved authoritative model changes (selection/camera are excluded). */
+  dirty: boolean;
+  /** Current project file name, without exposing the native path. */
+  projectFileName: string | null;
+  /** Which engine host the frontend is talking to (D8). */
+  engineKind: 'tauri' | 'wasm' | null;
+  /** Live snapshot of the active sketch session (null outside sketch mode). */
+  activeSketch: SketchDto | null;
+  /** Snapshots of finished sketches (M1d): rendered muted in 3D solid mode. */
+  finishedSketches: SketchDto[];
+  /** Recomputed OCCT tessellation and stable topology table. */
+  solidScene: SolidSceneDto;
+  datumPlanes: DatumPlaneDefinitionDto[];
+  /** Plane currently hovered in pick-plane mode (viewport or browser). */
+  hoveredPlane: OriginPlane | null;
+  activeTool: SketchTool;
+  /** Active modal nav tool (`select` = normal left-drag behavior). */
+  navTool: NavTool;
+  /** Frontend-side selection/hover bookkeeping (engine only stores geometry). */
+  selectedEntity: number | null;
+  /** Multi-select set for constraint application (shift/ctrl-click). */
+  selectedEntities: number[];
+  /** Selected dimension (constraint id) for edit/delete/drag (D9). */
+  selectedDimension: number | null;
+  hoveredEntity: number | null;
+  /** Inline dimension editor state (double-click a dimension). */
+  dimEditor: { dimId: number; initial: string; x: number; y: number } | null;
+  /** Show the live "DOF: N" chip in the viewport (D4.3 optional display). */
+  showDof: boolean;
+  /** Global appearance preference; System is the first-run/default value. */
+  themePreference: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+  settingsOpen: boolean;
+  /** Polygon creation mode (from the ribbon payload). */
+  polygonMode: 'inscribed' | 'circumscribed';
+  /** Slot creation mode selected by the ribbon payload. */
+  slotMode: 'centerToCenter' | 'overall' | 'centerPoint';
+  dynInput: DynInput;
+  constraintDialog: ConstraintDialog | null;
+  /** Incremented to request a camera "Look At" snap (Sketch Palette). */
+  lookAtNonce: number;
+  /** Browser nodes explicitly expanded (default: collapsed). */
+  expanded: Record<NodeId, boolean>;
+  /** Browser nodes explicitly hidden via the eye toggle (default: visible). */
+  hidden: Record<NodeId, boolean>;
+  selectedNode: NodeId | null;
+  selectedBody: number | null;
+  /** Explicit solid-body selections. `selectedBody` remains the active owner. */
+  selectedBodies: number[];
+  selectedFace: number | null;
+  /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
+  selectedFaces: number[];
+  hoveredFace: number | null;
+  selectedFacePoint: Point3Dto | null;
+  /** Face awaiting the sketch-coordinate-origin choice. */
+  sketchPlaneFace: number | null;
+  selectedEdges: number[];
+  hoveredEdge: number | null;
+  /** Modeless region selector shared by sketch-driven solid dialogs. */
+  profilePicker: SolidProfilePicker | null;
+  /** Modeless finished-curve selector shared by path-driven solid dialogs. */
+  curvePicker: SolidCurvePicker | null;
+  /** null = closed; 0 = new Extrude; positive = edit feature id. */
+  extrudeDialogFeature: number | null;
+  /** null = closed; 0 = new Revolve; positive = edit feature id. */
+  revolveDialogFeature: number | null;
+  /** Viewport-picked stable sketch line used by the open Revolve dialog. */
+  revolveAxisSelection: FinishedSketchLineRef | null;
+  revolveAxisHover: FinishedSketchLineRef | null;
+  sweepDialogFeature: number | null;
+  loftDialogFeature: number | null;
+  ribDialogFeature: number | null;
+  filletDialogFeature: number | null;
+  chamferDialogFeature: number | null;
+  holeDialogFeature: number | null;
+  /** Associative sketch points used by the open multi-position Hole dialog. */
+  holePositionSelections: FinishedSketchPointPick[];
+  holePositionHover: FinishedSketchPointPick | null;
+  constructionPlaneDialog: { kind: ConstructionPlaneKind; featureId: number } | null;
+  bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
+  sketchPatternDialog: 'rectangular' | 'circular' | null;
+  solidBusy: boolean;
+  palette: Record<PaletteOptionKey, boolean>;
+
+  setMode: (mode: AppMode) => void;
+  setActiveTab: (tab: string) => void;
+  loadDocument: () => Promise<void>;
+  setDocument: (doc: DocumentDto) => void;
+  setActiveSketch: (sketch: SketchDto | null) => void;
+  setFinishedSketches: (sketches: SketchDto[]) => void;
+  setSolidScene: (scene: SolidSceneDto) => void;
+  applySolidUpdate: (update: SolidUpdateDto) => void;
+  applyDatumPlaneUpdate: (update: DatumPlaneUpdateDto) => void;
+  loadProjectState: (
+    update: SolidUpdateDto,
+    finishedSketches: SketchDto[],
+    datumPlanes: DatumPlaneDefinitionDto[],
+    fileName: string | null,
+  ) => void;
+  markClean: (fileName?: string | null) => void;
+  markDirty: () => void;
+  setHoveredPlane: (plane: OriginPlane | null) => void;
+  setActiveTool: (tool: SketchTool) => void;
+  setNavTool: (tool: NavTool) => void;
+  setSelectedEntity: (id: number | null) => void;
+  setSelectedEntities: (ids: number[]) => void;
+  setSelectedDimension: (id: number | null) => void;
+  setDimEditor: (editor: { dimId: number; initial: string; x: number; y: number } | null) => void;
+  setHoveredEntity: (id: number | null) => void;
+  setShowDof: (show: boolean) => void;
+  setThemePreference: (preference: ThemePreference) => void;
+  syncResolvedTheme: () => void;
+  setSettingsOpen: (open: boolean) => void;
+  setPolygonMode: (mode: 'inscribed' | 'circumscribed') => void;
+  setSlotMode: (mode: 'centerToCenter' | 'overall' | 'centerPoint') => void;
+  showDynInput: (fieldKeys: string[], x: number, y: number) => void;
+  /** Live-update unlocked fields + cluster position (per pointer move). */
+  updateDynInput: (values: Record<string, string>, visible: Record<string, boolean>, x: number, y: number) => void;
+  setDynField: (key: string, value: string, locked: boolean) => void;
+  setDynFocus: (index: number | null, selectAll?: boolean) => void;
+  setDynPending: (pending: boolean) => void;
+  hideDynInput: () => void;
+  clearDynLocks: () => void;
+  setConstraintDialog: (dialog: ConstraintDialog | null) => void;
+  requestLookAt: () => void;
+  toggleExpanded: (id: NodeId) => void;
+  toggleHidden: (id: NodeId) => void;
+  selectNode: (id: NodeId | null) => void;
+  setSelectedBody: (id: number | null) => void;
+  /** Replace an ordered body selection; index 0 is the primary/target role. */
+  replaceSelectedBodies: (ids: number[]) => void;
+  /** Replace the selected faces for one owning body. */
+  replaceSelectedFaces: (bodyId: number, ids: number[]) => void;
+  setSelectedFace: (id: number | null) => void;
+  setHoveredFace: (id: number | null) => void;
+  setSelectedFacePoint: (point: Point3Dto | null) => void;
+  openSketchPlaneOrigin: (faceId: number) => void;
+  closeSketchPlaneOrigin: () => void;
+  setSelectedEdges: (ids: number[]) => void;
+  /** Replace or modifier-toggle one solid topology feature atomically. */
+  selectSolidFeature: (
+    kind: SolidSelectionKind,
+    bodyId: number,
+    featureId: number,
+    point?: Point3Dto | null,
+    additive?: boolean,
+  ) => void;
+  clearSolidSelection: () => void;
+  setHoveredEdge: (id: number | null) => void;
+  configureProfilePicker: (
+    owner: SolidProfilePickOwner,
+    catalog: ProfileCatalogItemDto[],
+    selected: ProfileRefDto[],
+    sketchName: string,
+  ) => void;
+  replaceProfilePicks: (
+    owner: SolidProfilePickOwner,
+    selected: ProfileRefDto[],
+    sketchName?: string,
+  ) => void;
+  toggleProfilePick: (profile: ProfileRefDto) => void;
+  setHoveredProfilePick: (profile: ProfileRefDto | null) => void;
+  clearProfilePicker: (owner?: SolidProfilePickOwner) => void;
+  configureCurvePicker: (
+    owner: SolidCurvePickOwner,
+    catalog: ProfileCatalogItemDto[],
+    selected: FinishedSketchCurveRef[],
+    sketchName: string,
+  ) => void;
+  toggleCurvePick: (curve: FinishedSketchCurveRef) => void;
+  replaceCurvePicks: (
+    owner: SolidCurvePickOwner,
+    selected: FinishedSketchCurveRef[],
+    sketchName?: string,
+  ) => void;
+  setHoveredCurvePick: (curve: FinishedSketchCurveRef | null) => void;
+  clearCurvePicker: (owner?: SolidCurvePickOwner) => void;
+  openExtrudeDialog: (featureId?: number) => void;
+  closeExtrudeDialog: () => void;
+  openRevolveDialog: (featureId?: number) => void;
+  closeRevolveDialog: () => void;
+  setRevolveAxisSelection: (selection: FinishedSketchLineRef | null) => void;
+  setRevolveAxisHover: (selection: FinishedSketchLineRef | null) => void;
+  openSweepDialog: (featureId?: number) => void;
+  closeSweepDialog: () => void;
+  openLoftDialog: (featureId?: number) => void;
+  closeLoftDialog: () => void;
+  openRibDialog: (featureId?: number) => void;
+  closeRibDialog: () => void;
+  openFilletDialog: (featureId?: number) => void;
+  closeFilletDialog: () => void;
+  openChamferDialog: (featureId?: number) => void;
+  closeChamferDialog: () => void;
+  openHoleDialog: (featureId?: number) => void;
+  closeHoleDialog: () => void;
+  setHolePositionSelections: (selections: FinishedSketchPointPick[]) => void;
+  toggleHolePositionSelection: (selection: FinishedSketchPointPick) => void;
+  setHolePositionHover: (selection: FinishedSketchPointPick | null) => void;
+  openConstructionPlaneDialog: (kind: ConstructionPlaneKind, featureId?: number) => void;
+  closeConstructionPlaneDialog: () => void;
+  openBodyFeatureDialog: (kind: BodyFeatureKind, featureId?: number) => void;
+  closeBodyFeatureDialog: () => void;
+  openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
+  closeSketchPatternDialog: () => void;
+  setSolidBusy: (busy: boolean) => void;
+  setPaletteOption: (key: PaletteOptionKey, value: boolean) => void;
+}
+
+/** Clear document-owned interaction state while preserving app preferences. */
+function resetDocumentUiState(): Partial<AppState> {
+  return {
+    mode: 'solid',
+    activeTab: 'solid',
+    activeSketch: null,
+    finishedSketches: [],
+    solidScene: { bodies: [], errors: [] },
+    datumPlanes: [],
+    hoveredPlane: null,
+    activeTool: null,
+    navTool: 'select',
+    selectedEntity: null,
+    selectedEntities: [],
+    selectedDimension: null,
+    dimEditor: null,
+    hoveredEntity: null,
+    dynInput: {
+      active: false,
+      x: 0,
+      y: 0,
+      fields: [],
+      focus: null,
+      selectAll: false,
+      pending: false,
+    },
+    constraintDialog: null,
+    lookAtNonce: 0,
+    expanded: {},
+    hidden: {},
+    selectedNode: null,
+    selectedBody: null,
+    selectedBodies: [],
+    selectedFace: null,
+    selectedFaces: [],
+    hoveredFace: null,
+    selectedFacePoint: null,
+    sketchPlaneFace: null,
+    selectedEdges: [],
+    hoveredEdge: null,
+    profilePicker: null,
+    curvePicker: null,
+    extrudeDialogFeature: null,
+    revolveDialogFeature: null,
+    revolveAxisSelection: null,
+    revolveAxisHover: null,
+    sweepDialogFeature: null,
+    loftDialogFeature: null,
+    ribDialogFeature: null,
+    filletDialogFeature: null,
+    chamferDialogFeature: null,
+    holeDialogFeature: null,
+    holePositionSelections: [],
+    holePositionHover: null,
+    constructionPlaneDialog: null,
+    bodyFeatureDialog: null,
+    sketchPatternDialog: null,
+    solidBusy: false,
+  };
+}
+
+export const useAppStore = create<AppState>()((set) => ({
+  mode: 'solid',
+  activeTab: 'solid',
+  document: null,
+  dirty: false,
+  projectFileName: null,
+  engineKind: null,
+  activeSketch: null,
+  finishedSketches: [],
+  solidScene: { bodies: [], errors: [] },
+  datumPlanes: [],
+  hoveredPlane: null,
+  activeTool: null,
+  navTool: 'select',
+  selectedEntity: null,
+  selectedEntities: [],
+  selectedDimension: null,
+  dimEditor: null,
+  hoveredEntity: null,
+  showDof: false,
+  themePreference: INITIAL_THEME_PREFERENCE,
+  resolvedTheme: INITIAL_RESOLVED_THEME,
+  settingsOpen: false,
+  polygonMode: 'circumscribed',
+  slotMode: 'centerToCenter',
+  lookAtNonce: 0,
+  expanded: {},
+  hidden: {},
+  selectedNode: null,
+  selectedBody: null,
+  selectedBodies: [],
+  selectedFace: null,
+  selectedFaces: [],
+  hoveredFace: null,
+  selectedFacePoint: null,
+  sketchPlaneFace: null,
+  selectedEdges: [],
+  hoveredEdge: null,
+  profilePicker: null,
+  curvePicker: null,
+  extrudeDialogFeature: null,
+  revolveDialogFeature: null,
+  revolveAxisSelection: null,
+  revolveAxisHover: null,
+  sweepDialogFeature: null,
+  loftDialogFeature: null,
+  ribDialogFeature: null,
+  filletDialogFeature: null,
+  chamferDialogFeature: null,
+  holeDialogFeature: null,
+  holePositionSelections: [],
+  holePositionHover: null,
+  constructionPlaneDialog: null,
+  bodyFeatureDialog: null,
+  sketchPatternDialog: null,
+  solidBusy: false,
+  palette: { ...DEFAULT_PALETTE },
+
+  setMode: (mode) =>
+    set((s) => ({
+      mode,
+      // In sketch mode the tab strip collapses to a single SKETCH tab.
+      activeTab: mode === 'sketch' ? 'sketch' : s.activeTab === 'sketch' ? 'solid' : s.activeTab,
+    })),
+
+  setActiveTab: (tab) => set({ activeTab: tab }),
+
+  loadDocument: async () => {
+    const engine = await getEngine();
+    const doc = await engine.getDocument();
+    const [finishedSketches, solidScene, datumPlanes] = await Promise.all([
+      engine.finishedSketches(),
+      engine.solidScene(),
+      engine.datumPlaneDefinitions(),
+    ]);
+    set({
+      document: doc,
+      engineKind: engine.kind,
+      finishedSketches,
+      solidScene,
+      datumPlanes,
+      dirty: false,
+    });
+  },
+
+  setDocument: (doc) => set({ document: doc, dirty: true }),
+
+  setFinishedSketches: (sketches) => set({ finishedSketches: sketches }),
+
+  setSolidScene: (solidScene) => set({ solidScene }),
+
+  applySolidUpdate: (update) =>
+    set((state) => ({
+      document: update.document,
+      solidScene: update.scene,
+      dirty: true,
+      selectedBody:
+        state.selectedBody !== null && update.scene.bodies.some((body) => body.id === state.selectedBody)
+          ? state.selectedBody
+          : null,
+      selectedBodies: state.selectedBodies.filter((bodyId) =>
+        update.scene.bodies.some((body) => body.id === bodyId),
+      ),
+      selectedFace:
+        state.selectedFace !== null &&
+        update.scene.bodies.some((body) => body.faces.some((face) => face.id === state.selectedFace))
+          ? state.selectedFace
+          : null,
+      selectedFaces: state.selectedFaces.filter((faceId) =>
+        update.scene.bodies.some((body) => body.faces.some((face) => face.id === faceId)),
+      ),
+      hoveredFace: null,
+      selectedFacePoint: null,
+      selectedEdges: state.selectedEdges.filter((edgeId) =>
+        update.scene.bodies.some((body) => body.edges.some((edge) => edge.id === edgeId)),
+      ),
+      hoveredEdge: null,
+    })),
+
+  applyDatumPlaneUpdate: (update) =>
+    set({
+      document: update.document,
+      datumPlanes: update.planes,
+      dirty: true,
+    }),
+
+  loadProjectState: (update, finishedSketches, datumPlanes, fileName) =>
+    set({
+      ...resetDocumentUiState(),
+      document: update.document,
+      finishedSketches,
+      solidScene: update.scene,
+      datumPlanes,
+      dirty: false,
+      projectFileName: fileName,
+    }),
+
+  markClean: (fileName) =>
+    set((state) => ({
+      dirty: false,
+      projectFileName: fileName === undefined ? state.projectFileName : fileName,
+    })),
+
+  markDirty: () => set({ dirty: true }),
+
+  setActiveSketch: (sketch) =>
+    set((s) => ({
+      activeSketch: sketch,
+      dirty: true,
+      // Drop selection/hover of entities that no longer exist.
+      selectedEntity:
+        s.selectedEntity !== null && sketch?.entities.some((e) => e.id === s.selectedEntity)
+          ? s.selectedEntity
+          : null,
+      selectedEntities: s.selectedEntities.filter((id) =>
+        sketch?.entities.some((e) => e.id === id),
+      ),
+      selectedDimension:
+        s.selectedDimension !== null &&
+        sketch?.dimensions.some((d) => d.constraint_id === s.selectedDimension)
+          ? s.selectedDimension
+          : null,
+      hoveredEntity:
+        s.hoveredEntity !== null && sketch?.entities.some((e) => e.id === s.hoveredEntity)
+          ? s.hoveredEntity
+          : null,
+    })),
+
+  setHoveredPlane: (plane) =>
+    set((s) => (s.hoveredPlane === plane ? s : { hoveredPlane: plane })),
+
+  // Inline dimension editing is transient UI owned by the currently active
+  // sketch interaction. Switching tools (including Escape -> Select) must
+  // always dismiss it; otherwise the editor can outlive the Dimension tool.
+  setActiveTool: (tool) =>
+    set({ activeTool: tool, dimEditor: null, sketchPatternDialog: null }),
+
+  setNavTool: (tool) => set({ navTool: tool }),
+
+  setSelectedEntity: (id) =>
+    set((s) => (s.selectedEntity === id ? s : { selectedEntity: id })),
+
+  setSelectedEntities: (ids) => set({ selectedEntities: ids }),
+
+  setSelectedDimension: (id) =>
+    set((s) => (s.selectedDimension === id ? s : { selectedDimension: id })),
+
+  setDimEditor: (editor) => set({ dimEditor: editor }),
+
+  setHoveredEntity: (id) =>
+    set((s) => (s.hoveredEntity === id ? s : { hoveredEntity: id })),
+
+  setShowDof: (show) => set({ showDof: show }),
+
+  setThemePreference: (themePreference) => {
+    persistThemePreference(themePreference);
+    const resolvedTheme = applyThemePreference(themePreference);
+    set({ themePreference, resolvedTheme });
+  },
+
+  syncResolvedTheme: () =>
+    set((state) => {
+      const resolvedTheme = applyThemePreference(state.themePreference);
+      return resolvedTheme === state.resolvedTheme ? state : { resolvedTheme };
+    }),
+
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+
+  setPolygonMode: (mode) => set({ polygonMode: mode }),
+
+  setSlotMode: (mode) => set({ slotMode: mode }),
+
+  dynInput: {
+    active: false,
+    x: 0,
+    y: 0,
+    fields: [],
+    focus: null,
+    selectAll: false,
+    pending: false,
+  },
+  constraintDialog: null,
+
+  showDynInput: (fieldKeys, x, y) =>
+    set({
+      dynInput: {
+        active: true,
+        x,
+        y,
+        focus: null,
+        selectAll: false,
+        pending: false,
+        fields: fieldKeys.map((key) => ({ key, value: '', locked: false, visible: true })),
+      },
+    }),
+
+  updateDynInput: (values, visible, x, y) =>
+    set((s) => {
+      if (!s.dynInput.active) return s;
+      return {
+        dynInput: {
+          ...s.dynInput,
+          x,
+          y,
+          fields: s.dynInput.fields.map((f) => ({
+            ...f,
+            value: f.locked ? f.value : values[f.key] ?? f.value,
+            visible: visible[f.key] ?? true,
+          })),
+        },
+      };
+    }),
+
+  setDynField: (key, value, locked) =>
+    set((s) => ({
+      dynInput: {
+        ...s.dynInput,
+        fields: s.dynInput.fields.map((f) => (f.key === key ? { ...f, value, locked } : f)),
+      },
+    })),
+
+  setDynFocus: (index, selectAll = index !== null) =>
+    set((s) => ({ dynInput: { ...s.dynInput, focus: index, selectAll } })),
+
+  setDynPending: (pending) =>
+    set((s) => ({ dynInput: { ...s.dynInput, pending } })),
+
+  hideDynInput: () =>
+    set((s) => ({
+      dynInput: { ...s.dynInput, active: false, focus: null, selectAll: false },
+    })),
+
+  clearDynLocks: () =>
+    set((s) => ({
+      dynInput: {
+        ...s.dynInput,
+        focus: null,
+        selectAll: false,
+        fields: s.dynInput.fields.map((f) => ({ ...f, locked: false })),
+      },
+    })),
+
+  setConstraintDialog: (dialog) => set({ constraintDialog: dialog }),
+
+  requestLookAt: () => set((s) => ({ lookAtNonce: s.lookAtNonce + 1 })),
+
+  toggleExpanded: (id) =>
+    set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
+
+  toggleHidden: (id) =>
+    set((s) => ({ hidden: { ...s.hidden, [id]: !s.hidden[id] } })),
+
+  selectNode: (id) => set({ selectedNode: id }),
+
+  setSelectedBody: (id) =>
+    set((state) => ({
+      selectedBody: id,
+      selectedBodies: id === null ? [] : [id],
+      selectedFace: null,
+      selectedFaces: [],
+      selectedFacePoint: null,
+      selectedEdges: [],
+      selectedNode:
+        id === null
+          ? state.selectedNode !== null &&
+              bodyBrowserNode(
+                state.document,
+                state.selectedBody,
+              ) === state.selectedNode
+            ? null
+            : state.selectedNode
+          : bodyBrowserNode(state.document, id),
+    })),
+
+  replaceSelectedBodies: (ids) =>
+    set((state) => {
+      const selectedBodies = [...new Set(ids)].filter((id) =>
+        state.solidScene.bodies.some((body) => body.id === id),
+      );
+      const selectedBody = selectedBodies[selectedBodies.length - 1] ?? null;
+      return {
+        selectedBody,
+        selectedBodies,
+        selectedFace: null,
+        selectedFaces: [],
+        selectedFacePoint: null,
+        selectedEdges: [],
+        selectedNode: bodyBrowserNode(state.document, selectedBody),
+      };
+    }),
+
+  replaceSelectedFaces: (bodyId, ids) =>
+    set((state) => {
+      const body = state.solidScene.bodies.find(
+        (candidate) => candidate.id === bodyId,
+      );
+      const selectedFaces = [
+        ...new Set(
+          ids.filter((id) => body?.faces.some((face) => face.id === id)),
+        ),
+      ];
+      return {
+        selectedBody: body ? bodyId : null,
+        selectedBodies: body ? [bodyId] : [],
+        selectedFace: selectedFaces[selectedFaces.length - 1] ?? null,
+        selectedFaces,
+        selectedFacePoint: null,
+        selectedEdges: [],
+        selectedNode: bodyBrowserNode(
+          state.document,
+          body ? bodyId : null,
+        ),
+      };
+    }),
+
+  setSelectedFace: (id) =>
+    set((state) => ({
+      selectedFace: id,
+      selectedBodies: id === null ? state.selectedBodies : [],
+      selectedFaces: id === null ? [] : [id],
+      selectedEdges: id === null ? state.selectedEdges : [],
+      selectedFacePoint:
+        id !== null && id === state.selectedFace ? state.selectedFacePoint : null,
+    })),
+
+  setHoveredFace: (id) => set((state) => (state.hoveredFace === id ? state : { hoveredFace: id })),
+
+  setSelectedFacePoint: (point) => set({ selectedFacePoint: point }),
+
+  openSketchPlaneOrigin: (faceId) => set({ sketchPlaneFace: faceId }),
+
+  closeSketchPlaneOrigin: () => set({ sketchPlaneFace: null }),
+
+  setSelectedEdges: (ids) =>
+    set((state) => {
+      const selectedEdges = [...new Set(ids)];
+      return {
+        selectedEdges,
+        selectedBodies: selectedEdges.length > 0 ? [] : state.selectedBodies,
+        selectedFaces: selectedEdges.length > 0 ? [] : state.selectedFaces,
+        selectedFace: selectedEdges.length > 0 ? null : state.selectedFace,
+        selectedFacePoint: selectedEdges.length > 0 ? null : state.selectedFacePoint,
+      };
+    }),
+
+  selectSolidFeature: (
+    kind,
+    bodyId,
+    featureId,
+    point = null,
+    additive = false,
+  ) =>
+    set((state) => {
+      const selectedBodies = additive ? [...state.selectedBodies] : [];
+      const selectedFaces = additive ? [...state.selectedFaces] : [];
+      const selectedEdges = additive ? [...state.selectedEdges] : [];
+      const target =
+        kind === 'body'
+          ? selectedBodies
+          : kind === 'face'
+            ? selectedFaces
+            : selectedEdges;
+      const existingIndex = target.indexOf(featureId);
+      const removing = additive && existingIndex >= 0;
+      if (removing) target.splice(existingIndex, 1);
+      else target.push(featureId);
+
+      let selectedBody: number | null = null;
+      let selectedFace: number | null = null;
+      let selectedFacePoint: Point3Dto | null = null;
+
+      if (!removing) {
+        selectedBody = bodyId;
+        if (kind === 'face') {
+          selectedFace = featureId;
+          selectedFacePoint = point;
+        }
+      } else if (selectedFaces.length > 0) {
+        selectedFace = selectedFaces[selectedFaces.length - 1];
+        selectedBody =
+          state.solidScene.bodies.find((body) =>
+            body.faces.some((face) => face.id === selectedFace),
+          )?.id ?? null;
+        if (selectedFace === state.selectedFace) {
+          selectedFacePoint = state.selectedFacePoint;
+        }
+      } else if (selectedEdges.length > 0) {
+        const edgeId = selectedEdges[selectedEdges.length - 1];
+        selectedBody =
+          state.solidScene.bodies.find((body) =>
+            body.edges.some((edge) => edge.id === edgeId),
+          )?.id ?? null;
+      } else if (selectedBodies.length > 0) {
+        selectedBody = selectedBodies[selectedBodies.length - 1];
+      }
+
+      return {
+        selectedBody,
+        selectedBodies,
+        selectedFace,
+        selectedFaces,
+        selectedFacePoint,
+        selectedEdges,
+        selectedNode: bodyBrowserNode(state.document, selectedBody),
+      };
+    }),
+
+  clearSolidSelection: () =>
+    set({
+      selectedNode: null,
+      selectedBody: null,
+      selectedBodies: [],
+      selectedFace: null,
+      selectedFaces: [],
+      selectedFacePoint: null,
+      selectedEdges: [],
+    }),
+
+  setHoveredEdge: (id) => set((state) => (state.hoveredEdge === id ? state : { hoveredEdge: id })),
+
+  configureProfilePicker: (owner, catalog, selected, sketchName) =>
+    set({
+      profilePicker: {
+        owner,
+        catalog,
+        selected,
+        hovered: null,
+        sketchName,
+      },
+    }),
+
+  replaceProfilePicks: (owner, selected, sketchName) =>
+    set((state) =>
+      state.profilePicker?.owner === owner
+        ? {
+            profilePicker: {
+              ...state.profilePicker,
+              selected,
+              sketchName: sketchName ?? state.profilePicker.sketchName,
+            },
+          }
+        : state,
+    ),
+
+  toggleProfilePick: (profile) =>
+    set((state) => {
+      const picker = state.profilePicker;
+      if (!picker) return state;
+      const same = (candidate: ProfileRefDto) =>
+        candidate.sketch_name === profile.sketch_name &&
+        candidate.profile_index === profile.profile_index;
+      let selected: ProfileRefDto[];
+      if (picker.owner === 'sweep') {
+        selected = [profile];
+      } else if (picker.owner === 'loft') {
+        selected = picker.selected.some(same)
+          ? picker.selected.filter((candidate) => !same(candidate))
+          : [...picker.selected, profile];
+      } else {
+        const sameSketch = picker.selected.filter(
+          (candidate) => candidate.sketch_name === profile.sketch_name,
+        );
+        selected = sameSketch.some(same)
+          ? sameSketch.filter((candidate) => !same(candidate))
+          : [...sameSketch, profile];
+      }
+      return {
+        profilePicker: {
+          ...picker,
+          selected,
+          sketchName: profile.sketch_name,
+        },
+      };
+    }),
+
+  setHoveredProfilePick: (profile) =>
+    set((state) => {
+      const current = state.profilePicker?.hovered;
+      if (
+        !state.profilePicker ||
+        (current?.sketch_name === profile?.sketch_name &&
+          current?.profile_index === profile?.profile_index)
+      ) {
+        return state;
+      }
+      return { profilePicker: { ...state.profilePicker, hovered: profile } };
+    }),
+
+  clearProfilePicker: (owner) =>
+    set((state) =>
+      !state.profilePicker || (owner !== undefined && state.profilePicker.owner !== owner)
+        ? state
+        : { profilePicker: null },
+    ),
+
+  configureCurvePicker: (owner, catalog, selected, sketchName) =>
+    set({
+      curvePicker: {
+        owner,
+        catalog,
+        selected,
+        hovered: null,
+        sketchName,
+      },
+    }),
+
+  toggleCurvePick: (curve) =>
+    set((state) => {
+      const picker = state.curvePicker;
+      if (!picker) return state;
+      const sameSketch = picker.sketchName === curve.sketchName;
+      const current = sameSketch ? picker.selected : [];
+      const selected = current.some(
+        (candidate) =>
+          candidate.sketchName === curve.sketchName &&
+          candidate.entityId === curve.entityId,
+      )
+        ? current.filter(
+            (candidate) =>
+              candidate.sketchName !== curve.sketchName ||
+              candidate.entityId !== curve.entityId,
+          )
+        : [...current, curve];
+      return {
+        curvePicker: {
+          ...picker,
+          selected,
+          sketchName: curve.sketchName,
+        },
+      };
+    }),
+
+  replaceCurvePicks: (owner, selected, sketchName) =>
+    set((state) =>
+      state.curvePicker?.owner !== owner
+        ? state
+        : {
+            curvePicker: {
+              ...state.curvePicker,
+              selected,
+              sketchName:
+                sketchName ??
+                selected[selected.length - 1]?.sketchName ??
+                state.curvePicker.sketchName,
+            },
+          },
+    ),
+
+  setHoveredCurvePick: (curve) =>
+    set((state) => {
+      const current = state.curvePicker?.hovered;
+      if (
+        !state.curvePicker ||
+        (current?.sketchName === curve?.sketchName &&
+          current?.entityId === curve?.entityId)
+      ) {
+        return state;
+      }
+      return { curvePicker: { ...state.curvePicker, hovered: curve } };
+    }),
+
+  clearCurvePicker: (owner) =>
+    set((state) =>
+      !state.curvePicker || (owner !== undefined && state.curvePicker.owner !== owner)
+        ? state
+        : { curvePicker: null },
+    ),
+
+  openExtrudeDialog: (featureId = 0) =>
+    set((state) =>
+      state.extrudeDialogFeature === featureId
+        ? state
+        : {
+            extrudeDialogFeature: featureId,
+            revolveDialogFeature: null,
+            revolveAxisSelection: null,
+            revolveAxisHover: null,
+            sweepDialogFeature: null,
+            loftDialogFeature: null,
+            ribDialogFeature: null,
+            filletDialogFeature: null,
+            chamferDialogFeature: null,
+            holeDialogFeature: null,
+            profilePicker: null,
+            curvePicker: null,
+          },
+    ),
+
+  closeExtrudeDialog: () =>
+    set((state) => ({
+      extrudeDialogFeature: null,
+      profilePicker: state.profilePicker?.owner === 'extrude' ? null : state.profilePicker,
+    })),
+
+  openRevolveDialog: (featureId = 0) =>
+    set({
+      revolveDialogFeature: featureId,
+      revolveAxisSelection: null,
+      revolveAxisHover: null,
+      extrudeDialogFeature: null,
+      sweepDialogFeature: null,
+      loftDialogFeature: null,
+      ribDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeRevolveDialog: () =>
+    set({
+      revolveDialogFeature: null,
+      revolveAxisSelection: null,
+      revolveAxisHover: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  setRevolveAxisSelection: (selection) => set({ revolveAxisSelection: selection }),
+
+  setRevolveAxisHover: (selection) =>
+    set((state) => {
+      const current = state.revolveAxisHover;
+      if (
+        current?.sketchName === selection?.sketchName &&
+        current?.entityId === selection?.entityId
+      ) {
+        return state;
+      }
+      return { revolveAxisHover: selection };
+    }),
+
+  openSweepDialog: (featureId = 0) =>
+    set({
+      sweepDialogFeature: featureId,
+      extrudeDialogFeature: null,
+      revolveDialogFeature: null,
+      revolveAxisSelection: null,
+      revolveAxisHover: null,
+      loftDialogFeature: null,
+      ribDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeSweepDialog: () =>
+    set((state) => ({
+      sweepDialogFeature: null,
+      profilePicker: state.profilePicker?.owner === 'sweep' ? null : state.profilePicker,
+      curvePicker: null,
+    })),
+
+  openLoftDialog: (featureId = 0) =>
+    set({
+      loftDialogFeature: featureId,
+      extrudeDialogFeature: null,
+      revolveDialogFeature: null,
+      revolveAxisSelection: null,
+      revolveAxisHover: null,
+      sweepDialogFeature: null,
+      ribDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeLoftDialog: () =>
+    set((state) => ({
+      loftDialogFeature: null,
+      profilePicker: state.profilePicker?.owner === 'loft' ? null : state.profilePicker,
+      curvePicker: null,
+    })),
+
+  openRibDialog: (featureId = 0) =>
+    set({
+      ribDialogFeature: featureId,
+      extrudeDialogFeature: null,
+      revolveDialogFeature: null,
+      revolveAxisSelection: null,
+      revolveAxisHover: null,
+      sweepDialogFeature: null,
+      loftDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeRibDialog: () => set({ ribDialogFeature: null, curvePicker: null }),
+
+  openFilletDialog: (featureId = 0) => set({
+    filletDialogFeature: featureId,
+    chamferDialogFeature: null,
+    holeDialogFeature: null,
+    extrudeDialogFeature: null,
+    revolveDialogFeature: null,
+    sweepDialogFeature: null,
+    loftDialogFeature: null,
+    ribDialogFeature: null,
+    profilePicker: null,
+    curvePicker: null,
+    hoveredFace: null,
+    hoveredEdge: null,
+  }),
+
+  closeFilletDialog: () => set({ filletDialogFeature: null, hoveredEdge: null }),
+
+  openChamferDialog: (featureId = 0) => set({
+    chamferDialogFeature: featureId,
+    filletDialogFeature: null,
+    holeDialogFeature: null,
+    extrudeDialogFeature: null,
+    revolveDialogFeature: null,
+    sweepDialogFeature: null,
+    loftDialogFeature: null,
+    ribDialogFeature: null,
+    profilePicker: null,
+    curvePicker: null,
+    hoveredFace: null,
+    hoveredEdge: null,
+  }),
+
+  closeChamferDialog: () => set({ chamferDialogFeature: null, hoveredEdge: null }),
+
+  openHoleDialog: (featureId = 0) => set({
+    holeDialogFeature: featureId,
+    holePositionSelections: [],
+    holePositionHover: null,
+    filletDialogFeature: null,
+    chamferDialogFeature: null,
+    extrudeDialogFeature: null,
+    revolveDialogFeature: null,
+    sweepDialogFeature: null,
+    loftDialogFeature: null,
+    ribDialogFeature: null,
+    profilePicker: null,
+    curvePicker: null,
+  }),
+
+  closeHoleDialog: () => set({
+    holeDialogFeature: null,
+    holePositionSelections: [],
+    holePositionHover: null,
+    hoveredFace: null,
+  }),
+
+  setHolePositionSelections: (selections) => set({ holePositionSelections: selections }),
+
+  toggleHolePositionSelection: (selection) =>
+    set((state) => {
+      const same = (candidate: FinishedSketchPointPick) =>
+        candidate.sketch_name === selection.sketch_name &&
+        candidate.entity_id === selection.entity_id &&
+        candidate.kind === selection.kind &&
+        (candidate.kind === 'fit_point' ? candidate.index : null) ===
+          (selection.kind === 'fit_point' ? selection.index : null);
+      return {
+        holePositionSelections: state.holePositionSelections.some(same)
+          ? state.holePositionSelections.filter((candidate) => !same(candidate))
+          : [...state.holePositionSelections, selection],
+      };
+    }),
+
+  setHolePositionHover: (selection) =>
+    set((state) => {
+      const current = state.holePositionHover;
+      if (
+        current?.sketch_name === selection?.sketch_name &&
+        current?.entity_id === selection?.entity_id &&
+        current?.kind === selection?.kind &&
+        (current?.kind === 'fit_point' ? current.index : null) ===
+          (selection?.kind === 'fit_point' ? selection.index : null)
+      ) {
+        return state;
+      }
+      return { holePositionHover: selection };
+    }),
+
+  openConstructionPlaneDialog: (kind, featureId = 0) =>
+    set({
+      constructionPlaneDialog: { kind, featureId },
+      bodyFeatureDialog: null,
+      extrudeDialogFeature: null,
+      revolveDialogFeature: null,
+      sweepDialogFeature: null,
+      loftDialogFeature: null,
+      ribDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeConstructionPlaneDialog: () => set({ constructionPlaneDialog: null }),
+
+  openBodyFeatureDialog: (kind, featureId = 0) =>
+    set({
+      bodyFeatureDialog: { kind, featureId },
+      constructionPlaneDialog: null,
+      extrudeDialogFeature: null,
+      revolveDialogFeature: null,
+      sweepDialogFeature: null,
+      loftDialogFeature: null,
+      ribDialogFeature: null,
+      filletDialogFeature: null,
+      chamferDialogFeature: null,
+      holeDialogFeature: null,
+      profilePicker: null,
+      curvePicker: null,
+    }),
+
+  closeBodyFeatureDialog: () => set({ bodyFeatureDialog: null }),
+
+  openSketchPatternDialog: (kind) =>
+    set({
+      sketchPatternDialog: kind,
+      activeTool: null,
+      dimEditor: null,
+      dynInput: {
+        active: false,
+        x: 0,
+        y: 0,
+        fields: [],
+        focus: null,
+        selectAll: false,
+        pending: false,
+      },
+    }),
+
+  closeSketchPatternDialog: () => set({ sketchPatternDialog: null }),
+
+  setSolidBusy: (busy) => set({ solidBusy: busy }),
+
+  setPaletteOption: (key, value) =>
+    set((s) => ({ palette: { ...s.palette, [key]: value } })),
+}));

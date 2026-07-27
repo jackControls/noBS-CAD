@@ -1,0 +1,39 @@
+node_modules
+dist
+dist-ssr
+target
+src-tauri/target
+src-tauri/gen
+src/engine-wasm/pkg
+src-tauri/occt-libs
+src-tauri/tauri.occt.conf.json
+*.local
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+*.py[cod]
+
+# Local AI-assistant instructions and continuity state.
+**/CLAUDE.md
+**/AGENTS.md
+**/CODEX.md
+.claude/
+.agents/
+.codex/
+
+# Internal development memory used to resume and steer agent work.
+docs/HANDOFF.md
+docs/DEVELOPMENT_HISTORY.md
+docs/DECISIONS.md
+docs/FEATURE_DECISIONS.md
+docs/BUGS.md
+docs/ROADMAP.md
+docs/RELEASE_CHECKLIST.md
+
+# Local acceptance evidence and bug-report captures.
+docs/qa/
+docs/reference/
+scripts/probe-*.mjs

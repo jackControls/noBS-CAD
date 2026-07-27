@@ -1,0 +1,19 @@
+[package]
+name = "nbcad-occt"
+version = "0.1.0"
+edition = "2021"
+description = "Native Open CASCADE adapter for noBS CAD"
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+[features]
+default = []
+native-occt = []
+
+[dependencies]
+cxx = "1"
+nbcad-core = { path = "../core" }
+nbcad-solid = { path = "../solid" }
+
+[build-dependencies]
+cxx-build = "1"

@@ -1,0 +1,720 @@
+//! Reproduction tests for the 2026-07-19 owner bug reports on rectangle
+//! corner modify ops: fillet trim re-opened by driving dims (AM round), and
+//! "second corner op rejected" (PM round).
+
+use nbcad_sketch::{
+    ChamferRequest, EditDimensionRequest, EntityDto, FilletRequest, LockedRectangleRequest,
+    OriginPlane, PlaneRef, RectangleMode, SketchSession, Vec2,
+};
+
+fn v(x: f64, y: f64) -> Vec2 {
+    Vec2::new(x, y)
+}
+
+const XY: PlaneRef = PlaneRef::OriginPlane {
+    plane: OriginPlane::Xy,
+};
+
+fn session() -> SketchSession {
+    SketchSession::new("Sketch1", XY, XY.basis().unwrap(), false)
+}
+
+fn lines_of(dto: &nbcad_sketch::SketchDto) -> Vec<(nbcad_sketch::EntityId, Vec2, Vec2)> {
+    dto.entities
+        .iter()
+        .filter_map(|e| match e {
+            EntityDto::Line { id, start, end, .. } => Some((*id, *start, *end)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn close(a: Vec2, b: Vec2) -> bool {
+    a.distance(b) < 1e-7
+}
+
+#[test]
+fn rectangle_corner_fillet_trims_both_edges() {
+    let mut s = session();
+    // 40×30 rectangle, corners (0,0) (40,0) (40,30) (0,30).
+    s.add_rectangle(RectangleMode::TwoPoint, v(0.0, 0.0), v(40.0, 30.0))
+        .unwrap();
+    let dto = s.dto();
+    let lines = lines_of(&dto);
+    assert_eq!(lines.len(), 4);
+    // Top edge (y=30) and left edge (x=0) share the (0,30) corner.
+    let top = lines
+        .iter()
+        .find(|(_, a, b)| (a.y - 30.0).abs() < 1e-9 && (b.y - 30.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+    let left = lines
+        .iter()
+        .find(|(_, a, b)| (a.x - 0.0).abs() < 1e-9 && (b.x - 0.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+
+    // Fillet R4 on the top-left corner (the corner-pick order: [top, left]).
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "4".to_string(),
+    })
+    .unwrap();
+    let dto = s.dto();
+    let lines = lines_of(&dto);
+    let (ta, tb) = {
+        let l = lines.iter().find(|(id, _, _)| *id == top).unwrap();
+        (l.1, l.2)
+    };
+    let (la, lb) = {
+        let l = lines.iter().find(|(id, _, _)| *id == left).unwrap();
+        (l.1, l.2)
+    };
+    // Top edge must start at the tangent point (4, 30) and keep (40, 30).
+    let top_ok = (close(ta, v(4.0, 30.0)) && close(tb, v(40.0, 30.0)))
+        || (close(tb, v(4.0, 30.0)) && close(ta, v(40.0, 30.0)));
+    assert!(top_ok, "top edge trimmed at tangent: {ta:?} {tb:?}");
+    // Left edge must start at the tangent point (0, 26) and keep (0, 0).
+    let left_ok = (close(la, v(0.0, 26.0)) && close(lb, v(0.0, 0.0)))
+        || (close(lb, v(0.0, 26.0)) && close(la, v(0.0, 0.0)));
+    assert!(left_ok, "left edge trimmed at tangent: {la:?} {lb:?}");
+}
+
+/// The owner's actual scenario (2026-07-19 AM bug report): the rectangle was
+/// drawn with TYPED width/height, so the bottom and left edges carry DRIVING
+/// distance dims. Filleting the top-left corner must not let the height dim
+/// drag the trimmed endpoint back up to the old corner.
+#[test]
+fn dimensioned_rectangle_corner_fillet_keeps_trim() {
+    let mut s = session();
+    s.add_rectangle_locked(&LockedRectangleRequest {
+        mode: RectangleMode::TwoPoint,
+        anchor: v(0.0, 0.0),
+        width_mm: None,
+        height_mm: None,
+        width_text: Some("40".to_string()),
+        height_text: Some("15".to_string()),
+        corner_hint: v(40.0, 15.0),
+        ctrl_held: true,
+    })
+    .unwrap();
+    let dto = s.dto();
+    assert_eq!(dto.dimensions.len(), 2, "auto dims on bottom + left");
+    let lines = lines_of(&dto);
+    let top = lines
+        .iter()
+        .find(|(_, a, b)| (a.y - 15.0).abs() < 1e-9 && (b.y - 15.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+    let left = lines
+        .iter()
+        .find(|(_, a, b)| (a.x - 0.0).abs() < 1e-9 && (b.x - 0.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "4".to_string(),
+    })
+    .unwrap();
+    let dto = s.dto();
+    let lines = lines_of(&dto);
+    let (la, lb) = {
+        let l = lines.iter().find(|(id, _, _)| *id == left).unwrap();
+        (l.1, l.2)
+    };
+    println!("left edge after fillet: {la:?} -> {lb:?}");
+    // The height dim legitimately shifts the sketch (dim wins) — WHICH side
+    // moves is Newton's choice. The invariant that matters: the trimmed
+    // endpoint stays glued to the arc tangent, exactly `radius` below the
+    // top edge. Tolerance 1e-3 (damped Newton parks coupled trims at ~1e-4).
+    let top_y = {
+        let l = lines.iter().find(|(id, _, _)| *id == top).unwrap();
+        l.1.y
+    };
+    let trim_y = la.y.max(lb.y);
+    assert!(
+        (top_y - trim_y - 4.0).abs() < 1e-3,
+        "trim must sit R4 below the top edge (top={top_y}, trim={trim_y})"
+    );
+    // …and the height dim (15 mm) is still satisfied ACROSS THE CORNER
+    // POINTS (corner-to-corner dims since the 2026-07-19 PM model change:
+    // the trimmed line is short by design; the corners carry the 15).
+    let pts: Vec<Vec2> = dto
+        .entities
+        .iter()
+        .filter_map(|e| match e {
+            EntityDto::Point { position, .. } => Some(*position),
+            _ => None,
+        })
+        .collect();
+    let corner_dist = |a: Vec2, b: Vec2| {
+        let pa = pts.iter().find(|p| p.distance(a) < 1e-3);
+        let pb = pts.iter().find(|p| p.distance(b) < 1e-3);
+        pa.zip(pb).map(|(a, b)| a.distance(*b))
+    };
+    let h = corner_dist(v(0.0, 0.0), v(0.0, 15.0)).expect("corner points persist");
+    assert!(
+        (h - 15.0).abs() < 1e-3,
+        "height dim stays 15 across corners, got {h}"
+    );
+}
+
+// --- PM round: second corner op on a dimensioned rectangle ---
+
+fn typed_square(s: &mut SketchSession) -> Vec<(nbcad_sketch::EntityId, Vec2, Vec2)> {
+    s.add_rectangle_locked(&LockedRectangleRequest {
+        mode: RectangleMode::TwoPoint,
+        anchor: v(0.0, 0.0),
+        width_mm: None,
+        height_mm: None,
+        width_text: Some("20".to_string()),
+        height_text: Some("20".to_string()),
+        corner_hint: v(20.0, 20.0),
+        ctrl_held: true,
+    })
+    .unwrap();
+    lines_of(&s.dto())
+}
+
+fn typed_30_square(s: &mut SketchSession) -> Vec<(nbcad_sketch::EntityId, Vec2, Vec2)> {
+    s.add_rectangle_locked(&LockedRectangleRequest {
+        mode: RectangleMode::TwoPoint,
+        anchor: v(0.0, 0.0),
+        width_mm: None,
+        height_mm: None,
+        width_text: Some("30".to_string()),
+        height_text: Some("30".to_string()),
+        corner_hint: v(30.0, 30.0),
+        ctrl_held: true,
+    })
+    .unwrap();
+    lines_of(&s.dto())
+}
+
+fn typed_40_square(s: &mut SketchSession) -> Vec<(nbcad_sketch::EntityId, Vec2, Vec2)> {
+    s.add_rectangle_locked(&LockedRectangleRequest {
+        mode: RectangleMode::TwoPoint,
+        anchor: v(0.0, 0.0),
+        width_mm: None,
+        height_mm: None,
+        width_text: Some("40".to_string()),
+        height_text: Some("40".to_string()),
+        corner_hint: v(40.0, 40.0),
+        ctrl_held: true,
+    })
+    .unwrap();
+    lines_of(&s.dto())
+}
+
+fn edge(
+    lines: &[(nbcad_sketch::EntityId, Vec2, Vec2)],
+    axis: char,
+    val: f64,
+) -> nbcad_sketch::EntityId {
+    lines
+        .iter()
+        .find(|(_, a, b)| {
+            if axis == 'x' {
+                (a.x - val).abs() < 1e-6 && (b.x - val).abs() < 1e-6
+            } else {
+                (a.y - val).abs() < 1e-6 && (b.y - val).abs() < 1e-6
+            }
+        })
+        .unwrap_or_else(|| panic!("edge {axis}={val} exists"))
+        .0
+}
+
+#[test]
+fn second_fillet_on_dimensioned_rect_is_accepted() {
+    let mut s = session();
+    let lines = typed_square(&mut s);
+    let (bottom, left, top, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'x', 0.0),
+        edge(&lines, 'y', 20.0),
+        edge(&lines, 'x', 20.0),
+    );
+    // First fillet: bottom-left corner.
+    s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: left,
+        radius_text: "4".to_string(),
+    })
+    .expect("first fillet works");
+    // Second fillet: top-left corner — the owner's failing case.
+    let r = s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "4".to_string(),
+    });
+    assert!(r.is_ok(), "second fillet must be accepted: {r:?}");
+    // Third: top-right. Fourth: bottom-right.
+    let r = s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: right,
+        radius_text: "4".to_string(),
+    });
+    assert!(r.is_ok(), "third fillet: {r:?}");
+    let r = s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: right,
+        radius_text: "4".to_string(),
+    });
+    assert!(r.is_ok(), "fourth fillet: {r:?}");
+    let arcs = s
+        .dto()
+        .entities
+        .iter()
+        .filter(|e| matches!(e, EntityDto::Arc { .. }))
+        .count();
+    assert_eq!(arcs, 4, "all four corners filleted");
+}
+
+/// Boundary regression from the owner's 2026-07-20 report: two fillets on
+/// the ends of one 30 mm edge may each be R15. The remaining straight edge
+/// is a valid zero-length carrier at exactly R1 + R2 == L; only values above
+/// that boundary are invalid.
+#[test]
+fn adjacent_r15_fillets_fit_exactly_on_a_30_mm_edge() {
+    let mut s = session();
+    let lines = typed_30_square(&mut s);
+    let (bottom, left, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'x', 0.0),
+        edge(&lines, 'x', 30.0),
+    );
+
+    s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: left,
+        radius_text: "15".to_string(),
+    })
+    .expect("first R15 fillet works");
+    let result = s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: right,
+        radius_text: "15".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "R15 + R15 must fit a 30 mm edge: {result:?}"
+    );
+
+    let dto = s.dto();
+    let (_, a, b) = lines_of(&dto)
+        .into_iter()
+        .find(|(id, _, _)| *id == bottom)
+        .expect("zero-length carrier line remains addressable");
+    assert!(
+        a.distance(b) < 1e-6,
+        "shared edge must close exactly: {a:?} -> {b:?}"
+    );
+}
+
+/// Owner's 2026-07-20 Chamfer boundary report: two bottom R20 fillets on a
+/// 40 × 40 square leave exactly 20 mm of each vertical side. A distance-20
+/// chamfer at the top corner may consume that remaining carrier completely;
+/// only a distance beyond 20 is invalid.
+#[test]
+fn r20_bottom_fillets_allow_exact_distance_20_top_chamfer() {
+    let mut s = session();
+    let lines = typed_40_square(&mut s);
+    let (bottom, left, top, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'x', 0.0),
+        edge(&lines, 'y', 40.0),
+        edge(&lines, 'x', 40.0),
+    );
+
+    s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: left,
+        radius_text: "20".to_string(),
+    })
+    .expect("first R20 fillet works");
+    s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: right,
+        radius_text: "20".to_string(),
+    })
+    .expect("second R20 fillet works");
+
+    let before = s.dto();
+    let (_, left_a, left_b) = lines_of(&before)
+        .into_iter()
+        .find(|(id, _, _)| *id == left)
+        .expect("left carrier exists before chamfer");
+    let remaining = left_a.distance(left_b);
+    let too_large = s.chamfer_lines(&ChamferRequest {
+        l1: top,
+        l2: left,
+        distance_text: "20.001".to_string(),
+    });
+    assert!(too_large.is_err(), "distance beyond the carrier must fail");
+    assert_eq!(
+        s.dto().entities.len(),
+        before.entities.len(),
+        "failure rolls back"
+    );
+
+    let result = s.chamfer_lines(&ChamferRequest {
+        l1: top,
+        l2: left,
+        distance_text: "20".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "distance equal to the remaining carrier must succeed (remaining={remaining:.17}): {result:?}"
+    );
+
+    let (_, a, b) = lines_of(&s.dto())
+        .into_iter()
+        .find(|(id, _, _)| *id == left)
+        .expect("consumed left carrier remains addressable");
+    assert!(
+        a.distance(b) < 5e-4,
+        "left carrier closes at equality: {}",
+        a.distance(b)
+    );
+}
+
+/// Matches the screenshot path: create the second fillet below the limit,
+/// edit its radius to the exact boundary, then reduce it again. Keeping the
+/// carrier line in the model makes the topology transition reversible.
+#[test]
+fn editing_adjacent_fillet_to_exact_sum_is_accepted_and_reversible() {
+    let mut s = session();
+    let lines = typed_30_square(&mut s);
+    let (bottom, left, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'x', 0.0),
+        edge(&lines, 'x', 30.0),
+    );
+
+    s.fillet_lines(&FilletRequest {
+        l1: bottom,
+        l2: left,
+        radius_text: "15".to_string(),
+    })
+    .unwrap();
+    let before_second = s.dto();
+    let first_arc = before_second
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Arc { id, .. } => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    let second = s
+        .fillet_lines(&FilletRequest {
+            l1: bottom,
+            l2: right,
+            radius_text: "10".to_string(),
+        })
+        .unwrap();
+    let second_arc = second
+        .sketch
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Arc { id, .. } if *id != first_arc => Some(*id),
+            _ => None,
+        })
+        .unwrap();
+    let radius_dimension = second
+        .sketch
+        .dimensions
+        .iter()
+        .find(|dimension| dimension.entities == vec![second_arc])
+        .expect("second fillet radius dimension");
+
+    let equal = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: radius_dimension.constraint_id,
+            text: "15".to_string(),
+        })
+        .expect("editing to R1 + R2 == L is valid");
+    let (_, a, b) = lines_of(&equal.sketch)
+        .into_iter()
+        .find(|(id, _, _)| *id == bottom)
+        .unwrap();
+    assert!(
+        a.distance(b) < 5e-4,
+        "edge closes at equality: {a:?} -> {b:?}"
+    );
+
+    let over_limit = s.edit_dimension(EditDimensionRequest {
+        constraint_id: radius_dimension.constraint_id,
+        text: "15.1".to_string(),
+    });
+    assert!(
+        over_limit.is_err(),
+        "R1 + R2 > L must remain invalid: {over_limit:?}"
+    );
+
+    let reopened = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: radius_dimension.constraint_id,
+            text: "10".to_string(),
+        })
+        .expect("reducing the radius reopens the carrier edge");
+    let (_, a, b) = lines_of(&reopened.sketch)
+        .into_iter()
+        .find(|(id, _, _)| *id == bottom)
+        .unwrap();
+    assert!(
+        (a.distance(b) - 5.0).abs() < 5e-4,
+        "reopened edge length: {}",
+        a.distance(b)
+    );
+}
+
+/// A zero-span carrier must remember its directed support, not merely that it
+/// was horizontal/vertical. Rectangle edges have all four possible endpoint
+/// orderings; each one must cross the equality boundary and reopen correctly.
+#[test]
+fn exact_sum_reopens_on_every_rectangle_edge_orientation() {
+    for (carrier_axis, carrier_value, end_axis, end1_value, end2_value) in [
+        ('y', 0.0, 'x', 0.0, 30.0),
+        ('y', 30.0, 'x', 0.0, 30.0),
+        ('x', 0.0, 'y', 0.0, 30.0),
+        ('x', 30.0, 'y', 0.0, 30.0),
+    ] {
+        let mut s = session();
+        let lines = typed_30_square(&mut s);
+        let carrier = edge(&lines, carrier_axis, carrier_value);
+        let end1 = edge(&lines, end_axis, end1_value);
+        let end2 = edge(&lines, end_axis, end2_value);
+
+        s.fillet_lines(&FilletRequest {
+            l1: carrier,
+            l2: end1,
+            radius_text: "15".to_string(),
+        })
+        .unwrap();
+        let first_arc = s
+            .dto()
+            .entities
+            .iter()
+            .find_map(|entity| match entity {
+                EntityDto::Arc { id, .. } => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        let second = s
+            .fillet_lines(&FilletRequest {
+                l1: carrier,
+                l2: end2,
+                radius_text: "10".to_string(),
+            })
+            .unwrap();
+        let second_arc = second
+            .sketch
+            .entities
+            .iter()
+            .find_map(|entity| match entity {
+                EntityDto::Arc { id, .. } if *id != first_arc => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        let radius_dimension = second
+            .sketch
+            .dimensions
+            .iter()
+            .find(|dimension| dimension.entities == vec![second_arc])
+            .unwrap();
+
+        let equal = s
+            .edit_dimension(EditDimensionRequest {
+                constraint_id: radius_dimension.constraint_id,
+                text: "15".to_string(),
+            })
+            .unwrap_or_else(|error| {
+                panic!("{carrier_axis}={carrier_value} must accept equality: {error:?}")
+            });
+        let (_, a, b) = lines_of(&equal.sketch)
+            .into_iter()
+            .find(|(id, _, _)| *id == carrier)
+            .unwrap();
+        assert!(
+            a.distance(b) < 5e-4,
+            "{carrier_axis}={carrier_value} closes: {}",
+            a.distance(b)
+        );
+
+        let reopened = s
+            .edit_dimension(EditDimensionRequest {
+                constraint_id: radius_dimension.constraint_id,
+                text: "10".to_string(),
+            })
+            .unwrap_or_else(|error| {
+                panic!("{carrier_axis}={carrier_value} must reopen after equality: {error:?}")
+            });
+        let (_, a, b) = lines_of(&reopened.sketch)
+            .into_iter()
+            .find(|(id, _, _)| *id == carrier)
+            .unwrap();
+        assert!(
+            (a.distance(b) - 5.0).abs() < 5e-4,
+            "{carrier_axis}={carrier_value} reopened length: {}",
+            a.distance(b)
+        );
+    }
+}
+
+#[test]
+fn chamfer_then_fillet_on_dimensioned_rect() {
+    let mut s = session();
+    let lines = typed_square(&mut s);
+    let (bottom, left, top) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'x', 0.0),
+        edge(&lines, 'y', 20.0),
+    );
+    s.chamfer_lines(&ChamferRequest {
+        l1: bottom,
+        l2: left,
+        distance_text: "4".to_string(),
+    })
+    .expect("chamfer works");
+    let r = s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "4".to_string(),
+    });
+    assert!(r.is_ok(), "fillet after chamfer: {r:?}");
+}
+
+// --- Persistent corner reference points (2026-07-19 PM round 3, owner
+// design ask: modifying a corner must NOT move the constraint reference) ---
+
+#[test]
+fn corner_point_persists_as_constraint_reference() {
+    let mut s = session();
+    s.add_rectangle_locked(&LockedRectangleRequest {
+        mode: RectangleMode::TwoPoint,
+        anchor: v(0.0, 0.0),
+        width_mm: None,
+        height_mm: None,
+        width_text: Some("40".to_string()),
+        height_text: Some("15".to_string()),
+        corner_hint: v(40.0, 15.0),
+        ctrl_held: true,
+    })
+    .unwrap();
+    let lines = lines_of(&s.dto());
+    let top = lines
+        .iter()
+        .find(|(_, a, b)| (a.y - 15.0).abs() < 1e-9 && (b.y - 15.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+    let left = lines
+        .iter()
+        .find(|(_, a, b)| (a.x - 0.0).abs() < 1e-9 && (b.x - 0.0).abs() < 1e-9)
+        .unwrap()
+        .0;
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "4".to_string(),
+    })
+    .unwrap();
+    let dto = s.dto();
+
+    // 1. The original top-left corner POINT still exists at (0,15) —
+    //    persistent reference for constraints.
+    let corner_alive = dto.entities.iter().any(|e| {
+        matches!(e, EntityDto::Point { position, .. } if position.distance(v(0.0, 15.0)) < 1e-3)
+    });
+    assert!(corner_alive, "original corner point must persist at (0,15)");
+
+    // 2. The height dim still reads 15.00 across the ORIGINAL corner span,
+    //    and the sketch did NOT shift (bottom-left corner stays at origin).
+    let height_dim = dto
+        .dimensions
+        .iter()
+        .find(|d| d.text == "15.00")
+        .expect("height dim");
+    assert_eq!(height_dim.text, "15.00");
+    let bl_alive = dto.entities.iter().any(
+        |e| matches!(e, EntityDto::Point { position, .. } if position.distance(v(0.0, 0.0)) < 1e-3),
+    );
+    assert!(bl_alive, "no shift: bottom-left corner stays at (0,0)");
+
+    // 3. The left line IS trimmed at the tangent point.
+    let (la, lb) = {
+        let l = lines_of(&dto)
+            .into_iter()
+            .find(|(id, _, _)| *id == left)
+            .unwrap();
+        (l.1, l.2)
+    };
+    let trim_y = la.y.max(lb.y);
+    assert!(
+        (15.0 - trim_y - 4.0).abs() < 1e-3,
+        "trim 4 below top: {trim_y}"
+    );
+}
+
+/// Every ordered pair of DISTINCT corners × every op pair — the full
+/// cross-product the owner asked us to verify in reverse. All must be accepted.
+#[test]
+fn corner_op_matrix_on_dimensioned_rect() {
+    for (c1x, c1y) in [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)] {
+        for (c2x, c2y) in [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)] {
+            if (c1x, c1y) == (c2x, c2y) {
+                continue;
+            }
+            for ops in ["ff", "cf", "fc", "cc"] {
+                let mut s = session();
+                let lines = typed_square(&mut s);
+                let l1a = edge(&lines, if c1y == c1x * 0.0 + 0.0 { 'y' } else { 'y' }, c1y);
+                let l1b = edge(&lines, 'x', c1x);
+                let do_c1 = |s: &mut SketchSession, la, lb| {
+                    if ops.starts_with('f') {
+                        s.fillet_lines(&FilletRequest {
+                            l1: la,
+                            l2: lb,
+                            radius_text: "4".to_string(),
+                        })
+                        .map(|_| ())
+                    } else {
+                        s.chamfer_lines(&ChamferRequest {
+                            l1: la,
+                            l2: lb,
+                            distance_text: "4".to_string(),
+                        })
+                        .map(|_| ())
+                    }
+                };
+                do_c1(&mut s, l1a, l1b)
+                    .unwrap_or_else(|e| panic!("op1 {ops} @({c1x},{c1y}): {e:?}"));
+                let lines = lines_of(&s.dto());
+                let l2a = edge(&lines, 'y', c2y);
+                let l2b = edge(&lines, 'x', c2x);
+                let r = if ops.ends_with('f') {
+                    s.fillet_lines(&FilletRequest {
+                        l1: l2a,
+                        l2: l2b,
+                        radius_text: "4".to_string(),
+                    })
+                    .map(|_| ())
+                } else {
+                    s.chamfer_lines(&ChamferRequest {
+                        l1: l2a,
+                        l2: l2b,
+                        distance_text: "4".to_string(),
+                    })
+                    .map(|_| ())
+                };
+                r.unwrap_or_else(|e| {
+                    panic!("op2 {ops} @({c2x},{c2y}) after @({c1x},{c1y}): {e:?}")
+                });
+            }
+        }
+    }
+}

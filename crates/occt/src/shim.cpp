@@ -1,0 +1,1340 @@
+#include "nbcad-occt/src/native.rs.h"
+
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_TransitionMode.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRep_Tool.hxx>
+#include <GeomAbs_CurveType.hxx>
+#include <GeomAbs_Shape.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <GC_MakeArcOfCircle.hxx>
+#include <Message_ProgressRange.hxx>
+#include <IFSelect_ReturnStatus.hxx>
+#include <Interface_Static.hxx>
+#include <Poly_Triangulation.hxx>
+#include <STEPControl_StepModelType.hxx>
+#include <STEPControl_Reader.hxx>
+#include <STEPControl_Writer.hxx>
+#include <TopAbs_Orientation.hxx>
+#include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Shape.hxx>
+#include <TopoDS_Wire.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace nbcad_occt {
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+
+gp_Pnt point_at(const FfiJob& job, std::size_t point_index) {
+  const std::size_t offset = point_index * 3;
+  if (offset + 2 >= job.points.size()) {
+    throw std::runtime_error("profile point buffer is malformed");
+  }
+  return gp_Pnt(job.points[offset], job.points[offset + 1], job.points[offset + 2]);
+}
+
+TopoDS_Wire make_wire(const std::vector<gp_Pnt>& points) {
+  if (points.size() < 3) {
+    throw std::runtime_error("profile must contain at least three points");
+  }
+  BRepBuilderAPI_MakePolygon polygon;
+  for (const gp_Pnt& point : points) {
+    polygon.Add(point);
+  }
+  polygon.Close();
+  if (!polygon.IsDone()) {
+    throw std::runtime_error("OCCT could not build the profile wire");
+  }
+  return polygon.Wire();
+}
+
+TopoDS_Wire make_open_wire(const std::vector<gp_Pnt>& points) {
+  if (points.size() < 2) {
+    throw std::runtime_error("path must contain at least two points");
+  }
+  BRepBuilderAPI_MakePolygon polygon;
+  for (const gp_Pnt& point : points) {
+    polygon.Add(point);
+  }
+  if (!polygon.IsDone()) {
+    throw std::runtime_error("OCCT could not build the path wire");
+  }
+  return polygon.Wire();
+}
+
+gp_Pnt buffered_curve_point(const rust::Vec<double>& points,
+                            std::size_t point_index,
+                            const char* label) {
+  const std::size_t offset = point_index * 3;
+  if (offset + 2 >= points.size()) {
+    throw std::runtime_error(std::string(label) + " curve point buffer is malformed");
+  }
+  return gp_Pnt(points[offset], points[offset + 1], points[offset + 2]);
+}
+
+TopoDS_Wire make_curve_wire(const rust::Vec<std::uint8_t>& kinds,
+                            const rust::Vec<std::uint32_t>& offsets,
+                            const rust::Vec<double>& points,
+                            const char* label) {
+  if (kinds.empty() || offsets.size() != kinds.size() + 1 ||
+      offsets.front() != 0 || offsets.back() * 3 != points.size()) {
+    throw std::runtime_error(std::string(label) + " curve buffers are malformed");
+  }
+  BRepBuilderAPI_MakeWire wire;
+  for (std::size_t curve_index = 0; curve_index < kinds.size(); ++curve_index) {
+    const std::size_t begin = offsets[curve_index];
+    const std::size_t end = offsets[curve_index + 1];
+    const std::size_t count = end - begin;
+    auto point = [&](std::size_t index) {
+      return buffered_curve_point(points, index, label);
+    };
+    if (kinds[curve_index] == 0) {
+      if (count != 2) {
+        throw std::runtime_error(std::string(label) + " line needs two points");
+      }
+      BRepBuilderAPI_MakeEdge edge(point(begin), point(begin + 1));
+      if (!edge.IsDone()) {
+        throw std::runtime_error(std::string("OCCT could not build the ") + label +
+                                 " line");
+      }
+      wire.Add(edge.Edge());
+    } else if (kinds[curve_index] == 1) {
+      if (count != 3) {
+        throw std::runtime_error(std::string(label) +
+                                 " arc needs start/mid/end points");
+      }
+      GC_MakeArcOfCircle arc(point(begin), point(begin + 1), point(begin + 2));
+      if (!arc.IsDone()) {
+        throw std::runtime_error(std::string("OCCT could not build the ") + label +
+                                 " arc");
+      }
+      BRepBuilderAPI_MakeEdge edge(arc.Value());
+      if (!edge.IsDone()) {
+        throw std::runtime_error(std::string("OCCT could not build the ") + label +
+                                 " arc edge");
+      }
+      wire.Add(edge.Edge());
+    } else if (kinds[curve_index] == 2) {
+      if (count != 3) {
+        throw std::runtime_error(std::string(label) +
+                                 " circle needs center/axis/normal data");
+      }
+      const gp_Pnt center = point(begin);
+      const gp_Pnt axis_point = point(begin + 1);
+      const gp_Pnt normal_data = point(begin + 2);
+      const gp_Vec axis(center, axis_point);
+      const gp_Vec normal(normal_data.X(), normal_data.Y(), normal_data.Z());
+      if (axis.SquareMagnitude() < 1e-18 || normal.SquareMagnitude() < 1e-18) {
+        throw std::runtime_error(std::string(label) + " circle axes are degenerate");
+      }
+      BRepBuilderAPI_MakeEdge edge(
+          gp_Circ(gp_Ax2(center, gp_Dir(normal), gp_Dir(axis)), axis.Magnitude()));
+      if (!edge.IsDone()) {
+        throw std::runtime_error(std::string("OCCT could not build the ") + label +
+                                 " circle");
+      }
+      wire.Add(edge.Edge());
+    } else if (kinds[curve_index] == 3) {
+      if (count < 2) {
+        throw std::runtime_error(std::string(label) +
+                                 " polyline needs at least two points");
+      }
+      for (std::size_t index = begin; index + 1 < end; ++index) {
+        BRepBuilderAPI_MakeEdge edge(point(index), point(index + 1));
+        if (!edge.IsDone()) {
+          throw std::runtime_error(std::string("OCCT could not build the ") +
+                                   label + " polyline");
+        }
+        wire.Add(edge.Edge());
+      }
+    } else {
+      throw std::runtime_error(std::string("unknown ") + label + " curve kind");
+    }
+  }
+  if (!wire.IsDone()) {
+    throw std::runtime_error(std::string("OCCT could not build the ") + label +
+                             " wire");
+  }
+  return wire.Wire();
+}
+
+struct SectionTransform {
+  gp_Pnt centroid;
+  gp_Vec translation;
+  double scale;
+
+  gp_Pnt Apply(const gp_Pnt& point) const {
+    gp_Vec radial(centroid, point);
+    radial.Multiply(scale);
+    gp_Pnt transformed = centroid.Translated(radial);
+    transformed.Translate(translation);
+    return transformed;
+  }
+};
+
+SectionTransform section_transform(const FfiJob& job, std::size_t begin,
+                                   std::size_t end, double offset,
+                                   double reference_radius) {
+  const gp_Vec normal(job.normal_x, job.normal_y, job.normal_z);
+  if (normal.SquareMagnitude() < 1e-18) {
+    throw std::runtime_error("extrude normal is degenerate");
+  }
+  gp_Vec unit = normal.Normalized();
+  gp_Pnt centroid(0.0, 0.0, 0.0);
+  for (std::size_t index = begin; index < end; ++index) {
+    const gp_Pnt point = point_at(job, index);
+    centroid.SetX(centroid.X() + point.X());
+    centroid.SetY(centroid.Y() + point.Y());
+    centroid.SetZ(centroid.Z() + point.Z());
+  }
+  const double count = static_cast<double>(end - begin);
+  centroid.SetX(centroid.X() / count);
+  centroid.SetY(centroid.Y() / count);
+  centroid.SetZ(centroid.Z() / count);
+
+  const double angle = job.taper_angle_deg * kPi / 180.0;
+  const double scale = 1.0 + std::tan(angle) * offset / reference_radius;
+  if (!std::isfinite(scale) || scale <= 1e-6) {
+    throw std::runtime_error("taper collapses or inverts the profile");
+  }
+  return SectionTransform{centroid, unit.Multiplied(offset), scale};
+}
+
+gp_Pnt curve_point_at(const FfiJob& job, std::size_t point_index) {
+  const std::size_t offset = point_index * 3;
+  if (offset + 2 >= job.curve_points.size()) {
+    throw std::runtime_error("profile curve point buffer is malformed");
+  }
+  return gp_Pnt(job.curve_points[offset], job.curve_points[offset + 1],
+                job.curve_points[offset + 2]);
+}
+
+TopoDS_Wire make_profile_wire(const FfiJob& job, std::size_t profile_index,
+                              const SectionTransform* transform = nullptr) {
+  if (profile_index + 1 >= job.profile_offsets.size()) {
+    throw std::runtime_error("profile offset buffer is malformed");
+  }
+  const std::size_t point_begin = job.profile_offsets[profile_index];
+  const std::size_t point_end = job.profile_offsets[profile_index + 1];
+
+  // Compatibility fallback for plans created before analytic curve metadata.
+  if (job.curve_kinds.empty() || job.curve_profile_offsets.empty()) {
+    std::vector<gp_Pnt> points;
+    points.reserve(point_end - point_begin);
+    for (std::size_t index = point_begin; index < point_end; ++index) {
+      const gp_Pnt value = point_at(job, index);
+      points.push_back(transform == nullptr ? value : transform->Apply(value));
+    }
+    return make_wire(points);
+  }
+  if (job.curve_profile_offsets.size() != job.profile_offsets.size() ||
+      job.curve_point_offsets.size() != job.curve_kinds.size() + 1 ||
+      job.curve_point_offsets.back() * 3 != job.curve_points.size()) {
+    throw std::runtime_error("profile curve buffers are malformed");
+  }
+
+  const std::size_t curve_begin = job.curve_profile_offsets[profile_index];
+  const std::size_t curve_end = job.curve_profile_offsets[profile_index + 1];
+  if (curve_end <= curve_begin || curve_end > job.curve_kinds.size()) {
+    throw std::runtime_error("profile contains no boundary curves");
+  }
+
+  auto transformed = [&](std::size_t point_index) {
+    const gp_Pnt value = curve_point_at(job, point_index);
+    return transform == nullptr ? value : transform->Apply(value);
+  };
+  BRepBuilderAPI_MakeWire wire;
+  for (std::size_t curve_index = curve_begin; curve_index < curve_end;
+       ++curve_index) {
+    const std::size_t begin = job.curve_point_offsets[curve_index];
+    const std::size_t end = job.curve_point_offsets[curve_index + 1];
+    const std::size_t count = end - begin;
+    switch (job.curve_kinds[curve_index]) {
+      case 0: {
+        if (count != 2) {
+          throw std::runtime_error("line curve requires two points");
+        }
+        BRepBuilderAPI_MakeEdge edge(transformed(begin),
+                                     transformed(begin + 1));
+        if (!edge.IsDone()) {
+          throw std::runtime_error("OCCT could not build a line profile edge");
+        }
+        wire.Add(edge.Edge());
+        break;
+      }
+      case 1: {
+        if (count != 3) {
+          throw std::runtime_error("arc curve requires start/mid/end points");
+        }
+        const gp_Pnt start = transformed(begin);
+        const gp_Pnt mid = transformed(begin + 1);
+        const gp_Pnt finish = transformed(begin + 2);
+        GC_MakeArcOfCircle arc(start, mid, finish);
+        if (!arc.IsDone()) {
+          throw std::runtime_error("OCCT could not build an analytic arc");
+        }
+        BRepBuilderAPI_MakeEdge edge(arc.Value());
+        if (!edge.IsDone()) {
+          throw std::runtime_error("OCCT could not build an arc profile edge");
+        }
+        wire.Add(edge.Edge());
+        break;
+      }
+      case 2: {
+        if (count != 3) {
+          throw std::runtime_error(
+              "circle curve requires center/axis/normal data");
+        }
+        const gp_Pnt center = transformed(begin);
+        const gp_Pnt axis_point = transformed(begin + 1);
+        const gp_Pnt normal_data = curve_point_at(job, begin + 2);
+        const gp_Vec axis(center, axis_point);
+        const gp_Vec normal(normal_data.X(), normal_data.Y(), normal_data.Z());
+        if (axis.SquareMagnitude() < 1e-18 ||
+            normal.SquareMagnitude() < 1e-18) {
+          throw std::runtime_error("circle curve has degenerate axes");
+        }
+        const gp_Circ circle(gp_Ax2(center, gp_Dir(normal), gp_Dir(axis)),
+                             axis.Magnitude());
+        BRepBuilderAPI_MakeEdge edge(circle);
+        if (!edge.IsDone()) {
+          throw std::runtime_error("OCCT could not build a circle profile edge");
+        }
+        wire.Add(edge.Edge());
+        break;
+      }
+      case 3: {
+        if (count < 2) {
+          throw std::runtime_error("polyline curve needs at least two points");
+        }
+        for (std::size_t index = begin; index + 1 < end; ++index) {
+          BRepBuilderAPI_MakeEdge edge(transformed(index),
+                                       transformed(index + 1));
+          if (!edge.IsDone()) {
+            throw std::runtime_error(
+                "OCCT could not build a polyline profile edge");
+          }
+          wire.Add(edge.Edge());
+        }
+        break;
+      }
+      default:
+        throw std::runtime_error("unknown profile curve kind");
+    }
+  }
+  if (!wire.IsDone()) {
+    throw std::runtime_error("OCCT could not build the analytic profile wire");
+  }
+  return wire.Wire();
+}
+
+std::pair<std::size_t, std::size_t> region_range(const FfiJob& job,
+                                                  std::size_t region_index) {
+  if (region_index + 1 >= job.region_offsets.size()) {
+    throw std::runtime_error("profile region buffer is malformed");
+  }
+  const std::size_t begin = job.region_offsets[region_index];
+  const std::size_t end = job.region_offsets[region_index + 1];
+  if (end <= begin || end >= job.profile_offsets.size()) {
+    throw std::runtime_error("profile region is empty or out of range");
+  }
+  return {begin, end};
+}
+
+TopoDS_Face make_profile_face(const FfiJob& job, std::size_t profile_index,
+                              const SectionTransform* transform = nullptr) {
+  const TopoDS_Wire outer = make_profile_wire(job, profile_index, transform);
+  BRepBuilderAPI_MakeFace face(outer, true);
+  if (!face.IsDone()) {
+    throw std::runtime_error("OCCT could not build a profile face");
+  }
+  return face.Face();
+}
+
+gp_Ax2 profile_fixed_axes(const FfiJob& job, std::size_t profile_index) {
+  if (profile_index + 1 >= job.profile_offsets.size()) {
+    throw std::runtime_error("profile offset buffer is malformed");
+  }
+  const std::size_t begin = job.profile_offsets[profile_index];
+  const std::size_t end = job.profile_offsets[profile_index + 1];
+  if (end < begin + 3) {
+    throw std::runtime_error("fixed sweep orientation needs three profile points");
+  }
+  const gp_Pnt origin = point_at(job, begin);
+  gp_Vec x(origin, point_at(job, begin + 1));
+  if (x.SquareMagnitude() < 1e-18) {
+    throw std::runtime_error("fixed sweep profile axis is degenerate");
+  }
+  gp_Vec normal;
+  bool found_normal = false;
+  for (std::size_t index = begin + 2; index < end; ++index) {
+    normal = x.Crossed(gp_Vec(origin, point_at(job, index)));
+    if (normal.SquareMagnitude() >= 1e-18) {
+      found_normal = true;
+      break;
+    }
+  }
+  if (!found_normal) {
+    throw std::runtime_error("fixed sweep profile plane is degenerate");
+  }
+  return gp_Ax2(origin, gp_Dir(normal), gp_Dir(x));
+}
+
+void configure_pipe(const FfiJob& job, BRepOffsetAPI_MakePipeShell& pipe,
+                    std::size_t profile_index, bool allow_guide) {
+  if (job.orientation == 0) {
+    pipe.SetMode(false);
+  } else if (job.orientation == 1) {
+    pipe.SetMode(true);
+  } else if (job.orientation == 2) {
+    pipe.SetMode(profile_fixed_axes(job, profile_index));
+  } else {
+    throw std::runtime_error("unknown sweep orientation");
+  }
+  if (job.transition == 0) {
+    pipe.SetTransitionMode(BRepBuilderAPI_Transformed);
+  } else if (job.transition == 1) {
+    pipe.SetTransitionMode(BRepBuilderAPI_RightCorner);
+  } else if (job.transition == 2) {
+    pipe.SetTransitionMode(BRepBuilderAPI_RoundCorner);
+  } else {
+    throw std::runtime_error("unknown sweep transition");
+  }
+  pipe.SetForceApproxC1(job.force_c1);
+  if (allow_guide && !job.guide_curve_kinds.empty()) {
+    const TopoDS_Wire guide =
+        make_curve_wire(job.guide_curve_kinds, job.guide_curve_point_offsets,
+                        job.guide_curve_points, "guide rail");
+    pipe.SetMode(guide, true, BRepFill_ContactOnBorder);
+  }
+}
+
+TopoDS_Shape make_tool(const FfiJob& job, std::size_t region_index) {
+  const auto wire_range = region_range(job, region_index);
+  const std::size_t wire_begin = wire_range.first;
+  const std::size_t wire_end = wire_range.second;
+  const std::size_t begin = job.profile_offsets[wire_begin];
+  const std::size_t end = job.profile_offsets[wire_begin + 1];
+  if (end <= begin + 2 || end * 3 > job.points.size()) {
+    throw std::runtime_error("profile offset is out of range");
+  }
+
+  if (job.kind == 1) {
+    const gp_Vec direction(job.axis_direction_x, job.axis_direction_y,
+                           job.axis_direction_z);
+    if (direction.SquareMagnitude() < 1e-18) {
+      throw std::runtime_error("revolve axis is degenerate");
+    }
+    const gp_Ax1 axis(
+        gp_Pnt(job.axis_origin_x, job.axis_origin_y, job.axis_origin_z),
+        gp_Dir(direction));
+    auto revolve_wire = [&](std::size_t wire_index) {
+      const TopoDS_Face face = make_profile_face(job, wire_index);
+      BRepPrimAPI_MakeRevol revolve(face, axis, job.angle_rad, true);
+      if (!revolve.IsDone()) {
+        throw std::runtime_error("OCCT revolve construction failed");
+      }
+      return revolve.Shape();
+    };
+    TopoDS_Shape result = revolve_wire(wire_begin);
+    for (std::size_t wire_index = wire_begin + 1; wire_index < wire_end;
+         ++wire_index) {
+      const TopoDS_Shape cutter = revolve_wire(wire_index);
+      BRepAlgoAPI_Cut cut(result, cutter, Message_ProgressRange());
+      if (!cut.IsDone() || cut.Shape().IsNull()) {
+        throw std::runtime_error("OCCT could not revolve a profile hole");
+      }
+      result = cut.Shape();
+    }
+    return result;
+  }
+  if (job.kind == 2) {
+    const TopoDS_Wire path_wire =
+        make_curve_wire(job.path_curve_kinds, job.path_curve_point_offsets,
+                        job.path_curve_points, "sweep path");
+    auto sweep_wire = [&](std::size_t wire_index) {
+      const TopoDS_Wire profile = make_profile_wire(job, wire_index);
+      BRepOffsetAPI_MakePipeShell pipe(path_wire);
+      configure_pipe(job, pipe, wire_index, wire_index == wire_begin);
+      pipe.Add(profile, false, false);
+      pipe.Build(Message_ProgressRange());
+      if (!pipe.IsDone()) {
+        throw std::runtime_error("OCCT sweep construction failed");
+      }
+      if (!pipe.MakeSolid()) {
+        throw std::runtime_error("OCCT sweep could not close into a solid");
+      }
+      return pipe.Shape();
+    };
+    TopoDS_Shape result = sweep_wire(wire_begin);
+    for (std::size_t wire_index = wire_begin + 1; wire_index < wire_end;
+         ++wire_index) {
+      const TopoDS_Shape cutter = sweep_wire(wire_index);
+      BRepAlgoAPI_Cut cut(result, cutter, Message_ProgressRange());
+      if (!cut.IsDone() || cut.Shape().IsNull()) {
+        throw std::runtime_error("OCCT could not sweep a profile hole");
+      }
+      result = cut.Shape();
+    }
+    return result;
+  }
+  if (job.kind != 0 && job.kind != 4) {
+    throw std::runtime_error("unknown solid job kind");
+  }
+
+  gp_Pnt centroid(0.0, 0.0, 0.0);
+  for (std::size_t index = begin; index < end; ++index) {
+    const gp_Pnt point = point_at(job, index);
+    centroid.SetX(centroid.X() + point.X());
+    centroid.SetY(centroid.Y() + point.Y());
+    centroid.SetZ(centroid.Z() + point.Z());
+  }
+  const double count = static_cast<double>(end - begin);
+  centroid.SetX(centroid.X() / count);
+  centroid.SetY(centroid.Y() / count);
+  centroid.SetZ(centroid.Z() / count);
+  double radius = 0.0;
+  for (std::size_t index = begin; index < end; ++index) {
+    radius += centroid.Distance(point_at(job, index));
+  }
+  radius = std::max(radius / count, 1e-6);
+
+  const SectionTransform first_transform =
+      section_transform(job, begin, end, job.start_offset, radius);
+  const SectionTransform last_transform =
+      section_transform(job, begin, end, job.end_offset, radius);
+  if (std::abs(job.taper_angle_deg) < 1e-12) {
+    gp_Vec direction(job.normal_x, job.normal_y, job.normal_z);
+    direction.Normalize();
+    direction.Multiply(job.end_offset - job.start_offset);
+    auto prism_wire = [&](std::size_t wire_index) {
+      const TopoDS_Face face =
+          make_profile_face(job, wire_index, &first_transform);
+      BRepPrimAPI_MakePrism prism(face, direction, true, true);
+      if (!prism.IsDone()) {
+        throw std::runtime_error("OCCT prism construction failed");
+      }
+      return prism.Shape();
+    };
+    TopoDS_Shape result = prism_wire(wire_begin);
+    for (std::size_t wire_index = wire_begin + 1; wire_index < wire_end;
+         ++wire_index) {
+      const TopoDS_Shape cutter = prism_wire(wire_index);
+      BRepAlgoAPI_Cut cut(result, cutter, Message_ProgressRange());
+      if (!cut.IsDone() || cut.Shape().IsNull()) {
+        throw std::runtime_error("OCCT could not extrude a profile hole");
+      }
+      result = cut.Shape();
+    }
+    return result;
+  }
+
+  auto loft_wire = [&](std::size_t wire_index) {
+    const TopoDS_Wire first_wire =
+        make_profile_wire(job, wire_index, &first_transform);
+    const TopoDS_Wire last_wire =
+        make_profile_wire(job, wire_index, &last_transform);
+    BRepOffsetAPI_ThruSections loft(true, true, 1e-7);
+    loft.CheckCompatibility(true);
+    loft.AddWire(first_wire);
+    loft.AddWire(last_wire);
+    loft.Build(Message_ProgressRange());
+    if (!loft.IsDone()) {
+      throw std::runtime_error("OCCT tapered loft construction failed");
+    }
+    return loft.Shape();
+  };
+  TopoDS_Shape result = loft_wire(wire_begin);
+  for (std::size_t wire_index = wire_begin + 1; wire_index < wire_end;
+       ++wire_index) {
+    const TopoDS_Shape hole = loft_wire(wire_index);
+    BRepAlgoAPI_Cut cut(result, hole, Message_ProgressRange());
+    if (!cut.IsDone()) {
+      throw std::runtime_error("OCCT could not taper a profile hole");
+    }
+    result = cut.Shape();
+  }
+  return result;
+}
+
+TopoDS_Shape make_loft_tool(const FfiJob& job) {
+  if (job.region_offsets.size() < 3) {
+    throw std::runtime_error("Loft needs at least two sections");
+  }
+  const std::size_t section_count = job.region_offsets.size() - 1;
+  const std::size_t wire_count =
+      job.region_offsets[1] - job.region_offsets[0];
+  for (std::size_t section = 1; section < section_count; ++section) {
+    if (job.region_offsets[section + 1] - job.region_offsets[section] !=
+        wire_count) {
+      throw std::runtime_error(
+          "Loft sections must contain the same number of profile holes");
+    }
+  }
+  const bool guided =
+      !job.path_curve_kinds.empty() || !job.guide_curve_kinds.empty();
+  auto centerline_wire = [&]() {
+    if (!job.path_curve_kinds.empty()) {
+      return make_curve_wire(job.path_curve_kinds,
+                             job.path_curve_point_offsets,
+                             job.path_curve_points, "loft centerline");
+    }
+    std::vector<gp_Pnt> centroids;
+    centroids.reserve(section_count);
+    for (std::size_t section = 0; section < section_count; ++section) {
+      const std::size_t profile_index = job.region_offsets[section];
+      const std::size_t begin = job.profile_offsets[profile_index];
+      const std::size_t end = job.profile_offsets[profile_index + 1];
+      gp_Pnt centroid(0.0, 0.0, 0.0);
+      for (std::size_t index = begin; index < end; ++index) {
+        const gp_Pnt point = point_at(job, index);
+        centroid.SetX(centroid.X() + point.X());
+        centroid.SetY(centroid.Y() + point.Y());
+        centroid.SetZ(centroid.Z() + point.Z());
+      }
+      const double count = static_cast<double>(end - begin);
+      centroid.SetX(centroid.X() / count);
+      centroid.SetY(centroid.Y() / count);
+      centroid.SetZ(centroid.Z() / count);
+      centroids.push_back(centroid);
+    }
+    return make_open_wire(centroids);
+  };
+  auto loft_wire = [&](std::size_t wire_offset) {
+    if (guided) {
+      const TopoDS_Wire spine = centerline_wire();
+      BRepOffsetAPI_MakePipeShell loft(spine);
+      loft.SetMode(false);
+      loft.SetForceApproxC1(job.continuity >= 1);
+      if (wire_offset == 0 && !job.guide_curve_kinds.empty()) {
+        const TopoDS_Wire guide =
+            make_curve_wire(job.guide_curve_kinds,
+                            job.guide_curve_point_offsets,
+                            job.guide_curve_points, "loft guide rail");
+        loft.SetMode(guide, true, BRepFill_ContactOnBorder);
+      }
+      for (std::size_t section = 0; section < section_count; ++section) {
+        loft.Add(make_profile_wire(
+            job, job.region_offsets[section] + wire_offset), false, false);
+      }
+      loft.Build(Message_ProgressRange());
+      if (!loft.IsDone()) {
+        throw std::runtime_error("OCCT guided loft construction failed");
+      }
+      if (!loft.MakeSolid()) {
+        throw std::runtime_error("OCCT guided loft could not close into a solid");
+      }
+      return loft.Shape();
+    }
+    BRepOffsetAPI_ThruSections loft(true, job.ruled, 1e-7);
+    loft.CheckCompatibility(true);
+    if (job.continuity == 0) {
+      loft.SetContinuity(GeomAbs_C0);
+    } else if (job.continuity == 1) {
+      loft.SetContinuity(GeomAbs_G1);
+    } else if (job.continuity == 2) {
+      loft.SetContinuity(GeomAbs_G2);
+    } else {
+      throw std::runtime_error("unknown loft continuity");
+    }
+    for (std::size_t section = 0; section < section_count; ++section) {
+      loft.AddWire(make_profile_wire(
+          job, job.region_offsets[section] + wire_offset));
+    }
+    loft.Build(Message_ProgressRange());
+    if (!loft.IsDone()) {
+      throw std::runtime_error("OCCT loft construction failed");
+    }
+    return loft.Shape();
+  };
+  TopoDS_Shape result = loft_wire(0);
+  for (std::size_t hole = 1; hole < wire_count; ++hole) {
+    const TopoDS_Shape cutter = loft_wire(hole);
+    BRepAlgoAPI_Cut cut(result, cutter, Message_ProgressRange());
+    if (!cut.IsDone()) {
+      throw std::runtime_error("OCCT could not loft a profile hole");
+    }
+    result = cut.Shape();
+  }
+  return result;
+}
+
+TopoDS_Shape fuse_shapes(const std::vector<TopoDS_Shape>& shapes) {
+  if (shapes.empty()) {
+    throw std::runtime_error("extrude contains no tool profiles");
+  }
+  TopoDS_Shape result = shapes.front();
+  for (std::size_t index = 1; index < shapes.size(); ++index) {
+    BRepAlgoAPI_Fuse fuse(result, shapes[index], Message_ProgressRange());
+    if (!fuse.IsDone()) {
+      throw std::runtime_error("OCCT could not combine tool profiles");
+    }
+    fuse.SimplifyResult(true, true, 1.0e-7);
+    result = fuse.Shape();
+  }
+  return result;
+}
+
+void append_point(rust::Vec<double>& output, const gp_Pnt& point) {
+  output.push_back(point.X());
+  output.push_back(point.Y());
+  output.push_back(point.Z());
+}
+
+void append_vec(rust::Vec<float>& output, const gp_Vec& value) {
+  output.push_back(static_cast<float>(value.X()));
+  output.push_back(static_cast<float>(value.Y()));
+  output.push_back(static_cast<float>(value.Z()));
+}
+
+void append_plane(rust::Vec<double>& output, const TopoDS_Face& face) {
+  BRepAdaptor_Surface surface(face, true);
+  if (surface.GetType() != GeomAbs_Plane) {
+    for (int index = 0; index < 13; ++index) {
+      output.push_back(0.0);
+    }
+    return;
+  }
+  const gp_Pln plane = surface.Plane();
+  const gp_Ax3 axes = plane.Position();
+  gp_Dir normal = axes.Direction();
+  gp_Dir u = axes.XDirection();
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  gp_Vec v = gp_Vec(normal).Crossed(gp_Vec(u));
+  v.Normalize();
+  output.push_back(1.0);
+  append_point(output, axes.Location());
+  output.push_back(u.X());
+  output.push_back(u.Y());
+  output.push_back(u.Z());
+  output.push_back(v.X());
+  output.push_back(v.Y());
+  output.push_back(v.Z());
+  output.push_back(normal.X());
+  output.push_back(normal.Y());
+  output.push_back(normal.Z());
+}
+
+}  // namespace
+
+class Kernel::Impl {
+ public:
+  std::map<std::uint64_t, TopoDS_Shape> bodies;
+};
+
+Kernel::Kernel() : impl_(std::make_unique<Impl>()) {}
+Kernel::~Kernel() = default;
+
+void Kernel::reset() { impl_->bodies.clear(); }
+
+void Kernel::apply_job(const FfiJob& job) {
+  if (job.kind == 12) {
+    if (job.result_body_ids.size() != 1 || job.step_data.empty()) {
+      throw std::runtime_error("STEP import buffers are malformed");
+    }
+    std::string content;
+    content.reserve(job.step_data.size());
+    for (const std::uint8_t byte : job.step_data) {
+      content.push_back(static_cast<char>(byte));
+    }
+    std::istringstream stream(content);
+    STEPControl_Reader reader;
+    if (reader.ReadStream("import.step", stream) != IFSelect_RetDone) {
+      throw std::runtime_error("OCCT could not read the STEP stream");
+    }
+    if (reader.TransferRoots(Message_ProgressRange()) <= 0) {
+      throw std::runtime_error("STEP file did not contain transferable shapes");
+    }
+    const TopoDS_Shape shape = reader.OneShape();
+    if (shape.IsNull()) {
+      throw std::runtime_error("STEP import produced a null shape");
+    }
+    impl_->bodies[job.result_body_ids[0]] = shape;
+    return;
+  }
+  if (job.kind == 5 || job.kind == 6) {
+    if (job.target_body_ids.size() != 1 || job.edge_indices.empty()) {
+      throw std::runtime_error("edge refinement needs one body and at least one edge");
+    }
+    auto found = impl_->bodies.find(job.target_body_ids[0]);
+    if (found == impl_->bodies.end()) {
+      throw std::runtime_error("edge refinement target body is missing");
+    }
+    TopTools_IndexedMapOfShape edge_map;
+    TopExp::MapShapes(found->second, TopAbs_EDGE, edge_map);
+    if (job.kind == 5) {
+      BRepFilletAPI_MakeFillet fillet(found->second);
+      for (const std::uint32_t index : job.edge_indices) {
+        if (index >= static_cast<std::uint32_t>(edge_map.Extent())) {
+          throw std::runtime_error("referenced fillet edge no longer exists");
+        }
+        fillet.Add(job.radius, TopoDS::Edge(edge_map.FindKey(index + 1)));
+      }
+      fillet.Build(Message_ProgressRange());
+      if (!fillet.IsDone()) {
+        throw std::runtime_error("OCCT could not build the selected solid fillet");
+      }
+      found->second = fillet.Shape();
+    } else {
+      BRepFilletAPI_MakeChamfer chamfer(found->second);
+      for (const std::uint32_t index : job.edge_indices) {
+        if (index >= static_cast<std::uint32_t>(edge_map.Extent())) {
+          throw std::runtime_error("referenced chamfer edge no longer exists");
+        }
+        chamfer.Add(job.radius, TopoDS::Edge(edge_map.FindKey(index + 1)));
+      }
+      chamfer.Build(Message_ProgressRange());
+      if (!chamfer.IsDone()) {
+        throw std::runtime_error("OCCT could not build the selected solid chamfer");
+      }
+      found->second = chamfer.Shape();
+    }
+    return;
+  }
+  if (job.kind == 7) {
+    if (job.target_body_ids.size() != 1 || job.diameter <= 0.0 ||
+        job.end_offset <= 0.0) {
+      throw std::runtime_error("hole parameters are malformed");
+    }
+    auto found = impl_->bodies.find(job.target_body_ids[0]);
+    if (found == impl_->bodies.end()) {
+      throw std::runtime_error("hole target body is missing");
+    }
+    gp_Vec direction(job.axis_direction_x, job.axis_direction_y,
+                     job.axis_direction_z);
+    if (direction.SquareMagnitude() < 1e-18) {
+      throw std::runtime_error("hole direction is degenerate");
+    }
+    direction.Normalize();
+    const double overlap = 1e-4;
+    const gp_Pnt support(job.axis_origin_x, job.axis_origin_y,
+                         job.axis_origin_z);
+    const gp_Pnt start = support.Translated(direction.Multiplied(-overlap));
+    const gp_Ax2 axis(start, gp_Dir(direction));
+    BRepPrimAPI_MakeCylinder main_cylinder(axis, job.diameter * 0.5,
+                                           job.end_offset + overlap * 2.0);
+    TopoDS_Shape cutter = main_cylinder.Shape();
+    if (job.hole_style == 1) {
+      BRepPrimAPI_MakeCylinder counterbore(
+          axis, job.secondary_diameter * 0.5,
+          job.secondary_depth + overlap * 2.0);
+      BRepAlgoAPI_Fuse fuse(cutter, counterbore.Shape(),
+                            Message_ProgressRange());
+      if (!fuse.IsDone()) {
+        throw std::runtime_error("OCCT could not build the counterbore cutter");
+      }
+      cutter = fuse.Shape();
+    } else if (job.hole_style == 2) {
+      const double large_radius = job.secondary_diameter * 0.5;
+      const double small_radius = job.diameter * 0.5;
+      const double half_angle = job.hole_angle_deg * kPi / 360.0;
+      const double sink_depth = (large_radius - small_radius) / std::tan(half_angle);
+      if (!std::isfinite(sink_depth) || sink_depth <= 0.0) {
+        throw std::runtime_error("countersink dimensions are invalid");
+      }
+      BRepPrimAPI_MakeCone countersink(axis, large_radius, small_radius,
+                                       sink_depth + overlap);
+      BRepAlgoAPI_Fuse fuse(cutter, countersink.Shape(),
+                            Message_ProgressRange());
+      if (!fuse.IsDone()) {
+        throw std::runtime_error("OCCT could not build the countersink cutter");
+      }
+      cutter = fuse.Shape();
+    }
+    if (!job.through_all && job.hole_bottom_style == 1) {
+      const double half_angle = job.drill_point_angle_deg * kPi / 360.0;
+      const double tip_depth =
+          (job.diameter * 0.5) / std::tan(half_angle);
+      if (!std::isfinite(tip_depth) || tip_depth <= 0.0) {
+        throw std::runtime_error("drill point angle is invalid");
+      }
+      const gp_Pnt tip_start = support.Translated(
+          direction.Multiplied(job.end_offset - overlap));
+      const gp_Ax2 tip_axis(tip_start, gp_Dir(direction));
+      BRepPrimAPI_MakeCone drill_point(
+          tip_axis, job.diameter * 0.5, 0.0, tip_depth + overlap);
+      BRepAlgoAPI_Fuse fuse(cutter, drill_point.Shape(),
+                            Message_ProgressRange());
+      if (!fuse.IsDone()) {
+        throw std::runtime_error("OCCT could not build the drill point cutter");
+      }
+      cutter = fuse.Shape();
+    }
+    BRepAlgoAPI_Cut cut(found->second, cutter, Message_ProgressRange());
+    if (!cut.IsDone() || cut.Shape().IsNull()) {
+      throw std::runtime_error("OCCT hole cut failed");
+    }
+    found->second = cut.Shape();
+    return;
+  }
+  if (job.kind == 8) {
+    if (job.target_body_ids.size() != 1 || job.face_indices.empty() ||
+        !std::isfinite(job.radius) || job.radius <= 0.0) {
+      throw std::runtime_error(
+          "Shell needs one body, removable faces, and positive thickness");
+    }
+    auto found = impl_->bodies.find(job.target_body_ids[0]);
+    if (found == impl_->bodies.end()) {
+      throw std::runtime_error("Shell target body is missing");
+    }
+    TopTools_IndexedMapOfShape face_map;
+    TopExp::MapShapes(found->second, TopAbs_FACE, face_map);
+    TopTools_ListOfShape closing_faces;
+    for (const std::uint32_t index : job.face_indices) {
+      if (index >= static_cast<std::uint32_t>(face_map.Extent())) {
+        throw std::runtime_error("referenced Shell face no longer exists");
+      }
+      closing_faces.Append(face_map.FindKey(index + 1));
+    }
+    BRepOffsetAPI_MakeThickSolid shell;
+    shell.MakeThickSolidByJoin(
+        found->second, closing_faces, job.inward ? -job.radius : job.radius,
+        1.0e-3, BRepOffset_Skin, false, false, GeomAbs_Arc, true,
+        Message_ProgressRange());
+    if (!shell.IsDone() || shell.Shape().IsNull()) {
+      throw std::runtime_error("OCCT could not build the selected Shell");
+    }
+    found->second = shell.Shape();
+    return;
+  }
+  if (job.kind == 9) {
+    if (job.target_body_ids.empty() || job.transform_kinds.empty() ||
+        job.transform_values.size() != job.transform_kinds.size() * 7 ||
+        job.result_body_ids.size() !=
+            job.target_body_ids.size() * job.transform_kinds.size()) {
+      throw std::runtime_error("body transform buffers are malformed");
+    }
+    std::size_t output_index = 0;
+    for (std::size_t transform_index = 0;
+         transform_index < job.transform_kinds.size(); ++transform_index) {
+      const std::size_t offset = transform_index * 7;
+      gp_Trsf transform;
+      if (job.transform_kinds[transform_index] == 0) {
+        const gp_Vec normal(job.transform_values[offset + 3],
+                            job.transform_values[offset + 4],
+                            job.transform_values[offset + 5]);
+        if (normal.SquareMagnitude() < 1e-18) {
+          throw std::runtime_error("Mirror plane normal is degenerate");
+        }
+        transform.SetMirror(gp_Ax2(
+            gp_Pnt(job.transform_values[offset],
+                   job.transform_values[offset + 1],
+                   job.transform_values[offset + 2]),
+            gp_Dir(normal)));
+      } else if (job.transform_kinds[transform_index] == 1) {
+        transform.SetTranslation(
+            gp_Vec(job.transform_values[offset],
+                   job.transform_values[offset + 1],
+                   job.transform_values[offset + 2]));
+      } else if (job.transform_kinds[transform_index] == 2) {
+        const gp_Vec axis(job.transform_values[offset + 3],
+                          job.transform_values[offset + 4],
+                          job.transform_values[offset + 5]);
+        if (axis.SquareMagnitude() < 1e-18) {
+          throw std::runtime_error("Circular Pattern axis is degenerate");
+        }
+        transform.SetRotation(
+            gp_Ax1(gp_Pnt(job.transform_values[offset],
+                          job.transform_values[offset + 1],
+                          job.transform_values[offset + 2]),
+                   gp_Dir(axis)),
+            job.transform_values[offset + 6]);
+      } else {
+        throw std::runtime_error("unknown body transform kind");
+      }
+      for (const std::uint64_t source_id : job.target_body_ids) {
+        const auto source = impl_->bodies.find(source_id);
+        if (source == impl_->bodies.end()) {
+          throw std::runtime_error("body transform source is missing");
+        }
+        BRepBuilderAPI_Transform operation(source->second, transform, true);
+        operation.Build(Message_ProgressRange());
+        if (!operation.IsDone() || operation.Shape().IsNull()) {
+          throw std::runtime_error("OCCT body transform failed");
+        }
+        impl_->bodies[job.result_body_ids[output_index++]] =
+            operation.Shape();
+      }
+    }
+    return;
+  }
+  if (job.kind == 10) {
+    if (job.target_body_ids.size() < 2) {
+      throw std::runtime_error("Combine needs a target and at least one tool body");
+    }
+    const std::uint64_t target_id = job.target_body_ids[0];
+    auto target = impl_->bodies.find(target_id);
+    if (target == impl_->bodies.end()) {
+      throw std::runtime_error("Combine target body is missing");
+    }
+    TopoDS_Shape result = target->second;
+    for (std::size_t index = 1; index < job.target_body_ids.size(); ++index) {
+      const auto tool = impl_->bodies.find(job.target_body_ids[index]);
+      if (tool == impl_->bodies.end()) {
+        throw std::runtime_error("Combine tool body is missing");
+      }
+      if (job.operation == 1) {
+        BRepAlgoAPI_Fuse operation(result, tool->second,
+                                   Message_ProgressRange());
+        if (!operation.IsDone()) {
+          throw std::runtime_error("OCCT Combine Join failed");
+        }
+        operation.SimplifyResult(true, true, 1.0e-7);
+        result = operation.Shape();
+      } else if (job.operation == 2) {
+        BRepAlgoAPI_Cut operation(result, tool->second,
+                                  Message_ProgressRange());
+        if (!operation.IsDone()) {
+          throw std::runtime_error("OCCT Combine Cut failed");
+        }
+        operation.SimplifyResult(true, true, 1.0e-7);
+        result = operation.Shape();
+      } else if (job.operation == 3) {
+        BRepAlgoAPI_Common operation(result, tool->second,
+                                     Message_ProgressRange());
+        if (!operation.IsDone()) {
+          throw std::runtime_error("OCCT Combine Intersect failed");
+        }
+        operation.SimplifyResult(true, true, 1.0e-7);
+        result = operation.Shape();
+      } else {
+        throw std::runtime_error("unknown Combine operation");
+      }
+      if (result.IsNull()) {
+        throw std::runtime_error("Combine produced a null body");
+      }
+    }
+    impl_->bodies[target_id] = result;
+    if (!job.keep_tools) {
+      for (std::size_t index = 1; index < job.target_body_ids.size(); ++index) {
+        impl_->bodies.erase(job.target_body_ids[index]);
+      }
+    }
+    return;
+  }
+  if (job.kind == 11) {
+    if (job.target_body_ids.size() != 1 || job.result_body_ids.size() != 2) {
+      throw std::runtime_error("Split Body buffers are malformed");
+    }
+    const auto target = impl_->bodies.find(job.target_body_ids[0]);
+    if (target == impl_->bodies.end()) {
+      throw std::runtime_error("Split Body target is missing");
+    }
+    const gp_Vec normal(job.axis_direction_x, job.axis_direction_y,
+                        job.axis_direction_z);
+    if (normal.SquareMagnitude() < 1e-18) {
+      throw std::runtime_error("Split Body plane normal is degenerate");
+    }
+    const gp_Pnt origin(job.axis_origin_x, job.axis_origin_y,
+                        job.axis_origin_z);
+    const gp_Vec unit = normal.Normalized();
+    BRepBuilderAPI_MakeFace plane(gp_Pln(origin, gp_Dir(unit)));
+    if (!plane.IsDone()) {
+      throw std::runtime_error("OCCT could not build the splitting plane");
+    }
+    const TopoDS_Shape positive_half =
+        BRepPrimAPI_MakeHalfSpace(
+            plane.Face(), origin.Translated(unit.Multiplied(1.0))).Shape();
+    const TopoDS_Shape negative_half =
+        BRepPrimAPI_MakeHalfSpace(
+            plane.Face(), origin.Translated(unit.Multiplied(-1.0))).Shape();
+    BRepAlgoAPI_Common positive(target->second, positive_half,
+                                Message_ProgressRange());
+    BRepAlgoAPI_Common negative(target->second, negative_half,
+                                Message_ProgressRange());
+    if (!positive.IsDone() || !negative.IsDone() ||
+        positive.Shape().IsNull() || negative.Shape().IsNull()) {
+      throw std::runtime_error("OCCT Split Body failed");
+    }
+    impl_->bodies[job.result_body_ids[0]] = positive.Shape();
+    impl_->bodies[job.result_body_ids[1]] = negative.Shape();
+    return;
+  }
+  if (job.profile_offsets.size() < 2 ||
+      job.profile_offsets[job.profile_offsets.size() - 1] * 3 !=
+          job.points.size()) {
+    throw std::runtime_error("profile buffers are malformed");
+  }
+  if (job.region_offsets.size() < 2 || job.region_offsets.front() != 0 ||
+      job.region_offsets.back() + 1 != job.profile_offsets.size()) {
+    throw std::runtime_error("profile region buffers are malformed");
+  }
+  const std::size_t profile_count = job.region_offsets.size() - 1;
+  std::vector<TopoDS_Shape> tools;
+  if (job.kind == 3) {
+    tools.push_back(make_loft_tool(job));
+  } else {
+    tools.reserve(profile_count);
+    for (std::size_t index = 0; index < profile_count; ++index) {
+      tools.push_back(make_tool(job, index));
+    }
+  }
+
+  if (job.operation == 0) {
+    if (job.result_body_ids.size() != tools.size()) {
+      throw std::runtime_error("New Body output count does not match profiles");
+    }
+    for (std::size_t index = 0; index < tools.size(); ++index) {
+      impl_->bodies[job.result_body_ids[index]] = tools[index];
+    }
+    return;
+  }
+  if (job.operation == 1 && job.target_body_ids.empty()) {
+    if (tools.size() < 2 || job.result_body_ids.size() != 1) {
+      throw std::runtime_error(
+          "Join Profiles needs multiple profiles and one output body");
+    }
+    impl_->bodies[job.result_body_ids[0]] = fuse_shapes(tools);
+    return;
+  }
+  if (job.target_body_ids.empty()) {
+    throw std::runtime_error("boolean solid feature has no target body");
+  }
+  const TopoDS_Shape tool = fuse_shapes(tools);
+  for (const std::uint64_t body_id : job.target_body_ids) {
+    auto found = impl_->bodies.find(body_id);
+    if (found == impl_->bodies.end()) {
+      throw std::runtime_error("boolean target body is missing");
+    }
+    TopoDS_Shape result;
+    if (job.operation == 1) {
+      BRepAlgoAPI_Fuse operation(found->second, tool, Message_ProgressRange());
+      if (!operation.IsDone()) {
+        throw std::runtime_error("OCCT Join failed");
+      }
+      operation.SimplifyResult(true, true, 1.0e-7);
+      result = operation.Shape();
+    } else if (job.operation == 2) {
+      BRepAlgoAPI_Cut operation(found->second, tool, Message_ProgressRange());
+      if (!operation.IsDone()) {
+        throw std::runtime_error("OCCT Cut failed");
+      }
+      operation.SimplifyResult(true, true, 1.0e-7);
+      result = operation.Shape();
+    } else if (job.operation == 3) {
+      BRepAlgoAPI_Common operation(found->second, tool, Message_ProgressRange());
+      if (!operation.IsDone()) {
+        throw std::runtime_error("OCCT Intersect failed");
+      }
+      operation.SimplifyResult(true, true, 1.0e-7);
+      result = operation.Shape();
+    } else {
+      throw std::runtime_error("unknown solid operation");
+    }
+    if (result.IsNull()) {
+      throw std::runtime_error("boolean operation produced a null shape");
+    }
+    found->second = result;
+  }
+}
+
+rust::Vec<std::uint64_t> Kernel::body_ids() const {
+  rust::Vec<std::uint64_t> result;
+  result.reserve(impl_->bodies.size());
+  for (const auto& entry : impl_->bodies) {
+    result.push_back(entry.first);
+  }
+  return result;
+}
+
+FfiMesh Kernel::mesh(std::uint64_t body_id) const {
+  const auto found = impl_->bodies.find(body_id);
+  if (found == impl_->bodies.end()) {
+    throw std::runtime_error("body is missing");
+  }
+  const TopoDS_Shape& shape = found->second;
+  BRepMesh_IncrementalMesh mesher(shape, 0.15, false, 0.35, true);
+  mesher.Perform();
+
+  FfiMesh output;
+  output.body_id = body_id;
+  TopTools_IndexedMapOfShape face_map;
+  TopExp::MapShapes(shape, TopAbs_FACE, face_map);
+  for (int face_index = 1; face_index <= face_map.Extent(); ++face_index) {
+    const TopoDS_Face face = TopoDS::Face(face_map.FindKey(face_index));
+    TopLoc_Location location;
+    const Handle(Poly_Triangulation) triangulation =
+        BRep_Tool::Triangulation(face, location);
+    if (triangulation.IsNull()) {
+      continue;
+    }
+    if (!triangulation->HasNormals()) {
+      triangulation->ComputeNormals();
+    }
+    output.face_first_indices.push_back(
+        static_cast<std::uint32_t>(output.indices.size()));
+    const gp_Trsf transform = location.Transformation();
+    for (int triangle_index = 1;
+         triangle_index <= triangulation->NbTriangles(); ++triangle_index) {
+      const Poly_Triangle triangle = triangulation->Triangle(triangle_index);
+      int indices[3] = {triangle.Value(1), triangle.Value(2),
+                        triangle.Value(3)};
+      if (face.Orientation() == TopAbs_REVERSED) {
+        std::swap(indices[1], indices[2]);
+      }
+      gp_Pnt points[3] = {triangulation->Node(indices[0]).Transformed(transform),
+                          triangulation->Node(indices[1]).Transformed(transform),
+                          triangulation->Node(indices[2]).Transformed(transform)};
+      gp_Vec triangle_normal(points[0], points[1]);
+      triangle_normal.Cross(gp_Vec(points[0], points[2]));
+      if (triangle_normal.SquareMagnitude() <= 1e-24) {
+        continue;
+      }
+      for (int vertex = 0; vertex < 3; ++vertex) {
+        gp_Dir normal = triangulation->Normal(indices[vertex]);
+        normal.Transform(transform);
+        if (face.Orientation() == TopAbs_REVERSED) {
+          normal.Reverse();
+        }
+        output.positions.push_back(static_cast<float>(points[vertex].X()));
+        output.positions.push_back(static_cast<float>(points[vertex].Y()));
+        output.positions.push_back(static_cast<float>(points[vertex].Z()));
+        append_vec(output.normals, gp_Vec(normal));
+        output.indices.push_back(
+            static_cast<std::uint32_t>(output.indices.size()));
+      }
+    }
+    output.face_index_counts.push_back(
+        static_cast<std::uint32_t>(output.indices.size()) -
+        output.face_first_indices.back());
+    append_plane(output.face_plane_data, face);
+  }
+
+  output.edge_point_offsets.push_back(0);
+  TopTools_IndexedMapOfShape edge_map;
+  TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
+  TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE,
+                                      edge_faces, false);
+  for (int edge_index = 1; edge_index <= edge_map.Extent(); ++edge_index) {
+    const TopoDS_Edge edge = TopoDS::Edge(edge_map.FindKey(edge_index));
+    bool refinable = false;
+    if (edge_faces.Contains(edge)) {
+      const TopTools_ListOfShape& adjacent_faces =
+          edge_faces.FindFromKey(edge);
+      if (adjacent_faces.Extent() == 2) {
+        TopTools_ListIteratorOfListOfShape iterator(adjacent_faces);
+        const TopoDS_Face first_face = TopoDS::Face(iterator.Value());
+        iterator.Next();
+        const TopoDS_Face second_face = TopoDS::Face(iterator.Value());
+        refinable =
+            BRep_Tool::Continuity(edge, first_face, second_face) == GeomAbs_C0;
+      }
+    }
+    output.edge_refinable.push_back(refinable ? 1 : 0);
+    BRepAdaptor_Curve curve(edge);
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    const int sample_count =
+        curve.GetType() == GeomAbs_Line ? 2 : 25;
+    for (int sample = 0; sample < sample_count; ++sample) {
+      const double t =
+          first + (last - first) * static_cast<double>(sample) /
+                      static_cast<double>(sample_count - 1);
+      append_point(output.edge_points, curve.Value(t));
+    }
+    output.edge_point_offsets.push_back(
+        static_cast<std::uint32_t>(output.edge_points.size() / 3));
+  }
+  return output;
+}
+
+rust::Vec<std::uint8_t> Kernel::export_step(
+    const rust::Vec<std::uint64_t>& requested_body_ids) const {
+  if (impl_->bodies.empty()) {
+    throw std::runtime_error("there are no active bodies to export");
+  }
+  STEPControl_Writer writer;
+  if (!Interface_Static::SetIVal("write.step.schema", 5)) {
+    throw std::runtime_error("OCCT does not expose the AP242 STEP schema");
+  }
+  // STEPControl_Writer constructs an AP214 model by default. OCCT requires
+  // a fresh model after changing write.step.schema for that setting to take
+  // effect.
+  (void)writer.Model(Standard_True);
+  auto transfer = [&](const TopoDS_Shape& shape) {
+    const IFSelect_ReturnStatus status =
+        writer.Transfer(shape, STEPControl_AsIs, true, Message_ProgressRange());
+    if (status != IFSelect_RetDone) {
+      throw std::runtime_error("OCCT could not transfer a body to STEP");
+    }
+  };
+  if (requested_body_ids.empty()) {
+    for (const auto& [body_id, shape] : impl_->bodies) {
+      (void)body_id;
+      transfer(shape);
+    }
+  } else {
+    for (const std::uint64_t body_id : requested_body_ids) {
+      const auto found = impl_->bodies.find(body_id);
+      if (found == impl_->bodies.end()) {
+        throw std::runtime_error("selected STEP export body is missing");
+      }
+      transfer(found->second);
+    }
+  }
+
+  std::ostringstream stream;
+  if (writer.WriteStream(stream) != IFSelect_RetDone) {
+    throw std::runtime_error("OCCT could not write the STEP stream");
+  }
+  const std::string bytes = stream.str();
+  rust::Vec<std::uint8_t> output;
+  output.reserve(bytes.size());
+  for (const unsigned char byte : bytes) {
+    output.push_back(byte);
+  }
+  return output;
+}
+
+std::unique_ptr<Kernel> new_kernel() { return std::make_unique<Kernel>(); }
+
+}  // namespace nbcad_occt

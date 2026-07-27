@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+    <title>noBS CAD</title>
+    <script>
+      (() => {
+        const key = 'nbcad.theme';
+        let preference = 'system';
+        try {
+          const stored = localStorage.getItem(key);
+          if (stored === 'system' || stored === 'light' || stored === 'dark') {
+            preference = stored;
+          }
+        } catch {}
+        const resolved =
+          preference === 'system'
+            ? matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : preference;
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.style.colorScheme = resolved;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

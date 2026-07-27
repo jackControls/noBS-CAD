@@ -1,0 +1,16 @@
+[package]
+name = "nbcad-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Headless MCP stdio server for noBS CAD sketch and solid tools"
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+# Keep native OCCT out of the host-neutral root workspace.
+[workspace]
+
+[dependencies]
+serde_json = "1"
+nbcad-sketch = { path = "../crates/sketch" }
+nbcad-solid = { path = "../crates/solid" }
+nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
