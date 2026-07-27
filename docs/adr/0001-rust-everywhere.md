@@ -22,5 +22,7 @@ The geometry kernel, history, and MCP server are already Rust. The UI is React/T
 
 ## Follow-up PRs
 
-- Packaging matrix checklist + Windows portable path (fork already explores this)
-- Shared export crate used by Tauri and MCP
+- Windows portable CI exists (merged #1); extend with engine/MCP required
+  checks ([#14](https://github.com/jackControls/noBS-CAD/issues/14)).
+- Shared export crate used by Tauri and MCP (pairs with [#13](https://github.com/jackControls/noBS-CAD/issues/13)).
+- Packaging parity for Linux remains an open gap; track in issues, not README hope.
