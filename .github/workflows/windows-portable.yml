@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+env:
+  VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
+
 concurrency:
   group: windows-portable-${{ github.ref }}
   cancel-in-progress: true
@@ -33,6 +37,35 @@ jobs:
           ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
           path: .vcpkg
           fetch-depth: 0
+
+      - name: Detect MSVC toolset
+        id: msvc
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationRoot = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installationRoot)) {
+            throw "Visual Studio C++ Build Tools were not found"
+          }
+          $versionFile = Join-Path `
+            $installationRoot `
+            "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          if (-not (Test-Path $versionFile -PathType Leaf)) {
+            throw "MSVC toolset version file was not found: $versionFile"
+          }
+          $toolset = (Get-Content $versionFile -Raw).Trim()
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$toolset"
+          Write-Host "MSVC toolset: $toolset"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: vcpkg-binary-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -57,6 +90,11 @@ jobs:
       - name: Bootstrap vcpkg
         shell: pwsh
         run: |
+          New-Item `
+            -ItemType Directory `
+            -Path $env:VCPKG_BINARY_CACHE `
+            -Force |
+            Out-Null
           & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"

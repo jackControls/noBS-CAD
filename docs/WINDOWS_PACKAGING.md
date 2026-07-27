@@ -87,11 +87,20 @@ Microsoft Visual C++ runtime.
 dispatches. It:
 
 1. checks out the pinned vcpkg registry;
-2. installs OCCT 7.9.3 for `x64-windows`;
-3. creates the portable ZIP;
-4. launches the packaged executable long enough to catch missing DLL or
+2. restores an ABI-keyed vcpkg binary cache when one is available;
+3. installs OCCT 7.9.3 for `x64-windows`, compiling only on a cache miss;
+4. creates the portable ZIP;
+5. launches the packaged executable long enough to catch missing DLL or
    WebView startup failures;
-5. uploads the ZIP and SHA-256 file for seven days.
+6. uploads the ZIP and SHA-256 file for seven days.
+
+The binary-cache key includes the pinned dependency manifest and the installed
+MSVC toolset version. The first run for a new combination compiles OCCT and
+stores vcpkg's binary packages; subsequent runs restore those packages instead
+of rebuilding OCCT from source. GitHub scopes pull-request caches separately,
+so a manual run on `main` seeds the default-branch cache that future branches
+can reuse. Cache eviction or a dependency, triplet, or toolset change causes a
+safe rebuild rather than reusing an incompatible binary.
 
 The workflow intentionally uses a standard GitHub-hosted runner, which is free
 for this public repository. Short artifact retention keeps temporary storage
@@ -115,3 +124,5 @@ bounded.
   <https://v2.tauri.app/distribute/windows-installer/#webview2-installation-options>
 - Microsoft Visual C++ runtime deployment:
   <https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files>
+- vcpkg binary caching:
+  <https://learn.microsoft.com/vcpkg/users/binarycaching>

@@ -183,7 +183,9 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
 - macOS CI and releases: use an immutable OCCT 7.9.3 SDK artifact via
   `OCCT_ROOT`.
 - Windows CI: use the committed vcpkg baseline and OCCT 7.9.3 override,
-  installed as the dynamic `x64-windows` triplet.
+  installed as the dynamic `x64-windows` triplet. Preserve vcpkg binary
+  packages in an ABI-keyed CI cache; a cache miss must rebuild from the pinned
+  sources.
 - Browser: keep the exact OpenCascade.js package version; upgrades require
   native/browser conformance fixtures and a checked bundle-size report.
 - The lockfile is committed with the exact browser-kernel package resolution.
@@ -212,6 +214,8 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
 - Tauri Windows prerequisites: <https://v2.tauri.app/start/prerequisites/>
 - Microsoft Visual C++ runtime deployment:
   <https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files>
+- vcpkg binary caching:
+  <https://learn.microsoft.com/vcpkg/users/binarycaching>
 - OpenCascade.js prebuilt workflow: <https://ocjs.org/docs/app-dev-workflow/pre-built>
 - OpenCascade.js custom builds: <https://ocjs.org/docs/app-dev-workflow/custom-builds>
 - OpenCascade.js file size notes: <https://ocjs.org/docs/getting-started/file-size>
