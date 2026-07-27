@@ -1,10 +1,18 @@
 # Contributing to noBS CAD
 
-Issue-first, worktree-per-change, PR-babysit-to-merge.
+Issue-first, worktree-per-change, PR-babysit-to-merge, **prove it ran**.
+
+Harness / agentic backlog: epic
+[#9](https://github.com/jackControls/noBS-CAD/issues/9).
+Runnable evidence on PRs:
+[#18](https://github.com/jackControls/noBS-CAD/issues/18).
+CI checks:
+[#14](https://github.com/jackControls/noBS-CAD/issues/14).
 
 ## 1. Start from an issue
 
-1. Search existing issues before opening a new one (deduplicate).
+1. Search existing issues before opening a new one (deduplicate). Prefer linking
+   children of epic #9 when the work is harness / MCP / export / CI related.
 2. One issue = one problem or proposal. Link related issues instead of restating them.
 3. Prefer labels: `bug`, `enhancement`, `agent`, `docs`, `geometry`, `mcp`, `packaging`.
 4. Do not start implementation without an issue number you can put on the branch and PR.
@@ -27,13 +35,26 @@ Keep `main` checked out in the primary clone; do all feature work in the worktre
 - Keep diffs focused. Prefer small PRs over multi-week branches.
 - Add or extend tests for geometry/MCP regressions when you change behavior.
 - Do not commit secrets, local OCCT paths, or machine-specific config.
+- Do not claim MCP↔UI co-link, focus-aware tools, or multi-window agent control
+  until those issues are done ([#22](https://github.com/jackControls/noBS-CAD/issues/22)).
 
 ## 4. Open a PR
 
 - Title: imperative, scoped (`mcp: add solid_export_3mf`, not `updates`).
-- Body: link the issue (`Fixes #N` / `Refs #N`), summary, test plan.
+- Body: link the issue (`Fixes #N` / `Refs #N`), summary, **validation evidence**.
 - Request review. Expect automated review (Bugbot / CODEOWNERS) where configured.
 - Keep the PR mergeable: rebase or merge `main` when behind.
+
+### Validation evidence (required)
+
+Check **one** of the following in the PR template ([#18](https://github.com/jackControls/noBS-CAD/issues/18)):
+
+- [ ] Ran `cargo test --workspace` (or named crates) — paste summary
+- [ ] Ran MCP scenario (tool sequence) — describe
+- [ ] Ran named e2e script (e.g. `npm run e2e:m2`) — say which
+- [ ] Docs-only / no runtime impact — state explicitly
+
+“Looks good in the editor” is not enough for engine/MCP/UI behavior changes.
 
 ## 5. Babysit until merge
 
@@ -48,12 +69,15 @@ Maintainers merge only when the above holds and branch protection allows it.
 
 ## 6. Branch protection (maintainers)
 
-Recommended `main` rules once CI exists:
+Enable **after** engine/MCP jobs from [#14](https://github.com/jackControls/noBS-CAD/issues/14)
+are green. Today only Windows portable CI exists — do not require checks that
+do not exist yet.
 
-- Require pull request before merge
-- Require at least one approving review
-- Require status checks to pass (build/test/e2e subset)
-- Disallow force-push to `main`
-- Prefer linear history (squash or rebase merge)
+See [docs/branch-protection.md](docs/branch-protection.md) and
+[docs/process.md](docs/process.md).
 
-See `docs/process.md` for the full agent/human loop.
+## License / borrow
+
+Project is **LGPL-2.0-or-later**. Peer projects (e.g. Open CAD Studio, **GPL-3**)
+— borrow **ideas**, not code, unless counsel says otherwise
+([#19](https://github.com/jackControls/noBS-CAD/issues/19)).
