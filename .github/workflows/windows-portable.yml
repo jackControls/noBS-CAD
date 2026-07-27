@@ -32,6 +32,7 @@ jobs:
           repository: microsoft/vcpkg
           ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
           path: .vcpkg
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
