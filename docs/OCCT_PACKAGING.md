@@ -1,6 +1,6 @@
 # OCCT Packaging and Browser/WASM Strategy
 
-Status: implemented for the current macOS/browser baseline.
+Status: implemented for the current macOS, Windows x64, and browser baseline.
 
 ## 1. Ownership boundary
 
@@ -62,7 +62,8 @@ cargo test -p nbcad-occt --features native-occt
 ```
 
 `OCCT_ROOT` must contain `include/opencascade` (or `include`) and `lib` (or
-`lib64`). Homebrew locations are probed only when `OCCT_ROOT` is absent.
+`lib64`). A Windows SDK may use `inc` plus a supported `win64/vc*/lib`
+directory. Homebrew locations are probed only when `OCCT_ROOT` is absent.
 
 ## 3. Reproducible macOS application bundle
 
@@ -121,7 +122,28 @@ For signed/notarized releases, supply the normal Tauri Apple signing identity
 and credentials. The local ad-hoc seal is a verification aid, not distribution
 signing.
 
-## 4. Browser/WASM development
+## 4. Reproducible Windows portable build
+
+The first Windows target is x64 Windows 10 version 1803 or newer and Windows
+11. It uses the system WebView2 runtime and requires Microsoft's centrally
+installed Visual C++ v14 x64 Redistributable.
+
+The root `vcpkg.json` pins both the vcpkg registry and OCCT 7.9.3. The Windows
+packager compiles the Tauri executable with `--no-bundle`, copies the complete
+DLL set from the isolated vcpkg prefix beside the executable, adds licenses,
+and creates a ZIP plus SHA-256 file:
+
+```powershell
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
+npm run bundle:windows:portable
+```
+
+GitHub Actions performs the same operation on a standard `windows-2025`
+runner and launch-smoke-tests the packaged executable before uploading it.
+See [Windows portable packaging](WINDOWS_PACKAGING.md) for exact setup and
+runtime requirements.
+
+## 5. Browser/WASM development
 
 The browser host combines two WASM modules:
 
@@ -155,17 +177,22 @@ contains only the symbols reached by `occtBrowser.ts`, then lock it by content
 digest and run the native/browser conformance suite. Threaded OpenCascade.js is
 deferred until hosting provides COOP/COEP cross-origin isolation.
 
-## 5. Version and CI policy
+## 6. Version and CI policy
 
 - Local development: Homebrew OCCT 7.9.x is supported.
-- CI and releases: use an immutable OCCT 7.9.3 SDK artifact via `OCCT_ROOT`.
+- macOS CI and releases: use an immutable OCCT 7.9.3 SDK artifact via
+  `OCCT_ROOT`.
+- Windows CI: use the committed vcpkg baseline and OCCT 7.9.3 override,
+  installed as the dynamic `x64-windows` triplet. Preserve vcpkg binary
+  packages in an ABI-keyed CI cache; a cache miss must rebuild from the pinned
+  sources.
 - Browser: keep the exact OpenCascade.js package version; upgrades require
   native/browser conformance fixtures and a checked bundle-size report.
 - The lockfile is committed with the exact browser-kernel package resolution.
 - A release is blocked by absolute non-system dylib paths, signature failure,
   mismatched topology IDs, or divergent native/browser feature results.
 
-## 6. Current limitations
+## 7. Current limitations
 
 - `To Face` supports a parallel planar target face.
 - `Through All` uses a finite ±1,000,000 mm construction extent.
@@ -179,11 +206,16 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
 - Public-web payload optimization and native/browser fixture automation remain
   release hardening work.
 
-## 7. Upstream references
+## 8. Upstream references
 
 - OCCT build guidance: <https://dev.opencascade.org/doc/overview/html/build_upgrade__building_occt.html>
 - OCCT meshing guidance: <https://github.com/Open-Cascade-SAS/OCCT/wiki/mesh>
 - Homebrew OCCT formula: <https://formulae.brew.sh/formula/opencascade>
+- Tauri Windows prerequisites: <https://v2.tauri.app/start/prerequisites/>
+- Microsoft Visual C++ runtime deployment:
+  <https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files>
+- vcpkg binary caching:
+  <https://learn.microsoft.com/vcpkg/users/binarycaching>
 - OpenCascade.js prebuilt workflow: <https://ocjs.org/docs/app-dev-workflow/pre-built>
 - OpenCascade.js custom builds: <https://ocjs.org/docs/app-dev-workflow/custom-builds>
 - OpenCascade.js file size notes: <https://ocjs.org/docs/getting-started/file-size>

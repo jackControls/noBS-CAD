@@ -114,9 +114,29 @@ earn trust one operation at a time. We would love to hear from CAM experts!
 
 ## Build locally
 
+### Windows x64 portable build
+
+The Windows release path targets Windows 10 version 1803 or newer and Windows
+11. It produces a portable ZIP rather than an installer, uses the WebView2
+runtime supplied by Windows, and requires Microsoft's centrally installed
+Visual C++ v14 x64 Redistributable.
+
+The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
+SDK, Rust, Node.js, `wasm-pack`, and the pinned OCCT 7.9.3 vcpkg dependency.
+After installing the pinned vcpkg manifest:
+
+```powershell
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
+npm ci
+npm run bundle:windows:portable
+```
+
+See [Windows portable packaging](docs/WINDOWS_PACKAGING.md) for the complete
+setup, output layout, runtime requirements, and GitHub Actions workflow.
+
 ### Native macOS development bundle
 
-The current native packaging path is macOS and uses Tauri with OCCT 7.9.x.
+The macOS packaging path uses Tauri with OCCT 7.9.x.
 
 ```sh
 brew install opencascade wasm-pack
@@ -168,6 +188,7 @@ npm run build
 Public technical references:
 
 - [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md)
+- [Windows portable packaging](docs/WINDOWS_PACKAGING.md)
 - [MCP server](mcp-server/README.md)
 - [Icon provenance](docs/ICON_PROVENANCE.md)
 - [Generated WASM bundle](src/engine-wasm/README.md)

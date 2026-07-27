@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "nbcad-native-dependencies",
+  "version-string": "0.1.0",
+  "builtin-baseline": "716b42043743cdceabed9c8e2e6cf80ddae1e0c1",
+  "dependencies": [
+    "opencascade"
+  ],
+  "overrides": [
+    {
+      "name": "opencascade",
+      "version": "7.9.3",
+      "port-version": 1
+    }
+  ]
+}

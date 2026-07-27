@@ -1,0 +1,149 @@
+name: Windows portable
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
+
+concurrency:
+  group: windows-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-portable:
+    name: Windows x64 portable ZIP
+    runs-on: windows-2025
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Check out pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
+          path: .vcpkg
+          fetch-depth: 0
+
+      - name: Detect MSVC toolset
+        id: msvc
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationRoot = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installationRoot)) {
+            throw "Visual Studio C++ Build Tools were not found"
+          }
+          $versionFile = Join-Path `
+            $installationRoot `
+            "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          if (-not (Test-Path $versionFile -PathType Leaf)) {
+            throw "MSVC toolset version file was not found: $versionFile"
+          }
+          $toolset = (Get-Content $versionFile -Raw).Trim()
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$toolset"
+          Write-Host "MSVC toolset: $toolset"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: vcpkg-binary-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          New-Item `
+            -ItemType Directory `
+            -Path $env:VCPKG_BINARY_CACHE `
+            -Force |
+            Out-Null
+          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Install pinned OpenCASCADE 7.9.3
+        shell: pwsh
+        run: |
+          & .\.vcpkg\vcpkg.exe install `
+            --triplet x64-windows `
+            --x-manifest-root="$env:GITHUB_WORKSPACE" `
+            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg install failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build portable ZIP
+        shell: pwsh
+        env:
+          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+        run: npm run bundle:windows:portable
+
+      - name: Smoke-test packaged executable
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem `
+            "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\portable" `
+            -Directory |
+            Select-Object -First 1
+          if (-not $package) {
+            throw "Portable package directory was not created"
+          }
+          $process = Start-Process `
+            -FilePath (Join-Path $package.FullName "noBS-CAD.exe") `
+            -WorkingDirectory $package.FullName `
+            -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) {
+            throw "Portable application exited during launch smoke test (code $($process.ExitCode))"
+          }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Upload portable release
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-0.1.0-windows-x64
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.zip
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
