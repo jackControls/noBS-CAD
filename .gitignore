@@ -17,12 +17,16 @@ __pycache__/
 *.py[cod]
 
 # Local AI-assistant instructions and continuity state.
+# Root AGENTS.md is the shared agent entrypoint (tracked).
 **/CLAUDE.md
-**/AGENTS.md
 **/CODEX.md
 .claude/
 .agents/
 .codex/
+# Nested AGENTS.md copies remain local-only.
+**/AGENTS.md
+!/AGENTS.md
+!AGENTS.md
 
 # Internal development memory used to resume and steer agent work.
 docs/HANDOFF.md
