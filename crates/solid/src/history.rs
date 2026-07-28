@@ -2472,6 +2472,7 @@ fn make_jobs(
                         countersink_angle_deg: definition.countersink_angle_deg,
                         bottom_style: definition.bottom_style,
                         drill_point_angle_deg: definition.drill_point_angle_deg,
+                        thread: definition.thread.clone(),
                     }));
                 }
             }
@@ -3600,6 +3601,7 @@ fn validate_hole(request: &HoleRequest) -> Result<(), SolidError> {
         request.countersink_angle_deg,
         request.bottom_style,
         request.drill_point_angle_deg,
+        request.thread.as_ref(),
     )
 }
 
@@ -3617,6 +3619,7 @@ fn validate_hole_definition(definition: &HoleDefinitionDto) -> Result<(), SolidE
         definition.countersink_angle_deg,
         definition.bottom_style,
         definition.drill_point_angle_deg,
+        definition.thread.as_ref(),
     )
 }
 
@@ -3645,6 +3648,7 @@ fn validate_hole_values(
     countersink_angle_deg: f64,
     bottom_style: HoleBottomStyle,
     drill_point_angle_deg: f64,
+    thread: Option<&HoleThreadDto>,
 ) -> Result<(), SolidError> {
     if let HoleExtent::Distance { depth } = extent {
         validate_positive(depth, "hole depth")?;
@@ -3686,6 +3690,92 @@ fn validate_hole_values(
             "drill point angle must be between 0° and 180°".to_string(),
         ));
     }
+    if let Some(thread) = thread {
+        validate_hole_thread(thread, diameter, extent)?;
+    }
+    Ok(())
+}
+
+fn validate_hole_thread(
+    thread: &HoleThreadDto,
+    predrill_diameter: f64,
+    hole_extent: HoleExtent,
+) -> Result<(), SolidError> {
+    validate_positive(thread.nominal_diameter, "thread nominal diameter")?;
+    validate_positive(thread.pitch, "thread pitch")?;
+    if thread.designation.trim().is_empty() {
+        return Err(SolidError::InvalidExtent(
+            "thread designation cannot be empty".to_string(),
+        ));
+    }
+    if thread.class.trim().is_empty() {
+        return Err(SolidError::InvalidExtent(
+            "thread tolerance class cannot be empty".to_string(),
+        ));
+    }
+    if thread.nominal_diameter <= predrill_diameter + EPS {
+        return Err(SolidError::InvalidExtent(
+            "thread nominal diameter must exceed the predrill diameter".to_string(),
+        ));
+    }
+    match (thread.standard, thread.series) {
+        (
+            HoleThreadStandard::IsoMetric,
+            HoleThreadSeries::MetricCoarse | HoleThreadSeries::MetricFine,
+        )
+        | (HoleThreadStandard::UnifiedInch, HoleThreadSeries::Unc | HoleThreadSeries::Unf) => {}
+        _ => {
+            return Err(SolidError::InvalidExtent(
+                "thread series does not match its standard".to_string(),
+            ));
+        }
+    }
+    match thread.standard {
+        HoleThreadStandard::IsoMetric => {
+            if thread.threads_per_inch.is_some() {
+                return Err(SolidError::InvalidExtent(
+                    "ISO metric threads must not specify threads per inch".to_string(),
+                ));
+            }
+        }
+        HoleThreadStandard::UnifiedInch => {
+            let tpi = thread.threads_per_inch.ok_or_else(|| {
+                SolidError::InvalidExtent(
+                    "Unified threads must specify threads per inch".to_string(),
+                )
+            })?;
+            validate_positive(tpi, "threads per inch")?;
+            let expected_pitch = 25.4 / tpi;
+            if (thread.pitch - expected_pitch).abs() > expected_pitch * 1e-6 {
+                return Err(SolidError::InvalidExtent(
+                    "Unified thread pitch must equal 25.4 / threads per inch".to_string(),
+                ));
+            }
+        }
+    }
+    if let Some(depth) = thread.depth {
+        validate_positive(depth, "thread depth")?;
+        if let HoleExtent::Distance { depth: hole_depth } = hole_extent {
+            if depth > hole_depth + EPS {
+                return Err(SolidError::InvalidExtent(
+                    "thread depth cannot exceed the cylindrical hole depth".to_string(),
+                ));
+            }
+        }
+    }
+    if thread.representation == HoleThreadRepresentation::Modeled {
+        // Start with the P/8 basic root flat at the major diameter, then
+        // widen toward the actual predrill along 60° flanks. An excessively
+        // small custom predrill would make adjacent turns overlap.
+        let radial_depth = (thread.nominal_diameter - predrill_diameter) * 0.5;
+        let inner_half_width = thread.pitch * 0.0625 + radial_depth * (30.0_f64.to_radians().tan());
+        if inner_half_width >= thread.pitch * 0.499 {
+            return Err(SolidError::InvalidExtent(
+                "predrill diameter is too small for a non-overlapping 60° modeled thread"
+                    .to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -3712,6 +3802,7 @@ fn hole_definition(
         countersink_angle_deg: request.countersink_angle_deg,
         bottom_style: request.bottom_style,
         drill_point_angle_deg: request.drill_point_angle_deg,
+        thread: request.thread,
         flip: request.flip,
         face_basis: Some(face_basis),
     }
@@ -4017,6 +4108,84 @@ mod tests {
         );
     }
 
+    fn metric_thread() -> HoleThreadDto {
+        HoleThreadDto {
+            standard: HoleThreadStandard::IsoMetric,
+            series: HoleThreadSeries::MetricCoarse,
+            designation: "M6 x 1 - 6H".to_string(),
+            class: "6H".to_string(),
+            nominal_diameter: 6.0,
+            pitch: 1.0,
+            threads_per_inch: None,
+            hand: HoleThreadHand::Right,
+            depth: Some(7.0),
+            representation: HoleThreadRepresentation::Modeled,
+            tap_drill_designation: Some("5 mm".to_string()),
+        }
+    }
+
+    #[test]
+    fn threaded_hole_validation_enforces_standard_pitch_depth_and_profile() {
+        let metric = metric_thread();
+        validate_hole_thread(&metric, 5.0, HoleExtent::Distance { depth: 8.0 }).unwrap();
+
+        let mut wrong_series = metric.clone();
+        wrong_series.series = HoleThreadSeries::Unc;
+        assert!(matches!(
+            validate_hole_thread(
+                &wrong_series,
+                5.0,
+                HoleExtent::Distance { depth: 8.0 }
+            ),
+            Err(SolidError::InvalidExtent(message))
+                if message.contains("series does not match")
+        ));
+
+        let mut too_deep = metric.clone();
+        too_deep.depth = Some(9.0);
+        assert!(matches!(
+            validate_hole_thread(
+                &too_deep,
+                5.0,
+                HoleExtent::Distance { depth: 8.0 }
+            ),
+            Err(SolidError::InvalidExtent(message))
+                if message.contains("cannot exceed")
+        ));
+
+        let mut overlapping = metric.clone();
+        overlapping.pitch = 0.5;
+        assert!(matches!(
+            validate_hole_thread(
+                &overlapping,
+                4.0,
+                HoleExtent::Distance { depth: 8.0 }
+            ),
+            Err(SolidError::InvalidExtent(message))
+                if message.contains("non-overlapping")
+        ));
+
+        let mut unified = metric;
+        unified.standard = HoleThreadStandard::UnifiedInch;
+        unified.series = HoleThreadSeries::Unc;
+        unified.designation = "1/4-20 UNC-2B".to_string();
+        unified.class = "2B".to_string();
+        unified.nominal_diameter = 6.35;
+        unified.pitch = 1.27;
+        unified.threads_per_inch = Some(20.0);
+        validate_hole_thread(&unified, 5.1054, HoleExtent::Distance { depth: 8.0 }).unwrap();
+        unified.pitch = 1.2;
+        assert!(matches!(
+            validate_hole_thread(
+                &unified,
+                5.1054,
+                HoleExtent::Distance { depth: 8.0 }
+            ),
+            Err(SolidError::InvalidExtent(message))
+                if message.contains("25.4 / threads per inch")
+        ));
+    }
+
     #[test]
     fn one_hole_feature_plans_every_selected_position_with_shared_parameters() {
         let mut document = SolidDocument::new();
@@ -4071,6 +4240,7 @@ mod tests {
                     countersink_angle_deg: 90.0,
                     bottom_style: HoleBottomStyle::DrillPoint,
                     drill_point_angle_deg: 118.0,
+                    thread: None,
                     flip: false,
                 },
                 &catalog(),
@@ -4141,6 +4311,7 @@ mod tests {
                     countersink_angle_deg: 90.0,
                     bottom_style: HoleBottomStyle::Flat,
                     drill_point_angle_deg: 118.0,
+                    thread: None,
                     flip: false,
                 },
                 &catalog(),

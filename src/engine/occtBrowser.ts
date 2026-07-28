@@ -6,7 +6,11 @@
  * convention, same boolean semantics, same face/edge ordering, and the same
  * mesh DTO contract. It is lazy-loaded on the first solid operation.
  */
-import type { OpenCascadeInstance, TopoDS_Shape } from 'opencascade.js';
+import type {
+  gp_Ax2,
+  OpenCascadeInstance,
+  TopoDS_Shape,
+} from 'opencascade.js';
 import type {
   KernelBodyDto,
   KernelEdgeDto,
@@ -31,6 +35,7 @@ import type {
   PlaneBasis,
   Point3Dto,
   RecomputePlanDto,
+  StepExportRequest,
 } from './types';
 
 const TAU = Math.PI * 2;
@@ -603,6 +608,7 @@ function booleanShape(
   kind: KernelExtrudeJobDto['operation'],
   target: TopoDS_Shape,
   tool: TopoDS_Shape,
+  simplifyResult = true,
 ): TopoDS_Shape {
   const progress = new oc.Message_ProgressRange_1();
   const operation =
@@ -619,7 +625,9 @@ function booleanShape(
   // Boolean builders retain same-domain subdivisions by default. Collapse
   // coplanar/tangent result faces once here so combined bodies do not expose
   // selectable seam edges on an otherwise flat face.
-  operation.SimplifyResult(true, true, 1e-7);
+  if (simplifyResult) {
+    operation.SimplifyResult(true, true, 1e-7);
+  }
   const result = operation.Shape();
   operation.delete();
   if (result.IsNull()) {
@@ -627,6 +635,32 @@ function booleanShape(
     throw new Error(`${kind} produced a null shape`);
   }
   return result;
+}
+
+function cutThreadTools(
+  oc: Oc,
+  target: TopoDS_Shape,
+  cutters: TopoDS_Shape[],
+): TopoDS_Shape {
+  if (cutters.length === 0) {
+    throw new Error('Modeled thread contains no cutter');
+  }
+  let result: TopoDS_Shape | null = null;
+  try {
+    for (const cutter of cutters) {
+      const next = booleanShape(oc, 'cut', result ?? target, cutter, false);
+      result?.delete();
+      result = next;
+    }
+    if (!result) {
+      throw new Error('Modeled thread cut did not produce a result');
+    }
+    const completed = result;
+    result = null;
+    return completed;
+  } finally {
+    result?.delete();
+  }
 }
 
 function fuseTools(oc: Oc, tools: TopoDS_Shape[]): TopoDS_Shape {
@@ -707,6 +741,279 @@ function applyChamfer(oc: Oc, target: TopoDS_Shape, job: KernelChamferJobDto): T
   }
 }
 
+function boundedThroughDepth(oc: Oc, shape: TopoDS_Shape, margin: number): number {
+  const bounds = new oc.Bnd_Box_1();
+  try {
+    oc.BRepBndLib.Add(shape, bounds, true);
+    if (bounds.IsVoid()) throw new Error('Could not bound the through-hole target');
+    const diagonal = Math.sqrt(bounds.SquareExtent());
+    if (!Number.isFinite(diagonal) || diagonal <= 0) {
+      throw new Error('Through-hole target bounds are degenerate');
+    }
+    return diagonal + Math.max(margin, 1);
+  } finally {
+    bounds.delete();
+  }
+}
+
+function boundedDirectionalDepth(
+  oc: Oc,
+  shape: TopoDS_Shape,
+  origin: Point3Dto,
+  direction: readonly [number, number, number],
+): number {
+  const bounds = new oc.Bnd_Box_1();
+  try {
+    oc.BRepBndLib.Add(shape, bounds, true);
+    if (bounds.IsVoid()) throw new Error('Could not bound the threaded-hole target');
+    const minimum = bounds.CornerMin();
+    const maximum = bounds.CornerMax();
+    const values = {
+      min: [minimum.X(), minimum.Y(), minimum.Z()] as const,
+      max: [maximum.X(), maximum.Y(), maximum.Z()] as const,
+    };
+    minimum.delete();
+    maximum.delete();
+    let depth = 0;
+    for (const x of [values.min[0], values.max[0]]) {
+      for (const y of [values.min[1], values.max[1]]) {
+        for (const z of [values.min[2], values.max[2]]) {
+          depth = Math.max(
+            depth,
+            (x - origin.x) * direction[0]
+              + (y - origin.y) * direction[1]
+              + (z - origin.z) * direction[2],
+          );
+        }
+      }
+    }
+    if (!Number.isFinite(depth) || depth <= 0) {
+      throw new Error('Threaded-hole target depth is degenerate');
+    }
+    return depth;
+  } finally {
+    bounds.delete();
+  }
+}
+
+function makeLineEdge(
+  oc: Oc,
+  first: readonly [number, number, number],
+  last: readonly [number, number, number],
+) {
+  const start = new oc.gp_Pnt_3(first[0], first[1], first[2]);
+  const end = new oc.gp_Pnt_3(last[0], last[1], last[2]);
+  const maker = new oc.BRepBuilderAPI_MakeEdge_3(start, end);
+  start.delete();
+  end.delete();
+  if (!maker.IsDone()) {
+    maker.delete();
+    throw new Error('OCCT could not build a thread flank edge');
+  }
+  const edge = maker.Edge();
+  maker.delete();
+  return edge;
+}
+
+function makeThreadProfile(
+  oc: Oc,
+  axis: gp_Ax2,
+  center: number,
+  innerRadius: number,
+  outerRadius: number,
+  innerHalfWidth: number,
+  outerHalfWidth: number,
+  angle = 0,
+) {
+  const location = axis.Location();
+  const normal = axis.Direction();
+  const xAxis = axis.XDirection();
+  const yAxis = axis.YDirection();
+  const origin = [location.X(), location.Y(), location.Z()] as const;
+  const axial = [normal.X(), normal.Y(), normal.Z()] as const;
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const radial = [
+    cosine * xAxis.X() + sine * yAxis.X(),
+    cosine * xAxis.Y() + sine * yAxis.Y(),
+    cosine * xAxis.Z() + sine * yAxis.Z(),
+  ] as const;
+  location.delete();
+  normal.delete();
+  xAxis.delete();
+  yAxis.delete();
+  const pointAt = (radius: number, offset: number) => [
+    origin[0] + radius * radial[0] + (center + offset) * axial[0],
+    origin[1] + radius * radial[1] + (center + offset) * axial[1],
+    origin[2] + radius * radial[2] + (center + offset) * axial[2],
+  ] as const;
+  const points = [
+    pointAt(innerRadius, -innerHalfWidth),
+    pointAt(outerRadius, -outerHalfWidth),
+    pointAt(outerRadius, outerHalfWidth),
+    pointAt(innerRadius, innerHalfWidth),
+  ];
+  const maker = new oc.BRepBuilderAPI_MakeWire_1();
+  try {
+    for (let index = 0; index < points.length; index += 1) {
+      const edge = makeLineEdge(oc, points[index], points[(index + 1) % points.length]);
+      maker.Add_1(edge);
+      edge.delete();
+    }
+    if (!maker.IsDone()) {
+      throw new Error('OCCT could not close the thread cutter profile');
+    }
+    return maker.Wire();
+  } finally {
+    maker.delete();
+  }
+}
+
+function makeInternalThreadCutters(
+  oc: Oc,
+  axis: gp_Ax2,
+  predrillDiameter: number,
+  nominalDiameter: number,
+  pitch: number,
+  threadDepth: number,
+  throughAll: boolean,
+  leftHand: boolean,
+): TopoDS_Shape[] {
+  const nominalRadialDepth = (nominalDiameter - predrillDiameter) * 0.5;
+  // Penetrate the predrill void by a real modeling allowance. A tangent or
+  // near-coincident cutter can leave the cylindrical predrill face behind.
+  const overlap = Math.max(
+    2e-3,
+    Math.min(
+      predrillDiameter * 5e-3,
+      pitch * 5e-2,
+      nominalRadialDepth * 1e-1,
+    ),
+  );
+  const innerRadius = predrillDiameter * 0.5 - overlap;
+  const outerRadius = nominalDiameter * 0.5;
+  const radialDepth = outerRadius - innerRadius;
+  // Start with the P/8 basic root flat at the major diameter, then widen the
+  // internal-thread void toward the actual predrill along 60° flanks.
+  const outerHalfWidth = pitch * 0.0625;
+  const innerHalfWidth = outerHalfWidth + radialDepth * Math.tan(Math.PI / 6);
+  if (
+    innerRadius <= 0
+    || outerRadius <= innerRadius
+    || innerHalfWidth >= pitch * 0.499
+  ) {
+    throw new Error('Predrill diameter is too small for a non-overlapping 60° thread');
+  }
+  const centerStart = -pitch;
+  const centerEnd = throughAll
+    ? threadDepth + pitch
+    : Math.max(centerStart + pitch * 0.25, threadDepth - innerHalfWidth);
+  const turns = (centerEnd - centerStart) / pitch;
+  if (!Number.isFinite(turns) || turns > 256) {
+    throw new Error(
+      'This modeled thread exceeds 256 turns; use simplified representation',
+    );
+  }
+
+  const sectionCount = Math.max(2, Math.ceil(turns * 8));
+  const loft = new oc.BRepOffsetAPI_ThruSections(true, false, 1e-6);
+  try {
+    for (let index = 0; index <= sectionCount; index += 1) {
+      const ratio = index / sectionCount;
+      const center = centerStart + (centerEnd - centerStart) * ratio;
+      const angle = (leftHand ? -1 : 1) * TAU * turns * ratio;
+      const profile = makeThreadProfile(
+        oc,
+        axis,
+        center,
+        innerRadius,
+        outerRadius,
+        innerHalfWidth,
+        outerHalfWidth,
+        angle,
+      );
+      loft.AddWire(profile);
+      profile.delete();
+    }
+    loft.CheckCompatibility(false);
+    const progress = new oc.Message_ProgressRange_1();
+    loft.Build(progress);
+    progress.delete();
+    if (!loft.IsDone()) {
+      throw new Error('OCCT could not loft the modeled thread cutter');
+    }
+    const loftShape = loft.Shape();
+    if (loftShape.IsNull()
+      || loftShape.ShapeType() !== oc.TopAbs_ShapeEnum.TopAbs_SOLID) {
+      loftShape.delete();
+      throw new Error('OCCT modeled thread loft is not a solid');
+    }
+    const cutter = oc.TopoDS.Solid_1(loftShape);
+    loftShape.delete();
+    if (!oc.BRepLib.OrientClosedSolid(cutter)) {
+      cutter.delete();
+      throw new Error('OCCT could not orient the thread cutter solid');
+    }
+    cutter.Orientation_2(oc.TopAbs_Orientation.TopAbs_FORWARD as never);
+    const analyzer = new oc.BRepCheck_Analyzer(cutter, true, false);
+    const isValid = analyzer.IsValid_2();
+    analyzer.delete();
+    if (!isValid) {
+      cutter.delete();
+      throw new Error('OCCT modeled thread cutter is invalid');
+    }
+    const properties = new oc.GProp_GProps_1();
+    oc.BRepGProp.VolumeProperties_1(cutter, properties, true, false, false);
+    const volume = properties.Mass();
+    properties.delete();
+    if (!Number.isFinite(volume) || Math.abs(volume) <= 1e-9) {
+      cutter.delete();
+      throw new Error('OCCT modeled thread cutter has no volume');
+    }
+    return [cutter];
+  } finally {
+    loft.delete();
+  }
+}
+
+function addThreadMetadataToStep(
+  bytes: Uint8Array,
+  metadata: StepExportRequest['thread_metadata'],
+): Uint8Array {
+  if (metadata.length === 0) return bytes;
+  const text = new TextDecoder().decode(bytes);
+  const marker = 'FILE_DESCRIPTION((';
+  const markerIndex = text.indexOf(marker);
+  const firstQuote = text.indexOf("'", markerIndex + marker.length);
+  if (markerIndex < 0 || firstQuote < 0) {
+    throw new Error('OCCT STEP output is missing FILE_DESCRIPTION');
+  }
+  let closingQuote = firstQuote + 1;
+  while (closingQuote < text.length) {
+    if (text[closingQuote] !== "'") {
+      closingQuote += 1;
+      continue;
+    }
+    if (text[closingQuote + 1] === "'") {
+      closingQuote += 2;
+      continue;
+    }
+    break;
+  }
+  if (closingQuote >= text.length) {
+    throw new Error('OCCT STEP FILE_DESCRIPTION is malformed');
+  }
+  const metadataHex = Array.from(
+    new TextEncoder().encode(JSON.stringify(metadata)),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('');
+  const description = `noBS CAD AP242; NBCAD_THREAD_METADATA_V1_HEX=${metadataHex}`;
+  const wrappedDescription = description.match(/.{1,58}/g)?.join('\n') ?? description;
+  return new TextEncoder().encode(
+    `${text.slice(0, firstQuote + 1)}${wrappedDescription}${text.slice(closingQuote)}`,
+  );
+}
+
 function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_Shape {
   const direction = unit(job.direction);
   const overlap = 1e-4;
@@ -719,7 +1026,9 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
   const axis = new oc.gp_Ax2_3(start, dir);
   start.delete();
   dir.delete();
-  const depth = job.extent.type === 'through_all' ? 1_000_000 : job.extent.depth;
+  const depth = job.extent.type === 'through_all'
+    ? boundedThroughDepth(oc, target, (job.thread?.pitch ?? 0) * 2)
+    : job.extent.depth;
   const mainMaker = new oc.BRepPrimAPI_MakeCylinder_3(
     axis,
     job.diameter * 0.5,
@@ -727,6 +1036,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
   );
   let cutter = mainMaker.Shape();
   mainMaker.delete();
+  let threadCutters: TopoDS_Shape[] = [];
   try {
     if (job.style === 'counterbore') {
       const secondary = new oc.BRepPrimAPI_MakeCylinder_3(
@@ -758,6 +1068,33 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       shape.delete();
       cutter = next;
     }
+    if (job.thread?.representation === 'modeled') {
+      const fullThreadDepth = job.thread.depth === null;
+      const availableThreadDepth = job.extent.type === 'through_all'
+        ? boundedDirectionalDepth(oc, target, job.center, direction)
+        : depth;
+      const requestedThreadDepth = fullThreadDepth
+        ? availableThreadDepth
+        : Math.min(job.thread.depth!, availableThreadDepth);
+      const threadOrigin = new oc.gp_Pnt_3(job.center.x, job.center.y, job.center.z);
+      const threadDirection = new oc.gp_Dir_4(direction[0], direction[1], direction[2]);
+      const xDirection = axis.XDirection();
+      const threadAxis = new oc.gp_Ax2_2(threadOrigin, threadDirection, xDirection);
+      threadOrigin.delete();
+      threadDirection.delete();
+      xDirection.delete();
+      threadCutters = makeInternalThreadCutters(
+        oc,
+        threadAxis,
+        job.diameter,
+        job.thread.nominal_diameter,
+        job.thread.pitch,
+        requestedThreadDepth,
+        job.extent.type === 'through_all' && fullThreadDepth,
+        job.thread.hand === 'left',
+      );
+      threadAxis.delete();
+    }
     if (job.extent.type === 'distance' && job.bottom_style === 'drill_point') {
       const halfAngle = job.drill_point_angle_deg * Math.PI / 360;
       const tipDepth = (job.diameter * 0.5) / Math.tan(halfAngle);
@@ -787,8 +1124,39 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       tip.delete();
       cutter = next;
     }
-    return booleanShape(oc, 'cut', target, cutter);
+    let result: TopoDS_Shape;
+    if (threadCutters.length > 0) {
+      let threadedResult: TopoDS_Shape | null = null;
+      try {
+        // Subtract the helical tool before opening the predrill bore. Passing
+        // both overlapping tools as a compound can preserve the removed thread
+        // volume as a detached second solid, visually filling the groove.
+        threadedResult = cutThreadTools(oc, target, threadCutters);
+        result = booleanShape(oc, 'cut', threadedResult, cutter, false);
+      } catch (error) {
+        throw new Error(
+          `Modeled thread cut failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      } finally {
+        threadedResult?.delete();
+      }
+    } else {
+      result = booleanShape(oc, 'cut', target, cutter);
+    }
+    if (threadCutters.length > 0) {
+      const resultAnalyzer = new oc.BRepCheck_Analyzer(result, true, false);
+      const resultIsValid = resultAnalyzer.IsValid_2();
+      resultAnalyzer.delete();
+      if (!resultIsValid) {
+        result.delete();
+        throw new Error('OCCT modeled thread result is invalid');
+      }
+    }
+    return result;
   } finally {
+    threadCutters.forEach((threadCutter) => threadCutter.delete());
     cutter.delete();
     axis.delete();
   }
@@ -1148,15 +1516,34 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
       }
     }
     const curve = new oc.BRepAdaptor_Curve_2(edge);
-    const first = curve.FirstParameter();
-    const last = curve.LastParameter();
-    const samples = curve.GetType() === oc.GeomAbs_CurveType.GeomAbs_Line ? 2 : 25;
     const points: Point3Dto[] = [];
-    for (let sample = 0; sample < samples; sample += 1) {
-      const parameter = first + (last - first) * sample / (samples - 1);
-      const p = curve.Value(parameter);
-      points.push(readPoint(p));
-      p.delete();
+    if (curve.GetType() === oc.GeomAbs_CurveType.GeomAbs_Line) {
+      for (const parameter of [curve.FirstParameter(), curve.LastParameter()]) {
+        const p = curve.Value(parameter);
+        points.push(readPoint(p));
+        p.delete();
+      }
+    } else {
+      const discretization = new oc.GCPnts_UniformDeflection_2(curve, 0.05, true);
+      try {
+        if (discretization.IsDone() && discretization.NbPoints() >= 2) {
+          for (let pointIndex = 1; pointIndex <= discretization.NbPoints(); pointIndex += 1) {
+            const p = discretization.Value(pointIndex);
+            points.push(readPoint(p));
+            p.delete();
+          }
+        } else {
+          const first = curve.FirstParameter();
+          const last = curve.LastParameter();
+          for (let sample = 0; sample < 25; sample += 1) {
+            const p = curve.Value(first + (last - first) * sample / 24);
+            points.push(readPoint(p));
+            p.delete();
+          }
+        }
+      } finally {
+        discretization.delete();
+      }
     }
     edges.push({ key: `edge:${edgeIndex - 1}`, points, refinable });
     curve.delete();
@@ -1384,12 +1771,12 @@ export class BrowserOcctKernel {
   }
 
   /** Export selected (or all) live B-reps as AP242 STEP bytes. */
-  exportStep(bodyIds: number[]): Uint8Array {
+  exportStep(request: StepExportRequest): Uint8Array {
     if (this.bodies.size === 0) {
       throw new Error('There are no active bodies to export.');
     }
-    const ids = bodyIds.length > 0
-      ? [...new Set(bodyIds)]
+    const ids = request.body_ids.length > 0
+      ? [...new Set(request.body_ids)]
       : [...this.bodies.keys()].sort((a, b) => a - b);
     const writer = new this.oc.STEPControl_Writer_1();
     const path = `/nbcad-${Date.now()}-${Math.random().toString(36).slice(2)}.step`;
@@ -1413,7 +1800,10 @@ export class BrowserOcctKernel {
       if (writer.Write(path) !== this.oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
         throw new Error('OCCT could not write the STEP file.');
       }
-      return new Uint8Array(this.oc.FS.readFile(path));
+      return addThreadMetadataToStep(
+        new Uint8Array(this.oc.FS.readFile(path)),
+        request.thread_metadata,
+      );
     } finally {
       writer.delete();
       try {

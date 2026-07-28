@@ -485,6 +485,27 @@ export interface SolidChamferDefinitionDto extends SolidChamferRequest {
 export type HoleExtent = { type: 'distance'; depth: number } | { type: 'through_all' };
 export type HoleStyle = 'simple' | 'counterbore' | 'countersink';
 export type HoleBottomStyle = 'flat' | 'drill_point';
+export type HoleThreadStandard = 'iso_metric' | 'unified_inch';
+export type HoleThreadSeries = 'metric_coarse' | 'metric_fine' | 'unc' | 'unf';
+export type HoleThreadHand = 'right' | 'left';
+export type HoleThreadRepresentation = 'modeled' | 'simplified';
+
+export interface HoleThreadDto {
+  standard: HoleThreadStandard;
+  series: HoleThreadSeries;
+  designation: string;
+  class: string;
+  /** Basic major diameter in millimetres. */
+  nominal_diameter: number;
+  /** Axial pitch in millimetres, including for Unified inch threads. */
+  pitch: number;
+  threads_per_inch: number | null;
+  hand: HoleThreadHand;
+  /** Null means the full cylindrical hole depth. */
+  depth: number | null;
+  representation: HoleThreadRepresentation;
+  tap_drill_designation: string | null;
+}
 
 export interface HolePositionDto {
   position: Vec2;
@@ -506,6 +527,7 @@ export interface HoleRequest {
   countersink_angle_deg: number;
   bottom_style: HoleBottomStyle;
   drill_point_angle_deg: number;
+  thread: HoleThreadDto | null;
   flip: boolean;
 }
 
@@ -782,6 +804,7 @@ export interface KernelHoleJobDto {
   countersink_angle_deg: number;
   bottom_style: HoleBottomStyle;
   drill_point_angle_deg: number;
+  thread: HoleThreadDto | null;
 }
 
 export type KernelTransformDto =
@@ -911,9 +934,19 @@ export interface SolidUpdateDto {
   scene: SolidSceneDto;
 }
 
+export interface StepThreadMetadataDto {
+  body_id: number;
+  feature_id: number;
+  feature_name: string;
+  position_count: number;
+  predrill_diameter: number;
+  thread: HoleThreadDto;
+}
+
 /** Empty body_ids exports every active body. */
 export interface StepExportRequest {
   body_ids: number[];
+  thread_metadata: StepThreadMetadataDto[];
 }
 
 /** Dynamic-input locked segment request (mm / degrees from +u, CCW).

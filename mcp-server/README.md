@@ -67,6 +67,14 @@ references, and finite holes support flat or angled drill-point bottoms
 (118° is the application default). Matching definitions/edit tools preserve
 these operations in the same replayable history.
 
+`solid_hole` also accepts optional ISO metric coarse/fine or ASME B1.1
+UNC/UNF internal-thread data. Use a common `6H` class for ISO metric or `2B`
+for Unified threads unless the design requires another fit. The hole
+`diameter` remains the editable predrill diameter; `thread.nominal_diameter`
+is the major diameter. `modeled` creates a 60° helical B-rep, while
+`simplified` keeps the cylindrical predrill for faster replay and preserves
+the complete callout for project and STEP metadata.
+
 Solid calls run the same Rust replay planner and native OCCT adapter as the
 desktop application. IDs returned by one call are stable inputs to later
 calls in the same feature history.

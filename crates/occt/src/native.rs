@@ -1,10 +1,12 @@
 use cxx::UniquePtr;
 use nbcad_solid::{
-    CombineOperation, ExtrudeOperation, HoleBottomStyle, HoleExtent, HoleStyle, KernelBodyDto,
-    KernelCurveDto, KernelEdgeDto, KernelFaceDto, KernelFeatureErrorDto, KernelJobDto,
-    KernelProfileDto, KernelSceneDto, KernelTransformDto, LoftContinuity, Point3Dto,
-    RecomputePlanDto, StepExportRequest, SweepOrientation, SweepTransition,
+    CombineOperation, ExtrudeOperation, HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadHand,
+    HoleThreadRepresentation, KernelBodyDto, KernelCurveDto, KernelEdgeDto, KernelFaceDto,
+    KernelFeatureErrorDto, KernelJobDto, KernelProfileDto, KernelSceneDto, KernelTransformDto,
+    LoftContinuity, Point3Dto, RecomputePlanDto, StepExportRequest, SweepOrientation,
+    SweepTransition,
 };
+use std::fmt::Write as _;
 
 use crate::OcctError;
 
@@ -59,6 +61,11 @@ mod ffi {
         hole_style: u8,
         drill_point_angle_deg: f64,
         hole_bottom_style: u8,
+        thread_mode: u8,
+        thread_nominal_diameter: f64,
+        thread_pitch: f64,
+        thread_depth: f64,
+        thread_left_hand: bool,
         through_all: bool,
         inward: bool,
         keep_tools: bool,
@@ -93,7 +100,11 @@ mod ffi {
         fn apply_job(self: Pin<&mut Kernel>, job: &FfiJob) -> Result<()>;
         fn body_ids(self: &Kernel) -> Vec<u64>;
         fn mesh(self: &Kernel, body_id: u64) -> Result<FfiMesh>;
-        fn export_step(self: &Kernel, body_ids: &Vec<u64>) -> Result<Vec<u8>>;
+        fn export_step(
+            self: &Kernel,
+            body_ids: &Vec<u64>,
+            thread_metadata_hex: &str,
+        ) -> Result<Vec<u8>>;
     }
 }
 
@@ -168,10 +179,19 @@ impl OcctKernel {
     /// file. Tessellated meshes are never used for export.
     pub fn export_step(&self, request: &StepExportRequest) -> Result<Vec<u8>, OcctError> {
         let body_ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let thread_metadata_json =
+            serde_json::to_string(&request.thread_metadata).map_err(|error| {
+                OcctError(format!("could not serialize STEP thread metadata: {error}"))
+            })?;
+        let mut thread_metadata_hex = String::with_capacity(thread_metadata_json.len() * 2);
+        for byte in thread_metadata_json.bytes() {
+            write!(&mut thread_metadata_hex, "{byte:02x}")
+                .map_err(|error| OcctError(format!("could not encode STEP metadata: {error}")))?;
+        }
         self.inner
             .as_ref()
             .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
-            .export_step(&body_ids)
+            .export_step(&body_ids, &thread_metadata_hex)
             .map_err(|error| OcctError(error.to_string()))
     }
 }
@@ -352,6 +372,11 @@ fn empty_ffi_job(feature_id: u64, kind: u8) -> ffi::FfiJob {
         hole_style: 0,
         drill_point_angle_deg: 0.0,
         hole_bottom_style: 0,
+        thread_mode: 0,
+        thread_nominal_diameter: 0.0,
+        thread_pitch: 0.0,
+        thread_depth: 0.0,
+        thread_left_hand: false,
         through_all: false,
         inward: false,
         keep_tools: false,
@@ -515,6 +540,16 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                 HoleBottomStyle::DrillPoint => 1,
             };
             job.drill_point_angle_deg = source.drill_point_angle_deg;
+            if let Some(thread) = &source.thread {
+                job.thread_mode = match thread.representation {
+                    HoleThreadRepresentation::Simplified => 1,
+                    HoleThreadRepresentation::Modeled => 2,
+                };
+                job.thread_nominal_diameter = thread.nominal_diameter;
+                job.thread_pitch = thread.pitch;
+                job.thread_depth = thread.depth.unwrap_or(0.0);
+                job.thread_left_hand = thread.hand == HoleThreadHand::Left;
+            }
             job.through_all = matches!(source.extent, HoleExtent::ThroughAll);
             job.target_body_ids = vec![source.target_body_id.0];
             job.result_body_ids = vec![source.target_body_id.0];
@@ -771,11 +806,12 @@ mod tests {
     use super::*;
     use nbcad_core::{BodyId, FeatureId};
     use nbcad_solid::{
-        HoleBottomStyle, HoleExtent, HoleStyle, KernelChamferJobDto, KernelCombineJobDto,
-        KernelCurveDto, KernelExtrudeJobDto, KernelFilletJobDto, KernelHoleJobDto,
-        KernelImportStepJobDto, KernelJobDto, KernelLoftJobDto, KernelProfileDto,
+        HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadDto, HoleThreadHand,
+        HoleThreadRepresentation, HoleThreadSeries, HoleThreadStandard, KernelChamferJobDto,
+        KernelCombineJobDto, KernelCurveDto, KernelExtrudeJobDto, KernelFilletJobDto,
+        KernelHoleJobDto, KernelImportStepJobDto, KernelJobDto, KernelLoftJobDto, KernelProfileDto,
         KernelRevolveJobDto, KernelRibJobDto, KernelSweepJobDto, LoftContinuity, Point3Dto,
-        RecomputePlanDto, SweepOrientation, SweepTransition,
+        RecomputePlanDto, StepThreadMetadataDto, SweepOrientation, SweepTransition,
     };
 
     fn square(z: f64, half: f64) -> KernelProfileDto {
@@ -956,6 +992,54 @@ mod tests {
         );
         assert!(text.contains("MANIFOLD_SOLID_BREP"));
         assert!(text.ends_with("END-ISO-10303-21;\n"));
+
+        let metadata_step = kernel
+            .export_step(&StepExportRequest {
+                body_ids: Vec::new(),
+                thread_metadata: vec![StepThreadMetadataDto {
+                    body_id: BodyId(1),
+                    feature_id: FeatureId(3),
+                    feature_name: "Hole1".to_string(),
+                    position_count: 1,
+                    predrill_diameter: 5.0,
+                    thread: HoleThreadDto {
+                        standard: HoleThreadStandard::IsoMetric,
+                        series: HoleThreadSeries::MetricCoarse,
+                        designation: "M6 x 1 - 6H".to_string(),
+                        class: "6H".to_string(),
+                        nominal_diameter: 6.0,
+                        pitch: 1.0,
+                        threads_per_inch: None,
+                        hand: HoleThreadHand::Right,
+                        depth: None,
+                        representation: HoleThreadRepresentation::Modeled,
+                        tap_drill_designation: Some("5 mm".to_string()),
+                    },
+                }],
+            })
+            .unwrap();
+        let metadata_text = String::from_utf8(metadata_step.clone()).unwrap();
+        let compact_metadata = metadata_text
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(compact_metadata.contains("NBCAD_THREAD_METADATA_V1_HEX="));
+        assert!(compact_metadata.contains("4d3620782031202d203648"));
+
+        let mut roundtrip_kernel = OcctKernel::new().unwrap();
+        let roundtrip = roundtrip_kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 2,
+                errors: Vec::new(),
+                jobs: vec![KernelJobDto::ImportStep(KernelImportStepJobDto {
+                    feature_id: FeatureId(4),
+                    result_body_id: BodyId(8),
+                    data_base64: encode_base64(&metadata_step),
+                })],
+            })
+            .unwrap();
+        assert!(roundtrip.errors.is_empty());
+        assert_eq!(roundtrip.bodies.len(), 1);
     }
 
     #[test]
@@ -1235,6 +1319,166 @@ mod tests {
     }
 
     #[test]
+    fn occt_modeled_through_thread_removes_the_predrill_core() {
+        let mut kernel = OcctKernel::new().unwrap();
+        let scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 3,
+                errors: Vec::new(),
+                jobs: vec![
+                    box_job(2, 1),
+                    KernelJobDto::Hole(KernelHoleJobDto {
+                        feature_id: FeatureId(3),
+                        target_body_id: BodyId(1),
+                        center: Point3Dto {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 10.0,
+                        },
+                        direction: Point3Dto {
+                            x: 0.0,
+                            y: 0.0,
+                            z: -1.0,
+                        },
+                        diameter: 5.0,
+                        extent: HoleExtent::ThroughAll,
+                        style: HoleStyle::Simple,
+                        counterbore_diameter: 0.0,
+                        counterbore_depth: 0.0,
+                        countersink_diameter: 0.0,
+                        countersink_angle_deg: 90.0,
+                        bottom_style: HoleBottomStyle::Flat,
+                        drill_point_angle_deg: 118.0,
+                        thread: Some(HoleThreadDto {
+                            standard: HoleThreadStandard::IsoMetric,
+                            series: HoleThreadSeries::MetricCoarse,
+                            designation: "M6 x 1 - 6H".to_string(),
+                            class: "6H".to_string(),
+                            nominal_diameter: 6.0,
+                            pitch: 1.0,
+                            threads_per_inch: None,
+                            hand: HoleThreadHand::Right,
+                            depth: None,
+                            representation: HoleThreadRepresentation::Modeled,
+                            tap_drill_designation: Some("5 mm".to_string()),
+                        }),
+                    }),
+                ],
+            })
+            .unwrap();
+        assert!(scene.errors.is_empty(), "{:?}", scene.errors);
+        let body = &scene.bodies[0];
+        let wall_radii = body
+            .positions
+            .chunks_exact(3)
+            .filter_map(|point| {
+                let radius = (f64::from(point[0]).powi(2) + f64::from(point[1]).powi(2)).sqrt();
+                (point[2] > 0.1 && point[2] < 9.9 && radius > 1.0 && radius < 4.0).then_some(radius)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            wall_radii.iter().copied().fold(f64::INFINITY, f64::min) < 2.55,
+            "modeled thread lost its 5 mm predrill lands"
+        );
+        assert!(
+            wall_radii.iter().copied().fold(f64::NEG_INFINITY, f64::max) > 2.9,
+            "modeled thread grooves do not reach the 6 mm major diameter"
+        );
+        let mut minimum_hole_edge_chord_radius = f64::INFINITY;
+        for edge in &body.edges {
+            for segment in edge.points.windows(2) {
+                let a = &segment[0];
+                let b = &segment[1];
+                if a.x.hypot(a.y) >= 4.0 || b.x.hypot(b.y) >= 4.0 {
+                    continue;
+                }
+                let dx = b.x - a.x;
+                let dy = b.y - a.y;
+                let denominator = dx * dx + dy * dy;
+                let parameter = if denominator > 1e-12 {
+                    (-(a.x * dx + a.y * dy) / denominator).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                minimum_hole_edge_chord_radius = minimum_hole_edge_chord_radius
+                    .min((a.x + dx * parameter).hypot(a.y + dy * parameter));
+            }
+        }
+        assert!(
+            minimum_hole_edge_chord_radius > 2.4,
+            "displayed thread edge chords cross the cavity"
+        );
+        let axis_cover_count = body
+            .indices
+            .chunks_exact(3)
+            .filter(|triangle| {
+                let point = |index: u32| {
+                    let offset = index as usize * 3;
+                    [
+                        body.positions[offset] as f64,
+                        body.positions[offset + 1] as f64,
+                    ]
+                };
+                let a = point(triangle[0]);
+                let b = point(triangle[1]);
+                let c = point(triangle[2]);
+                let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                if area.abs() < 1e-10 {
+                    return false;
+                }
+                let first = (b[0] * c[1] - b[1] * c[0]) / area;
+                let second = (c[0] * a[1] - c[1] * a[0]) / area;
+                let third = 1.0 - first - second;
+                first >= -1e-8 && second >= -1e-8 && third >= -1e-8
+            })
+            .count();
+        assert_eq!(
+            axis_cover_count, 0,
+            "modeled through-thread left material on its center axis"
+        );
+        let internal_thread_cap_faces = body
+            .faces
+            .iter()
+            .filter(|face| face.plane.is_some())
+            .filter(|face| {
+                let begin = face.first_index as usize;
+                let end = begin + face.index_count as usize;
+                let mut minimum_radius = f64::INFINITY;
+                let mut maximum_radius = f64::NEG_INFINITY;
+                let mut minimum_z = f64::INFINITY;
+                let mut maximum_z = f64::NEG_INFINITY;
+                for index in &body.indices[begin..end] {
+                    let offset = *index as usize * 3;
+                    let x = f64::from(body.positions[offset]);
+                    let y = f64::from(body.positions[offset + 1]);
+                    let z = f64::from(body.positions[offset + 2]);
+                    let radius = x.hypot(y);
+                    minimum_radius = minimum_radius.min(radius);
+                    maximum_radius = maximum_radius.max(radius);
+                    minimum_z = minimum_z.min(z);
+                    maximum_z = maximum_z.max(z);
+                }
+                minimum_radius > 2.2 && maximum_radius < 3.2 && minimum_z > 0.2 && maximum_z < 9.8
+            })
+            .count();
+        assert_eq!(
+            internal_thread_cap_faces, 0,
+            "modeled thread left planar cutter caps inside the hole"
+        );
+        let step =
+            String::from_utf8(kernel.export_step(&StepExportRequest::default()).unwrap()).unwrap();
+        assert_eq!(
+            step.matches("MANIFOLD_SOLID_BREP").count(),
+            1,
+            "threaded-hole STEP must contain one connected solid"
+        );
+        assert!(
+            step.contains("B_SPLINE_CURVE_WITH_KNOTS") || step.contains("SURFACE_CURVE"),
+            "threaded-hole STEP must contain helical B-rep geometry"
+        );
+    }
+
+    #[test]
     fn occt_builds_multi_edge_refinements_and_all_first_hole_styles() {
         let refinements = vec![
             KernelJobDto::Fillet(KernelFilletJobDto {
@@ -1273,6 +1517,7 @@ mod tests {
                 countersink_angle_deg: 90.0,
                 bottom_style: HoleBottomStyle::DrillPoint,
                 drill_point_angle_deg: 118.0,
+                thread: None,
             }),
             KernelJobDto::Hole(KernelHoleJobDto {
                 feature_id: FeatureId(3),
@@ -1296,6 +1541,7 @@ mod tests {
                 countersink_angle_deg: 90.0,
                 bottom_style: HoleBottomStyle::Flat,
                 drill_point_angle_deg: 118.0,
+                thread: None,
             }),
             KernelJobDto::Hole(KernelHoleJobDto {
                 feature_id: FeatureId(3),
@@ -1319,6 +1565,7 @@ mod tests {
                 countersink_angle_deg: 90.0,
                 bottom_style: HoleBottomStyle::Flat,
                 drill_point_angle_deg: 118.0,
+                thread: None,
             }),
             KernelJobDto::Hole(KernelHoleJobDto {
                 feature_id: FeatureId(3),
@@ -1342,6 +1589,43 @@ mod tests {
                 countersink_angle_deg: 90.0,
                 bottom_style: HoleBottomStyle::Flat,
                 drill_point_angle_deg: 118.0,
+                thread: None,
+            }),
+            KernelJobDto::Hole(KernelHoleJobDto {
+                feature_id: FeatureId(3),
+                target_body_id: BodyId(1),
+                center: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 10.0,
+                },
+                direction: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: -1.0,
+                },
+                diameter: 5.0,
+                extent: HoleExtent::Distance { depth: 8.0 },
+                style: HoleStyle::Simple,
+                counterbore_diameter: 0.0,
+                counterbore_depth: 0.0,
+                countersink_diameter: 0.0,
+                countersink_angle_deg: 90.0,
+                bottom_style: HoleBottomStyle::DrillPoint,
+                drill_point_angle_deg: 118.0,
+                thread: Some(HoleThreadDto {
+                    standard: HoleThreadStandard::IsoMetric,
+                    series: HoleThreadSeries::MetricCoarse,
+                    designation: "M6 x 1 - 6H".to_string(),
+                    class: "6H".to_string(),
+                    nominal_diameter: 6.0,
+                    pitch: 1.0,
+                    threads_per_inch: None,
+                    hand: HoleThreadHand::Right,
+                    depth: Some(7.0),
+                    representation: HoleThreadRepresentation::Modeled,
+                    tap_drill_designation: Some("5 mm".to_string()),
+                }),
             }),
         ];
 
