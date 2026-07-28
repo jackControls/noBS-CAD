@@ -204,7 +204,33 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
   const target = await chooseSaveTarget(`${documentName}${suffix}.step`, STEP_TYPE);
   if (!target) return false;
   const engine = await getEngine();
-  const bytes = await engine.exportStep({ body_ids: bodyIds });
+  const activeFeatureIds = new Set(
+    (state.document?.features ?? [])
+      .slice(0, state.document?.rollback_index ?? 0)
+      .filter((feature) => !feature.suppressed)
+      .map((feature) => feature.id),
+  );
+  const threadMetadata = (await engine.holeDefinitions()).flatMap((definition) => {
+    if (
+      !definition.thread
+      || !bodyIds.includes(definition.body_id)
+      || !activeFeatureIds.has(definition.feature_id)
+    ) {
+      return [];
+    }
+    return [{
+      body_id: definition.body_id,
+      feature_id: definition.feature_id,
+      feature_name: definition.name,
+      position_count: Math.max(1, definition.positions.length),
+      predrill_diameter: definition.diameter,
+      thread: definition.thread,
+    }];
+  });
+  const bytes = await engine.exportStep({
+    body_ids: bodyIds,
+    thread_metadata: threadMetadata,
+  });
   await writeSaveTarget(target, bytes);
   return true;
 }

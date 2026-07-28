@@ -3703,7 +3703,7 @@ mod project_tests {
                 position: Point2Dto::new(5.0, 5.0),
                 position_reference: None,
                 positions: Vec::new(),
-                diameter: 2.0,
+                diameter: 2.5,
                 extent: HoleExtent::ThroughAll,
                 style: HoleStyle::Countersink,
                 counterbore_diameter: 0.0,
@@ -3712,6 +3712,19 @@ mod project_tests {
                 countersink_angle_deg: 90.0,
                 bottom_style: nbcad_solid::HoleBottomStyle::Flat,
                 drill_point_angle_deg: 118.0,
+                thread: Some(nbcad_solid::HoleThreadDto {
+                    standard: nbcad_solid::HoleThreadStandard::IsoMetric,
+                    series: nbcad_solid::HoleThreadSeries::MetricCoarse,
+                    designation: "M3 x 0.5 - 6H".to_string(),
+                    class: "6H".to_string(),
+                    nominal_diameter: 3.0,
+                    pitch: 0.5,
+                    threads_per_inch: None,
+                    hand: nbcad_solid::HoleThreadHand::Right,
+                    depth: None,
+                    representation: nbcad_solid::HoleThreadRepresentation::Modeled,
+                    tap_drill_designation: Some("2.5 mm".to_string()),
+                }),
                 flip: false,
             })
             .unwrap();
@@ -3722,6 +3735,7 @@ mod project_tests {
         assert_eq!(parsed["fillets"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["chamfers"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["holes"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["holes"][0]["thread"]["designation"], "M3 x 0.5 - 6H");
 
         let mut loaded = SketchManager::new();
         let replay = loaded.prepare_load_project(json).unwrap();
@@ -3732,6 +3746,13 @@ mod project_tests {
         assert_eq!(loaded.fillet_definitions().len(), 1);
         assert_eq!(loaded.chamfer_definitions().len(), 1);
         assert_eq!(loaded.hole_definitions().len(), 1);
+        assert_eq!(
+            loaded.hole_definitions()[0]
+                .thread
+                .as_ref()
+                .map(|thread| thread.class.as_str()),
+            Some("6H")
+        );
     }
 
     #[test]

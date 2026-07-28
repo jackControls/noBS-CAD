@@ -447,6 +447,54 @@ fn tool_specs() -> Vec<ToolSpec> {
         }),
         &["position"],
     );
+    let hole_thread = object_schema(
+        json!({
+            "standard": { "type": "string", "enum": ["iso_metric", "unified_inch"] },
+            "series": {
+                "type": "string",
+                "enum": ["metric_coarse", "metric_fine", "unc", "unf"]
+            },
+            "designation": { "type": "string", "minLength": 1 },
+            "class": { "type": "string", "minLength": 1 },
+            "nominal_diameter": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Basic thread major diameter in millimetres."
+            },
+            "pitch": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Axial pitch in millimetres, including for Unified threads."
+            },
+            "threads_per_inch": {
+                "type": ["number", "null"],
+                "exclusiveMinimum": 0
+            },
+            "hand": { "type": "string", "enum": ["right", "left"] },
+            "depth": {
+                "type": ["number", "null"],
+                "exclusiveMinimum": 0,
+                "description": "Null threads the full cylindrical hole depth."
+            },
+            "representation": {
+                "type": "string",
+                "enum": ["modeled", "simplified"]
+            },
+            "tap_drill_designation": { "type": ["string", "null"] }
+        }),
+        &[
+            "standard",
+            "series",
+            "designation",
+            "class",
+            "nominal_diameter",
+            "pitch",
+            "threads_per_inch",
+            "hand",
+            "depth",
+            "representation",
+        ],
+    );
     let hole = object_schema(
         json!({
             "body_id": { "type": "integer", "minimum": 1 },
@@ -487,6 +535,10 @@ fn tool_specs() -> Vec<ToolSpec> {
             "countersink_angle_deg": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180 },
             "bottom_style": { "type": "string", "enum": ["flat", "drill_point"] },
             "drill_point_angle_deg": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180 },
+            "thread": {
+                "oneOf": [hole_thread, {"type": "null"}],
+                "description": "Optional ISO metric or ASME B1.1 Unified internal thread. Hole diameter is the predrill diameter."
+            },
             "flip": { "type": "boolean" }
         }),
         &[
@@ -1505,7 +1557,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::solid(
             "solid_hole",
             "Create Hole on planar face",
-            "Cut one or more simple, counterbored, or countersunk holes with flat or angled drill-point bottoms from a stable planar face.",
+            "Cut one or more simple, counterbored, countersunk, or ISO/Unified threaded holes with flat or angled drill-point bottoms from a stable planar face.",
             "solid_prepare_hole",
             Payload::Object,
             hole.clone(),
@@ -2144,13 +2196,26 @@ mod tests {
                     "body_id": body["id"].clone(),
                     "face_id": top["id"].clone(),
                     "position": {"x": project(u), "y": project(v)},
-                    "diameter": 4.0,
+                    "diameter": 5.0,
                     "extent": {"type": "through_all"},
                     "style": "countersink",
                     "counterbore_diameter": 0.0,
                     "counterbore_depth": 0.0,
                     "countersink_diameter": 8.0,
                     "countersink_angle_deg": 90.0,
+                    "thread": {
+                        "standard": "iso_metric",
+                        "series": "metric_coarse",
+                        "designation": "M6 x 1 - 6H",
+                        "class": "6H",
+                        "nominal_diameter": 6.0,
+                        "pitch": 1.0,
+                        "threads_per_inch": null,
+                        "hand": "right",
+                        "depth": null,
+                        "representation": "modeled",
+                        "tap_drill_designation": "5 mm"
+                    },
                     "flip": false
                 }),
             )
@@ -2161,15 +2226,12 @@ mod tests {
             update["scene"]["errors"]
         );
         assert_eq!(update["document"]["features"][2]["kind"], "hole");
-        assert_eq!(
-            server
-                .call_tool("solid_hole_definitions", json!({}))
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        let definitions = server
+            .call_tool("solid_hole_definitions", json!({}))
+            .unwrap();
+        assert_eq!(definitions.as_array().unwrap().len(), 1);
+        assert_eq!(definitions[0]["thread"]["designation"], "M6 x 1 - 6H");
+        assert_eq!(definitions[0]["thread"]["representation"], "modeled");
         let replay = server.call_tool("solid_recompute", json!({})).unwrap();
         assert!(replay["scene"]["errors"].as_array().unwrap().is_empty());
     }

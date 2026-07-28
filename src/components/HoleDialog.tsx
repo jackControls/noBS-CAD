@@ -9,12 +9,23 @@ import type {
   HoleExtent,
   HolePositionDto,
   HoleStyle,
+  HoleThreadHand,
+  HoleThreadRepresentation,
+  HoleThreadSeries,
+  HoleThreadStandard,
   PlaneBasis,
   Point3Dto,
   SketchDto,
   SketchPointRefDto,
 } from '../engine/types';
 import { useTranslation } from '../i18n';
+import {
+  defaultThreadPreset,
+  presetsForSeries,
+  THREAD_PRESETS,
+  threadDtoFromPreset,
+} from '../lib/threadStandards';
+import type { ThreadPreset } from '../lib/threadStandards';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
 
@@ -139,6 +150,19 @@ export function HoleDialog() {
   const [countersinkAngle, setCountersinkAngle] = useState('90');
   const [bottomStyle, setBottomStyle] = useState<HoleBottomStyle>('drill_point');
   const [drillPointAngle, setDrillPointAngle] = useState('118');
+  const defaultThread = defaultThreadPreset();
+  const [threaded, setThreaded] = useState(false);
+  const [threadStandard, setThreadStandard] = useState<HoleThreadStandard>(
+    defaultThread.standard,
+  );
+  const [threadSeries, setThreadSeries] = useState<HoleThreadSeries>(defaultThread.series);
+  const [threadPresetId, setThreadPresetId] = useState(defaultThread.id);
+  const [customThreadPreset, setCustomThreadPreset] = useState<ThreadPreset | null>(null);
+  const [threadRepresentation, setThreadRepresentation] =
+    useState<HoleThreadRepresentation>('modeled');
+  const [threadHand, setThreadHand] = useState<HoleThreadHand>('right');
+  const [fullThreadDepth, setFullThreadDepth] = useState(true);
+  const [threadDepth, setThreadDepth] = useState('8');
   const [flip, setFlip] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +170,18 @@ export function HoleDialog() {
   const planarBodies = useMemo(
     () => bodies.filter((body) => body.faces.some((face) => face.plane !== null)),
     [bodies],
+  );
+  const threadPresets = useMemo(() => {
+    const catalog = presetsForSeries(threadSeries);
+    return customThreadPreset?.series === threadSeries
+      ? [customThreadPreset, ...catalog]
+      : catalog;
+  }, [customThreadPreset, threadSeries]);
+  const selectedThreadPreset = useMemo(
+    () => threadPresets.find((preset) => preset.id === threadPresetId)
+      ?? threadPresets[0]
+      ?? defaultThreadPreset(),
+    [threadPresetId, threadPresets],
   );
 
   useEffect(() => {
@@ -206,6 +242,55 @@ export function HoleDialog() {
       setCountersinkAngle(String(edit?.countersink_angle_deg || 90));
       setBottomStyle(edit?.bottom_style ?? 'drill_point');
       setDrillPointAngle(String(edit?.drill_point_angle_deg || 118));
+      const editThread = edit?.thread ?? null;
+      setThreaded(editThread !== null);
+      if (editThread && edit) {
+        const matchingPreset = THREAD_PRESETS.find((preset) =>
+          preset.standard === editThread.standard
+          && preset.series === editThread.series
+          && Math.abs(preset.nominalDiameterMm - editThread.nominal_diameter) < 1e-6
+          && Math.abs(preset.pitchMm - editThread.pitch) < 1e-6,
+        );
+        setThreadStandard(editThread.standard);
+        setThreadSeries(editThread.series);
+        if (matchingPreset) {
+          setCustomThreadPreset(null);
+          setThreadPresetId(matchingPreset.id);
+        } else {
+          const customPreset: ThreadPreset = {
+            id: `custom-${edit.feature_id}`,
+            label: `${editThread.designation} — custom`,
+            standard: editThread.standard,
+            series: editThread.series,
+            designation: editThread.designation,
+            class: editThread.class,
+            nominalDiameterMm: editThread.nominal_diameter,
+            pitchMm: editThread.pitch,
+            threadsPerInch: editThread.threads_per_inch,
+            tapDrillDiameterMm: edit.diameter,
+            tapDrillDesignation: editThread.tap_drill_designation
+              ?? `${edit.diameter} mm`,
+          };
+          setCustomThreadPreset(customPreset);
+          setThreadPresetId(customPreset.id);
+        }
+        setThreadRepresentation(editThread.representation);
+        setThreadHand(editThread.hand);
+        setFullThreadDepth(editThread.depth === null);
+        setThreadDepth(String(editThread.depth ?? (
+          edit?.extent.type === 'distance' ? edit.extent.depth : 8
+        )));
+      } else {
+        const preset = defaultThreadPreset();
+        setCustomThreadPreset(null);
+        setThreadStandard(preset.standard);
+        setThreadSeries(preset.series);
+        setThreadPresetId(preset.id);
+        setThreadRepresentation('modeled');
+        setThreadHand('right');
+        setFullThreadDepth(true);
+        setThreadDepth(String(edit?.extent.type === 'distance' ? edit.extent.depth : 8));
+      }
       setFlip(edit?.flip ?? false);
     }).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : t('hole.loadFailed'));
@@ -248,7 +333,7 @@ export function HoleDialog() {
     x: Number(x), y: Number(y), diameter: Number(diameter), depth: Number(depth),
     counterboreDiameter: Number(counterboreDiameter), counterboreDepth: Number(counterboreDepth),
     countersinkDiameter: Number(countersinkDiameter), countersinkAngle: Number(countersinkAngle),
-    drillPointAngle: Number(drillPointAngle),
+    drillPointAngle: Number(drillPointAngle), threadDepth: Number(threadDepth),
   };
   const commonValid = bodyId > 0 && faceId > 0 && Number.isFinite(values.x) && Number.isFinite(values.y)
     && Number.isFinite(values.diameter) && values.diameter > 0
@@ -269,7 +354,46 @@ export function HoleDialog() {
     || Number.isFinite(values.drillPointAngle)
       && values.drillPointAngle > 0
       && values.drillPointAngle < 180;
-  const canSubmit = !loading && !busy && !error && commonValid && styleValid && bottomValid;
+  const threadRadialDepth = (
+    selectedThreadPreset.nominalDiameterMm - values.diameter
+  ) * 0.5;
+  const threadInnerHalfWidth = selectedThreadPreset.pitchMm * 0.0625
+    + threadRadialDepth * Math.tan(Math.PI / 6);
+  const threadValid = !threaded || (
+    selectedThreadPreset.standard === threadStandard
+    && selectedThreadPreset.series === threadSeries
+    && selectedThreadPreset.nominalDiameterMm > values.diameter
+    && (fullThreadDepth || (
+      Number.isFinite(values.threadDepth)
+      && values.threadDepth > 0
+      && (extentType !== 'distance' || values.threadDepth <= values.depth)
+    ))
+    && (threadRepresentation !== 'modeled'
+      || threadInnerHalfWidth < selectedThreadPreset.pitchMm * 0.499)
+  );
+  const canSubmit = !loading && !busy && !error
+    && commonValid && styleValid && bottomValid && threadValid;
+  const chooseThreadPreset = (id: string) => {
+    const preset = THREAD_PRESETS.find((candidate) => candidate.id === id)
+      ?? (customThreadPreset?.id === id ? customThreadPreset : null);
+    if (!preset) return;
+    setThreadPresetId(id);
+    setDiameter(String(Number(preset.tapDrillDiameterMm.toFixed(6))));
+  };
+  const chooseThreadStandard = (standard: HoleThreadStandard) => {
+    const series: HoleThreadSeries = standard === 'iso_metric' ? 'metric_coarse' : 'unc';
+    const preset = presetsForSeries(series)[0] ?? defaultThreadPreset();
+    setCustomThreadPreset(null);
+    setThreadStandard(standard);
+    setThreadSeries(series);
+    chooseThreadPreset(preset.id);
+  };
+  const chooseThreadSeries = (series: HoleThreadSeries) => {
+    const preset = presetsForSeries(series)[0] ?? defaultThreadPreset();
+    setCustomThreadPreset(null);
+    setThreadSeries(series);
+    chooseThreadPreset(preset.id);
+  };
   const chooseBody = (nextBodyId: number) => {
     const nextBody = planarBodies.find((candidate) => candidate.id === nextBodyId);
     const nextFace = nextBody?.faces.find((candidate) => candidate.plane !== null);
@@ -324,6 +448,13 @@ export function HoleDialog() {
       countersink_angle_deg: style === 'countersink' ? values.countersinkAngle : 90,
       bottom_style: bottomStyle,
       drill_point_angle_deg: values.drillPointAngle,
+      thread: threaded
+        ? threadDtoFromPreset(selectedThreadPreset, {
+            hand: threadHand,
+            depth: fullThreadDepth ? null : values.threadDepth,
+            representation: threadRepresentation,
+          })
+        : null,
       flip,
     }, featureId > 0 ? featureId : undefined);
   };
@@ -351,7 +482,145 @@ export function HoleDialog() {
                       </div>
                     </div>
                   )}
-                  <label><span className={LABEL_CLASS}>{t('hole.diameter')}</span><DimensionInput data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
+                    <input
+                      data-testid="hole-threaded"
+                      type="checkbox"
+                      checked={threaded}
+                      onChange={(event) => {
+                        setThreaded(event.target.checked);
+                        if (event.target.checked) chooseThreadPreset(selectedThreadPreset.id);
+                      }}
+                      className="accent-accent"
+                    />
+                    {t('hole.threaded')}
+                  </label>
+                  {threaded && (
+                    <section className="space-y-2 rounded border border-edge bg-header/50 p-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <label>
+                          <span className={LABEL_CLASS}>{t('hole.threadStandard')}</span>
+                          <select
+                            data-testid="hole-thread-standard"
+                            value={threadStandard}
+                            onChange={(event) => chooseThreadStandard(
+                              event.target.value as HoleThreadStandard,
+                            )}
+                            className={INPUT_CLASS}
+                          >
+                            <option value="iso_metric">{t('hole.isoMetric')}</option>
+                            <option value="unified_inch">{t('hole.asmeUnified')}</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span className={LABEL_CLASS}>{t('hole.threadSeries')}</span>
+                          <select
+                            value={threadSeries}
+                            onChange={(event) => chooseThreadSeries(
+                              event.target.value as HoleThreadSeries,
+                            )}
+                            className={INPUT_CLASS}
+                          >
+                            {threadStandard === 'iso_metric' ? (
+                              <>
+                                <option value="metric_coarse">{t('hole.metricCoarse')}</option>
+                                <option value="metric_fine">{t('hole.metricFine')}</option>
+                              </>
+                            ) : (
+                              <>
+                                <option value="unc">{t('hole.unc')}</option>
+                                <option value="unf">{t('hole.unf')}</option>
+                              </>
+                            )}
+                          </select>
+                        </label>
+                      </div>
+                      <label>
+                        <span className={LABEL_CLASS}>{t('hole.threadSize')}</span>
+                        <select
+                          data-testid="hole-thread-size"
+                          value={selectedThreadPreset.id}
+                          onChange={(event) => chooseThreadPreset(event.target.value)}
+                          className={INPUT_CLASS}
+                        >
+                          {threadPresets.map((preset) => (
+                            <option key={preset.id} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label>
+                          <span className={LABEL_CLASS}>{t('hole.threadRepresentation')}</span>
+                          <select
+                            data-testid="hole-thread-representation"
+                            value={threadRepresentation}
+                            onChange={(event) => setThreadRepresentation(
+                              event.target.value as HoleThreadRepresentation,
+                            )}
+                            className={INPUT_CLASS}
+                          >
+                            <option value="modeled">{t('hole.modeledThread')}</option>
+                            <option value="simplified">{t('hole.simplifiedThread')}</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span className={LABEL_CLASS}>{t('hole.threadHand')}</span>
+                          <select
+                            value={threadHand}
+                            onChange={(event) => setThreadHand(
+                              event.target.value as HoleThreadHand,
+                            )}
+                            className={INPUT_CLASS}
+                          >
+                            <option value="right">{t('hole.rightHand')}</option>
+                            <option value="left">{t('hole.leftHand')}</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="flex cursor-pointer items-center gap-2 text-[11px] text-ink">
+                        <input
+                          type="checkbox"
+                          checked={fullThreadDepth}
+                          onChange={(event) => setFullThreadDepth(event.target.checked)}
+                          className="accent-accent"
+                        />
+                        {t('hole.fullThreadDepth')}
+                      </label>
+                      {!fullThreadDepth && (
+                        <label>
+                          <span className={LABEL_CLASS}>{t('hole.threadDepth')}</span>
+                          <DimensionInput
+                            data-testid="hole-thread-depth"
+                            min="0.000001"
+                            step="any"
+                            value={threadDepth}
+                            onValueChange={setThreadDepth}
+                          />
+                        </label>
+                      )}
+                      <p className="text-[10px] leading-4 text-mute">
+                        {t(threadRepresentation === 'modeled'
+                          ? 'hole.modeledThreadHint'
+                          : 'hole.simplifiedThreadHint')}
+                      </p>
+                      <dl className="grid grid-cols-[1fr_auto] gap-x-2 gap-y-1 text-[10px]">
+                        <dt className="text-mute">{t('hole.majorDiameter')}</dt>
+                        <dd className="font-mono text-ink">
+                          Ø{selectedThreadPreset.nominalDiameterMm.toFixed(3)} mm
+                        </dd>
+                        <dt className="text-mute">{t('hole.pitch')}</dt>
+                        <dd className="font-mono text-ink">
+                          {selectedThreadPreset.pitchMm.toFixed(4)} mm
+                          {selectedThreadPreset.threadsPerInch
+                            ? ` (${selectedThreadPreset.threadsPerInch} TPI)`
+                            : ''}
+                        </dd>
+                        <dt className="text-mute">{t('hole.threadClass')}</dt>
+                        <dd className="font-mono text-ink">{selectedThreadPreset.class}</dd>
+                      </dl>
+                    </section>
+                  )}
+                  <label><span className={LABEL_CLASS}>{t(threaded ? 'hole.predrillDiameter' : 'hole.diameter')}</span><DimensionInput data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>
                   <label><span className={LABEL_CLASS}>{t('hole.extent')}</span><select data-testid="hole-extent" value={extentType} onChange={(event) => setExtentType(event.target.value as HoleExtent['type'])} className={INPUT_CLASS}><option value="through_all">{t('hole.throughAll')}</option><option value="distance">{t('hole.distance')}</option></select></label>
                   {extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('hole.depth')}</span><DimensionInput min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}
                   <label><span className={LABEL_CLASS}>{t('hole.style')}</span><select value={style} onChange={(event) => setStyle(event.target.value as HoleStyle)} className={INPUT_CLASS}><option value="simple">{t('hole.simple')}</option><option value="counterbore">{t('hole.counterbore')}</option><option value="countersink">{t('hole.countersink')}</option></select></label>

@@ -440,6 +440,75 @@ impl Default for HoleBottomStyle {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleThreadStandard {
+    IsoMetric,
+    UnifiedInch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleThreadSeries {
+    MetricCoarse,
+    MetricFine,
+    Unc,
+    Unf,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleThreadHand {
+    #[default]
+    Right,
+    Left,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleThreadRepresentation {
+    #[default]
+    Modeled,
+    Simplified,
+}
+
+/// Manufacturing and geometry data for an internal screw thread.
+///
+/// `HoleRequest::diameter` remains the actual predrill cylinder diameter. The
+/// thread adds the helical groove out to `nominal_diameter`. Keeping these
+/// values separate reflects shop practice: ISO/ASME define the thread form
+/// and tolerance, while the preferred tap drill can vary with material and
+/// tapping process.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HoleThreadDto {
+    pub standard: HoleThreadStandard,
+    pub series: HoleThreadSeries,
+    /// Canonical human-readable callout, for example `M6 x 1 - 6H` or
+    /// `1/4-20 UNC-2B`.
+    pub designation: String,
+    /// Internal-thread tolerance class (`6H` for common ISO metric threads,
+    /// `2B` for common Unified threads).
+    pub class: String,
+    /// Basic major diameter in millimetres.
+    pub nominal_diameter: f64,
+    /// Axial pitch in millimetres for both metric and Unified threads.
+    pub pitch: f64,
+    /// Original inch-series pitch value retained for an unambiguous callout.
+    #[serde(default)]
+    pub threads_per_inch: Option<f64>,
+    #[serde(default)]
+    pub hand: HoleThreadHand,
+    /// `None` threads the full cylindrical hole depth. A finite value allows
+    /// a blind drilled hole to keep an unthreaded tap/run-out allowance.
+    #[serde(default)]
+    pub depth: Option<f64>,
+    #[serde(default)]
+    pub representation: HoleThreadRepresentation,
+    /// Optional shop drill label such as `5.0 mm` or `#7`.
+    #[serde(default)]
+    pub tap_drill_designation: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HolePositionDto {
     /// Hole center in the selected face's local (u, v) coordinates.
@@ -480,6 +549,8 @@ pub struct HoleRequest {
     #[serde(default = "default_drill_point_angle")]
     pub drill_point_angle_deg: f64,
     #[serde(default)]
+    pub thread: Option<HoleThreadDto>,
+    #[serde(default)]
     pub flip: bool,
 }
 
@@ -514,11 +585,26 @@ pub struct ReorderFeatureRequest {
     pub target_index: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepThreadMetadataDto {
+    pub body_id: BodyId,
+    pub feature_id: FeatureId,
+    pub feature_name: String,
+    pub position_count: u32,
+    /// Actual modeled or simplified predrill diameter in millimetres.
+    pub predrill_diameter: f64,
+    pub thread: HoleThreadDto,
+}
+
 /// STEP export selection. An empty body list means every active body.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepExportRequest {
     #[serde(default)]
     pub body_ids: Vec<BodyId>,
+    /// Namespaced manufacturing metadata written into FILE_DESCRIPTION.
+    /// Modeled threads additionally travel as ordinary AP242 B-rep geometry.
+    #[serde(default)]
+    pub thread_metadata: Vec<StepThreadMetadataDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -667,6 +753,8 @@ pub struct HoleDefinitionDto {
     pub bottom_style: HoleBottomStyle,
     #[serde(default = "default_drill_point_angle")]
     pub drill_point_angle_deg: f64,
+    #[serde(default)]
+    pub thread: Option<HoleThreadDto>,
     pub flip: bool,
     /// Cached planar support lets a saved project bootstrap its first replay.
     #[serde(default)]
@@ -1121,6 +1209,7 @@ pub struct KernelHoleJobDto {
     pub countersink_angle_deg: f64,
     pub bottom_style: HoleBottomStyle,
     pub drill_point_angle_deg: f64,
+    pub thread: Option<HoleThreadDto>,
 }
 
 /// Ordered full-replay kernel operation. The tagged representation keeps the

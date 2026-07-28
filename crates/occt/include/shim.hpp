@@ -20,7 +20,8 @@ class Kernel {
   rust::Vec<std::uint64_t> body_ids() const;
   FfiMesh mesh(std::uint64_t body_id) const;
   rust::Vec<std::uint8_t> export_step(
-      const rust::Vec<std::uint64_t>& body_ids) const;
+      const rust::Vec<std::uint64_t>& body_ids,
+      rust::Str thread_metadata_hex) const;
 
  private:
   class Impl;

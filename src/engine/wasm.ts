@@ -385,7 +385,7 @@ export class WasmEngine implements Engine {
   }
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {
-    return (await this.browserKernel()).exportStep(request.body_ids);
+    return (await this.browserKernel()).exportStep(request);
   }
 
   private async executeSolidPlan(plan: RecomputePlanDto): Promise<SolidUpdateDto> {
