@@ -12,6 +12,11 @@ around the familiar sketch-and-extrude workflow.
 [`testPiece.nbcad`](examples/testPiece.nbcad) project or its
 [`testPiece.step`](examples/testPiece.step) geometry backup.*
 
+![Fillet, chamfer, and a modeled threaded hole in noBS CAD](docs/assets/fillet-chamfer-threaded-hole.png)
+
+*Fillet, chamfer, and a modeled M12 threaded hole shown together in the
+editable feature history.*
+
 ## Why this project exists
 
 We are grateful for projects such as [FreeCAD](https://www.freecad.org/) and
