@@ -2,12 +2,11 @@
 type: Log
 title: Knowledge log
 status: active
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 # log
 
 - 2026-07-27: Initial OKF bundle seeded from README product stance and MCP docs.
-- 2026-07-27: Synced concepts with epic #9 — co-link honesty, multi-window,
-  3MF materials/colors core, process validation evidence, deferred Bevy.
-- 2026-07-27: Documented shared vs local agent files; hardened .gitignore synced across docs PRs.
+- 2026-07-28: Aligned concepts with maintainer feedback — goals vs proposals,
+  co-link first / multi-window deferred, agent steering files stay internal.
