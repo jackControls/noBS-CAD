@@ -1,39 +1,37 @@
 # Branch protection checklist (maintainers)
 
-Enable after minimal **engine + MCP** CI from
-[#14](https://github.com/jackControls/noBS-CAD/issues/14) is green on `main`.
+## Current state
 
-**Today:** only `.github/workflows/windows-portable.yml` (`Windows x64 portable ZIP`)
-runs on PRs/tags. Branch protection is **not** enabled yet — do not require
-job names that do not exist.
+- Pull requests to `main` should be reviewed.
+- **One approving review** is the expected bar (either `@jackControls` or
+  `@jeffglousher` may approve the other’s PR; authors do not self-approve).
+- **Required CI status checks** are still **deferred** until reliable jobs
+  exist (see engine/MCP CI work). The Windows portable workflow is valuable
+  but is not treated as a hard required gate for every docs PR yet.
 
-Process PR: this file. Lean on merged Windows portable (#1); add focused
-workflows without boiling the ocean.
+## When enabling a formal `main` protection rule
 
-## GitHub settings → Branches → Branch protection rule for `main`
+GitHub → Settings → Branches → Branch protection rule for `main`:
 
 - [ ] Require a pull request before merging
 - [ ] Require approvals: 1
 - [ ] Dismiss stale approvals when new commits are pushed
-- [ ] Require review from Code Owners (once `CODEOWNERS` handles are real)
-- [ ] Require status checks to pass (list **exact** job names from CI)
-- [ ] Require branches to be up to date before merging
+- [ ] Require review from Code Owners (once handles stay accurate)
+- [ ] Require status checks to pass — **only after** named jobs are stable
+- [ ] Require branches to be up to date before merging (optional; cost vs safety)
 - [ ] Do not allow force pushes
 - [ ] Do not allow deletions
 
-## Suggested required checks (when [#14](https://github.com/jackControls/noBS-CAD/issues/14) lands)
+## Suggested required checks (later)
 
-| Check | Job idea | Required? |
-|-------|----------|-----------|
-| Engine | `ci-engine` — `cargo test --workspace` | **Yes** once green |
-| MCP | `ci-mcp` — build/test `mcp-server` | **Yes** once green |
+| Check | Purpose | Required? |
+|-------|---------|-----------|
+| Engine tests | `cargo test --workspace` | When green and fast enough |
+| MCP tests | build/test `mcp-server` | When green |
 | E2E smoke | small Playwright subset | Soft → then required |
-| Windows portable | existing `Windows x64 portable ZIP` | Informative until stable/fast |
-| Co-link smoke | only after [#11](https://github.com/jackControls/noBS-CAD/issues/11) | Later |
+| Windows portable ZIP | existing workflow | Informative until stable/fast for all PRs |
 
-Path-filter or skip expensive portable ZIP on docs-only PRs when practical.
+## Follow-through
 
-## Agent babysit expectation
-
-PRs that fail checks or accumulate unresolved review threads should be babysat
-to merge-ready rather than abandoned. See `CONTRIBUTING.md` §5 and `docs/process.md`.
+PRs that fail checks or accumulate unresolved review threads should be followed
+through to merge-ready rather than abandoned. See `CONTRIBUTING.md`.

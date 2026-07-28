@@ -3,37 +3,25 @@
 ## Loop
 
 ```text
-issue (dedupe) → worktree/branch → implement → prove ran → PR → babysit → merge → close issue
+(optional issue) → branch → implement → verify → PR → follow through → merge
 ```
 
-Harness epic: [#9](https://github.com/jackControls/noBS-CAD/issues/9).  
-Runnable evidence: [#18](https://github.com/jackControls/noBS-CAD/issues/18).  
-CI: [#14](https://github.com/jackControls/noBS-CAD/issues/14).
+## Issues
 
-## Issue hygiene
+- Search before filing; close duplicates with a pointer to the survivor.
+- Substantial bugs/features benefit from an issue first.
+- Small docs/fixes may go straight to a PR.
 
-- Search title + body before filing.
-- If two issues describe the same failure, close one as duplicate and point to the survivor.
-- Agents must comment on the issue when they change scope or discover a duplicate mid-flight.
-- Prefer extending epic #9 children over opening parallel vague “agentic CAD” issues.
+## Branches and worktrees
 
-## Worktrees
-
-Why: agents and humans can land multiple PRs without dirtying `main` or fighting checkouts.
+Ordinary feature branches are fine. Worktrees help when juggling multiple PRs
+or agent sessions; they are optional.
 
 ```sh
 git worktree add ../nbcad-issue-42 -b issue/42-fillet-regression origin/main
 ```
 
-Remove when done:
-
-```sh
-git worktree remove ../nbcad-issue-42
-```
-
-## PR babysitting
-
-Treat babysitting as first-class work:
+## PR follow-through
 
 | Concern | Action |
 |---------|--------|
@@ -41,20 +29,15 @@ Treat babysitting as first-class work:
 | Merge conflicts | Resolve preserving intent; ask if intents clash |
 | CI | Fix failures in PR scope; never disable required checks to pass |
 | Behind main | Merge/rebase latest `main`, re-verify |
-| Validation | Template must show what was run (#18) |
+| Validation | Proportional to the change (see CONTRIBUTING) |
 
-## MCP / agent changes
+## MCP / automation changes
 
-Any MCP tool or session change should include:
+Prefer documenting behavior in public MCP docs (`docs/mcp-harness.md`,
+`mcp-server/README.md`) and adding tests where practical. Be honest when work
+is headless-only vs UI-visible.
 
-1. Issue describing the modeling goal or bug (link #10/#11/#12 when applicable)
-2. Golden scenario note in `mcp-server/README.md` or knowledge wiki (when present)
-3. Unit or integration coverage for the planner / focus / attach path touched
-4. Honest statement: headless-only vs UI co-link ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
+## Cross-platform
 
-## Cross-platform note
-
-Prefer Rust for new engine, export, and MCP surfaces so Windows / macOS / Linux
-stay aligned. UI packaging may still differ by host; document platform gaps in
-the issue. Windows portable artifact CI already exists; engine/MCP required
-checks are [#14](https://github.com/jackControls/noBS-CAD/issues/14).
+Prefer Rust for new engine, export, and MCP surfaces so Windows / macOS /
+Linux stay aligned. Document packaging gaps in the issue or PR.

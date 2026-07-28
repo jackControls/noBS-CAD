@@ -108,8 +108,8 @@ not just guess from a checklist of CAD commands. Please
 [open an issue](https://github.com/jackControls/noBS-CAD/issues) with what you
 find.
 
-Contributors (human or agent): see [CONTRIBUTING.md](CONTRIBUTING.md) for the
-issue → worktree → PR → babysit loop.
+Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md) for a short, welcoming
+contribution guide.
 
 ## Where we are going
 

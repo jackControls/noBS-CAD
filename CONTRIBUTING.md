@@ -1,104 +1,72 @@
 # Contributing to noBS CAD
 
-Issue-first, worktree-per-change, PR-babysit-to-merge, **prove it ran**.
+Thanks for helping. This guide is meant to be practical and welcoming — not
+heavy bureaucracy.
 
-Harness / agentic backlog: epic
-[#9](https://github.com/jackControls/noBS-CAD/issues/9).
-Runnable evidence on PRs:
-[#18](https://github.com/jackControls/noBS-CAD/issues/18).
-CI checks:
-[#14](https://github.com/jackControls/noBS-CAD/issues/14).
+Maintainers today: `@jackControls` and `@jeffglousher`. Either can review the
+other’s work; a PR author should not approve their own PR.
 
-## 1. Start from an issue
+## 1. Issues
 
-1. Search existing issues before opening a new one (deduplicate). Prefer linking
-   children of epic #9 when the work is harness / MCP / export / CI related.
-2. One issue = one problem or proposal. Link related issues instead of restating them.
-3. Prefer labels: `bug`, `enhancement`, `agent`, `docs`, `geometry`, `mcp`, `packaging`.
-4. Do not start implementation without an issue number you can put on the branch and PR.
+- Search existing issues before opening a new one.
+- **Recommended** for substantial bugs and features so discussion stays
+  visible.
+- **Optional** for small fixes, typos, and documentation-only PRs — open
+  straight to a PR if that is clearer.
 
-## 2. Branch in a worktree
+Useful labels include: `bug`, `enhancement`, `mcp`, `geometry`, `packaging`,
+`documentation`.
+
+## 2. Branches
 
 From a clean `main`:
 
 ```sh
 git fetch origin
-git worktree add ../nbcad-issue-N -b issue/N-short-slug origin/main
-cd ../nbcad-issue-N
+git checkout -b fix/short-slug origin/main
 ```
 
-Keep `main` checked out in the primary clone; do all feature work in the worktree.
+[Git worktrees](https://git-scm.com/docs/git-worktree) are helpful for
+**parallel** or agent work. They are **not** required for every contribution.
 
 ## 3. While you work
 
-- Update the issue with progress, blockers, and decisions (agents included).
-- Keep diffs focused. Prefer small PRs over multi-week branches.
-- Add or extend tests for geometry/MCP regressions when you change behavior.
-- Do not commit secrets, local OCCT paths, or machine-specific config.
-- Do not commit personal Cursor/editor state (see Shared vs local below).
-- Do not claim MCP↔UI co-link, focus-aware tools, or multi-window agent control
-  until those issues are done ([#22](https://github.com/jackControls/noBS-CAD/issues/22)).
+- Keep diffs focused. Prefer small PRs.
+- Add or extend tests when you change geometry/MCP behavior.
+- Do not commit secrets, `.env*` files, machine-local OCCT paths, or personal
+  editor/agent state (those paths are gitignored).
+- Do not weaken CI to force a green check.
 
 ## 4. Open a PR
 
-- Title: imperative, scoped (`mcp: add solid_export_3mf`, not `updates`).
-- Body: link the issue (`Fixes #N` / `Refs #N`), summary, **validation evidence**.
-- Request review. Expect automated review (Bugbot / CODEOWNERS) where configured.
-- Keep the PR mergeable: rebase or merge `main` when behind.
+- Title: imperative and scoped (`mcp: clarify stdio setup`, not `updates`).
+- Link an issue when one exists (`Fixes #N` / `Refs #N`).
+- Include a short **test plan** proportional to the change (see template).
+- Keep the PR mergeable with `main`.
 
-### Validation evidence (required)
+### Validation (proportional)
 
-Check **one** of the following in the PR template ([#18](https://github.com/jackControls/noBS-CAD/issues/18)):
+Pick what fits:
 
-- [ ] Ran `cargo test --workspace` (or named crates) — paste summary
-- [ ] Ran MCP scenario (tool sequence) — describe
-- [ ] Ran named e2e script (e.g. `npm run e2e:m2`) — say which
-- [ ] Docs-only / no runtime impact — state explicitly
+- Ran `cargo test` (or named crates) — note which
+- Ran an MCP or e2e scenario — describe briefly
+- Docs-only / no runtime impact — say so explicitly
 
-“Looks good in the editor” is not enough for engine/MCP/UI behavior changes.
+## 5. Follow through until merge-ready
 
-## 5. Babysit until merge
+Stay with the PR until it is ready to merge:
 
-A PR is not done when opened. Stay on it until merge-ready:
+1. Address review comments (or explain disagreements).
+2. Resolve conflicts intentionally.
+3. Fix CI failures caused by the PR.
 
-1. Triage review comments (including bot findings); fix valid ones or reply why not.
-2. Resolve merge conflicts intentionally (preserve both intents; ask if they conflict).
-3. Fix CI failures caused by this PR; do not weaken checks to force green.
-4. Re-run until: green CI, unresolved threads addressed, no conflicts.
-
-Maintainers merge only when the above holds and branch protection allows it.
+Maintainers merge when the above holds and required reviews pass.
 
 ## 6. Branch protection (maintainers)
 
-Enable **after** engine/MCP jobs from [#14](https://github.com/jackControls/noBS-CAD/issues/14)
-are green. Today only Windows portable CI exists — do not require checks that
-do not exist yet.
-
-See [docs/branch-protection.md](docs/branch-protection.md) and
-[docs/process.md](docs/process.md).
-
-## Shared vs local agent / editor files
-
-**Commit these** (shared agentic tooling):
-
-- `AGENTS.md` at the **repo root** only
-- `.cursor/rules/*.mdc` (project Cursor rules)
-- `.cursor/skills/**` when adding intentional shared skills
-- `docs/goals.md`, `docs/mcp-harness.md`, `docs/adr/`, process docs
-- `.github/` templates and workflows
-
-**Never commit** (ignored by `.gitignore`):
-
-- Nested `**/AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `.claude/`, `.agents/`, `.codex/`
-- Personal Cursor state under `.cursor/` (e.g. `mcp.json`, plans, chats)
-- `.env*` (except a future `.env.example`), key material (`*.pem`, `credentials.json`, …)
-- Local continuity docs (`docs/HANDOFF.md`, qa captures, probe scripts)
-- Machine OCCT/vcpkg trees (`vcpkg_installed`, `.vcpkg`, `occt-libs`, …)
-
-If you need a personal agent note, keep it outside the repo or in an ignored path.
+See [docs/branch-protection.md](docs/branch-protection.md).
 
 ## License / borrow
 
 Project is **LGPL-2.0-or-later**. Peer projects (e.g. Open CAD Studio, **GPL-3**)
-— borrow **ideas**, not code, unless counsel says otherwise
-([#19](https://github.com/jackControls/noBS-CAD/issues/19)).
+— borrow **ideas**, not code, unless counsel says otherwise.

@@ -4,24 +4,20 @@
 
 ## Issue
 
-Fixes #
+Refs #   <!-- optional for small docs/fixes -->
 
-<!-- Prefer linking epic #9 children when harness/MCP/export/CI related -->
+## Test plan / validation
 
-## Test plan / validation evidence
-
-Required ([#18](https://github.com/jackControls/noBS-CAD/issues/18)) — check **one**:
+Proportional to the change — check what applies:
 
 - [ ] Ran `cargo test` (engine / touched crates) — note which
-- [ ] Ran MCP scenario (tool sequence) — describe briefly
-- [ ] Ran named e2e (`npm run e2e:…`) — which script
-- [ ] Docs-only / no runtime impact (explicit)
+- [ ] Ran MCP or e2e scenario — describe briefly
+- [ ] Docs-only / no runtime impact
 
 Also:
 
-- [ ] No secrets or machine-local paths
-- [ ] If MCP/UI behavior: do not claim co-link unless attaching to a live UI session ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
+- [ ] No secrets, `.env*`, or machine-local paths
 
 ## Notes for reviewers
 
-<!-- Architecture / agent / packaging / license risks -->
+<!-- Architecture / packaging / license risks -->

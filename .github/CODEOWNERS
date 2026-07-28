@@ -1,6 +1,6 @@
-# Soft ownership until a larger maintainer set exists.
-# Replace with real GitHub handles when ready.
+# Soft ownership until the maintainer set grows.
+# Either listed owner may review; PR authors should not approve their own PRs.
 
-*       @jackControls
-/mcp-server/ @jackControls
-/crates/ @jackControls
+*       @jackControls @jeffglousher
+/mcp-server/ @jackControls @jeffglousher
+/crates/ @jackControls @jeffglousher

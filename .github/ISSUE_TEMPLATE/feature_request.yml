@@ -1,21 +1,22 @@
 name: Feature / proposal
-description: Enhancement, agent workflow, or architecture proposal
+description: Enhancement or product proposal
 title: "[feat] "
 labels: ["enhancement"]
 body:
   - type: dropdown
-    id: track
+    id: area
     attributes:
-      label: Track
+      label: Area
       options:
+        - sketch
         - modeling
-        - mcp-agent
-        - process
-        - docs-okf
+        - CAM
+        - import/export
+        - MCP/automation
+        - simulation
+        - UI/viewport
         - packaging
-        - viewport-bevy
-        - export-3mf
-        - rename
+        - documentation
         - other
     validations:
       required: true
