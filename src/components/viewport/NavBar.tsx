@@ -115,7 +115,10 @@ export function NavBar({
   ];
 
   return (
-    <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded border border-edge bg-header/90 px-1.5 py-1 backdrop-blur-sm">
+    <div
+      data-native-viewport-overlay
+      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded border border-edge bg-header/90 px-1.5 py-1 backdrop-blur-sm"
+    >
       {sketchMode && (
         <>
           <button

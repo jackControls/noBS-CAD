@@ -8,6 +8,7 @@
 //! All modeling logic lives in the engine crates, never here.
 
 mod session_bridge;
+mod native_viewport;
 mod six_dof_mouse;
 mod state;
 
@@ -15,9 +16,14 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use native_viewport::{
+    NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
+    ViewportModel, ViewportPreview,
+};
 use nbcad_core::DocumentDto;
 use six_dof_mouse::SixDofMouseState;
 use state::AppState;
+use tauri::Manager;
 
 /// Health-check command used by the frontend IPC wrapper.
 #[tauri::command]
@@ -29,6 +35,58 @@ fn ping() -> String {
 #[tauri::command]
 fn get_document(state: tauri::State<'_, AppState>) -> DocumentDto {
     state.document_snapshot()
+}
+
+#[tauri::command]
+fn native_viewport_set_layout(
+    app: tauri::AppHandle,
+    viewport: tauri::State<'_, NativeViewport>,
+    layout: ViewportLayout,
+) -> Result<(), String> {
+    viewport.set_layout(&app, layout)
+}
+
+#[tauri::command]
+async fn native_viewport_sync_model(
+    engine: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+) -> Result<(), String> {
+    let (scene, active_sketch, finished_sketches) = engine.viewport_snapshot();
+    viewport.sync_model(ViewportModel {
+        scene,
+        active_sketch,
+        finished_sketches,
+    })
+}
+
+#[tauri::command]
+fn native_viewport_set_camera(
+    viewport: tauri::State<'_, NativeViewport>,
+    camera: ViewportCamera,
+) -> Result<(), String> {
+    viewport.set_camera(camera)
+}
+
+#[tauri::command]
+fn native_viewport_set_preview(
+    viewport: tauri::State<'_, NativeViewport>,
+    preview: ViewportPreview,
+) -> Result<(), String> {
+    viewport.set_preview(preview)
+}
+
+#[tauri::command]
+async fn native_viewport_pick(
+    viewport: tauri::State<'_, NativeViewport>,
+    x: f32,
+    y: f32,
+) -> Result<Option<NativePick>, String> {
+    viewport.pick(x, y)
+}
+
+#[tauri::command]
+fn native_viewport_metrics(viewport: tauri::State<'_, NativeViewport>) -> NativeViewportMetrics {
+    viewport.metrics()
 }
 
 macro_rules! engine_command {
@@ -330,10 +388,27 @@ pub fn run() {
         .manage(AppState::new())
         .manage(session_bridge::SessionBridgeState::default())
         .manage(SixDofMouseState::default())
-        .setup(|_app| Ok(()))
+        .setup(|app| {
+            let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
+            let (scene, active_sketch, finished_sketches) =
+                app.state::<AppState>().viewport_snapshot();
+            let _ = viewport.sync_model(ViewportModel {
+                scene,
+                active_sketch,
+                finished_sketches,
+            });
+            app.manage(viewport);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
             get_document,
+            native_viewport_set_layout,
+            native_viewport_sync_model,
+            native_viewport_set_camera,
+            native_viewport_set_preview,
+            native_viewport_pick,
+            native_viewport_metrics,
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,

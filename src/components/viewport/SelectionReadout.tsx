@@ -101,6 +101,7 @@ export function SelectionReadout() {
   return (
     <aside
       data-testid="selection-readout"
+      data-native-viewport-overlay
       aria-label={t('selectionReadout.title')}
       aria-live="polite"
       className="pointer-events-none absolute bottom-12 right-3 z-10 min-w-[208px] max-w-[280px] select-none rounded border border-edge bg-header/95 px-2.5 py-2 text-[11px] text-ink shadow-lg shadow-black/15 backdrop-blur-sm"

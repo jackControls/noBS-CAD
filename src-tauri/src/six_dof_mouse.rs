@@ -42,6 +42,7 @@ struct Worker {
 
 #[derive(Default)]
 pub struct SixDofMouseState {
+    operation: Mutex<()>,
     worker: Mutex<Option<Worker>>,
 }
 
@@ -85,7 +86,7 @@ fn vector(data: &[u8], offset: usize) -> Option<[i16; 3]> {
 }
 
 #[tauri::command]
-pub fn six_dof_mouse_devices() -> Result<Vec<SixDofMouseInfo>, String> {
+pub async fn six_dof_mouse_devices() -> Result<Vec<SixDofMouseInfo>, String> {
     let api = hidapi::HidApi::new().map_err(|error| error.to_string())?;
     Ok(api
         .device_list()
@@ -100,10 +101,14 @@ pub fn six_dof_mouse_devices() -> Result<Vec<SixDofMouseInfo>, String> {
 }
 
 #[tauri::command]
-pub fn six_dof_mouse_connect(
+pub async fn six_dof_mouse_connect(
     app: AppHandle,
     state: State<'_, SixDofMouseState>,
 ) -> Result<SixDofMouseInfo, String> {
+    let _operation = state
+        .operation
+        .lock()
+        .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
     state.stop();
     let api = hidapi::HidApi::new().map_err(|error| error.to_string())?;
     let info = api
@@ -186,6 +191,11 @@ pub fn six_dof_mouse_connect(
 }
 
 #[tauri::command]
-pub fn six_dof_mouse_disconnect(state: State<'_, SixDofMouseState>) {
+pub async fn six_dof_mouse_disconnect(state: State<'_, SixDofMouseState>) -> Result<(), String> {
+    let _operation = state
+        .operation
+        .lock()
+        .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
     state.stop();
+    Ok(())
 }

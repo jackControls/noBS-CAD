@@ -30,7 +30,37 @@ nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+bevy = { version = "0.19.0", default-features = false, features = [
+  "async_executor",
+  "bevy_asset",
+  "bevy_camera",
+  "bevy_color",
+  "bevy_core_pipeline",
+  "bevy_gizmos",
+  "bevy_gizmos_render",
+  "bevy_image",
+  "bevy_light",
+  "bevy_material",
+  "bevy_mesh",
+  "bevy_pbr",
+  "bevy_render",
+  "bevy_shader",
+  "bevy_window",
+  "hdr",
+  "multi_threaded",
+  "png",
+  "std",
+  "tonemapping_luts",
+  "zstd_rust",
+] }
+bevy_ecs = "0.19.0"
 hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "objc2-quartz-core"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGGeometry", "CGPath"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "objc2-core-foundation", "objc2-core-graphics"] }
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["windows-native"] }
