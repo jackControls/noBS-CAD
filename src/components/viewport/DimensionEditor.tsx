@@ -56,6 +56,7 @@ export function DimensionEditor() {
 
   return (
     <div
+      data-native-viewport-overlay
       className="absolute z-30"
       style={{ left: editor.x + 10, top: editor.y - 14 }}
       onPointerDown={(e) => e.stopPropagation()}

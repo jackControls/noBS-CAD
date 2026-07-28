@@ -79,6 +79,13 @@ import { DimensionEditor } from './DimensionEditor';
 import { NavBar } from './NavBar';
 import { OrientationDial } from './OrientationDial';
 import { SelectionReadout } from './SelectionReadout';
+import {
+  attachNativeViewport,
+  nativeViewportIsActive,
+  pickNativeViewport,
+  syncNativeViewportCamera,
+  syncNativeViewportPreview,
+} from './nativeViewportBridge';
 
 const HOME_POSITION = new THREE.Vector3(170, -170, 130);
 const HOME_TARGET = new THREE.Vector3(0, 0, 0);
@@ -198,6 +205,7 @@ export function Viewport() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const detachNativeViewport = attachNativeViewport(container);
 
     // DOM and WebGL consume the same theme tokens. Viewport is keyed by the
     // resolved theme in App, so switching theme reconstructs all materials and
@@ -806,6 +814,84 @@ export function Viewport() {
     previewLine.visible = false;
     lineMaterials.add(previewMaterial);
     previewGroup.add(previewLine);
+
+    const previewStart = new THREE.Vector3();
+    const previewEnd = new THREE.Vector3();
+    const collectNativeSketchPreview = (): {
+      segments: number[];
+      marker: [number, number, number] | null;
+    } => {
+      if (!sketchGroup.visible) return { segments: [], marker: null };
+
+      const segments: number[] = [];
+      previewGroup.traverseVisible((object) => {
+        const geometry = (object as THREE.Object3D & {
+          geometry?: THREE.BufferGeometry;
+        }).geometry;
+        if (!geometry) return;
+
+        const starts = geometry.getAttribute('instanceStart');
+        const ends = geometry.getAttribute('instanceEnd');
+        if (starts && ends) {
+          const count = Math.min(starts.count, ends.count);
+          for (let index = 0; index < count; index += 1) {
+            previewStart
+              .set(starts.getX(index), starts.getY(index), starts.getZ(index))
+              .applyMatrix4(object.matrixWorld);
+            previewEnd
+              .set(ends.getX(index), ends.getY(index), ends.getZ(index))
+              .applyMatrix4(object.matrixWorld);
+            segments.push(
+              previewStart.x,
+              previewStart.y,
+              previewStart.z,
+              previewEnd.x,
+              previewEnd.y,
+              previewEnd.z,
+            );
+          }
+          return;
+        }
+
+        const positions = geometry.getAttribute('position');
+        if (!positions) return;
+        const step = object instanceof THREE.LineSegments ? 2 : 1;
+        if (!(object instanceof THREE.LineSegments || object instanceof THREE.Line)) {
+          return;
+        }
+        for (let index = 0; index + 1 < positions.count; index += step) {
+          previewStart
+            .set(
+              positions.getX(index),
+              positions.getY(index),
+              positions.getZ(index),
+            )
+            .applyMatrix4(object.matrixWorld);
+          previewEnd
+            .set(
+              positions.getX(index + 1),
+              positions.getY(index + 1),
+              positions.getZ(index + 1),
+            )
+            .applyMatrix4(object.matrixWorld);
+          segments.push(
+            previewStart.x,
+            previewStart.y,
+            previewStart.z,
+            previewEnd.x,
+            previewEnd.y,
+            previewEnd.z,
+          );
+        }
+      });
+
+      let marker: [number, number, number] | null = null;
+      if (snapMarker.visible) {
+        snapMarker.getWorldPosition(previewStart);
+        marker = [previewStart.x, previewStart.y, previewStart.z];
+      }
+      return { segments, marker };
+    };
 
     const addLine2 = (
       group: THREE.Group,
@@ -5181,6 +5267,31 @@ export function Viewport() {
           );
           return;
         }
+        if (nativeViewportIsActive()) {
+          const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+          void pickNativeViewport(e, container)
+            .then((hit) => {
+              const current = store.getState();
+              if (current.mode !== 'solid') return;
+              if (hit) {
+                current.selectSolidFeature(
+                  'face',
+                  hit.bodyId,
+                  hit.faceId,
+                  {
+                    x: hit.point[0],
+                    y: hit.point[1],
+                    z: hit.point[2],
+                  },
+                  additive,
+                );
+              } else if (!additive) {
+                current.clearSolidSelection();
+              }
+            })
+            .catch(() => undefined);
+          return;
+        }
         const hit = pickSolidFace(e);
         if (hit) {
           state.selectSolidFeature(
@@ -6379,6 +6490,7 @@ export function Viewport() {
 
     // --- Render loop ---
     let raf = 0;
+    let nativeControllerOnly = false;
     let lastTime = performance.now();
     const tick = () => {
       raf = requestAnimationFrame(tick);
@@ -6388,6 +6500,7 @@ export function Viewport() {
 
       if (camAnim) stepCameraAnimation(now);
       if (controls.enabled) controls.update();
+      syncNativeViewportCamera(camera, controls.target);
       // Manual navigation uses OrbitControls.target as its center. Keep the
       // driver's separate pivot ready for the next transaction without ever
       // letting a driver auto-pivot move the camera target mid-transaction.
@@ -6459,7 +6572,20 @@ export function Viewport() {
         mesh.scale.setScalar(wpp * px);
       }
 
-      renderer.render(scene, camera);
+      if (nativeViewportIsActive()) {
+        // Keep Three's scene graph as the interaction/controller layer, but
+        // do not submit a second GPU render behind the clipped WKWebView.
+        if (!nativeControllerOnly) {
+          renderer.dispose();
+          renderer.forceContextLoss();
+          nativeControllerOnly = true;
+        }
+        scene.updateMatrixWorld(true);
+        const preview = collectNativeSketchPreview();
+        syncNativeViewportPreview(preview.segments, preview.marker);
+      } else {
+        renderer.render(scene, camera);
+      }
     };
     tick();
 
@@ -6490,6 +6616,7 @@ export function Viewport() {
       glyphTextureCache.forEach((texture) => texture.dispose());
       renderer.dispose();
       container.removeChild(renderer.domElement);
+      detachNativeViewport();
       apiRef.current = null;
       const w = window as unknown as {
         __cameraApi?: ViewportCameraApi;
@@ -6525,13 +6652,17 @@ export function Viewport() {
     >
       {/* Pick-plane prompt (top-center). */}
       {pickingPlane && (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded border border-edge bg-header/90 px-3 py-1.5 text-xs text-ink backdrop-blur-sm">
+        <div
+          data-native-viewport-overlay
+          className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded border border-edge bg-header/90 px-3 py-1.5 text-xs text-ink backdrop-blur-sm"
+        >
           {t('sketch.pickPlanePrompt')}
         </div>
       )}
       {/* Plane name tag (follows the cursor in pick-plane mode). */}
       <div
         ref={planeTagRef}
+        data-native-viewport-overlay
         className="pointer-events-none absolute z-10 hidden rounded border border-edge bg-header/95 px-1.5 py-0.5 text-[10px] text-ink"
         style={{ display: 'none' }}
       />
@@ -6539,12 +6670,14 @@ export function Viewport() {
       <div
         ref={chipsRef}
         data-testid="inference-chips"
+        data-native-viewport-overlay
         className="pointer-events-none absolute z-10 gap-1"
         style={{ display: 'none' }}
       />
       {/* Zoom Window drag rect. */}
       <div
         ref={zoomRectRef}
+        data-native-viewport-overlay
         className="pointer-events-none absolute z-10 border border-accent bg-accent/10"
         style={{ display: 'none' }}
       />
@@ -6558,6 +6691,7 @@ export function Viewport() {
       <div
         ref={readoutRef}
         data-testid="sketch-coordinate-readout"
+        data-native-viewport-overlay
         className="pointer-events-none absolute bottom-3 right-3 z-10 rounded border border-edge bg-header/90 px-2 py-1 font-mono text-[10px] tabular-nums text-mute"
         style={{ display: 'none' }}
       />
@@ -6582,6 +6716,7 @@ function DofChip() {
   return (
     <button
       type="button"
+      data-native-viewport-overlay
       title={t('sketch.dofToggle')}
       onClick={() => setShowDof(!showDof)}
       className="absolute bottom-3 right-40 z-10 rounded border border-edge bg-header/90 px-2 py-1 font-mono text-[10px] tabular-nums text-mute hover:text-ink"

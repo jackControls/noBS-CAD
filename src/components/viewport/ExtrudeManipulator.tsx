@@ -266,6 +266,7 @@ export function ExtrudeManipulator({
       <button
         ref={handleRef}
         type="button"
+        data-native-viewport-overlay
         data-testid="extrude-direction-handle"
         aria-label={t('extrude.dragHandle')}
         title={t('extrude.dragHandle')}
@@ -279,6 +280,7 @@ export function ExtrudeManipulator({
 
       <label
         ref={fieldRef}
+        data-native-viewport-overlay
         data-testid="extrude-canvas-input"
         className="pointer-events-auto fixed z-[72] flex h-8 -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-accent bg-header/95 px-2 font-mono text-[11px] text-ink shadow-lg shadow-black/50 backdrop-blur-sm"
         onPointerDown={(event) => event.stopPropagation()}
