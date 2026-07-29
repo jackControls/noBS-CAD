@@ -205,6 +205,7 @@ export function ProjectTabBar() {
     <div
       data-testid="project-tabs"
       data-tauri-drag-region
+      data-native-viewport-overlay
       className="flex h-7 shrink-0 items-stretch border-b border-edge bg-panel"
     >
       {document !== null && (
