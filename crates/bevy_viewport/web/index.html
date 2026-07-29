@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>noBS CAD — Bevy wasm spike (#20)</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e2124;
+        color: #e8eaed;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      #status {
+        position: absolute;
+        top: 8px;
+        left: 12px;
+        font-size: 12px;
+        opacity: 0.85;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">Loading Bevy wasm spike…</div>
+    <script type="module">
+      import init from "./bevy_desktop.js";
+      const status = document.getElementById("status");
+      try {
+        await init();
+        status.textContent =
+          "Bevy wasm spike running. Click cube to pick. RMB orbits. Scroll zooms.";
+      } catch (error) {
+        status.textContent = "Failed to start: " + error;
+        console.error(error);
+      }
+    </script>
+  </body>
+</html>

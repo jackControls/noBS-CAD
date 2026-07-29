@@ -1,0 +1,20 @@
+[package]
+name = "nbcad-bevy-viewport"
+version = "0.1.0"
+edition = "2021"
+description = "Spike: Bevy 0.19 display/ECS viewport (not B-rep). Issue #20 / ADR 0002."
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+publish = false
+
+[[bin]]
+name = "bevy_desktop"
+path = "src/bin/bevy_desktop.rs"
+
+[dependencies]
+bevy = { version = "0.19.0", default-features = true }
+
+[features]
+default = []
+# Documented for wasm builds; Bevy enables web APIs via target cfg.
+webgl2 = []

@@ -32,6 +32,8 @@ the Open CASCADE Technology software.
 | fflate | Local `.nbcad` ZIP files | MIT |
 | Lucide | General-purpose interface icons | ISC |
 | Tauri and the dialog plugin | Native application shell | MIT or Apache-2.0 |
+| Bevy 0.19 (spike crates only) | Optional viewport ECS spike (`nbcad-bevy-viewport`) | MIT or Apache-2.0 |
+
 
 Build and test dependencies are listed in `package-lock.json`, `Cargo.lock`,
 `src-tauri/Cargo.lock`, and `mcp-server/Cargo.lock`. Their package archives

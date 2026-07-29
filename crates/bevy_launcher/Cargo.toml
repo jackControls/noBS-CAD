@@ -1,0 +1,14 @@
+[package]
+name = "nbcad-bevy-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Launcher for the Bevy viewport spike: desktop or wasm."
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+publish = false
+
+[[bin]]
+name = "nbcad-bevy-launcher"
+path = "src/main.rs"
+
+[dependencies]

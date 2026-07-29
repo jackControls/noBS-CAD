@@ -39,3 +39,8 @@ docs/RELEASE_CHECKLIST.md
 docs/qa/
 docs/reference/
 scripts/probe-*.mjs
+
+# Bevy wasm-bindgen outputs (keep web/index.html).
+crates/bevy_viewport/web/bevy_desktop.js
+crates/bevy_viewport/web/bevy_desktop_bg.wasm
+crates/bevy_viewport/web/*.d.ts

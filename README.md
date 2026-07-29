@@ -71,6 +71,20 @@ and native geometry adapter as the desktop application.
 This is useful for testing, automation, and experimenting with agent-driven
 CAD workflows without turning the project into a cloud service.
 
+## Bevy viewport spike (experimental)
+
+An isolated Bevy **0.19** display/ECS spike lives in
+[`crates/bevy_viewport`](crates/bevy_viewport) (issue
+[#20](https://github.com/jackControls/noBS-CAD/issues/20)). It does **not**
+replace the Three.js viewport or OCCT. Launch desktop or wasm with:
+
+```bash
+cargo run -p nbcad-bevy-launcher -- --target desktop
+cargo run -p nbcad-bevy-launcher -- --target wasm
+```
+
+See [`crates/bevy_viewport/SPIKE.md`](crates/bevy_viewport/SPIKE.md).
+
 ## 3D mouse compatibility
 
 noBS CAD is compatible with 3Dconnexion SpaceMouse devices. In the browser
