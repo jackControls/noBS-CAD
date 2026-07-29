@@ -49,6 +49,8 @@ const tauriRoot = join(projectRoot, 'src-tauri');
 const stageRoot = join(tauriRoot, 'occt-libs');
 const licenseRoot = join(stageRoot, 'licenses');
 const overlayPath = join(tauriRoot, 'tauri.occt.conf.json');
+const signingIdentity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-';
+const usesAdHocSigning = signingIdentity === '-';
 
 const occtCandidates = [
   process.env.OCCT_ROOT,
@@ -200,11 +202,13 @@ writeFileSync(
         },
         macOS: {
           frameworks,
-          // Tauri must seal the app before it copies it into a DMG. A local
-          // build uses Apple's ad-hoc identity; release builders can provide
-          // a Developer ID through the same environment variable consumed by
-          // scripts/bundle-macos.mjs.
-          signingIdentity: process.env.APPLE_SIGNING_IDENTITY ?? '-',
+          // Hardened runtime enforces library validation by signing team.
+          // Ad-hoc identities have no Team ID, so a hardened local build is
+          // rejected by dyld when it loads the bundled OCCT dylibs. Keep
+          // hardened runtime for Developer ID releases and disable it only
+          // for local/test DMGs.
+          signingIdentity,
+          hardenedRuntime: !usesAdHocSigning,
         },
       },
     },
