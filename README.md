@@ -44,6 +44,7 @@ The current application includes early implementations of:
 - parametric sketches with dimensions and geometric constraints;
 - extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, and shell
   features;
+- modeled hole threads for common ISO metric and Unified standards;
 - mirrors, patterns, construction planes, combine, and split-body tools;
 - editable feature history, undo, project saving, and reopening;
 - local `.nbcad` project files (ZIP archives containing editable model data
@@ -60,16 +61,20 @@ exporting a STEP copy of any design you care about as a backup. STEP preserves
 the final solid geometry for use in other CAD software, but not the editable
 noBS CAD feature history.
 
-## An MCP server for CAD automation
+## Local automation (MCP)
 
-The repository also includes a stateful, headless
-[MCP server](mcp-server/README.md) that covers most currently implemented
-sketch and solid-modeling tools. It exposes 101 granular tools today, keeps one
-persistent feature history per process, and uses the same Rust planning model
-and native geometry adapter as the desktop application.
+The repository includes a stateful, headless
+[MCP server](mcp-server/README.md) for local testing and agent-driven
+experiments. It covers most currently implemented sketch and solid-modeling
+tools over **stdio**, keeps one feature history per process, and uses the same
+Rust planning model and native OCCT adapter as the desktop app for solid
+operations.
 
-This is useful for testing, automation, and experimenting with agent-driven
-CAD workflows without turning the project into a cloud service.
+**Today:** the MCP process and the visible UI still own **separate** documents.
+Use MCP as an engine/automation probe; co-linking one active UI document is a
+proposed next step ([docs/proposed-architecture.md](docs/proposed-architecture.md)).
+
+Notes: [docs/mcp-harness.md](docs/mcp-harness.md).
 
 ## 3D mouse compatibility
 
@@ -105,11 +110,19 @@ find.
 
 ## Where we are going
 
-Our near-term priorities are:
+High-level directions (mechanical CAD first) are in
+[docs/goals.md](docs/goals.md): reliable foundation, careful **CAM**, additive
+**3MF** (with useful color/material metadata) alongside STEP, strong **local
+MCP** automation, and **staged** simulation later. Proposed implementation
+ideas stay in [docs/proposed-architecture.md](docs/proposed-architecture.md)
+until prototyped.
+
+Near-term engineering priorities:
 
 1. Make today's sketching, solid modeling, history, undo, and project-file
    workflows more dependable.
-2. Add threaded and tapped options to Hole features.
+2. Harden and expand modeled hole-thread coverage; add regression tests for
+   edge cases.
 3. Keep improving general UX.
 4. Improve preview, selection, and recompute performance.
 5. Turn reported failures into focused regression tests.
@@ -198,6 +211,9 @@ npm run build
 
 Public technical references:
 
+- [Goals / directions](docs/goals.md)
+- [Proposed architecture](docs/proposed-architecture.md)
+- [MCP harness notes](docs/mcp-harness.md)
 - [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md)
 - [Windows portable packaging](docs/WINDOWS_PACKAGING.md)
 - [MCP server](mcp-server/README.md)
