@@ -111,6 +111,16 @@ try {
   check('d1 dimension created with annotation', s.dimensions.length === 1 && s.dimensions[0].text === '50.00', s.dimensions.map((d) => d.text).join(','));
   check('d1 stores the expression', s.dimensions[0].param_expression === '25*2', s.dimensions[0].param_expression ?? 'none');
   check('d1 param name', s.dimensions[0].param_name === 'd1');
+  const nativeDimensionPresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  check(
+    'Bevy presentation receives the live dimension annotation',
+    nativeDimensionPresentation.annotations.some(
+      (annotation) =>
+        annotation.kind === 'dimension' && annotation.text === '50.00',
+    ),
+  );
   await shot('02-d1-annotation');
 
   // Chain: second line with =d1/2.
@@ -187,6 +197,15 @@ try {
   s = await sketch();
   const rectDim = s.dimensions.find((d) => d.kind === 'distance' && d.text === '40.00');
   check('linear dim placed on rectangle edge', !!rectDim, s.dimensions.map((d) => `${d.kind}:${d.text}`).join(', '));
+  const nativeConstraintPresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  check(
+    'Bevy presentation receives sketch constraint glyphs',
+    nativeConstraintPresentation.annotations.some(
+      (annotation) => annotation.kind === 'constraint',
+    ),
+  );
   await shot('05b-linear-dim-placed');
 
   // Cancelling after the entity pick must discard that pick. Reactivating

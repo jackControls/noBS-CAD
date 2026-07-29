@@ -86,6 +86,7 @@ interface NativeHud {
 interface NativePresentation {
   mode: 'solid' | 'pick_plane' | 'sketch';
   hoveredOriginPlane: 'xy' | 'xz' | 'yz' | null;
+  hoveredDatumPlaneId: number | null;
   selectedBodyIds: number[];
   hoveredBodyId: number | null;
   selectedFaceIds: number[];
@@ -96,6 +97,32 @@ interface NativePresentation {
   hoveredSketchEntityId: number | null;
   hiddenBodyIds: number[];
   hiddenDatumPlaneIds: number[];
+}
+
+export interface NativeViewportLineLayer {
+  color: [number, number, number, number];
+  width: number;
+  segments: number[];
+}
+
+export interface NativeViewportPointLayer {
+  color: [number, number, number, number];
+  radius: number;
+  positions: number[];
+}
+
+export interface NativeViewportAnnotation {
+  screen: [number, number];
+  color: [number, number, number, number];
+  text: string;
+  kind: 'dimension' | 'constraint';
+}
+
+export interface NativeViewportTransient {
+  lines: NativeViewportLineLayer[];
+  points: NativeViewportPointLayer[];
+  annotations: NativeViewportAnnotation[];
+  marker: [number, number, number] | null;
 }
 
 const overlaySelector = [
@@ -123,12 +150,7 @@ let pendingCamera:
   | null = null;
 let lastCameraKey = '';
 let lastPreviewKey = '';
-let pendingPreview:
-  | {
-      segments: number[];
-      marker: [number, number, number] | null;
-    }
-  | null = null;
+let pendingPreview: NativeViewportTransient | null = null;
 let previewInFlight = false;
 let lastLayoutKey = '';
 let layoutRevision = Date.now() * 1000;
@@ -355,6 +377,7 @@ function collectPresentation(): NativePresentation {
   return {
     mode: state.mode === 'pickPlane' ? 'pick_plane' : state.mode,
     hoveredOriginPlane: state.hoveredPlane,
+    hoveredDatumPlaneId: state.hoveredDatumPlane,
     selectedBodyIds: state.selectedBodies,
     hoveredBodyId,
     selectedFaceIds: state.selectedFaces,
@@ -597,24 +620,47 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   };
 }
 
-function previewKey(
-  segments: number[],
-  marker: [number, number, number] | null,
-): string {
+function previewKey(preview: NativeViewportTransient): string {
   // Quantization avoids waking the native renderer for insignificant
   // float noise while preserving sub-micron precision in millimeter models.
   let hash = 2_166_136_261;
-  for (const value of segments) {
+  let numericCount = 0;
+  const addNumber = (value: number) => {
     hash ^= Math.round(value * 10_000);
     hash = Math.imul(hash, 16_777_619);
-  }
-  if (marker) {
-    for (const value of marker) {
-      hash ^= Math.round(value * 10_000);
+    numericCount += 1;
+  };
+  const addString = (value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
       hash = Math.imul(hash, 16_777_619);
     }
+  };
+  for (const layer of preview.lines) {
+    layer.color.forEach(addNumber);
+    addNumber(layer.width);
+    layer.segments.forEach(addNumber);
   }
-  return `${segments.length}:${marker ? 1 : 0}:${hash >>> 0}`;
+  for (const layer of preview.points) {
+    layer.color.forEach(addNumber);
+    addNumber(layer.radius);
+    layer.positions.forEach(addNumber);
+  }
+  for (const annotation of preview.annotations) {
+    annotation.screen.forEach(addNumber);
+    annotation.color.forEach(addNumber);
+    addString(annotation.text);
+    addString(annotation.kind);
+  }
+  preview.marker?.forEach(addNumber);
+  return [
+    preview.lines.length,
+    preview.points.length,
+    preview.annotations.length,
+    numericCount,
+    preview.marker ? 1 : 0,
+    hash >>> 0,
+  ].join(':');
 }
 
 function pumpPreview(): void {
@@ -631,18 +677,16 @@ function pumpPreview(): void {
 }
 
 /**
- * Sends only transient rubber-band geometry through IPC. Committed sketches
- * and OCCT meshes stay on the direct Rust path and never cross JavaScript.
+ * Sends only transient presentation geometry through IPC: tool previews,
+ * dialog-owned highlights, point grips, and dimension/constraint annotations.
+ * Committed sketches and OCCT meshes stay on the direct Rust path.
  */
-export function syncNativeViewportPreview(
-  segments: number[],
-  marker: [number, number, number] | null,
-): void {
+export function syncNativeViewportPreview(preview: NativeViewportTransient): void {
   if (!active) return;
-  const key = previewKey(segments, marker);
+  const key = previewKey(preview);
   if (key === lastPreviewKey) return;
   lastPreviewKey = key;
-  pendingPreview = { segments, marker };
+  pendingPreview = preview;
   pumpPreview();
 }
 

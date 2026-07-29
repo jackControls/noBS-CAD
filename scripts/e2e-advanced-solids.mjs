@@ -84,18 +84,36 @@ async function extrude(page, distance = 20) {
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy && window.__appStore.getState().solidScene.bodies.length > 0, undefined, { timeout: 60_000 });
 }
 
-function faceCentroid(body, face) {
-  const point = [0, 0, 0];
-  let count = 0;
-  for (let offset = face.first_index; offset < face.first_index + face.index_count; offset += 1) {
-    const vertex = body.mesh.indices[offset];
-    if (vertex === undefined) continue;
-    point[0] += body.mesh.positions[vertex * 3] ?? 0;
-    point[1] += body.mesh.positions[vertex * 3 + 1] ?? 0;
-    point[2] += body.mesh.positions[vertex * 3 + 2] ?? 0;
-    count += 1;
+function faceInteriorPoints(body, face) {
+  const samples = [];
+  const weightSets = [
+    [0.19, 0.34, 0.47],
+    [0.47, 0.19, 0.34],
+    [0.34, 0.47, 0.19],
+  ];
+  for (
+    let offset = face.first_index;
+    offset + 2 < face.first_index + face.index_count;
+    offset += 3
+  ) {
+    const indices = [0, 1, 2].map(
+      (index) => body.mesh.indices[offset + index],
+    );
+    if (indices.some((index) => index === undefined)) continue;
+    const vertices = indices.map((index) => [
+      body.mesh.positions[index * 3] ?? 0,
+      body.mesh.positions[index * 3 + 1] ?? 0,
+      body.mesh.positions[index * 3 + 2] ?? 0,
+    ]);
+    for (const weights of weightSets) {
+      samples.push([0, 1, 2].map((axis) =>
+        vertices.reduce(
+          (sum, vertex, index) => sum + vertex[axis] * weights[index],
+          0,
+        )));
+    }
   }
-  return point.map((value) => value / Math.max(count, 1));
+  return samples;
 }
 
 console.log('1. sketch-line axis Revolve Cut');
@@ -139,6 +157,13 @@ console.log('1. sketch-line axis Revolve Cut');
     emphasizedWidths.length > 0 &&
       emphasizedWidths.every((width) => Math.abs(width - 1.725) < 1e-6),
     JSON.stringify(emphasizedWidths),
+  );
+  const nativeCurvePresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  check(
+    'Bevy receives selected finished-sketch curves for Revolve/Sweep/Loft/Rib',
+    nativeCurvePresentation.lines.some((layer) => layer.segments.length >= 6),
   );
   await page.getByTestId('solid-operation').selectOption('cut');
   await page.getByTestId('revolve-ok').click();
@@ -211,13 +236,32 @@ console.log('4. Loft between origin and planar-face profiles');
   await extrude(page, 20);
   let app = await state(page);
   const body = app.solidScene.bodies[0];
-  const top = body.faces.filter((face) => face.plane).map((face) => ({ face, center: faceCentroid(body, face) })).sort((a, b) => b.center[2] - a.center[2])[0];
-  const screen = await page.evaluate(([x, y, z]) => window.__worldToScreen(x, y, z), top.center);
-  await page.mouse.click(screen.x, screen.y);
+  const top = body.faces
+    .filter((face) => face.plane)
+    .map((face) => ({ face, samples: faceInteriorPoints(body, face) }))
+    .filter(({ samples }) => samples.length > 0)
+    .sort((a, b) => b.samples[0][2] - a.samples[0][2])[0];
+  for (const sample of top.samples) {
+    const screen = await page.evaluate(
+      ([x, y, z]) => window.__worldToScreen(x, y, z),
+      sample,
+    );
+    await page.mouse.click(screen.x, screen.y);
+    await page.waitForTimeout(80);
+    if ((await state(page)).selectedFace === top.face.id) break;
+  }
+  check(
+    'Loft support face is selected away from projected topology edges',
+    (await state(page)).selectedFace === top.face.id,
+  );
   await page.getByRole('button', { name: 'Create Sketch' }).first().click();
   await page.getByTestId('sketch-plane-origin-dialog').waitFor({ state: 'visible' });
   await page.getByTestId('sketch-plane-origin-ok').click();
   await page.waitForFunction(() => window.__appStore.getState().mode === 'sketch');
+  // The face-hosted camera transition uses the same 350 ms interpolation as
+  // origin-plane sketches. Wait for it before converting sketch coordinates
+  // into screen clicks, otherwise both rectangle clicks can land together.
+  await page.waitForTimeout(900);
   await rectangle(page, -7, -7, 7, 7);
   await finishSketch(page);
   await page.mouse.click(1200, 750);

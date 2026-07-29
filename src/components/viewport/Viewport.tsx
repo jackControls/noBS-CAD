@@ -87,6 +87,7 @@ import {
   pickNativeViewport,
   syncNativeViewportCamera,
   syncNativeViewportPreview,
+  type NativeViewportTransient,
 } from './nativeViewportBridge';
 
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
@@ -834,82 +835,250 @@ export function Viewport() {
     lineMaterials.add(previewMaterial);
     previewGroup.add(previewLine);
 
-    const previewStart = new CAD.Vector3();
-    const previewEnd = new CAD.Vector3();
-    const collectNativeSketchPreview = (): {
-      segments: number[];
-      marker: [number, number, number] | null;
-    } => {
-      if (!sketchGroup.visible) return { segments: [], marker: null };
+    const transientStart = new CAD.Vector3();
+    const transientEnd = new CAD.Vector3();
+    const transientPosition = new CAD.Vector3();
 
-      const segments: number[] = [];
-      previewGroup.traverseVisible((object) => {
-        const geometry = (object as CAD.Object3D & {
-          geometry?: CAD.BufferGeometry;
-        }).geometry;
-        if (!geometry) return;
+    /**
+     * Convert the CPU interaction scene into a small semantic payload for
+     * Bevy. This deliberately excludes committed sketch curves and OCCT
+     * tessellation; Rust already owns both. It includes only presentation
+     * details that belong to an active command.
+     */
+    const collectNativeViewportTransient = (): NativeViewportTransient => {
+      type Rgba = [number, number, number, number];
+      type LineLayer = NativeViewportTransient['lines'][number];
+      type PointLayer = NativeViewportTransient['points'][number];
+      const lineLayers = new Map<string, LineLayer>();
+      const pointLayers = new Map<string, PointLayer>();
+      const annotations: NativeViewportTransient['annotations'] = [];
 
-        const starts = geometry.getAttribute('instanceStart');
-        const ends = geometry.getAttribute('instanceEnd');
-        if (starts && ends) {
-          const count = Math.min(starts.count, ends.count);
-          for (let index = 0; index < count; index += 1) {
-            previewStart
-              .set(starts.getX(index), starts.getY(index), starts.getZ(index))
-              .applyMatrix4(object.matrixWorld);
-            previewEnd
-              .set(ends.getX(index), ends.getY(index), ends.getZ(index))
-              .applyMatrix4(object.matrixWorld);
-            segments.push(
-              previewStart.x,
-              previewStart.y,
-              previewStart.z,
-              previewEnd.x,
-              previewEnd.y,
-              previewEnd.z,
+      const rgbaFor = (
+        material: CAD.Material | null,
+        fallback = COLOR_PREVIEW,
+      ): Rgba => {
+        const color = material?.color ?? new CAD.Color(fallback);
+        return [color.r, color.g, color.b, material?.opacity ?? 1];
+      };
+      const materialFor = (object: CAD.Object3D): CAD.Material | null => {
+        const candidate = (object as CAD.Object3D & {
+          material?: CAD.Material | CAD.Material[];
+        }).material;
+        return Array.isArray(candidate) ? (candidate[0] ?? null) : (candidate ?? null);
+      };
+      const lineWidthFor = (material: CAD.Material | null) =>
+        material instanceof ScreenLineMaterial ? material.linewidth : 1.25;
+      const layerKey = (color: Rgba, width: number) =>
+        `${color.map((value) => value.toFixed(4)).join(',')}|${width.toFixed(2)}`;
+      const pointKey = (color: Rgba, radius: number) =>
+        `${color.map((value) => value.toFixed(4)).join(',')}|${radius.toFixed(4)}`;
+      const appendSegment = (
+        color: Rgba,
+        width: number,
+        start: CAD.Vector3,
+        end: CAD.Vector3,
+      ) => {
+        const key = layerKey(color, width);
+        let layer = lineLayers.get(key);
+        if (!layer) {
+          layer = { color, width, segments: [] };
+          lineLayers.set(key, layer);
+        }
+        layer.segments.push(start.x, start.y, start.z, end.x, end.y, end.z);
+      };
+      const appendPoint = (
+        color: Rgba,
+        radius: number,
+        point: CAD.Vector3,
+      ) => {
+        const key = pointKey(color, radius);
+        let layer = pointLayers.get(key);
+        if (!layer) {
+          layer = { color, radius, positions: [] };
+          pointLayers.set(key, layer);
+        }
+        layer.positions.push(point.x, point.y, point.z);
+      };
+      const appendAnnotation = (object: CAD.Object3D) => {
+        const text = object.userData.nativeAnnotationText;
+        if (typeof text !== 'string' || text.length === 0) return;
+        const screenRect = surface.domElement.getBoundingClientRect();
+        const projected = object
+          .getWorldPosition(transientPosition)
+          .clone()
+          .project(camera);
+        if (
+          projected.z < -1 ||
+          projected.z > 1 ||
+          !Number.isFinite(projected.x) ||
+          !Number.isFinite(projected.y)
+        ) {
+          return;
+        }
+        const colorValue =
+          typeof object.userData.nativeAnnotationColor === 'number'
+            ? object.userData.nativeAnnotationColor
+            : COLOR_DIMENSION;
+        const color = new CAD.Color(colorValue);
+        annotations.push({
+          screen: [
+            ((projected.x + 1) * screenRect.width) / 2,
+            ((1 - projected.y) * screenRect.height) / 2,
+          ],
+          color: [color.r, color.g, color.b, 1],
+          text,
+          kind:
+            object.userData.nativeAnnotationKind === 'constraint'
+              ? 'constraint'
+              : 'dimension',
+        });
+      };
+      const collectRoot = (
+        root: CAD.Object3D,
+        options: {
+          lines?: boolean;
+          points?: boolean;
+          meshEdges?: boolean;
+          annotations?: boolean;
+          include?: (object: CAD.Object3D) => boolean;
+        } = {},
+      ) => {
+        root.updateWorldMatrix(true, true);
+        root.traverseVisible((object) => {
+          if (options.include && !options.include(object)) return;
+          if (options.annotations) appendAnnotation(object);
+
+          const geometry = (object as CAD.Object3D & {
+            geometry?: CAD.BufferGeometry;
+          }).geometry;
+          if (!geometry) return;
+          const material = materialFor(object);
+
+          if (options.points && object instanceof CAD.Points) {
+            const positions = geometry.getAttribute('position');
+            if (!positions) return;
+            const colors = geometry.getAttribute('color');
+            const pointMaterial = material as CAD.PointsMaterial | null;
+            const radius = Math.max(
+              0.08,
+              worldPerPixel() * (pointMaterial?.size ?? 7) * 0.5,
             );
+            for (let index = 0; index < positions.count; index += 1) {
+              transientPosition
+                .set(
+                  positions.getX(index),
+                  positions.getY(index),
+                  positions.getZ(index),
+                )
+                .applyMatrix4(object.matrixWorld);
+              const color: Rgba = colors
+                ? [
+                    colors.getX(index),
+                    colors.getY(index),
+                    colors.getZ(index),
+                    material?.opacity ?? 1,
+                  ]
+                : rgbaFor(material);
+              appendPoint(color, radius, transientPosition);
+            }
+            return;
           }
-          return;
-        }
 
-        const positions = geometry.getAttribute('position');
-        if (!positions) return;
-        const step = object instanceof CAD.LineSegments ? 2 : 1;
-        if (!(object instanceof CAD.LineSegments || object instanceof CAD.Line)) {
-          return;
-        }
-        for (let index = 0; index + 1 < positions.count; index += step) {
-          previewStart
-            .set(
-              positions.getX(index),
-              positions.getY(index),
-              positions.getZ(index),
-            )
-            .applyMatrix4(object.matrixWorld);
-          previewEnd
-            .set(
-              positions.getX(index + 1),
-              positions.getY(index + 1),
-              positions.getZ(index + 1),
-            )
-            .applyMatrix4(object.matrixWorld);
-          segments.push(
-            previewStart.x,
-            previewStart.y,
-            previewStart.z,
-            previewEnd.x,
-            previewEnd.y,
-            previewEnd.z,
-          );
-        }
+          if (!options.lines) return;
+          const color = rgbaFor(material);
+          const width = lineWidthFor(material);
+          const starts = geometry.getAttribute('instanceStart');
+          const ends = geometry.getAttribute('instanceEnd');
+          if (starts && ends) {
+            const count = Math.min(starts.count, ends.count);
+            for (let index = 0; index < count; index += 1) {
+              transientStart
+                .set(starts.getX(index), starts.getY(index), starts.getZ(index))
+                .applyMatrix4(object.matrixWorld);
+              transientEnd
+                .set(ends.getX(index), ends.getY(index), ends.getZ(index))
+                .applyMatrix4(object.matrixWorld);
+              appendSegment(color, width, transientStart, transientEnd);
+            }
+            return;
+          }
+
+          const positions = geometry.getAttribute('position');
+          if (!positions) return;
+          if (object instanceof CAD.LineSegments || object instanceof CAD.Line) {
+            const step = object instanceof CAD.LineSegments ? 2 : 1;
+            for (let index = 0; index + 1 < positions.count; index += step) {
+              transientStart
+                .set(
+                  positions.getX(index),
+                  positions.getY(index),
+                  positions.getZ(index),
+                )
+                .applyMatrix4(object.matrixWorld);
+              transientEnd
+                .set(
+                  positions.getX(index + 1),
+                  positions.getY(index + 1),
+                  positions.getZ(index + 1),
+                )
+                .applyMatrix4(object.matrixWorld);
+              appendSegment(color, width, transientStart, transientEnd);
+            }
+            return;
+          }
+          if (options.meshEdges && object instanceof CAD.Mesh) {
+            for (let index = 0; index + 2 < positions.count; index += 3) {
+              const vertices = [0, 1, 2].map((offset) =>
+                new CAD.Vector3(
+                  positions.getX(index + offset),
+                  positions.getY(index + offset),
+                  positions.getZ(index + offset),
+                ).applyMatrix4(object.matrixWorld),
+              );
+              appendSegment(color, width, vertices[0], vertices[1]);
+              appendSegment(color, width, vertices[1], vertices[2]);
+              appendSegment(color, width, vertices[2], vertices[0]);
+            }
+          }
+        });
+      };
+
+      if (sketchGroup.visible) {
+        collectRoot(previewGroup, {
+          lines: true,
+          points: true,
+          meshEdges: true,
+          annotations: true,
+        });
+        collectRoot(dimsGroup, {
+          lines: true,
+          meshEdges: true,
+          annotations: true,
+        });
+        collectRoot(glyphGroup, { annotations: true });
+        collectRoot(entityGroup, { points: true });
+      }
+      collectRoot(finishedGroup, {
+        lines: true,
+        points: true,
+        include: (object) => object.userData.finishedSketchEmphasis === true,
+      });
+      collectRoot(profileGroup, {
+        lines: true,
+        include: (object) => object.userData.profileHighlightKind !== undefined,
       });
 
       let marker: [number, number, number] | null = null;
-      if (snapMarker.visible) {
-        snapMarker.getWorldPosition(previewStart);
-        marker = [previewStart.x, previewStart.y, previewStart.z];
+      if (sketchGroup.visible && snapMarker.visible) {
+        snapMarker.getWorldPosition(transientPosition);
+        marker = [transientPosition.x, transientPosition.y, transientPosition.z];
       }
-      return { segments, marker };
+      return {
+        lines: [...lineLayers.values()],
+        points: [...pointLayers.values()],
+        annotations,
+        marker,
+      };
     };
 
     const addScreenLine = (
@@ -1095,6 +1264,9 @@ export function Viewport() {
           const len = Math.hypot(dx, dy) || 1;
           const sprite = makeSprite(midpointTexture, 13, 7);
           sprite.position.set(mid.x + (-dy / len) * 6, mid.y + (dx / len) * 6, 0.2);
+          sprite.userData.nativeAnnotationText = '△';
+          sprite.userData.nativeAnnotationKind = 'constraint';
+          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_FINISH).getHex();
           glyphGroup.add(sprite);
           continue;
         }
@@ -1115,6 +1287,10 @@ export function Viewport() {
             7,
           );
           sprite.position.set(x, y, 0.2);
+          sprite.userData.nativeAnnotationText =
+            constraint.type === 'horizontal' ? 'H' : 'V';
+          sprite.userData.nativeAnnotationKind = 'constraint';
+          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
           glyphGroup.add(sprite);
         } else if (constraint.type === 'fix') {
           const target = sketch.entities.find((e) => e.id === constraint.entity);
@@ -1129,6 +1305,9 @@ export function Viewport() {
                   : { x: (target.start.x + target.end.x) / 2, y: (target.start.y + target.end.y) / 2 };
           const sprite = makeSprite(glyphTexture('fix'), 16, 7);
           sprite.position.set(at.x + 6, at.y + 6, 0.2);
+          sprite.userData.nativeAnnotationText = '▣';
+          sprite.userData.nativeAnnotationKind = 'constraint';
+          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
           glyphGroup.add(sprite);
         }
       }
@@ -1202,6 +1381,11 @@ export function Viewport() {
       );
       sprite.renderOrder = 9;
       sprite.position.set(textPos.x, textPos.y, 0.24);
+      sprite.userData.nativeAnnotationText = dimLike.text;
+      sprite.userData.nativeAnnotationKind = 'dimension';
+      sprite.userData.nativeAnnotationColor = opts.selected
+        ? COLOR_DIMENSION_SELECTED
+        : COLOR_DIMENSION;
       dimSprites.push({
         sprite,
         px: 19,
@@ -4894,6 +5078,7 @@ export function Viewport() {
         if (faceHit) {
           highlightDatumPlane(null, true);
           state.setHoveredPlane(null);
+          state.setHoveredDatumPlane(null);
           state.setHoveredFace(faceHit.planar ? faceHit.faceId : null);
           const tag = planeTagRef.current;
           if (tag) {
@@ -4916,6 +5101,7 @@ export function Viewport() {
         if (datumHit) {
           state.setHoveredPlane(null);
           const datumId = datumHit.object.userData.datumPlaneId as number;
+          state.setHoveredDatumPlane(datumId);
           highlightDatumPlane(datumId, true);
           const tag = planeTagRef.current;
           if (tag) {
@@ -4930,6 +5116,7 @@ export function Viewport() {
           surface.domElement.style.cursor = 'pointer';
           return;
         }
+        state.setHoveredDatumPlane(null);
         highlightDatumPlane(null, true);
         const hits = raycaster.intersectObjects(picker.map((p) => p.mesh));
         const plane = (hits[0]?.object.userData.plane ?? null) as OriginPlane | null;
@@ -4952,6 +5139,7 @@ export function Viewport() {
       }
 
       if (state.mode === 'solid') {
+        if (state.hoveredDatumPlane !== null) state.setHoveredDatumPlane(null);
         if (state.navTool !== 'select') {
           state.setHoveredFace(null);
           state.setHoveredEdge(null);
@@ -5980,6 +6168,14 @@ export function Viewport() {
     ).__worldToScreen = (x, y, z) => api.worldToScreen([x, y, z]) ?? { x: 0, y: 0 };
     (
       window as unknown as {
+        __nativeViewportTransient?: () => NativeViewportTransient;
+      }
+    ).__nativeViewportTransient = () => {
+      scene.updateMatrixWorld(true);
+      return collectNativeViewportTransient();
+    };
+    (
+      window as unknown as {
         __profileVisualState?: (
           sketchName: string,
           profileIndex: number,
@@ -6612,8 +6808,7 @@ export function Viewport() {
       const native = nativeViewportIsActive();
       scene.updateMatrixWorld(true);
       if (native) {
-        const preview = collectNativeSketchPreview();
-        syncNativeViewportPreview(preview.segments, preview.marker);
+        syncNativeViewportPreview(collectNativeViewportTransient());
       }
       if (
         !native ||
@@ -6671,6 +6866,7 @@ export function Viewport() {
         __solidEdgeVisualState?: unknown;
         __finishedSketchVisualState?: unknown;
         __sketchGridStep?: unknown;
+        __nativeViewportTransient?: unknown;
       };
       delete w.__cameraApi;
       delete w.__sketchToScreen;
@@ -6681,6 +6877,7 @@ export function Viewport() {
       delete w.__solidEdgeVisualState;
       delete w.__finishedSketchVisualState;
       delete w.__sketchGridStep;
+      delete w.__nativeViewportTransient;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

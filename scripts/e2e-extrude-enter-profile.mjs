@@ -102,6 +102,19 @@ try {
     () => window.__appStore.getState().profilePicker?.selected.length === 1,
   );
   assert.equal(await profileCheckbox.isChecked(), true);
+  await page.waitForFunction(
+    () =>
+      window
+        .__nativeViewportTransient()
+        .lines.some((layer) => layer.segments.length >= 6),
+  );
+  const nativeProfilePresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  assert.ok(
+    nativeProfilePresentation.lines.some((layer) => layer.segments.length >= 6),
+    'Bevy receives the selected profile outline used by Extrude and other profile commands',
+  );
 
   console.log('3. Invalid Enter submission explains why it cannot run');
   await distance.fill('0');

@@ -122,6 +122,7 @@ pub struct ViewportPresentation {
     #[serde(default)]
     pub mode: ViewportMode,
     pub hovered_origin_plane: Option<ViewportOriginPlane>,
+    pub hovered_datum_plane_id: Option<u64>,
     #[serde(default)]
     pub selected_body_ids: Vec<u64>,
     pub hovered_body_id: Option<u64>,
@@ -205,10 +206,72 @@ pub struct ViewportCamera {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ViewportPreview {
+pub struct ViewportLineLayer {
+    /// sRGBA from the DOM theme/presentation material.
+    #[serde(default)]
+    pub color: [f32; 4],
+    /// Requested screen-space width. Bevy maps this to its normal/highlight
+    /// gizmo pipelines rather than treating it as a world-space measurement.
+    #[serde(default = "default_line_width")]
+    pub width: f32,
     /// World-space line segments, packed as x0, y0, z0, x1, y1, z1.
     #[serde(default)]
     pub segments: Vec<f32>,
+}
+
+fn default_line_width() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportPointLayer {
+    /// sRGBA from the DOM theme/presentation material.
+    #[serde(default)]
+    pub color: [f32; 4],
+    /// Approximate world-space marker radius derived from the current camera.
+    #[serde(default)]
+    pub radius: f32,
+    /// World-space point positions, packed as x, y, z.
+    #[serde(default)]
+    pub positions: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportAnnotationKind {
+    #[default]
+    Dimension,
+    Constraint,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportAnnotation {
+    /// Viewport-local logical pixels. React already owns the exact projection
+    /// used for picking, so annotations stay aligned with its interaction
+    /// scene during orbit, resize, and DPI changes.
+    #[serde(default)]
+    pub screen: [f32; 2],
+    #[serde(default)]
+    pub color: [f32; 4],
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub kind: ViewportAnnotationKind,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportPreview {
+    /// Small, transient presentation layers only. Committed sketches and OCCT
+    /// tessellations continue to travel through the direct Rust snapshot path.
+    #[serde(default)]
+    pub lines: Vec<ViewportLineLayer>,
+    #[serde(default)]
+    pub points: Vec<ViewportPointLayer>,
+    #[serde(default)]
+    pub annotations: Vec<ViewportAnnotation>,
     /// Optional world-space sketch snap marker.
     pub marker: Option<[f32; 3]>,
 }
