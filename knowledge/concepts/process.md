@@ -1,8 +1,9 @@
 ---
 type: Concept
 title: Contribution process
-status: active
-updated: 2026-07-28
+description: Lightweight contribution, validation, review, and merge expectations.
+status: stable
+updated: 2026-07-29
 ---
 
 # Contribution process
@@ -17,4 +18,5 @@ updated: 2026-07-28
 - Validation proportional to the change.
 - Maintainers: `@jackControls` and `@jeffglousher` (no self-approve).
 
-Canonical detail: `CONTRIBUTING.md`, `docs/process.md`.
+Canonical detail: [CONTRIBUTING.md](../../CONTRIBUTING.md) and
+[the contribution process](../../docs/process.md).

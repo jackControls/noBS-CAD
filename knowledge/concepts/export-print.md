@@ -1,8 +1,9 @@
 ---
 type: Concept
 title: Export and print
-status: active
-updated: 2026-07-28
+description: Current CAD interchange support and planned additive-manufacturing formats.
+status: stable
+updated: 2026-07-29
 ---
 
 # Export and print
@@ -20,4 +21,6 @@ updated: 2026-07-28
 - **STL** fallback; document appearance limits
 - Keep STEP for CAD interchange
 
-See `docs/goals.md` and ADR 0003 when merged.
+See [goals](../../docs/goals.md) for the accepted direction and
+[proposed architecture](../../docs/proposed-architecture.md) for ideas that
+have not shipped.

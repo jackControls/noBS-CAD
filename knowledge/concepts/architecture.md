@@ -1,8 +1,9 @@
 ---
 type: Concept
 title: Architecture
-status: active
-updated: 2026-07-28
+description: Kernel, shell, viewport, and project-file boundaries in noBS CAD.
+status: stable
+updated: 2026-07-29
 ---
 
 # Architecture
@@ -26,4 +27,4 @@ updated: 2026-07-28
 - 3MF (+ materials/colors) — **target**, not current functionality
 
 Related: [Export & print](export-print.md), [MCP harness](mcp-harness.md),
-`docs/proposed-architecture.md`.
+and the longer [proposed architecture](../../docs/proposed-architecture.md).

@@ -1,19 +1,26 @@
 name: pages-knowledge
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "knowledge/**"
+      - "docs/knowledge-wiki.md"
+      - "scripts/check-knowledge.mjs"
+      - ".github/workflows/pages-knowledge.yml"
   push:
     branches: [main]
     paths:
       - "knowledge/**"
+      - "docs/knowledge-wiki.md"
+      - "scripts/check-knowledge.mjs"
       - ".github/workflows/pages-knowledge.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages-knowledge
+  group: pages-knowledge-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,20 +28,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate OKF bundle
+        run: node scripts/check-knowledge.mjs
       - name: Build static knowledge site
         run: |
+          rm -rf _site
           mkdir -p _site
-          cp -R knowledge/* _site/
+          cp -R knowledge/. _site/
           cp _site/home.html _site/index.html
+          touch _site/.nojekyll
           test -f _site/index.md
           test -f _site/index.html
-      - uses: actions/upload-pages-artifact@v3
+      - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
         with:
           path: _site
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

@@ -1,8 +1,9 @@
 ---
 type: Concept
 title: MCP harness
-status: active
-updated: 2026-07-28
+description: Current local MCP behavior and proposed UI co-link milestones.
+status: stable
+updated: 2026-07-29
 ---
 
 # MCP harness
@@ -10,8 +11,8 @@ updated: 2026-07-28
 `mcp-server/` provides `nbcad-mcp`: a **stdio** MCP server for local
 automation and testing (no required cloud).
 
-Canonical notes (after mission docs merge): `docs/mcp-harness.md`.  
-Proposals: `docs/proposed-architecture.md`.
+Canonical notes: [MCP harness](../../docs/mcp-harness.md).
+Proposals: [proposed architecture](../../docs/proposed-architecture.md).
 
 ## Honest today
 
@@ -29,4 +30,5 @@ Use MCP as an engine/automation probe until UI co-link exists.
 2. Attach MCP to **one** active UI document (first milestone)
 3. Multi-window routing later if needed (not P0)
 
-See also `docs/agent-mcp.md`, `mcp-server/README.md`.
+See also the [MCP playbook](../../docs/agent-mcp.md) and
+[server documentation](../../mcp-server/README.md).

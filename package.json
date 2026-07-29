@@ -22,6 +22,7 @@
     "bundle:windows:portable": "pwsh -NoProfile -File scripts/bundle-windows-portable.ps1",
     "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/engine-wasm/pkg --out-name nbcad_wasm",
     "smoke:wasm": "node scripts/smoke-wasm.mjs",
+    "check:knowledge": "node scripts/check-knowledge.mjs",
     "audit:icons": "node scripts/audit-icons.mjs",
     "e2e": "node scripts/run-e2e.mjs",
     "e2e:release": "node scripts/run-e2e.mjs e2e-sketch.mjs e2e-m1b.mjs e2e-m1c.mjs e2e-m1c2.mjs e2e-m1d.mjs e2e-m1d-fixes.mjs e2e-input-selection.mjs e2e-adaptive-grid.mjs e2e-origin-chain.mjs e2e-point-extension.mjs e2e-overlapping-profile.mjs e2e-shared-profile-extrude.mjs e2e-solid-edge-picking.mjs e2e-selection-readout.mjs e2e-extrude-enter-profile.mjs e2e-timeline-drag-delete.mjs e2e-hole-multi-point.mjs e2e-hole-thread.mjs e2e-slot.mjs e2e-spline.mjs e2e-m2.mjs e2e-revolve.mjs e2e-advanced-solids.mjs e2e-project-lifecycle.mjs e2e-theme.mjs e2e-six-dof-mouse.mjs",

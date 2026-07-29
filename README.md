@@ -217,6 +217,7 @@ Public technical references:
 - [Goals / directions](docs/goals.md)
 - [Proposed architecture](docs/proposed-architecture.md)
 - [MCP harness notes](docs/mcp-harness.md)
+- [Open Knowledge Format bundle](knowledge/index.md)
 - [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md)
 - [Windows portable packaging](docs/WINDOWS_PACKAGING.md)
 - [MCP server](mcp-server/README.md)
@@ -228,6 +229,7 @@ Public technical references:
 Start with:
 
 ```sh
+npm run check:knowledge
 cargo test --workspace
 npm run build:wasm
 npm run build

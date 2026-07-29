@@ -1,8 +1,9 @@
 ---
 type: Concept
 title: Product stance
-status: active
-updated: 2026-07-28
+description: The local-first, free, open-source mechanical CAD product stance.
+status: stable
+updated: 2026-07-29
 ---
 
 # Product stance
@@ -14,6 +15,6 @@ noBS CAD is **local-first, free, open-source mechanical CAD**.
 - Sketch-and-extrude workflow first; parametric history.
 - Strong **local** MCP automation for testing/agents — without cloud CAD.
 - High-level directions: reliable foundation, CAM, additive 3MF (+ STEP),
-  local MCP, staged simulation — see `docs/goals.md`.
+  local MCP, staged simulation — see [goals](../../docs/goals.md).
 
 Related: [Architecture](architecture.md), [MCP harness](mcp-harness.md).
