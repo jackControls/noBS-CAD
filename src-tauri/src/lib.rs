@@ -9,7 +9,6 @@
 
 mod six_dof_mouse;
 mod state;
-mod ui_control;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -288,51 +287,7 @@ fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| format!("could not read file: {error}"))
 }
 
-/// Write a file-bridge session manifest for MCP co-link (`cad_list_sessions` / `cad_attach`).
-/// Honors `NBCAD_SESSION_DIR` when set; otherwise uses the system temp `nbcad-sessions` dir.
-#[tauri::command]
-fn mcp_session_bridge_write(payload: String) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(&payload)
-        .map_err(|error| format!("invalid session payload: {error}"))?;
-    let document_id = value
-        .get("document_id")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "session payload missing document_id".to_string())?;
-    let dir = std::env::var_os("NBCAD_SESSION_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("nbcad-sessions"));
-    fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
-    let safe: String = document_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let path = dir.join(format!("{safe}.json"));
-    let mut body = value;
-    if let Some(obj) = body.as_object_mut() {
-        obj.entry("updated_ms".to_string()).or_insert_with(|| {
-            serde_json::json!(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0))
-        });
-        obj.insert(
-            "co_link".to_string(),
-            serde_json::json!("file_bridge_v1"),
-        );
-    }
-    let encoded = serde_json::to_string_pretty(&body)
-        .map_err(|error| format!("encode session: {error}"))?;
-    fs::write(&path, encoded).map_err(|error| format!("write session: {error}"))?;
-    Ok(path.display().to_string())
-}
-
+/// Write bytes to a path atomically (temp file + rename).
 #[tauri::command]
 fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
@@ -373,15 +328,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(SixDofMouseState::default())
-        .setup(|app| {
-            ui_control::start_watcher(app.handle().clone());
-            Ok(())
-        })
+        .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
             ping,
             get_document,
             read_binary_file,
-            mcp_session_bridge_write,
             write_binary_file_atomic,
             six_dof_mouse::six_dof_mouse_devices,
             six_dof_mouse::six_dof_mouse_connect,

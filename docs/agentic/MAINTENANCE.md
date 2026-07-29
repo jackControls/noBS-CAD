@@ -1,22 +1,29 @@
 # Maintenance — MCP & disclosure
 
-## Install MCP into agent clients
-
-Upsert `nobs-cad` into detected user configs (Cursor, VS Code, Claude, OpenCode, Grok):
-
-```powershell
-cargo run -p xtask -- install-mcp
-cargo run -p xtask -- install-mcp --dry-run
-```
-
-Full guide: [INSTALL_MCP.md](INSTALL_MCP.md).
-
 ## Prerequisites (Windows)
 
 ```powershell
 # After vcpkg install (see docs/WINDOWS_PACKAGING.md):
 $env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
 $env:Path = "$PWD\vcpkg_installed\x64-windows\bin;$env:Path"
+```
+
+Point MCP clients at the release binary after build:
+
+```text
+.../mcp-server/target/release/nbcad-mcp
+```
+
+Example Cursor / VS Code config:
+
+```json
+{
+  "mcpServers": {
+    "nbcad": {
+      "command": "/absolute/path/to/noBS-CAD/mcp-server/target/release/nbcad-mcp"
+    }
+  }
+}
 ```
 
 ## Tests
@@ -47,8 +54,8 @@ Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on sh
 | Re-promote | 15 s |
 | Default focus | `document` |
 
-## Session bridge
+## Headless sessions
 
 - Env: `NBCAD_SESSION_DIR` (else `%TEMP%/nbcad-sessions`)
-- Layout: `<session_id>/model.json` + `focus.json`
-- UI publisher: `src/sessionBridge.ts` (Tauri only)
+- Layout: `<session_id>/model.json` (+ optional `focus.json`)
+- `cad_attach`: read-only load into the MCP process; not live UI co-link

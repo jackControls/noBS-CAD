@@ -1,42 +1,61 @@
-# Proposed architecture notes
+# Proposed architecture (not yet accepted product commits)
 
-This document collects **aspirational / proposed** implementation ideas and
-records what has **shipped**. Factual MCP as-built notes live in
-[mcp-harness.md](mcp-harness.md). Product directions: [goals.md](goals.md).
+This document collects **aspirational / proposed** implementation ideas.
+They are useful for discussion and issues. They are **not** promises that
+`main` already behaves this way.
 
-Doc index: [INDEX.md](INDEX.md).
+Accepted product directions (without binding IPC/UI architecture) live in
+[goals.md](goals.md). Factual MCP notes live in [mcp-harness.md](mcp-harness.md).
 
 ## Status key
 
 | Status | Meaning |
 |--------|---------|
-| Shipped | On `main` / this branch; see linked docs for as-built detail |
 | Proposed | Open for prototyping; may change |
 | Deferred | Interesting later; not near-term P0 |
 
 ---
 
-## 1. Focus-scoped MCP tools — Shipped
+## 1. Focus-scoped MCP tools — Proposed
 
-Soft focus-scoped disclosure is live: `tools.listChanged: true`, throttled
-`notifications/tools/list_changed`, spine + active pack + soft packs (60 s TTL,
-LRU 2). Hidden tools remain callable; escape hatch: `full_static` or
-`cad_list_all_tools`.
+**Problem today:** `nbcad-mcp` advertises `tools.listChanged: false` and returns
+a large static tool list (~100 tools), which floods agent context.
 
-See [mcp-harness.md](mcp-harness.md) and `mcp-server/src/disclosure.rs`.
+**Proposal:** when modeling **focus** changes (document / sketch / solid /
+modify / history / print):
+
+1. Advertise `tools.listChanged: true`.
+2. Add/remove tools for that focus.
+3. Send `notifications/tools/list_changed` (exact MCP notification name).
+4. Keep a tiny always-on spine (status, set focus, safe cancel).
+
+**Invariant:** keep a fully **local** automation path. Today that is **stdio**.
+Stdio is the current supported transport, not an irreversible forever decision —
+offline/local behavior is the invariant; internal IPC can evolve with evidence.
 
 Spec reference: [MCP tools / listChanged](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
+**Branch note (`feat/3mf-print-export`):** soft disclosure prototype is implemented;
+see [mcp-harness.md](mcp-harness.md). `main` still uses a static list until merge.
+
 ---
 
-## 2. Co-link MCP ↔ one active UI document — Shipped (file bridge v1)
+## 2. Co-link MCP ↔ one active UI document — Proposed (first milestone)
 
-File-bridge co-link ships today: `cad_list_sessions` / `cad_attach`
-(`NBCAD_SESSION_DIR`). Optional UI launch: `cad_launch_ui`, `cad_ui_status`,
-`cad_ui_window` (see [agentic/UI_LAUNCH.md](agentic/UI_LAUNCH.md)).
+**Problem today:** MCP owns an independent document from the visible UI
+(fork of truth). Same Rust planner crates; separate instances.
 
-Headless MCP without attach remains valid for CI goldens. In-process shared
-document with the live UI is a **proposed** next step (not shipped).
+**Proposal:** attach MCP to **one** live UI/engine session
+(`list_sessions` / `attach` with `document_id`, optional `window_id`).
+
+**v1 rules sketch:** explicit attach; writer lock or clear conflict errors;
+headless MCP without UI remains valid for CI goldens.
+
+This is the useful first automation milestone. Prototype before treating it as
+required product behavior.
+
+**Branch note:** `cad_list_sessions` / `cad_attach` load read-only snapshots from
+headless session dirs only — not a live shared UI document.
 
 ---
 
@@ -46,28 +65,28 @@ Multiple open windows may matter later. A stdio **broker** that routes by
 `window_id` / `document_id` is one option; one MCP process per document is
 another (especially for CI).
 
-**Not a P0 product requirement** until real use cases justify it.
+**Not a P0 product requirement** until real use cases justify it. Co-link to
+one active document comes first.
 
 ---
 
-## 4. Manufacturing export — Shipped
+## 4. 3MF export with materials/colors — Proposed target
 
-| Format | Role |
-|--------|------|
-| **STEP AP242** | Engineering interchange (B-rep). No invented STEP colors. |
-| **3MF** | Additive manufacturing. Unit millimetre. Consortium `basematerials` + optional slicer Metadata (`bambu_studio` default, also Orca / Prusa / Cura). |
-| **STL** | Mesh fallback. Geometry only; appearance omitted (UI warns). |
+**Accepted direction:** additive manufacturing / 3MF with useful appearance
+metadata ([goals.md](goals.md)).
 
-Shared path: OCCT tessellation → `nbcad_export::ExportFacade`. Desktop File menu
-and MCP (`solid_export_3mf` / `solid_export_stl` / `solid_export_step`,
-`material_catalog`) share requests.
+**Proposed implementation sketch:**
 
-Per-body `BodyAppearance` (color, filament type, brand, vendor id, density,
-diameter, preset) lives in `.nbcad` `body_appearances`, tints three.js, and
-feeds 3MF. Catalog: `crates/export/presets/catalog.json`.
+- Rust export from OCCT tessellation → 3MF primary, STL fallback
+- UI + MCP export tools when ready
+- v1 appearance may be per-body color + named material
+- Golden fixtures: colored cube → 3MF
 
-Face paints, 3MF import, and full sliced G-code.3mf projects are non-goals for
-this cycle — see [manufacturing/OKRs.md](manufacturing/OKRs.md).
+Describe as a **target with testable scope**, not current functionality.
+(No 3MF writer on `main` today.)
+
+**Branch note (`feat/3mf-print-export`):** native 3MF/STL export + MCP print pack
+(Metadata hints for Bambu/Orca/Prusa/Cura — not a full sliced G-code project).
 
 ---
 
@@ -79,7 +98,6 @@ When proposing engine work, keep these boundaries clear:
 |-------|------|
 | `nbcad-core`, `nbcad-sketch`, `nbcad-solid` | Host-neutral model logic (document, sketches, features, history, planning) |
 | `nbcad-occt` | Native geometry adapter (OCCT) |
-| `nbcad-export` | Print/export (3MF, STL, material catalog) |
 | `nbcad-wasm` | Browser adapter path (WASM host + OpenCascade.js for solids in the browser build) |
 
 UI (React/Three.js/Tauri) displays and commands; geometry truth stays in the

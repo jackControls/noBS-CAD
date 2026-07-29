@@ -358,7 +358,7 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
 
-        // Print-in-place drawer clip (housing + drawer + latch), DFM-cleared.
+        // Print-in-place drawer clip (housing + drawer + latch), AABB clearance smoke.
         let (pip_meshes, pip_apps) = print_in_place_clip();
         assert_eq!(pip_meshes.len(), 3);
         for (name, target) in [
@@ -382,7 +382,7 @@ mod tests {
         }
         assert!(dir.join("print_in_place_clip_bambu.3mf").is_file());
 
-        // Four-body cam bolt (wedge drive + dial lock), DFM-cleared.
+        // Four-body cam bolt (wedge drive + dial lock), AABB clearance smoke.
         let (cam_meshes, cam_apps) = print_in_place_cam_bolt();
         assert_eq!(cam_meshes.len(), 4);
         for (name, target) in [

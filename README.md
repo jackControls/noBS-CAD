@@ -49,89 +49,6 @@ The current application includes early implementations of:
 - editable feature history, undo, project saving, and reopening;
 - local `.nbcad` project files (ZIP archives containing editable model data
   and metadata);
-- STEP import and AP242 STEP export;
-- native **3MF** export with per-body color/material (millimetres), brand
-  filament presets (Bambu Lab, Prusa, Creality, and others), and slicer Metadata
-  targets (Bambu Studio default; also Orca + PrusaSlicer Metadata, Cura
-  basematerials + hint JSON), plus **STL** mesh fallback (geometry only;
-  appearance is omitted). STL/3MF are **native-app / MCP only** in this build —
-  the browser build still exports STEP but stubs mesh export;
-- per-body appearance stored in `.nbcad` and shown in the viewport.
-
-Not every tool or combination is reliable yet. We would especially like
-people to try real mechanical parts and whatever else is useful to you. Tell
-us where the workflow becomes confusing, where the geometry fails, and which
-missing capability would help most.
-
-The `.nbcad` format may still change during pre-alpha, so we recommend
-exporting a STEP and/or 3MF copy of any design you care about as a backup.
-STEP preserves the final solid geometry for use in other CAD software, but
-not the editable noBS CAD feature history. 3MF carries tessellated geometry
-plus per-body color/material for slicers; STL is geometry-only.
-
-## Local automation (MCP)
-
-The repository includes a stateful, headless\n[MCP server](mcp-server/README.md) for local testing and agent-driven\nmodeling. It uses the same Rust planning model and native OCCT adapter as the\ndesktop app for solid operations.\n\nThe repository also includes a stateful, headless
-[MCP server](mcp-server/README.md) that covers most currently implemented
-sketch and solid-modeling tools. The registry has 101 modeling tools plus
-control/export helpers. In the default **dynamic** disclosure mode, agents see a
-focus-scoped subset (spine + active/soft packs) with soft TTL — not a hard jail.
-`full_static` and `cad_list_all_tools` remain available for subagents and
-clients that ignore `notifications/tools/list_changed`. A file-bridge co-link
-(`cad_list_sessions` / `cad_attach`) can attach to a UI-published document.
-
-Details: [docs/mcp-harness.md](docs/mcp-harness.md), [docs/OKRs.md](docs/OKRs.md),
-[INDEX.md](INDEX.md).\n# noBS CAD
-
-**noBS means no cloud, no BS.** noBS CAD is fully local,
-fully free, and fully open source. It is designed first for mechanical parts,
-around the familiar sketch-and-extrude workflow.
-
-> noBS CAD is currently pre-alpha.
-
-![testPiece modeled in noBS CAD](docs/assets/testPiece.png)
-
-*A simple test piece modeled in noBS CAD. Download the editable
-[`testPiece.nbcad`](examples/testPiece.nbcad) project or its
-[`testPiece.step`](examples/testPiece.step) geometry backup.*
-
-![Fillet, chamfer, and a modeled threaded hole in noBS CAD](docs/assets/fillet-chamfer-threaded-hole.png)
-
-*Fillet, chamfer, and a modeled M12 threaded hole shown together in the
-editable feature history.*
-
-## Why this project exists
-
-We are grateful for projects such as [FreeCAD](https://www.freecad.org/) and
-for the community work that proved open-source CAD can be serious and useful.
-At the same time, we would love an option with a gentler learning curve and
-the kind of clear, modern experience people have come to expect from
-commercial and cloud CAD platforms.
-
-That is the direction we are exploring with noBS CAD:
-
-- project and modeling data stay on your computer;
-- there is no account, subscription, or cloud backend;
-- the complete source is public under an open-source license;
-- the software is free to use;
-- mechanical-part workflows are the priority.
-
-## What works today
-
-noBS CAD can already make solid models. Right now it is happiest making
-relatively simple boxy and cylindrical parts, but the best way to understand
-the real boundary is to try building something for the real world.
-
-The current application includes early implementations of:
-
-- parametric sketches with dimensions and geometric constraints;
-- extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, and shell
-  features;
-- modeled hole threads for common ISO metric and Unified standards;
-- mirrors, patterns, construction planes, combine, and split-body tools;
-- editable feature history, undo, project saving, and reopening;
-- local `.nbcad` project files (ZIP archives containing editable model data
-  and metadata);
 - STEP import and AP242 STEP export.
 
 Not every tool or combination is reliable yet. We would especially like
@@ -148,18 +65,22 @@ noBS CAD feature history.
 
 The repository includes a stateful, headless
 [MCP server](mcp-server/README.md) for local testing and agent-driven
-modeling. It uses the same Rust planning model and native OCCT adapter as the
-desktop app for solid operations.
+modeling over **stdio**. It uses the same Rust planning model and native OCCT
+adapter as the desktop app and registers **105** sketch/solid modeling tools
+(plus control and export helpers).
 
-The repository also includes a stateful, headless
-[MCP server](mcp-server/README.md) that covers most currently implemented
-sketch and solid-modeling tools. It exposes 106 granular tools today, keeps one
-persistent feature history per process, and uses the same Rust planning model
-and native geometry adapter as the desktop application.
+Default **dynamic** disclosure advertises a focus-scoped subset (spine + active
+and soft packs with TTL) — guidance for agents, not a hard jail. Out-of-focus
+tools stay callable. Use `full_static` or `cad_list_all_tools` when a client
+ignores `notifications/tools/list_changed`.
 
-This is useful for testing, automation, and experimenting with agent-driven
-CAD workflows without turning the project into a cloud service.
+Export via MCP: **STEP** (CAD interchange), **STL** (geometry-only mesh), and
+**3MF** (preferred for slicers; per-body color/material plus compatible slicer
+Metadata hints — not a full pre-sliced project). Headless session directories
+(`cad_list_sessions` / `cad_attach`) support read-only load from
+`NBCAD_SESSION_DIR`; live UI co-link is not shipped.
 
+Details: [docs/mcp-harness.md](docs/mcp-harness.md).
 
 ## 3D mouse compatibility
 

@@ -1,4 +1,7 @@
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nbcad_core::BodyId;
@@ -10,7 +13,6 @@ use serde_json::{json, Map, Value};
 
 mod disclosure;
 mod session;
-mod ui_launch;
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
@@ -122,8 +124,6 @@ struct CadServer {
     disclosure: DisclosureState,
     attached_document_id: Option<String>,
     pending_recompute_transaction: Option<u64>,
-    /// Last UI process launched from this MCP session (best-effort).
-    ui_pid: Option<u32>,
 }
 
 impl CadServer {
@@ -134,7 +134,6 @@ impl CadServer {
             disclosure: DisclosureState::new(),
             attached_document_id: None,
             pending_recompute_transaction: None,
-            ui_pid: None,
         })
     }
 
@@ -290,7 +289,6 @@ impl CadServer {
         if let Some(focus) = auto_focus_for_tool(name) {
             self.disclosure.auto_hint(focus);
         }
-        self.write_attached_session()?;
         value = annotate_disclosure(value, &self.disclosure, pack, spine);
         Ok(value)
     }
@@ -334,17 +332,6 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
-            "cad_launch_ui" => {
-                let force = arguments
-                    .get("force")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let result = ui_launch::launch_ui(force)?;
-                self.ui_pid = Some(result.pid);
-                ui_launch::launch_result_json(&result)
-            }
-            "cad_ui_status" => ui_launch::ui_status_json(self.ui_pid),
-            "cad_ui_window" => ui_launch::write_window_command(&arguments)?,
             "cad_attach" => {
                 let session_id = arguments
                     .get("session_id")
@@ -405,43 +392,12 @@ impl CadServer {
                     "session_id": session_id,
                     "document_id": session_id,
                     "focus": self.disclosure.active().as_str(),
-                    "co_link": "file_bridge_v1",
+                    "co_link": "session_dir_headless",
                 })
             }
             other => return Err(format!("unknown control tool: {other}")),
         };
-        // Keep attached file-bridge focus/model in sync after control mutations.
-        if matches!(
-            name,
-            "cad_set_focus"
-                | "cad_set_tool_disclosure_mode"
-                | "cad_attach"
-                | "cad_launch_ui"
-        ) {
-            self.write_attached_session()?;
-        }
         Ok(value)
-    }
-
-    fn write_attached_session(&mut self) -> Result<(), String> {
-        let Some(session_id) = self.attached_document_id.clone() else {
-            return Ok(());
-        };
-        let model = parse_engine_envelope(host::handle(
-            &mut self.manager,
-            "project_export_model",
-            "",
-        ))?;
-        let model_json =
-            serde_json::to_string(&model).map_err(|error| format!("encode model: {error}"))?;
-        session::write_session(&session_id, "model.json", &model_json)?;
-        let focus_json = serde_json::to_string(&json!({
-            "focus": self.disclosure.active().as_str(),
-            "updated_at_ms": session::now_ms(),
-        }))
-        .map_err(|error| error.to_string())?;
-        session::write_session(&session_id, "focus.json", &focus_json)?;
-        Ok(())
     }
 
     fn export_mesh(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -2434,7 +2390,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "demo_export_pip_3mf",
             "Export PIP demo 3MF",
-            "Return a built-in print-in-place demo as base64 3MF (DFM clearances ≥ 0.4 mm). Does not mutate the document. kind=cam_bolt (default, 4-body wedge+dial) or clip (3-body drawer).",
+            "Return a built-in print-in-place demo as base64 3MF (AABB clearance smoke ≥ 0.4 mm). Does not mutate the document. kind=cam_bolt (default, 4-body wedge+dial) or clip (3-body drawer).",
             "demo_export_pip_3mf",
             Payload::Object,
             object_schema(
@@ -2517,57 +2473,19 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_list_sessions",
-            "List co-link sessions",
-            "List file-bridge session directories available for cad_attach.",
+            "List headless session directories",
+            "List session directories under NBCAD_SESSION_DIR for read-only cad_attach. UI file-bridge publisher is parked for follow-up.",
             empty_schema(),
         ),
         ToolSpec::control(
             "cad_attach",
-            "Attach co-link session",
-            "Attach to a file-bridge session directory and optionally load model.json and focus.json.",
+            "Attach headless session (read-only load)",
+            "Load model.json and focus.json from a headless session directory. Does not write back to disk. UI snapshot bridge is parked for follow-up.",
             object_schema(
                 json!({
                     "session_id": {"type": "string", "minLength": 1}
                 }),
                 &["session_id"],
-            ),
-        ),
-        ToolSpec::control(
-            "cad_launch_ui",
-            "Launch desktop UI",
-            "Spawn the noBS CAD desktop app (detached) sharing NBCAD_SESSION_DIR. MCP stays headless; use cad_attach for file-bridge co-link. Set NBCAD_UI_EXE to override the executable path.",
-            object_schema(
-                json!({
-                    "force": {
-                        "type": "boolean",
-                        "description": "Launch even if a tracked UI pid still looks alive."
-                    }
-                }),
-                &[],
-            ),
-        ),
-        ToolSpec::control(
-            "cad_ui_status",
-            "UI status",
-            "Report whether a tracked/launched desktop UI process is alive, plus file-bridge session summary.",
-            empty_schema(),
-        ),
-        ToolSpec::control(
-            "cad_ui_window",
-            "UI window command",
-            "Queue a window command (focus/show/hide/move/resize) via file-bridge _ui/control.json for the running desktop shell to apply. Multi-window broker is backlog.",
-            object_schema(
-                json!({
-                    "action": {
-                        "type": "string",
-                        "enum": ["focus", "show", "hide", "move", "resize"]
-                    },
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                    "width": {"type": "integer", "minimum": 1},
-                    "height": {"type": "integer", "minimum": 1}
-                }),
-                &["action"],
             ),
         ),
     ];
@@ -2698,6 +2616,33 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
     responses
 }
 
+/// Tick soft TTL and emit any due `tools/list_changed` without a further client RPC.
+fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
+    server.disclosure.tick_soft_expiry();
+    let mut outgoing = Vec::new();
+    if let Some(notification) = server.disclosure.take_notify_if_due() {
+        outgoing.push(notification);
+    }
+    outgoing
+}
+
+fn write_jsonrpc_messages(stdout: &mut impl Write, messages: &[Value]) -> bool {
+    for message in messages {
+        if serde_json::to_writer(&mut *stdout, message).is_err()
+            || writeln!(stdout).is_err()
+            || stdout.flush().is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+enum StdinEvent {
+    Line(String),
+    Eof,
+}
+
 fn main() {
     let mut server = match CadServer::new() {
         Ok(server) => server,
@@ -2706,29 +2651,67 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let stdin = io::stdin();
+    let (tx, rx) = mpsc::channel::<StdinEvent>();
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(StdinEvent::Line(line)).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(StdinEvent::Eof);
+    });
+
     let mut stdout = io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        if line.trim().is_empty() {
+    loop {
+        let due = idle_due_messages(&mut server);
+        if !due.is_empty() {
+            if !write_jsonrpc_messages(&mut stdout, &due) {
+                break;
+            }
             continue;
         }
-        let outgoing = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(&mut server, message),
-            Err(error) => vec![error_response(
-                Value::Null,
-                -32700,
-                format!("parse error: {error}"),
-            )],
+
+        let event = match server.disclosure.ms_until_wake() {
+            Some(ms) => match rx.recv_timeout(Duration::from_millis(ms.max(1))) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => {
+                    let due = idle_due_messages(&mut server);
+                    if !write_jsonrpc_messages(&mut stdout, &due) {
+                        break;
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(event) => event,
+                Err(_) => break,
+            },
         };
-        for message in outgoing {
-            if serde_json::to_writer(&mut stdout, &message).is_err()
-                || writeln!(&mut stdout).is_err()
-                || stdout.flush().is_err()
-            {
-                break;
+
+        match event {
+            StdinEvent::Eof => break,
+            StdinEvent::Line(line) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let outgoing = match serde_json::from_str::<Value>(&line) {
+                    Ok(message) => handle_message(&mut server, message),
+                    Err(error) => vec![error_response(
+                        Value::Null,
+                        -32700,
+                        format!("parse error: {error}"),
+                    )],
+                };
+                if !write_jsonrpc_messages(&mut stdout, &outgoing) {
+                    break;
+                }
             }
         }
     }
@@ -2781,8 +2764,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 20,
-            "105 modeling tools plus 8 print helpers and 12 control tools"
+            MODELING_TOOL_COUNT + 17,
+            "105 modeling tools plus 8 print helpers and 9 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2807,9 +2790,6 @@ mod tests {
                             | "cad_cancel_recompute"
                             | "cad_list_sessions"
                             | "cad_attach"
-                            | "cad_launch_ui"
-                            | "cad_ui_status"
-                            | "cad_ui_window"
                     )
                 )
             })
@@ -2864,9 +2844,6 @@ mod tests {
                     | "cad_cancel_recompute"
                     | "cad_list_sessions"
                     | "cad_attach"
-                    | "cad_launch_ui"
-                    | "cad_ui_status"
-                    | "cad_ui_window"
             ) {
                 continue;
             }
@@ -3006,7 +2983,45 @@ mod tests {
     }
 
     #[test]
-    fn focus_change_emits_throttled_list_changed() {
+    fn focus_change_emits_list_changed_without_later_rpc() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        let responses = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "sketch", "explicit": true}
+                }
+            }),
+        );
+        assert!(
+            responses.iter().all(|message| {
+                message.get("method").and_then(Value::as_str)
+                    != Some("notifications/tools/list_changed")
+            }),
+            "throttled notify must not flush on the focus-changing response itself"
+        );
+        assert!(
+            server.disclosure.ms_until_wake().is_some(),
+            "focus change must schedule a wake for the notify worker"
+        );
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let idle = idle_due_messages(&mut server);
+        assert!(
+            idle.iter().any(|message| {
+                message.get("method").and_then(Value::as_str)
+                    == Some("notifications/tools/list_changed")
+            }),
+            "notify worker must emit list_changed after throttle without a later ping/RPC"
+        );
+    }
+
+    #[test]
+    fn soft_ttl_expiry_emits_list_changed_without_later_rpc() {
         DisclosureState::set_clock_for_test(0);
         let mut server = CadServer::new().unwrap();
         let _ = handle_message(
@@ -3033,30 +3048,28 @@ mod tests {
                 }
             }),
         );
-        let immediate = handle_message(
-            &mut server,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/list",
-                "params": {}
-            }),
-        );
-        assert_eq!(immediate.len(), 1);
+        // Clear the focus-change notify so only soft-TTL expiry remains under test.
         DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
-        let later = handle_message(
-            &mut server,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "ping",
-                "params": {}
-            }),
-        );
-        assert!(later.iter().any(|message| {
+        let _ = idle_due_messages(&mut server);
+
+        DisclosureState::advance_for_test(disclosure::SOFT_TTL_MS + 1);
+        let after_expiry = idle_due_messages(&mut server);
+        // Expiry schedules a throttled notify; may or may not be due in the same tick.
+        if after_expiry.iter().any(|message| {
             message.get("method").and_then(Value::as_str)
                 == Some("notifications/tools/list_changed")
-        }));
+        }) {
+            return;
+        }
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let idle = idle_due_messages(&mut server);
+        assert!(
+            idle.iter().any(|message| {
+                message.get("method").and_then(Value::as_str)
+                    == Some("notifications/tools/list_changed")
+            }),
+            "soft-TTL expiry must emit list_changed via the notify worker without a later RPC"
+        );
     }
 
     #[test]

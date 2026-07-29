@@ -1,29 +1,41 @@
 # OKRs — mcp-server
 
-Parent: [../docs/OKRs.md](../docs/OKRs.md)
+Parent directions: [../docs/goals.md](../docs/goals.md) · As-built:
+[../docs/mcp-harness.md](../docs/mcp-harness.md).
 
-## Objective M1 — Soft steerable surface
+## M1 — Soft steerable surface (branch)
 
-| KR | Metric | Status |
+| KR | Target | Status |
 |----|--------|--------|
-| M1.1 | Default advertised tools ≪ full catalog | Met (`dynamic` mode) |
-| M1.2 | Soft-callable tools never hard-blocked | Met |
-| M1.3 | Tag coverage == registry size | Met (101) |
-| M1.4 | Pack matrix CI | **Met** (list + per-pack representatives) |
+| M1.1 | Default advertised tools ≪ full catalog in `dynamic` mode | On `feat/3mf-print-export` |
+| M1.2 | Out-of-focus tools stay callable | On branch |
+| M1.3 | 105 modeling tools tagged in disclosure matrix | On branch |
+| M1.4 | Pack matrix CI (list + per-pack representatives) | On branch |
 
-## Objective M2 — Escape & co-link
+## M2 — Escape hatch (branch)
 
-| KR | Metric | Status |
+| KR | Target | Status |
 |----|--------|--------|
-| M2.1 | `full_static` advertises full registry | Met + tested |
-| M2.2 | `cad_list_all_tools` always available | Met |
-| M2.3 | Attach + list sessions | Met |
-| M2.4 | Focus/mode changes rewrite `focus.json` | Met |
+| M2.1 | `full_static` advertises full registry | On branch |
+| M2.2 | `cad_list_all_tools` always available | On branch |
 
-## Objective M3 — Operability
+## M3 — Headless sessions (partial)
 
-| KR | Metric | Status |
+| KR | Target | Status |
 |----|--------|--------|
-| M3.1 | `cargo test` green with OCCT | Required for merge |
-| M3.2 | Workflow `.github/workflows/mcp-server.yml` | Met |
-| M3.3 | Agentic maintenance docs linked from INDEX | Met |
+| M3.1 | `cad_list_sessions` / `cad_attach` read-only load | On branch |
+| M3.2 | Live UI co-link / snapshot bridge | Proposed — not shipped |
+
+## M4 — Print export (branch)
+
+| KR | Target | Status |
+|----|--------|--------|
+| M4.1 | `solid_export_3mf` / STL / STEP + `material_catalog` | On branch |
+| M4.2 | Slicer Metadata = compatible hints, not full project | By design |
+
+## M5 — Operability
+
+| KR | Target | Status |
+|----|--------|--------|
+| M5.1 | `cargo test --manifest-path mcp-server/Cargo.toml` with OCCT | Required for merge |
+| M5.2 | `.github/workflows/mcp-server.yml` | Required path |

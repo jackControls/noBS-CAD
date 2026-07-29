@@ -27,8 +27,8 @@ Needs native OCCT (`OCCT_ROOT` when not in a default install). Logs stay on
 3. Use stable IDs from scene/status for later ops.
 4. Default **`dynamic`** disclosure; call `cad_set_focus` as you model.
 5. Subagents: `full_static` or `cad_list_all_tools`.
-6. Optional UI co-link: `cad_list_sessions` → `cad_attach` (file bridge);
-   headless goldens do not require attach.
+6. Optional headless session attach: `cad_list_sessions` → `cad_attach`
+   (read-only load from `NBCAD_SESSION_DIR`); goldens do not require attach.
 
 Soft disclosure: out-of-focus tools stay **callable**; results may include
 `_disclosure`.

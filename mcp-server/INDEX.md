@@ -7,11 +7,10 @@
 | [Cargo.toml](Cargo.toml) | Crate deps |
 | [src/main.rs](src/main.rs) | Tool registry, RPC, goldens |
 | [src/disclosure.rs](src/disclosure.rs) | Soft focus packs + tags |
-| [src/session.rs](src/session.rs) | File-bridge sessions |
-| [src/ui_launch.rs](src/ui_launch.rs) | Optional UI launch / window control.json |
+| [src/session.rs](src/session.rs) | Headless session directories |
 | [src/ffi.rs](src/ffi.rs) | OCCT FFI glue |
 | [build.rs](build.rs) | Link / OCCT discovery |
 
 Upstream product docs: [../docs/mcp-harness.md](../docs/mcp-harness.md), [../docs/agentic/STEERABLE_MCP.md](../docs/agentic/STEERABLE_MCP.md).
 
-Install into agent clients: `cargo run -p xtask -- install-mcp` — [../docs/agentic/INSTALL_MCP.md](../docs/agentic/INSTALL_MCP.md).
+UI snapshot bridge and client installer are follow-ups (not in this slice).

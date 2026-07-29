@@ -6,7 +6,7 @@
 2. **Hard errors** = missing IDs, invalid sketch state, kernel failure only.
 3. **Notification name** must stay exactly `notifications/tools/list_changed`.
 4. **Stdout** = JSON-RPC only; logs on **stderr**.
-5. **Headless goldens** must work without UI or `cad_attach`.
+5. **Headless goldens** must work without `cad_attach`.
 6. **Offline/local** invariant; stdio is current transport, not forever law.
 7. When adding a modeling tool: update `tags_for_tool` in `disclosure.rs` **and** the pack matrix test.
 
@@ -23,21 +23,21 @@ Prefer `cad_list_all_tools` for planners over leaving the main session in `full_
 
 `document | sketch | solid | modify | body_ops | datums | history | inspect | print`
 
-UI mapping lives in `src/sessionBridge.ts` (`focusFromUi`) and
-`disclosure::focus_from_ui` — keep them aligned when adding dialogs.
+Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 
-## Co-link honesty
+## Headless sessions (honest scope)
 
-File-bridge v1 ≠ live shared memory. After attach, MCP loads `model.json`;
-UI must republish for agents to see UI edits. Deeper #11 sharing is separate work.
+`cad_list_sessions` / `cad_attach` load a **read-only** snapshot from
+`NBCAD_SESSION_DIR`. They do not co-link a live UI document. MCP and the
+visible app still own separate documents unless/until in-process co-link ships.
 
-## UI launch (optional)
+## Print export
 
-MCP is headless by default. Optional spine tools: `cad_launch_ui`,
-`cad_ui_status`, `cad_ui_window` (file-bridge `_ui/control.json`).
-See [UI_LAUNCH.md](UI_LAUNCH.md).
+Prefer `solid_export_3mf` for slicers. Metadata targets (Bambu/Orca/Prusa/Cura)
+are compatible hints — not a full pre-sliced project. STL is geometry-only.
 
 ## Related reading
 
-- Issues [#10](https://github.com/jackControls/noBS-CAD/issues/10), [#11](https://github.com/jackControls/noBS-CAD/issues/11), epic [#9](https://github.com/jackControls/noBS-CAD/issues/9)
+- [mcp-harness.md](../mcp-harness.md)
+- Issues [#10](https://github.com/jackControls/noBS-CAD/issues/10), [#11](https://github.com/jackControls/noBS-CAD/issues/11)
 - MCP tools / listChanged: https://modelcontextprotocol.io/specification/2025-06-18/server/tools

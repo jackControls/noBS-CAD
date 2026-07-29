@@ -28,7 +28,11 @@ pub fn list_sessions() -> Result<Vec<String>, String> {
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
-            sessions.push(entry.file_name().to_string_lossy().into_owned());
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "_ui" {
+                continue;
+            }
+            sessions.push(name);
         }
     }
     sessions.sort();
@@ -51,12 +55,12 @@ pub fn write_session(session_id: &str, filename: &str, content: &str) -> Result<
 pub fn sessions_list_json() -> Value {
     match list_sessions() {
         Ok(sessions) => json!({
-            "co_link": "file_bridge",
+            "co_link": "session_dir_headless",
             "sessions": sessions,
             "session_dir": session_dir().display().to_string(),
         }),
         Err(error) => json!({
-            "co_link": "file_bridge",
+            "co_link": "session_dir_headless",
             "sessions": [],
             "session_dir": session_dir().display().to_string(),
             "error": error,

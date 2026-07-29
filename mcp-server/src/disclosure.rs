@@ -288,7 +288,28 @@ impl DisclosureState {
         }
     }
 
-    #[allow(dead_code)]
+    /// Earliest wall-clock deadline for a pending list_changed or soft-pack expiry.
+    pub fn next_wake_at_ms(&self) -> Option<u64> {
+        let mut wake = self.pending_notify_at_ms;
+        if self.mode == DisclosureMode::Dynamic {
+            for entry in self.soft.values() {
+                wake = Some(match wake {
+                    Some(existing) => existing.min(entry.expires_at_ms),
+                    None => entry.expires_at_ms,
+                });
+            }
+        }
+        wake
+    }
+
+    /// Milliseconds until [`Self::next_wake_at_ms`], or `None` if nothing is scheduled.
+    pub fn ms_until_wake(&mut self) -> Option<u64> {
+        self.refresh_clock();
+        let now = self.now();
+        self.next_wake_at_ms()
+            .map(|deadline| deadline.saturating_sub(now))
+    }
+
     pub fn take_notify_immediate(&mut self) -> Value {
         self.pending_notify_at_ms = None;
         list_changed_notification()
@@ -464,9 +485,6 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_attach"
-            | "cad_launch_ui"
-            | "cad_ui_status"
-            | "cad_ui_window"
     );
     if spine {
         let pack = match name {
@@ -674,12 +692,12 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     None
 }
 
-/// Shared focus mapping for UI co-link (`sessionBridge.ts`) and tests.
-/// Keep dialog keys identical to `activeSolidDialog` in the TypeScript publisher.
+/// Focus mapping for tests and future UI snapshot bridge (parked).
+/// Keep dialog keys aligned with `activeSolidDialog` in the desktop app.
 pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option<&str>) -> FocusPack {
     if let Some(dialog) = solid_dialog {
         return match dialog {
-            // Keep keys aligned with src/sessionBridge.ts focusFromUi / activeSolidDialog.
+            // Keep keys aligned with activeSolidDialog in the desktop app.
             "fillet" | "chamfer" | "hole" => FocusPack::Modify,
             "shell"
             | "mirror"
