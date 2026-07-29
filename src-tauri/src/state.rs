@@ -4,11 +4,12 @@ use nbcad_core::DocumentDto;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{err_json, host, ok_json, SketchDto, SketchManager};
 use nbcad_solid::{
-    BodyFeatureRequestDto, DeleteFeatureRequest, EditBodyFeatureRequest, EditExtrudeRequest,
-    EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest, EditSolidChamferRequest,
-    EditSolidFilletRequest, EditSweepRequest, ExtrudeRequest, HoleRequest, LoftRequest,
-    RecomputePlanDto, ReorderFeatureRequest, RevolveRequest, RibRequest, SetRollbackRequest,
-    SolidChamferRequest, SolidFilletRequest, SolidSceneDto, StepExportRequest, SweepRequest,
+    BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
+    EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
+    EditSolidChamferRequest, EditSolidFilletRequest, EditSweepRequest, ExtrudeRequest, HoleRequest,
+    LoftRequest, RecomputePlanDto, ReorderFeatureRequest, RevolveRequest, RibRequest,
+    SetRollbackRequest, SolidChamferRequest, SolidFilletRequest, SolidSceneDto, StepExportRequest,
+    SweepRequest,
 };
 use serde::de::DeserializeOwned;
 
@@ -46,12 +47,20 @@ impl AppState {
     /// One lock acquisition gives the native viewport a coherent model
     /// snapshot. The OCCT triangle buffers stay in Rust and never make a
     /// JSON/IPC round-trip through the webview.
-    pub fn viewport_snapshot(&self) -> (SolidSceneDto, Option<SketchDto>, Vec<SketchDto>) {
+    pub fn viewport_snapshot(
+        &self,
+    ) -> (
+        SolidSceneDto,
+        Option<SketchDto>,
+        Vec<SketchDto>,
+        Vec<DatumPlaneDefinitionDto>,
+    ) {
         let inner = self.inner.lock().expect("engine lock poisoned");
         (
             inner.manager.solid_scene(),
             inner.manager.active_snapshot(),
             inner.manager.finished_sketches(),
+            inner.manager.datum_plane_definitions(),
         )
     }
 

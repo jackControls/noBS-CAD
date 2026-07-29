@@ -21,7 +21,7 @@ use bevy::{
 };
 use nbcad_core::PlaneBasis;
 use nbcad_sketch::{EntityDto, SketchDto};
-use nbcad_solid::{BodyDto, SolidSceneDto};
+use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, SolidSceneDto};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSView, NSWindow, NSWindowOrderingMode};
 use objc2_core_graphics::CGMutablePath;
@@ -34,8 +34,8 @@ use raw_window_handle::{
 use tauri::Manager;
 
 use super::{
-    NativePick, NativeViewportMetrics, ViewportCamera, ViewportLayout, ViewportModel,
-    ViewportPalette, ViewportPreview, ViewportRect,
+    NativePick, NativeViewportMetrics, ViewportCamera, ViewportHud, ViewportHudSelection,
+    ViewportLayout, ViewportModel, ViewportPalette, ViewportPreview, ViewportRect,
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
@@ -69,6 +69,7 @@ enum RenderCommand {
         logical_height: f64,
         scale_factor: f64,
         palette: ViewportPalette,
+        hud: ViewportHud,
     },
     Model(ViewportModel),
     Camera(ViewportCamera),
@@ -77,7 +78,7 @@ enum RenderCommand {
 
 #[derive(Default)]
 struct PendingRenderCommands {
-    resize: Option<(f64, f64, f64, ViewportPalette)>,
+    resize: Option<(f64, f64, f64, ViewportPalette, ViewportHud)>,
     model: Option<ViewportModel>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
@@ -168,6 +169,7 @@ impl MacNativeViewport {
                         scene: SolidSceneDto::default(),
                         active_sketch: None,
                         finished_sketches: Vec::new(),
+                        datum_planes: Vec::new(),
                     },
                     camera: ViewportCamera::default(),
                     logical_size: (1.0, 1.0),
@@ -234,6 +236,7 @@ impl MacNativeViewport {
                     logical_height: layout.viewport.height.max(1.0),
                     scale_factor,
                     palette: layout.palette,
+                    hud: layout.hud,
                 },
             );
             drain_render_commands(&runtime, &pending, &metrics);
@@ -469,6 +472,7 @@ struct ModelResource {
     scene: SolidSceneDto,
     active_sketch: Option<SketchDto>,
     finished_sketches: Vec<SketchDto>,
+    datum_planes: Vec<DatumPlaneDefinitionDto>,
     revision: u64,
 }
 
@@ -487,6 +491,21 @@ struct PreviewResource {
 #[derive(Resource, Clone, Copy, Default)]
 struct PaletteResource(ViewportPalette);
 
+#[derive(Resource)]
+struct HudResource {
+    hud: ViewportHud,
+    revision: u64,
+}
+
+impl Default for HudResource {
+    fn default() -> Self {
+        Self {
+            hud: ViewportHud::default(),
+            revision: 1,
+        }
+    }
+}
+
 impl Default for CameraResource {
     fn default() -> Self {
         Self {
@@ -500,13 +519,35 @@ impl Default for CameraResource {
 struct RenderedRevisions {
     model: u64,
     camera: u64,
+    hud: u64,
 }
 
 #[derive(Component)]
 struct NativeCadBody;
 
 #[derive(Component)]
+struct NativeModelGeometry;
+
+#[derive(Component)]
 struct NativeCadCamera;
+
+#[derive(Component)]
+struct NativeDatumPlane;
+
+#[derive(Component)]
+struct NativeHudRoot;
+
+#[derive(Component, Clone, Copy)]
+struct HudAxisMark {
+    axis: Vec3,
+    fraction: f32,
+    radius: f32,
+}
+
+#[derive(Component, Clone, Copy)]
+struct HudAxisLabel {
+    axis: Vec3,
+}
 
 fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
@@ -557,11 +598,19 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         .init_resource::<CameraResource>()
         .init_resource::<PreviewResource>()
         .init_resource::<PaletteResource>()
+        .init_resource::<HudResource>()
         .init_resource::<RenderedRevisions>()
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (rebuild_occt_meshes, apply_camera, draw_cad_gizmos).chain(),
+            (
+                rebuild_occt_meshes,
+                apply_camera,
+                rebuild_native_hud,
+                update_native_hud_orientation,
+                draw_cad_gizmos,
+            )
+                .chain(),
         );
 
     app.finish();
@@ -569,7 +618,11 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
     Ok(app)
 }
 
-fn setup_scene(mut commands: Commands) {
+fn setup_scene(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
     let camera = ViewportCamera::default();
     commands.spawn((
         Name::new("React-synchronized CAD camera"),
@@ -604,13 +657,27 @@ fn setup_scene(mut commands: Commands) {
         },
         Transform::from_xyz(-120.0, 80.0, 70.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
+
+    for (name, basis, color) in origin_plane_bases() {
+        commands.spawn((
+            Name::new(format!("Origin plane {name}")),
+            Mesh3d(meshes.add(reference_plane_mesh(&basis, 24.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color,
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                cull_mode: None,
+                ..default()
+            })),
+        ));
+    }
 }
 
 fn rebuild_occt_meshes(
     mut commands: Commands,
     model: Res<ModelResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    existing: Query<Entity, With<NativeCadBody>>,
+    existing: Query<Entity, With<NativeModelGeometry>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<PaletteResource>,
@@ -656,11 +723,33 @@ fn rebuild_occt_meshes(
         commands.spawn((
             Name::new(format!("OCCT body {} ({})", body.id.0, body.name)),
             NativeCadBody,
+            NativeModelGeometry,
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: rgb(palette.0.body),
                 metallic: 0.035,
                 perceptual_roughness: 0.44,
+                ..default()
+            })),
+        ));
+    }
+
+    for plane in &model.datum_planes {
+        commands.spawn((
+            Name::new(format!("Construction plane {}", plane.name)),
+            NativeDatumPlane,
+            NativeModelGeometry,
+            Mesh3d(meshes.add(reference_plane_mesh(&plane.basis, 28.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgba(
+                    palette.0.accent[0],
+                    palette.0.accent[1],
+                    palette.0.accent[2],
+                    0.13,
+                ),
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                cull_mode: None,
                 ..default()
             })),
         ));
@@ -688,6 +777,460 @@ fn apply_camera(
     }
 }
 
+fn rebuild_native_hud(
+    mut commands: Commands,
+    hud: Res<HudResource>,
+    palette: Res<PaletteResource>,
+    mut revisions: ResMut<RenderedRevisions>,
+    existing: Query<Entity, With<NativeHudRoot>>,
+    cameras: Query<Entity, With<NativeCadCamera>>,
+) {
+    if revisions.hud == hud.revision {
+        return;
+    }
+    revisions.hud = hud.revision;
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+
+    let panel = rgba(palette.0.panel, 0.94);
+    let header = rgba(palette.0.header, 0.96);
+    let ink = rgb(palette.0.ink);
+    let mute = rgb(palette.0.mute);
+    let edge = rgba(palette.0.ui_edge, 0.92);
+    let accent = rgb(palette.0.accent);
+
+    commands
+        .spawn((
+            Name::new("Native orientation dial"),
+            NativeHudRoot,
+            UiTargetCamera(camera),
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(12.0),
+                top: px(12.0),
+                width: px(132.0),
+                padding: UiRect::axes(px(8.0), px(6.0)),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(12.0)),
+                ..default()
+            },
+            BackgroundColor(panel),
+            BorderColor::all(edge),
+            ZIndex(20),
+        ))
+        .with_children(|card| {
+            card.spawn((
+                Text::new("ORIENTATION DIAL"),
+                TextFont::from_font_size(8.0),
+                TextColor(mute),
+                Node {
+                    height: px(12.0),
+                    ..default()
+                },
+            ));
+
+            card.spawn(Node {
+                position_type: PositionType::Relative,
+                width: px(104.0),
+                height: px(104.0),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|dial| {
+                for (label, left, top) in [
+                    ("F", 38.0, 0.0),
+                    ("R", 76.0, 42.0),
+                    ("B", 38.0, 84.0),
+                    ("L", 0.0, 42.0),
+                ] {
+                    dial.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(left),
+                            top: px(top),
+                            width: px(28.0),
+                            height: px(20.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(10.0)),
+                            ..default()
+                        },
+                        BackgroundColor(header),
+                        BorderColor::all(edge),
+                    ))
+                    .with_child((
+                        Text::new(label),
+                        TextFont::from_font_size(9.0),
+                        TextColor(mute),
+                    ));
+                }
+
+                dial.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(14.0),
+                        top: px(14.0),
+                        width: px(76.0),
+                        height: px(76.0),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::MAX,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(rgba(palette.0.background, 0.82)),
+                    BorderColor::all(edge),
+                ))
+                .with_children(|indicator| {
+                    for angle_index in 0..20 {
+                        let angle = angle_index as f32 * std::f32::consts::TAU / 20.0;
+                        indicator.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: px(37.0 + angle.cos() * 31.0),
+                                top: px(37.0 + angle.sin() * 31.0),
+                                width: px(2.0),
+                                height: px(2.0),
+                                border_radius: BorderRadius::MAX,
+                                ..default()
+                            },
+                            BackgroundColor(rgba(palette.0.grid_major, 0.65)),
+                        ));
+                    }
+
+                    for (axis, label, color) in [
+                        (Vec3::X, "X", Color::srgb(0.88, 0.36, 0.39)),
+                        (Vec3::Y, "Y", Color::srgb(0.35, 0.68, 0.45)),
+                        (Vec3::Z, "Z", Color::srgb(0.26, 0.65, 0.91)),
+                    ] {
+                        for index in 1..=9 {
+                            let fraction = index as f32 / 9.0;
+                            let radius = if index == 9 { 2.5 } else { 1.15 };
+                            indicator.spawn((
+                                HudAxisMark {
+                                    axis,
+                                    fraction,
+                                    radius,
+                                },
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    width: px(radius * 2.0),
+                                    height: px(radius * 2.0),
+                                    border_radius: BorderRadius::MAX,
+                                    ..default()
+                                },
+                                BackgroundColor(color),
+                            ));
+                        }
+                        indicator.spawn((
+                            HudAxisLabel { axis },
+                            Text::new(label),
+                            TextFont::from_font_size(8.0),
+                            TextColor(color),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                ..default()
+                            },
+                        ));
+                    }
+
+                    indicator.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(35.5),
+                            top: px(35.5),
+                            width: px(5.0),
+                            height: px(5.0),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(ink),
+                    ));
+                });
+            });
+
+            card.spawn(Node {
+                width: percent(100.0),
+                height: px(20.0),
+                margin: UiRect::top(px(4.0)),
+                column_gap: px(4.0),
+                ..default()
+            })
+            .with_children(|row| {
+                for (label, emphasized) in [("+Z", false), ("ISO", true), ("-Z", false)] {
+                    row.spawn((
+                        Node {
+                            height: px(20.0),
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(px(1.0)),
+                            border_radius: BorderRadius::all(px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(header),
+                        BorderColor::all(edge),
+                    ))
+                    .with_child((
+                        Text::new(label),
+                        TextFont::from_font_size(9.0),
+                        TextColor(if emphasized { ink } else { mute }),
+                    ));
+                }
+            });
+            card.spawn((
+                Text::new("Drag the dial to orbit"),
+                TextFont::from_font_size(8.0),
+                TextColor(rgba(palette.0.mute, 0.72)),
+                Node {
+                    margin: UiRect::top(px(3.0)),
+                    ..default()
+                },
+            ));
+        });
+
+    commands
+        .spawn((
+            Name::new("Native viewport navigation"),
+            NativeHudRoot,
+            UiTargetCamera(camera),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0.0),
+                bottom: px(12.0),
+                width: percent(100.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            ZIndex(20),
+        ))
+        .with_children(|center| {
+            center
+                .spawn((
+                    Node {
+                        height: px(34.0),
+                        padding: UiRect::axes(px(6.0), px(4.0)),
+                        align_items: AlignItems::Center,
+                        column_gap: px(2.0),
+                        border: UiRect::all(px(1.0)),
+                        border_radius: BorderRadius::all(px(5.0)),
+                        ..default()
+                    },
+                    BackgroundColor(header),
+                    BorderColor::all(edge),
+                ))
+                .with_children(|bar| {
+                    let mut buttons = Vec::new();
+                    if hud.hud.sketch_mode {
+                        buttons.extend([
+                            ("U", false, !hud.hud.can_undo),
+                            ("R", false, !hud.hud.can_redo),
+                            ("N", false, false),
+                        ]);
+                    }
+                    buttons.extend([
+                        ("O", hud.hud.nav_tool == "orbit", false),
+                        ("P", hud.hud.nav_tool == "pan", false),
+                        ("+", hud.hud.nav_tool == "zoom", false),
+                        ("[]", hud.hud.nav_tool == "zoomWindow", false),
+                        ("F", false, false),
+                        ("D", false, true),
+                        ("G", false, true),
+                        (
+                            "3D",
+                            hud.hud.six_dof_state == "connected",
+                            hud.hud.six_dof_state == "unsupported",
+                        ),
+                    ]);
+
+                    for (index, (label, active, disabled)) in buttons.into_iter().enumerate() {
+                        if hud.hud.sketch_mode && index == 3 {
+                            spawn_hud_separator(bar, edge);
+                        }
+                        if label == "3D" {
+                            spawn_hud_separator(bar, edge);
+                        }
+                        bar.spawn((
+                            Node {
+                                width: px(24.0),
+                                height: px(24.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(if active {
+                                rgba(palette.0.accent, 0.30)
+                            } else {
+                                Color::NONE
+                            }),
+                        ))
+                        .with_child((
+                            Text::new(label),
+                            TextFont::from_font_size(if label.len() > 1 { 7.5 } else { 10.0 }),
+                            TextColor(if disabled {
+                                rgba(palette.0.mute, 0.35)
+                            } else if active {
+                                accent
+                            } else {
+                                mute
+                            }),
+                        ));
+                    }
+                });
+        });
+
+    if let Some(selection) = &hud.hud.selection {
+        spawn_selection_hud(&mut commands, camera, selection, header, edge, ink, mute);
+    }
+}
+
+fn spawn_hud_separator(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, color: Color) {
+    parent.spawn((
+        Node {
+            width: px(1.0),
+            height: px(16.0),
+            margin: UiRect::horizontal(px(4.0)),
+            ..default()
+        },
+        BackgroundColor(color),
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_selection_hud(
+    commands: &mut Commands,
+    camera: Entity,
+    selection: &ViewportHudSelection,
+    header: Color,
+    edge: Color,
+    ink: Color,
+    mute: Color,
+) {
+    commands
+        .spawn((
+            Name::new("Native selection readout"),
+            NativeHudRoot,
+            UiTargetCamera(camera),
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(12.0),
+                bottom: px(48.0),
+                min_width: px(208.0),
+                max_width: px(280.0),
+                padding: UiRect::all(px(10.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4.0),
+                border: UiRect::all(px(1.0)),
+                border_radius: BorderRadius::all(px(5.0)),
+                ..default()
+            },
+            BackgroundColor(header),
+            BorderColor::all(edge),
+            ZIndex(20),
+        ))
+        .with_children(|card| {
+            card.spawn(Node {
+                min_width: px(218.0),
+                padding: UiRect::bottom(px(6.0)),
+                margin: UiRect::bottom(px(2.0)),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: px(16.0),
+                border: UiRect::bottom(px(1.0)),
+                ..default()
+            })
+            .with_children(|header_row| {
+                header_row.spawn((
+                    Text::new(selection.title.clone()),
+                    TextFont::from_font_size(9.0),
+                    TextColor(mute),
+                ));
+                header_row.spawn((
+                    Text::new(selection.subject.clone()),
+                    TextFont::from_font_size(11.0),
+                    TextColor(ink),
+                ));
+            });
+
+            for row in &selection.rows {
+                card.spawn(Node {
+                    width: percent(100.0),
+                    justify_content: JustifyContent::SpaceBetween,
+                    column_gap: px(16.0),
+                    ..default()
+                })
+                .with_children(|values| {
+                    values.spawn((
+                        Text::new(row.label.clone()),
+                        TextFont::from_font_size(11.0),
+                        TextColor(mute),
+                    ));
+                    values.spawn((
+                        Text::new(row.value.clone()),
+                        TextFont::from_font_size(11.0),
+                        TextColor(ink),
+                    ));
+                });
+            }
+
+            if let Some(footer) = &selection.footer {
+                card.spawn((
+                    Node {
+                        width: percent(100.0),
+                        justify_content: JustifyContent::FlexEnd,
+                        padding: UiRect::top(px(4.0)),
+                        margin: UiRect::top(px(2.0)),
+                        border: UiRect::top(px(1.0)),
+                        ..default()
+                    },
+                    BorderColor::all(edge),
+                ))
+                .with_child((
+                    Text::new(footer.clone()),
+                    TextFont::from_font_size(9.0),
+                    TextColor(mute),
+                ));
+            }
+        });
+}
+
+fn update_native_hud_orientation(
+    camera: Res<CameraResource>,
+    mut marks: Query<(&HudAxisMark, &mut Node)>,
+    mut labels: Query<(&HudAxisLabel, &mut Node), Without<HudAxisMark>>,
+) {
+    let position = Vec3::from_array(camera.camera.position);
+    let target = Vec3::from_array(camera.camera.target);
+    let forward = (target - position).normalize_or_zero();
+    let up_hint = Vec3::from_array(camera.camera.up).normalize_or_zero();
+    let mut right = forward.cross(up_hint).normalize_or_zero();
+    if right == Vec3::ZERO {
+        right = Vec3::X;
+    }
+    let screen_up = right.cross(forward).normalize_or_zero();
+
+    for (mark, mut node) in &mut marks {
+        let endpoint = Vec2::new(mark.axis.dot(right), -mark.axis.dot(screen_up)) * 25.0;
+        let point = Vec2::splat(38.0) + endpoint * mark.fraction;
+        node.left = px(point.x - mark.radius);
+        node.top = px(point.y - mark.radius);
+    }
+    for (label, mut node) in &mut labels {
+        let endpoint = Vec2::new(label.axis.dot(right), -label.axis.dot(screen_up)) * 25.0;
+        let point = Vec2::splat(38.0) + endpoint;
+        node.left = px(point.x + if endpoint.x >= 0.0 { 4.0 } else { -8.0 });
+        node.top = px(point.y + if endpoint.y >= 0.0 { 2.0 } else { -10.0 });
+    }
+}
+
 fn camera_transform(camera: ViewportCamera) -> Transform {
     let position = Vec3::from_array(camera.position);
     let target = Vec3::from_array(camera.target);
@@ -697,6 +1240,68 @@ fn camera_transform(camera: ViewportCamera) -> Transform {
         up = Vec3::Z;
     }
     Transform::from_translation(position).looking_at(target, up)
+}
+
+fn origin_plane_bases() -> [(&'static str, PlaneBasis, Color); 3] {
+    [
+        (
+            "XY",
+            PlaneBasis {
+                origin: [0.0, 0.0, 0.0],
+                u: [1.0, 0.0, 0.0],
+                v: [0.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            Color::srgba(0.25, 0.60, 0.94, 0.055),
+        ),
+        (
+            "XZ",
+            PlaneBasis {
+                origin: [0.0, 0.0, 0.0],
+                u: [1.0, 0.0, 0.0],
+                v: [0.0, 0.0, 1.0],
+                normal: [0.0, -1.0, 0.0],
+            },
+            Color::srgba(0.31, 0.74, 0.47, 0.050),
+        ),
+        (
+            "YZ",
+            PlaneBasis {
+                origin: [0.0, 0.0, 0.0],
+                u: [0.0, 1.0, 0.0],
+                v: [0.0, 0.0, 1.0],
+                normal: [1.0, 0.0, 0.0],
+            },
+            Color::srgba(0.88, 0.36, 0.39, 0.050),
+        ),
+    ]
+}
+
+fn reference_plane_mesh(basis: &PlaneBasis, half_size: f32) -> Mesh {
+    let origin = basis_vector(basis.origin);
+    let u = basis_vector(basis.u) * half_size;
+    let v = basis_vector(basis.v) * half_size;
+    let normal = basis_vector(basis.normal).normalize_or_zero();
+    let positions = vec![
+        (origin - u - v).to_array(),
+        (origin + u - v).to_array(),
+        (origin + u + v).to_array(),
+        (origin - u + v).to_array(),
+    ];
+    let normals = vec![normal.to_array(); 4];
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    );
+    mesh.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    mesh
 }
 
 fn draw_cad_gizmos(
@@ -730,6 +1335,45 @@ fn draw_cad_gizmos(
         Vec3::new(0.0, -150.0, 0.0),
         Vec3::new(0.0, 150.0, 0.0),
         Color::srgba(0.25, 0.65, 0.38, 0.62),
+    );
+    gizmos.line(
+        Vec3::new(0.0, 0.0, -150.0),
+        Vec3::new(0.0, 0.0, 150.0),
+        Color::srgba(0.25, 0.58, 0.92, 0.50),
+    );
+
+    for (_, basis, color) in origin_plane_bases() {
+        draw_plane_outline(&mut gizmos, &basis, 24.0, color.with_alpha(0.38));
+    }
+    for plane in &model.datum_planes {
+        draw_plane_outline(
+            &mut gizmos,
+            &plane.basis,
+            28.0,
+            rgba(palette.0.accent, 0.72),
+        );
+        gizmos.sphere(
+            basis_vector(plane.basis.origin),
+            0.34,
+            rgba(palette.0.accent, 0.95),
+        );
+    }
+
+    gizmos.sphere(Vec3::ZERO, 0.46, Color::srgba(0.94, 0.95, 0.98, 0.98));
+    gizmos.arrow(
+        Vec3::ZERO,
+        Vec3::X * 14.0,
+        Color::srgba(0.88, 0.36, 0.39, 0.98),
+    );
+    gizmos.arrow(
+        Vec3::ZERO,
+        Vec3::Y * 14.0,
+        Color::srgba(0.35, 0.68, 0.45, 0.98),
+    );
+    gizmos.arrow(
+        Vec3::ZERO,
+        Vec3::Z * 14.0,
+        Color::srgba(0.26, 0.65, 0.91, 0.98),
     );
 
     for body in &model.scene.bodies {
@@ -779,6 +1423,23 @@ fn draw_cad_gizmos(
             marker_color,
         );
     }
+}
+
+fn draw_plane_outline(gizmos: &mut Gizmos, basis: &PlaneBasis, half_size: f32, color: Color) {
+    let origin = basis_vector(basis.origin);
+    let u = basis_vector(basis.u) * half_size;
+    let v = basis_vector(basis.v) * half_size;
+    let corners = [
+        origin - u - v,
+        origin + u - v,
+        origin + u + v,
+        origin - u + v,
+    ];
+    for index in 0..4 {
+        gizmos.line(corners[index], corners[(index + 1) % 4], color);
+    }
+    gizmos.line(origin - u, origin + u, color.with_alpha(0.46));
+    gizmos.line(origin - v, origin + v, color.with_alpha(0.46));
 }
 
 fn draw_sketch(gizmos: &mut Gizmos, sketch: &SketchDto, color: Color) {
@@ -892,7 +1553,8 @@ fn push_render_command(
             logical_height,
             scale_factor,
             palette,
-        } => pending.resize = Some((logical_width, logical_height, scale_factor, palette)),
+            hud,
+        } => pending.resize = Some((logical_width, logical_height, scale_factor, palette, hud)),
         RenderCommand::Model(model) => pending.model = Some(model),
         RenderCommand::Camera(camera) => pending.camera = Some(camera),
         RenderCommand::Preview(preview) => pending.preview = Some(preview),
@@ -948,13 +1610,14 @@ fn drain_render_commands(
             current.wakeups += 1;
         }
         let mut dirty = false;
-        if let Some((logical_width, logical_height, scale_factor, palette)) = commands.0 {
+        if let Some((logical_width, logical_height, scale_factor, palette, hud)) = commands.0 {
             apply_render_command(
                 RenderCommand::Resize {
                     logical_width,
                     logical_height,
                     scale_factor,
                     palette,
+                    hud,
                 },
                 runtime,
                 metrics,
@@ -995,6 +1658,7 @@ fn apply_render_command(
             logical_height,
             scale_factor,
             palette,
+            hud,
         } => {
             let physical_width = (logical_width * scale_factor).round().max(1.0) as u32;
             let physical_height = (logical_height * scale_factor).round().max(1.0) as u32;
@@ -1021,6 +1685,12 @@ fn apply_render_command(
                 let mut model = runtime.app.world_mut().resource_mut::<ModelResource>();
                 model.revision = model.revision.wrapping_add(1);
             }
+            let hud_changed = runtime.app.world().resource::<HudResource>().hud != hud;
+            if hud_changed || palette_changed {
+                let mut resource = runtime.app.world_mut().resource_mut::<HudResource>();
+                resource.hud = hud;
+                resource.revision = resource.revision.wrapping_add(1);
+            }
             runtime.logical_size = (logical_width as f32, logical_height as f32);
             runtime.scale_factor = scale_factor as f32;
             let mut first_layout = false;
@@ -1038,7 +1708,7 @@ fn apply_render_command(
                     logical_width, logical_height, physical_width, physical_height, scale_factor
                 );
             }
-            *dirty |= size_changed || palette_changed;
+            *dirty |= size_changed || palette_changed || hud_changed;
         }
         RenderCommand::Model(next) => {
             runtime.model = next;
@@ -1046,6 +1716,7 @@ fn apply_render_command(
             resource.scene = runtime.model.scene.clone();
             resource.active_sketch = runtime.model.active_sketch.clone();
             resource.finished_sketches = runtime.model.finished_sketches.clone();
+            resource.datum_planes = runtime.model.datum_planes.clone();
             resource.revision = resource.revision.wrapping_add(1);
             if let Ok(mut current) = metrics.lock() {
                 current.body_count = runtime.model.scene.bodies.len();
@@ -1248,7 +1919,7 @@ mod tests {
             }"#,
         );
 
-        let (scene, _, _) = state.viewport_snapshot();
+        let (scene, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(scene.bodies[0].mesh.indices.len(), 36);
         let hit = pick_occt_scene(
