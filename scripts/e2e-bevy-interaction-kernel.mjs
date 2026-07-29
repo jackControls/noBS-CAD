@@ -18,6 +18,7 @@ try {
 
   const result = await page.evaluate(async () => {
     const cad = await import('/src/components/viewport/cadInteraction.ts');
+    const viewport = await import('/src/components/viewport/Viewport.tsx');
     const epsilon = 1e-6;
     const approximately = (actual, expected, tolerance = epsilon) =>
       Math.abs(actual - expected) <= tolerance;
@@ -79,7 +80,10 @@ try {
       approximately(datumHits[0].point.z, 2);
 
     const originPlane = new cad.Mesh(
-      new cad.PlaneGeometry(100, 100),
+      new cad.PlaneGeometry(
+        viewport.REFERENCE_PLANE_SIZE,
+        viewport.REFERENCE_PLANE_SIZE,
+      ),
       new cad.MeshBasicMaterial({ side: cad.DoubleSide }),
     );
     originPlane.userData.plane = 'xy';
@@ -87,6 +91,20 @@ try {
     const originRay =
       originHits.length === 1 &&
       originHits[0].object.userData.plane === 'xy';
+
+    // The visible 100 mm reference quad and its finite hit primitive share
+    // one footprint: a ray through ~45 mm hits, while ~58 mm does not.
+    const planeCamera = new cad.PerspectiveCamera(45, 1, 0.1, 500);
+    planeCamera.position.set(0, 0, 200);
+    planeCamera.up.set(0, 1, 0);
+    planeCamera.lookAt(new cad.Vector3());
+    const nearEdgeRay = new cad.Raycaster();
+    nearEdgeRay.setFromCamera(new cad.Vector2(0.55, 0), planeCamera);
+    const outsideRay = new cad.Raycaster();
+    outsideRay.setFromCamera(new cad.Vector2(0.70, 0), planeCamera);
+    const finiteReferencePlane =
+      nearEdgeRay.intersectObject(originPlane).length === 1 &&
+      outsideRay.intersectObject(originPlane).length === 0;
 
     // Sketch pointer mapping: ray/world intersection transformed into local mm.
     const sketchBasis = new cad.Group();
@@ -192,17 +210,64 @@ try {
         'canvas[data-cad-interaction-surface="true"]',
       ) !== null;
 
+    // Native mode exposes the real DOM chrome, not an invisible interaction
+    // copy over a visually different Bevy control.
+    const surface = document.querySelector(
+      'canvas[data-cad-interaction-surface="true"]',
+    );
+    const viewportRoot = surface?.parentElement;
+    if (viewportRoot) viewportRoot.dataset.nativeViewport = 'bevy';
+    const hudRoots = [...document.querySelectorAll('[data-native-hud]')];
+    const visibleDomHud =
+      hudRoots.length >= 2 &&
+      hudRoots.every((element) => getComputedStyle(element).opacity !== '0');
+    const nativeOverlayIslands = [
+      document.querySelector('[data-orientation-dial]'),
+      document.querySelector('[data-native-hud="navigation"]'),
+      document.querySelector('[data-testid="project-tabs"]'),
+      [...document.querySelectorAll('[data-native-viewport-overlay]')].find(
+        (element) => element.textContent?.includes('COMMENTS'),
+      ),
+    ].every(
+      (element) =>
+        element?.hasAttribute('data-native-viewport-overlay') === true,
+    );
+    const animatedHud =
+      [...document.querySelectorAll(
+        '[data-native-hud="navigation"] button, [data-orientation-dial] button',
+      )].every(
+        (button) =>
+          Number.parseFloat(getComputedStyle(button).transitionDuration) > 0,
+      );
+    if (viewportRoot) delete viewportRoot.dataset.nativeViewport;
+
+    const store = window.__appStore.getState();
+    store.setNavTool('orbit');
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    });
+    const escapeOwned =
+      window.dispatchEvent(escape) === false &&
+      window.__appStore.getState().navTool === 'select';
+
     return {
       projection,
       faceRay,
       edgeRay,
       datumRay,
       originRay,
+      finiteReferencePlane,
       sketchPlane,
       profileRay,
       orbit,
       transientPreview,
       inputSurface,
+      visibleDomHud,
+      nativeOverlayIslands,
+      animatedHud,
+      escapeOwned,
     };
   });
 
@@ -214,17 +279,67 @@ try {
       edgeRay: true,
       datumRay: true,
       originRay: true,
+      finiteReferencePlane: true,
       sketchPlane: true,
       profileRay: true,
       orbit: true,
       transientPreview: true,
       inputSurface: true,
+      visibleDomHud: true,
+      nativeOverlayIslands: true,
+      animatedHud: true,
+      escapeOwned: true,
     },
     `Three-free interaction proof failed: ${JSON.stringify(result)}`,
   );
+
+  await page.waitForFunction(
+    () => window.__appStore?.getState().document !== null,
+  );
+  await page.locator('button[title="Create Sketch"]').click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().mode === 'pickPlane',
+  );
+  const planeTargets = await page.evaluate(() => {
+    const surface = document.querySelector(
+      'canvas[data-cad-interaction-surface="true"]',
+    );
+    const rect = surface.getBoundingClientRect();
+    return {
+      xz: window.__worldToScreen(35, 0, 35),
+      outside: window.__worldToScreen(90, 0, 90),
+      viewport: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+      },
+    };
+  });
+  for (const point of [planeTargets.xz, planeTargets.outside]) {
+    assert.ok(
+      point.x > planeTargets.viewport.left &&
+        point.x < planeTargets.viewport.right &&
+        point.y > planeTargets.viewport.top &&
+        point.y < planeTargets.viewport.bottom,
+      `reference-plane test point is outside the viewport: ${JSON.stringify(point)}`,
+    );
+  }
+  await page.mouse.move(planeTargets.xz.x, planeTargets.xz.y);
+  await page.waitForFunction(
+    () => window.__appStore.getState().hoveredPlane === 'xz',
+  );
+  await page.mouse.move(planeTargets.outside.x, planeTargets.outside.y);
+  await page.waitForTimeout(100);
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().hoveredPlane),
+    null,
+    'the XZ hit target must end at the same 100 mm boundary Bevy draws',
+  );
+
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
-    '  [ok] projection, orbit, face/edge/datum/origin/profile rays, sketch mapping, and Bevy preview transport',
+    '  [ok] projection, exact XZ-plane hover bounds, hover-ready DOM islands, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
   );
 } finally {
   await browser.close();

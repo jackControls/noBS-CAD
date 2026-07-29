@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
 
@@ -75,6 +76,7 @@ interface NativeHudSelection {
 }
 
 interface NativeHud {
+  renderNativeChrome: boolean;
   navTool: string;
   sketchMode: boolean;
   canUndo: boolean;
@@ -246,9 +248,7 @@ function mergeOverlayRects(rects: NativeRect[]): NativeRect[] {
 }
 
 function collectOverlays(): NativeRect[] {
-  const elements = [...document.querySelectorAll(overlaySelector)].filter(
-    (element) => !element.closest('[data-native-hud]'),
-  );
+  const elements = [...document.querySelectorAll(overlaySelector)];
   return mergeOverlayRects(
     elements
       .map(rectFor)
@@ -321,6 +321,10 @@ function collectHud(): NativeHud {
   const state = useAppStore.getState();
   const navigation = document.querySelector('[data-native-hud="navigation"]');
   return {
+    // React is the single visual and interaction source for viewport chrome.
+    // The native surface remains available for an all-Bevy shell experiment,
+    // but duplicating these controls makes CSS hit targets drift from pixels.
+    renderNativeChrome: false,
     navTool: state.navTool,
     sketchMode: state.mode === 'sketch',
     canUndo: state.activeSketch?.can_undo ?? false,
@@ -433,10 +437,12 @@ async function syncModel(): Promise<void> {
 export function attachNativeViewport(container: HTMLElement): () => void {
   let disposed = false;
   let layoutFrame = 0;
+  let layoutEpoch = 0;
   let layoutInFlight = false;
   let layoutRequested = false;
   let probeTimer = 0;
   let settleTimers: number[] = [];
+  let nativeWindowUnlisteners: Array<() => void> = [];
 
   const flushLayout = async () => {
     if (disposed) return;
@@ -464,6 +470,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
         const key = JSON.stringify({
           ...payload,
           devicePixelRatio: window.devicePixelRatio,
+          layoutEpoch,
         });
         if (key === lastLayoutKey) continue;
         const layout = {
@@ -491,12 +498,19 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     });
   };
   const settleLayout = () => {
-    scheduleLayout();
+    const forceLayout = () => {
+      // Native full-screen transitions can replace AppKit layers or reparent
+      // the WKWebView without changing the final DOM rectangle. Epoch makes
+      // those lifecycle passes reach Rust even when CSS geometry deduplicates.
+      layoutEpoch += 1;
+      scheduleLayout();
+    };
+    forceLayout();
     for (const timer of settleTimers) window.clearTimeout(timer);
-    settleTimers = [80, 180, 350].map((delay) =>
-      window.setTimeout(scheduleLayout, delay),
+    settleTimers = [80, 180, 350, 700, 1_200].map((delay) =>
+      window.setTimeout(forceLayout, delay),
     );
-    requestAnimationFrame(() => requestAnimationFrame(scheduleLayout));
+    requestAnimationFrame(() => requestAnimationFrame(forceLayout));
   };
 
   const observedLayoutElements = new Set<Element>();
@@ -544,6 +558,23 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   document.addEventListener('input', scheduleLayout, true);
   document.addEventListener('change', scheduleLayout, true);
   document.addEventListener('transitionend', scheduleLayout, true);
+  window.addEventListener('focus', settleLayout);
+
+  if (isTauriRuntime()) {
+    const appWindow = getCurrentWindow();
+    void Promise.all([
+      appWindow.onResized(settleLayout),
+      appWindow.onScaleChanged(settleLayout),
+    ])
+      .then((unlisteners) => {
+        if (disposed) {
+          for (const unlisten of unlisteners) unlisten();
+        } else {
+          nativeWindowUnlisteners = unlisteners;
+        }
+      })
+      .catch(() => undefined);
+  }
 
   let previous = useAppStore.getState();
   const unsubscribe = useAppStore.subscribe((next) => {
@@ -615,6 +646,9 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     document.removeEventListener('input', scheduleLayout, true);
     document.removeEventListener('change', scheduleLayout, true);
     document.removeEventListener('transitionend', scheduleLayout, true);
+    window.removeEventListener('focus', settleLayout);
+    for (const unlisten of nativeWindowUnlisteners) unlisten();
+    nativeWindowUnlisteners = [];
     unsubscribe();
     delete container.dataset.nativeViewport;
   };
@@ -715,6 +749,7 @@ export function syncNativeViewportCamera(
     .join(',');
   if (key === lastCameraKey) return;
   lastCameraKey = key;
+  window.dispatchEvent(new CustomEvent('nbcad:camera-change'));
   pendingCamera = next;
   if (pendingCameraFrame !== 0) return;
   pendingCameraFrame = requestAnimationFrame(() => {

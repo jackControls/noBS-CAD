@@ -44,15 +44,7 @@ export function OrientationDial({
     const right = new Vector3();
     const screenUp = new Vector3();
 
-    const tick = () => {
-      // Bevy owns the visible dial in the native desktop path and updates it
-      // from the same camera command. Do not keep animating the transparent
-      // DOM mirror at 60 Hz after the native bridge is ready.
-      if (nativeViewportIsActive()) {
-        raf = 0;
-        return;
-      }
-      raf = requestAnimationFrame(tick);
+    const update = () => {
       const svg = indicatorRef.current;
       const snapshot = apiRef.current?.getSnapshot();
       if (!svg || !snapshot) return;
@@ -85,8 +77,19 @@ export function OrientationDial({
         label?.setAttribute('opacity', opacity);
       }
     };
+    const tick = () => {
+      update();
+      // Browser/dev rendering has no native bridge event source and needs to
+      // follow Orbit/6-DOF camera changes continuously. Once Bevy is active,
+      // bridge camera events own updates so the DOM dial costs no idle frame.
+      if (!nativeViewportIsActive()) raf = requestAnimationFrame(tick);
+    };
     tick();
-    return () => cancelAnimationFrame(raf);
+    window.addEventListener('nbcad:camera-change', update);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('nbcad:camera-change', update);
+    };
   }, [apiRef]);
 
   const snap = (preset: AxisPreset) => {
@@ -128,7 +131,7 @@ export function OrientationDial({
       title={t(`orientationDial.${preset}`)}
       aria-label={t(`orientationDial.${preset}`)}
       onClick={() => snap(preset)}
-      className={`absolute z-10 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header/95 text-[9px] font-bold text-mute shadow-sm transition-colors hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
+      className={`absolute z-10 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header/95 text-[9px] font-bold text-mute shadow-sm transition-all duration-150 ease-out hover:scale-105 hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
     >
       {shortLabel}
     </button>
@@ -185,7 +188,7 @@ export function OrientationDial({
           data-orientation-preset="top"
           title={t('orientationDial.top')}
           onClick={() => snap('top')}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           +Z
         </button>
@@ -195,7 +198,7 @@ export function OrientationDial({
           title={t('orientationDial.axonometric')}
           aria-label={t('orientationDial.axonometric')}
           onClick={() => apiRef.current?.home()}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-bold text-ink hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-bold text-ink transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           ISO
         </button>
@@ -204,7 +207,7 @@ export function OrientationDial({
           data-orientation-preset="bottom"
           title={t('orientationDial.bottom')}
           onClick={() => snap('bottom')}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           −Z
         </button>

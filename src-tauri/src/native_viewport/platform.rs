@@ -67,6 +67,8 @@ use super::{
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
+/// Matches the React interaction plane's 100 mm edge length.
+const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
@@ -475,12 +477,30 @@ unsafe fn apply_native_layout(
     let viewport = unsafe { &*(viewport_pointer as *const NSView) };
     let ns_window = unsafe { &*(window_pointer as *const NSWindow) };
     let webview_bounds = webview.bounds();
+    let Some(parent) = (unsafe { webview.superview() }) else {
+        viewport.setHidden(true);
+        return ns_window.backingScaleFactor();
+    };
+
+    // AppKit can replace the WKWebView's container during native full-screen
+    // transitions. Keep the Metal sibling attached to the WebView's current
+    // parent; applying a frame converted for a different parent can otherwise
+    // expand the viewport across the whole application shell after exit.
+    let parent_pointer = (&*parent as *const NSView) as usize;
+    let viewport_parent_pointer = unsafe { viewport.superview() }
+        .as_deref()
+        .map(|view| (view as *const NSView) as usize);
+    if viewport_parent_pointer != Some(parent_pointer) {
+        viewport.removeFromSuperview();
+        parent.addSubview_positioned_relativeTo(
+            viewport,
+            NSWindowOrderingMode::Below,
+            Some(webview),
+        );
+    }
 
     let viewport_in_webview = dom_rect_to_view_rect(webview, layout.viewport);
-    let viewport_in_parent = webview.convertRect_toView(
-        viewport_in_webview,
-        unsafe { webview.superview() }.as_deref(),
-    );
+    let viewport_in_parent = webview.convertRect_toView(viewport_in_webview, Some(&parent));
     viewport.setFrame(viewport_in_parent);
     viewport.setHidden(layout.viewport.width < 2.0 || layout.viewport.height < 2.0);
 
@@ -1033,7 +1053,7 @@ fn setup_scene(
             Name::new(format!("Origin plane {name}")),
             NativeOriginPlane { plane },
             Visibility::Hidden,
-            Mesh3d(meshes.add(reference_plane_mesh(&basis, 24.0))),
+            Mesh3d(meshes.add(reference_plane_mesh(&basis, REFERENCE_PLANE_HALF_SIZE))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: color,
                 alpha_mode: AlphaMode::Blend,
@@ -1098,7 +1118,10 @@ fn rebuild_occt_meshes(
                 datum_id: plane.datum_id.0,
             },
             NativeModelGeometry,
-            Mesh3d(meshes.add(reference_plane_mesh(&plane.basis, 28.0))),
+            Mesh3d(meshes.add(reference_plane_mesh(
+                &plane.basis,
+                REFERENCE_PLANE_HALF_SIZE,
+            ))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: Color::srgba(0.85, 0.65, 0.30, 0.08),
                 alpha_mode: AlphaMode::Blend,
@@ -1323,6 +1346,9 @@ fn rebuild_native_hud(
 
     for entity in &existing {
         commands.entity(entity).despawn();
+    }
+    if !hud.hud.render_native_chrome {
+        return;
     }
     let Ok(camera) = cameras.single() else {
         return;
@@ -1910,7 +1936,7 @@ fn draw_cad_gizmos(
             draw_plane_outline(
                 &mut highlights,
                 &basis,
-                24.0,
+                REFERENCE_PLANE_HALF_SIZE,
                 origin_plane_color(plane, alpha),
             );
         }
@@ -1945,7 +1971,7 @@ fn draw_cad_gizmos(
         draw_plane_outline(
             &mut gizmos,
             &plane.basis,
-            28.0,
+            REFERENCE_PLANE_HALF_SIZE,
             Color::srgba(
                 0.88,
                 0.68,
@@ -2721,6 +2747,33 @@ mod tests {
         )
         .expect("ray should hit");
         assert!((distance - 5.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn native_reference_plane_matches_the_react_pick_footprint() {
+        let mesh = reference_plane_mesh(&origin_plane_bases()[0].1, REFERENCE_PLANE_HALF_SIZE);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|values| values.as_float3())
+            .expect("reference plane should expose float3 positions");
+        let min_x = positions
+            .iter()
+            .map(|position| position[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = positions
+            .iter()
+            .map(|position| position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = positions
+            .iter()
+            .map(|position| position[1])
+            .fold(f32::INFINITY, f32::min);
+        let max_y = positions
+            .iter()
+            .map(|position| position[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(max_x - min_x, 100.0);
+        assert_eq!(max_y - min_y, 100.0);
     }
 
     #[test]
