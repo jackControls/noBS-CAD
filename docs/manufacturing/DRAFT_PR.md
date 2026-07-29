@@ -1,44 +1,83 @@
-# Draft PR notes — 3MF print export (human summary)
+# Draft PR — 3MF print export (for humans)
 
-## Why this exists
+**Stacking:** merge **[PR #24](https://github.com/jackControls/noBS-CAD/pull/24)** (steerable MCP) first.
+This draft builds on that tip and adds the **print pack** tools + writers.
 
-Slicers (Bambu Studio, Orca, PrusaSlicer, Cura) want **mesh packages**, not CAD
-B-rep. Exporting **STEP** and opening it in a slicer forces the slicer to
-remesh. That often looks broken: few triangles, “split compound” dialogs, and
-no filament/profile metadata.
+## Plain-language goal
 
-noBS CAD already has solid STEP for CAD interchange. This work adds the
-**additive print path**: tessellate in-app → write **standard 3MF** (mm) with
-materials and optional slicer Metadata (“profiles” in the filament/hint sense).
+Agents (and the desktop app) should hand slicers a **real 3MF mesh package**,
+not a STEP file that the slicer has to remesh.
 
-## What “3MF with profiles” means here
+| Format | Use it for |
+|--------|------------|
+| **3MF** | Additive / slicers (preferred) |
+| **STL** | Simple mesh fallback (no materials) |
+| **STEP** | CAD interchange only (already in #24) |
 
-| Included | Not included (v1) |
-|----------|-------------------|
-| Consortium 3MF geometry + basematerials colors | Full sliced G-code.3mf projects |
-| Per-body objects (not one fused mystery compound) | AMS machine pairing / wipe-tower authoring |
-| Slicer Metadata targets: Bambu / Orca / Prusa / Cura | Claiming vendor filament IDs never go stale |
-| Filament catalog + body appearance in `.nbcad` | 3MF **import** |
+Opening STEP in Bambu/Orca often shows deflection dialogs and a tiny triangle
+count — that is the **slicer remeshing CAD**, not a print package from noBS.
 
-Use **Import / drag onto plate** in Bambu — not “Open Project” — if you want to
-keep your existing printer profile.
+## What agents get (MCP print pack)
 
-## Depends on MCP landing first
+After #24’s soft disclosure, focus `print` advertises:
 
-**Depends on PR #24** (steerable MCP disclosure + file-bridge).
+| Tool | What it returns |
+|------|-----------------|
+| `solid_export_3mf` | Base64 ZIP 3MF (mm, colors, optional slicer Metadata). **Prefer this.** |
+| `solid_export_stl` | Base64 binary STL (no appearance) |
+| `material_catalog` | Built-in filament presets (brand / type / color ids) |
+| `solid_export_step` | Base64 AP242 STEP (CAD handoff; keep using for CAD tools) |
 
-This branch is stacked on that tip so the print pack can advertise:
+### Typical agent recipe
 
-- `solid_export_3mf` (preferred for slicers)
-- `solid_export_stl` (fallback mesh)
-- `material_catalog`
-- `solid_export_step` (keep for CAD handoff)
+1. Model (or `cad_attach` a UI session from #24’s file bridge).
+2. Optional: `cad_set_focus` → `print`.
+3. Optional: `material_catalog` then set body appearance in the document.
+4. Call `solid_export_3mf` with `slicer_target` (`bambu_studio` default, or
+   `orca_slicer` / `prusa_slicer` / `cura` / `standard`).
+5. Decode `bytes_base64` → write `.3mf` → open in the slicer with
+   **Import / drag onto plate** (not “Open Project” if you want to keep your
+   printer profile).
 
-## How to try (once UI/MCP binaries are built)
+Response shape:
 
-1. Model a part (or attach a session).
-2. Assign filament appearance (UI panel) or accept defaults.
-3. Export 3MF with `slicer_target: bambu_studio` (or Orca/Prusa/Cura/standard).
-4. Open in the slicer → Import → verify bodies/colors/slots.
+```json
+{
+  "format": "3mf",
+  "encoding": "base64",
+  "bytes_base64": "UEsDB...",
+  "slicer_target": "bambu_studio"
+}
+```
 
-Fixtures under `crates/export/fixtures/smoke/` are ready for manual smoke.
+## What humans get (desktop)
+
+- Export **3MF** / **STL** from the UI
+- Body filament / appearance picker (brand catalog)
+- Same slicer targets as MCP
+- Docs under `docs/manufacturing/`
+
+## Under the hood (shared)
+
+- New `crates/export` writers + smoke fixtures (cube + print-in-place latch)
+- OCCT tessellation → one 3MF object per body
+- UI and MCP share `ExportFacade` (same bytes path)
+
+## Status
+
+| Item | State |
+|------|--------|
+| Export crate + unit tests | Done |
+| MCP `solid_export_3mf` golden (`PK` ZIP) | Done |
+| Print-pack disclosure tags | Done (on top of #24) |
+| UI export + appearance panel | Included; needs desktop smoke |
+| Manual slicer open (KR3.6) | Checklist in `VALIDATION.md` |
+| Rebase onto `main` after #24 merges | Pending |
+
+## Out of scope (v1)
+
+- 3MF import
+- Full sliced G-code.3mf / AMS machine pairing
+- Guaranteeing vendor filament IDs never change
+
+Refs: #13, #9, #24.
