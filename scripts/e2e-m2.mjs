@@ -555,6 +555,15 @@ try {
     await page.getByTestId('extrude-canvas-distance').isVisible() &&
       await page.getByTestId('extrude-direction-handle').isVisible(),
   );
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-extrude-operation="join"]')
+        ?.getAttribute('aria-checked') === 'true' &&
+      document.querySelectorAll(
+        '[data-testid="extrude-dialog"] input[type="checkbox"]',
+      )[1]?.checked === true,
+  );
   check(
     'an outward face Extrude initially proposes Join with its support body',
     await signedDialog

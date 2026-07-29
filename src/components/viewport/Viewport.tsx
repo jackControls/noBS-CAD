@@ -1,5 +1,5 @@
 /**
- * Viewport: three.js WebGL canvas with noBS CAD navigation and the M1a
+ * Native Bevy viewport interaction layer with noBS CAD navigation and the
  * sketch environment.
  *
  * - Z-up world (engine convention): ground grid on XY, camera.up = +Z.
@@ -9,23 +9,25 @@
  *   including inside an active sketch.
  * - Pick-plane mode: translucent origin-plane quads with hover highlight +
  *   name tag, synced with the browser tree; click enters the sketch.
- * - Sketch mode: 2D grid on the sketch plane, origin snap marker, entities
- *   (Line2 fat lines + point grips + constraint glyph sprites), rubber-band
+ * - Sketch mode: 2D grid on the sketch plane, origin snap marker, entities,
+ *   rubber-band
  *   preview with snap marker and inference glyphs, endpoint dragging,
  *   selection, and a live cursor mm readout.
  *
- * All sketch geometry/behavior comes from the engine (src/engine); this
- * file only renders DTOs and forwards pointer input. All scene units are
- * document units (millimeters by default).
+ * All sketch geometry/behavior comes from the engine (src/engine); this file
+ * builds CPU interaction proxies and forwards pointer/camera intent to the
+ * native viewport. All scene units are document units (millimeters by default).
  */
 import { useEffect, useRef } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Line2 } from 'three/addons/lines/Line2.js';
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import * as CAD from './cadInteraction';
+import {
+  ScreenPolyline,
+  PolylineGeometry,
+  ScreenLineMaterial,
+  ScreenLineSegments,
+  SegmentListGeometry,
+  CadOrbitControls,
+} from './cadInteraction';
 import { useTranslation } from '../../i18n';
 import { getEngine, EngineError, type Engine } from '../../engine';
 import { pickDatumPlane, pickPlanarFace, pickPlane } from '../../engine/controller';
@@ -87,9 +89,9 @@ import {
   syncNativeViewportPreview,
 } from './nativeViewportBridge';
 
-const HOME_POSITION = new THREE.Vector3(170, -170, 130);
-const HOME_TARGET = new THREE.Vector3(0, 0, 0);
-const WORLD_UP = new THREE.Vector3(0, 0, 1);
+const HOME_POSITION = new CAD.Vector3(170, -170, 130);
+const HOME_TARGET = new CAD.Vector3(0, 0, 0);
+const WORLD_UP = new CAD.Vector3(0, 0, 1);
 const AXIS_LENGTH = 120;
 let preservedCameraSnapshot: CameraSnapshot | null = null;
 
@@ -160,8 +162,8 @@ function triangleBoundarySegments(positions: number[]): number[] {
 
 interface PickerPlane {
   plane: OriginPlane;
-  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  border: THREE.LineSegments;
+  mesh: CAD.Mesh<CAD.PlaneGeometry, CAD.MeshBasicMaterial>;
+  border: CAD.LineSegments;
 }
 
 interface PickerDef {
@@ -207,14 +209,14 @@ export function Viewport() {
     if (!container) return;
     const detachNativeViewport = attachNativeViewport(container);
 
-    // DOM and WebGL consume the same theme tokens. Viewport is keyed by the
-    // resolved theme in App, so switching theme reconstructs all materials and
-    // canvas textures without keeping stale dark/light colors.
+    // DOM and Bevy consume the same theme tokens. Viewport is keyed by the
+    // resolved theme in App, so switching theme reconstructs the interaction
+    // presentation state without keeping stale dark/light colors.
     const themeStyle = window.getComputedStyle(window.document.documentElement);
     const cssThemeColor = (name: string, fallback: string) =>
       themeStyle.getPropertyValue(name).trim() || fallback;
-    const threeThemeColor = (name: string, fallback: string) =>
-      new THREE.Color(cssThemeColor(name, fallback)).getHex();
+    const interactionThemeColor = (name: string, fallback: string) =>
+      new CAD.Color(cssThemeColor(name, fallback)).getHex();
     const CSS_ACCENT = cssThemeColor('--accent', '#7463d8');
     const CSS_INK = cssThemeColor('--ink', '#d7dce2');
     const CSS_MUTE = cssThemeColor('--mute', '#9aa0a8');
@@ -225,16 +227,16 @@ export function Viewport() {
       '#c4b9ff',
     );
     const CSS_GRIP_FILL = cssThemeColor('--cad-grip-fill', '#ffffff');
-    const COLOR_SKETCH = threeThemeColor('--sketchline', '#5da9ff');
-    const COLOR_DEFINED = threeThemeColor('--cad-defined', '#e8e9ec');
-    const COLOR_HOVER = threeThemeColor('--cad-hover', '#9ccaff');
-    const COLOR_ACCENT = threeThemeColor('--accent', '#7463d8');
+    const COLOR_SKETCH = interactionThemeColor('--sketchline', '#5da9ff');
+    const COLOR_DEFINED = interactionThemeColor('--cad-defined', '#e8e9ec');
+    const COLOR_HOVER = interactionThemeColor('--cad-hover', '#9ccaff');
+    const COLOR_ACCENT = interactionThemeColor('--accent', '#7463d8');
     const COLOR_SELECTED = COLOR_ACCENT;
-    const COLOR_PREVIEW = threeThemeColor('--cad-preview', '#8fc4ff');
-    const COLOR_FINISHED = threeThemeColor('--cad-finished', '#4ac7ff');
-    const COLOR_BODY = threeThemeColor('--cad-body', '#8b9bac');
-    const COLOR_BODY_SELECTED = threeThemeColor('--cad-body-selected', '#69a9d4');
-    const COLOR_BODY_TOOL = threeThemeColor('--cad-body-tool', '#b58a43');
+    const COLOR_PREVIEW = interactionThemeColor('--cad-preview', '#8fc4ff');
+    const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#4ac7ff');
+    const COLOR_BODY = interactionThemeColor('--cad-body', '#8b9bac');
+    const COLOR_BODY_SELECTED = interactionThemeColor('--cad-body-selected', '#69a9d4');
+    const COLOR_BODY_TOOL = interactionThemeColor('--cad-body-tool', '#b58a43');
 
     const bodyBaseColor = (bodyId: number, appearances: ReturnType<typeof useAppStore.getState>['bodyAppearances']) => {
       const appearance = appearances.find((entry) => entry.body_id === bodyId);
@@ -242,23 +244,23 @@ export function Viewport() {
       const { r, g, b } = appearance.color;
       return (r << 16) | (g << 8) | b;
     };
-    const COLOR_FACE_HOVER = threeThemeColor('--cad-face-hover', '#9ed5f3');
-    const COLOR_FACE_SELECTED = threeThemeColor('--cad-face-selected', '#30aee8');
-    const COLOR_EDGE = threeThemeColor('--cad-edge', '#29333d');
-    const COLOR_EDGE_HOVER = threeThemeColor('--cad-edge-hover', '#58c7ff');
-    const COLOR_EDGE_SELECTED = threeThemeColor('--cad-edge-selected', '#ffc857');
-    const COLOR_HOLE_POINT_SELECTED = threeThemeColor(
+    const COLOR_FACE_HOVER = interactionThemeColor('--cad-face-hover', '#9ed5f3');
+    const COLOR_FACE_SELECTED = interactionThemeColor('--cad-face-selected', '#30aee8');
+    const COLOR_EDGE = interactionThemeColor('--cad-edge', '#29333d');
+    const COLOR_EDGE_HOVER = interactionThemeColor('--cad-edge-hover', '#58c7ff');
+    const COLOR_EDGE_SELECTED = interactionThemeColor('--cad-edge-selected', '#ffc857');
+    const COLOR_HOLE_POINT_SELECTED = interactionThemeColor(
       '--cad-hole-point-selected',
       '#ffd166',
     );
-    const COLOR_GROUND_FINE = threeThemeColor('--cad-ground-fine', '#3a3f47');
-    const COLOR_GROUND_MAJOR = threeThemeColor('--cad-ground-major', '#4d545f');
-    const COLOR_SKETCH_GRID_FINE = threeThemeColor('--cad-sketch-grid-fine', '#41474f');
-    const COLOR_SKETCH_GRID_MAJOR = threeThemeColor('--cad-sketch-grid-major', '#4d545f');
-    const COLOR_HEMI_SKY = threeThemeColor('--cad-hemi-sky', '#dce9f5');
-    const COLOR_HEMI_GROUND = threeThemeColor('--cad-hemi-ground', '#30343b');
-    const COLOR_DIMENSION = threeThemeColor('--dimgreen', '#aecb1e');
-    const COLOR_DIMENSION_SELECTED = threeThemeColor(
+    const COLOR_GROUND_FINE = interactionThemeColor('--cad-ground-fine', '#3a3f47');
+    const COLOR_GROUND_MAJOR = interactionThemeColor('--cad-ground-major', '#4d545f');
+    const COLOR_SKETCH_GRID_FINE = interactionThemeColor('--cad-sketch-grid-fine', '#41474f');
+    const COLOR_SKETCH_GRID_MAJOR = interactionThemeColor('--cad-sketch-grid-major', '#4d545f');
+    const COLOR_HEMI_SKY = interactionThemeColor('--cad-hemi-sky', '#dce9f5');
+    const COLOR_HEMI_GROUND = interactionThemeColor('--cad-hemi-ground', '#30343b');
+    const COLOR_DIMENSION = interactionThemeColor('--dimgreen', '#aecb1e');
+    const COLOR_DIMENSION_SELECTED = interactionThemeColor(
       '--cad-dimension-selected',
       '#c4b9ff',
     );
@@ -270,81 +272,83 @@ export function Viewport() {
       (window as unknown as { __engine?: Engine }).__engine = e;
     });
 
-    // --- Renderer / scene / camera (Z-up world) ---
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    container.appendChild(renderer.domElement);
-    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    // --- Input surface / interaction scene / camera (Z-up world) ---
+    // The canvas exists only to receive DOM pointer events and preserve the
+    // established automation contract. It never requests a WebGL context.
+    const surface = new CAD.ViewportInputSurface();
+    surface.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(surface.domElement);
+    surface.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 20000);
+    const scene = new CAD.Scene();
+    const camera = new CAD.PerspectiveCamera(45, 1, 0.1, 20000);
     const initialTarget = preservedCameraSnapshot
-      ? new THREE.Vector3(...preservedCameraSnapshot.target)
+      ? new CAD.Vector3(...preservedCameraSnapshot.target)
       : HOME_TARGET.clone();
     camera.up.copy(
       preservedCameraSnapshot
-        ? new THREE.Vector3(...preservedCameraSnapshot.up)
+        ? new CAD.Vector3(...preservedCameraSnapshot.up)
         : WORLD_UP,
     );
     camera.position.copy(
       preservedCameraSnapshot
-        ? new THREE.Vector3(...preservedCameraSnapshot.position)
+        ? new CAD.Vector3(...preservedCameraSnapshot.position)
         : HOME_POSITION,
     );
     camera.lookAt(initialTarget);
-    scene.add(new THREE.HemisphereLight(COLOR_HEMI_SKY, COLOR_HEMI_GROUND, 2.1));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+    scene.add(new CAD.HemisphereLight(COLOR_HEMI_SKY, COLOR_HEMI_GROUND, 2.1));
+    const keyLight = new CAD.DirectionalLight(0xffffff, 2.4);
     keyLight.position.set(150, -180, 240);
     scene.add(keyLight);
 
     // --- World axes triad (X red, Y green, Z blue up) ---
-    const axes = new THREE.Group();
-    const axis = (dir: THREE.Vector3, color: number) => {
-      const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), dir]);
-      return new THREE.Line(geometry, new THREE.LineBasicMaterial({ color }));
+    const axes = new CAD.Group();
+    const axis = (dir: CAD.Vector3, color: number) => {
+      const geometry = new CAD.BufferGeometry().setFromPoints([new CAD.Vector3(), dir]);
+      return new CAD.Line(geometry, new CAD.LineBasicMaterial({ color }));
     };
-    axes.add(axis(new THREE.Vector3(AXIS_LENGTH, 0, 0), 0xd64949));
-    axes.add(axis(new THREE.Vector3(0, AXIS_LENGTH, 0), 0x58a65c));
-    axes.add(axis(new THREE.Vector3(0, 0, AXIS_LENGTH), COLOR_AXIS_Z));
+    axes.add(axis(new CAD.Vector3(AXIS_LENGTH, 0, 0), 0xd64949));
+    axes.add(axis(new CAD.Vector3(0, AXIS_LENGTH, 0), 0x58a65c));
+    axes.add(axis(new CAD.Vector3(0, 0, AXIS_LENGTH), COLOR_AXIS_Z));
     axes.position.z = 0.1; // above the grid to avoid z-fighting
     scene.add(axes);
 
     // --- Viewport mouse controls ---
     // Left = select (no camera action), middle = pan, Shift+middle = orbit,
     // right = orbit, wheel = zoom. The pointerdown listener is registered
-    // BEFORE OrbitControls is constructed so the remapping is observed.
-    let controlsRef: OrbitControls | null = null;
-    // Bevy is event-driven, so its invisible Three.js controller should wake
-    // only for input/state changes or an animation that is still settling.
+    // BEFORE CadOrbitControls is constructed so the remapping is observed.
+    let controlsRef: CadOrbitControls | null = null;
+    // Bevy is event-driven, so the interaction controller should wake only
+    // for input/state changes or an animation that is still settling.
     let wakeControllerFrame: () => void = () => undefined;
     const onNavPointerDown = (e: PointerEvent) => {
       if (e.button === 1 && e.shiftKey && controlsRef) {
-        controlsRef.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
+        controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.ROTATE;
       }
       cancelCameraAnimation();
       wakeControllerFrame();
     };
     const onNavPointerUp = (e: PointerEvent) => {
       if (e.button === 1 && controlsRef) {
-        controlsRef.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+        controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.PAN;
       }
     };
-    renderer.domElement.addEventListener('pointerdown', onNavPointerDown);
+    surface.domElement.addEventListener('pointerdown', onNavPointerDown);
     window.addEventListener('pointerup', onNavPointerUp);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
+    const controls = new CadOrbitControls(camera, surface.domElement);
     controlsRef = controls;
     controls.target.copy(initialTarget);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.mouseButtons = {
-      LEFT: -1 as unknown as THREE.MOUSE, // disabled: left button is selection
-      MIDDLE: THREE.MOUSE.PAN,
-      RIGHT: THREE.MOUSE.ROTATE,
+      LEFT: -1 as unknown as CAD.MOUSE, // disabled: left button is selection
+      MIDDLE: CAD.MOUSE.PAN,
+      RIGHT: CAD.MOUSE.ROTATE,
     };
     const onControlsChange = () => wakeControllerFrame();
     controls.addEventListener('change', onControlsChange);
-    renderer.domElement.addEventListener('wheel', cancelCameraAnimation, { passive: true });
+    surface.domElement.addEventListener('wheel', cancelCameraAnimation, { passive: true });
 
     // --- Input device mapping (D11, owner) ---------------------------------
     //   ctrl+wheel  = trackpad PINCH → zoom   (macOS sets ctrlKey on pinch)
@@ -410,7 +414,7 @@ export function Viewport() {
 
     const onWheelNav = (e: WheelEvent) => {
       e.preventDefault();
-      e.stopImmediatePropagation(); // OrbitControls never handles wheel
+      e.stopImmediatePropagation(); // CadOrbitControls never handles wheel
       cancelCameraAnimation();
       wakeControllerFrame();
       const unit = e.deltaMode === 1 ? 16 : 1; // lines → px
@@ -442,7 +446,7 @@ export function Viewport() {
         panBy(-e.deltaX * unit, -e.deltaY * unit);
       }
     };
-    renderer.domElement.addEventListener('wheel', onWheelNav, {
+    surface.domElement.addEventListener('wheel', onWheelNav, {
       capture: true,
       passive: false,
     });
@@ -451,19 +455,19 @@ export function Viewport() {
     interface CamAnim {
       t0: number;
       dur: number;
-      fromPos: THREE.Vector3;
-      toPos: THREE.Vector3;
-      fromTarget: THREE.Vector3;
-      toTarget: THREE.Vector3;
-      fromUp: THREE.Vector3;
-      toUp: THREE.Vector3;
+      fromPos: CAD.Vector3;
+      toPos: CAD.Vector3;
+      fromTarget: CAD.Vector3;
+      toTarget: CAD.Vector3;
+      fromUp: CAD.Vector3;
+      toUp: CAD.Vector3;
     }
     let camAnim: CamAnim | null = null;
 
     function animateCamera(
-      toPos: THREE.Vector3,
-      toTarget: THREE.Vector3,
-      toUp: THREE.Vector3,
+      toPos: CAD.Vector3,
+      toTarget: CAD.Vector3,
+      toUp: CAD.Vector3,
       dur = 300,
     ) {
       camAnim = {
@@ -499,24 +503,24 @@ export function Viewport() {
 
     // --- Ground grid (adaptive two-level, XY plane) ---
     let groundLevel = Number.NaN;
-    let groundFine: THREE.GridHelper | null = null;
-    let groundMajor: THREE.GridHelper | null = null;
+    let groundFine: CAD.GridHelper | null = null;
+    let groundMajor: CAD.GridHelper | null = null;
 
-    const styleGrid = (grid: THREE.GridHelper, opacity: number, z: number) => {
-      const material = grid.material as THREE.LineBasicMaterial;
+    const styleGrid = (grid: CAD.GridHelper, opacity: number, z: number) => {
+      const material = grid.material as CAD.LineBasicMaterial;
       material.transparent = true;
       material.opacity = opacity;
       material.depthWrite = false;
       grid.position.z = z;
     };
 
-    const disposeObject = (obj: THREE.Object3D | null) => {
+    const disposeObject = (obj: CAD.Object3D | null) => {
       if (!obj) return;
       scene.remove(obj);
       obj.traverse((child) => {
-        if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.Sprite) {
+        if (child instanceof CAD.Mesh || child instanceof CAD.Line || child instanceof CAD.Points || child instanceof CAD.Sprite) {
           child.geometry?.dispose?.();
-          const material = child.material as THREE.Material | THREE.Material[] | undefined;
+          const material = child.material as CAD.Material | CAD.Material[] | undefined;
           if (Array.isArray(material)) material.forEach((m) => m.dispose());
           else material?.dispose?.();
         }
@@ -529,8 +533,8 @@ export function Viewport() {
       const fineSpacing = 10 ** (level + 1); // mm per fine cell
       const size = fineSpacing * 100;
       // GridHelper lies in XZ; rotate into the XY ground plane (Z-up).
-      groundFine = new THREE.GridHelper(size, 100, COLOR_GROUND_MAJOR, COLOR_GROUND_FINE);
-      groundMajor = new THREE.GridHelper(size, 10, COLOR_GROUND_MAJOR, COLOR_GROUND_MAJOR);
+      groundFine = new CAD.GridHelper(size, 100, COLOR_GROUND_MAJOR, COLOR_GROUND_FINE);
+      groundMajor = new CAD.GridHelper(size, 10, COLOR_GROUND_MAJOR, COLOR_GROUND_MAJOR);
       groundFine.rotateX(Math.PI / 2);
       groundMajor.rotateX(Math.PI / 2);
       styleGrid(groundFine, 0.5 * groundFade, -0.02);
@@ -541,9 +545,9 @@ export function Viewport() {
     // --- Sketch grid (on the sketch plane, local XY). The minor spacing
     // follows a 1-2-5 engineering sequence and is shared with the engine's
     // snap step, down to one micrometer. ---
-    const sketchGroup = new THREE.Group(); // oriented by the plane basis
-    const sketchGridFine = new THREE.Group();
-    const sketchGridMajor = new THREE.Group();
+    const sketchGroup = new CAD.Group(); // oriented by the plane basis
+    const sketchGridFine = new CAD.Group();
+    const sketchGridMajor = new CAD.Group();
     sketchGroup.add(sketchGridFine, sketchGridMajor);
     sketchGroup.visible = false;
     scene.add(sketchGroup);
@@ -580,50 +584,50 @@ export function Viewport() {
     };
 
     /** User-visible finished sketches remain legible through solid bodies. */
-    const finishedGroup = new THREE.Group();
+    const finishedGroup = new CAD.Group();
     scene.add(finishedGroup);
     /** Closed sketch regions exposed while a sketch-driven solid dialog is
      * open. These are real triangulated hit targets (including inner holes),
      * so feature selection is spatial rather than list-only. */
-    const profileGroup = new THREE.Group();
+    const profileGroup = new CAD.Group();
     profileGroup.name = 'solid-profile-picker';
     scene.add(profileGroup);
 
     /** OCCT tessellation. Faces are separate pickable meshes so a ray hit
      * maps directly to a stable FaceId; edge DTOs render as topology lines. */
-    const solidGroup = new THREE.Group();
+    const solidGroup = new CAD.Group();
     solidGroup.name = 'solid-bodies';
     scene.add(solidGroup);
-    const solidBodyHighlightGroup = new THREE.Group();
+    const solidBodyHighlightGroup = new CAD.Group();
     solidBodyHighlightGroup.name = 'solid-body-highlights';
     scene.add(solidBodyHighlightGroup);
-    const solidFaceHighlightGroup = new THREE.Group();
+    const solidFaceHighlightGroup = new CAD.Group();
     solidFaceHighlightGroup.name = 'solid-face-highlights';
     scene.add(solidFaceHighlightGroup);
     /** Constant-screen-width overlays make edge-tool feedback readable over
      * both bright and dark faces without changing the topology hit targets. */
-    const solidEdgeHighlightGroup = new THREE.Group();
+    const solidEdgeHighlightGroup = new CAD.Group();
     solidEdgeHighlightGroup.name = 'solid-edge-highlights';
     scene.add(solidEdgeHighlightGroup);
-    const datumGroup = new THREE.Group();
+    const datumGroup = new CAD.Group();
     datumGroup.name = 'construction-planes';
     scene.add(datumGroup);
-    const lineMaterials = new Set<LineMaterial>();
+    const lineMaterials = new Set<ScreenLineMaterial>();
 
-    const clearGroup = (group: THREE.Group) => {
+    const clearGroup = (group: CAD.Group) => {
       for (const child of [...group.children]) {
         group.remove(child);
         child.traverse((c) => {
-          if (c instanceof THREE.Mesh || c instanceof THREE.Line || c instanceof THREE.Points || c instanceof THREE.Sprite) {
+          if (c instanceof CAD.Mesh || c instanceof CAD.Line || c instanceof CAD.Points || c instanceof CAD.Sprite) {
             c.geometry?.dispose?.();
-            const material = c.material as THREE.Material | THREE.Material[] | undefined;
+            const material = c.material as CAD.Material | CAD.Material[] | undefined;
             if (Array.isArray(material)) {
               material.forEach((item) => {
-                lineMaterials.delete(item as LineMaterial);
+                lineMaterials.delete(item as ScreenLineMaterial);
                 item.dispose();
               });
             } else if (material) {
-              lineMaterials.delete(material as LineMaterial);
+              lineMaterials.delete(material as ScreenLineMaterial);
               material.dispose();
             }
           }
@@ -639,15 +643,15 @@ export function Viewport() {
         positions.push(c, -half, 0, c, half, 0);
         positions.push(-half, c, 0, half, c, 0);
       }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      const material = new THREE.LineBasicMaterial({
+      const geometry = new CAD.BufferGeometry();
+      geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+      const material = new CAD.LineBasicMaterial({
         color,
         transparent: true,
         opacity,
         depthWrite: false,
       });
-      return new THREE.LineSegments(geometry, material);
+      return new CAD.LineSegments(geometry, material);
     };
 
     const rebuildSketchGrid = (spacing: number) => {
@@ -663,28 +667,28 @@ export function Viewport() {
 
     // --- Pick-plane quads ---
     const picker: PickerPlane[] = PICKER_PLANES.map((def) => {
-      const group = new THREE.Group();
-      const u = new THREE.Vector3(...def.basis.u);
-      const v = new THREE.Vector3(...def.basis.v);
-      const n = new THREE.Vector3(...def.basis.normal);
-      const m = new THREE.Matrix4().makeBasis(u, v, n);
+      const group = new CAD.Group();
+      const u = new CAD.Vector3(...def.basis.u);
+      const v = new CAD.Vector3(...def.basis.v);
+      const n = new CAD.Vector3(...def.basis.normal);
+      const m = new CAD.Matrix4().makeBasis(u, v, n);
       group.quaternion.setFromRotationMatrix(m);
       group.position.set(...def.basis.origin);
 
-      const mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(PLANE_SIZE, PLANE_SIZE),
-        new THREE.MeshBasicMaterial({
+      const mesh = new CAD.Mesh(
+        new CAD.PlaneGeometry(PLANE_SIZE, PLANE_SIZE),
+        new CAD.MeshBasicMaterial({
           color: def.color,
           transparent: true,
           opacity: 0.1,
-          side: THREE.DoubleSide,
+          side: CAD.DoubleSide,
           depthWrite: false,
         }),
       );
       mesh.userData.plane = def.plane;
-      const border = new THREE.LineSegments(
-        new THREE.EdgesGeometry(mesh.geometry),
-        new THREE.LineBasicMaterial({ color: def.color, transparent: true, opacity: 0.35 }),
+      const border = new CAD.LineSegments(
+        new CAD.EdgesGeometry(mesh.geometry),
+        new CAD.LineBasicMaterial({ color: def.color, transparent: true, opacity: 0.35 }),
       );
       group.add(mesh, border);
       group.visible = false;
@@ -705,31 +709,31 @@ export function Viewport() {
       for (const p of picker) {
         const isHovered = p.plane === hovered;
         p.mesh.material.opacity = isHovered ? 0.28 : 0.1;
-        (p.border.material as THREE.LineBasicMaterial).opacity = isHovered ? 0.9 : 0.35;
+        (p.border.material as CAD.LineBasicMaterial).opacity = isHovered ? 0.9 : 0.35;
       }
     };
     const highlightDatumPlane = (datumId: number | null, picking: boolean) => {
       datumGroup.traverse((object) => {
-        if (!(object instanceof THREE.Mesh) || object.userData.datumPlaneId === undefined) {
+        if (!(object instanceof CAD.Mesh) || object.userData.datumPlaneId === undefined) {
           return;
         }
-        const material = object.material as THREE.MeshBasicMaterial;
+        const material = object.material as CAD.MeshBasicMaterial;
         material.opacity =
           object.userData.datumPlaneId === datumId ? 0.32 : picking ? 0.14 : 0.08;
       });
     };
 
     // --- Sketch scene: entities, glyphs, preview, markers ---
-    const entityGroup = new THREE.Group();
-    const glyphGroup = new THREE.Group();
-    const previewGroup = new THREE.Group();
+    const entityGroup = new CAD.Group();
+    const glyphGroup = new CAD.Group();
+    const previewGroup = new CAD.Group();
     sketchGroup.add(entityGroup, glyphGroup, previewGroup);
 
     /** Sprites kept at constant screen size; scaled per frame. */
-    const scaledSprites: Array<{ sprite: THREE.Sprite; px: number }> = [];
+    const scaledSprites: Array<{ sprite: CAD.Sprite; px: number }> = [];
 
-    const glyphTextureCache = new Map<string, THREE.CanvasTexture>();
-    const glyphTexture = (text: string): THREE.CanvasTexture => {
+    const glyphTextureCache = new Map<string, CAD.CanvasTexture>();
+    const glyphTexture = (text: string): CAD.CanvasTexture => {
       const cached = glyphTextureCache.get(text);
       if (cached) return cached;
       const canvas = window.document.createElement('canvas');
@@ -751,7 +755,7 @@ export function Viewport() {
         ctx.fillStyle = CSS_INK;
         ctx.fillText(text, 32, 34);
       }
-      const texture = new THREE.CanvasTexture(canvas);
+      const texture = new CAD.CanvasTexture(canvas);
       glyphTextureCache.set(text, texture);
       return texture;
     };
@@ -761,7 +765,7 @@ export function Viewport() {
       canvas.width = 64;
       canvas.height = 64;
       draw(canvas.getContext('2d')!);
-      return new THREE.CanvasTexture(canvas);
+      return new CAD.CanvasTexture(canvas);
     };
 
     // Snap marker: filled square with an accent border.
@@ -799,9 +803,9 @@ export function Viewport() {
       ctx.stroke();
     });
 
-    const makeSprite = (texture: THREE.Texture, px: number, renderOrder: number) => {
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }),
+    const makeSprite = (texture: CAD.Texture, px: number, renderOrder: number) => {
+      const sprite = new CAD.Sprite(
+        new CAD.SpriteMaterial({ map: texture, transparent: true, depthTest: false }),
       );
       sprite.renderOrder = renderOrder;
       scaledSprites.push({ sprite, px });
@@ -816,22 +820,22 @@ export function Viewport() {
     snapMarker.visible = false;
     sketchGroup.add(snapMarker);
 
-    // Rubber-band preview line (Line2, constant screen width).
-    const previewMaterial = new LineMaterial({
+    // Rubber-band preview line (constant screen width).
+    const previewMaterial = new ScreenLineMaterial({
       color: COLOR_PREVIEW,
       linewidth: 1.75,
       transparent: true,
       opacity: 0.95,
       depthTest: false,
     });
-    const previewLine = new Line2(new LineGeometry(), previewMaterial);
+    const previewLine = new ScreenPolyline(new PolylineGeometry(), previewMaterial);
     previewLine.renderOrder = 6;
     previewLine.visible = false;
     lineMaterials.add(previewMaterial);
     previewGroup.add(previewLine);
 
-    const previewStart = new THREE.Vector3();
-    const previewEnd = new THREE.Vector3();
+    const previewStart = new CAD.Vector3();
+    const previewEnd = new CAD.Vector3();
     const collectNativeSketchPreview = (): {
       segments: number[];
       marker: [number, number, number] | null;
@@ -840,8 +844,8 @@ export function Viewport() {
 
       const segments: number[] = [];
       previewGroup.traverseVisible((object) => {
-        const geometry = (object as THREE.Object3D & {
-          geometry?: THREE.BufferGeometry;
+        const geometry = (object as CAD.Object3D & {
+          geometry?: CAD.BufferGeometry;
         }).geometry;
         if (!geometry) return;
 
@@ -870,8 +874,8 @@ export function Viewport() {
 
         const positions = geometry.getAttribute('position');
         if (!positions) return;
-        const step = object instanceof THREE.LineSegments ? 2 : 1;
-        if (!(object instanceof THREE.LineSegments || object instanceof THREE.Line)) {
+        const step = object instanceof CAD.LineSegments ? 2 : 1;
+        if (!(object instanceof CAD.LineSegments || object instanceof CAD.Line)) {
           return;
         }
         for (let index = 0; index + 1 < positions.count; index += step) {
@@ -908,26 +912,26 @@ export function Viewport() {
       return { segments, marker };
     };
 
-    const addLine2 = (
-      group: THREE.Group,
+    const addScreenLine = (
+      group: CAD.Group,
       a: Vec2,
       b: Vec2,
       color: number,
       linewidth: number,
     ) => {
-      const geometry = new LineGeometry();
+      const geometry = new PolylineGeometry();
       geometry.setPositions([a.x, a.y, 0.05, b.x, b.y, 0.05]);
-      const material = new LineMaterial({ color, linewidth, depthTest: false });
-      material.resolution.set(renderer.domElement.clientWidth, renderer.domElement.clientHeight);
+      const material = new ScreenLineMaterial({ color, linewidth, depthTest: false });
+      material.resolution.set(surface.domElement.clientWidth, surface.domElement.clientHeight);
       lineMaterials.add(material);
-      const line = new Line2(geometry, material);
+      const line = new ScreenPolyline(geometry, material);
       line.renderOrder = 4;
       group.add(line);
     };
 
-    /** Polyline Line2 (tessellated circles/arcs, rectangle previews). */
-    const addPolyline2 = (
-      group: THREE.Group,
+    /** Screen-width polyline (tessellated circles/arcs, rectangle previews). */
+    const addScreenPolyline = (
+      group: CAD.Group,
       positions: number[],
       color: number,
       linewidth: number,
@@ -935,9 +939,9 @@ export function Viewport() {
       depthTest = false,
       opacity = 1,
     ) => {
-      const geometry = new LineGeometry();
+      const geometry = new PolylineGeometry();
       geometry.setPositions(positions);
-      const material = new LineMaterial({
+      const material = new ScreenLineMaterial({
         color,
         linewidth,
         transparent: opacity < 1,
@@ -945,9 +949,9 @@ export function Viewport() {
         depthTest,
         depthWrite: depthTest && opacity >= 1,
       });
-      material.resolution.set(renderer.domElement.clientWidth, renderer.domElement.clientHeight);
+      material.resolution.set(surface.domElement.clientWidth, surface.domElement.clientHeight);
       lineMaterials.add(material);
-      const line = new Line2(geometry, material);
+      const line = new ScreenPolyline(geometry, material);
       line.renderOrder = renderOrder;
       group.add(line);
       return line;
@@ -955,8 +959,8 @@ export function Viewport() {
 
     /** Independent constant-screen-width segments, used for derived face
      * perimeters and whole-body topology silhouettes. */
-    const addLineSegments2 = (
-      group: THREE.Group,
+    const addScreenSegments = (
+      group: CAD.Group,
       positions: number[],
       color: number,
       linewidth: number,
@@ -964,9 +968,9 @@ export function Viewport() {
       depthTest: boolean,
       opacity = 1,
     ) => {
-      const geometry = new LineSegmentsGeometry();
+      const geometry = new SegmentListGeometry();
       geometry.setPositions(positions);
-      const material = new LineMaterial({
+      const material = new ScreenLineMaterial({
         color,
         linewidth,
         transparent: opacity < 1,
@@ -975,11 +979,11 @@ export function Viewport() {
         depthWrite: depthTest && opacity >= 1,
       });
       material.resolution.set(
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight,
+        surface.domElement.clientWidth,
+        surface.domElement.clientHeight,
       );
       lineMaterials.add(material);
-      const lines = new LineSegments2(geometry, material);
+      const lines = new ScreenLineSegments(geometry, material);
       lines.renderOrder = renderOrder;
       group.add(lines);
       return lines;
@@ -1011,13 +1015,13 @@ export function Viewport() {
         switch (entity.kind) {
           case 'line':
             lines.set(entity.id, { start: entity.start, end: entity.end });
-            addLine2(entityGroup, entity.start, entity.end, color, 2.25);
+            addScreenLine(entityGroup, entity.start, entity.end, color, 2.25);
             break;
           case 'point':
             gripPoints.push({ x: entity.position.x, y: entity.position.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'circle':
-            addPolyline2(
+            addScreenPolyline(
               entityGroup,
               tessellateCircle(entity.center, entity.radius),
               color,
@@ -1026,7 +1030,7 @@ export function Viewport() {
             gripPoints.push({ x: entity.center.x, y: entity.center.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'arc':
-            addPolyline2(
+            addScreenPolyline(
               entityGroup,
               tessellateArc(entity.center, entity.radius, entity.start_angle, entity.end_angle),
               color,
@@ -1037,7 +1041,7 @@ export function Viewport() {
           case 'spline': {
             const pts: number[] = [];
             for (const q of entity.tessellation) pts.push(q.x, q.y, 0.05);
-            addPolyline2(entityGroup, pts, color, 2.25);
+            addScreenPolyline(entityGroup, pts, color, 2.25);
             for (const q of entity.points) {
               gripPoints.push({ x: q.x, y: q.y, id: entity.id, fd: entity.fully_defined });
             }
@@ -1046,27 +1050,27 @@ export function Viewport() {
         }
       }
 
-      // Point + center grips (one THREE.Points, per-vertex colors) —
+      // Point + center grips (one CAD.Points, per-vertex colors) —
       // hidden when the palette "Points" toggle is off.
       if (showGrips && gripPoints.length > 0) {
         const positions: number[] = [];
         const colors: number[] = [];
-        const c = new THREE.Color();
+        const c = new CAD.Color();
         for (const p of gripPoints) {
           positions.push(p.x, p.y, 0.1);
           c.setHex(colorOf(p.id, p.fd));
           colors.push(c.r, c.g, c.b);
         }
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        const material = new THREE.PointsMaterial({
+        const geometry = new CAD.BufferGeometry();
+        geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new CAD.Float32BufferAttribute(colors, 3));
+        const material = new CAD.PointsMaterial({
           size: 7,
           sizeAttenuation: false,
           vertexColors: true,
           depthTest: false,
         });
-        const grips = new THREE.Points(geometry, material);
+        const grips = new CAD.Points(geometry, material);
         grips.renderOrder = 5;
         entityGroup.add(grips);
       }
@@ -1131,22 +1135,22 @@ export function Viewport() {
     };
 
     // --- Dimension annotations (D9, driven by the selected document style) ---
-    const dimsGroup = new THREE.Group();
+    const dimsGroup = new CAD.Group();
     sketchGroup.add(dimsGroup);
 
     /** Text sprites needing per-frame scale and optional alignment rotation. */
     const dimSprites: Array<{
-      sprite: THREE.Sprite;
+      sprite: CAD.Sprite;
       px: number;
-      dirLocal: THREE.Vector3 | null;
+      dirLocal: CAD.Vector3 | null;
       aligned: boolean;
       dimId: number;
     }> = [];
     /** Arrowhead meshes needing per-frame constant-px scale. */
-    const dimArrows: Array<{ mesh: THREE.Mesh; px: number }> = [];
+    const dimArrows: Array<{ mesh: CAD.Mesh; px: number }> = [];
 
-    const dimTextCache = new Map<string, THREE.CanvasTexture>();
-    const dimTextTexture = (text: string, selected: boolean): THREE.CanvasTexture => {
+    const dimTextCache = new Map<string, CAD.CanvasTexture>();
+    const dimTextTexture = (text: string, selected: boolean): CAD.CanvasTexture => {
       const key = `${text}|${selected ? 1 : 0}`;
       const cached = dimTextCache.get(key);
       if (cached) return cached;
@@ -1159,21 +1163,21 @@ export function Viewport() {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = selected ? CSS_DIMENSION_SELECTED : CSS_DIMENSION;
       ctx.fillText(text, 128, 34);
-      const texture = new THREE.CanvasTexture(canvas);
+      const texture = new CAD.CanvasTexture(canvas);
       dimTextCache.set(key, texture);
       return texture;
     };
 
-    const makeArrow = (group: THREE.Group, angle: number, at: Vec2, z: number, green: number) => {
-      const geometry = new THREE.BufferGeometry();
+    const makeArrow = (group: CAD.Group, angle: number, at: Vec2, z: number, green: number) => {
+      const geometry = new CAD.BufferGeometry();
       geometry.setAttribute(
         'position',
-        new THREE.Float32BufferAttribute([0, 0, 0, -1, 0.3, 0, -1, -0.3, 0], 3),
+        new CAD.Float32BufferAttribute([0, 0, 0, -1, 0.3, 0, -1, -0.3, 0], 3),
       );
       geometry.computeVertexNormals();
-      const mesh = new THREE.Mesh(
+      const mesh = new CAD.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ color: green, side: THREE.DoubleSide, depthTest: false }),
+        new CAD.MeshBasicMaterial({ color: green, side: CAD.DoubleSide, depthTest: false }),
       );
       mesh.renderOrder = 5;
       mesh.position.set(at.x, at.y, z);
@@ -1183,14 +1187,14 @@ export function Viewport() {
     };
 
     const addDimText = (
-      group: THREE.Group,
+      group: CAD.Group,
       dimLike: { constraint_id?: number; text: string },
       textPos: Vec2,
-      dirLocal: THREE.Vector3 | null,
+      dirLocal: CAD.Vector3 | null,
       opts: { selected: boolean; aligned: boolean; dimId: number },
     ) => {
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({
+      const sprite = new CAD.Sprite(
+        new CAD.SpriteMaterial({
           map: dimTextTexture(dimLike.text, opts.selected),
           transparent: true,
           depthTest: false,
@@ -1211,7 +1215,7 @@ export function Viewport() {
     /** Render one dimension annotation into `group` (also used for the
      * tool's placement preview). */
     const renderDimAnnotation = (
-      group: THREE.Group,
+      group: CAD.Group,
       dimLike: { kind: DimensionDto['kind']; entities: number[]; text: string; text_pos: Vec2; constraint_id?: number },
       byId: Map<number, EntityDto>,
       opts: { selected: boolean; aligned: boolean },
@@ -1234,14 +1238,14 @@ export function Viewport() {
           const s = Math.sign(offset);
           const a2 = { x: a.x + n.x * offset, y: a.y + n.y * offset };
           const b2 = { x: b.x + n.x * offset, y: b.y + n.y * offset };
-          addPolyline2(group, [a.x + n.x * s * 1.5, a.y + n.y * s * 1.5, z, a2.x + n.x * s * 2, a2.y + n.y * s * 2, z], green, 1.25);
-          addPolyline2(group, [b.x + n.x * s * 1.5, b.y + n.y * s * 1.5, z, b2.x + n.x * s * 2, b2.y + n.y * s * 2, z], green, 1.25);
-          addPolyline2(group, [a2.x, a2.y, z, b2.x, b2.y, z], green, 1.25);
+          addScreenPolyline(group, [a.x + n.x * s * 1.5, a.y + n.y * s * 1.5, z, a2.x + n.x * s * 2, a2.y + n.y * s * 2, z], green, 1.25);
+          addScreenPolyline(group, [b.x + n.x * s * 1.5, b.y + n.y * s * 1.5, z, b2.x + n.x * s * 2, b2.y + n.y * s * 2, z], green, 1.25);
+          addScreenPolyline(group, [a2.x, a2.y, z, b2.x, b2.y, z], green, 1.25);
           const fits = len >= 14;
           const uAng = Math.atan2(u.y, u.x);
           makeArrow(group, fits ? uAng : uAng + Math.PI, a2, z, green);
           makeArrow(group, fits ? uAng + Math.PI : uAng, b2, z, green);
-          addDimText(group, dimLike, textPos, new THREE.Vector3(u.x, u.y, 0), {
+          addDimText(group, dimLike, textPos, new CAD.Vector3(u.x, u.y, 0), {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
@@ -1255,11 +1259,11 @@ export function Viewport() {
           const u = { x: ud.x / ul, y: ud.y / ul };
           const far = { x: center.x - u.x * (radius + 4), y: center.y - u.y * (radius + 4) };
           const near = { x: center.x + u.x * (ul + 4), y: center.y + u.y * (ul + 4) };
-          addPolyline2(group, [far.x, far.y, z, near.x, near.y, z], green, 1.25);
+          addScreenPolyline(group, [far.x, far.y, z, near.x, near.y, z], green, 1.25);
           const uAng = Math.atan2(u.y, u.x);
           makeArrow(group, uAng + Math.PI, { x: center.x - u.x * radius, y: center.y - u.y * radius }, z, green);
           makeArrow(group, uAng, { x: center.x + u.x * radius, y: center.y + u.y * radius }, z, green);
-          addDimText(group, dimLike, textPos, new THREE.Vector3(u.x, u.y, 0), {
+          addDimText(group, dimLike, textPos, new CAD.Vector3(u.x, u.y, 0), {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
@@ -1270,9 +1274,9 @@ export function Viewport() {
           const { center, radius, midAngle, textPos } = geom;
           const m = { x: center.x + radius * Math.cos(midAngle), y: center.y + radius * Math.sin(midAngle) };
           const uAng = midAngle;
-          addPolyline2(group, [center.x, center.y, z, m.x, m.y, z], green, 1.25);
+          addScreenPolyline(group, [center.x, center.y, z, m.x, m.y, z], green, 1.25);
           makeArrow(group, uAng, m, z, green);
-          addDimText(group, dimLike, textPos, new THREE.Vector3(Math.cos(uAng), Math.sin(uAng), 0), {
+          addDimText(group, dimLike, textPos, new CAD.Vector3(Math.cos(uAng), Math.sin(uAng), 0), {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
@@ -1282,11 +1286,11 @@ export function Viewport() {
         case 'angular': {
           const { vertex, a1, a2, textPos } = geom;
           const rr = Math.min(25, Math.max(8, Math.hypot(textPos.x - vertex.x, textPos.y - vertex.y) - 6));
-          addPolyline2(group, tessellateArc(vertex, rr, a1, a2, z), green, 1.25);
+          addScreenPolyline(group, tessellateArc(vertex, rr, a1, a2, z), green, 1.25);
           makeArrow(group, a1 - Math.PI / 2, { x: vertex.x + rr * Math.cos(a1), y: vertex.y + rr * Math.sin(a1) }, z, green);
           makeArrow(group, a2 + Math.PI / 2, { x: vertex.x + rr * Math.cos(a2), y: vertex.y + rr * Math.sin(a2) }, z, green);
           const bis = a1 + ccwSweep(a1, a2) / 2;
-          addDimText(group, dimLike, textPos, new THREE.Vector3(Math.cos(bis), Math.sin(bis), 0), {
+          addDimText(group, dimLike, textPos, new CAD.Vector3(Math.cos(bis), Math.sin(bis), 0), {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
@@ -1327,10 +1331,10 @@ export function Viewport() {
     };
     const setupSketchScene = (sketch: SketchDto) => {
       const { basis } = sketch;
-      const u = new THREE.Vector3(...basis.u);
-      const v = new THREE.Vector3(...basis.v);
-      const n = new THREE.Vector3(...basis.normal);
-      const m = new THREE.Matrix4().makeBasis(u, v, n);
+      const u = new CAD.Vector3(...basis.u);
+      const v = new CAD.Vector3(...basis.v);
+      const n = new CAD.Vector3(...basis.normal);
+      const m = new CAD.Matrix4().makeBasis(u, v, n);
       sketchGroup.quaternion.setFromRotationMatrix(m);
       sketchGroup.position.set(...basis.origin);
       sketchGroup.visible = true;
@@ -1359,19 +1363,19 @@ export function Viewport() {
 
     // --- Plane-normal fit view ---
     const lookAtPlane = (basis: PlaneBasis, dur: number) => {
-      const n = new THREE.Vector3(...basis.normal);
-      const o = new THREE.Vector3(...basis.origin);
-      const up = new THREE.Vector3(...basis.v).normalize();
+      const n = new CAD.Vector3(...basis.normal);
+      const o = new CAD.Vector3(...basis.origin);
+      const up = new CAD.Vector3(...basis.v).normalize();
       const dist =
-        SKETCH_FIT_HALF_EXTENT / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        SKETCH_FIT_HALF_EXTENT / Math.tan(CAD.MathUtils.degToRad(camera.fov / 2));
       animateCamera(o.clone().addScaledVector(n, dist), o, up, dur);
     };
 
     // --- Pointer helpers ---
-    const raycaster = new THREE.Raycaster();
+    const raycaster = new CAD.Raycaster();
     const ndcFromEvent = (e: PointerEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      return new THREE.Vector2(
+      const rect = surface.domElement.getBoundingClientRect();
+      return new CAD.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
@@ -1380,15 +1384,15 @@ export function Viewport() {
     /** World mm covered by one screen pixel at the controls-target depth. */
     const worldPerPixel = () => {
       const dist = camera.position.distanceTo(controls.target);
-      const height = Math.max(1, renderer.domElement.clientHeight);
-      return (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / height;
+      const height = Math.max(1, surface.domElement.clientHeight);
+      return (2 * dist * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) / height;
     };
 
-    const sketchPlane = new THREE.Plane();
+    const sketchPlane = new CAD.Plane();
     const pointerToSketch = (e: PointerEvent): Vec2 | null => {
       if (!sketchGroup.visible) return null;
       raycaster.setFromCamera(ndcFromEvent(e), camera);
-      const hit = new THREE.Vector3();
+      const hit = new CAD.Vector3();
       if (!raycaster.ray.intersectPlane(sketchPlane, hit)) return null;
       const local = sketchGroup.worldToLocal(hit);
       return { x: local.x, y: local.y };
@@ -1597,10 +1601,10 @@ export function Viewport() {
       moved: boolean;
     } | null = null;
     /** Dimension text drag (live sprite move, engine commit on release). */
-    let dimDragging: { dimId: number; sprite: THREE.Sprite } | null = null;
+    let dimDragging: { dimId: number; sprite: CAD.Sprite } | null = null;
     /** Dimension tool pick state (entity picks before placement). */
     let dimPick: { entities: number[]; phase: 'pick' | 'place' } | null = null;
-    const dimPreviewGroup = new THREE.Group();
+    const dimPreviewGroup = new CAD.Group();
     previewGroup.add(dimPreviewGroup);
     const endDimensionTool = () => {
       dimPick = null;
@@ -1610,10 +1614,10 @@ export function Viewport() {
     /** Modify-tool pick state (fillet/chamfer picks; offset/trim/etc.). */
     let modTool: { picks: number[]; rejected?: boolean } | null = null;
     /** Picked entities render highlighted so modify tools feel alive (M1d). */
-    const picksGroup = new THREE.Group();
+    const picksGroup = new CAD.Group();
     previewGroup.add(picksGroup);
     /** Valid target under a modify-tool cursor (magnetic acquisition). */
-    const acquireGroup = new THREE.Group();
+    const acquireGroup = new CAD.Group();
     previewGroup.add(acquireGroup);
     let modCornerTarget: { point: Vec2; lines: [number, number] } | null = null;
     /** Trim hover preview: entity id + removed-piece render state. */
@@ -1716,7 +1720,7 @@ export function Viewport() {
       for (const id of target.lines) {
         const line = byId.get(id);
         if (line?.kind !== 'line') continue;
-        addPolyline2(
+        addScreenPolyline(
           acquireGroup,
           [line.start.x, line.start.y, 0.13, line.end.x, line.end.y, 0.13],
           COLOR_HOVER,
@@ -1943,7 +1947,7 @@ export function Viewport() {
         if (e.kind === 'line') {
           const a = sx(e.start);
           const b = sx(e.end);
-          addPolyline2(
+          addScreenPolyline(
             dimPreviewGroup,
             [a.x, a.y, 0.1, b.x, b.y, 0.1],
             COLOR_PREVIEW,
@@ -1952,7 +1956,7 @@ export function Viewport() {
         } else if (e.kind === 'point') {
           const point = sx(e.position);
           const r = worldPerPixel() * 4;
-          addPolyline2(
+          addScreenPolyline(
             dimPreviewGroup,
             [
               point.x - r,
@@ -1976,7 +1980,7 @@ export function Viewport() {
           );
         } else if (e.kind === 'circle') {
           const c = sx(e.center);
-          addPolyline2(
+          addScreenPolyline(
             dimPreviewGroup,
             tessellateCircle(c, e.radius * Math.abs(factor), 0.1),
             COLOR_PREVIEW,
@@ -1984,7 +1988,7 @@ export function Viewport() {
           );
         } else if (e.kind === 'arc') {
           const c = sx(e.center);
-          addPolyline2(
+          addScreenPolyline(
             dimPreviewGroup,
             tessellateArc(
               c,
@@ -2002,7 +2006,7 @@ export function Viewport() {
             const scaled = sx(point);
             positions.push(scaled.x, scaled.y, 0.1);
           }
-          addPolyline2(dimPreviewGroup, positions, COLOR_PREVIEW, 1.75);
+          addScreenPolyline(dimPreviewGroup, positions, COLOR_PREVIEW, 1.75);
         }
       }
     };
@@ -2011,8 +2015,8 @@ export function Viewport() {
     const panBy = (dxPx: number, dyPx: number) => {
       cancelCameraAnimation();
       const wpp = worldPerPixel();
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-      const upv = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+      const upv = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
       const delta = right.multiplyScalar(-dxPx * wpp).addScaledVector(upv, dyPx * wpp);
       camera.position.add(delta);
       controls.target.add(delta);
@@ -2029,12 +2033,12 @@ export function Viewport() {
 
     /** Frame a dragged screen rect (Zoom Window): recentre + dolly to fit. */
     const frameRect = (cx: number, cy: number, w: number, h: number) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      const ndc = new THREE.Vector2((cx / rect.width) * 2 - 1, -(cy / rect.height) * 2 + 1);
+      const rect = surface.domElement.getBoundingClientRect();
+      const ndc = new CAD.Vector2((cx / rect.width) * 2 - 1, -(cy / rect.height) * 2 + 1);
       raycaster.setFromCamera(ndc, camera);
       const viewDir = controls.target.clone().sub(camera.position).normalize();
-      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(viewDir, controls.target);
-      const hit = new THREE.Vector3();
+      const plane = new CAD.Plane().setFromNormalAndCoplanarPoint(viewDir, controls.target);
+      const hit = new CAD.Vector3();
       if (!raycaster.ray.intersectPlane(plane, hit)) return;
       const dist = camera.position.distanceTo(controls.target);
       const scale = Math.max(w / rect.width, h / rect.height);
@@ -2046,7 +2050,7 @@ export function Viewport() {
     const updateZoomRect = (x0: number, y0: number, x1: number, y1: number) => {
       const el = zoomRectRef.current;
       if (!el) return;
-      const rect = renderer.domElement.getBoundingClientRect();
+      const rect = surface.domElement.getBoundingClientRect();
       el.style.display = 'block';
       el.style.left = `${Math.min(x0, x1) - rect.left}px`;
       el.style.top = `${Math.min(y0, y1) - rect.top}px`;
@@ -2194,7 +2198,7 @@ export function Viewport() {
     /** Viewport-relative cluster position next to a client point, flipped
      * left/up near the Sketch Palette and bottom edges (D9 polish). */
     const clusterPos = (clientX: number, clientY: number) => {
-      const rect = renderer.domElement.getBoundingClientRect();
+      const rect = surface.domElement.getBoundingClientRect();
       let x = clientX - rect.left + 20;
       let y = clientY - rect.top + 20;
       const PALETTE_W = 244;
@@ -2451,7 +2455,7 @@ export function Viewport() {
         previewLine.visible = false;
         return;
       }
-      const geometry = new LineGeometry();
+      const geometry = new PolylineGeometry();
       geometry.setPositions(positions);
       previewLine.geometry.dispose();
       previewLine.geometry = geometry;
@@ -2593,7 +2597,7 @@ export function Viewport() {
           ? midpointTexture
           : snapTexture;
       snapMarker.visible = true;
-      const rect = renderer.domElement.getBoundingClientRect();
+      const rect = surface.domElement.getBoundingClientRect();
       showChips(inferences, e.clientX - rect.left, e.clientY - rect.top);
     };
 
@@ -2661,7 +2665,7 @@ export function Viewport() {
                 ? midpointTexture
                 : snapTexture;
             snapMarker.visible = true;
-            const rect = renderer.domElement.getBoundingClientRect();
+            const rect = surface.domElement.getBoundingClientRect();
             showChips(
               preview.inferences,
               e.clientX - rect.left,
@@ -3457,17 +3461,17 @@ export function Viewport() {
 
     /** Render a PreviewCurve into a group with a given color/width. */
     const renderCurveInto = (
-      group: THREE.Group,
+      group: CAD.Group,
       curve: PreviewCurve,
       color: number,
       linewidth: number,
     ) => {
       switch (curve.kind) {
         case 'line':
-          addPolyline2(group, [curve.a.x, curve.a.y, 0.14, curve.b.x, curve.b.y, 0.14], color, linewidth);
+          addScreenPolyline(group, [curve.a.x, curve.a.y, 0.14, curve.b.x, curve.b.y, 0.14], color, linewidth);
           break;
         case 'arc':
-          addPolyline2(
+          addScreenPolyline(
             group,
             tessellateArc(curve.center, curve.radius, curve.start_angle, curve.end_angle, 0.14),
             color,
@@ -3475,7 +3479,7 @@ export function Viewport() {
           );
           break;
         case 'circle':
-          addPolyline2(group, tessellateCircle(curve.center, curve.radius, 0.14), color, linewidth);
+          addScreenPolyline(group, tessellateCircle(curve.center, curve.radius, 0.14), color, linewidth);
           break;
       }
     };
@@ -3493,13 +3497,13 @@ export function Viewport() {
         if (!ent) continue;
         switch (ent.kind) {
           case 'line':
-            addPolyline2(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2.75);
             break;
           case 'arc':
-            addPolyline2(picksGroup, tessellateArc(ent.center, ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, tessellateArc(ent.center, ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_SELECTED, 2.75);
             break;
           case 'circle':
-            addPolyline2(picksGroup, tessellateCircle(ent.center, ent.radius, 0.14), COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, tessellateCircle(ent.center, ent.radius, 0.14), COLOR_SELECTED, 2.75);
             break;
         }
       }
@@ -3597,21 +3601,21 @@ export function Viewport() {
         ? null
         : resolvedHoleSupportFace(s)?.plane ?? null;
       const supportOrigin = holeSupportPlane
-        ? new THREE.Vector3(...holeSupportPlane.origin)
+        ? new CAD.Vector3(...holeSupportPlane.origin)
         : null;
       const supportNormal = holeSupportPlane
-        ? new THREE.Vector3(...holeSupportPlane.normal).normalize()
+        ? new CAD.Vector3(...holeSupportPlane.normal).normalize()
         : null;
       clearGroup(finishedGroup);
       for (const sketch of s.finishedSketches) {
         if (hidden.has(sketch.name)) continue;
-        const g = new THREE.Group();
+        const g = new CAD.Group();
         const pointPositions: number[] = [];
         const pointColors: number[] = [];
         const emphasisPointPositions: number[] = [];
         const emphasisPointColors: number[] = [];
         const selectedHolePointPositions: number[] = [];
-        const pointColor = new THREE.Color();
+        const pointColor = new CAD.Color();
         const addFinishedPoint = (
           point: Vec2,
           z: number,
@@ -3624,10 +3628,10 @@ export function Viewport() {
           pointColor.setHex(color);
           colors.push(pointColor.r, pointColor.g, pointColor.b);
         };
-        const u = new THREE.Vector3(...sketch.basis.u);
-        const v = new THREE.Vector3(...sketch.basis.v);
-        const n = new THREE.Vector3(...sketch.basis.normal);
-        g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+        const u = new CAD.Vector3(...sketch.basis.u);
+        const v = new CAD.Vector3(...sketch.basis.v);
+        const n = new CAD.Vector3(...sketch.basis.normal);
+        g.quaternion.setFromRotationMatrix(new CAD.Matrix4().makeBasis(u, v, n));
         g.position.set(...sketch.basis.origin);
         for (const ent of sketch.entities) {
           const axisSelected =
@@ -3685,7 +3689,7 @@ export function Viewport() {
                 sameSketchPoint(ref, pick),
               );
               const hovered = sameSketchPoint(ref, s.holePositionHover);
-              const world = new THREE.Vector3(
+              const world = new CAD.Vector3(
                 sketch.basis.origin[0]
                   + sketch.basis.u[0] * candidate.point.x
                   + sketch.basis.v[0] * candidate.point.y,
@@ -3700,7 +3704,7 @@ export function Viewport() {
                 supportNormal,
                 -world.clone().sub(supportOrigin).dot(supportNormal),
               );
-              const local = world.sub(new THREE.Vector3(...sketch.basis.origin));
+              const local = world.sub(new CAD.Vector3(...sketch.basis.origin));
               const localX = local.dot(u);
               const localY = local.dot(v);
               const localZ = local.dot(n);
@@ -3718,7 +3722,7 @@ export function Viewport() {
           }
           switch (ent.kind) {
             case 'line': {
-              const line = addPolyline2(
+              const line = addScreenPolyline(
                 g,
                 [ent.start.x, ent.start.y, 0.02, ent.end.x, ent.end.y, 0.02],
                 color,
@@ -3731,7 +3735,7 @@ export function Viewport() {
               break;
             }
             case 'arc': {
-              const line = addPolyline2(
+              const line = addScreenPolyline(
                 g,
                 tessellateArc(
                   ent.center,
@@ -3750,7 +3754,7 @@ export function Viewport() {
               break;
             }
             case 'circle': {
-              const line = addPolyline2(
+              const line = addScreenPolyline(
                 g,
                 tessellateCircle(ent.center, ent.radius, 0.02),
                 color,
@@ -3767,7 +3771,7 @@ export function Viewport() {
               for (const q of ent.tessellation) {
                 positions.push(q.x, q.y, 0.02);
               }
-              const line = addPolyline2(
+              const line = addScreenPolyline(
                 g,
                 positions,
                 color,
@@ -3782,10 +3786,10 @@ export function Viewport() {
           }
         }
         if (pointPositions.length > 0) {
-          const geometry = new THREE.BufferGeometry();
-          geometry.setAttribute('position', new THREE.Float32BufferAttribute(pointPositions, 3));
-          geometry.setAttribute('color', new THREE.Float32BufferAttribute(pointColors, 3));
-          const material = new THREE.PointsMaterial({
+          const geometry = new CAD.BufferGeometry();
+          geometry.setAttribute('position', new CAD.Float32BufferAttribute(pointPositions, 3));
+          geometry.setAttribute('color', new CAD.Float32BufferAttribute(pointColors, 3));
+          const material = new CAD.PointsMaterial({
             size: 4.5,
             sizeAttenuation: false,
             vertexColors: true,
@@ -3794,29 +3798,29 @@ export function Viewport() {
             depthTest: false,
             depthWrite: false,
           });
-          const points = new THREE.Points(geometry, material);
+          const points = new CAD.Points(geometry, material);
           points.renderOrder = 15;
           points.userData.finishedSketchEmphasis = false;
           g.add(points);
         }
         if (emphasisPointPositions.length > 0) {
-          const geometry = new THREE.BufferGeometry();
+          const geometry = new CAD.BufferGeometry();
           geometry.setAttribute(
             'position',
-            new THREE.Float32BufferAttribute(emphasisPointPositions, 3),
+            new CAD.Float32BufferAttribute(emphasisPointPositions, 3),
           );
           geometry.setAttribute(
             'color',
-            new THREE.Float32BufferAttribute(emphasisPointColors, 3),
+            new CAD.Float32BufferAttribute(emphasisPointColors, 3),
           );
-          const material = new THREE.PointsMaterial({
+          const material = new CAD.PointsMaterial({
             size: 8,
             sizeAttenuation: false,
             vertexColors: true,
             depthTest: false,
             depthWrite: false,
           });
-          const points = new THREE.Points(geometry, material);
+          const points = new CAD.Points(geometry, material);
           points.renderOrder = 16;
           points.userData.finishedSketchEmphasis = true;
           g.add(points);
@@ -3828,19 +3832,19 @@ export function Viewport() {
             renderOrder: number,
             role: 'hole-selected-outline' | 'hole-selected-fill',
           ) => {
-            const geometry = new THREE.BufferGeometry();
+            const geometry = new CAD.BufferGeometry();
             geometry.setAttribute(
               'position',
-              new THREE.Float32BufferAttribute(selectedHolePointPositions, 3),
+              new CAD.Float32BufferAttribute(selectedHolePointPositions, 3),
             );
-            const material = new THREE.PointsMaterial({
+            const material = new CAD.PointsMaterial({
               size,
               sizeAttenuation: false,
               color,
               depthTest: false,
               depthWrite: false,
             });
-            const points = new THREE.Points(geometry, material);
+            const points = new CAD.Points(geometry, material);
             points.renderOrder = renderOrder;
             points.userData.finishedSketchEmphasis = true;
             points.userData.finishedSketchPointRole = role;
@@ -3868,9 +3872,9 @@ export function Viewport() {
     const sameProfile = (a: ProfileRefDto | null, b: ProfileRefDto | null) =>
       a?.sketch_name === b?.sketch_name && a?.profile_index === b?.profile_index;
 
-    const closedPath = (points: Vec2[], shape = false): THREE.Shape | THREE.Path | null => {
+    const closedPath = (points: Vec2[], shape = false): CAD.Shape | CAD.Path | null => {
       if (points.length < 3) return null;
-      const path = shape ? new THREE.Shape() : new THREE.Path();
+      const path = shape ? new CAD.Shape() : new CAD.Path();
       path.moveTo(points[0].x, points[0].y);
       for (const point of points.slice(1)) path.lineTo(point.x, point.y);
       path.closePath();
@@ -3884,17 +3888,17 @@ export function Viewport() {
       const hidden = hiddenSketchNames();
       for (const entry of pickerState.catalog) {
         if (hidden.has(entry.sketch_name)) continue;
-        const group = new THREE.Group();
-        const u = new THREE.Vector3(...entry.basis.u);
-        const v = new THREE.Vector3(...entry.basis.v);
-        const n = new THREE.Vector3(...entry.basis.normal);
-        group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+        const group = new CAD.Group();
+        const u = new CAD.Vector3(...entry.basis.u);
+        const v = new CAD.Vector3(...entry.basis.v);
+        const n = new CAD.Vector3(...entry.basis.normal);
+        group.quaternion.setFromRotationMatrix(new CAD.Matrix4().makeBasis(u, v, n));
         group.position.set(...entry.basis.origin);
         for (const profile of entry.profiles.filter(
           (candidate) => candidate.nesting_depth % 2 === 0,
         )) {
           const shape = closedPath(profile.points, true);
-          if (!(shape instanceof THREE.Shape)) continue;
+          if (!(shape instanceof CAD.Shape)) continue;
           const holes = entry.profiles.filter(
             (candidate) =>
               candidate.nesting_depth % 2 === 1 &&
@@ -3911,8 +3915,8 @@ export function Viewport() {
           const selected = pickerState.selected.some((candidate) => sameProfile(candidate, ref));
           const hovered = sameProfile(pickerState.hovered, ref);
           for (const z of [0.045, -0.045]) {
-            const geometry = new THREE.ShapeGeometry(shape);
-            const material = new THREE.MeshBasicMaterial({
+            const geometry = new CAD.ShapeGeometry(shape);
+            const material = new CAD.MeshBasicMaterial({
               color: selected
                 ? COLOR_EDGE_SELECTED
                 : hovered
@@ -3920,14 +3924,14 @@ export function Viewport() {
                   : 0x2e86b6,
               transparent: true,
               opacity: selected ? 0.3 : hovered ? 0.24 : 0.13,
-              side: THREE.DoubleSide,
+              side: CAD.DoubleSide,
               depthTest: true,
               depthWrite: false,
               polygonOffset: true,
               polygonOffsetFactor: -2,
               polygonOffsetUnits: -2,
             });
-            const mesh = new THREE.Mesh(geometry, material);
+            const mesh = new CAD.Mesh(geometry, material);
             mesh.position.z = z;
             mesh.renderOrder = 12;
             mesh.userData.profileSurface = true;
@@ -3943,7 +3947,7 @@ export function Viewport() {
                 point.y,
                 0.07,
               ]);
-              const outline = addPolyline2(
+              const outline = addScreenPolyline(
                 group,
                 positions,
                 selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
@@ -3984,7 +3988,7 @@ export function Viewport() {
       const s = store.getState();
       if (s.revolveDialogFeature === null) return null;
       const hidden = hiddenSketchNames();
-      const rect = renderer.domElement.getBoundingClientRect();
+      const rect = surface.domElement.getBoundingClientRect();
       const distanceToSegment = (
         px: number,
         py: number,
@@ -4003,7 +4007,7 @@ export function Viewport() {
       };
       const toScreen = (sketch: SketchDto, point: Vec2) => {
         const basis = sketch.basis;
-        const world = new THREE.Vector3(
+        const world = new CAD.Vector3(
           basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y,
           basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y,
           basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y,
@@ -4052,10 +4056,10 @@ export function Viewport() {
         ),
       );
       const hidden = hiddenSketchNames();
-      const rect = renderer.domElement.getBoundingClientRect();
+      const rect = surface.domElement.getBoundingClientRect();
       const toScreen = (sketch: SketchDto, point: Vec2) => {
         const basis = sketch.basis;
-        const projected = new THREE.Vector3(
+        const projected = new CAD.Vector3(
           basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y,
           basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y,
           basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y,
@@ -4180,32 +4184,32 @@ export function Viewport() {
       clearGroup(datumGroup);
       for (const definition of s.datumPlanes) {
         if (hidden.has(definition.datum_id)) continue;
-        const group = new THREE.Group();
+        const group = new CAD.Group();
         const basis = definition.basis;
         group.quaternion.setFromRotationMatrix(
-          new THREE.Matrix4().makeBasis(
-            new THREE.Vector3(...basis.u),
-            new THREE.Vector3(...basis.v),
-            new THREE.Vector3(...basis.normal),
+          new CAD.Matrix4().makeBasis(
+            new CAD.Vector3(...basis.u),
+            new CAD.Vector3(...basis.v),
+            new CAD.Vector3(...basis.normal),
           ),
         );
         group.position.set(...basis.origin);
-        const geometry = new THREE.PlaneGeometry(PLANE_SIZE, PLANE_SIZE);
-        const mesh = new THREE.Mesh(
+        const geometry = new CAD.PlaneGeometry(PLANE_SIZE, PLANE_SIZE);
+        const mesh = new CAD.Mesh(
           geometry,
-          new THREE.MeshBasicMaterial({
+          new CAD.MeshBasicMaterial({
             color: 0xd8a64d,
             transparent: true,
             opacity: s.mode === 'pickPlane' ? 0.14 : 0.08,
-            side: THREE.DoubleSide,
+            side: CAD.DoubleSide,
             depthWrite: false,
           }),
         );
         mesh.userData.datumPlaneId = definition.datum_id;
         mesh.userData.datumPlaneName = definition.name;
-        const border = new THREE.LineSegments(
-          new THREE.EdgesGeometry(geometry),
-          new THREE.LineDashedMaterial({
+        const border = new CAD.LineSegments(
+          new CAD.EdgesGeometry(geometry),
+          new CAD.LineDashedMaterial({
             color: 0xe0ad52,
             transparent: true,
             opacity: 0.7,
@@ -4259,8 +4263,8 @@ export function Viewport() {
       clearGroup(solidFaceHighlightGroup);
       clearGroup(solidEdgeHighlightGroup);
       solidGroup.traverse((object) => {
-        if (object instanceof THREE.Mesh && object.userData.solidFace === true) {
-          const material = object.material as THREE.MeshStandardMaterial;
+        if (object instanceof CAD.Mesh && object.userData.solidFace === true) {
+          const material = object.material as CAD.MeshStandardMaterial;
           const bodyId = object.userData.bodyId as number;
           const bodySelectionIndex = s.selectedBodies.indexOf(bodyId);
           const bodySelected = bodySelectionIndex >= 0;
@@ -4288,8 +4292,8 @@ export function Viewport() {
               selected: faceSelected,
             });
           }
-        } else if (object instanceof THREE.Line && object.userData.solidEdge === true) {
-          const material = object.material as THREE.LineBasicMaterial;
+        } else if (object instanceof CAD.Line && object.userData.solidEdge === true) {
+          const material = object.material as CAD.LineBasicMaterial;
           const selected = s.selectedEdges.includes(object.userData.edgeId as number);
           const hovered = object.userData.edgeId === s.hoveredEdge;
           material.color.setHex(
@@ -4312,7 +4316,7 @@ export function Viewport() {
 
       for (const face of faceHighlights) {
         if (face.positions.length < 6) continue;
-        const outline = addLineSegments2(
+        const outline = addScreenSegments(
           solidFaceHighlightGroup,
           face.positions,
           face.selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
@@ -4341,7 +4345,7 @@ export function Viewport() {
         }
         if (positions.length < 6) continue;
         const toolBody = selected && selectedIndex > 0;
-        const outline = addLineSegments2(
+        const outline = addScreenSegments(
           solidBodyHighlightGroup,
           positions,
           selected
@@ -4372,7 +4376,7 @@ export function Viewport() {
             point.y,
             point.z,
           ]);
-          const line = addPolyline2(
+          const line = addScreenPolyline(
             solidEdgeHighlightGroup,
             positions,
             selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
@@ -4393,7 +4397,7 @@ export function Viewport() {
 
       for (const body of s.solidScene.bodies) {
         if (hidden.has(body.id)) continue;
-        const bodyGroup = new THREE.Group();
+        const bodyGroup = new CAD.Group();
         bodyGroup.name = body.name;
         bodyGroup.userData.bodyId = body.id;
 
@@ -4418,21 +4422,21 @@ export function Viewport() {
             );
           }
           if (positions.length < 9) continue;
-          const geometry = new THREE.BufferGeometry();
-          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-          geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+          const geometry = new CAD.BufferGeometry();
+          geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+          geometry.setAttribute('normal', new CAD.Float32BufferAttribute(normals, 3));
           geometry.computeBoundingBox();
           geometry.computeBoundingSphere();
-          const material = new THREE.MeshStandardMaterial({
+          const material = new CAD.MeshStandardMaterial({
             color: bodyBaseColor(body.id, useAppStore.getState().bodyAppearances),
             roughness: 0.72,
             metalness: 0.03,
-            side: THREE.DoubleSide,
+            side: CAD.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
             polygonOffsetUnits: 1,
           });
-          const mesh = new THREE.Mesh(geometry, material);
+          const mesh = new CAD.Mesh(geometry, material);
           mesh.name = `${body.name}:${face.key}`;
           mesh.userData.solidFace = true;
           mesh.userData.bodyId = body.id;
@@ -4444,16 +4448,16 @@ export function Viewport() {
 
         for (const edge of body.edges) {
           if (edge.points.length < 2) continue;
-          const geometry = new THREE.BufferGeometry().setFromPoints(
-            edge.points.map((point) => new THREE.Vector3(point.x, point.y, point.z)),
+          const geometry = new CAD.BufferGeometry().setFromPoints(
+            edge.points.map((point) => new CAD.Vector3(point.x, point.y, point.z)),
           );
-          const material = new THREE.LineBasicMaterial({
+          const material = new CAD.LineBasicMaterial({
             color: COLOR_EDGE,
             transparent: true,
             opacity: 0.72,
             depthTest: true,
           });
-          const line = new THREE.Line(geometry, material);
+          const line = new CAD.Line(geometry, material);
           line.name = `${body.name}:${edge.key}`;
           line.userData.solidEdge = true;
           line.userData.bodyId = body.id;
@@ -4521,22 +4525,22 @@ export function Viewport() {
       if (!face?.plane) return null;
 
       const hidden = hiddenSketchNames();
-      const rect = renderer.domElement.getBoundingClientRect();
-      const supportOrigin = new THREE.Vector3(...face.plane.origin);
-      const supportNormal = new THREE.Vector3(...face.plane.normal).normalize();
+      const rect = surface.domElement.getBoundingClientRect();
+      const supportOrigin = new CAD.Vector3(...face.plane.origin);
+      const supportNormal = new CAD.Vector3(...face.plane.normal).normalize();
       let best: {
         pick: FinishedSketchPointPick;
-        projectedWorld: THREE.Vector3;
+        projectedWorld: CAD.Vector3;
         distance: number;
       } | null = null;
       for (const sketch of s.finishedSketches) {
         if (hidden.has(sketch.name)) continue;
-        const sketchNormal = new THREE.Vector3(...sketch.basis.normal).normalize();
+        const sketchNormal = new CAD.Vector3(...sketch.basis.normal).normalize();
         if (Math.abs(sketchNormal.dot(supportNormal)) < 1 - 1e-6) continue;
         for (const entity of sketch.entities) {
           for (const candidate of sketchPointCandidates(entity)) {
             const basis = sketch.basis;
-            const world = new THREE.Vector3(
+            const world = new CAD.Vector3(
               basis.origin[0] + basis.u[0] * candidate.point.x + basis.v[0] * candidate.point.y,
               basis.origin[1] + basis.u[1] * candidate.point.x + basis.v[1] * candidate.point.y,
               basis.origin[2] + basis.u[2] * candidate.point.x + basis.v[2] * candidate.point.y,
@@ -4612,25 +4616,25 @@ export function Viewport() {
       return null;
     };
 
-    const renderEntityGhost = (group: THREE.Group, ent: EntityDto, dx: number, dy: number) => {
+    const renderEntityGhost = (group: CAD.Group, ent: EntityDto, dx: number, dy: number) => {
       const t = (p: Vec2): Vec2 => ({ x: p.x + dx, y: p.y + dy });
       switch (ent.kind) {
         case 'line':
-          addPolyline2(group, [t(ent.start).x, t(ent.start).y, 0.14, t(ent.end).x, t(ent.end).y, 0.14], COLOR_PREVIEW, 1.75);
+          addScreenPolyline(group, [t(ent.start).x, t(ent.start).y, 0.14, t(ent.end).x, t(ent.end).y, 0.14], COLOR_PREVIEW, 1.75);
           break;
         case 'point':
-          addPolyline2(group, [t(ent.position).x - 1, t(ent.position).y, 0.14, t(ent.position).x + 1, t(ent.position).y, 0.14], COLOR_PREVIEW, 1.75);
+          addScreenPolyline(group, [t(ent.position).x - 1, t(ent.position).y, 0.14, t(ent.position).x + 1, t(ent.position).y, 0.14], COLOR_PREVIEW, 1.75);
           break;
         case 'circle':
-          addPolyline2(group, tessellateCircle(t(ent.center), ent.radius, 0.14), COLOR_PREVIEW, 1.75);
+          addScreenPolyline(group, tessellateCircle(t(ent.center), ent.radius, 0.14), COLOR_PREVIEW, 1.75);
           break;
         case 'arc':
-          addPolyline2(group, tessellateArc(t(ent.center), ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_PREVIEW, 1.75);
+          addScreenPolyline(group, tessellateArc(t(ent.center), ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_PREVIEW, 1.75);
           break;
         case 'spline': {
           const pts: number[] = [];
           for (const q of ent.tessellation) pts.push(t(q).x, t(q).y, 0.14);
-          addPolyline2(group, pts, COLOR_PREVIEW, 1.75);
+          addScreenPolyline(group, pts, COLOR_PREVIEW, 1.75);
           break;
         }
       }
@@ -4893,7 +4897,7 @@ export function Viewport() {
           state.setHoveredFace(faceHit.planar ? faceHit.faceId : null);
           const tag = planeTagRef.current;
           if (tag) {
-            const rect = renderer.domElement.getBoundingClientRect();
+            const rect = surface.domElement.getBoundingClientRect();
             tag.textContent = faceHit.planar
               ? t('sketch.planarFace')
               : t('sketch.nonPlanarFace');
@@ -4901,7 +4905,7 @@ export function Viewport() {
             tag.style.left = `${e.clientX - rect.left + 14}px`;
             tag.style.top = `${e.clientY - rect.top + 12}px`;
           }
-          renderer.domElement.style.cursor = faceHit.planar ? 'pointer' : 'not-allowed';
+          surface.domElement.style.cursor = faceHit.planar ? 'pointer' : 'not-allowed';
           return;
         }
         state.setHoveredFace(null);
@@ -4915,7 +4919,7 @@ export function Viewport() {
           highlightDatumPlane(datumId, true);
           const tag = planeTagRef.current;
           if (tag) {
-            const rect = renderer.domElement.getBoundingClientRect();
+            const rect = surface.domElement.getBoundingClientRect();
             tag.textContent =
               (datumHit.object.userData.datumPlaneName as string | undefined) ??
               t('browser.constructionPlane');
@@ -4923,7 +4927,7 @@ export function Viewport() {
             tag.style.left = `${e.clientX - rect.left + 14}px`;
             tag.style.top = `${e.clientY - rect.top + 12}px`;
           }
-          renderer.domElement.style.cursor = 'pointer';
+          surface.domElement.style.cursor = 'pointer';
           return;
         }
         highlightDatumPlane(null, true);
@@ -4934,7 +4938,7 @@ export function Viewport() {
         if (tag) {
           if (plane) {
             const def = PICKER_PLANES.find((d) => d.plane === plane)!;
-            const rect = renderer.domElement.getBoundingClientRect();
+            const rect = surface.domElement.getBoundingClientRect();
             tag.textContent = t(def.labelKey);
             tag.style.display = 'block';
             tag.style.left = `${e.clientX - rect.left + 14}px`;
@@ -4943,7 +4947,7 @@ export function Viewport() {
             tag.style.display = 'none';
           }
         }
-        renderer.domElement.style.cursor = plane ? 'pointer' : '';
+        surface.domElement.style.cursor = plane ? 'pointer' : '';
         return;
       }
 
@@ -4970,7 +4974,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(faceHit?.faceId ?? null);
-          renderer.domElement.style.cursor = faceHit ? 'crosshair' : '';
+          surface.domElement.style.cursor = faceHit ? 'crosshair' : '';
           return;
         }
         const edgePickMode = activeSolidEdgePickMode(state);
@@ -4981,7 +4985,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(edgeHit?.edgeId ?? null);
           state.setHoveredFace(null);
-          renderer.domElement.style.cursor = edgeHit ? 'crosshair' : '';
+          surface.domElement.style.cursor = edgeHit ? 'crosshair' : '';
           return;
         }
         const axisLine = pickFinishedSketchLine(e);
@@ -4990,7 +4994,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
-          renderer.domElement.style.cursor = 'crosshair';
+          surface.domElement.style.cursor = 'crosshair';
           return;
         }
         const curve = pickFinishedSketchCurve(e);
@@ -4999,7 +5003,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
-          renderer.domElement.style.cursor = 'crosshair';
+          surface.domElement.style.cursor = 'crosshair';
           return;
         }
         const profileHit = pickFinishedProfile(e);
@@ -5007,7 +5011,7 @@ export function Viewport() {
         if (profileHit) {
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
-          renderer.domElement.style.cursor = 'crosshair';
+          surface.domElement.style.cursor = 'crosshair';
           return;
         }
         if (state.holeDialogFeature !== null) {
@@ -5016,14 +5020,14 @@ export function Viewport() {
           state.setHolePositionHover(point?.pick ?? null);
           state.setHoveredEdge(null);
           state.setHoveredFace(point?.face.faceId ?? (face?.planar ? face.faceId : null));
-          renderer.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
+          surface.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
           return;
         }
         const edgeHit = pickSolidEdge(e);
         const hit = edgeHit ? null : pickSolidFace(e);
         state.setHoveredEdge(edgeHit?.edgeId ?? null);
         state.setHoveredFace(hit?.faceId ?? null);
-        renderer.domElement.style.cursor = axisLine ? 'crosshair' : edgeHit || hit ? 'pointer' : '';
+        surface.domElement.style.cursor = axisLine ? 'crosshair' : edgeHit || hit ? 'pointer' : '';
         return;
       }
 
@@ -5106,7 +5110,7 @@ export function Viewport() {
           const placement = acquirePointPlacement(p, e.ctrlKey);
           clearGroup(acquireGroup);
           if (placement.extension) {
-            addPolyline2(
+            addScreenPolyline(
               acquireGroup,
               [
                 placement.extension.from.x,
@@ -5127,7 +5131,7 @@ export function Viewport() {
           );
           snapMarker.material.map = snapTexture;
           snapMarker.visible = true;
-          const rect = renderer.domElement.getBoundingClientRect();
+          const rect = surface.domElement.getBoundingClientRect();
           showChips(
             placement.coincidentWith === null ? [] : ['coincident'],
             e.clientX - rect.left,
@@ -5430,7 +5434,7 @@ export function Viewport() {
         if (drag.tool === 'zoomWindow') {
           hideZoomRect();
           if (drag.moved) {
-            const rect = renderer.domElement.getBoundingClientRect();
+            const rect = surface.domElement.getBoundingClientRect();
             frameRect(
               (Math.min(drag.startX, e.clientX) + Math.abs(e.clientX - drag.startX) / 2) - rect.left,
               (Math.min(drag.startY, e.clientY) + Math.abs(e.clientY - drag.startY) / 2) - rect.top,
@@ -5572,10 +5576,10 @@ export function Viewport() {
         if (!dim) return;
         const initial = dim.param_expression ? `=${dim.param_expression}` : dim.text.replace(/[ØR°]/g, '');
         const screen = (() => {
-          const v = new THREE.Vector3(dim.text_pos.x, dim.text_pos.y, 0)
+          const v = new CAD.Vector3(dim.text_pos.x, dim.text_pos.y, 0)
             .applyMatrix4(sketchGroup.matrixWorld)
             .project(camera);
-          const rect = renderer.domElement.getBoundingClientRect();
+          const rect = surface.domElement.getBoundingClientRect();
           return {
             x: rect.left + ((v.x + 1) / 2) * rect.width,
             y: rect.top + ((1 - v.y) / 2) * rect.height,
@@ -5648,23 +5652,23 @@ export function Viewport() {
       }
     };
 
-    renderer.domElement.addEventListener('pointermove', onPointerMove);
-    renderer.domElement.addEventListener('pointerdown', onPointerDown);
-    renderer.domElement.addEventListener('click', onCanvasClick);
-    renderer.domElement.addEventListener('dblclick', onDoubleClick);
+    surface.domElement.addEventListener('pointermove', onPointerMove);
+    surface.domElement.addEventListener('pointerdown', onPointerDown);
+    surface.domElement.addEventListener('click', onCanvasClick);
+    surface.domElement.addEventListener('dblclick', onDoubleClick);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('keydown', onKeyDown, true);
 
     // --- Overlay camera API (Orientation Dial / navigation bar / Look At) ---
-    let savedView: { position: THREE.Vector3; target: THREE.Vector3; up: THREE.Vector3 } | null =
+    let savedView: { position: CAD.Vector3; target: CAD.Vector3; up: CAD.Vector3 } | null =
       null;
 
     const getVisibleBounds = () => {
       scene.updateMatrixWorld(true);
-      const bounds = new THREE.Box3();
-      const include = (group: THREE.Object3D) => {
+      const bounds = new CAD.Box3();
+      const include = (group: CAD.Object3D) => {
         if (!group.visible || group.children.length === 0) return;
-        bounds.union(new THREE.Box3().setFromObject(group, true));
+        bounds.union(new CAD.Box3().setFromObject(group, true));
       };
       if (sketchGroup.visible) include(entityGroup);
       include(solidGroup);
@@ -5678,11 +5682,11 @@ export function Viewport() {
         animateCamera(HOME_POSITION.clone(), HOME_TARGET.clone(), WORLD_UP.clone(), 350);
         return;
       }
-      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      const sphere = bounds.getBoundingSphere(new CAD.Sphere());
       const radius = Math.max(1, sphere.radius);
-      const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+      const verticalFov = CAD.MathUtils.degToRad(camera.fov);
       const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
-      const halfFov = Math.max(THREE.MathUtils.degToRad(5), Math.min(verticalFov, horizontalFov) / 2);
+      const halfFov = Math.max(CAD.MathUtils.degToRad(5), Math.min(verticalFov, horizontalFov) / 2);
       const distance = Math.min(10000, Math.max(2, (radius / Math.sin(halfFov)) * 1.15));
       const viewDirection = camera.position.clone().sub(controls.target).normalize();
       if (viewDirection.lengthSq() < 1e-12) viewDirection.set(1, -1, 1).normalize();
@@ -5704,7 +5708,7 @@ export function Viewport() {
     const sixDofDriverPivot = controls.target.clone();
 
     const alignSixDofTargetToCamera = (distance: number) => {
-      const forward = new THREE.Vector3(0, 0, -1)
+      const forward = new CAD.Vector3(0, 0, -1)
         .applyQuaternion(camera.quaternion)
         .normalize();
       controls.target.copy(camera.position).addScaledVector(forward, distance);
@@ -5728,7 +5732,7 @@ export function Viewport() {
         sixDofDriverPivot.copy(controls.target);
         sixDofDriverControlsWereEnabled = controls.enabled;
         // The driver owns the full camera transform while the cap is moving.
-        // Pausing OrbitControls also prevents any remaining mouse damping from
+        // Pausing CadOrbitControls also prevents any remaining mouse damping from
         // being applied on top of the external camera matrices.
         controls.enabled = false;
         wakeControllerFrame();
@@ -5758,8 +5762,8 @@ export function Viewport() {
           0.001,
           camera.position.distanceTo(controls.target),
         );
-        const matrix = new THREE.Matrix4().fromArray(values);
-        const scale = new THREE.Vector3();
+        const matrix = new CAD.Matrix4().fromArray(values);
+        const scale = new CAD.Vector3();
         matrix.decompose(camera.position, camera.quaternion, scale);
         camera.up.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
         // During a driver transaction, setTarget is the authoritative look
@@ -5780,7 +5784,7 @@ export function Viewport() {
       },
       getViewFrustum: () => {
         const halfHeight =
-          camera.near * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+          camera.near * Math.tan(CAD.MathUtils.degToRad(camera.fov) / 2);
         const halfWidth = halfHeight * camera.aspect;
         return [
           -halfWidth,
@@ -5792,7 +5796,7 @@ export function Viewport() {
         ] as [number, number, number, number, number, number];
       },
       getFov: () => {
-        const vertical = THREE.MathUtils.degToRad(camera.fov);
+        const vertical = CAD.MathUtils.degToRad(camera.fov);
         return (
           2 *
           Math.atan(Math.tan(vertical / 2) * Math.sqrt(1 + camera.aspect * camera.aspect))
@@ -5806,8 +5810,8 @@ export function Viewport() {
             Math.tan(diagonalRadians / 2) /
               Math.sqrt(1 + camera.aspect * camera.aspect),
           );
-        camera.fov = THREE.MathUtils.clamp(
-          THREE.MathUtils.radToDeg(vertical),
+        camera.fov = CAD.MathUtils.clamp(
+          CAD.MathUtils.radToDeg(vertical),
           5,
           150,
         );
@@ -5843,7 +5847,7 @@ export function Viewport() {
         if (!position.every(Number.isFinite)) return;
         // The Navigation Library may move its automatic center of rotation
         // after a large pan or dolly. A pivot is not the camera look target:
-        // changing OrbitControls.target here caused the visible end-of-motion
+        // changing CadOrbitControls.target here caused the visible end-of-motion
         // snap reported with larger SpaceMouse movements.
         sixDofDriverPivot.set(...position);
       },
@@ -5852,8 +5856,8 @@ export function Viewport() {
       getConstructionPlane: () => {
         const sketch = store.getState().activeSketch;
         if (!sketch) return [0, 0, 1, 0] as [number, number, number, number];
-        const normal = new THREE.Vector3(...sketch.basis.normal).normalize();
-        const origin = new THREE.Vector3(...sketch.basis.origin);
+        const normal = new CAD.Vector3(...sketch.basis.normal).normalize();
+        const origin = new CAD.Vector3(...sketch.basis.origin);
         return [
           normal.x,
           normal.y,
@@ -5871,10 +5875,10 @@ export function Viewport() {
         up: camera.up.toArray() as [number, number, number],
       }),
       snapToDirection: (direction) => {
-        const n = new THREE.Vector3(...direction).normalize();
+        const n = new CAD.Vector3(...direction).normalize();
         const distance = camera.position.distanceTo(controls.target);
         const up =
-          Math.abs(n.z) > 0.99 ? new THREE.Vector3(0, n.z > 0 ? 1 : -1, 0) : WORLD_UP.clone();
+          Math.abs(n.z) > 0.99 ? new CAD.Vector3(0, n.z > 0 ? 1 : -1, 0) : WORLD_UP.clone();
         animateCamera(
           controls.target.clone().addScaledVector(n, distance),
           controls.target.clone(),
@@ -5888,18 +5892,18 @@ export function Viewport() {
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
         cancelCameraAnimation();
-        // Replicate OrbitControls' rotate handling exactly (spherical in the
+        // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height) so every orbit
         // input feels identical to right-drag orbit in the canvas.
         const offset = camera.position.clone().sub(controls.target);
-        const quat = new THREE.Quaternion().setFromUnitVectors(
+        const quat = new CAD.Quaternion().setFromUnitVectors(
           camera.up.clone().normalize(),
-          new THREE.Vector3(0, 1, 0),
+          new CAD.Vector3(0, 1, 0),
         );
         const quatInv = quat.clone().invert();
         offset.applyQuaternion(quat);
-        const spherical = new THREE.Spherical().setFromVector3(offset);
-        const height = Math.max(1, renderer.domElement.clientHeight);
+        const spherical = new CAD.Spherical().setFromVector3(offset);
+        const height = Math.max(1, surface.domElement.clientHeight);
         spherical.theta -= (2 * Math.PI * dx) / height;
         spherical.phi -= (2 * Math.PI * dy) / height;
         spherical.makeSafe();
@@ -5913,16 +5917,16 @@ export function Viewport() {
         cancelCameraAnimation();
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const distance = Math.max(1, camera.position.distanceTo(controls.target));
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
-        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+        const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+        const up = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+        const forward = new CAD.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
 
         // Object-mode mapping: model motion follows the physical cap, so the
         // camera translates/rotates in the opposite direction. Translation
         // speed scales with view distance to stay useful from detail to
         // assembly scale.
         const translationSpeed = distance * 0.9 * dt;
-        const delta = new THREE.Vector3()
+        const delta = new CAD.Vector3()
           .addScaledVector(right, -translation[0] * translationSpeed)
           .addScaledVector(forward, -translation[1] * translationSpeed)
           .addScaledVector(up, -translation[2] * translationSpeed);
@@ -5930,9 +5934,9 @@ export function Viewport() {
         controls.target.add(delta);
 
         const angle = 1.65 * dt;
-        const pitch = new THREE.Quaternion().setFromAxisAngle(right, -rotation[0] * angle);
-        const roll = new THREE.Quaternion().setFromAxisAngle(forward, -rotation[1] * angle);
-        const yaw = new THREE.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);
+        const pitch = new CAD.Quaternion().setFromAxisAngle(right, -rotation[0] * angle);
+        const roll = new CAD.Quaternion().setFromAxisAngle(forward, -rotation[1] * angle);
+        const yaw = new CAD.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);
         const turn = yaw.multiply(pitch).multiply(roll);
         const offset = camera.position.clone().sub(controls.target).applyQuaternion(turn);
         camera.position.copy(controls.target).add(offset);
@@ -5946,9 +5950,9 @@ export function Viewport() {
         if (sketch) lookAtPlane(sketch.basis, 350);
       },
       worldToScreen: (point) => {
-        const projected = new THREE.Vector3(...point).project(camera);
+        const projected = new CAD.Vector3(...point).project(camera);
         if (projected.z < -1 || projected.z > 1) return null;
-        const rect = renderer.domElement.getBoundingClientRect();
+        const rect = surface.domElement.getBoundingClientRect();
         return {
           x: rect.left + ((projected.x + 1) / 2) * rect.width,
           y: rect.top + ((1 - projected.y) / 2) * rect.height,
@@ -5962,8 +5966,8 @@ export function Viewport() {
     (window as unknown as { __sketchToScreen?: (x: number, y: number) => { x: number; y: number } | null }).__sketchToScreen =
       (x, y) => {
         if (!sketchGroup.visible) return null;
-        const v = new THREE.Vector3(x, y, 0).applyMatrix4(sketchGroup.matrixWorld).project(camera);
-        const rect = renderer.domElement.getBoundingClientRect();
+        const v = new CAD.Vector3(x, y, 0).applyMatrix4(sketchGroup.matrixWorld).project(camera);
+        const rect = surface.domElement.getBoundingClientRect();
         return {
           x: rect.left + ((v.x + 1) / 2) * rect.width,
           y: rect.top + ((1 - v.y) / 2) * rect.height,
@@ -6001,15 +6005,15 @@ export function Viewport() {
         ) {
           return;
         }
-        if (object instanceof THREE.Mesh && object.userData.profileSurface === true) {
-          const material = object.material as THREE.MeshBasicMaterial;
+        if (object instanceof CAD.Mesh && object.userData.profileSurface === true) {
+          const material = object.material as CAD.MeshBasicMaterial;
           result.fillColors.push(material.color.getHexString());
           result.fillOpacities.push(material.opacity);
-        } else if ((object as THREE.Object3D & { isLine2?: boolean }).isLine2 === true) {
+        } else if (object instanceof ScreenPolyline) {
           result.overlayKinds.push(
             object.userData.profileHighlightKind as string,
           );
-          result.overlayWidths.push((object as Line2).material.linewidth);
+          result.overlayWidths.push((object as ScreenPolyline).material.linewidth);
         }
       });
       return result;
@@ -6030,18 +6034,18 @@ export function Viewport() {
       };
       solidGroup.traverse((object) => {
         if (
-          object instanceof THREE.Mesh
+          object instanceof CAD.Mesh
           && object.userData.solidFace === true
           && object.userData.faceId === faceId
         ) {
           result.color = (
-            object.material as THREE.MeshStandardMaterial
+            object.material as CAD.MeshStandardMaterial
           ).color.getHexString();
         }
       });
       solidFaceHighlightGroup.traverse((object) => {
         if (
-          object instanceof LineSegments2
+          object instanceof ScreenLineSegments
           && object.userData.faceId === faceId
         ) {
           result.overlayKinds.push(object.userData.faceHighlightKind as string);
@@ -6066,18 +6070,18 @@ export function Viewport() {
       };
       solidGroup.traverse((object) => {
         if (
-          object instanceof THREE.Mesh
+          object instanceof CAD.Mesh
           && object.userData.solidFace === true
           && object.userData.bodyId === bodyId
         ) {
           result.faceColors.push(
-            (object.material as THREE.MeshStandardMaterial).color.getHexString(),
+            (object.material as CAD.MeshStandardMaterial).color.getHexString(),
           );
         }
       });
       solidBodyHighlightGroup.traverse((object) => {
         if (
-          object instanceof LineSegments2
+          object instanceof ScreenLineSegments
           && object.userData.bodyId === bodyId
         ) {
           result.overlayKinds.push(object.userData.bodyHighlightKind as string);
@@ -6111,11 +6115,11 @@ export function Viewport() {
       solidGroup.traverse((object) => {
         if (
           result === null
-          && object instanceof THREE.Line
+          && object instanceof CAD.Line
           && object.userData.solidEdge === true
           && object.userData.edgeId === edgeId
         ) {
-          const material = object.material as THREE.LineBasicMaterial;
+          const material = object.material as CAD.LineBasicMaterial;
           result = {
             color: material.color.getHexString(),
             depthTest: material.depthTest,
@@ -6130,10 +6134,10 @@ export function Viewport() {
       solidEdgeHighlightGroup.traverse((object) => {
         if (
           result !== null
-          && (object as THREE.Object3D & { isLine2?: boolean }).isLine2 === true
+          && object instanceof ScreenPolyline
           && object.userData.edgeId === edgeId
         ) {
-          const material = (object as Line2).material;
+          const material = (object as ScreenPolyline).material;
           result.overlayWidths.push(material.linewidth);
           result.overlayColors.push(material.color.getHexString());
           result.overlayKinds.push(object.userData.edgeHighlightKind as string);
@@ -6172,8 +6176,8 @@ export function Viewport() {
       const pointPositionCounts: number[] = [];
       let pointCount = 0;
       finishedGroup.traverse((object) => {
-        if (object instanceof THREE.Points) {
-          const material = object.material as THREE.PointsMaterial;
+        if (object instanceof CAD.Points) {
+          const material = object.material as CAD.PointsMaterial;
           pointDepthTests.push(material.depthTest);
           pointSizes.push(material.size);
           pointOpacities.push(material.opacity);
@@ -6188,8 +6192,8 @@ export function Viewport() {
           pointCount += positionCount;
           return;
         }
-        if ((object as THREE.Object3D & { isLine2?: boolean }).isLine2 === true) {
-          const material = (object as Line2).material;
+        if (object instanceof ScreenPolyline) {
+          const material = (object as ScreenPolyline).material;
           lineDepthTests.push(material.depthTest);
           lineWidths.push(material.linewidth);
           lineOpacities.push(material.opacity);
@@ -6285,15 +6289,15 @@ export function Viewport() {
       for (const grid of [groundFine, groundMajor]) {
         if (grid) grid.visible = groundFade > 0.01;
       }
-      if (groundFine) (groundFine.material as THREE.LineBasicMaterial).opacity = 0.5 * groundFade;
-      if (groundMajor) (groundMajor.material as THREE.LineBasicMaterial).opacity = 0.85 * groundFade;
+      if (groundFine) (groundFine.material as CAD.LineBasicMaterial).opacity = 0.5 * groundFade;
+      if (groundMajor) (groundMajor.material as CAD.LineBasicMaterial).opacity = 0.85 * groundFade;
       sketchGridFine.visible = sketchFade > 0.01;
       sketchGridMajor.visible = sketchFade > 0.01;
       for (const child of sketchGridFine.children) {
-        ((child as THREE.LineSegments).material as THREE.LineBasicMaterial).opacity = 0.5 * sketchFade;
+        ((child as CAD.LineSegments).material as CAD.LineBasicMaterial).opacity = 0.5 * sketchFade;
       }
       for (const child of sketchGridMajor.children) {
-        ((child as THREE.LineSegments).material as THREE.LineBasicMaterial).opacity = 0.9 * sketchFade;
+        ((child as CAD.LineSegments).material as CAD.LineBasicMaterial).opacity = 0.9 * sketchFade;
       }
       return (
         Math.abs(groundTarget - groundFade) > 1e-4 ||
@@ -6485,7 +6489,7 @@ export function Viewport() {
           ['fillet', 'chamfer', 'offset'].includes(s.activeTool)
         ) {
           modTool = { picks: [] };
-          const rect = renderer.domElement.getBoundingClientRect();
+          const rect = surface.domElement.getBoundingClientRect();
           const cx = lastPointerClient?.x ?? rect.left + rect.width / 2;
           const cy = lastPointerClient?.y ?? rect.top + rect.height / 2;
           const pos = clusterPos(cx, cy);
@@ -6503,7 +6507,7 @@ export function Viewport() {
           zoom: 'zoom-in',
           zoomWindow: 'crosshair',
         };
-        renderer.domElement.style.cursor = cursors[s.navTool] ?? '';
+        surface.domElement.style.cursor = cursors[s.navTool] ?? '';
       }
     });
 
@@ -6513,18 +6517,17 @@ export function Viewport() {
       if (w === 0 || h === 0) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      surface.setSize(w, h);
       for (const material of lineMaterials) material.resolution.set(w, h);
       wakeControllerFrame();
     });
     resizeObserver.observe(container);
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    surface.setSize(container.clientWidth, container.clientHeight);
     camera.aspect = container.clientWidth / Math.max(1, container.clientHeight);
     camera.updateProjectionMatrix();
 
-    // --- Render loop ---
+    // --- Event-driven interaction update loop ---
     let raf = 0;
-    let nativeControllerOnly = false;
     let lastTime = performance.now();
     const tick = () => {
       raf = 0;
@@ -6535,7 +6538,7 @@ export function Viewport() {
       if (camAnim) stepCameraAnimation(now);
       const controlsChanged = controls.enabled ? controls.update() : false;
       syncNativeViewportCamera(camera, controls.target);
-      // Manual navigation uses OrbitControls.target as its center. Keep the
+      // Manual navigation uses CadOrbitControls.target as its center. Keep the
       // driver's separate pivot ready for the next transaction without ever
       // letting a driver auto-pivot move the camera target mid-transaction.
       if (!sixDofDriverMotion) sixDofDriverPivot.copy(controls.target);
@@ -6570,7 +6573,7 @@ export function Viewport() {
         sketchGridMajor.position.set(gridX, gridY, -0.01);
 
         // Keep the sketch plane equation current for pointer mapping.
-        const n = new THREE.Vector3(0, 0, 1).applyQuaternion(sketchGroup.quaternion);
+        const n = new CAD.Vector3(0, 0, 1).applyQuaternion(sketchGroup.quaternion);
         const o = sketchGroup.position;
         sketchPlane.setFromNormalAndCoplanarPoint(n, o);
       } else {
@@ -6588,7 +6591,7 @@ export function Viewport() {
       // Dimension text: constant screen size with optional alignment rotation
       // (ISO: upright, above an unbroken dimension line — D4.5).
       for (const { sprite, px, dirLocal, aligned } of dimSprites) {
-        const texture = (sprite.material as THREE.SpriteMaterial).map;
+        const texture = (sprite.material as CAD.SpriteMaterial).map;
         const aspect = texture ? (texture.image?.width ?? 4) / (texture.image?.height ?? 1) : 4;
         sprite.scale.set(wpp * px * aspect, wpp * px, 1);
         if (dirLocal && aligned) {
@@ -6597,9 +6600,9 @@ export function Viewport() {
           // Keep text readable (flip beyond ±90°).
           if (rot > Math.PI / 2) rot -= Math.PI;
           else if (rot < -Math.PI / 2) rot += Math.PI;
-          (sprite.material as THREE.SpriteMaterial).rotation = rot;
+          (sprite.material as CAD.SpriteMaterial).rotation = rot;
         } else {
-          (sprite.material as THREE.SpriteMaterial).rotation = 0;
+          (sprite.material as CAD.SpriteMaterial).rotation = 0;
         }
       }
       for (const { mesh, px } of dimArrows) {
@@ -6607,19 +6610,10 @@ export function Viewport() {
       }
 
       const native = nativeViewportIsActive();
+      scene.updateMatrixWorld(true);
       if (native) {
-        // Keep Three's scene graph as the interaction/controller layer, but
-        // do not submit a second GPU render behind the clipped WKWebView.
-        if (!nativeControllerOnly) {
-          renderer.dispose();
-          renderer.forceContextLoss();
-          nativeControllerOnly = true;
-        }
-        scene.updateMatrixWorld(true);
         const preview = collectNativeSketchPreview();
         syncNativeViewportPreview(preview.segments, preview.marker);
-      } else {
-        renderer.render(scene, camera);
       }
       if (
         !native ||
@@ -6641,13 +6635,13 @@ export function Viewport() {
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
       unsub();
-      renderer.domElement.removeEventListener('pointerdown', onNavPointerDown);
-      renderer.domElement.removeEventListener('pointermove', onPointerMove);
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
-      renderer.domElement.removeEventListener('click', onCanvasClick);
-      renderer.domElement.removeEventListener('dblclick', onDoubleClick);
-      renderer.domElement.removeEventListener('wheel', cancelCameraAnimation);
-      renderer.domElement.removeEventListener('wheel', onWheelNav, { capture: true });
+      surface.domElement.removeEventListener('pointerdown', onNavPointerDown);
+      surface.domElement.removeEventListener('pointermove', onPointerMove);
+      surface.domElement.removeEventListener('pointerdown', onPointerDown);
+      surface.domElement.removeEventListener('click', onCanvasClick);
+      surface.domElement.removeEventListener('dblclick', onDoubleClick);
+      surface.domElement.removeEventListener('wheel', cancelCameraAnimation);
+      surface.domElement.removeEventListener('wheel', onWheelNav, { capture: true });
       window.removeEventListener('pointerup', onNavPointerUp);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown, true);
@@ -6655,16 +6649,16 @@ export function Viewport() {
       wakeControllerFrame = () => undefined;
       controls.dispose();
       scene.traverse((child) => {
-        if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.Sprite) {
+        if (child instanceof CAD.Mesh || child instanceof CAD.Line || child instanceof CAD.Points || child instanceof CAD.Sprite) {
           child.geometry?.dispose?.();
-          const material = child.material as THREE.Material | THREE.Material[] | undefined;
+          const material = child.material as CAD.Material | CAD.Material[] | undefined;
           if (Array.isArray(material)) material.forEach((m) => m.dispose());
           else material?.dispose?.();
         }
       });
       glyphTextureCache.forEach((texture) => texture.dispose());
-      renderer.dispose();
-      container.removeChild(renderer.domElement);
+      surface.dispose();
+      container.removeChild(surface.domElement);
       detachNativeViewport();
       apiRef.current = null;
       const w = window as unknown as {
