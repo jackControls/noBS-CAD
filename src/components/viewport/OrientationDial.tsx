@@ -7,6 +7,7 @@ import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObje
 import * as THREE from 'three';
 import { useTranslation } from '../../i18n';
 import type { ViewportCameraApi } from './cameraApi';
+import { nativeViewportIsActive } from './nativeViewportBridge';
 
 type AxisPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 
@@ -44,6 +45,13 @@ export function OrientationDial({
     const screenUp = new THREE.Vector3();
 
     const tick = () => {
+      // Bevy owns the visible dial in the native desktop path and updates it
+      // from the same camera command. Do not keep animating the transparent
+      // DOM mirror at 60 Hz after the native bridge is ready.
+      if (nativeViewportIsActive()) {
+        raf = 0;
+        return;
+      }
       raf = requestAnimationFrame(tick);
       const svg = indicatorRef.current;
       const snapshot = apiRef.current?.getSnapshot();

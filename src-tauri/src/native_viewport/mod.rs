@@ -28,6 +28,8 @@ pub struct ViewportRect {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportLayout {
+    #[serde(default)]
+    pub revision: u64,
     pub viewport: ViewportRect,
     #[serde(default)]
     pub overlays: Vec<ViewportRect>,
@@ -50,8 +52,18 @@ pub struct ViewportPalette {
     pub grid_fine: [f32; 3],
     pub grid_major: [f32; 3],
     pub body: [f32; 3],
+    pub body_selected: [f32; 3],
+    pub body_tool: [f32; 3],
+    pub body_selected_edge: [f32; 3],
+    pub face_hover: [f32; 3],
+    pub face_selected: [f32; 3],
     pub edge: [f32; 3],
+    pub edge_hover: [f32; 3],
+    pub edge_selected: [f32; 3],
     pub active_sketch: [f32; 3],
+    pub defined_sketch: [f32; 3],
+    pub hover: [f32; 3],
+    pub selection: [f32; 3],
     pub finished_sketch: [f32; 3],
     pub preview: [f32; 3],
 }
@@ -69,12 +81,63 @@ impl Default for ViewportPalette {
             grid_fine: [58.0 / 255.0, 63.0 / 255.0, 71.0 / 255.0],
             grid_major: [77.0 / 255.0, 84.0 / 255.0, 95.0 / 255.0],
             body: [139.0 / 255.0, 155.0 / 255.0, 172.0 / 255.0],
+            body_selected: [105.0 / 255.0, 169.0 / 255.0, 212.0 / 255.0],
+            body_tool: [181.0 / 255.0, 138.0 / 255.0, 67.0 / 255.0],
+            body_selected_edge: [13.0 / 255.0, 117.0 / 255.0, 165.0 / 255.0],
+            face_hover: [158.0 / 255.0, 213.0 / 255.0, 243.0 / 255.0],
+            face_selected: [48.0 / 255.0, 174.0 / 255.0, 232.0 / 255.0],
             edge: [41.0 / 255.0, 51.0 / 255.0, 61.0 / 255.0],
+            edge_hover: [88.0 / 255.0, 199.0 / 255.0, 1.0],
+            edge_selected: [1.0, 200.0 / 255.0, 87.0 / 255.0],
             active_sketch: [93.0 / 255.0, 169.0 / 255.0, 1.0],
+            defined_sketch: [232.0 / 255.0, 233.0 / 255.0, 236.0 / 255.0],
+            hover: [156.0 / 255.0, 202.0 / 255.0, 1.0],
+            selection: [116.0 / 255.0, 99.0 / 255.0, 216.0 / 255.0],
             finished_sketch: [74.0 / 255.0, 199.0 / 255.0, 1.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportMode {
+    #[default]
+    Solid,
+    PickPlane,
+    Sketch,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportOriginPlane {
+    Xy,
+    Xz,
+    Yz,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportPresentation {
+    #[serde(default)]
+    pub mode: ViewportMode,
+    pub hovered_origin_plane: Option<ViewportOriginPlane>,
+    #[serde(default)]
+    pub selected_body_ids: Vec<u64>,
+    pub hovered_body_id: Option<u64>,
+    #[serde(default)]
+    pub selected_face_ids: Vec<u64>,
+    pub hovered_face_id: Option<u64>,
+    #[serde(default)]
+    pub selected_edge_ids: Vec<u64>,
+    pub hovered_edge_id: Option<u64>,
+    #[serde(default)]
+    pub selected_sketch_entity_ids: Vec<u64>,
+    pub hovered_sketch_entity_id: Option<u64>,
+    #[serde(default)]
+    pub hidden_body_ids: Vec<u64>,
+    #[serde(default)]
+    pub hidden_datum_plane_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -225,7 +288,7 @@ impl NativeViewport {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (app, layout);
-            Err("the embedded native viewport POC is macOS-only".to_string())
+            Err("the embedded native viewport is currently macOS-only".to_string())
         }
     }
 
@@ -238,7 +301,7 @@ impl NativeViewport {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = model;
-            Err("the embedded native viewport POC is macOS-only".to_string())
+            Err("the embedded native viewport is currently macOS-only".to_string())
         }
     }
 
@@ -251,7 +314,7 @@ impl NativeViewport {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = camera;
-            Err("the embedded native viewport POC is macOS-only".to_string())
+            Err("the embedded native viewport is currently macOS-only".to_string())
         }
     }
 
@@ -264,7 +327,20 @@ impl NativeViewport {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = preview;
-            Err("the embedded native viewport POC is macOS-only".to_string())
+            Err("the embedded native viewport is currently macOS-only".to_string())
+        }
+    }
+
+    pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.set_presentation(presentation)
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = presentation;
+            Err("the embedded native viewport is currently macOS-only".to_string())
         }
     }
 
@@ -277,7 +353,7 @@ impl NativeViewport {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (x, y);
-            Err("the embedded native viewport POC is macOS-only".to_string())
+            Err("the embedded native viewport is currently macOS-only".to_string())
         }
     }
 

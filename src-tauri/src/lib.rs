@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use native_viewport::{
     NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
-    ViewportModel, ViewportPreview,
+    ViewportModel, ViewportPresentation, ViewportPreview,
 };
 use nbcad_core::DocumentDto;
 use six_dof_mouse::SixDofMouseState;
@@ -73,6 +73,14 @@ fn native_viewport_set_preview(
     preview: ViewportPreview,
 ) -> Result<(), String> {
     viewport.set_preview(preview)
+}
+
+#[tauri::command]
+fn native_viewport_set_presentation(
+    viewport: tauri::State<'_, NativeViewport>,
+    presentation: ViewportPresentation,
+) -> Result<(), String> {
+    viewport.set_presentation(presentation)
 }
 
 #[tauri::command]
@@ -394,6 +402,7 @@ pub fn run() {
             native_viewport_sync_model,
             native_viewport_set_camera,
             native_viewport_set_preview,
+            native_viewport_set_presentation,
             native_viewport_pick,
             native_viewport_metrics,
             read_binary_file,

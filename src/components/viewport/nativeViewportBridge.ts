@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type * as THREE from 'three';
 import { useAppStore } from '../../store/appStore';
+import type { BrowserNode } from '../../types/document';
 
 interface NativeViewportMetrics {
   available: boolean;
@@ -44,8 +45,18 @@ interface NativePalette {
   gridFine: [number, number, number];
   gridMajor: [number, number, number];
   body: [number, number, number];
+  bodySelected: [number, number, number];
+  bodyTool: [number, number, number];
+  bodySelectedEdge: [number, number, number];
+  faceHover: [number, number, number];
+  faceSelected: [number, number, number];
   edge: [number, number, number];
+  edgeHover: [number, number, number];
+  edgeSelected: [number, number, number];
   activeSketch: [number, number, number];
+  definedSketch: [number, number, number];
+  hover: [number, number, number];
+  selection: [number, number, number];
   finishedSketch: [number, number, number];
   preview: [number, number, number];
 }
@@ -64,6 +75,21 @@ interface NativeHud {
   canRedo: boolean;
   sixDofState: string;
   selection: NativeHudSelection | null;
+}
+
+interface NativePresentation {
+  mode: 'solid' | 'pick_plane' | 'sketch';
+  hoveredOriginPlane: 'xy' | 'xz' | 'yz' | null;
+  selectedBodyIds: number[];
+  hoveredBodyId: number | null;
+  selectedFaceIds: number[];
+  hoveredFaceId: number | null;
+  selectedEdgeIds: number[];
+  hoveredEdgeId: number | null;
+  selectedSketchEntityIds: number[];
+  hoveredSketchEntityId: number | null;
+  hiddenBodyIds: number[];
+  hiddenDatumPlaneIds: number[];
 }
 
 const overlaySelector = [
@@ -99,6 +125,10 @@ let pendingPreview:
   | null = null;
 let previewInFlight = false;
 let lastLayoutKey = '';
+let layoutRevision = Date.now() * 1000;
+let pendingPresentation: NativePresentation | null = null;
+let presentationInFlight = false;
+let lastPresentationKey = '';
 
 function isTauriRuntime(): boolean {
   return '__TAURI_INTERNALS__' in window;
@@ -223,8 +253,18 @@ function collectPalette(): NativePalette {
     gridFine: cssRgb('--cad-ground-fine', '#3a3f47'),
     gridMajor: cssRgb('--cad-ground-major', '#4d545f'),
     body: cssRgb('--cad-body', '#8b9bac'),
+    bodySelected: cssRgb('--cad-body-selected', '#69a9d4'),
+    bodyTool: cssRgb('--cad-body-tool', '#b58a43'),
+    bodySelectedEdge: [13 / 255, 117 / 255, 165 / 255],
+    faceHover: cssRgb('--cad-face-hover', '#9ed5f3'),
+    faceSelected: cssRgb('--cad-face-selected', '#30aee8'),
     edge: cssRgb('--cad-edge', '#29333d'),
+    edgeHover: cssRgb('--cad-edge-hover', '#58c7ff'),
+    edgeSelected: cssRgb('--cad-edge-selected', '#ffc857'),
     activeSketch: cssRgb('--sketchline', '#5da9ff'),
+    definedSketch: cssRgb('--cad-defined', '#e8e9ec'),
+    hover: cssRgb('--cad-hover', '#9ccaff'),
+    selection: cssRgb('--accent', '#7463d8'),
     finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
   };
@@ -262,22 +302,93 @@ function collectHud(): NativeHud {
   };
 }
 
-async function sendLayout(container: HTMLElement): Promise<void> {
-  if (!(await probe())) return;
-  const viewport = rectFor(container);
-  if (!viewport) return;
-  const layout = {
-    viewport,
-    overlays: collectOverlays(),
-    palette: collectPalette(),
-    hud: collectHud(),
+function hiddenReferences(
+  nodes: BrowserNode[],
+  hidden: Record<number, boolean>,
+  kind: BrowserNode['kind'],
+): number[] {
+  const ids: number[] = [];
+  const visit = (entries: BrowserNode[]) => {
+    for (const node of entries) {
+      if (node.kind === kind && node.reference_id !== null && hidden[node.id]) {
+        ids.push(node.reference_id);
+      }
+      visit(node.children);
+    }
   };
-  const key = JSON.stringify(layout);
-  if (key === lastLayoutKey) return;
-  lastLayoutKey = key;
-  await invoke('native_viewport_set_layout', {
-    layout,
-  });
+  visit(nodes);
+  return ids;
+}
+
+function collectPresentation(): NativePresentation {
+  const state = useAppStore.getState();
+  const bodyHoverKinds = new Set([
+    'combine',
+    'mirror',
+    'rectangular_pattern',
+    'circular_pattern',
+    'split_body',
+  ]);
+  const hoveredBodyId =
+    state.hoveredFace !== null &&
+    state.bodyFeatureDialog !== null &&
+    bodyHoverKinds.has(state.bodyFeatureDialog.kind)
+      ? state.solidScene.bodies.find((body) =>
+          body.faces.some((face) => face.id === state.hoveredFace),
+        )?.id ?? null
+      : null;
+  const selectedSketchEntityIds = [...new Set(state.selectedEntities)];
+  if (
+    state.selectedEntity !== null &&
+    !selectedSketchEntityIds.includes(state.selectedEntity)
+  ) {
+    selectedSketchEntityIds.push(state.selectedEntity);
+  }
+  const browser = state.document?.browser ?? [];
+
+  return {
+    mode: state.mode === 'pickPlane' ? 'pick_plane' : state.mode,
+    hoveredOriginPlane: state.hoveredPlane,
+    selectedBodyIds: state.selectedBodies,
+    hoveredBodyId,
+    selectedFaceIds: state.selectedFaces,
+    hoveredFaceId: state.hoveredFace,
+    selectedEdgeIds: state.selectedEdges,
+    hoveredEdgeId: state.hoveredEdge,
+    selectedSketchEntityIds,
+    hoveredSketchEntityId: state.hoveredEntity,
+    hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
+    hiddenDatumPlaneIds: hiddenReferences(
+      browser,
+      state.hidden,
+      'construction_plane',
+    ),
+  };
+}
+
+function pumpPresentation(): void {
+  if (presentationInFlight || !pendingPresentation || !active) return;
+  const presentation = pendingPresentation;
+  pendingPresentation = null;
+  presentationInFlight = true;
+  void invoke('native_viewport_set_presentation', { presentation })
+    .catch(() => {
+      lastPresentationKey = '';
+    })
+    .finally(() => {
+      presentationInFlight = false;
+      pumpPresentation();
+    });
+}
+
+function syncPresentation(): void {
+  if (!active) return;
+  const presentation = collectPresentation();
+  const key = JSON.stringify(presentation);
+  if (key === lastPresentationKey) return;
+  lastPresentationKey = key;
+  pendingPresentation = presentation;
+  pumpPresentation();
 }
 
 async function syncModel(): Promise<void> {
@@ -293,13 +404,63 @@ async function syncModel(): Promise<void> {
 export function attachNativeViewport(container: HTMLElement): () => void {
   let disposed = false;
   let layoutFrame = 0;
+  let layoutInFlight = false;
+  let layoutRequested = false;
   let probeTimer = 0;
+  let settleTimers: number[] = [];
+
+  const flushLayout = async () => {
+    if (disposed) return;
+    if (layoutInFlight) {
+      layoutRequested = true;
+      return;
+    }
+    layoutInFlight = true;
+    try {
+      do {
+        layoutRequested = false;
+        if (!(await probe()) || disposed) break;
+        const viewport = rectFor(container);
+        if (!viewport) break;
+        const payload = {
+          viewport,
+          overlays: collectOverlays(),
+          palette: collectPalette(),
+          hud: collectHud(),
+        };
+        const key = JSON.stringify(payload);
+        if (key === lastLayoutKey) continue;
+        const layout = {
+          revision: ++layoutRevision,
+          ...payload,
+        };
+        try {
+          await invoke('native_viewport_set_layout', { layout });
+          lastLayoutKey = key;
+        } catch {
+          lastLayoutKey = '';
+        }
+      } while (layoutRequested && !disposed);
+    } finally {
+      layoutInFlight = false;
+      if (layoutRequested && !disposed) void flushLayout();
+    }
+  };
+
   const scheduleLayout = () => {
     if (disposed || layoutFrame !== 0) return;
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = 0;
-      void sendLayout(container).catch(() => undefined);
+      void flushLayout();
     });
+  };
+  const settleLayout = () => {
+    scheduleLayout();
+    for (const timer of settleTimers) window.clearTimeout(timer);
+    settleTimers = [80, 180, 350].map((delay) =>
+      window.setTimeout(scheduleLayout, delay),
+    );
+    requestAnimationFrame(() => requestAnimationFrame(scheduleLayout));
   };
 
   const observedLayoutElements = new Set<Element>();
@@ -341,8 +502,9 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       'data-native-six-dof-state',
     ],
   });
-  window.addEventListener('resize', scheduleLayout);
-  window.visualViewport?.addEventListener('resize', scheduleLayout);
+  window.addEventListener('resize', settleLayout);
+  window.visualViewport?.addEventListener('resize', settleLayout);
+  document.addEventListener('fullscreenchange', settleLayout);
   document.addEventListener('input', scheduleLayout, true);
   document.addEventListener('change', scheduleLayout, true);
   document.addEventListener('transitionend', scheduleLayout, true);
@@ -371,6 +533,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     ) {
       scheduleLayout();
     }
+    syncPresentation();
     previous = next;
   });
 
@@ -382,10 +545,12 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       container.dataset.nativeViewport = 'bevy';
       lastPreviewKey = '';
       lastLayoutKey = '';
+      lastPresentationKey = '';
       // Do the first cut immediately. requestAnimationFrame may be throttled
       // while a newly launched desktop window is still behind another app.
-      void sendLayout(container).catch(() => undefined);
+      void flushLayout();
       void syncModel().catch(() => undefined);
+      syncPresentation();
       // Web fonts and SVG icon metrics can settle after the first native cut.
       // Observed overlay roots catch the size change; these extra passes cover
       // engines that batch font layout without emitting ResizeObserver yet.
@@ -405,10 +570,12 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     disposed = true;
     if (layoutFrame !== 0) cancelAnimationFrame(layoutFrame);
     if (probeTimer !== 0) window.clearTimeout(probeTimer);
+    for (const timer of settleTimers) window.clearTimeout(timer);
     resize.disconnect();
     mutation.disconnect();
-    window.removeEventListener('resize', scheduleLayout);
-    window.visualViewport?.removeEventListener('resize', scheduleLayout);
+    window.removeEventListener('resize', settleLayout);
+    window.visualViewport?.removeEventListener('resize', settleLayout);
+    document.removeEventListener('fullscreenchange', settleLayout);
     document.removeEventListener('input', scheduleLayout, true);
     document.removeEventListener('change', scheduleLayout, true);
     document.removeEventListener('transitionend', scheduleLayout, true);
