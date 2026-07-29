@@ -1,9 +1,10 @@
 # ADR 0002 — Bevy as viewport / ECS subsystem
 
-- Status: Proposed — **deferred this quarter**
+- Status: Proposed — **deferred**
 - Date: 2026-07-27
 - Tracking: [#20](https://github.com/jackControls/noBS-CAD/issues/20)
-- Queue: **after** MCP focus (#10), co-link (#11), multi-window (#12)
+- Queue: after core CAD reliability and MCP co-link work; not blocked on the
+  deferred multi-window proposal (#12)
 
 ## Context
 

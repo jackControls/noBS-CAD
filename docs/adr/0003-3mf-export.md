@@ -3,7 +3,8 @@
 - Status: Proposed
 - Date: 2026-07-27
 - Tracking: [#13](https://github.com/jackControls/noBS-CAD/issues/13)
-- Related: goals / print focus in ADR 0006; tutor quests [#16](https://github.com/jackControls/noBS-CAD/issues/16)
+- Related: [product directions](../goals.md), MCP print focus in ADR 0006,
+  tutor quests [#16](https://github.com/jackControls/noBS-CAD/issues/16)
 
 ## Context
 
