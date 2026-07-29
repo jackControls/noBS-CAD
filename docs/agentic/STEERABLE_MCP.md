@@ -31,6 +31,12 @@ UI mapping lives in `src/sessionBridge.ts` (`focusFromUi`) and
 File-bridge v1 ≠ live shared memory. After attach, MCP loads `model.json`;
 UI must republish for agents to see UI edits. Deeper #11 sharing is separate work.
 
+## UI launch (optional)
+
+MCP is headless by default. Optional spine tools: `cad_launch_ui`,
+`cad_ui_status`, `cad_ui_window` (file-bridge `_ui/control.json`).
+See [UI_LAUNCH.md](UI_LAUNCH.md).
+
 ## Related reading
 
 - Issues [#10](https://github.com/jackControls/noBS-CAD/issues/10), [#11](https://github.com/jackControls/noBS-CAD/issues/11), epic [#9](https://github.com/jackControls/noBS-CAD/issues/9)

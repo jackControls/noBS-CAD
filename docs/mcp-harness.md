@@ -97,6 +97,27 @@ Spine controls (`cad_get_focus`, mode, catalog, sessions, …) stay advertised i
 
 Indexes / OKRs / agent ops: [INDEX.md](INDEX.md), [OKRs.md](OKRs.md), [agentic/INDEX.md](agentic/INDEX.md).
 
+### Install into agent clients
+
+```powershell
+cargo run -p xtask -- install-mcp
+```
+
+Detects Cursor / VS Code / Claude / OpenCode / Grok user configs and upserts
+`nobs-cad`. Guide: [agentic/INSTALL_MCP.md](agentic/INSTALL_MCP.md).
+
+### Headless vs UI
+
+MCP is **headless by default**. Optional spine tools:
+
+| Tool | Role |
+|------|------|
+| `cad_launch_ui` | Detach-spawn desktop app (needs built `nbcad` / `NBCAD_UI_EXE`) |
+| `cad_ui_status` | Tracked UI pid + sessions |
+| `cad_ui_window` | focus / show / hide / move / resize via `_ui/control.json` |
+
+Guide: [agentic/UI_LAUNCH.md](agentic/UI_LAUNCH.md). Live multi-window broker is backlog.
+
 ## Build
 
 ```sh

@@ -10,6 +10,9 @@
 | [src/INDEX.md](src/INDEX.md) | UI / session-bridge entrypoints |
 | [crates/INDEX.md](crates/INDEX.md) | Host-neutral Rust crates |
 | [src-tauri/INDEX.md](src-tauri/INDEX.md) | Native shell (Tauri + OCCT) |
+| [xtask/](xtask/) | Repo tasks (`install-mcp`, …) |
 
-**Steerable MCP (current):** PR tracking soft focus-scoped tools + file-bridge co-link.
+**Steerable MCP (current):** soft focus-scoped tools + file-bridge co-link.
 See [docs/mcp-harness.md](docs/mcp-harness.md) and [mcp-server/OKRs.md](mcp-server/OKRs.md).
+
+**Install into clients:** `cargo run -p xtask -- install-mcp` — [docs/agentic/INSTALL_MCP.md](docs/agentic/INSTALL_MCP.md).

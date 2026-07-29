@@ -1,5 +1,16 @@
 # Maintenance — MCP & disclosure
 
+## Install MCP into agent clients
+
+Upsert `nobs-cad` into detected user configs (Cursor, VS Code, Claude, OpenCode, Grok):
+
+```powershell
+cargo run -p xtask -- install-mcp
+cargo run -p xtask -- install-mcp --dry-run
+```
+
+Full guide: [INSTALL_MCP.md](INSTALL_MCP.md).
+
 ## Prerequisites (Windows)
 
 ```powershell
