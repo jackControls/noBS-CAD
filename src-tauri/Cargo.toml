@@ -58,6 +58,8 @@ bevy = { version = "0.19.0", default-features = false, features = [
   "zstd_rust",
 ] }
 bevy_ecs = "0.19.0"
+bevy_gizmos = "0.19.0"
+bevy_reflect = "0.19.0"
 hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "objc2-quartz-core"] }

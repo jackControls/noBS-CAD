@@ -1,9 +1,10 @@
 use std::{
+    collections::HashMap,
     ffi::c_void,
     num::NonZeroU32,
     ptr::NonNull,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Instant,
@@ -21,7 +22,7 @@ use bevy::{
 };
 use nbcad_core::PlaneBasis;
 use nbcad_sketch::{EntityDto, SketchDto};
-use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, SolidSceneDto};
+use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, FaceDto, SolidSceneDto};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSView, NSWindow, NSWindowOrderingMode};
 use objc2_core_graphics::CGMutablePath;
@@ -35,7 +36,8 @@ use tauri::Manager;
 
 use super::{
     NativePick, NativeViewportMetrics, ViewportCamera, ViewportHud, ViewportHudSelection,
-    ViewportLayout, ViewportModel, ViewportPalette, ViewportPreview, ViewportRect,
+    ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
+    ViewportPresentation, ViewportPreview, ViewportRect,
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
@@ -74,6 +76,7 @@ enum RenderCommand {
     Model(ViewportModel),
     Camera(ViewportCamera),
     Preview(ViewportPreview),
+    Presentation(ViewportPresentation),
 }
 
 #[derive(Default)]
@@ -82,6 +85,7 @@ struct PendingRenderCommands {
     model: Option<ViewportModel>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
+    presentation: Option<ViewportPresentation>,
     scheduled: bool,
 }
 
@@ -97,6 +101,7 @@ struct PickState {
     scene: SolidSceneDto,
     camera: ViewportCamera,
     logical_size: (f32, f32),
+    hidden_body_ids: Vec<u64>,
 }
 
 impl Default for PickState {
@@ -105,6 +110,7 @@ impl Default for PickState {
             scene: SolidSceneDto::default(),
             camera: ViewportCamera::default(),
             logical_size: (1.0, 1.0),
+            hidden_body_ids: Vec::new(),
         }
     }
 }
@@ -114,6 +120,7 @@ pub struct MacNativeViewport {
     runtime: Arc<AtomicUsize>,
     pending: Arc<Mutex<PendingRenderCommands>>,
     pick_state: Arc<Mutex<PickState>>,
+    layout_revision: Arc<AtomicU64>,
     pointers: Arc<NativePointers>,
     metrics: Arc<Mutex<MetricsState>>,
 }
@@ -127,6 +134,7 @@ impl MacNativeViewport {
         let runtime = Arc::new(AtomicUsize::new(0));
         let pending = Arc::new(Mutex::new(PendingRenderCommands::default()));
         let pick_state = Arc::new(Mutex::new(PickState::default()));
+        let layout_revision = Arc::new(AtomicU64::new(0));
         let pointers = Arc::new(NativePointers::default());
         let metrics = Arc::new(Mutex::new(MetricsState::default()));
         let install_pointers = pointers.clone();
@@ -202,12 +210,21 @@ impl MacNativeViewport {
             runtime,
             pending,
             pick_state,
+            layout_revision,
             pointers,
             metrics,
         })
     }
 
     pub fn set_layout(&self, app: &tauri::AppHandle, layout: ViewportLayout) -> Result<(), String> {
+        if layout.revision > 0 {
+            let previous = self
+                .layout_revision
+                .fetch_max(layout.revision, Ordering::AcqRel);
+            if layout.revision < previous {
+                return Ok(());
+            }
+        }
         if let Ok(mut state) = self.pick_state.lock() {
             state.logical_size = (
                 layout.viewport.width.max(1.0) as f32,
@@ -265,6 +282,13 @@ impl MacNativeViewport {
         self.enqueue(RenderCommand::Preview(preview))
     }
 
+    pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
+        if let Ok(mut state) = self.pick_state.lock() {
+            state.hidden_body_ids = presentation.hidden_body_ids.clone();
+        }
+        self.enqueue(RenderCommand::Presentation(presentation))
+    }
+
     pub fn pick(&self, x: f32, y: f32) -> Result<Option<NativePick>, String> {
         let started = Instant::now();
         let result = {
@@ -272,7 +296,14 @@ impl MacNativeViewport {
                 .pick_state
                 .lock()
                 .map_err(|_| "native viewport pick state lock poisoned".to_string())?;
-            pick_occt_scene(&state.scene, state.camera, state.logical_size, x, y)
+            pick_occt_scene(
+                &state.scene,
+                state.camera,
+                state.logical_size,
+                x,
+                y,
+                &state.hidden_body_ids,
+            )
         };
         if let Ok(mut current) = self.metrics.lock() {
             current.last_pointer_latency_ms = started.elapsed().as_secs_f64() * 1_000.0;
@@ -497,6 +528,9 @@ struct HudResource {
     revision: u64,
 }
 
+#[derive(Resource, Default)]
+struct PresentationResource(ViewportPresentation);
+
 impl Default for HudResource {
     fn default() -> Self {
         Self {
@@ -525,6 +559,12 @@ struct RenderedRevisions {
 #[derive(Component)]
 struct NativeCadBody;
 
+#[derive(Component, Clone, Copy)]
+struct NativeCadFace {
+    body_id: u64,
+    face_id: u64,
+}
+
 #[derive(Component)]
 struct NativeModelGeometry;
 
@@ -532,7 +572,14 @@ struct NativeModelGeometry;
 struct NativeCadCamera;
 
 #[derive(Component)]
-struct NativeDatumPlane;
+struct NativeDatumPlane {
+    datum_id: u64,
+}
+
+#[derive(Component, Clone, Copy)]
+struct NativeOriginPlane {
+    plane: ViewportOriginPlane,
+}
 
 #[derive(Component)]
 struct NativeHudRoot;
@@ -548,6 +595,9 @@ struct HudAxisMark {
 struct HudAxisLabel {
     axis: Vec3,
 }
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadHighlightGizmos;
 
 fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
@@ -565,7 +615,8 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         exit_condition: ExitCondition::DontExit,
         close_when_requested: false,
     });
-    app.add_plugins(plugins);
+    app.add_plugins(plugins)
+        .init_gizmo_group::<CadHighlightGizmos>();
 
     let (window_entity, holder) = {
         let world = app.world_mut();
@@ -599,6 +650,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         .init_resource::<PreviewResource>()
         .init_resource::<PaletteResource>()
         .init_resource::<HudResource>()
+        .init_resource::<PresentationResource>()
         .init_resource::<RenderedRevisions>()
         .add_systems(Startup, setup_scene)
         .add_systems(
@@ -606,6 +658,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
             (
                 rebuild_occt_meshes,
                 apply_camera,
+                apply_native_presentation_styles,
                 rebuild_native_hud,
                 update_native_hud_orientation,
                 draw_cad_gizmos,
@@ -622,7 +675,12 @@ fn setup_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut gizmo_config: ResMut<GizmoConfigStore>,
 ) {
+    let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
+    highlight_config.line.width = 2.6;
+    highlight_config.depth_bias = -1.0;
+
     let camera = ViewportCamera::default();
     commands.spawn((
         Name::new("React-synchronized CAD camera"),
@@ -659,8 +717,15 @@ fn setup_scene(
     ));
 
     for (name, basis, color) in origin_plane_bases() {
+        let plane = match name {
+            "XY" => ViewportOriginPlane::Xy,
+            "XZ" => ViewportOriginPlane::Xz,
+            _ => ViewportOriginPlane::Yz,
+        };
         commands.spawn((
             Name::new(format!("Origin plane {name}")),
+            NativeOriginPlane { plane },
+            Visibility::Hidden,
             Mesh3d(meshes.add(reference_plane_mesh(&basis, 24.0))),
             MeshMaterial3d(materials.add(StandardMaterial {
                 base_color: color,
@@ -692,61 +757,43 @@ fn rebuild_occt_meshes(
     }
 
     for body in &model.scene.bodies {
-        let positions = body
-            .mesh
-            .positions
-            .chunks_exact(3)
-            .map(|value| [value[0], value[1], value[2]])
-            .collect::<Vec<_>>();
-        let normals = body
-            .mesh
-            .normals
-            .chunks_exact(3)
-            .map(|value| [value[0], value[1], value[2]])
-            .collect::<Vec<_>>();
-        if positions.is_empty() || body.mesh.indices.is_empty() {
-            continue;
+        for face in &body.faces {
+            let Some(mesh) = face_mesh(body, face) else {
+                continue;
+            };
+            commands.spawn((
+                Name::new(format!(
+                    "OCCT face {} on {} ({})",
+                    face.id.0, body.id.0, body.name
+                )),
+                NativeCadBody,
+                NativeCadFace {
+                    body_id: body.id.0,
+                    face_id: face.id.0,
+                },
+                NativeModelGeometry,
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: rgb(palette.0.body),
+                    metallic: 0.03,
+                    perceptual_roughness: 0.72,
+                    cull_mode: None,
+                    ..default()
+                })),
+            ));
         }
-
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        );
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        if normals.len() == body.mesh.positions.len() / 3 {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        } else {
-            mesh.compute_smooth_normals();
-        }
-        mesh.insert_indices(Indices::U32(body.mesh.indices.clone()));
-
-        commands.spawn((
-            Name::new(format!("OCCT body {} ({})", body.id.0, body.name)),
-            NativeCadBody,
-            NativeModelGeometry,
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: rgb(palette.0.body),
-                metallic: 0.035,
-                perceptual_roughness: 0.44,
-                ..default()
-            })),
-        ));
     }
 
     for plane in &model.datum_planes {
         commands.spawn((
             Name::new(format!("Construction plane {}", plane.name)),
-            NativeDatumPlane,
+            NativeDatumPlane {
+                datum_id: plane.datum_id.0,
+            },
             NativeModelGeometry,
             Mesh3d(meshes.add(reference_plane_mesh(&plane.basis, 28.0))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgba(
-                    palette.0.accent[0],
-                    palette.0.accent[1],
-                    palette.0.accent[2],
-                    0.13,
-                ),
+                base_color: Color::srgba(0.85, 0.65, 0.30, 0.08),
                 alpha_mode: AlphaMode::Blend,
                 unlit: true,
                 cull_mode: None,
@@ -773,6 +820,106 @@ fn apply_camera(
                 .vertical_fov_degrees
                 .clamp(1.0, 150.0)
                 .to_radians();
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn apply_native_presentation_styles(
+    presentation: Res<PresentationResource>,
+    palette: Res<PaletteResource>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut faces: Query<
+        (
+            &NativeCadFace,
+            &MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        (Without<NativeDatumPlane>, Without<NativeOriginPlane>),
+    >,
+    mut datum_planes: Query<
+        (
+            &NativeDatumPlane,
+            &MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        (Without<NativeCadFace>, Without<NativeOriginPlane>),
+    >,
+    mut origin_planes: Query<
+        (
+            &NativeOriginPlane,
+            &MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        (Without<NativeCadFace>, Without<NativeDatumPlane>),
+    >,
+) {
+    let state = &presentation.0;
+    for (face, handle, mut visibility) in &mut faces {
+        *visibility = if state.hidden_body_ids.contains(&face.body_id) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        let Some(mut material) = materials.get_mut(&handle.0) else {
+            continue;
+        };
+        let selected_face = state.selected_face_ids.contains(&face.face_id);
+        let hovered_face = state.hovered_face_id == Some(face.face_id);
+        let selected_body_index = state
+            .selected_body_ids
+            .iter()
+            .position(|body_id| *body_id == face.body_id);
+        let color = if selected_face {
+            palette.0.face_selected
+        } else if hovered_face {
+            palette.0.face_hover
+        } else if selected_body_index == Some(0) {
+            palette.0.body_selected
+        } else if selected_body_index.is_some() {
+            palette.0.body_tool
+        } else {
+            palette.0.body
+        };
+        material.base_color = rgb(color);
+        material.emissive = if selected_face || hovered_face {
+            rgb(color).to_linear() * 0.32
+        } else {
+            LinearRgba::BLACK
+        };
+    }
+
+    for (plane, handle, mut visibility) in &mut datum_planes {
+        *visibility = if state.hidden_datum_plane_ids.contains(&plane.datum_id) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.base_color = Color::srgba(
+                0.85,
+                0.65,
+                0.30,
+                if state.mode == ViewportMode::PickPlane {
+                    0.14
+                } else {
+                    0.08
+                },
+            );
+        }
+    }
+
+    for (plane, handle, mut visibility) in &mut origin_planes {
+        let visible = state.mode == ViewportMode::PickPlane;
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            let hovered = state.hovered_origin_plane == Some(plane.plane);
+            material.base_color =
+                origin_plane_color(plane.plane, if hovered { 0.28 } else { 0.10 });
         }
     }
 }
@@ -1277,6 +1424,14 @@ fn origin_plane_bases() -> [(&'static str, PlaneBasis, Color); 3] {
     ]
 }
 
+fn origin_plane_color(plane: ViewportOriginPlane, alpha: f32) -> Color {
+    match plane {
+        ViewportOriginPlane::Xy => Color::srgba(0.25, 0.60, 0.94, alpha),
+        ViewportOriginPlane::Xz => Color::srgba(0.31, 0.74, 0.47, alpha),
+        ViewportOriginPlane::Yz => Color::srgba(0.88, 0.36, 0.39, alpha),
+    }
+}
+
 fn reference_plane_mesh(basis: &PlaneBasis, half_size: f32) -> Mesh {
     let origin = basis_vector(basis.origin);
     let u = basis_vector(basis.u) * half_size;
@@ -1304,95 +1459,216 @@ fn reference_plane_mesh(basis: &PlaneBasis, half_size: f32) -> Mesh {
     mesh
 }
 
+fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
+    let start = face.first_index as usize;
+    let end = start
+        .saturating_add(face.index_count as usize)
+        .min(body.mesh.indices.len());
+    let mut positions = Vec::with_capacity(end.saturating_sub(start));
+    let mut normals = Vec::with_capacity(end.saturating_sub(start));
+    for vertex in &body.mesh.indices[start..end] {
+        let offset = *vertex as usize * 3;
+        let position = body.mesh.positions.get(offset..offset + 3)?;
+        positions.push([position[0], position[1], position[2]]);
+        if let Some(normal) = body.mesh.normals.get(offset..offset + 3) {
+            normals.push([normal[0], normal[1], normal[2]]);
+        }
+    }
+    if positions.len() < 3 {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    if normals.len() == end.saturating_sub(start) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    } else {
+        mesh.compute_flat_normals();
+    }
+    Some(mesh)
+}
+
 fn draw_cad_gizmos(
     mut gizmos: Gizmos,
+    mut highlights: Gizmos<CadHighlightGizmos>,
     model: Res<ModelResource>,
     preview: Res<PreviewResource>,
     palette: Res<PaletteResource>,
+    presentation: Res<PresentationResource>,
 ) {
+    let state = &presentation.0;
     let fine = rgba(palette.0.grid_fine, 0.28);
     let major = rgba(palette.0.grid_major, 0.48);
-    for index in -30..=30 {
-        let coordinate = index as f32 * 5.0;
-        let color = if index % 5 == 0 { major } else { fine };
-        gizmos.line(
-            Vec3::new(coordinate, -150.0, -0.03),
-            Vec3::new(coordinate, 150.0, -0.03),
-            color,
-        );
-        gizmos.line(
-            Vec3::new(-150.0, coordinate, -0.03),
-            Vec3::new(150.0, coordinate, -0.03),
-            color,
-        );
-    }
-    gizmos.line(
-        Vec3::new(-150.0, 0.0, 0.0),
-        Vec3::new(150.0, 0.0, 0.0),
-        Color::srgba(0.80, 0.25, 0.30, 0.62),
-    );
-    gizmos.line(
-        Vec3::new(0.0, -150.0, 0.0),
-        Vec3::new(0.0, 150.0, 0.0),
-        Color::srgba(0.25, 0.65, 0.38, 0.62),
-    );
-    gizmos.line(
-        Vec3::new(0.0, 0.0, -150.0),
-        Vec3::new(0.0, 0.0, 150.0),
-        Color::srgba(0.25, 0.58, 0.92, 0.50),
-    );
 
-    for (_, basis, color) in origin_plane_bases() {
-        draw_plane_outline(&mut gizmos, &basis, 24.0, color.with_alpha(0.38));
+    if state.mode == ViewportMode::Sketch {
+        if let Some(sketch) = &model.active_sketch {
+            draw_grid_on_basis(&mut gizmos, &sketch.basis, fine, major);
+        }
+    } else {
+        draw_grid_on_basis(&mut gizmos, &origin_plane_bases()[0].1, fine, major);
     }
+
+    if state.mode == ViewportMode::PickPlane {
+        for (name, basis, _) in origin_plane_bases() {
+            let plane = match name {
+                "XY" => ViewportOriginPlane::Xy,
+                "XZ" => ViewportOriginPlane::Xz,
+                _ => ViewportOriginPlane::Yz,
+            };
+            let alpha = if state.hovered_origin_plane == Some(plane) {
+                0.92
+            } else {
+                0.42
+            };
+            draw_plane_outline(
+                &mut highlights,
+                &basis,
+                24.0,
+                origin_plane_color(plane, alpha),
+            );
+        }
+        gizmos.sphere(Vec3::ZERO, 0.46, Color::srgba(0.94, 0.95, 0.98, 0.98));
+        gizmos.arrow(
+            Vec3::ZERO,
+            Vec3::X * 14.0,
+            Color::srgba(0.88, 0.36, 0.39, 0.98),
+        );
+        gizmos.arrow(
+            Vec3::ZERO,
+            Vec3::Y * 14.0,
+            Color::srgba(0.35, 0.68, 0.45, 0.98),
+        );
+        gizmos.arrow(
+            Vec3::ZERO,
+            Vec3::Z * 14.0,
+            Color::srgba(0.26, 0.65, 0.91, 0.98),
+        );
+    } else if state.mode == ViewportMode::Sketch {
+        if let Some(sketch) = &model.active_sketch {
+            let origin = basis_vector(sketch.basis.origin);
+            gizmos.sphere(origin, 0.38, rgba(palette.0.mute, 0.92));
+        }
+    }
+
     for plane in &model.datum_planes {
+        if state.hidden_datum_plane_ids.contains(&plane.datum_id.0) {
+            continue;
+        }
         draw_plane_outline(
             &mut gizmos,
             &plane.basis,
             28.0,
-            rgba(palette.0.accent, 0.72),
-        );
-        gizmos.sphere(
-            basis_vector(plane.basis.origin),
-            0.34,
-            rgba(palette.0.accent, 0.95),
+            Color::srgba(
+                0.88,
+                0.68,
+                0.32,
+                if state.mode == ViewportMode::PickPlane {
+                    0.76
+                } else {
+                    0.56
+                },
+            ),
         );
     }
 
-    gizmos.sphere(Vec3::ZERO, 0.46, Color::srgba(0.94, 0.95, 0.98, 0.98));
-    gizmos.arrow(
-        Vec3::ZERO,
-        Vec3::X * 14.0,
-        Color::srgba(0.88, 0.36, 0.39, 0.98),
-    );
-    gizmos.arrow(
-        Vec3::ZERO,
-        Vec3::Y * 14.0,
-        Color::srgba(0.35, 0.68, 0.45, 0.98),
-    );
-    gizmos.arrow(
-        Vec3::ZERO,
-        Vec3::Z * 14.0,
-        Color::srgba(0.26, 0.65, 0.91, 0.98),
-    );
-
     for body in &model.scene.bodies {
+        if state.hidden_body_ids.contains(&body.id.0) {
+            continue;
+        }
+        let selected_body_index = state
+            .selected_body_ids
+            .iter()
+            .position(|body_id| *body_id == body.id.0);
+        let hovered_body = state.hovered_body_id == Some(body.id.0);
+
+        if selected_body_index.is_some() || hovered_body {
+            let color = if selected_body_index == Some(0) {
+                rgb(palette.0.face_selected)
+            } else if selected_body_index.is_some() {
+                rgb(palette.0.edge_selected)
+            } else {
+                rgb(palette.0.edge_hover)
+            };
+            for edge in &body.edges {
+                draw_edge_segments(&mut highlights, edge, color);
+            }
+        }
+
         for edge in &body.edges {
-            for pair in edge.points.windows(2) {
-                gizmos.line(
-                    Vec3::new(pair[0].x as f32, pair[0].y as f32, pair[0].z as f32),
-                    Vec3::new(pair[1].x as f32, pair[1].y as f32, pair[1].z as f32),
-                    rgba(palette.0.edge, 0.92),
+            let selected = state.selected_edge_ids.contains(&edge.id.0);
+            let hovered = state.hovered_edge_id == Some(edge.id.0);
+            let color = if selected {
+                palette.0.edge_selected
+            } else if hovered {
+                palette.0.edge_hover
+            } else if selected_body_index.is_some() {
+                palette.0.body_selected_edge
+            } else {
+                palette.0.edge
+            };
+            draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92));
+            if selected || hovered {
+                draw_edge_segments(
+                    &mut highlights,
+                    edge,
+                    rgb(if selected {
+                        palette.0.edge_selected
+                    } else {
+                        palette.0.edge_hover
+                    }),
+                );
+            }
+        }
+
+        for face in &body.faces {
+            let selected = state.selected_face_ids.contains(&face.id.0);
+            let hovered = state.hovered_face_id == Some(face.id.0);
+            if selected || hovered {
+                draw_face_boundary(
+                    &mut highlights,
+                    body,
+                    face,
+                    rgb(if selected {
+                        palette.0.edge_selected
+                    } else {
+                        palette.0.edge_hover
+                    }),
                 );
             }
         }
     }
 
     for sketch in &model.finished_sketches {
-        draw_sketch(&mut gizmos, sketch, rgba(palette.0.finished_sketch, 0.58));
+        draw_sketch(&mut gizmos, sketch, |_| {
+            Some(rgba(palette.0.finished_sketch, 0.58))
+        });
     }
     if let Some(sketch) = &model.active_sketch {
-        draw_sketch(&mut gizmos, sketch, rgba(palette.0.active_sketch, 0.98));
+        draw_sketch(&mut gizmos, sketch, |entity| {
+            let (id, fully_defined) = sketch_entity_style(entity);
+            Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
+                palette.0.selection
+            } else if state.hovered_sketch_entity_id == Some(id) {
+                palette.0.hover
+            } else if fully_defined {
+                palette.0.defined_sketch
+            } else {
+                palette.0.active_sketch
+            }))
+        });
+        draw_sketch(&mut highlights, sketch, |entity| {
+            let (id, _) = sketch_entity_style(entity);
+            if state.selected_sketch_entity_ids.contains(&id) {
+                Some(rgb(palette.0.selection))
+            } else if state.hovered_sketch_entity_id == Some(id) {
+                Some(rgb(palette.0.hover))
+            } else {
+                None
+            }
+        });
     }
 
     let preview_color = rgba(palette.0.preview, 0.98);
@@ -1425,7 +1701,42 @@ fn draw_cad_gizmos(
     }
 }
 
-fn draw_plane_outline(gizmos: &mut Gizmos, basis: &PlaneBasis, half_size: f32, color: Color) {
+fn draw_grid_on_basis(gizmos: &mut Gizmos, basis: &PlaneBasis, fine: Color, major: Color) {
+    let origin = basis_vector(basis.origin) - basis_vector(basis.normal) * 0.03;
+    let u = basis_vector(basis.u);
+    let v = basis_vector(basis.v);
+    for index in -30..=30 {
+        let coordinate = index as f32 * 5.0;
+        let color = if index % 5 == 0 { major } else { fine };
+        gizmos.line(
+            origin + u * coordinate - v * 150.0,
+            origin + u * coordinate + v * 150.0,
+            color,
+        );
+        gizmos.line(
+            origin - u * 150.0 + v * coordinate,
+            origin + u * 150.0 + v * coordinate,
+            color,
+        );
+    }
+    gizmos.line(
+        origin - u * 150.0,
+        origin + u * 150.0,
+        Color::srgba(0.80, 0.25, 0.30, 0.62),
+    );
+    gizmos.line(
+        origin - v * 150.0,
+        origin + v * 150.0,
+        Color::srgba(0.25, 0.65, 0.38, 0.62),
+    );
+}
+
+fn draw_plane_outline<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    half_size: f32,
+    color: Color,
+) {
     let origin = basis_vector(basis.origin);
     let u = basis_vector(basis.u) * half_size;
     let v = basis_vector(basis.v) * half_size;
@@ -1442,8 +1753,87 @@ fn draw_plane_outline(gizmos: &mut Gizmos, basis: &PlaneBasis, half_size: f32, c
     gizmos.line(origin - v, origin + v, color.with_alpha(0.46));
 }
 
-fn draw_sketch(gizmos: &mut Gizmos, sketch: &SketchDto, color: Color) {
+fn draw_edge_segments<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    edge: &nbcad_solid::EdgeDto,
+    color: Color,
+) {
+    for pair in edge.points.windows(2) {
+        gizmos.line(
+            Vec3::new(pair[0].x as f32, pair[0].y as f32, pair[0].z as f32),
+            Vec3::new(pair[1].x as f32, pair[1].y as f32, pair[1].z as f32),
+            color,
+        );
+    }
+}
+
+fn draw_face_boundary<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    body: &BodyDto,
+    face: &FaceDto,
+    color: Color,
+) {
+    let start = face.first_index as usize;
+    let end = start
+        .saturating_add(face.index_count as usize)
+        .min(body.mesh.indices.len());
+    let mut counts = HashMap::<(u32, u32), u32>::new();
+    for triangle in body.mesh.indices[start..end].chunks_exact(3) {
+        for (a, b) in [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ] {
+            let edge = if a <= b { (a, b) } else { (b, a) };
+            *counts.entry(edge).or_default() += 1;
+        }
+    }
+    for ((a, b), count) in counts {
+        if count != 1 {
+            continue;
+        }
+        let Some(start) = mesh_position(body, a) else {
+            continue;
+        };
+        let Some(end) = mesh_position(body, b) else {
+            continue;
+        };
+        gizmos.line(start, end, color);
+    }
+}
+
+fn sketch_entity_style(entity: &EntityDto) -> (u64, bool) {
+    match entity {
+        EntityDto::Point {
+            id, fully_defined, ..
+        }
+        | EntityDto::Line {
+            id, fully_defined, ..
+        }
+        | EntityDto::Arc {
+            id, fully_defined, ..
+        }
+        | EntityDto::Circle {
+            id, fully_defined, ..
+        }
+        | EntityDto::Spline {
+            id, fully_defined, ..
+        } => (id.0, *fully_defined),
+    }
+}
+
+fn draw_sketch<Config, ColorFor>(
+    gizmos: &mut Gizmos<Config>,
+    sketch: &SketchDto,
+    mut color_for: ColorFor,
+) where
+    Config: GizmoConfigGroup,
+    ColorFor: FnMut(&EntityDto) -> Option<Color>,
+{
     for entity in &sketch.entities {
+        let Some(color) = color_for(entity) else {
+            continue;
+        };
         match entity {
             EntityDto::Point { position, .. } => {
                 let point = sketch_world(&sketch.basis, position.x, position.y, 0.05);
@@ -1507,7 +1897,7 @@ fn draw_sketch(gizmos: &mut Gizmos, sketch: &SketchDto, color: Color) {
 }
 
 fn draw_parametric_curve(
-    gizmos: &mut Gizmos,
+    gizmos: &mut Gizmos<impl GizmoConfigGroup>,
     segments: usize,
     color: Color,
     point: impl Fn(f64) -> Vec3,
@@ -1558,6 +1948,9 @@ fn push_render_command(
         RenderCommand::Model(model) => pending.model = Some(model),
         RenderCommand::Camera(camera) => pending.camera = Some(camera),
         RenderCommand::Preview(preview) => pending.preview = Some(preview),
+        RenderCommand::Presentation(presentation) => {
+            pending.presentation = Some(presentation);
+        }
     }
     if pending.scheduled {
         false
@@ -1594,6 +1987,7 @@ fn drain_render_commands(
                 && pending.model.is_none()
                 && pending.camera.is_none()
                 && pending.preview.is_none()
+                && pending.presentation.is_none()
             {
                 pending.scheduled = false;
                 return;
@@ -1603,6 +1997,7 @@ fn drain_render_commands(
                 pending.model.take(),
                 pending.camera.take(),
                 pending.preview.take(),
+                pending.presentation.take(),
             )
         };
 
@@ -1633,6 +2028,14 @@ fn drain_render_commands(
         if let Some(preview) = commands.3 {
             apply_render_command(
                 RenderCommand::Preview(preview),
+                runtime,
+                metrics,
+                &mut dirty,
+            );
+        }
+        if let Some(presentation) = commands.4 {
+            apply_render_command(
+                RenderCommand::Presentation(presentation),
                 runtime,
                 metrics,
                 &mut dirty,
@@ -1743,6 +2146,16 @@ fn apply_render_command(
             resource.marker = next.marker;
             *dirty = true;
         }
+        RenderCommand::Presentation(next) => {
+            let mut resource = runtime
+                .app
+                .world_mut()
+                .resource_mut::<PresentationResource>();
+            if resource.0 != next {
+                resource.0 = next;
+                *dirty = true;
+            }
+        }
     }
 }
 
@@ -1764,6 +2177,7 @@ fn pick_occt_scene(
     viewport: (f32, f32),
     x: f32,
     y: f32,
+    hidden_body_ids: &[u64],
 ) -> Option<NativePick> {
     if viewport.0 <= 1.0 || viewport.1 <= 1.0 {
         return None;
@@ -1785,6 +2199,9 @@ fn pick_occt_scene(
 
     let mut best: Option<NativePick> = None;
     for body in &scene.bodies {
+        if hidden_body_ids.contains(&body.id.0) {
+            continue;
+        }
         pick_body(body, origin, direction, &mut best);
     }
     best
@@ -1933,10 +2350,37 @@ mod tests {
             (800.0, 600.0),
             400.0,
             300.0,
+            &[],
         )
         .expect("center ray should hit the OCCT box");
         assert_eq!(hit.body_id, scene.bodies[0].id.0);
         assert!(hit.point[2] > 9.99);
+        assert!(
+            pick_occt_scene(
+                &scene,
+                ViewportCamera {
+                    position: [0.0, 0.0, 100.0],
+                    target: [0.0, 0.0, 0.0],
+                    up: [0.0, 1.0, 0.0],
+                    vertical_fov_degrees: 45.0,
+                },
+                (800.0, 600.0),
+                400.0,
+                300.0,
+                &[scene.bodies[0].id.0],
+            )
+            .is_none(),
+            "browser-hidden bodies must not remain pickable"
+        );
+        for face in &scene.bodies[0].faces {
+            let mesh = face_mesh(&scene.bodies[0], face)
+                .expect("every OCCT face should become an independent Bevy mesh");
+            assert_eq!(
+                mesh.count_vertices(),
+                face.index_count as usize,
+                "per-face meshes preserve the OCCT tessellation range"
+            );
+        }
 
         let started = Instant::now();
         for _ in 0..10_000 {
@@ -1951,13 +2395,14 @@ mod tests {
                 (800.0, 600.0),
                 400.0,
                 300.0,
+                &[],
             ));
         }
         let average_micros = started.elapsed().as_secs_f64() * 100.0;
         eprintln!("actual OCCT box pick average: {average_micros:.3} µs");
         assert!(
             average_micros < 5_000.0,
-            "native picking exceeded the POC's 5 ms CPU budget"
+            "native picking exceeded the demo's 5 ms CPU budget"
         );
     }
 }

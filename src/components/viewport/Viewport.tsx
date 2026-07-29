@@ -314,11 +314,15 @@ export function Viewport() {
     // right = orbit, wheel = zoom. The pointerdown listener is registered
     // BEFORE OrbitControls is constructed so the remapping is observed.
     let controlsRef: OrbitControls | null = null;
+    // Bevy is event-driven, so its invisible Three.js controller should wake
+    // only for input/state changes or an animation that is still settling.
+    let wakeControllerFrame: () => void = () => undefined;
     const onNavPointerDown = (e: PointerEvent) => {
       if (e.button === 1 && e.shiftKey && controlsRef) {
         controlsRef.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
       }
       cancelCameraAnimation();
+      wakeControllerFrame();
     };
     const onNavPointerUp = (e: PointerEvent) => {
       if (e.button === 1 && controlsRef) {
@@ -338,6 +342,8 @@ export function Viewport() {
       MIDDLE: THREE.MOUSE.PAN,
       RIGHT: THREE.MOUSE.ROTATE,
     };
+    const onControlsChange = () => wakeControllerFrame();
+    controls.addEventListener('change', onControlsChange);
     renderer.domElement.addEventListener('wheel', cancelCameraAnimation, { passive: true });
 
     // --- Input device mapping (D11, owner) ---------------------------------
@@ -406,6 +412,7 @@ export function Viewport() {
       e.preventDefault();
       e.stopImmediatePropagation(); // OrbitControls never handles wheel
       cancelCameraAnimation();
+      wakeControllerFrame();
       const unit = e.deltaMode === 1 ? 16 : 1; // lines → px
       if (e.shiftKey) {
         // Shift+swipe = orbit. Same macOS natural-scrolling inversion as
@@ -470,6 +477,7 @@ export function Viewport() {
         toUp: toUp.clone().normalize(),
       };
       controls.enabled = false;
+      wakeControllerFrame();
     }
 
     function cancelCameraAnimation() {
@@ -2008,6 +2016,7 @@ export function Viewport() {
       const delta = right.multiplyScalar(-dxPx * wpp).addScaledVector(upv, dyPx * wpp);
       camera.position.add(delta);
       controls.target.add(delta);
+      wakeControllerFrame();
     };
 
     const dollyBy = (factor: number) => {
@@ -2015,6 +2024,7 @@ export function Viewport() {
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       offset.setLength(Math.min(5000, Math.max(2, offset.length())));
       camera.position.copy(controls.target).add(offset);
+      wakeControllerFrame();
     };
 
     /** Frame a dragged screen rect (Zoom Window): recentre + dolly to fit. */
@@ -4846,6 +4856,7 @@ export function Viewport() {
       });
     };
     const onPointerMove = (e: PointerEvent) => {
+      wakeControllerFrame();
       const state = store.getState();
 
       // Modal nav-tool drag takes over the left button when active.
@@ -5720,6 +5731,7 @@ export function Viewport() {
         // Pausing OrbitControls also prevents any remaining mouse damping from
         // being applied on top of the external camera matrices.
         controls.enabled = false;
+        wakeControllerFrame();
       },
       endMotion: () => {
         if (!sixDofDriverMotion) return;
@@ -5733,6 +5745,7 @@ export function Viewport() {
         controls.enabled = sixDofDriverControlsWereEnabled;
         if (controls.enabled) controls.update();
         sixDofDriverPivot.copy(controls.target);
+        wakeControllerFrame();
       },
       getViewMatrix: () => {
         camera.updateMatrixWorld(true);
@@ -5754,6 +5767,7 @@ export function Viewport() {
         // both setTarget and the independently changing rotation pivot.
         if (!sixDofDriverMotion) alignSixDofTargetToCamera(focusDistance);
         camera.updateMatrixWorld(true);
+        wakeControllerFrame();
       },
       getViewTarget: () =>
         controls.target.toArray() as [number, number, number],
@@ -5762,6 +5776,7 @@ export function Viewport() {
         cancelCameraAnimation();
         controls.target.set(...target);
         if (sixDofDriverMotion) sixDofDriverTargetUpdated = true;
+        wakeControllerFrame();
       },
       getViewFrustum: () => {
         const halfHeight =
@@ -5797,6 +5812,7 @@ export function Viewport() {
           150,
         );
         camera.updateProjectionMatrix();
+        wakeControllerFrame();
       },
       getModelExtents: () => {
         const bounds = getVisibleBounds();
@@ -5891,6 +5907,7 @@ export function Viewport() {
         offset.applyQuaternion(quatInv);
         camera.position.copy(controls.target).add(offset);
         camera.lookAt(controls.target);
+        wakeControllerFrame();
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
@@ -5921,6 +5938,7 @@ export function Viewport() {
         camera.position.copy(controls.target).add(offset);
         camera.up.applyQuaternion(turn).normalize();
         camera.lookAt(controls.target);
+        wakeControllerFrame();
       },
       getSixDofDriverView: () => sixDofDriverView,
       lookAtActivePlane: () => {
@@ -6277,9 +6295,14 @@ export function Viewport() {
       for (const child of sketchGridMajor.children) {
         ((child as THREE.LineSegments).material as THREE.LineBasicMaterial).opacity = 0.9 * sketchFade;
       }
+      return (
+        Math.abs(groundTarget - groundFade) > 1e-4 ||
+        Math.abs(sketchTarget - sketchFade) > 1e-4
+      );
     };
 
     const unsub = store.subscribe((s) => {
+      wakeControllerFrame();
       // Finished-sketch rendering: refresh on list or eye-toggle change.
       if (
         s.finishedSketches !== lastFinished ||
@@ -6492,6 +6515,7 @@ export function Viewport() {
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
       for (const material of lineMaterials) material.resolution.set(w, h);
+      wakeControllerFrame();
     });
     resizeObserver.observe(container);
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -6503,19 +6527,19 @@ export function Viewport() {
     let nativeControllerOnly = false;
     let lastTime = performance.now();
     const tick = () => {
-      raf = requestAnimationFrame(tick);
+      raf = 0;
       const now = performance.now();
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
 
       if (camAnim) stepCameraAnimation(now);
-      if (controls.enabled) controls.update();
+      const controlsChanged = controls.enabled ? controls.update() : false;
       syncNativeViewportCamera(camera, controls.target);
       // Manual navigation uses OrbitControls.target as its center. Keep the
       // driver's separate pivot ready for the next transaction without ever
       // letting a driver auto-pivot move the camera target mid-transaction.
       if (!sixDofDriverMotion) sixDofDriverPivot.copy(controls.target);
-      updateGridFades(dt);
+      const gridFading = updateGridFades(dt);
 
       // Adaptive grid levels.
       const distance = camera.position.distanceTo(controls.target);
@@ -6582,7 +6606,8 @@ export function Viewport() {
         mesh.scale.setScalar(wpp * px);
       }
 
-      if (nativeViewportIsActive()) {
+      const native = nativeViewportIsActive();
+      if (native) {
         // Keep Three's scene graph as the interaction/controller layer, but
         // do not submit a second GPU render behind the clipped WKWebView.
         if (!nativeControllerOnly) {
@@ -6596,8 +6621,20 @@ export function Viewport() {
       } else {
         renderer.render(scene, camera);
       }
+      if (
+        !native ||
+        camAnim !== null ||
+        sixDofDriverMotion ||
+        controlsChanged ||
+        gridFading
+      ) {
+        wakeControllerFrame();
+      }
     };
-    tick();
+    wakeControllerFrame = () => {
+      if (raf === 0) raf = requestAnimationFrame(tick);
+    };
+    wakeControllerFrame();
 
     return () => {
       preservedCameraSnapshot = api.getSnapshot();
@@ -6614,6 +6651,8 @@ export function Viewport() {
       window.removeEventListener('pointerup', onNavPointerUp);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown, true);
+      controls.removeEventListener('change', onControlsChange);
+      wakeControllerFrame = () => undefined;
       controls.dispose();
       scene.traverse((child) => {
         if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points || child instanceof THREE.Sprite) {
