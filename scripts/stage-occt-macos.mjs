@@ -49,6 +49,8 @@ const tauriRoot = join(projectRoot, 'src-tauri');
 const stageRoot = join(tauriRoot, 'occt-libs');
 const licenseRoot = join(stageRoot, 'licenses');
 const overlayPath = join(tauriRoot, 'tauri.occt.conf.json');
+const signingIdentity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-';
+const usesAdHocSigning = signingIdentity === '-';
 
 const occtCandidates = [
   process.env.OCCT_ROOT,
@@ -198,7 +200,16 @@ writeFileSync(
           './occt-libs/licenses/OPENCASCADE_JS_LICENSE.txt':
             'licenses/OPENCASCADE_JS_LICENSE.txt',
         },
-        macOS: { frameworks },
+        macOS: {
+          frameworks,
+          // Hardened runtime enforces library validation by signing team.
+          // Ad-hoc identities have no Team ID, so a hardened local build is
+          // rejected by dyld when it loads the bundled OCCT dylibs. Keep
+          // hardened runtime for Developer ID releases and disable it only
+          // for local/test DMGs.
+          signingIdentity,
+          hardenedRuntime: !usesAdHocSigning,
+        },
       },
     },
     null,

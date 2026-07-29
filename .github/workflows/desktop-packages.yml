@@ -1,0 +1,353 @@
+name: Desktop packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: desktop-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify_changes:
+    name: Classify desktop build inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows_should_build: ${{ steps.classify.outputs.windows_should_build }}
+      macos_should_build: ${{ steps.classify.outputs.macos_should_build }}
+    steps:
+      - name: Inspect changed paths
+        id: classify
+        uses: actions/github-script@v9
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              core.info(`${context.eventName} runs always build both desktop packages.`);
+              core.setOutput("windows_should_build", "true");
+              core.setOutput("macos_should_build", "true");
+              return;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              },
+            );
+
+            const commonBuildInputs = [
+              {
+                pattern: /^(src|src-tauri|crates|public)\//,
+                reason: "application or native source",
+              },
+              {
+                pattern: /^\.github\/actions\//,
+                reason: "shared GitHub Action",
+              },
+              {
+                pattern: /^\.github\/workflows\/desktop-packages\.yml$/,
+                reason: "desktop packaging workflow",
+              },
+              {
+                pattern:
+                  /^(Cargo\.toml|Cargo\.lock|package\.json|package-lock\.json|vcpkg\.json|index\.html|tsconfig\.json|vite\.config\.ts|postcss\.config\.js|tailwind\.config\.js|\.npmrc|rust-toolchain(?:\.toml)?)$/,
+                reason: "build or dependency configuration",
+              },
+              {
+                pattern: /^(LICENSE|THIRD_PARTY_NOTICES\.md)$/,
+                reason: "bundled legal notice",
+              },
+            ];
+
+            const platformMatches = (platformInputs) =>
+              files.flatMap(({ filename }) => {
+                const rule = [...commonBuildInputs, ...platformInputs].find(
+                  ({ pattern }) => pattern.test(filename),
+                );
+                return rule ? [`${filename} (${rule.reason})`] : [];
+              });
+
+            const windowsMatches = platformMatches([
+              {
+                pattern: /^scripts\/bundle-windows-portable\.ps1$/,
+                reason: "Windows packaging script",
+              },
+            ]);
+            const macosMatches = platformMatches([
+              {
+                pattern: /^scripts\/(?:bundle-macos|stage-occt-macos)\.mjs$/,
+                reason: "macOS packaging script",
+              },
+            ]);
+
+            const report = (platform, output, matches) => {
+              const shouldBuild = matches.length > 0;
+              core.setOutput(output, String(shouldBuild));
+              if (shouldBuild) {
+                core.info(`${platform} build required by:\n${matches.join("\n")}`);
+              } else {
+                core.info(
+                  `Skipping ${platform} build; none of ${files.length} changed files affect that packaged application.`,
+                );
+              }
+            };
+
+            report("Windows", "windows_should_build", windowsMatches);
+            report("macOS", "macos_should_build", macosMatches);
+
+  build-windows-portable:
+    name: Windows x64 portable ZIP
+    needs: classify_changes
+    if: needs.classify_changes.outputs.windows_should_build == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
+
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Check out pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
+          path: .vcpkg
+          fetch-depth: 0
+
+      - name: Detect MSVC toolset
+        id: msvc
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationRoot = & $vswhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installationRoot)) {
+            throw "Visual Studio C++ Build Tools were not found"
+          }
+          $versionFile = Join-Path `
+            $installationRoot `
+            "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          if (-not (Test-Path $versionFile -PathType Leaf)) {
+            throw "MSVC toolset version file was not found: $versionFile"
+          }
+          $toolset = (Get-Content $versionFile -Raw).Trim()
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$toolset"
+          Write-Host "MSVC toolset: $toolset"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: vcpkg-binary-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          New-Item `
+            -ItemType Directory `
+            -Path $env:VCPKG_BINARY_CACHE `
+            -Force |
+            Out-Null
+          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Install pinned OpenCASCADE 7.9.3
+        shell: pwsh
+        run: |
+          & .\.vcpkg\vcpkg.exe install `
+            --triplet x64-windows `
+            --x-manifest-root="$env:GITHUB_WORKSPACE" `
+            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg install failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build portable ZIP
+        shell: pwsh
+        env:
+          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+        run: npm run bundle:windows:portable
+
+      - name: Smoke-test packaged executable
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem `
+            "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\portable" `
+            -Directory |
+            Select-Object -First 1
+          if (-not $package) {
+            throw "Portable package directory was not created"
+          }
+          $process = Start-Process `
+            -FilePath (Join-Path $package.FullName "noBS-CAD.exe") `
+            -WorkingDirectory $package.FullName `
+            -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) {
+            throw "Portable application exited during launch smoke test (code $($process.ExitCode))"
+          }
+          Stop-Process -Id $process.Id -Force
+
+      - name: Upload portable release
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-0.1.0-windows-x64
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.zip
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  build-macos-apple-silicon:
+    name: macOS Apple silicon DMG
+    needs: classify_changes
+    if: needs.classify_changes.outputs.macos_should_build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Verify Apple silicon runner
+        shell: bash
+        run: |
+          architecture="$(uname -m)"
+          if [[ "$architecture" != "arm64" ]]; then
+            echo "Expected an Apple silicon runner, got $architecture" >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Install pinned OpenCASCADE 7.9.3
+        shell: bash
+        run: |
+          brew install opencascade
+          occt_version="$(brew list --versions opencascade | awk '{ print $2 }')"
+          if [[ "$occt_version" != "7.9.3" ]]; then
+            echo "Expected OpenCASCADE 7.9.3, got $occt_version" >&2
+            exit 1
+          fi
+          echo "OCCT_ROOT=$(brew --prefix opencascade)" >> "$GITHUB_ENV"
+
+      - name: Build ad-hoc signed DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run bundle:macos
+
+      - name: Verify packaged architecture and launch
+        shell: bash
+        run: |
+          app="src-tauri/target/release/bundle/macos/noBS CAD.app"
+          executable="$app/Contents/MacOS/nbcad"
+          if ! lipo -archs "$executable" | tr ' ' '\n' | grep -qx arm64; then
+            echo "Packaged executable is not Apple silicon:" >&2
+            lipo -info "$executable" >&2
+            exit 1
+          fi
+
+          log="$RUNNER_TEMP/nbcad-macos-smoke.log"
+          "$executable" >"$log" 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            cat "$log"
+            echo "Packaged application exited during launch smoke test (code $status)" >&2
+            if [[ "$status" -eq 0 ]]; then
+              status=1
+            fi
+            exit "$status"
+          fi
+          kill "$pid"
+          wait "$pid" || true
+          cat "$log"
+
+      - name: Create checksum
+        shell: bash
+        run: |
+          dmg="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          if [[ -z "$dmg" ]]; then
+            echo "DMG was not created" >&2
+            exit 1
+          fi
+          dmg_directory="$(dirname "$dmg")"
+          dmg_name="$(basename "$dmg")"
+          (
+            cd "$dmg_directory"
+            shasum -a 256 "$dmg_name" > "$dmg_name.sha256"
+          )
+
+      - name: Upload Apple silicon release
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-0.1.0-macos-arm64
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/dmg/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

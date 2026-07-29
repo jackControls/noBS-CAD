@@ -82,7 +82,7 @@ Microsoft Visual C++ runtime.
 
 ## GitHub Actions
 
-`.github/workflows/windows-portable.yml` runs on a standard
+`.github/workflows/desktop-packages.yml` runs the Windows job on a standard
 `windows-2025` runner for pull requests to `main`, version tags, and manual
 dispatches. It:
 

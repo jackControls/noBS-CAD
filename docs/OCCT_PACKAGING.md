@@ -90,14 +90,15 @@ The command:
    resources;
 8. links the Rust executable against those staged libraries and adds
    `@executable_path/../Frameworks` to `LC_RPATH`;
-9. creates the `.app`, seals local builds ad hoc when no signing identity is
-   supplied, and runs `codesign --verify --deep --strict`.
+9. creates the `.app` and `.dmg`, seals local builds ad hoc when no signing
+   identity is supplied, and verifies both the code signature and disk image.
 
 The generated staging directory and config overlay are intentionally ignored.
-The result is:
+The results are:
 
 ```text
 src-tauri/target/release/bundle/macos/noBS CAD.app
+src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 ```
 
 Useful manual release audit:
@@ -138,10 +139,13 @@ $env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
 npm run bundle:windows:portable
 ```
 
-GitHub Actions performs the same operation on a standard `windows-2025`
-runner and launch-smoke-tests the packaged executable before uploading it.
-See [Windows portable packaging](WINDOWS_PACKAGING.md) for exact setup and
-runtime requirements.
+The desktop packaging GitHub Actions workflow uses one lightweight path
+classifier and then conditionally runs the affected package jobs. It builds the
+Windows package on `windows-2025` and the Apple-silicon DMG on `macos-15`,
+launch-smoke-tests both packaged executables, and uploads the package plus its
+SHA-256 file. Documentation-only pull requests skip both expensive runners.
+See [Windows portable packaging](WINDOWS_PACKAGING.md) for exact Windows setup
+and runtime requirements.
 
 ## 5. Browser/WASM development
 
@@ -180,8 +184,10 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
 ## 6. Version and CI policy
 
 - Local development: Homebrew OCCT 7.9.x is supported.
-- macOS CI and releases: use an immutable OCCT 7.9.3 SDK artifact via
-  `OCCT_ROOT`.
+- macOS CI currently installs the Homebrew OCCT formula, requires it to resolve
+  to exactly 7.9.3, and passes its prefix through `OCCT_ROOT`. Move signed
+  releases to an immutable 7.9.3 SDK artifact before treating the workflow as a
+  reproducible release authority.
 - Windows CI: use the committed vcpkg baseline and OCCT 7.9.3 override,
   installed as the dynamic `x64-windows` triplet. Preserve vcpkg binary
   packages in an ABI-keyed CI cache; a cache miss must rebuild from the pinned
