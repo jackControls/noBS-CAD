@@ -12,22 +12,38 @@ MCP gives coding agents a tool API without turning noBS CAD into a cloud
 service. The goal is a **strong local automation** surface for testing and
 agent-driven modeling.
 
-**Invariant:** no required cloud control plane. Automation stays on the user’s
+**Invariant:** no required cloud control plane. Automation stays on the user's
 machine (or CI runner).
 
 ## Today (as-built)
 
 | Topic | Current state |
 |-------|----------------|
-| Transport | **stdio** JSON-RPC (`nbcad-mcp`) — supported local path |
-| Tools | Large static list covering most sketch/solid ops; `tools.listChanged: false` |
+| Transport | **stdio** JSON-RPC (`nbcad-mcp`) — supported local path; logs on **stderr** |
+| Tools | Soft focus-scoped disclosure; `tools.listChanged: true` |
+| Notification | `notifications/tools/list_changed` (300 ms throttle) |
 | Document | One persistent feature history **per MCP process** |
-| UI relationship | MCP and the visible UI own **separate documents** (same planner crates, different instances) |
+| UI co-link | File bridge: `cad_list_sessions` / `cad_attach` (`NBCAD_SESSION_DIR`) |
 | Geometry | Same native OCCT replay path as desktop for solid ops when OCCT is available |
-| Print/export via MCP | Model JSON load/export tools exist; **no** 3MF MCP export yet |
+| Export | `solid_export_step` (AP242 base64). No 3MF MCP export yet |
 
-Honest use today: treat headless MCP as an **engine / automation probe**, not as
-proof that the open UI document changed.
+### Soft disclosure (not a jail)
+
+Spine → active pack → soft packs (60 s TTL, LRU 2). Hidden tools stay
+**callable**; results include `_disclosure`. Escape hatch: `full_static` or
+`cad_list_all_tools`. Prefer `dynamic` for main agents.
+
+### Focus packs
+
+```text
+document | sketch | solid | modify | body_ops | datums | history | inspect | print
+```
+
+Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
+
+Honest use: headless MCP remains valid for CI goldens without attach. With
+`cad_attach`, MCP can load the UI-published session snapshot; without attach,
+MCP owns its own document.
 
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
@@ -55,15 +71,21 @@ Stdio is the **current** supported local transport. It is not declared an
 irreversible forever architecture choice—local/offline behavior is the
 invariant; internal IPC may evolve with engineering evidence.
 
+## Build
+
+```sh
+cargo test --manifest-path mcp-server/Cargo.toml
+```
+
+Requires OCCT 7.9.x (`OCCT_ROOT` or `vcpkg_installed/x64-windows`).
+
 ## Proposed next (not shipped)
 
 See [proposed-architecture.md](proposed-architecture.md) for detail:
 
-1. **Focus-scoped tools** — `tools.listChanged: true` and
-   `notifications/tools/list_changed` when focus changes.
-2. **Co-link** MCP to **one** active UI document (first useful milestone).
-3. **Multi-window broker** — deferred until use cases justify it (not P0).
-4. **3MF + materials/colors** — target with testable scope.
+1. **In-process shared document** with the live UI (file bridge v1 ships today).
+2. **Multi-window broker** — deferred until use cases justify it (not P0).
+3. **3MF + materials/colors** — target with testable scope.
 
 ## Rust boundaries (for automation work)
 

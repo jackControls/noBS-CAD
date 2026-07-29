@@ -1,0 +1,89 @@
+name: MCP server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp-server/**'
+      - 'crates/core/**'
+      - 'crates/sketch/**'
+      - 'crates/solid/**'
+      - 'crates/occt/**'
+      - 'vcpkg.json'
+      - '.github/workflows/mcp-server.yml'
+  pull_request:
+    paths:
+      - 'mcp-server/**'
+      - 'crates/core/**'
+      - 'crates/sketch/**'
+      - 'crates/solid/**'
+      - 'crates/occt/**'
+      - 'vcpkg.json'
+      - '.github/workflows/mcp-server.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  VCPKG_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
+
+jobs:
+  mcp-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out pinned vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
+          path: .vcpkg
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: MSVC environment
+        id: msvc
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          Import-Module "$installPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $installPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
+          $toolset = "msvc"
+          "toolset=$toolset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INCLUDE=$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIB=$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIBPATH=$env:LIBPATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: vcpkg-binary-mcp-v1-${{ steps.msvc.outputs.toolset }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+
+      - name: Install OCCT via vcpkg
+        shell: pwsh
+        run: |
+          & .\.vcpkg\vcpkg.exe install `
+            --triplet x64-windows `
+            --x-manifest-root="$env:GITHUB_WORKSPACE" `
+            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: MCP server tests
+        shell: pwsh
+        env:
+          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+        run: |
+          cargo test --manifest-path mcp-server/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }

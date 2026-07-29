@@ -1,11 +1,21 @@
 use std::io::{self, BufRead, Write};
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
-use nbcad_solid::{CommitKernelRequest, RecomputePlanDto};
+use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod disclosure;
+mod session;
+
+use disclosure::{
+    auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
+    FocusPack,
+};
+
 const LATEST_PROTOCOL: &str = "2025-06-18";
+const MODELING_TOOL_COUNT: usize = 101;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -22,6 +32,7 @@ enum Payload {
 enum Execution {
     Direct,
     SolidReplay,
+    Control,
 }
 
 struct ToolSpec {
@@ -32,6 +43,8 @@ struct ToolSpec {
     payload: Payload,
     execution: Execution,
     input_schema: Value,
+    pack: FocusPack,
+    spine: bool,
 }
 
 impl ToolSpec {
@@ -43,6 +56,7 @@ impl ToolSpec {
         payload: Payload,
         input_schema: Value,
     ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
         Self {
             name,
             title,
@@ -51,6 +65,8 @@ impl ToolSpec {
             payload,
             execution: Execution::Direct,
             input_schema,
+            pack,
+            spine,
         }
     }
 
@@ -62,6 +78,7 @@ impl ToolSpec {
         payload: Payload,
         input_schema: Value,
     ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
         Self {
             name,
             title,
@@ -70,6 +87,28 @@ impl ToolSpec {
             payload,
             execution: Execution::SolidReplay,
             input_schema,
+            pack,
+            spine,
+        }
+    }
+
+    fn control(
+        name: &'static str,
+        title: &'static str,
+        description: &'static str,
+        input_schema: Value,
+    ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
+        Self {
+            name,
+            title,
+            description,
+            engine_method: "",
+            payload: Payload::Empty,
+            execution: Execution::Control,
+            input_schema,
+            pack,
+            spine,
         }
     }
 }
@@ -77,6 +116,9 @@ impl ToolSpec {
 struct CadServer {
     manager: SketchManager,
     kernel: OcctKernel,
+    disclosure: DisclosureState,
+    attached_document_id: Option<String>,
+    pending_recompute_transaction: Option<u64>,
 }
 
 impl CadServer {
@@ -84,6 +126,9 @@ impl CadServer {
         Ok(Self {
             manager: SketchManager::new(),
             kernel: OcctKernel::new().map_err(|error| error.to_string())?,
+            disclosure: DisclosureState::new(),
+            attached_document_id: None,
+            pending_recompute_transaction: None,
         })
     }
 
@@ -93,7 +138,21 @@ impl CadServer {
             .iter()
             .find(|spec| spec.name == name)
             .ok_or_else(|| format!("unknown tool: {name}"))?;
-        let payload = match spec.payload {
+        let execution = spec.execution;
+        let engine_method = spec.engine_method;
+        let payload_kind = spec.payload;
+        let pack = spec.pack;
+        let spine = spec.spine;
+
+        if execution == Execution::Control {
+            return self.call_control(name, arguments);
+        }
+
+        if self.disclosure.advertisement_state(pack, spine) != AdvertisementState::Active {
+            self.disclosure.re_promote(pack);
+        }
+
+        let payload = match payload_kind {
             Payload::Empty => String::new(),
             Payload::Object => serde_json::to_string(&arguments)
                 .map_err(|error| format!("could not encode arguments: {error}"))?,
@@ -148,39 +207,196 @@ impl CadServer {
             }
         };
 
-        if spec.execution == Execution::Direct {
-            return parse_engine_envelope(host::handle(
-                &mut self.manager,
-                spec.engine_method,
-                &payload,
-            ));
-        }
-
-        let plan_value = parse_engine_envelope(host::handle(
-            &mut self.manager,
-            spec.engine_method,
-            &payload,
-        ))?;
-        let plan: RecomputePlanDto = serde_json::from_value(plan_value)
-            .map_err(|error| format!("engine returned an invalid recompute plan: {error}"))?;
-        let transaction_id = plan.transaction_id;
-        let scene = match self.kernel.recompute(&plan) {
-            Ok(scene) => scene,
-            Err(error) => {
-                self.manager.cancel_solid_recompute(transaction_id);
-                return Err(error.to_string());
+        let mut value = if execution == Execution::Direct {
+            if name == "solid_export_step" {
+                let request: StepExportRequest = if arguments.is_null() {
+                    StepExportRequest::default()
+                } else {
+                    serde_json::from_value(arguments)
+                        .map_err(|error| format!("invalid STEP export request: {error}"))?
+                };
+                let bytes = self
+                    .kernel
+                    .export_step(&request)
+                    .map_err(|error| error.to_string())?;
+                json!({
+                    "format": "step",
+                    "encoding": "base64",
+                    "bytes_base64": BASE64.encode(bytes),
+                })
+            } else {
+                parse_engine_envelope(host::handle(
+                    &mut self.manager,
+                    engine_method,
+                    &payload,
+                ))?
             }
+        } else {
+            let plan_value = parse_engine_envelope(host::handle(
+                &mut self.manager,
+                engine_method,
+                &payload,
+            ))?;
+            let plan: RecomputePlanDto = serde_json::from_value(plan_value)
+                .map_err(|error| format!("engine returned an invalid recompute plan: {error}"))?;
+            let transaction_id = plan.transaction_id;
+            self.pending_recompute_transaction = Some(transaction_id);
+            let scene = match self.kernel.recompute(&plan) {
+                Ok(scene) => scene,
+                Err(error) => {
+                    self.manager.cancel_solid_recompute(transaction_id);
+                    self.pending_recompute_transaction = None;
+                    return Err(error.to_string());
+                }
+            };
+            let commit = CommitKernelRequest {
+                transaction_id,
+                scene,
+            };
+            let committed = parse_engine_envelope(host::handle(
+                &mut self.manager,
+                "solid_commit",
+                &serde_json::to_string(&commit)
+                    .map_err(|error| format!("could not encode kernel result: {error}"))?,
+            ))?;
+            self.pending_recompute_transaction = None;
+            committed
         };
-        let commit = CommitKernelRequest {
-            transaction_id,
-            scene,
+
+        if let Some(focus) = auto_focus_for_tool(name) {
+            self.disclosure.auto_hint(focus);
+        }
+        self.write_attached_session()?;
+        value = annotate_disclosure(value, &self.disclosure, pack, spine);
+        Ok(value)
+    }
+
+    fn call_control(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let value = match name {
+            "cad_get_focus" => self.disclosure.status_json(),
+            "cad_set_focus" => {
+                let focus_name = arguments
+                    .get("focus")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing required argument 'focus'".to_string())?;
+                let focus = FocusPack::parse(focus_name)
+                    .ok_or_else(|| format!("unknown focus '{focus_name}'"))?;
+                let explicit = arguments
+                    .get("explicit")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                self.disclosure.set_focus(focus, explicit);
+                self.disclosure.status_json()
+            }
+            "cad_list_focus_areas" => DisclosureState::focus_areas_json(),
+            "cad_get_tool_disclosure_mode" => json!({ "mode": self.disclosure.status_json()["mode"] }),
+            "cad_set_tool_disclosure_mode" => {
+                let mode_name = arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing required argument 'mode'".to_string())?;
+                let mode = DisclosureMode::parse(mode_name)
+                    .ok_or_else(|| format!("unknown disclosure mode '{mode_name}'"))?;
+                self.disclosure.set_mode(mode);
+                json!({ "mode": mode.as_str() })
+            }
+            "cad_list_all_tools" => full_tool_catalog(),
+            "cad_cancel_recompute" => {
+                if let Some(transaction_id) = self.pending_recompute_transaction.take() {
+                    self.manager.cancel_solid_recompute(transaction_id);
+                    json!({ "cancelled": true, "transaction_id": transaction_id })
+                } else {
+                    json!({ "cancelled": false, "reason": "no in-flight solid recompute" })
+                }
+            }
+            "cad_list_sessions" => session::sessions_list_json(),
+            "cad_attach" => {
+                let session_id = arguments
+                    .get("session_id")
+                    .or_else(|| arguments.get("document_id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        "missing required argument 'session_id' (or document_id)".to_string()
+                    })?;
+                if !session::list_sessions()?.iter().any(|id| id == session_id) {
+                    return Err(format!(
+                        "session '{session_id}' was not found under {}",
+                        session::session_dir().display()
+                    ));
+                }
+                self.attached_document_id = Some(session_id.to_string());
+                if let Ok(model_json) = session::read_session_file(session_id, "model.json") {
+                    // Load via solid replay path (same as cad_load_project_model).
+                    let plan_value = parse_engine_envelope(host::handle(
+                        &mut self.manager,
+                        "project_prepare_load",
+                        &serde_json::to_string(&Value::String(model_json.clone()))
+                            .map_err(|e| e.to_string())?,
+                    ))?;
+                    let plan: RecomputePlanDto = serde_json::from_value(plan_value)
+                        .map_err(|error| format!("invalid recompute plan: {error}"))?;
+                    let transaction_id = plan.transaction_id;
+                    let scene = match self.kernel.recompute(&plan) {
+                        Ok(scene) => scene,
+                        Err(error) => {
+                            self.manager.cancel_solid_recompute(transaction_id);
+                            return Err(error.to_string());
+                        }
+                    };
+                    let _ = parse_engine_envelope(host::handle(
+                        &mut self.manager,
+                        "solid_commit",
+                        &serde_json::to_string(&CommitKernelRequest {
+                            transaction_id,
+                            scene,
+                        })
+                        .map_err(|e| e.to_string())?,
+                    ))?;
+                }
+                if let Ok(focus_json) = session::read_session_file(session_id, "focus.json") {
+                    if let Ok(focus_value) = serde_json::from_str::<Value>(&focus_json) {
+                        if let Some(focus_name) =
+                            focus_value.get("focus").and_then(Value::as_str)
+                        {
+                            if let Some(focus) = FocusPack::parse(focus_name) {
+                                self.disclosure.set_focus(focus, false);
+                                self.disclosure.clear_explicit_lock();
+                            }
+                        }
+                    }
+                }
+                json!({
+                    "attached": true,
+                    "session_id": session_id,
+                    "document_id": session_id,
+                    "focus": self.disclosure.active().as_str(),
+                    "co_link": "file_bridge_v1",
+                })
+            }
+            other => return Err(format!("unknown control tool: {other}")),
         };
-        parse_engine_envelope(host::handle(
+        Ok(value)
+    }
+
+    fn write_attached_session(&mut self) -> Result<(), String> {
+        let Some(session_id) = self.attached_document_id.clone() else {
+            return Ok(());
+        };
+        let model = parse_engine_envelope(host::handle(
             &mut self.manager,
-            "solid_commit",
-            &serde_json::to_string(&commit)
-                .map_err(|error| format!("could not encode kernel result: {error}"))?,
-        ))
+            "project_export_model",
+            "",
+        ))?;
+        let model_json =
+            serde_json::to_string(&model).map_err(|error| format!("encode model: {error}"))?;
+        session::write_session(&session_id, "model.json", &model_json)?;
+        let focus_json = serde_json::to_string(&json!({
+            "focus": self.disclosure.active().as_str(),
+            "updated_at_ms": session::now_ms(),
+        }))
+        .map_err(|error| error.to_string())?;
+        session::write_session(&session_id, "focus.json", &focus_json)?;
+        Ok(())
     }
 }
 
@@ -196,6 +412,57 @@ fn parse_engine_envelope(raw: String) -> Result<Value, String> {
             .unwrap_or("unknown noBS CAD engine error")
             .to_string())
     }
+}
+
+fn annotate_disclosure(
+    mut value: Value,
+    disclosure: &DisclosureState,
+    pack: FocusPack,
+    spine: bool,
+) -> Value {
+    let note = disclosure.disclosure_note(pack, spine);
+    if value.is_object() {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("_disclosure".to_string(), note);
+            return value;
+        }
+    }
+    json!({
+        "value": value,
+        "_disclosure": note,
+    })
+}
+
+fn tool_entry(tool: &ToolSpec) -> Value {
+    json!({
+        "name": tool.name,
+        "title": tool.title,
+        "description": tool.description,
+        "inputSchema": tool.input_schema
+    })
+}
+
+fn full_tool_catalog() -> Value {
+    Value::Array(
+        tool_specs()
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name,
+                    "title": tool.title,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                    "execution": match tool.execution {
+                        Execution::Direct => "direct",
+                        Execution::SolidReplay => "solid_replay",
+                        Execution::Control => "control",
+                    },
+                    "pack": tool.pack.as_str(),
+                    "spine": tool.spine,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn empty_schema() -> Value {
@@ -672,7 +939,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         &["reference", "body_id", "edge_id", "angle_deg"],
     );
 
-    vec![
+    let mut tools = vec![
         ToolSpec::direct(
             "cad_document",
             "Inspect CAD document",
@@ -1752,23 +2019,124 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["feature_id", "target_index"],
             ),
         ),
-    ]
+        ToolSpec::direct(
+            "solid_export_step",
+            "Export STEP",
+            "Export selected or all active bodies as AP242 STEP bytes encoded in base64.",
+            "solid_export_step",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "uniqueItems": true
+                    },
+                    "thread_metadata": {
+                        "type": "array",
+                        "items": {"type": "object", "additionalProperties": true}
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_get_focus",
+            "Get focus state",
+            "Return the active focus pack, soft packs, TTLs, and disclosure mode.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_set_focus",
+            "Set focus",
+            "Set the active modeling focus pack and schedule a throttled tools/list_changed notification.",
+            object_schema(
+                json!({
+                    "focus": {
+                        "type": "string",
+                        "enum": ["document", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
+                    },
+                    "explicit": {
+                        "type": "boolean",
+                        "description": "When true, auto-focus hints are ignored until cleared."
+                    }
+                }),
+                &["focus"],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_list_focus_areas",
+            "List focus areas",
+            "Return the supported focus packs and human-readable descriptions.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_get_tool_disclosure_mode",
+            "Get disclosure mode",
+            "Return the current tool disclosure mode: dynamic or full_static.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_set_tool_disclosure_mode",
+            "Set disclosure mode",
+            "Switch between dynamic focus-scoped advertisement and the full_static escape hatch.",
+            object_schema(
+                json!({
+                    "mode": {
+                        "type": "string",
+                        "enum": ["dynamic", "full_static"]
+                    }
+                }),
+                &["mode"],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_list_all_tools",
+            "List full tool catalog",
+            "Return every registered tool with schemas and focus tags without changing advertisement.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_cancel_recompute",
+            "Cancel solid recompute",
+            "Abort an in-flight solid replay if one is pending in this MCP process.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_list_sessions",
+            "List co-link sessions",
+            "List file-bridge session directories available for cad_attach.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_attach",
+            "Attach co-link session",
+            "Attach to a file-bridge session directory and optionally load model.json and focus.json.",
+            object_schema(
+                json!({
+                    "session_id": {"type": "string", "minLength": 1}
+                }),
+                &["session_id"],
+            ),
+        ),
+    ];
+    for tool in &mut tools {
+        let (pack, spine) = tags_for_tool(tool.name);
+        tool.pack = pack;
+        tool.spine = spine;
+    }
+    tools
 }
 
-fn tool_list_result() -> Value {
+fn tool_list_result(disclosure: &mut DisclosureState) -> Value {
+    disclosure.tick_soft_expiry();
     Value::Object(Map::from_iter([(
         "tools".to_string(),
         Value::Array(
             tool_specs()
-                .into_iter()
-                .map(|tool| {
-                    json!({
-                        "name": tool.name,
-                        "title": tool.title,
-                        "description": tool.description,
-                        "inputSchema": tool.input_schema
-                    })
-                })
+                .iter()
+                .filter(|tool| disclosure.is_advertised(tool.name, tool.pack, tool.spine))
+                .map(tool_entry)
                 .collect(),
         ),
     )]))
@@ -1809,10 +2177,12 @@ fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {
     })
 }
 
-fn handle_message(server: &mut CadServer, message: Value) -> Option<Value> {
-    let method = message.get("method")?.as_str()?;
+fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Vec::new();
+    };
     let id = message.get("id").cloned();
-    match method {
+    let mut responses = match method {
         "initialize" => {
             let requested = message
                 .pointer("/params/protocolVersion")
@@ -1822,52 +2192,59 @@ fn handle_message(server: &mut CadServer, message: Value) -> Option<Value> {
                 "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
                 _ => LATEST_PROTOCOL,
             };
-            Some(response(
+            vec![response(
                 id.unwrap_or(Value::Null),
                 json!({
                     "protocolVersion": protocol,
-                    "capabilities": { "tools": { "listChanged": false } },
+                    "capabilities": { "tools": { "listChanged": true } },
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls."
+                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable."
                 }),
-            ))
+            )]
         }
-        "notifications/initialized" | "notifications/cancelled" => None,
-        "ping" => id.map(|id| response(id, json!({}))),
-        "tools/list" => Some(response(id.unwrap_or(Value::Null), tool_list_result())),
+        "notifications/initialized" | "notifications/cancelled" => Vec::new(),
+        "ping" => id.map(|id| response(id, json!({}))).into_iter().collect(),
+        "tools/list" => vec![response(
+            id.unwrap_or(Value::Null),
+            tool_list_result(&mut server.disclosure),
+        )],
         "tools/call" => {
             let id = id.unwrap_or(Value::Null);
             let Some(name) = message.pointer("/params/name").and_then(Value::as_str) else {
-                return Some(error_response(
+                return vec![error_response(
                     id,
                     -32602,
                     "tools/call is missing params.name",
-                ));
+                )];
             };
             let arguments = message
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             if !tool_specs().iter().any(|tool| tool.name == name) {
-                return Some(error_response(id, -32602, format!("unknown tool: {name}")));
+                return vec![error_response(id, -32602, format!("unknown tool: {name}"))];
             }
             let result = match server.call_tool(name, arguments) {
                 Ok(value) => success_result(value),
                 Err(error) => tool_error(error),
             };
-            Some(response(id, result))
+            vec![response(id, result)]
         }
-        _ if id.is_none() => None,
-        _ => Some(error_response(
+        _ if id.is_none() => Vec::new(),
+        _ => vec![error_response(
             id.unwrap_or(Value::Null),
             -32601,
             format!("method not found: {method}"),
-        )),
+        )],
+    };
+    if let Some(notification) = server.disclosure.take_notify_if_due() {
+        responses.push(notification);
     }
+    responses
 }
 
 fn main() {
@@ -1889,14 +2266,14 @@ fn main() {
         }
         let outgoing = match serde_json::from_str::<Value>(&line) {
             Ok(message) => handle_message(&mut server, message),
-            Err(error) => Some(error_response(
+            Err(error) => vec![error_response(
                 Value::Null,
                 -32700,
                 format!("parse error: {error}"),
-            )),
+            )],
         };
-        if let Some(outgoing) = outgoing {
-            if serde_json::to_writer(&mut stdout, &outgoing).is_err()
+        for message in outgoing {
+            if serde_json::to_writer(&mut stdout, &message).is_err()
                 || writeln!(&mut stdout).is_err()
                 || stdout.flush().is_err()
             {
@@ -1949,46 +2326,42 @@ mod tests {
 
     #[test]
     fn tool_registry_is_granular_and_protocol_lists_revolve() {
-        let listed = tool_list_result();
-        let tools = listed["tools"].as_array().unwrap();
+        let catalog = full_tool_catalog();
+        let all_tools = catalog.as_array().unwrap();
         assert_eq!(
-            tools.len(),
-            101,
-            "update the public MCP tool count when the registry changes"
+            all_tools.len(),
+            MODELING_TOOL_COUNT + 10,
+            "101 modeling tools plus solid_export_step and 9 control tools"
         );
-        assert!(tools.iter().any(|tool| tool["name"] == "sketch_fillet"));
-        assert!(tools
+        let modeling_count = all_tools
             .iter()
-            .any(|tool| tool["name"] == "sketch_rectangular_pattern"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "sketch_circular_pattern"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_extrude"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_revolve"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_sweep"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_loft"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_rib"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_fillet"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_chamfer"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_hole"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "construction_plane_offset"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_shell"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_mirror"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_rectangular_pattern"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_circular_pattern"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_combine"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_split_body"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_reorder_feature"));
+            .filter(|tool| {
+                !matches!(
+                    tool["name"].as_str(),
+                    Some(
+                        "solid_export_step"
+                            | "cad_get_focus"
+                            | "cad_set_focus"
+                            | "cad_list_focus_areas"
+                            | "cad_get_tool_disclosure_mode"
+                            | "cad_set_tool_disclosure_mode"
+                            | "cad_list_all_tools"
+                            | "cad_cancel_recompute"
+                            | "cad_list_sessions"
+                            | "cad_attach"
+                    )
+                )
+            })
+            .count();
+        assert_eq!(modeling_count, MODELING_TOOL_COUNT);
 
         let mut server = CadServer::new().unwrap();
+        let listed = tool_list_result(&mut server.disclosure);
+        let tools = listed["tools"].as_array().unwrap();
+        assert!(tools.len() < all_tools.len());
+        assert!(tools.iter().any(|tool| tool["name"] == "cad_document"));
+        assert!(tools.iter().any(|tool| tool["name"] == "cad_get_focus"));
+
         let initialized = handle_message(
             &mut server,
             json!({
@@ -1998,9 +2371,182 @@ mod tests {
                 "params": { "protocolVersion": "2025-06-18" }
             }),
         )
+        .pop()
         .unwrap();
         assert_eq!(initialized["result"]["protocolVersion"], LATEST_PROTOCOL);
-        assert!(initialized["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(
+            initialized["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+    }
+
+    #[test]
+    fn focus_pack_matrix_covers_modeling_registry() {
+        let mut packs = std::collections::BTreeMap::<&str, usize>::new();
+        for tool in tool_specs() {
+            if matches!(
+                tool.name,
+                "solid_export_step"
+                    | "cad_get_focus"
+                    | "cad_set_focus"
+                    | "cad_list_focus_areas"
+                    | "cad_get_tool_disclosure_mode"
+                    | "cad_set_tool_disclosure_mode"
+                    | "cad_list_all_tools"
+                    | "cad_cancel_recompute"
+                    | "cad_list_sessions"
+                    | "cad_attach"
+            ) {
+                continue;
+            }
+            *packs.entry(tool.pack.as_str()).or_default() += 1;
+        }
+        assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
+        assert_eq!(packs["document"], 4);
+        assert_eq!(packs["sketch"], 48);
+        assert_eq!(packs["solid"], 10);
+        assert_eq!(packs["inspect"], 11);
+    }
+
+    #[test]
+    fn dynamic_disclosure_lists_active_and_soft_tools() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_set_focus", json!({"focus": "sketch", "explicit": true}))
+            .unwrap();
+        let mut listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.iter().any(|name| name.starts_with("sketch_")));
+        assert!(!names.iter().any(|name| *name == "solid_extrude"));
+
+        server
+            .call_tool("cad_set_focus", json!({"focus": "solid", "explicit": true}))
+            .unwrap();
+        listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.iter().any(|name| *name == "solid_extrude"));
+    }
+
+    #[test]
+    fn soft_hidden_tools_remain_callable() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_set_focus", json!({"focus": "document", "explicit": true}))
+            .unwrap();
+        DisclosureState::advance_for_test(disclosure::SOFT_TTL_MS + disclosure::FOCUS_THROTTLE_MS + 1);
+        server.disclosure.tick_soft_expiry();
+        let listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(!names.iter().any(|name| *name == "sketch_begin"));
+        let result = server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        assert_eq!(result["_disclosure"]["state"], "hidden_but_callable");
+    }
+
+    #[test]
+    fn focus_change_emits_throttled_list_changed() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        let _ = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "sketch", "explicit": true}
+                }
+            }),
+        );
+        let _ = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "solid", "explicit": true}
+                }
+            }),
+        );
+        let immediate = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list",
+                "params": {}
+            }),
+        );
+        assert_eq!(immediate.len(), 1);
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let later = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "ping",
+                "params": {}
+            }),
+        );
+        assert!(later.iter().any(|message| {
+            message.get("method").and_then(Value::as_str)
+                == Some("notifications/tools/list_changed")
+        }));
+    }
+
+    #[test]
+    fn file_bridge_attach_roundtrip() {
+        let unique = format!("attach-{}", session::now_ms());
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        session::write_session(&unique, "model.json", "{\"version\":1,\"features\":[]}").unwrap();
+        session::write_session(&unique, "focus.json", "{\"focus\":\"document\"}").unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        let attached = server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        assert_eq!(attached["attached"], true);
+        assert_eq!(server.attached_document_id.as_deref(), Some(unique.as_str()));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(dir.join(&unique));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn solid_export_step_returns_base64_payload() {
+        let (mut server, _) = mcp_box();
+        let exported = server
+            .call_tool("solid_export_step", json!({}))
+            .expect("STEP export should succeed for a simple box");
+        assert_eq!(exported["format"], "step");
+        assert_eq!(exported["encoding"], "base64");
+        assert!(exported["bytes_base64"].as_str().unwrap().len() > 16);
     }
 
     #[test]

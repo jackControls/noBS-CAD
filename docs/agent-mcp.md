@@ -14,21 +14,24 @@ cargo build --release --manifest-path mcp-server/Cargo.toml
 Point the MCP client at:
 
 ```text
-…/mcp-server/target/release/nbcad-mcp
+.../mcp-server/target/release/nbcad-mcp
 ```
 
 Needs native OCCT (`OCCT_ROOT` when not in a default install). Logs stay on
 **stderr**.
 
-## Honest session habit
+## Session habits
 
 1. Keep **one** MCP process for a headless golden or experiment.
 2. Read `cad_document` / `solid_scene` before editing.
 3. Use stable IDs from scene/status for later ops.
-4. Do **not** assume the desktop/browser UI shows the same document — today it
-   does not.
+4. Default **`dynamic`** disclosure; call `cad_set_focus` as you model.
+5. Subagents: `full_static` or `cad_list_all_tools`.
+6. Optional UI co-link: `cad_list_sessions` → `cad_attach` (file bridge);
+   headless goldens do not require attach.
 
-Focus-scoped tool lists and UI attach are **proposed**, not shipped.
+Soft disclosure: out-of-focus tools stay **callable**; results may include
+`_disclosure`.
 
 ## Basic modeling loop
 
@@ -46,9 +49,9 @@ Focus-scoped tool lists and UI attach are **proposed**, not shipped.
 | Hole | box → hole on a face |
 
 Print-ready **3MF** with materials/colors is a **target**, not available via MCP
-yet.
+yet. **STEP:** `solid_export_step` (AP242 base64).
 
 ## Failures
 
 Include in issues: tool name, args, last success, error text, OS, and whether
-you expected UI co-link (not supported yet).
+you used UI attach (`cad_attach`) or a headless-only session.
