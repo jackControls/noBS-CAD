@@ -200,10 +200,11 @@ impl DisclosureState {
             return;
         }
         let previous = self.active;
-        self.mark_soft(previous);
+        // Move active first so mark_soft does not no-op on previous==active.
         self.active = focus;
         self.soft.remove(&focus);
         self.soft_order.retain(|pack| *pack != focus);
+        self.mark_soft(previous);
         self.enforce_soft_lru();
         self.schedule_notify(false);
     }
@@ -265,7 +266,7 @@ impl DisclosureState {
         }
         for pack in expired {
             self.soft.remove(&pack);
-            self.soft_order.retain(|existing| existing != pack);
+            self.soft_order.retain(|existing| *existing != pack);
         }
         self.schedule_notify(false);
         true
@@ -285,6 +286,7 @@ impl DisclosureState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn take_notify_immediate(&mut self) -> Value {
         self.pending_notify_at_ms = None;
         list_changed_notification()
@@ -396,7 +398,7 @@ impl DisclosureState {
     }
 
     fn touch_soft_order(&mut self, pack: FocusPack) {
-        self.soft_order.retain(|existing| existing != pack);
+        self.soft_order.retain(|existing| *existing != pack);
         self.soft_order.push(pack);
     }
 
@@ -636,6 +638,7 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     None
 }
 
+#[allow(dead_code)]
 pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option<&str>) -> FocusPack {
     if let Some(dialog) = solid_dialog {
         return match dialog {
