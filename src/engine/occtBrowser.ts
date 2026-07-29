@@ -36,7 +36,9 @@ import type {
   Point3Dto,
   RecomputePlanDto,
   StepExportRequest,
+  MeshExportRequest,
 } from './types';
+import { translate } from '../i18n';
 
 const TAU = Math.PI * 2;
 
@@ -1812,5 +1814,14 @@ export class BrowserOcctKernel {
         // The file is absent when transfer failed before Write.
       }
     }
+  }
+
+  /** Browser mesh export is a follow-up; native shell owns STL/3MF v1. */
+  exportStl(_request: MeshExportRequest): Uint8Array {
+    throw new Error(translate('file.meshNativeOnly'));
+  }
+
+  export3mf(_request: MeshExportRequest): Uint8Array {
+    throw new Error(translate('file.meshNativeOnly'));
   }
 }

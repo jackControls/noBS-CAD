@@ -13,6 +13,7 @@ import type {
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
+  BodyAppearance,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   FaceSketchOrigin,
@@ -73,6 +74,7 @@ import type {
   SolidSceneDto,
   SolidUpdateDto,
   StepExportRequest,
+  MeshExportRequest,
   SweepDefinitionDto,
   SweepRequest,
   ToolResult,
@@ -94,6 +96,8 @@ export interface Engine {
   activeSketch(): Promise<SketchDto | null>;
   profileCatalog(): Promise<ProfileCatalogItemDto[]>;
   solidScene(): Promise<SolidSceneDto>;
+  bodyAppearances(): Promise<BodyAppearance[]>;
+  setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;
   revolveDefinitions(): Promise<RevolveDefinitionDto[]>;
   sweepDefinitions(): Promise<SweepDefinitionDto[]>;
@@ -133,6 +137,8 @@ export interface Engine {
   newProject(): Promise<SolidUpdateDto>;
   loadProjectModel(modelJson: string): Promise<SolidUpdateDto>;
   exportStep(request: StepExportRequest): Promise<Uint8Array>;
+  exportStl(request: MeshExportRequest): Promise<Uint8Array>;
+  export3mf(request: MeshExportRequest): Promise<Uint8Array>;
   previewSegment(request: SegmentRequest): Promise<PreviewDto>;
   addLine(request: SegmentRequest): Promise<AddLineResult>;
   previewSegmentLocked(request: LockedSegmentRequest): Promise<PreviewDto>;

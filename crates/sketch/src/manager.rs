@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
 use nbcad_core::{
-    BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature, FeatureId,
-    FeatureKind, FeatureStatus, PlaneBasis, PlaneRef,
+    BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
+    FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
 };
 use nbcad_solid::{
     extract_closed_loops_allow_open, BodyFeatureDefinitionDto, BodyFeatureRequestDto,
@@ -81,6 +81,8 @@ pub struct SketchManager {
     /// state rather than project state: reopening at a different zoom must
     /// choose the spacing appropriate for that view.
     grid_step: f64,
+    /// Per-body color/material for viewport and manufacturing export.
+    body_appearances: Vec<BodyAppearance>,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
@@ -113,6 +115,7 @@ impl SketchManager {
             hole_count: 0,
             grid_snap: true,
             grid_step: GRID_STEP_MM,
+            body_appearances: Vec::new(),
             pending_project: None,
         }
     }
@@ -167,6 +170,7 @@ impl SketchManager {
             holes: self.solids.hole_definitions().to_vec(),
             datum_planes: self.datum_planes.clone(),
             body_features: self.solids.body_feature_definitions().to_vec(),
+            body_appearances: self.scrubbed_body_appearances(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
                 extrude: self.extrude_count,
@@ -276,6 +280,7 @@ impl SketchManager {
             hole_count: model.counters.hole,
             grid_snap: model.preferences.grid_snap,
             grid_step: GRID_STEP_MM,
+            body_appearances: model.body_appearances,
             pending_project: None,
         };
         candidate.sketch_count = candidate
@@ -480,6 +485,97 @@ impl SketchManager {
 
     pub fn solid_scene(&self) -> SolidSceneDto {
         self.solids.scene().clone()
+    }
+
+    pub fn body_appearances(&self) -> Vec<BodyAppearance> {
+        self.body_appearances.clone()
+    }
+
+    pub fn set_body_appearance(
+        &mut self,
+        appearance: BodyAppearance,
+    ) -> Result<Vec<BodyAppearance>, SessionError> {
+        if appearance.body_id.0 == 0 {
+            return Err(SessionError::Solid(
+                "body appearance requires a non-zero body id".to_string(),
+            ));
+        }
+        let material_name = appearance.material_name.trim();
+        let material_name = if material_name.is_empty() {
+            DEFAULT_MATERIAL_NAME.to_string()
+        } else {
+            material_name.to_string()
+        };
+        let next = BodyAppearance {
+            body_id: appearance.body_id,
+            color: appearance.color,
+            material_name,
+            filament_type: {
+                let value = appearance.filament_type.trim();
+                if value.is_empty() {
+                    nbcad_core::DEFAULT_FILAMENT_TYPE.to_string()
+                } else {
+                    value.to_string()
+                }
+            },
+            brand: {
+                let value = appearance.brand.trim();
+                if value.is_empty() {
+                    nbcad_core::DEFAULT_BRAND.to_string()
+                } else {
+                    value.to_string()
+                }
+            },
+            color_name: appearance.color_name.trim().to_string(),
+            filament_id: appearance
+                .filament_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+            preset_id: appearance
+                .preset_id
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty()),
+            density_g_cm3: appearance.density_g_cm3.filter(|d| d.is_finite() && *d > 0.0),
+            diameter_mm: if appearance.diameter_mm.is_finite() && appearance.diameter_mm > 0.0 {
+                appearance.diameter_mm
+            } else {
+                nbcad_core::DEFAULT_FILAMENT_DIAMETER_MM
+            },
+        };
+        if let Some(existing) = self
+            .body_appearances
+            .iter_mut()
+            .find(|entry| entry.body_id == next.body_id)
+        {
+            *existing = next;
+        } else {
+            self.body_appearances.push(next);
+        }
+        self.body_appearances
+            .sort_by_key(|entry| entry.body_id.0);
+        Ok(self.body_appearances.clone())
+    }
+
+    fn scrubbed_body_appearances(&self) -> Vec<BodyAppearance> {
+        let live: BTreeSet<_> = self
+            .solids
+            .scene()
+            .bodies
+            .iter()
+            .map(|body| body.id)
+            .collect();
+        let mut kept: Vec<_> = self
+            .body_appearances
+            .iter()
+            .filter(|entry| live.contains(&entry.body_id))
+            .cloned()
+            .collect();
+        kept.sort_by_key(|entry| entry.body_id.0);
+        kept
+    }
+
+    fn scrub_body_appearances(&mut self) {
+        self.body_appearances = self.scrubbed_body_appearances();
     }
 
     pub fn extrude_definitions(&self) -> Vec<ExtrudeDefinitionDto> {
@@ -1291,6 +1387,7 @@ impl SketchManager {
                 self.document.add_body_node(body.id.0, &body.name);
             }
         }
+        self.scrub_body_appearances();
 
         // Every recompute starts clean, then kernel failures and persistent
         // reference failures are overlaid onto their timeline entries.
@@ -3035,6 +3132,110 @@ mod project_tests {
             .export_project_model()
             .unwrap()
             .contains("\"Sketch1\""));
+    }
+
+    #[test]
+    fn project_roundtrip_persists_body_appearances_and_scrubs_orphans() {
+        use nbcad_core::{BodyAppearance, Rgba8};
+
+        let mut manager = SketchManager::new();
+        let basis = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle_locked(crate::dto::LockedRectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                anchor: crate::Vec2::new(0.0, 0.0),
+                width_mm: Some(20.0),
+                height_mm: Some(10.0),
+                width_text: Some("20".to_string()),
+                height_text: Some("10".to_string()),
+                corner_hint: crate::Vec2::new(20.0, 10.0),
+                ctrl_held: false,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                sketch_name: "Sketch1".to_string(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 15.0 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: Vec::new(),
+            })
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        manager
+            .set_body_appearance(BodyAppearance {
+                body_id,
+                color: Rgba8::opaque(200, 40, 40),
+                material_name: "PLA Red".to_string(),
+                filament_type: "PLA".to_string(),
+                brand: "Bambu Lab".to_string(),
+                color_name: "Red".to_string(),
+                filament_id: Some("GFA00".into()),
+                preset_id: Some("bambu.pla.basic.red".into()),
+                density_g_cm3: Some(1.24),
+                diameter_mm: 1.75,
+            })
+            .unwrap();
+        // Orphan appearance for a deleted body must not survive save.
+        manager.body_appearances.push(BodyAppearance {
+            body_id: BodyId(999),
+            color: Rgba8::opaque(0, 0, 0),
+            material_name: "Gone".to_string(),
+            filament_type: "PLA".to_string(),
+            brand: "Generic".to_string(),
+            color_name: String::new(),
+            filament_id: None,
+            preset_id: None,
+            density_g_cm3: None,
+            diameter_mm: 1.75,
+        });
+
+        let json = manager.export_project_model().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let appearances = parsed["body_appearances"].as_array().unwrap();
+        assert_eq!(appearances.len(), 1);
+        assert_eq!(appearances[0]["body_id"], body_id.0);
+        assert_eq!(appearances[0]["material_name"], "PLA Red");
+        assert_eq!(appearances[0]["color"]["r"], 200);
+
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+        let restored = loaded.body_appearances();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].body_id, body_id);
+        assert_eq!(restored[0].material_name, "PLA Red");
+        assert_eq!(restored[0].color.r, 200);
     }
 
     #[test]

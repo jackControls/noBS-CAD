@@ -49,7 +49,14 @@ The current application includes early implementations of:
 - editable feature history, undo, project saving, and reopening;
 - local `.nbcad` project files (ZIP archives containing editable model data
   and metadata);
-- STEP import and AP242 STEP export.
+- STEP import and AP242 STEP export;
+- native **3MF** export with per-body color/material (millimetres), brand
+  filament presets (Bambu Lab, Prusa, Creality, and others), and slicer Metadata
+  targets (Bambu Studio default; also Orca + PrusaSlicer Metadata, Cura
+  basematerials + hint JSON), plus **STL** mesh fallback (geometry only;
+  appearance is omitted). STL/3MF are **native-app / MCP only** in this build —
+  the browser build still exports STEP but stubs mesh export;
+- per-body appearance stored in `.nbcad` and shown in the viewport.
 
 Not every tool or combination is reliable yet. We would especially like
 people to try real mechanical parts and whatever else is useful to you. Tell
@@ -57,9 +64,10 @@ us where the workflow becomes confusing, where the geometry fails, and which
 missing capability would help most.
 
 The `.nbcad` format may still change during pre-alpha, so we recommend
-exporting a STEP copy of any design you care about as a backup. STEP preserves
-the final solid geometry for use in other CAD software, but not the editable
-noBS CAD feature history.
+exporting a STEP and/or 3MF copy of any design you care about as a backup.
+STEP preserves the final solid geometry for use in other CAD software, but
+not the editable noBS CAD feature history. 3MF carries tessellated geometry
+plus per-body color/material for slicers; STL is geometry-only.
 
 ## Local automation (MCP)
 
@@ -145,15 +153,12 @@ desktop app for solid operations.
 
 The repository also includes a stateful, headless
 [MCP server](mcp-server/README.md) that covers most currently implemented
-sketch and solid-modeling tools. The registry has 101 modeling tools plus
-control/export helpers. In the default **dynamic** disclosure mode, agents see a
-focus-scoped subset (spine + active/soft packs) with soft TTL — not a hard jail.
-`full_static` and `cad_list_all_tools` remain available for subagents and
-clients that ignore `notifications/tools/list_changed`. A file-bridge co-link
-(`cad_list_sessions` / `cad_attach`) can attach to a UI-published document.
+sketch and solid-modeling tools. It exposes 106 granular tools today, keeps one
+persistent feature history per process, and uses the same Rust planning model
+and native geometry adapter as the desktop application.
 
-Details: [docs/mcp-harness.md](docs/mcp-harness.md), [docs/OKRs.md](docs/OKRs.md),
-[INDEX.md](INDEX.md).
+This is useful for testing, automation, and experimenting with agent-driven
+CAD workflows without turning the project into a cloud service.
 
 
 ## 3D mouse compatibility

@@ -25,7 +25,7 @@ machine (or CI runner).
 | Document | One persistent feature history **per MCP process** |
 | UI co-link | File bridge: `cad_list_sessions` / `cad_attach` (`NBCAD_SESSION_DIR`) |
 | Geometry | Same native OCCT replay path as desktop for solid ops when OCCT is available |
-| Export | `solid_export_step` (AP242 base64). No 3MF MCP export yet |
+| Export | `solid_export_3mf` (preferred for slicers) + STL + STEP; `material_catalog` |
 
 ### Soft disclosure (not a jail)
 
@@ -83,7 +83,7 @@ invariant; internal IPC may evolve with engineering evidence.
 | datums | `construction_plane_offset` |
 | history | `solid_delete_feature` |
 | inspect | `solid_scene` |
-| print | `solid_export_step` |
+| print | `solid_export_3mf` (also STL / STEP / `material_catalog`) |
 
 Spine controls (`cad_get_focus`, mode, catalog, sessions, …) stay advertised in every pack.
 
@@ -132,7 +132,6 @@ See [proposed-architecture.md](proposed-architecture.md) for detail:
 
 1. **In-process shared document** with the live UI (file bridge v1 ships today).
 2. **Multi-window broker** — deferred until use cases justify it (not P0).
-3. **3MF + materials/colors** — target with testable scope.
 
 ## Rust boundaries (for automation work)
 

@@ -10,6 +10,7 @@
  */
 import { create } from 'zustand';
 import type {
+  BodyAppearance,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   OriginPlane,
@@ -23,6 +24,10 @@ import type {
 } from '../engine/types';
 import { getEngine } from '../engine';
 import {
+  DEFAULT_BODY_COLOR,
+  DEFAULT_MATERIAL_NAME,
+} from '../engine/types';
+import {
   applyThemePreference,
   persistThemePreference,
   readThemePreference,
@@ -31,6 +36,36 @@ import {
   type ThemePreference,
 } from '../theme';
 import type { DocumentDto, NodeId } from '../types/document';
+
+function scrubAppearances(
+  appearances: BodyAppearance[],
+  bodies: { id: number }[],
+): BodyAppearance[] {
+  const live = new Set(bodies.map((body) => body.id));
+  return appearances
+    .filter((entry) => live.has(entry.body_id))
+    .sort((a, b) => a.body_id - b.body_id);
+}
+
+function appearanceFor(
+  appearances: BodyAppearance[],
+  bodyId: number,
+): BodyAppearance {
+  return (
+    appearances.find((entry) => entry.body_id === bodyId) ?? {
+      body_id: bodyId,
+      color: DEFAULT_BODY_COLOR,
+      material_name: DEFAULT_MATERIAL_NAME,
+      filament_type: 'PLA',
+      brand: 'Generic',
+      color_name: '',
+      filament_id: null,
+      preset_id: null,
+      density_g_cm3: null,
+      diameter_mm: 1.75,
+    }
+  );
+}
 
 function bodyBrowserNode(document: DocumentDto | null, bodyId: number | null): NodeId | null {
   if (!document || bodyId === null) return null;
@@ -262,6 +297,8 @@ interface AppState {
   selectedBody: number | null;
   /** Explicit solid-body selections. `selectedBody` remains the active owner. */
   selectedBodies: number[];
+  /** Per-body color/material from the project model. */
+  bodyAppearances: BodyAppearance[];
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -306,11 +343,14 @@ interface AppState {
   setSolidScene: (scene: SolidSceneDto) => void;
   applySolidUpdate: (update: SolidUpdateDto) => void;
   applyDatumPlaneUpdate: (update: DatumPlaneUpdateDto) => void;
+  setBodyAppearances: (appearances: BodyAppearance[]) => void;
+  setBodyAppearance: (appearance: BodyAppearance) => Promise<void>;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
     datumPlanes: DatumPlaneDefinitionDto[],
     fileName: string | null,
+    bodyAppearances?: BodyAppearance[],
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -454,6 +494,7 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedNode: null,
     selectedBody: null,
     selectedBodies: [],
+    bodyAppearances: [],
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -513,6 +554,7 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedNode: null,
   selectedBody: null,
   selectedBodies: [],
+  bodyAppearances: [],
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -552,10 +594,11 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
+      engine.bodyAppearances(),
     ]);
     set({
       document: doc,
@@ -563,6 +606,7 @@ export const useAppStore = create<AppState>()((set) => ({
       finishedSketches,
       solidScene,
       datumPlanes,
+      bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       dirty: false,
     });
   },
@@ -571,13 +615,18 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setFinishedSketches: (sketches) => set({ finishedSketches: sketches }),
 
-  setSolidScene: (solidScene) => set({ solidScene }),
+  setSolidScene: (solidScene) =>
+    set((state) => ({
+      solidScene,
+      bodyAppearances: scrubAppearances(state.bodyAppearances, solidScene.bodies),
+    })),
 
   applySolidUpdate: (update) =>
     set((state) => ({
       document: update.document,
       solidScene: update.scene,
       dirty: true,
+      bodyAppearances: scrubAppearances(state.bodyAppearances, update.scene.bodies),
       selectedBody:
         state.selectedBody !== null && update.scene.bodies.some((body) => body.id === state.selectedBody)
           ? state.selectedBody
@@ -608,13 +657,22 @@ export const useAppStore = create<AppState>()((set) => ({
       dirty: true,
     }),
 
-  loadProjectState: (update, finishedSketches, datumPlanes, fileName) =>
+  setBodyAppearances: (appearances) => set({ bodyAppearances: appearances }),
+
+  setBodyAppearance: async (appearance) => {
+    const engine = await getEngine();
+    const bodyAppearances = await engine.setBodyAppearance(appearance);
+    set({ bodyAppearances, dirty: true });
+  },
+
+  loadProjectState: (update, finishedSketches, datumPlanes, fileName, bodyAppearances = []) =>
     set({
       ...resetDocumentUiState(),
       document: update.document,
       finishedSketches,
       solidScene: update.scene,
       datumPlanes,
+      bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
       dirty: false,
       projectFileName: fileName,
     }),
@@ -1366,3 +1424,8 @@ export const useAppStore = create<AppState>()((set) => ({
   setPaletteOption: (key, value) =>
     set((s) => ({ palette: { ...s.palette, [key]: value } })),
 }));
+
+/** Resolve appearance for a body id from the live store. */
+export function bodyAppearanceFor(bodyId: number): BodyAppearance {
+  return appearanceFor(useAppStore.getState().bodyAppearances, bodyId);
+}

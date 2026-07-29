@@ -34,7 +34,9 @@ Native OCCT 7.9.x             OpenCascade.js
 
 The native and browser adapters are deliberately narrow: construct OCCT shapes,
 perform booleans, tessellate, enumerate topology, return `KernelSceneDto`, and
-serialize selected live B-reps to AP242 STEP.
+serialize selected live B-reps to AP242 STEP. **STL / 3MF mesh packaging** is
+native + MCP only today (`nbcad-export`); the browser adapter throws
+`file.meshNativeOnly` until explicit parity work.
 
 On native OCCT, the writer is constructed first, schema index 5 is selected,
 and `STEPControl_Writer::Model(Standard_True)` creates a fresh AP242 model

@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use nbcad_export::MeshExportRequest;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
@@ -230,6 +231,11 @@ impl CadServer {
                     "encoding": "base64",
                     "bytes_base64": BASE64.encode(bytes),
                 })
+            } else if name == "solid_export_stl" || name == "solid_export_3mf" {
+                self.export_mesh(name, arguments)?
+            } else if name == "material_catalog" {
+                serde_json::from_str(&nbcad_export::catalog_json())
+                    .map_err(|error| format!("catalog json: {error}"))?
             } else {
                 parse_engine_envelope(host::handle(
                     &mut self.manager,
@@ -424,6 +430,42 @@ impl CadServer {
         .map_err(|error| error.to_string())?;
         session::write_session(&session_id, "focus.json", &focus_json)?;
         Ok(())
+    }
+
+    fn export_mesh(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        if !self.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before exporting mesh files.".to_string());
+        }
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments)
+                .map_err(|error| format!("bad mesh export arguments: {error}"))?
+        };
+        let scene = self.manager.solid_scene();
+        let appearances = self.manager.body_appearances();
+        let mut meshes = self
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        let bytes = if name == "solid_export_stl" {
+            nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())?
+        } else {
+            nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+                .map_err(|error| error.to_string())?
+        };
+        Ok(json!({
+            "format": if name == "solid_export_stl" { "stl" } else { "3mf" },
+            "encoding": "base64",
+            "slicer_target": request.slicer_target,
+            "byte_length": bytes.len(),
+            "bytes_base64": BASE64.encode(bytes),
+        }))
     }
 }
 
@@ -2045,7 +2087,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "solid_export_step",
             "Export STEP",
-            "Export selected or all active bodies as AP242 STEP bytes encoded in base64.",
+            "Export selected or all active bodies as AP242 STEP bytes encoded in base64. Prefer solid_export_3mf for slicers.",
             "solid_export_step",
             Payload::Object,
             object_schema(
@@ -2062,6 +2104,59 @@ fn tool_specs() -> Vec<ToolSpec> {
                 }),
                 &[],
             ),
+        ),
+        ToolSpec::direct(
+            "solid_export_stl",
+            "Export STL",
+            "Tessellate active bodies and return binary STL (millimetres) as base64. Appearance is not included.",
+            "solid_export_stl",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": "Empty exports every active body."
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35}
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::direct(
+            "solid_export_3mf",
+            "Export 3MF",
+            "Tessellate active bodies into a standard 3MF (mm, basematerials) with optional slicer Metadata (Bambu/Orca/Prusa/Cura). Preferred print handoff vs STEP.",
+            "solid_export_3mf",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": "Empty exports every active body."
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35},
+                    "include_appearance": {"type": "boolean", "default": true},
+                    "slicer_target": {
+                        "type": "string",
+                        "enum": ["standard", "bambu_studio", "orca_slicer", "prusa_slicer", "cura"],
+                        "default": "bambu_studio",
+                        "description": "Embed slicer-compatible Metadata plus consortium basematerials."
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::direct(
+            "material_catalog",
+            "Material catalog",
+            "Return built-in filament presets (Generic, Bambu Lab, Prusa, Polymaker, Hatchbox, Overture, Elegoo, Creality, Sunlu, eSun, Anycubic).",
+            "material_catalog",
+            Payload::Empty,
+            empty_schema(),
         ),
         ToolSpec::control(
             "cad_get_focus",
@@ -2391,8 +2486,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 13,
-            "101 modeling tools plus solid_export_step and 12 control tools"
+            MODELING_TOOL_COUNT + 16,
+            "101 modeling tools plus 4 print/export helpers and 12 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2401,6 +2496,9 @@ mod tests {
                     tool["name"].as_str(),
                     Some(
                         "solid_export_step"
+                            | "solid_export_stl"
+                            | "solid_export_3mf"
+                            | "material_catalog"
                             | "cad_get_focus"
                             | "cad_set_focus"
                             | "cad_list_focus_areas"
@@ -2451,6 +2549,9 @@ mod tests {
             if matches!(
                 tool.name,
                 "solid_export_step"
+                    | "solid_export_stl"
+                    | "solid_export_3mf"
+                    | "material_catalog"
                     | "cad_get_focus"
                     | "cad_set_focus"
                     | "cad_list_focus_areas"
@@ -2469,7 +2570,7 @@ mod tests {
             *packs.entry(tool.pack.as_str()).or_default() += 1;
         }
         assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
-        // Modeling registry covers 8 packs; print is solid_export_step (non-modeling).
+        // Modeling registry covers 8 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 4);
         assert_eq!(packs["sketch"], 48);
@@ -2573,7 +2674,7 @@ mod tests {
             ("datums", "construction_plane_offset"),
             ("history", "solid_delete_feature"),
             ("inspect", "solid_scene"),
-            ("print", "solid_export_step"),
+            ("print", "solid_export_3mf"),
         ];
         for (focus, tool_name) in expectations {
             let mut server = CadServer::new().unwrap();
@@ -2682,6 +2783,25 @@ mod tests {
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(dir.join(&unique));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn solid_export_3mf_returns_base64_payload() {
+        let (mut server, _) = mcp_box();
+        let exported = server
+            .call_tool(
+                "solid_export_3mf",
+                json!({"slicer_target": "bambu_studio"}),
+            )
+            .expect("3MF export should succeed for a simple box");
+        assert_eq!(exported["format"], "3mf");
+        assert_eq!(exported["encoding"], "base64");
+        let b64 = exported["bytes_base64"].as_str().expect("base64 payload");
+        assert!(b64.len() > 32);
+        let bytes = BASE64.decode(b64).expect("valid base64");
+        assert!(bytes.len() > 32);
+        // ZIP local file header
+        assert_eq!(&bytes[0..2], b"PK");
     }
 
     #[test]

@@ -11,7 +11,8 @@ disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 **Spine controls:** `cad_get_focus`, `cad_set_focus`, disclosure mode get/set,
 `cad_list_all_tools`, `cad_cancel_recompute`, `cad_list_sessions`, `cad_attach`.
 
-**Print:** `solid_export_step` (AP242 base64). No 3MF yet.
+**Print:** prefer `solid_export_3mf` (mm + materials + slicer Metadata). Also
+`solid_export_stl`, `solid_export_step` (CAD), and `material_catalog`.
 
 ## Build and verify
 

@@ -574,7 +574,10 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "solid_chamfer_definitions"
         | "solid_hole_definitions"
         | "solid_body_feature_definitions" => FocusPack::Inspect,
-        "solid_export_step" => FocusPack::Print,
+        "solid_export_step"
+        | "solid_export_stl"
+        | "solid_export_3mf"
+        | "material_catalog" => FocusPack::Print,
         _ => FocusPack::Document,
     };
     (pack, false)
@@ -635,7 +638,10 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     if name.ends_with("_definitions") || name == "solid_scene" {
         return Some(FocusPack::Inspect);
     }
-    if name == "solid_export_step" {
+    if matches!(
+        name,
+        "solid_export_step" | "solid_export_stl" | "solid_export_3mf" | "material_catalog"
+    ) {
         return Some(FocusPack::Print);
     }
     None

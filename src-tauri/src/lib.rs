@@ -61,6 +61,8 @@ engine_command!(engine_edit_sketch, "edit_sketch");
 engine_command!(engine_active_sketch, "active_sketch", no_payload);
 engine_command!(engine_profile_catalog, "profile_catalog", no_payload);
 engine_command!(engine_solid_scene, "solid_scene", no_payload);
+engine_command!(engine_body_appearances, "body_appearances", no_payload);
+engine_command!(engine_set_body_appearance, "set_body_appearance");
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
@@ -265,52 +267,15 @@ fn engine_export_step(state: tauri::State<'_, AppState>, payload: &str) -> Resul
     state.export_step(payload)
 }
 
-const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-
-/// Publish a file-bridge session for MCP `cad_list_sessions` / `cad_attach`.
-/// Payload: `{ session_id, focus, model_json }` → writes
-/// `$NBCAD_SESSION_DIR/<session_id>/{model.json,focus.json}`.
-#[tauri::command]
-fn mcp_session_bridge_write(payload: String) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(&payload)
-        .map_err(|error| format!("invalid session payload: {error}"))?;
-    let session_id = value
-        .get("session_id")
-        .or_else(|| value.get("document_id"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "session payload missing session_id".to_string())?;
-    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
-        return Err("invalid session_id".to_string());
-    }
-    let dir = std::env::var_os("NBCAD_SESSION_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("nbcad-sessions"))
-        .join(session_id);
-    fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
-    if let Some(model) = value.get("model_json").and_then(|v| v.as_str()) {
-        fs::write(dir.join("model.json"), model)
-            .map_err(|error| format!("write model.json: {error}"))?;
-    }
-    let focus = value
-        .get("focus")
-        .cloned()
-        .unwrap_or(serde_json::json!("document"));
-    let focus_body = serde_json::json!({
-        "focus": focus,
-        "updated_at_ms": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0),
-        "co_link": "file_bridge_v1"
-    });
-    fs::write(
-        dir.join("focus.json"),
-        serde_json::to_string_pretty(&focus_body).unwrap(),
-    )
-    .map_err(|error| format!("write focus.json: {error}"))?;
-    Ok(dir.display().to_string())
+fn engine_export_stl(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
+    state.export_stl(payload)
 }
+
+fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
+    state.export_3mf(payload)
+}
+
+const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[tauri::command]
 fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
@@ -319,6 +284,51 @@ fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
         return Err("file is larger than the 256 MB safety limit".to_string());
     }
     fs::read(path).map_err(|error| format!("could not read file: {error}"))
+}
+
+/// Write a file-bridge session manifest for MCP co-link (`cad_list_sessions` / `cad_attach`).
+/// Honors `NBCAD_SESSION_DIR` when set; otherwise uses the system temp `nbcad-sessions` dir.
+#[tauri::command]
+fn mcp_session_bridge_write(payload: String) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(&payload)
+        .map_err(|error| format!("invalid session payload: {error}"))?;
+    let document_id = value
+        .get("document_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "session payload missing document_id".to_string())?;
+    let dir = std::env::var_os("NBCAD_SESSION_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("nbcad-sessions"));
+    fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
+    let safe: String = document_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{safe}.json"));
+    let mut body = value;
+    if let Some(obj) = body.as_object_mut() {
+        obj.entry("updated_ms".to_string()).or_insert_with(|| {
+            serde_json::json!(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0))
+        });
+        obj.insert(
+            "co_link".to_string(),
+            serde_json::json!("file_bridge_v1"),
+        );
+    }
+    let encoded = serde_json::to_string_pretty(&body)
+        .map_err(|error| format!("encode session: {error}"))?;
+    fs::write(&path, encoded).map_err(|error| format!("write session: {error}"))?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -380,12 +390,16 @@ pub fn run() {
             engine_project_new,
             engine_project_load,
             engine_export_step,
+            engine_export_stl,
+            engine_export_3mf,
             engine_end_sketch,
             engine_finished_sketches,
             engine_edit_sketch,
             engine_active_sketch,
             engine_profile_catalog,
             engine_solid_scene,
+            engine_body_appearances,
+            engine_set_body_appearance,
             engine_extrude_definitions,
             engine_revolve_definitions,
             engine_sweep_definitions,

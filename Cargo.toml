@@ -10,6 +10,7 @@ members = [
     "crates/sketch",
     "crates/solid",
     "crates/occt",
+    "crates/export",
     "crates/wasm",
     "xtask",
 ]

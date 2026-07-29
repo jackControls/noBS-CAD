@@ -27,6 +27,16 @@ const STEP_TYPE: SaveType = {
   alternateExtensions: ['.stp'],
   mime: 'model/step',
 };
+const STL_TYPE: SaveType = {
+  description: 'STL mesh (millimetres)',
+  extension: '.stl',
+  mime: 'model/stl',
+};
+const THREEMF_TYPE: SaveType = {
+  description: '3MF (millimetres)',
+  extension: '.3mf',
+  mime: 'model/3mf',
+};
 const MAX_STEP_IMPORT_BYTES = 96 * 1024 * 1024;
 const AUTOSAVE_KEY = 'nbcad:recovery:v1';
 const LEGACY_AUTOSAVE_KEYS = ['tfcad:recovery:v1'] as const;
@@ -165,9 +175,10 @@ export async function openProject(): Promise<boolean> {
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
+    engine.bodyAppearances(),
   ]);
   // A legacy project is readable, but the next Save must choose a new
   // `.nbcad` destination instead of silently overwriting the old container.
@@ -176,7 +187,7 @@ export async function openProject(): Promise<boolean> {
     : null;
   useAppStore
     .getState()
-    .loadProjectState(update, finishedSketches, datumPlanes, opened.name);
+    .loadProjectState(update, finishedSketches, datumPlanes, opened.name, bodyAppearances);
   clearProjectRecovery();
   return true;
 }
@@ -230,6 +241,67 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
   const bytes = await engine.exportStep({
     body_ids: bodyIds,
     thread_metadata: threadMetadata,
+  });
+  await writeSaveTarget(target, bytes);
+  return true;
+}
+
+function meshExportBodyIds(selectedOnly: boolean): number[] {
+  const state = useAppStore.getState();
+  if (state.activeSketch) {
+    throw new Error(translate('file.finishBeforeMesh'));
+  }
+  if (state.solidScene.errors.length > 0) {
+    throw new Error(translate('file.resolveErrors'));
+  }
+  if (selectedOnly && state.selectedBody === null) {
+    throw new Error(translate('file.selectBody'));
+  }
+  const bodyIds =
+    selectedOnly && state.selectedBody !== null
+      ? [state.selectedBody]
+      : state.solidScene.bodies.map((body) => body.id);
+  if (bodyIds.length === 0) {
+    throw new Error(translate('file.noBodies'));
+  }
+  return bodyIds;
+}
+
+export async function exportStl(selectedOnly: boolean): Promise<boolean> {
+  const state = useAppStore.getState();
+  const bodyIds = meshExportBodyIds(selectedOnly);
+  if (state.bodyAppearances.some((entry) => bodyIds.includes(entry.body_id))) {
+    window.alert(translate('file.stlDropsAppearance'));
+  }
+  const documentName = withoutExtension(state.document?.name ?? state.projectFileName ?? 'Untitled');
+  const suffix = selectedOnly && state.selectedBody !== null ? `-Body${state.selectedBody}` : '';
+  const target = await chooseSaveTarget(`${documentName}${suffix}.stl`, STL_TYPE);
+  if (!target) return false;
+  const engine = await getEngine();
+  const bytes = await engine.exportStl({
+    body_ids: bodyIds,
+    linear_deflection: 0.15,
+    angular_deflection: 0.35,
+    include_appearance: false,
+  });
+  await writeSaveTarget(target, bytes);
+  return true;
+}
+
+export async function export3mf(selectedOnly: boolean): Promise<boolean> {
+  const state = useAppStore.getState();
+  const bodyIds = meshExportBodyIds(selectedOnly);
+  const documentName = withoutExtension(state.document?.name ?? state.projectFileName ?? 'Untitled');
+  const suffix = selectedOnly && state.selectedBody !== null ? `-Body${state.selectedBody}` : '';
+  const target = await chooseSaveTarget(`${documentName}${suffix}.3mf`, THREEMF_TYPE);
+  if (!target) return false;
+  const engine = await getEngine();
+  const bytes = await engine.export3mf({
+    body_ids: bodyIds,
+    linear_deflection: 0.15,
+    angular_deflection: 0.35,
+    include_appearance: true,
+    slicer_target: (await import('../materials')).readSlicerTarget(),
   });
   await writeSaveTarget(target, bytes);
   return true;
@@ -337,14 +409,21 @@ export async function offerProjectRecovery(): Promise<boolean> {
     }
     const engine = await getEngine();
     const update = await engine.loadProjectModel(recovery.model_json);
-    const [finishedSketches, datumPlanes] = await Promise.all([
+    const [finishedSketches, datumPlanes, bodyAppearances] = await Promise.all([
       engine.finishedSketches(),
       engine.datumPlaneDefinitions(),
+      engine.bodyAppearances(),
     ]);
     currentProjectTarget = null;
     useAppStore
       .getState()
-      .loadProjectState(update, finishedSketches, datumPlanes, 'Recovered.nbcad');
+      .loadProjectState(
+        update,
+        finishedSketches,
+        datumPlanes,
+        'Recovered.nbcad',
+        bodyAppearances,
+      );
     useAppStore.getState().markDirty();
     if (recoveryEntryValue.key !== AUTOSAVE_KEY) {
       localStorage.removeItem(recoveryEntryValue.key);
