@@ -90,14 +90,16 @@ The command:
    resources;
 8. links the Rust executable against those staged libraries and adds
    `@executable_path/../Frameworks` to `LC_RPATH`;
-9. creates the `.app`, seals local builds ad hoc when no signing identity is
-   supplied, and runs `codesign --verify --deep --strict`.
+9. creates the `.app` and DMG, sealing both with the configured Developer ID
+   or an ad-hoc local identity;
+10. runs strict code-signature and disk-image checksum verification.
 
 The generated staging directory and config overlay are intentionally ignored.
 The result is:
 
 ```text
 src-tauri/target/release/bundle/macos/noBS CAD.app
+src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 ```
 
 Useful manual release audit:

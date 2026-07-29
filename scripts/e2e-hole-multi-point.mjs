@@ -174,6 +174,16 @@ try {
     2,
     'both selected Hole positions use the committed marker',
   );
+  const nativeHolePresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  assert.ok(
+    nativeHolePresentation.points.reduce(
+      (count, layer) => count + layer.positions.length / 3,
+      0,
+    ) >= 4,
+    'Bevy receives both outlined and filled associative Hole position markers',
+  );
   await page.screenshot({
     path: path.join(qa, 'hole-selection-contrast-light.png'),
   });

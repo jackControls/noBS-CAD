@@ -61,9 +61,9 @@ use windows_sys::Win32::{
 };
 
 use super::{
-    NativePick, NativeViewportMetrics, ViewportCamera, ViewportHud, ViewportHudSelection,
-    ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
-    ViewportPresentation, ViewportPreview, ViewportRect,
+    NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
+    ViewportHudSelection, ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane,
+    ViewportPalette, ViewportPresentation, ViewportPreview, ViewportRect,
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
@@ -319,8 +319,30 @@ impl PlatformNativeViewport {
     }
 
     pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
-        if preview.segments.len() > 6 * 16_384 {
-            return Err("native sketch preview is too large".to_string());
+        const MAX_LINE_FLOATS: usize = 6 * 65_536;
+        const MAX_POINT_FLOATS: usize = 3 * 32_768;
+        const MAX_ANNOTATIONS: usize = 2_048;
+        let line_floats = preview
+            .lines
+            .iter()
+            .map(|layer| layer.segments.len())
+            .sum::<usize>();
+        let point_floats = preview
+            .points
+            .iter()
+            .map(|layer| layer.positions.len())
+            .sum::<usize>();
+        if preview.lines.len() > 128
+            || preview.points.len() > 128
+            || line_floats > MAX_LINE_FLOATS
+            || point_floats > MAX_POINT_FLOATS
+            || preview.annotations.len() > MAX_ANNOTATIONS
+            || preview
+                .annotations
+                .iter()
+                .any(|annotation| annotation.text.len() > 128)
+        {
+            return Err("native transient presentation is too large".to_string());
         }
         self.enqueue(RenderCommand::Preview(preview))
     }
@@ -795,8 +817,8 @@ struct CameraResource {
 
 #[derive(Resource, Default)]
 struct PreviewResource {
-    segments: Vec<f32>,
-    marker: Option<[f32; 3]>,
+    value: ViewportPreview,
+    revision: u64,
 }
 
 #[derive(Resource, Clone, Copy, Default)]
@@ -834,6 +856,7 @@ struct RenderedRevisions {
     model: u64,
     camera: u64,
     hud: u64,
+    annotations: u64,
 }
 
 #[derive(Component)]
@@ -863,6 +886,9 @@ struct NativeOriginPlane {
 
 #[derive(Component)]
 struct NativeHudRoot;
+
+#[derive(Component)]
+struct NativeAnnotationRoot;
 
 #[derive(Component, Clone, Copy)]
 struct HudAxisMark {
@@ -939,6 +965,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
                 rebuild_occt_meshes,
                 apply_camera,
                 apply_native_presentation_styles,
+                rebuild_native_annotations,
                 rebuild_native_hud,
                 update_native_hud_orientation,
                 draw_cad_gizmos,
@@ -1176,11 +1203,14 @@ fn apply_native_presentation_styles(
             Visibility::Inherited
         };
         if let Some(mut material) = materials.get_mut(&handle.0) {
+            let hovered = state.hovered_datum_plane_id == Some(plane.datum_id);
             material.base_color = Color::srgba(
                 0.85,
                 0.65,
                 0.30,
-                if state.mode == ViewportMode::PickPlane {
+                if hovered {
+                    0.32
+                } else if state.mode == ViewportMode::PickPlane {
                     0.14
                 } else {
                     0.08
@@ -1201,6 +1231,80 @@ fn apply_native_presentation_styles(
             material.base_color =
                 origin_plane_color(plane.plane, if hovered { 0.28 } else { 0.10 });
         }
+    }
+}
+
+fn rebuild_native_annotations(
+    mut commands: Commands,
+    preview: Res<PreviewResource>,
+    palette: Res<PaletteResource>,
+    mut revisions: ResMut<RenderedRevisions>,
+    existing: Query<Entity, With<NativeAnnotationRoot>>,
+    cameras: Query<Entity, With<NativeCadCamera>>,
+) {
+    if revisions.annotations == preview.revision {
+        return;
+    }
+    revisions.annotations = preview.revision;
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+
+    for annotation in &preview.value.annotations {
+        if annotation.text.trim().is_empty()
+            || !annotation.screen[0].is_finite()
+            || !annotation.screen[1].is_finite()
+        {
+            continue;
+        }
+        let constraint = annotation.kind == ViewportAnnotationKind::Constraint;
+        let foreground = Color::srgba(
+            annotation.color[0],
+            annotation.color[1],
+            annotation.color[2],
+            annotation.color[3].clamp(0.0, 1.0),
+        );
+        commands
+            .spawn((
+                Name::new(format!("Native viewport annotation {}", annotation.text)),
+                NativeAnnotationRoot,
+                UiTargetCamera(camera),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(annotation.screen[0] + 4.0),
+                    top: px(annotation.screen[1] - if constraint { 9.0 } else { 11.0 }),
+                    min_width: px(if constraint { 15.0 } else { 24.0 }),
+                    min_height: px(if constraint { 15.0 } else { 18.0 }),
+                    padding: UiRect::axes(
+                        px(if constraint { 2.0 } else { 4.0 }),
+                        px(if constraint { 1.0 } else { 2.0 }),
+                    ),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(px(1.0)),
+                    border_radius: BorderRadius::all(px(if constraint { 4.0 } else { 5.0 })),
+                    ..default()
+                },
+                BackgroundColor(rgba(
+                    if constraint {
+                        palette.0.background
+                    } else {
+                        palette.0.header
+                    },
+                    if constraint { 0.78 } else { 0.90 },
+                )),
+                BorderColor::all(rgba(palette.0.ui_edge, 0.88)),
+                ZIndex(18),
+            ))
+            .with_child((
+                Text::new(annotation.text.clone()),
+                TextFont::from_font_size(if constraint { 9.0 } else { 10.0 }),
+                TextColor(foreground),
+            ));
     }
 }
 
@@ -1837,6 +1941,7 @@ fn draw_cad_gizmos(
         if state.hidden_datum_plane_ids.contains(&plane.datum_id.0) {
             continue;
         }
+        let hovered = state.hovered_datum_plane_id == Some(plane.datum_id.0);
         draw_plane_outline(
             &mut gizmos,
             &plane.basis,
@@ -1845,7 +1950,9 @@ fn draw_cad_gizmos(
                 0.88,
                 0.68,
                 0.32,
-                if state.mode == ViewportMode::PickPlane {
+                if hovered {
+                    0.98
+                } else if state.mode == ViewportMode::PickPlane {
                     0.76
                 } else {
                     0.56
@@ -1951,15 +2058,41 @@ fn draw_cad_gizmos(
         });
     }
 
-    let preview_color = rgba(palette.0.preview, 0.98);
-    for segment in preview.segments.chunks_exact(6) {
-        gizmos.line(
-            Vec3::new(segment[0], segment[1], segment[2]),
-            Vec3::new(segment[3], segment[4], segment[5]),
-            preview_color,
+    for layer in &preview.value.lines {
+        let color = Color::srgba(
+            layer.color[0],
+            layer.color[1],
+            layer.color[2],
+            layer.color[3].clamp(0.0, 1.0),
         );
+        for segment in layer.segments.chunks_exact(6) {
+            let start = Vec3::new(segment[0], segment[1], segment[2]);
+            let end = Vec3::new(segment[3], segment[4], segment[5]);
+            if layer.width >= 2.0 {
+                highlights.line(start, end, color);
+            } else {
+                gizmos.line(start, end, color);
+            }
+        }
     }
-    if let Some(marker) = preview.marker {
+
+    for layer in &preview.value.points {
+        let color = Color::srgba(
+            layer.color[0],
+            layer.color[1],
+            layer.color[2],
+            layer.color[3].clamp(0.0, 1.0),
+        );
+        let radius = layer.radius.clamp(0.08, 4.0);
+        for point in layer.positions.chunks_exact(3) {
+            let center = Vec3::new(point[0], point[1], point[2]);
+            highlights.line(center - Vec3::X * radius, center + Vec3::X * radius, color);
+            highlights.line(center - Vec3::Y * radius, center + Vec3::Y * radius, color);
+            highlights.line(center - Vec3::Z * radius, center + Vec3::Z * radius, color);
+        }
+    }
+
+    if let Some(marker) = preview.value.marker {
         let center = Vec3::from_array(marker);
         let radius = 0.42;
         let marker_color = Color::srgba(0.20, 0.52, 0.92, 1.0);
@@ -2422,8 +2555,8 @@ fn apply_render_command(
         }
         RenderCommand::Preview(next) => {
             let mut resource = runtime.app.world_mut().resource_mut::<PreviewResource>();
-            resource.segments = next.segments;
-            resource.marker = next.marker;
+            resource.value = next;
+            resource.revision = resource.revision.wrapping_add(1);
             *dirty = true;
         }
         RenderCommand::Presentation(next) => {

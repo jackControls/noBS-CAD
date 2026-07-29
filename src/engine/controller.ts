@@ -41,6 +41,7 @@ export function startPlanePick(): void {
   state.closeHoleDialog();
   state.closeConstructionPlaneDialog();
   state.closeBodyFeatureDialog();
+  state.setHoveredDatumPlane(null);
   state.setMode('pickPlane');
   if (state.selectedFace !== null) {
     const planar = state.solidScene.bodies
@@ -56,6 +57,7 @@ export function startPlanePick(): void {
 export function cancelPlanePick(): void {
   const s = useAppStore.getState();
   s.setHoveredPlane(null);
+  s.setHoveredDatumPlane(null);
   s.setHoveredFace(null);
   s.closeSketchPlaneOrigin();
   s.setMode('solid');
@@ -111,6 +113,7 @@ async function beginSketchOn(
   const sketch = await engine.beginSketch(plane, faceOrigin);
   const s = useAppStore.getState();
   s.setHoveredPlane(null);
+  s.setHoveredDatumPlane(null);
   s.setHoveredFace(null);
   s.closeSketchPlaneOrigin();
   s.setActiveSketch(sketch);

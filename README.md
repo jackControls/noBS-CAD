@@ -174,10 +174,11 @@ npm ci
 npm run bundle:macos
 ```
 
-The resulting application is written to:
+The resulting signed application and test disk image are written to:
 
 ```text
 src-tauri/target/release/bundle/macos/noBS CAD.app
+src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 ```
 
 See [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md) for

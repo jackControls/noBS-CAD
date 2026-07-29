@@ -5,7 +5,7 @@
  * those @rpath-normalized copies before Tauri copies/signs them.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 if (process.platform !== 'darwin') {
@@ -27,7 +27,7 @@ execFileSync(
     'tauri',
     'build',
     '--bundles',
-    'app',
+    'app,dmg',
     '--config',
     'src-tauri/tauri.occt.conf.json',
   ],
@@ -69,4 +69,18 @@ if (!process.env.APPLE_SIGNING_IDENTITY) {
 execFileSync('codesign', ['--verify', '--deep', '--strict', appBundle], {
   stdio: 'inherit',
 });
+const dmgDirectory = join(
+  projectRoot,
+  'src-tauri/target/release/bundle/dmg',
+);
+const dmgBundle = readdirSync(dmgDirectory)
+  .filter((name) => name.endsWith('.dmg'))
+  .map((name) => join(dmgDirectory, name))
+  .sort((left, right) => statSync(left).mtimeMs - statSync(right).mtimeMs)
+  .at(-1);
+if (!dmgBundle) {
+  throw new Error(`Tauri did not create a DMG under ${dmgDirectory}`);
+}
+execFileSync('hdiutil', ['verify', dmgBundle], { stdio: 'inherit' });
 console.log(`Verified portable app bundle: ${appBundle}`);
+console.log(`Verified disk image: ${dmgBundle}`);

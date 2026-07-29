@@ -228,6 +228,8 @@ interface AppState {
   datumPlanes: DatumPlaneDefinitionDto[];
   /** Plane currently hovered in pick-plane mode (viewport or browser). */
   hoveredPlane: OriginPlane | null;
+  /** User-defined datum plane currently hovered while choosing sketch support. */
+  hoveredDatumPlane: number | null;
   activeTool: SketchTool;
   /** Active modal nav tool (`select` = normal left-drag behavior). */
   navTool: NavTool;
@@ -315,6 +317,7 @@ interface AppState {
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
   setHoveredPlane: (plane: OriginPlane | null) => void;
+  setHoveredDatumPlane: (datumId: number | null) => void;
   setActiveTool: (tool: SketchTool) => void;
   setNavTool: (tool: NavTool) => void;
   setSelectedEntity: (id: number | null) => void;
@@ -431,6 +434,7 @@ function resetDocumentUiState(): Partial<AppState> {
     solidScene: { bodies: [], errors: [] },
     datumPlanes: [],
     hoveredPlane: null,
+    hoveredDatumPlane: null,
     activeTool: null,
     navTool: 'select',
     selectedEntity: null,
@@ -494,6 +498,7 @@ export const useAppStore = create<AppState>()((set) => ({
   solidScene: { bodies: [], errors: [] },
   datumPlanes: [],
   hoveredPlane: null,
+  hoveredDatumPlane: null,
   activeTool: null,
   navTool: 'select',
   selectedEntity: null,
@@ -652,6 +657,11 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setHoveredPlane: (plane) =>
     set((s) => (s.hoveredPlane === plane ? s : { hoveredPlane: plane })),
+
+  setHoveredDatumPlane: (datumId) =>
+    set((s) =>
+      s.hoveredDatumPlane === datumId ? s : { hoveredDatumPlane: datumId },
+    ),
 
   // Inline dimension editing is transient UI owned by the currently active
   // sketch interaction. Switching tools (including Escape -> Select) must

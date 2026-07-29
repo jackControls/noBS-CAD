@@ -291,7 +291,9 @@ function NodeRow({
   const toggleHidden = useAppStore((s) => s.toggleHidden);
   const mode = useAppStore((s) => s.mode);
   const hoveredPlane = useAppStore((s) => s.hoveredPlane);
+  const hoveredDatumPlane = useAppStore((s) => s.hoveredDatumPlane);
   const setHoveredPlane = useAppStore((s) => s.setHoveredPlane);
+  const setHoveredDatumPlane = useAppStore((s) => s.setHoveredDatumPlane);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const activeFullyDefined = useAppStore((s) => s.activeSketch?.dof.fully_defined ?? false);
 
@@ -308,6 +310,8 @@ function NodeRow({
     node.kind === 'construction_plane' &&
     node.reference_id !== null;
   const planeHovered = picking && hoveredPlane === plane;
+  const datumHovered =
+    pickingDatum && hoveredDatumPlane === node.reference_id;
   const isActiveSketch = node.kind === 'sketch' && node.name !== null && node.name === activeSketchName;
   // A finished sketch re-enters editing via double-click or the pencil
   // affordance (M1d).
@@ -356,6 +360,7 @@ function NodeRow({
           selected && 'bg-accent/20 hover:bg-accent/25',
           hidden && 'opacity-50',
           planeHovered && 'bg-accent/25 hover:bg-accent/30',
+          datumHovered && 'bg-accent/25 hover:bg-accent/30',
         )}
         style={{ paddingLeft: depth * 14 + 4 }}
         onClick={(event) => {
@@ -380,8 +385,20 @@ function NodeRow({
         onDoubleClick={reEdit}
         onContextMenu={openPointerContext}
         onKeyDown={onRowKeyDown}
-        onMouseEnter={picking && plane ? () => setHoveredPlane(plane) : undefined}
-        onMouseLeave={picking && plane ? () => setHoveredPlane(null) : undefined}
+        onMouseEnter={
+          picking && plane
+            ? () => setHoveredPlane(plane)
+            : pickingDatum
+              ? () => setHoveredDatumPlane(node.reference_id)
+              : undefined
+        }
+        onMouseLeave={
+          picking && plane
+            ? () => setHoveredPlane(null)
+            : pickingDatum
+              ? () => setHoveredDatumPlane(null)
+              : undefined
+        }
       >
         <button
           type="button"

@@ -198,7 +198,14 @@ writeFileSync(
           './occt-libs/licenses/OPENCASCADE_JS_LICENSE.txt':
             'licenses/OPENCASCADE_JS_LICENSE.txt',
         },
-        macOS: { frameworks },
+        macOS: {
+          frameworks,
+          // Tauri must seal the app before it copies it into a DMG. A local
+          // build uses Apple's ad-hoc identity; release builders can provide
+          // a Developer ID through the same environment variable consumed by
+          // scripts/bundle-macos.mjs.
+          signingIdentity: process.env.APPLE_SIGNING_IDENTITY ?? '-',
+        },
       },
     },
     null,
