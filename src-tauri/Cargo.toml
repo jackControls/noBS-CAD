@@ -72,6 +72,10 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["st
 
 [target.'cfg(target_os = "windows")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["windows-native"] }
+# Keep gpu-allocator and wgpu-hal on the same Direct3D COM types. Version 0.62.0
+# is the exact intersection of gpu-allocator's `<=0.62` cap and wgpu-hal's
+# `^0.62` requirement; allowing a newer patch release makes Cargo split them.
+windows = { version = "=0.62.0", default-features = false }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
