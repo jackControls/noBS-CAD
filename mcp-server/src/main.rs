@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 
 mod disclosure;
 mod session;
+mod ui_launch;
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
@@ -119,6 +120,8 @@ struct CadServer {
     disclosure: DisclosureState,
     attached_document_id: Option<String>,
     pending_recompute_transaction: Option<u64>,
+    /// Last UI process launched from this MCP session (best-effort).
+    ui_pid: Option<u32>,
 }
 
 impl CadServer {
@@ -129,6 +132,7 @@ impl CadServer {
             disclosure: DisclosureState::new(),
             attached_document_id: None,
             pending_recompute_transaction: None,
+            ui_pid: None,
         })
     }
 
@@ -312,6 +316,17 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
+            "cad_launch_ui" => {
+                let force = arguments
+                    .get("force")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let result = ui_launch::launch_ui(force)?;
+                self.ui_pid = Some(result.pid);
+                ui_launch::launch_result_json(&result)
+            }
+            "cad_ui_status" => ui_launch::ui_status_json(self.ui_pid),
+            "cad_ui_window" => ui_launch::write_window_command(&arguments)?,
             "cad_attach" => {
                 let session_id = arguments
                     .get("session_id")
@@ -383,6 +398,7 @@ impl CadServer {
             "cad_set_focus"
                 | "cad_set_tool_disclosure_mode"
                 | "cad_attach"
+                | "cad_launch_ui"
         ) {
             self.write_attached_session()?;
         }
@@ -2126,6 +2142,44 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["session_id"],
             ),
         ),
+        ToolSpec::control(
+            "cad_launch_ui",
+            "Launch desktop UI",
+            "Spawn the noBS CAD desktop app (detached) sharing NBCAD_SESSION_DIR. MCP stays headless; use cad_attach for file-bridge co-link. Set NBCAD_UI_EXE to override the executable path.",
+            object_schema(
+                json!({
+                    "force": {
+                        "type": "boolean",
+                        "description": "Launch even if a tracked UI pid still looks alive."
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_ui_status",
+            "UI status",
+            "Report whether a tracked/launched desktop UI process is alive, plus file-bridge session summary.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_ui_window",
+            "UI window command",
+            "Queue a window command (focus/show/hide/move/resize) via file-bridge _ui/control.json for the running desktop shell to apply. Multi-window broker is backlog.",
+            object_schema(
+                json!({
+                    "action": {
+                        "type": "string",
+                        "enum": ["focus", "show", "hide", "move", "resize"]
+                    },
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "width": {"type": "integer", "minimum": 1},
+                    "height": {"type": "integer", "minimum": 1}
+                }),
+                &["action"],
+            ),
+        ),
     ];
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
@@ -2337,8 +2391,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 10,
-            "101 modeling tools plus solid_export_step and 9 control tools"
+            MODELING_TOOL_COUNT + 13,
+            "101 modeling tools plus solid_export_step and 12 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2356,6 +2410,9 @@ mod tests {
                             | "cad_cancel_recompute"
                             | "cad_list_sessions"
                             | "cad_attach"
+                            | "cad_launch_ui"
+                            | "cad_ui_status"
+                            | "cad_ui_window"
                     )
                 )
             })
@@ -2403,6 +2460,9 @@ mod tests {
                     | "cad_cancel_recompute"
                     | "cad_list_sessions"
                     | "cad_attach"
+                    | "cad_launch_ui"
+                    | "cad_ui_status"
+                    | "cad_ui_window"
             ) {
                 continue;
             }

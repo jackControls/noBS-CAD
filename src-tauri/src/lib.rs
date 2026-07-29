@@ -9,6 +9,7 @@
 
 mod six_dof_mouse;
 mod state;
+mod ui_control;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -360,6 +361,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(SixDofMouseState::default())
+        .setup(|app| {
+            ui_control::start_watcher(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
             get_document,

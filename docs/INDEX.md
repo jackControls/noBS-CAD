@@ -21,6 +21,7 @@
 | Doc | Audience | When to update |
 |-----|----------|----------------|
 | [agentic/INDEX.md](agentic/INDEX.md) | Agents + maintainers | Structure changes |
+| [agentic/INSTALL_MCP.md](agentic/INSTALL_MCP.md) | Humans + agents | Client MCP upsert install |
 | [agentic/STEERABLE_MCP.md](agentic/STEERABLE_MCP.md) | Agents | Disclosure invariants |
 | [agentic/MAINTENANCE.md](agentic/MAINTENANCE.md) | Agents + CI | Toolchain / test commands |
 | [agentic/COMPLETION.md](agentic/COMPLETION.md) | Reviewers | Plan vs shipped status |

@@ -32,6 +32,16 @@ Logs on **stderr**; stdout is JSON-RPC.
 Prefer `dynamic` disclosure for main agents; `full_static` or
 `cad_list_all_tools` for subagents.
 
+## Install into Cursor / VS Code / Claude / OpenCode / Grok
+
+From the repo root, upsert the release binary into each **detected** user config:
+
+```powershell
+cargo run -p xtask -- install-mcp
+```
+
+Details: [docs/agentic/INSTALL_MCP.md](../docs/agentic/INSTALL_MCP.md).
+
 ```json
 {
   "mcpServers": {
