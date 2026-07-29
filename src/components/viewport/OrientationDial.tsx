@@ -4,9 +4,9 @@
  * and interaction language are intentionally native to noBS CAD.
  */
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import * as THREE from 'three';
 import { useTranslation } from '../../i18n';
 import type { ViewportCameraApi } from './cameraApi';
+import { Vector3 } from './cadInteraction';
 import { nativeViewportIsActive } from './nativeViewportBridge';
 
 type AxisPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
@@ -21,9 +21,9 @@ const PRESET_DIRECTIONS: Record<AxisPreset, [number, number, number]> = {
 };
 
 const AXES = [
-  { key: 'x', vector: new THREE.Vector3(1, 0, 0), color: '#e15b64' },
-  { key: 'y', vector: new THREE.Vector3(0, 1, 0), color: '#58ad72' },
-  { key: 'z', vector: new THREE.Vector3(0, 0, 1), color: '#42a5e8' },
+  { key: 'x', vector: new Vector3(1, 0, 0), color: '#e15b64' },
+  { key: 'y', vector: new Vector3(0, 1, 0), color: '#58ad72' },
+  { key: 'z', vector: new Vector3(0, 0, 1), color: '#42a5e8' },
 ] as const;
 
 export function OrientationDial({
@@ -37,12 +37,12 @@ export function OrientationDial({
 
   useEffect(() => {
     let raf = 0;
-    const position = new THREE.Vector3();
-    const target = new THREE.Vector3();
-    const upHint = new THREE.Vector3();
-    const forward = new THREE.Vector3();
-    const right = new THREE.Vector3();
-    const screenUp = new THREE.Vector3();
+    const position = new Vector3();
+    const target = new Vector3();
+    const upHint = new Vector3();
+    const forward = new Vector3();
+    const right = new Vector3();
+    const screenUp = new Vector3();
 
     const tick = () => {
       // Bevy owns the visible dial in the native desktop path and updates it

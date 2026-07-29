@@ -27,7 +27,7 @@ the Open CASCADE Technology software.
 | Component | Use | License |
 |---|---|---|
 | React and React DOM | User interface | MIT |
-| three.js | 3D viewport | MIT |
+| Bevy | Native viewport | MIT or Apache-2.0 |
 | Zustand | Application state | MIT |
 | fflate | Local `.nbcad` ZIP files | MIT |
 | Lucide | General-purpose interface icons | ISC |
@@ -61,7 +61,6 @@ The following copyright notices apply to their respective MIT-licensed
 components:
 
 - React and React DOM: Copyright (c) Facebook, Inc. and its affiliates.
-- three.js: Copyright © 2010-2024 three.js authors.
 - Zustand: Copyright (c) 2019 Paul Henschel.
 - fflate: Copyright (c) 2023 Arjun Barrett.
 - Tauri: Copyright (c) 2017-present Tauri Apps Contributors.

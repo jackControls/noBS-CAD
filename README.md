@@ -203,7 +203,8 @@ npm run build
 
 ## Project structure
 
-- React, TypeScript, Vite, and three.js provide the UI and viewport.
+- React, TypeScript, and Vite provide the DOM interface; Bevy renders the
+  native desktop viewport.
 - Host-neutral Rust crates own project data, sketches, feature definitions,
   history, stable references, and recompute planning.
 - Native builds use Open CASCADE Technology through a narrow C++ bridge.

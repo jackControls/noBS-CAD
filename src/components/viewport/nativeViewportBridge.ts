@@ -1,7 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
-import type * as THREE from 'three';
 import { useAppStore } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
+
+export interface NativeCameraState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  verticalFovDegrees: number;
+}
 
 interface NativeViewportMetrics {
   available: boolean;
@@ -634,11 +640,15 @@ export function syncNativeViewportPreview(
 }
 
 export function syncNativeViewportCamera(
-  camera: THREE.PerspectiveCamera,
-  target: THREE.Vector3,
+  camera: {
+    position: { toArray(): number[] };
+    up: { toArray(): number[] };
+    fov: number;
+  },
+  target: { toArray(): number[] },
 ): void {
   if (!active) return;
-  const next = {
+  const next: NativeCameraState = {
     position: camera.position.toArray() as [number, number, number],
     target: target.toArray() as [number, number, number],
     up: camera.up.toArray() as [number, number, number],

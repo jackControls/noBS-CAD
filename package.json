@@ -50,6 +50,7 @@
     "e2e:project-lifecycle": "node scripts/run-e2e.mjs e2e-project-lifecycle.mjs",
     "e2e:theme": "node scripts/run-e2e.mjs e2e-theme.mjs",
     "e2e:six-dof": "node scripts/run-e2e.mjs e2e-six-dof-mouse.mjs",
+    "e2e:bevy-kernel": "node scripts/run-e2e.mjs e2e-bevy-interaction-kernel.mjs",
     "e2e:files": "node scripts/run-e2e.mjs e2e-m2.mjs"
   },
   "dependencies": {
@@ -60,14 +61,12 @@
     "opencascade.js": "2.0.0-beta.b5ff984",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.171.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@types/three": "^0.171.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "playwright": "^1.61.1",
