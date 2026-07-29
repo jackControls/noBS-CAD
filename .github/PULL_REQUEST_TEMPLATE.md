@@ -1,10 +1,10 @@
 ## Summary
 
-- 
+<!-- Briefly explain what changed and why. -->
 
 ## Issue
 
-Refs #   <!-- optional for small docs/fixes -->
+<!-- Fixes #123 or Refs #123 (optional for small docs/fixes) -->
 
 ## Test plan / validation
 
