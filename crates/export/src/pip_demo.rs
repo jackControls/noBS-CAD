@@ -94,7 +94,7 @@ pub fn assert_box_clearances(bodies: &[(&str, &[[f32; 6]])], min_clear_mm: f32) 
                     let gap = Aabb::from_box(*a).separation(Aabb::from_box(*b));
                     assert!(
                         gap + 1e-3 >= min_clear_mm,
-                        "bodies '{}' and '{}' violate {} mm clearance (gap={gap})",
+                        "bodies '{}' and '{}' violate {} mm clearance (gap={gap})\n  a={a:?}\n  b={b:?}",
                         bodies[i].0,
                         bodies[j].0,
                         min_clear_mm
@@ -201,6 +201,174 @@ pub fn print_in_place_latch() -> (Vec<TriangleMesh>, Vec<BodyAppearance>) {
     print_in_place_clip()
 }
 
+/// Four-body print-in-place **cam bolt** (no supports, flat on bed).
+///
+/// Mechanical story after printing:
+/// 1. Slide the **bolt** along Y (T-channel on the left).
+/// 2. Stepped **wedge** on the bolt drives the **follower** out along +X.
+/// 3. Twist the **dial** so its lobe drops into the follower notch to lock travel.
+///
+/// Print rules baked in:
+/// - Every inter-body box pair ≥ [`CLEAR_MM`]
+/// - Max height ~12.5 mm; stepped wedge (≈45°) — no supports
+/// - No intentional interference / fused solids
+pub fn print_in_place_cam_bolt() -> (Vec<TriangleMesh>, Vec<BodyAppearance>) {
+    let housing_boxes: &[[f32; 6]] = &[
+        // Main floor
+        [0.0, 70.0, 0.0, 58.0, 0.0, 2.5],
+        // --- Bolt T-channel (left) ---
+        [0.0, 3.5, 0.0, 42.0, 2.5, 8.0],          // outer rail
+        [0.0, 8.5, 0.0, 42.0, 8.0, 10.0],          // lip outer
+        [13.5, 18.0, 0.0, 42.0, 8.0, 10.0],        // lip inner
+        [0.0, 18.0, 0.0, 3.5, 2.5, 10.0],          // front cheek
+        [8.5, 13.5, 0.0, 3.5, 8.0, 10.0],          // front top
+        [0.0, 20.0, 40.0, 42.0, 2.5, 10.0],         // bolt rear stop
+        // Inner rail split — open y16..28 for wedge → follower
+        [18.0, 20.0, 0.0, 16.0, 2.5, 8.0],
+        [18.0, 20.0, 28.0, 42.0, 2.5, 8.0],
+        // --- Follower pocket (center) x20..44, y12..32 ---
+        [20.0, 44.0, 12.0, 14.0, 2.5, 8.0],         // pocket front
+        // Pocket back split — slot x26..36 for lock tab
+        [20.0, 26.0, 30.0, 32.0, 2.5, 8.0],
+        [36.0, 44.0, 30.0, 32.0, 2.5, 8.0],
+        [42.0, 44.0, 14.0, 30.0, 2.5, 8.0],         // pocket outer
+        [20.0, 44.0, 12.0, 32.0, 8.0, 10.0],        // pocket lid
+        // --- Dial well (rear-right) interior x46..66, y36..54 ---
+        [44.0, 46.0, 36.0, 56.0, 2.5, 8.5],         // well left
+        [66.0, 68.0, 36.0, 56.0, 2.5, 8.5],         // well right
+        [46.0, 66.0, 36.0, 38.0, 2.5, 8.5],         // well front
+        [46.0, 66.0, 54.0, 56.0, 2.5, 8.5],         // well back
+        [46.0, 52.0, 38.0, 54.0, 8.5, 10.0],        // dial lip L
+        [60.0, 66.0, 38.0, 54.0, 8.5, 10.0],        // dial lip R
+        [52.0, 60.0, 38.0, 44.0, 8.5, 10.0],        // dial lip F
+        [52.0, 60.0, 50.0, 54.0, 8.5, 10.0],        // dial lip B
+    ];
+
+    let bx0 = 3.5 + CLEAR_MM;
+    let bx1 = 18.0 - CLEAR_MM;
+    let neck0 = 8.5 + CLEAR_MM;
+    let neck1 = 13.5 - CLEAR_MM;
+    let bz0 = 2.5 + CLEAR_MM;
+    let bz1 = 8.0 - CLEAR_MM;
+    let by0 = 6.0;
+    let by1 = 34.0;
+    // Wedge Z must stay ≤ pocket-lid clearance (lid at z=8).
+    let w1 = (bz0 + 1.0).min(bz1);
+    let w2 = (bz0 + 2.0).min(bz1);
+    let w3 = (bz0 + 3.0).min(bz1);
+    let w4 = (bz0 + 4.0).min(bz1);
+
+    // Bolt + ≈45° stepped wedge facing +X through window y16..28.
+    let bolt_boxes: &[[f32; 6]] = &[
+        [bx0, bx1, by0, by1, bz0, bz1],
+        [neck0, neck1, by0, by1, bz1, 10.0 + CLEAR_MM],
+        [6.5, 15.5, by0, by1, 10.0 + CLEAR_MM, 12.5],
+        [neck0, neck1, 3.5 + CLEAR_MM, by0, bz0, bz1],
+        [bx1, 22.0, 16.0 + CLEAR_MM, 18.0, bz0, w1],
+        [bx1, 24.5, 17.0, 19.0, bz0, w2],
+        [bx1, 27.0, 18.0, 20.0, bz0, w3],
+        [bx1, 28.0 - CLEAR_MM, 19.0, 21.0, bz0, w4],
+    ];
+
+    // Follower: body stays east of wedge tip; nose reaches west with CLEAR.
+    let follower_boxes: &[[f32; 6]] = &[
+        [
+            30.0 + CLEAR_MM,
+            42.0 - CLEAR_MM,
+            14.0 + CLEAR_MM,
+            30.0 - CLEAR_MM,
+            2.5 + CLEAR_MM,
+            8.0 - CLEAR_MM,
+        ],
+        // Nose toward bolt wedge (CLEAR at rest)
+        [
+            28.0 + CLEAR_MM,
+            30.0 + CLEAR_MM,
+            18.5,
+            22.5,
+            2.5 + CLEAR_MM,
+            7.0,
+        ],
+        // Lock tab through pocket-back slot (x26..36) toward dial lobe
+        [
+            27.0,
+            35.0,
+            32.0 + CLEAR_MM,
+            35.0,
+            2.5 + CLEAR_MM,
+            7.5,
+        ],
+    ];
+
+    // Dial in rear-right well; lobe toward follower lock tab.
+    let dial_boxes: &[[f32; 6]] = &[
+        [
+            46.0 + CLEAR_MM,
+            66.0 - CLEAR_MM,
+            38.0 + CLEAR_MM,
+            54.0 - CLEAR_MM,
+            2.5 + CLEAR_MM,
+            8.5 - CLEAR_MM,
+        ],
+        [50.0, 62.0, 38.0 + CLEAR_MM, 40.0, 2.5 + CLEAR_MM, 8.5 - CLEAR_MM],
+        [50.0, 62.0, 52.0, 54.0 - CLEAR_MM, 2.5 + CLEAR_MM, 8.5 - CLEAR_MM],
+        // Lock lobe toward follower tab (stays west of well left wall)
+        [
+            30.0,
+            44.0 - CLEAR_MM,
+            35.0 + CLEAR_MM,
+            38.0 - CLEAR_MM,
+            3.0,
+            7.2,
+        ],
+        [53.0, 59.0, 44.0 + CLEAR_MM, 50.0 - CLEAR_MM, 8.5 + CLEAR_MM, 12.5],
+    ];
+
+    assert_box_clearances(
+        &[
+            ("PIP Cam Housing", housing_boxes),
+            ("PIP Cam Bolt", bolt_boxes),
+            ("PIP Cam Follower", follower_boxes),
+            ("PIP Cam Dial", dial_boxes),
+        ],
+        CLEAR_MM,
+    );
+
+    let housing = mesh_from_boxes(BodyId(1), "PIP Cam Housing", housing_boxes);
+    let bolt = mesh_from_boxes(BodyId(2), "PIP Cam Bolt", bolt_boxes);
+    let follower = mesh_from_boxes(BodyId(3), "PIP Cam Follower", follower_boxes);
+    let dial = mesh_from_boxes(BodyId(4), "PIP Cam Dial", dial_boxes);
+
+    let mut housing_app = find_preset("bambu.pla.basic.black")
+        .unwrap()
+        .to_appearance(BodyId(1));
+    housing_app.color = Rgba8::opaque(20, 20, 20);
+    housing_app.color_name = "Black".into();
+
+    let mut bolt_app = find_preset("bambu.pla.basic.red")
+        .unwrap()
+        .to_appearance(BodyId(2));
+    bolt_app.color = Rgba8::opaque(200, 40, 40);
+    bolt_app.color_name = "Red".into();
+
+    let mut follower_app = find_preset("bambu.pla.basic.blue")
+        .unwrap()
+        .to_appearance(BodyId(3));
+    follower_app.color = Rgba8::opaque(40, 90, 200);
+    follower_app.color_name = "Blue".into();
+
+    let mut dial_app = find_preset("bambu.pla.basic.orange")
+        .unwrap()
+        .to_appearance(BodyId(4));
+    dial_app.color = Rgba8::opaque(240, 120, 40);
+    dial_app.color_name = "Orange".into();
+
+    (
+        vec![housing, bolt, follower, dial],
+        vec![housing_app, bolt_app, follower_app, dial_app],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +390,24 @@ mod tests {
             .map(|p| p[2])
             .fold(f32::MAX, f32::min);
         assert!(min_z >= 2.5 + CLEAR_MM - 1e-3);
+    }
+
+    #[test]
+    fn cam_bolt_has_four_bodies_and_dfm_clearance() {
+        let (meshes, apps) = print_in_place_cam_bolt();
+        assert_eq!(meshes.len(), 4);
+        assert_eq!(apps.len(), 4);
+        for mesh in &meshes {
+            assert!(mesh.positions.len() >= 8 * 3);
+            assert!(mesh.triangle_count() >= 12);
+        }
+        assert!(meshes.iter().all(|m| {
+            m.positions
+                .chunks_exact(3)
+                .map(|p| p[2])
+                .fold(f32::MAX, f32::min)
+                >= -1e-3
+        }));
     }
 
     #[test]

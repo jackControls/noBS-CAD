@@ -19,7 +19,10 @@ pub use facade::ExportFacade;
 pub use materials::{
     brands, catalog_json, find_preset, material_catalog, presets_for_brand, MaterialPreset,
 };
-pub use pip_demo::{assert_box_clearances, print_in_place_clip, print_in_place_latch, CLEAR_MM};
+pub use pip_demo::{
+    assert_box_clearances, print_in_place_cam_bolt, print_in_place_clip, print_in_place_latch,
+    CLEAR_MM,
+};
 pub use slicer::SlicerTarget;
 pub use stl::write_stl;
 pub use threemf::write_3mf;
@@ -378,5 +381,26 @@ mod tests {
             std::fs::write(dir.join(name), &bytes).unwrap();
         }
         assert!(dir.join("print_in_place_clip_bambu.3mf").is_file());
+
+        // Four-body cam bolt (wedge drive + dial lock), DFM-cleared.
+        let (cam_meshes, cam_apps) = print_in_place_cam_bolt();
+        assert_eq!(cam_meshes.len(), 4);
+        for (name, target) in [
+            ("print_in_place_cam_bolt_bambu.3mf", SlicerTarget::BambuStudio),
+            ("print_in_place_cam_bolt_orca.3mf", SlicerTarget::OrcaSlicer),
+            ("print_in_place_cam_bolt_prusa.3mf", SlicerTarget::PrusaSlicer),
+            ("print_in_place_cam_bolt_cura.3mf", SlicerTarget::Cura),
+        ] {
+            let bytes = write_3mf(&cam_meshes, &cam_apps, true, target).unwrap();
+            let tri_floats: usize = cam_meshes.iter().map(|m| m.indices.len()).sum();
+            assert!(
+                bytes.len() > 3_000 && tri_floats >= 28 * 36,
+                "{name} cam-bolt mesh under-built ({} bytes, {} index floats)",
+                bytes.len(),
+                tri_floats
+            );
+            std::fs::write(dir.join(name), &bytes).unwrap();
+        }
+        assert!(dir.join("print_in_place_cam_bolt_bambu.3mf").is_file());
     }
 }

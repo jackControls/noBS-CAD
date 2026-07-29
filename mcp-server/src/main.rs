@@ -596,16 +596,34 @@ impl CadServer {
         let request: MeshExportRequest = if arguments.is_null() {
             MeshExportRequest::default()
         } else {
-            serde_json::from_value(arguments)
+            serde_json::from_value(arguments.clone())
                 .map_err(|error| format!("bad demo export arguments: {error}"))?
         };
-        let (meshes, appearances) = nbcad_export::print_in_place_clip();
+        let kind = arguments
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("cam_bolt");
+        let (meshes, appearances, demo) = match kind {
+            "clip" | "latch" => {
+                let (m, a) = nbcad_export::print_in_place_clip();
+                (m, a, "print_in_place_clip")
+            }
+            "cam_bolt" | "cam" => {
+                let (m, a) = nbcad_export::print_in_place_cam_bolt();
+                (m, a, "print_in_place_cam_bolt")
+            }
+            other => {
+                return Err(format!(
+                    "unknown demo kind '{other}' (expected cam_bolt or clip)"
+                ))
+            }
+        };
         let bytes = nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
             .map_err(|error| error.to_string())?;
         Ok(json!({
             "format": "3mf",
             "encoding": "base64",
-            "demo": "print_in_place_clip",
+            "demo": demo,
             "body_count": meshes.len(),
             "clearance_mm": nbcad_export::CLEAR_MM,
             "slicer_target": request.slicer_target,
@@ -2416,11 +2434,16 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "demo_export_pip_3mf",
             "Export PIP demo 3MF",
-            "Return the built-in three-body print-in-place drawer clip as base64 3MF (DFM clearances ≥ 0.4 mm). Does not mutate the document.",
+            "Return a built-in print-in-place demo as base64 3MF (DFM clearances ≥ 0.4 mm). Does not mutate the document. kind=cam_bolt (default, 4-body wedge+dial) or clip (3-body drawer).",
             "demo_export_pip_3mf",
             Payload::Object,
             object_schema(
                 json!({
+                    "kind": {
+                        "type": "string",
+                        "enum": ["cam_bolt", "clip"],
+                        "default": "cam_bolt"
+                    },
                     "slicer_target": {
                         "type": "string",
                         "enum": ["standard", "bambu_studio", "orca_slicer", "prusa_slicer", "cura"],
