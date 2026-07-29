@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
@@ -21,8 +22,79 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify_changes:
+    name: Classify Windows build inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.classify.outputs.should_build }}
+    steps:
+      - name: Inspect changed paths
+        id: classify
+        uses: actions/github-script@v9
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              core.info(`${context.eventName} runs always build the Windows package.`);
+              core.setOutput("should_build", "true");
+              return;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              },
+            );
+
+            const windowsBuildInputs = [
+              {
+                pattern: /^(src|src-tauri|crates|public)\//,
+                reason: "application or native source",
+              },
+              {
+                pattern: /^\.github\/actions\//,
+                reason: "shared GitHub Action",
+              },
+              {
+                pattern: /^\.github\/workflows\/windows-portable\.yml$/,
+                reason: "Windows workflow",
+              },
+              {
+                pattern: /^scripts\/bundle-windows-portable\.ps1$/,
+                reason: "Windows packaging script",
+              },
+              {
+                pattern:
+                  /^(Cargo\.toml|Cargo\.lock|package\.json|package-lock\.json|vcpkg\.json|index\.html|tsconfig\.json|vite\.config\.ts|postcss\.config\.js|tailwind\.config\.js|\.npmrc|rust-toolchain(?:\.toml)?)$/,
+                reason: "build or dependency configuration",
+              },
+            ];
+
+            const matches = files.flatMap(({ filename }) => {
+              const rule = windowsBuildInputs.find(({ pattern }) =>
+                pattern.test(filename),
+              );
+              return rule ? [`${filename} (${rule.reason})`] : [];
+            });
+            const shouldBuild = matches.length > 0;
+
+            core.setOutput("should_build", String(shouldBuild));
+            if (shouldBuild) {
+              core.info(`Windows build required by:\n${matches.join("\n")}`);
+            } else {
+              core.info(
+                `Skipping Windows build; none of ${files.length} changed files affect the packaged application.`,
+              );
+            }
+
   build-windows-portable:
     name: Windows x64 portable ZIP
+    needs: classify_changes
+    if: needs.classify_changes.outputs.should_build == 'true'
     runs-on: windows-2025
     timeout-minutes: 120
 
