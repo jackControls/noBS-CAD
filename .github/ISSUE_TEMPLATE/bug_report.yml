@@ -1,0 +1,48 @@
+name: Bug report
+description: Something broke in modeling, UI, MCP, or packaging
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - sketch
+        - solid
+        - viewport
+        - mcp
+        - packaging
+        - docs
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From a new project if possible
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / build
+      placeholder: e.g. Windows 11, main @ abc1234
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Artifacts
+      description: Screenshot, recording, or safe .nbcad / STEP snippet

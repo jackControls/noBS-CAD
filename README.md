@@ -108,6 +108,9 @@ not just guess from a checklist of CAD commands. Please
 [open an issue](https://github.com/jackControls/noBS-CAD/issues) with what you
 find.
 
+Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md) for a short, welcoming
+contribution guide.
+
 ## Where we are going
 
 High-level directions (mechanical CAD first) are in
