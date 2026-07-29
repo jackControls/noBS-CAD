@@ -148,7 +148,9 @@ impl CadServer {
             return self.call_control(name, arguments);
         }
 
-        if self.disclosure.advertisement_state(pack, spine) != AdvertisementState::Active {
+        if self.disclosure.advertisement_state(pack, spine)
+            == AdvertisementState::HiddenButCallable
+        {
             self.disclosure.re_promote(pack);
         }
 
@@ -421,16 +423,12 @@ fn annotate_disclosure(
     spine: bool,
 ) -> Value {
     let note = disclosure.disclosure_note(pack, spine);
-    if value.is_object() {
-        if let Some(object) = value.as_object_mut() {
-            object.insert("_disclosure".to_string(), note);
-            return value;
-        }
+    // Only annotate JSON objects so string/array engine payloads (e.g.
+    // cad_project_model) keep their historical shapes for goldens/clients.
+    if let Value::Object(object) = &mut value {
+        object.insert("_disclosure".to_string(), note);
     }
-    json!({
-        "value": value,
-        "_disclosure": note,
-    })
+    value
 }
 
 fn tool_entry(tool: &ToolSpec) -> Value {
@@ -2461,7 +2459,14 @@ mod tests {
                 json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
             )
             .unwrap();
-        assert_eq!(result["_disclosure"]["state"], "hidden_but_callable");
+        // Hidden side-call re-promotes the pack (steerability); still no hard jail.
+        assert_eq!(result["_disclosure"]["state"], "soft");
+        let listed_after = tool_list_result(&mut server.disclosure);
+        assert!(listed_after["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "sketch_begin"));
     }
 
     #[test]
@@ -2520,11 +2525,18 @@ mod tests {
 
     #[test]
     fn file_bridge_attach_roundtrip() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
         let unique = format!("attach-{}", session::now_ms());
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-{unique}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
-        session::write_session(&unique, "model.json", "{\"version\":1,\"features\":[]}").unwrap();
-        session::write_session(&unique, "focus.json", "{\"focus\":\"document\"}").unwrap();
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+        session::write_session(&unique, "focus.json", "{\"focus\":\"solid\"}").unwrap();
 
         let mut server = CadServer::new().unwrap();
         let attached = server
@@ -2532,6 +2544,8 @@ mod tests {
             .unwrap();
         assert_eq!(attached["attached"], true);
         assert_eq!(server.attached_document_id.as_deref(), Some(unique.as_str()));
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(!scene["bodies"].as_array().unwrap().is_empty());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(dir.join(&unique));

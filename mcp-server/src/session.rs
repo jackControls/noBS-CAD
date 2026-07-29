@@ -82,12 +82,17 @@ fn session_path(session_id: &str, filename: &str) -> Result<PathBuf, String> {
     Ok(session_dir().join(session_id).join(filename))
 }
 
+/// Serialize tests that mutate `NBCAD_SESSION_DIR`.
+#[cfg(test)]
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn session_file_bridge_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let unique = format!("test-session-{}", now_ms());
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-test-{unique}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
