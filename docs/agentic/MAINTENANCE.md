@@ -1,0 +1,43 @@
+# Maintenance — MCP & disclosure
+
+## Prerequisites (Windows)
+
+```powershell
+# After vcpkg install (see docs/WINDOWS_PACKAGING.md):
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
+$env:Path = "$PWD\vcpkg_installed\x64-windows\bin;$env:Path"
+```
+
+## Tests
+
+```powershell
+cargo test --manifest-path mcp-server/Cargo.toml
+```
+
+CI: `.github/workflows/mcp-server.yml` (Windows + vcpkg OCCT).
+Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on shallow clones).
+
+## Adding an MCP tool
+
+1. Register `ToolSpec` in `mcp-server/src/main.rs` `tool_specs()`.
+2. Add pack tags in `disclosure::tags_for_tool` (and `auto_focus_for_tool` if needed).
+3. Update `MODELING_TOOL_COUNT` / pack count assertions if it is a modeling tool.
+4. Add or extend a headless golden under `#[cfg(test)]` in `main.rs`.
+5. Update `docs/mcp-harness.md` matrix row if packs change.
+6. Run the test suite with OCCT DLLs on `PATH`.
+
+## Disclosure knobs (defaults)
+
+| Knob | Default |
+|------|---------|
+| Throttle | 300 ms |
+| Soft TTL | 60 s |
+| Soft LRU | 2 packs |
+| Re-promote | 15 s |
+| Default focus | `document` |
+
+## Session bridge
+
+- Env: `NBCAD_SESSION_DIR` (else `%TEMP%/nbcad-sessions`)
+- Layout: `<session_id>/model.json` + `focus.json`
+- UI publisher: `src/sessionBridge.ts` (Tauri only)

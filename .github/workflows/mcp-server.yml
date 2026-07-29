@@ -38,6 +38,8 @@ jobs:
           repository: microsoft/vcpkg
           ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
           path: .vcpkg
+          # Shallow clones break versioned port tree objects (opencascade).
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,5 +87,6 @@ jobs:
         env:
           OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
         run: |
+          $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
           cargo test --manifest-path mcp-server/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }

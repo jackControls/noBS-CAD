@@ -71,6 +71,32 @@ Stdio is the **current** supported local transport. It is not declared an
 irreversible forever architecture choice—local/offline behavior is the
 invariant; internal IPC may evolve with engineering evidence.
 
+### Pack → representative tools (CI-guarded)
+
+| Pack | Must advertise (active) |
+|------|-------------------------|
+| document | `cad_project_model` |
+| sketch | `sketch_begin` |
+| solid | `solid_extrude` |
+| modify | `solid_fillet` |
+| body_ops | `solid_shell` |
+| datums | `construction_plane_offset` |
+| history | `solid_delete_feature` |
+| inspect | `solid_scene` |
+| print | `solid_export_step` |
+
+Spine controls (`cad_get_focus`, mode, catalog, sessions, …) stay advertised in every pack.
+
+### Client compatibility
+
+| Client behavior | Recommended mode |
+|-----------------|------------------|
+| Honors `notifications/tools/list_changed` | `dynamic` (default) |
+| Ignores mid-session list changes | `full_static` or poll `cad_list_all_tools` |
+| Planner / subagent needs full catalog once | `cad_list_all_tools` without leaving `dynamic` |
+
+Indexes / OKRs / agent ops: [INDEX.md](INDEX.md), [OKRs.md](OKRs.md), [agentic/INDEX.md](agentic/INDEX.md).
+
 ## Build
 
 ```sh
@@ -113,3 +139,5 @@ See [proposed-architecture.md](proposed-architecture.md) for detail:
 - [proposed-architecture.md](proposed-architecture.md)
 - [agent-mcp.md](agent-mcp.md)
 - [mcp-server/README.md](../mcp-server/README.md)
+
+On Windows, put `vcpkg_installed/x64-windows/bin` on `PATH` so OCCT DLLs load.
