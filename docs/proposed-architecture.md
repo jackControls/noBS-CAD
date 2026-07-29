@@ -16,7 +16,7 @@ Accepted product directions (without binding IPC/UI architecture) live in
 
 ---
 
-## 1. Focus-scoped MCP tools — Proposed
+## 1. Focus-scoped MCP tools ΓÇö Proposed
 
 **Problem today:** `nbcad-mcp` advertises `tools.listChanged: false` and returns
 a large static tool list (~100 tools), which floods agent context.
@@ -30,14 +30,14 @@ modify / history / print):
 4. Keep a tiny always-on spine (status, set focus, safe cancel).
 
 **Invariant:** keep a fully **local** automation path. Today that is **stdio**.
-Stdio is the current supported transport, not an irreversible forever decision —
+Stdio is the current supported transport, not an irreversible forever decision ΓÇö
 offline/local behavior is the invariant; internal IPC can evolve with evidence.
 
 Spec reference: [MCP tools / listChanged](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
 ---
 
-## 2. Co-link MCP ↔ one active UI document — Proposed (first milestone)
+## 2. Co-link MCP Γåö one active UI document ΓÇö Proposed (first milestone)
 
 **Problem today:** MCP owns an independent document from the visible UI
 (fork of truth). Same Rust planner crates; separate instances.
@@ -53,7 +53,7 @@ required product behavior.
 
 ---
 
-## 3. Multi-window / multi-document MCP broker — Deferred
+## 3. Multi-window / multi-document MCP broker ΓÇö Deferred
 
 Multiple open windows may matter later. A stdio **broker** that routes by
 `window_id` / `document_id` is one option; one MCP process per document is
@@ -64,17 +64,17 @@ one active document comes first.
 
 ---
 
-## 4. 3MF export with materials/colors — Proposed target
+## 4. 3MF export with materials/colors ΓÇö Proposed target
 
 **Accepted direction:** additive manufacturing / 3MF with useful appearance
 metadata ([goals.md](goals.md)).
 
 **Proposed implementation sketch:**
 
-- Rust export from OCCT tessellation → 3MF primary, STL fallback
+- Rust export from OCCT tessellation ΓåÆ 3MF primary, STL fallback
 - UI + MCP export tools when ready
 - v1 appearance may be per-body color + named material
-- Golden fixtures: colored cube → 3MF
+- Golden fixtures: colored cube ΓåÆ 3MF
 
 Describe as a **target with testable scope**, not current functionality.
 (No 3MF writer on `main` today.)
@@ -96,7 +96,7 @@ Rust model + kernel adapters.
 
 ---
 
-## 6. Shared agent / editor guidance files — Policy (open to revisit)
+## 6. Shared agent / editor guidance files ΓÇö Policy (open to revisit)
 
 **Current project policy:** editor- and agent-specific steering files stay
 **internal**. Root and nested `AGENTS.md`, plus `.cursor/` content, remain
@@ -108,13 +108,13 @@ file (commonly named `AGENTS.md`) for build/test commands and contribution
 norms. Relevant references if that discussion reopens:
 
 - [AGENTS.md open format](https://github.com/agentsmd/agents.md)
-- [Cursor Docs — Rules / AGENTS.md](https://cursor.com/docs/rules)
-- [GitHub Copilot — repository / agent instructions](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions)
-- [Microsoft ISE — AGENTS.md and skills](https://devblogs.microsoft.com/ise/ai-assisted-development-agents-skills-copilot-cli/)
+- [Cursor Docs ΓÇö Rules / AGENTS.md](https://cursor.com/docs/rules)
+- [GitHub Copilot ΓÇö repository / agent instructions](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions)
+- [Microsoft ISE ΓÇö AGENTS.md and skills](https://devblogs.microsoft.com/ise/ai-assisted-development-agents-skills-copilot-cli/)
 
 ---
 
-## 7. Education / quests — Deferred product layer
+## 7. Education / quests ΓÇö Deferred product layer
 
 Tutor-style loops that reuse golden MCP scenarios are attractive later. Keep
 them out of the top-level committed goals until the CAD foundation and local

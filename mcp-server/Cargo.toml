@@ -10,6 +10,7 @@ repository = "https://github.com/jackControls/noBS-CAD"
 [workspace]
 
 [dependencies]
+base64 = "0.22"
 serde_json = "1"
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }

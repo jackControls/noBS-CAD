@@ -1,38 +1,36 @@
 # noBS CAD MCP server
 
-`nbcad-mcp` is a native **stdio** JSON-RPC MCP server (protocol revision
-`2025-06-18`, with lifecycle negotiation for prior revisions). It covers most
-currently implemented sketch and solid-modeling tools, exposes one persistent
-headless CAD document per process, and uses the same Rust planner plus native
-OCCT adapter as the desktop app for solid operations.
+`nbcad-mcp` is a native **stdio** JSON-RPC MCP server (protocol `2025-06-18`).
+It covers most sketch and solid-modeling tools with **soft focus-scoped
+disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 
 > Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).  
-> Proposed ideas (focus tools, UI co-link, …):  
+> Proposed ideas (in-process co-link, multi-window broker, …):  
 > [docs/proposed-architecture.md](../docs/proposed-architecture.md).
->
-> **Today:** large static tool list (`tools.listChanged: false`), and an
-> **independent** document from the visible UI. Treat this server as a local
-> automation/testing surface, not as a live UI session.
+
+**Spine controls:** `cad_get_focus`, `cad_set_focus`, disclosure mode get/set,
+`cad_list_all_tools`, `cad_cancel_recompute`, `cad_list_sessions`, `cad_attach`.
+
+**Print:** `solid_export_step` (AP242 base64). No 3MF yet.
 
 ## Build and verify
-
-Native OCCT 7.9.x must be installed or supplied through `OCCT_ROOT`.
 
 ```sh
 cargo build --release --manifest-path mcp-server/Cargo.toml
 cargo test --manifest-path mcp-server/Cargo.toml
 ```
 
-The resulting MCP command is:
+Windows:
 
-```text
-/absolute/path/to/noBS-CAD/mcp-server/target/release/nbcad-mcp
+```powershell
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
+cargo test --manifest-path mcp-server/Cargo.toml
 ```
 
-Configure that command as a stdio server named `nbcad` in any MCP
-client. No command arguments or environment variables are needed when OCCT
-is installed in its default Homebrew location. A typical client-equivalent
-configuration is:
+Logs on **stderr**; stdout is JSON-RPC.
+
+Prefer `dynamic` disclosure for main agents; `full_static` or
+`cad_list_all_tools` for subagents.
 
 ```json
 {
@@ -43,10 +41,6 @@ configuration is:
   }
 }
 ```
-
-**Transport:** stdio is the current supported offline path. Put logs on
-**stderr**; stdout is JSON-RPC. Local/offline behavior is the invariant;
-internal IPC may evolve later.
 
 ## Modeling flow
 
@@ -69,14 +63,14 @@ After a body exists, use stable edge IDs from `solid_scene` with
 `solid_fillet`/`solid_chamfer`, or a planar face ID and one or more face-local
 positions with `solid_hole`. Hole positions may carry stable sketch-point
 references, and finite holes support flat or angled drill-point bottoms
-(118° is the application default). Matching definitions/edit tools preserve
+(118┬░ is the application default). Matching definitions/edit tools preserve
 these operations in the same replayable history.
 
 `solid_hole` also accepts optional ISO metric coarse/fine or ASME B1.1
 UNC/UNF internal-thread data. Use a common `6H` class for ISO metric or `2B`
 for Unified threads unless the design requires another fit. The hole
 `diameter` remains the editable predrill diameter; `thread.nominal_diameter`
-is the major diameter. `modeled` creates a 60° helical B-rep, while
+is the major diameter. `modeled` creates a 60┬░ helical B-rep, while
 `simplified` keeps the cylindrical predrill for faster replay and preserves
 the complete callout for project and STEP metadata.
 
@@ -108,3 +102,4 @@ independent document.
 There is no MCP `solid_export_3mf` tool yet; STEP export lives in the UI.
 3MF with materials/colors remains a documented target, not current MCP
 functionality.
+
