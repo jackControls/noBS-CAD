@@ -22,14 +22,16 @@ cargo run -p nbcad-bevy-launcher -- --target wasm
 
 Wasm path: `cargo build --target wasm32-unknown-unknown` → `wasm-bindgen --target web` into [`web/`](web/) → local HTTP serve (`py -3 -m http.server`).
 
-## Validation evidence (2026-07-28)
+## Validation evidence (2026-07-28 / follow-up)
 
 | Path | Result |
 |------|--------|
-| Unit tests | `cargo test -p nbcad-bevy-viewport --lib` — 3 passed |
-| Desktop | `bevy_desktop` release binary launched and stayed alive (window process healthy for 8s before intentional stop) |
-| Wasm build | `cargo build -p nbcad-bevy-viewport --bin bevy_desktop --target wasm32-unknown-unknown` succeeded |
-| Wasm in browser | Served `crates/bevy_viewport/web`; init completed; after camera orbit fix, ground/mesh visible in Cursor browser WebGL/WebGPU |
+| Unit tests | `cargo test -p nbcad-bevy-viewport --lib` — cube + backend + empty reject + **orbit look-at** |
+| Desktop | `bevy_desktop` release binary launched and stayed alive |
+| Wasm build | `wasm32-unknown-unknown` (debug + release) succeeded |
+| Wasm in browser | Mesh/ground visible after camera orbit fix |
+| Docs structure | INDEX / OKRS / AGENTIC at crate, src, web, crates/, docs/bevy-viewport/ |
+| Plan review | [docs/bevy-viewport/plan-review.md](../../docs/bevy-viewport/plan-review.md) |
 
 ### Bugs found and fixed during spike
 

@@ -2,9 +2,7 @@
 //!
 //! Usage:
 //!   cargo run -p nbcad-bevy-launcher -- --target desktop
-//!   cargo run -p nbcad-bevy-launcher -- --target wasm
-//!
-//! With no args, prompts on stdin (desktop default if stdin is empty).
+//!   cargo run -p nbcad-bevy-launcher -- --target wasm --release
 
 use std::env;
 use std::io::{self, Write};
@@ -15,8 +13,8 @@ use std::thread;
 use std::time::Duration;
 
 fn main() -> ExitCode {
-    let target = match parse_target(env::args().skip(1).collect()) {
-        Ok(target) => target,
+    let options = match parse_options(env::args().skip(1).collect()) {
+        Ok(options) => options,
         Err(message) => {
             eprintln!("{message}");
             print_usage();
@@ -24,9 +22,9 @@ fn main() -> ExitCode {
         }
     };
 
-    match target {
-        Target::Desktop => run_desktop(),
-        Target::Wasm => run_wasm(),
+    match options.target {
+        Target::Desktop => run_desktop(options.release),
+        Target::Wasm => run_wasm(options.release),
     }
 }
 
@@ -36,10 +34,22 @@ enum Target {
     Wasm,
 }
 
-fn parse_target(args: Vec<String>) -> Result<Target, String> {
+#[derive(Debug, Clone, Copy)]
+struct Options {
+    target: Target,
+    release: bool,
+}
+
+fn parse_options(args: Vec<String>) -> Result<Options, String> {
     if args.is_empty() {
-        return Ok(prompt_target());
+        return Ok(Options {
+            target: prompt_target(),
+            release: false,
+        });
     }
+
+    let mut target = None;
+    let mut release = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -47,20 +57,25 @@ fn parse_target(args: Vec<String>) -> Result<Target, String> {
                 print_usage();
                 std::process::exit(0);
             }
+            "--release" | "-r" => release = true,
             "--target" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --target".to_string())?;
-                return parse_target_value(&value);
+                target = Some(parse_target_value(&value)?);
             }
             other if other.starts_with("--target=") => {
-                return parse_target_value(&other["--target=".len()..]);
+                target = Some(parse_target_value(&other["--target=".len()..])?);
             }
-            "desktop" | "wasm" => return parse_target_value(&arg),
+            "desktop" | "wasm" => target = Some(parse_target_value(&arg)?),
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    Ok(prompt_target())
+
+    Ok(Options {
+        target: target.unwrap_or_else(prompt_target),
+        release,
+    })
 }
 
 fn parse_target_value(value: &str) -> Result<Target, String> {
@@ -91,24 +106,22 @@ fn print_usage() {
     eprintln!(
         "Usage:\n  \
          cargo run -p nbcad-bevy-launcher -- --target desktop\n  \
-         cargo run -p nbcad-bevy-launcher -- --target wasm\n\n\
+         cargo run -p nbcad-bevy-launcher -- --target wasm\n  \
+         cargo run -p nbcad-bevy-launcher -- --target wasm --release\n\n\
          desktop: native Bevy window (mesh + orbit + pick)\n\
-         wasm:    build wasm32, wasm-bindgen into crates/bevy_viewport/web, serve locally"
+         wasm:    build wasm32, wasm-bindgen into crates/bevy_viewport/web, serve locally\n\
+         --release: use release profile (strongly recommended for wasm size)"
     );
 }
 
-fn run_desktop() -> ExitCode {
+fn run_desktop(release: bool) -> ExitCode {
     eprintln!("Launching Bevy desktop spike…");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "run",
-            "-p",
-            "nbcad-bevy-viewport",
-            "--bin",
-            "bevy_desktop",
-        ])
-        .status();
-    match status {
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["run", "-p", "nbcad-bevy-viewport", "--bin", "bevy_desktop"]);
+    if release {
+        cmd.arg("--release");
+    }
+    match cmd.status() {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
@@ -118,20 +131,23 @@ fn run_desktop() -> ExitCode {
     }
 }
 
-fn run_wasm() -> ExitCode {
-    eprintln!("Building Bevy wasm spike (wasm32-unknown-unknown)…");
-    let status = Command::new(env!("CARGO"))
-        .args([
-            "build",
-            "-p",
-            "nbcad-bevy-viewport",
-            "--bin",
-            "bevy_desktop",
-            "--target",
-            "wasm32-unknown-unknown",
-        ])
-        .status();
-    match status {
+fn run_wasm(release: bool) -> ExitCode {
+    let profile = if release { "release" } else { "debug" };
+    eprintln!("Building Bevy wasm spike ({profile}, wasm32-unknown-unknown)…");
+    let mut build = Command::new(env!("CARGO"));
+    build.args([
+        "build",
+        "-p",
+        "nbcad-bevy-viewport",
+        "--bin",
+        "bevy_desktop",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]);
+    if release {
+        build.arg("--release");
+    }
+    match build.status() {
         Ok(status) if status.success() => {}
         Ok(status) => return ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
@@ -141,8 +157,9 @@ fn run_wasm() -> ExitCode {
     }
 
     let manifest_dir = workspace_root();
-    let wasm_path = manifest_dir
-        .join("target/wasm32-unknown-unknown/debug/bevy_desktop.wasm");
+    let wasm_path = manifest_dir.join(format!(
+        "target/wasm32-unknown-unknown/{profile}/bevy_desktop.wasm"
+    ));
     let web_dir = manifest_dir.join("crates/bevy_viewport/web");
     if !wasm_path.is_file() {
         eprintln!("missing wasm artifact at {}", wasm_path.display());
@@ -185,7 +202,6 @@ fn run_wasm() -> ExitCode {
     eprintln!("Serving {} at {url}", web_dir.display());
     eprintln!("Open that URL in a WebGL2 browser. Ctrl+C to stop.");
 
-    // Prefer Python's http.server; fall back to a tiny note if missing.
     let mut child = match spawn_http_server(port, &web_dir) {
         Ok(child) => child,
         Err(error) => {
@@ -198,7 +214,6 @@ fn run_wasm() -> ExitCode {
         }
     };
 
-    // Give the server a moment, then wait forever (until Ctrl+C / kill).
     thread::sleep(Duration::from_millis(400));
     let _ = open_browser(&url);
     match child.wait() {
@@ -212,7 +227,6 @@ fn run_wasm() -> ExitCode {
 }
 
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR for the launcher crate is crates/bevy_launcher.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -226,9 +240,11 @@ fn free_port() -> io::Result<u16> {
 
 fn spawn_http_server(port: u16, web_dir: &Path) -> io::Result<std::process::Child> {
     let port = port.to_string();
-    // Windows Store alias for `python` often fails; prefer the py launcher first.
     let attempts: [(&str, Vec<&str>); 3] = [
-        ("py", vec!["-3", "-m", "http.server", port.as_str(), "--bind", "127.0.0.1"]),
+        (
+            "py",
+            vec!["-3", "-m", "http.server", port.as_str(), "--bind", "127.0.0.1"],
+        ),
         (
             "python3",
             vec!["-m", "http.server", port.as_str(), "--bind", "127.0.0.1"],

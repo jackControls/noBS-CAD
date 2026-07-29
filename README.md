@@ -83,7 +83,9 @@ cargo run -p nbcad-bevy-launcher -- --target desktop
 cargo run -p nbcad-bevy-launcher -- --target wasm
 ```
 
-See [`crates/bevy_viewport/SPIKE.md`](crates/bevy_viewport/SPIKE.md).
+See [`crates/bevy_viewport/SPIKE.md`](crates/bevy_viewport/SPIKE.md),
+[`crates/bevy_viewport/INDEX.md`](crates/bevy_viewport/INDEX.md), and
+[`docs/bevy-viewport/`](docs/bevy-viewport/INDEX.md).
 
 ## 3D mouse compatibility
 
