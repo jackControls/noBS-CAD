@@ -503,6 +503,13 @@ unsafe fn apply_native_layout(
     let viewport_in_parent = webview.convertRect_toView(viewport_in_webview, Some(&parent));
     viewport.setFrame(viewport_in_parent);
     viewport.setHidden(layout.viewport.width < 2.0 || layout.viewport.height < 2.0);
+    if std::env::var_os("NBCAD_NATIVE_LAYOUT_DEBUG").is_some() {
+        eprintln!(
+            "native viewport layout: bounds={webview_bounds:?} safe={:?} dom={:?} appkit={viewport_in_webview:?}",
+            webview.safeAreaRect(),
+            layout.viewport,
+        );
+    }
 
     if let Some(webview_layer) = webview.layer() {
         let layer_bounds = webview_layer.bounds();
@@ -542,13 +549,35 @@ unsafe fn apply_native_layout(
 #[cfg(target_os = "macos")]
 fn dom_rect_to_view_rect(view: &NSView, rect: ViewportRect) -> NSRect {
     let bounds = view.bounds();
-    let y = if view.isFlipped() {
-        rect.y
+    // `getBoundingClientRect()` is relative to WebKit's unobscured content
+    // viewport. In a normal macOS window the WKWebView can still extend under
+    // the title bar, so its NSView bounds are taller than that DOM viewport by
+    // the title-bar safe-area inset. Full screen has no such inset. Mapping
+    // against the safe-area rect keeps both the Metal sibling and every DOM
+    // mask island on the same origin through window/full-screen transitions.
+    let content = view.safeAreaRect();
+    dom_rect_to_content_rect(bounds, content, view.isFlipped(), rect)
+}
+
+#[cfg(target_os = "macos")]
+fn dom_rect_to_content_rect(
+    bounds: NSRect,
+    content: NSRect,
+    flipped: bool,
+    rect: ViewportRect,
+) -> NSRect {
+    let content = if content.size.width > 0.0 && content.size.height > 0.0 {
+        content
     } else {
-        bounds.size.height - rect.y - rect.height
+        bounds
+    };
+    let y = if flipped {
+        content.origin.y + rect.y
+    } else {
+        content.origin.y + content.size.height - rect.y - rect.height
     };
     NSRect::new(
-        NSPoint::new(rect.x, y),
+        NSPoint::new(content.origin.x + rect.x, y),
         NSSize::new(rect.width.max(0.0), rect.height.max(0.0)),
     )
 }
@@ -2713,6 +2742,40 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dom_rect_mapping_accounts_for_window_title_bar_safe_area() {
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1_440.0, 900.0));
+        let content = NSRect::new(NSPoint::new(0.0, 32.0), NSSize::new(1_440.0, 868.0));
+        let viewport = ViewportRect {
+            x: 240.0,
+            y: 120.0,
+            width: 1_200.0,
+            height: 700.0,
+        };
+
+        let mapped = dom_rect_to_content_rect(bounds, content, true, viewport);
+        assert_eq!(mapped.origin.x, 240.0);
+        assert_eq!(mapped.origin.y, 152.0);
+        assert_eq!(mapped.size.height, 700.0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fullscreen_dom_rect_mapping_uses_the_full_webview_bounds() {
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1_440.0, 900.0));
+        let viewport = ViewportRect {
+            x: 240.0,
+            y: 120.0,
+            width: 1_200.0,
+            height: 728.0,
+        };
+
+        let mapped = dom_rect_to_content_rect(bounds, bounds, true, viewport);
+        assert_eq!(mapped.origin.y, 120.0);
+        assert_eq!(mapped.size.height, 728.0);
+    }
 
     #[test]
     fn rectangle_intersection_clips_overlay_to_viewport() {
