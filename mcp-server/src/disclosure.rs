@@ -642,6 +642,7 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
 pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option<&str>) -> FocusPack {
     if let Some(dialog) = solid_dialog {
         return match dialog {
+            // Keep keys aligned with src/sessionBridge.ts focusFromUi / activeSolidDialog.
             "fillet" | "chamfer" | "hole" => FocusPack::Modify,
             "shell"
             | "mirror"
@@ -650,7 +651,10 @@ pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option
             | "combine"
             | "split_body" => FocusPack::BodyOps,
             "extrude" | "revolve" | "sweep" | "loft" | "rib" => FocusPack::Solid,
-            "offset_plane" | "midplane" | "plane_at_angle" => FocusPack::Datums,
+            "construction_plane"
+            | "offset_plane"
+            | "midplane"
+            | "plane_at_angle" => FocusPack::Datums,
             _ => FocusPack::Solid,
         };
     }
@@ -677,6 +681,22 @@ pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_from_ui_matches_session_bridge_dialog_keys() {
+        assert_eq!(
+            focus_from_ui("solid", None, Some("construction_plane")),
+            FocusPack::Datums
+        );
+        assert_eq!(
+            focus_from_ui("solid", None, Some("fillet")),
+            FocusPack::Modify
+        );
+        assert_eq!(
+            focus_from_ui("sketch", None, None),
+            FocusPack::Sketch
+        );
+    }
 
     #[test]
     fn soft_ttl_removes_pack_from_advertisement() {

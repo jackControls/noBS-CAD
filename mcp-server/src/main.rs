@@ -377,6 +377,15 @@ impl CadServer {
             }
             other => return Err(format!("unknown control tool: {other}")),
         };
+        // Keep attached file-bridge focus/model in sync after control mutations.
+        if matches!(
+            name,
+            "cad_set_focus"
+                | "cad_set_tool_disclosure_mode"
+                | "cad_attach"
+        ) {
+            self.write_attached_session()?;
+        }
         Ok(value)
     }
 
@@ -2400,10 +2409,17 @@ mod tests {
             *packs.entry(tool.pack.as_str()).or_default() += 1;
         }
         assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
+        // Modeling registry covers 8 packs; print is solid_export_step (non-modeling).
+        assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 4);
         assert_eq!(packs["sketch"], 48);
         assert_eq!(packs["solid"], 10);
+        assert!(packs["modify"] >= 6);
+        assert!(packs["body_ops"] >= 10);
+        assert!(packs["datums"] >= 6);
+        assert!(packs["history"] >= 3);
         assert_eq!(packs["inspect"], 11);
+        assert!(!packs.contains_key("print"));
     }
 
     #[test]
@@ -2467,6 +2483,62 @@ mod tests {
             .unwrap()
             .iter()
             .any(|tool| tool["name"] == "sketch_begin"));
+    }
+
+    #[test]
+    fn full_static_lists_entire_registry() {
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "cad_set_tool_disclosure_mode",
+                json!({"mode": "full_static"}),
+            )
+            .unwrap();
+        let listed = tool_list_result(&mut server.disclosure);
+        let catalog = full_tool_catalog();
+        assert_eq!(
+            listed["tools"].as_array().unwrap().len(),
+            catalog.as_array().unwrap().len()
+        );
+    }
+
+    #[test]
+    fn every_focus_pack_lists_representative_tools() {
+        let expectations: &[(&str, &str)] = &[
+            ("document", "cad_project_model"),
+            ("sketch", "sketch_begin"),
+            ("solid", "solid_extrude"),
+            ("modify", "solid_fillet"),
+            ("body_ops", "solid_shell"),
+            ("datums", "construction_plane_offset"),
+            ("history", "solid_delete_feature"),
+            ("inspect", "solid_scene"),
+            ("print", "solid_export_step"),
+        ];
+        for (focus, tool_name) in expectations {
+            let mut server = CadServer::new().unwrap();
+            server
+                .call_tool(
+                    "cad_set_focus",
+                    json!({ "focus": focus, "explicit": true }),
+                )
+                .unwrap();
+            let listed = tool_list_result(&mut server.disclosure);
+            let names: Vec<_> = listed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect();
+            assert!(
+                names.iter().any(|name| name == tool_name),
+                "focus '{focus}' should advertise '{tool_name}'"
+            );
+            assert!(
+                names.iter().any(|name| *name == "cad_get_focus"),
+                "spine control tools must remain advertised under '{focus}'"
+            );
+        }
     }
 
     #[test]

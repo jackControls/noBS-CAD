@@ -108,7 +108,10 @@ export function startSessionBridge(): void {
   if (started) return;
   started = true;
   useAppStore.subscribe((state, prev) => {
+    const geometryChanged =
+      state.document !== prev.document || state.solidScene !== prev.solidScene;
     if (
+      geometryChanged ||
       state.mode !== prev.mode ||
       state.activeTool !== prev.activeTool ||
       state.document?.name !== prev.document?.name ||
