@@ -267,10 +267,12 @@ fn engine_export_step(state: tauri::State<'_, AppState>, payload: &str) -> Resul
     state.export_step(payload)
 }
 
+#[tauri::command]
 fn engine_export_stl(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
     state.export_stl(payload)
 }
 
+#[tauri::command]
 fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
     state.export_3mf(payload)
 }
