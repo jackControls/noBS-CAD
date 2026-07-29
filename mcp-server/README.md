@@ -1,17 +1,18 @@
 # noBS CAD MCP server
 
-`nbcad-mcp` is a native, line-delimited JSON-RPC stdio server for
-MCP protocol revision `2025-06-18` (with lifecycle negotiation for the two
-previous revisions). It exposes one persistent headless CAD document per
-server process.
+`nbcad-mcp` is a native **stdio** JSON-RPC MCP server (protocol revision
+`2025-06-18`, with lifecycle negotiation for prior revisions). It covers most
+currently implemented sketch and solid-modeling tools, exposes one persistent
+headless CAD document per process, and uses the same Rust planner plus native
+OCCT adapter as the desktop app for solid operations.
 
-One server exposes 101 granular tools. There is a distinct MCP tool for each
-implemented sketch creation/constraint/modify operation and for solid
-Extrude, Revolve, Sweep, Loft, Rib, Fillet, Chamfer, Hole, edit, rollback,
-reorder, delete, recompute, construction planes, Shell, Mirror,
-rectangular/circular Pattern, Combine, Split Body, and scene inspection.
-Keeping them in one server preserves a single feature history and avoids
-launching a different process for every CAD command.
+> Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).  
+> Proposed ideas (focus tools, UI co-link, …):  
+> [docs/proposed-architecture.md](../docs/proposed-architecture.md).
+>
+> **Today:** large static tool list (`tools.listChanged: false`), and an
+> **independent** document from the visible UI. Treat this server as a local
+> automation/testing surface, not as a live UI session.
 
 ## Build and verify
 
@@ -42,6 +43,10 @@ configuration is:
   }
 }
 ```
+
+**Transport:** stdio is the current supported offline path. Put logs on
+**stderr**; stdout is JSON-RPC. Local/offline behavior is the invariant;
+internal IPC may evolve later.
 
 ## Modeling flow
 
@@ -99,3 +104,7 @@ Body through the same replayable history as the interactive application.
 outer ZIP-based `.nbcad` packaging and live desktop-session attachment are
 not part of this first server slice; currently each MCP process owns an
 independent document.
+
+There is no MCP `solid_export_3mf` tool yet; STEP export lives in the UI.
+3MF with materials/colors remains a documented target, not current MCP
+functionality.
