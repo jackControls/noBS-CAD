@@ -35,6 +35,12 @@ interface NativeRect {
 
 interface NativePalette {
   background: [number, number, number];
+  panel: [number, number, number];
+  header: [number, number, number];
+  uiEdge: [number, number, number];
+  ink: [number, number, number];
+  mute: [number, number, number];
+  accent: [number, number, number];
   gridFine: [number, number, number];
   gridMajor: [number, number, number];
   body: [number, number, number];
@@ -42,6 +48,22 @@ interface NativePalette {
   activeSketch: [number, number, number];
   finishedSketch: [number, number, number];
   preview: [number, number, number];
+}
+
+interface NativeHudSelection {
+  title: string;
+  subject: string;
+  rows: Array<{ label: string; value: string }>;
+  footer: string | null;
+}
+
+interface NativeHud {
+  navTool: string;
+  sketchMode: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  sixDofState: string;
+  selection: NativeHudSelection | null;
 }
 
 const overlaySelector = [
@@ -166,7 +188,9 @@ function mergeOverlayRects(rects: NativeRect[]): NativeRect[] {
 }
 
 function collectOverlays(): NativeRect[] {
-  const elements = [...document.querySelectorAll(overlaySelector)];
+  const elements = [...document.querySelectorAll(overlaySelector)].filter(
+    (element) => !element.closest('[data-native-hud]'),
+  );
   return mergeOverlayRects(
     elements
       .map(rectFor)
@@ -190,6 +214,12 @@ function cssRgb(variable: string, fallback: string): [number, number, number] {
 function collectPalette(): NativePalette {
   return {
     background: cssRgb('--viewport', '#2a2d33'),
+    panel: cssRgb('--panel', '#22262c'),
+    header: cssRgb('--header', '#282d34'),
+    uiEdge: cssRgb('--edge', '#3a3e46'),
+    ink: cssRgb('--ink', '#e7ebef'),
+    mute: cssRgb('--mute', '#9aa3ad'),
+    accent: cssRgb('--accent', '#7c6df2'),
     gridFine: cssRgb('--cad-ground-fine', '#3a3f47'),
     gridMajor: cssRgb('--cad-ground-major', '#4d545f'),
     body: cssRgb('--cad-body', '#8b9bac'),
@@ -197,6 +227,38 @@ function collectPalette(): NativePalette {
     activeSketch: cssRgb('--sketchline', '#5da9ff'),
     finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
+  };
+}
+
+function elementText(element: Element | null): string {
+  return element?.textContent?.trim().replace(/\s+/g, ' ') ?? '';
+}
+
+function collectSelectionHud(): NativeHudSelection | null {
+  const root = document.querySelector('[data-native-hud="selection"]');
+  if (!root) return null;
+  const rows = [...root.querySelectorAll('[data-native-hud-row]')].map((row) => ({
+    label: elementText(row.querySelector('[data-native-hud-label]')),
+    value: elementText(row.querySelector('[data-native-hud-value]')),
+  }));
+  return {
+    title: elementText(root.querySelector('[data-native-hud-title]')) || 'SELECTION',
+    subject: elementText(root.querySelector('[data-native-hud-subject]')),
+    rows,
+    footer: elementText(root.querySelector('[data-native-hud-footer]')) || null,
+  };
+}
+
+function collectHud(): NativeHud {
+  const state = useAppStore.getState();
+  const navigation = document.querySelector('[data-native-hud="navigation"]');
+  return {
+    navTool: state.navTool,
+    sketchMode: state.mode === 'sketch',
+    canUndo: state.activeSketch?.can_undo ?? false,
+    canRedo: state.activeSketch?.can_redo ?? false,
+    sixDofState: navigation?.getAttribute('data-native-six-dof-state') ?? 'disconnected',
+    selection: collectSelectionHud(),
   };
 }
 
@@ -208,6 +270,7 @@ async function sendLayout(container: HTMLElement): Promise<void> {
     viewport,
     overlays: collectOverlays(),
     palette: collectPalette(),
+    hud: collectHud(),
   };
   const key = JSON.stringify(layout);
   if (key === lastLayoutKey) return;
@@ -239,25 +302,74 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     });
   };
 
+  const observedLayoutElements = new Set<Element>();
   const resize = new ResizeObserver(scheduleLayout);
   resize.observe(container);
-  const mutation = new MutationObserver(scheduleLayout);
-  mutation.observe(document.body, {
+  const refreshObservedLayoutElements = () => {
+    const next = new Set(
+      document.querySelectorAll(`${overlaySelector}, [data-native-hud]`),
+    );
+    for (const element of observedLayoutElements) {
+      if (!next.has(element)) {
+        resize.unobserve(element);
+        observedLayoutElements.delete(element);
+      }
+    }
+    for (const element of next) {
+      if (observedLayoutElements.has(element)) continue;
+      observedLayoutElements.add(element);
+      resize.observe(element);
+    }
+  };
+  refreshObservedLayoutElements();
+  const mutation = new MutationObserver(() => {
+    refreshObservedLayoutElements();
+    scheduleLayout();
+  });
+  mutation.observe(document.documentElement, {
     subtree: true,
     childList: true,
+    characterData: true,
     attributes: true,
-    attributeFilter: ['class', 'style', 'hidden'],
+    attributeFilter: [
+      'class',
+      'style',
+      'data-theme',
+      'hidden',
+      'disabled',
+      'data-native-nav-active',
+      'data-native-six-dof-state',
+    ],
   });
   window.addEventListener('resize', scheduleLayout);
+  window.visualViewport?.addEventListener('resize', scheduleLayout);
+  document.addEventListener('input', scheduleLayout, true);
+  document.addEventListener('change', scheduleLayout, true);
+  document.addEventListener('transitionend', scheduleLayout, true);
 
   let previous = useAppStore.getState();
   const unsubscribe = useAppStore.subscribe((next) => {
     if (
       next.activeSketch !== previous.activeSketch ||
       next.finishedSketches !== previous.finishedSketches ||
-      next.solidScene !== previous.solidScene
+      next.solidScene !== previous.solidScene ||
+      next.datumPlanes !== previous.datumPlanes
     ) {
       void syncModel().catch(() => undefined);
+    }
+    if (
+      next.mode !== previous.mode ||
+      next.navTool !== previous.navTool ||
+      next.activeSketch !== previous.activeSketch ||
+      next.selectedEntity !== previous.selectedEntity ||
+      next.selectedEntities !== previous.selectedEntities ||
+      next.selectedBody !== previous.selectedBody ||
+      next.selectedBodies !== previous.selectedBodies ||
+      next.selectedFace !== previous.selectedFace ||
+      next.selectedFaces !== previous.selectedFaces ||
+      next.selectedEdges !== previous.selectedEdges
+    ) {
+      scheduleLayout();
     }
     previous = next;
   });
@@ -274,6 +386,12 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       // while a newly launched desktop window is still behind another app.
       void sendLayout(container).catch(() => undefined);
       void syncModel().catch(() => undefined);
+      // Web fonts and SVG icon metrics can settle after the first native cut.
+      // Observed overlay roots catch the size change; these extra passes cover
+      // engines that batch font layout without emitting ResizeObserver yet.
+      requestAnimationFrame(scheduleLayout);
+      window.setTimeout(scheduleLayout, 120);
+      void document.fonts?.ready.then(scheduleLayout);
       return;
     }
     probeAttempt += 1;
@@ -290,6 +408,10 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     resize.disconnect();
     mutation.disconnect();
     window.removeEventListener('resize', scheduleLayout);
+    window.visualViewport?.removeEventListener('resize', scheduleLayout);
+    document.removeEventListener('input', scheduleLayout, true);
+    document.removeEventListener('change', scheduleLayout, true);
+    document.removeEventListener('transitionend', scheduleLayout, true);
     unsubscribe();
     delete container.dataset.nativeViewport;
   };

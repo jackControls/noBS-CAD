@@ -1,16 +1,18 @@
 //! Native viewport bridge.
 //!
-//! React continues to own the CAD interaction model and every DOM control.
-//! On macOS the WKWebView is visually clipped over a sibling NSView whose
-//! Metal surface is rendered by Bevy. Model synchronization stays entirely
-//! in-process: the OCCT tessellation is cloned from `AppState` into the render
-//! worker instead of being serialized through JavaScript.
+//! React continues to own the CAD interaction model, accessibility tree, and
+//! hit targets. Bevy paints viewport-local HUD chrome as well as CAD graphics;
+//! form-heavy command dialogs remain real DOM islands. On macOS the WKWebView
+//! is visually clipped over a sibling NSView whose Metal surface is rendered
+//! by Bevy. Model synchronization stays entirely in-process: the OCCT
+//! tessellation is cloned from `AppState` instead of being serialized through
+//! JavaScript.
 
 #[cfg(target_os = "macos")]
 mod macos;
 
 use nbcad_sketch::SketchDto;
-use nbcad_solid::SolidSceneDto;
+use nbcad_solid::{DatumPlaneDefinitionDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
 
@@ -31,12 +33,20 @@ pub struct ViewportLayout {
     pub overlays: Vec<ViewportRect>,
     #[serde(default)]
     pub palette: ViewportPalette,
+    #[serde(default)]
+    pub hud: ViewportHud,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportPalette {
     pub background: [f32; 3],
+    pub panel: [f32; 3],
+    pub header: [f32; 3],
+    pub ui_edge: [f32; 3],
+    pub ink: [f32; 3],
+    pub mute: [f32; 3],
+    pub accent: [f32; 3],
     pub grid_fine: [f32; 3],
     pub grid_major: [f32; 3],
     pub body: [f32; 3],
@@ -50,6 +60,12 @@ impl Default for ViewportPalette {
     fn default() -> Self {
         Self {
             background: [42.0 / 255.0, 45.0 / 255.0, 51.0 / 255.0],
+            panel: [34.0 / 255.0, 38.0 / 255.0, 44.0 / 255.0],
+            header: [40.0 / 255.0, 45.0 / 255.0, 52.0 / 255.0],
+            ui_edge: [58.0 / 255.0, 62.0 / 255.0, 70.0 / 255.0],
+            ink: [231.0 / 255.0, 235.0 / 255.0, 239.0 / 255.0],
+            mute: [154.0 / 255.0, 163.0 / 255.0, 173.0 / 255.0],
+            accent: [124.0 / 255.0, 109.0 / 255.0, 242.0 / 255.0],
             grid_fine: [58.0 / 255.0, 63.0 / 255.0, 71.0 / 255.0],
             grid_major: [77.0 / 255.0, 84.0 / 255.0, 95.0 / 255.0],
             body: [139.0 / 255.0, 155.0 / 255.0, 172.0 / 255.0],
@@ -57,6 +73,60 @@ impl Default for ViewportPalette {
             active_sketch: [93.0 / 255.0, 169.0 / 255.0, 1.0],
             finished_sketch: [74.0 / 255.0, 199.0 / 255.0, 1.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportHudRow {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportHudSelection {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub rows: Vec<ViewportHudRow>,
+    pub footer: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportHud {
+    #[serde(default = "default_nav_tool")]
+    pub nav_tool: String,
+    #[serde(default)]
+    pub sketch_mode: bool,
+    #[serde(default)]
+    pub can_undo: bool,
+    #[serde(default)]
+    pub can_redo: bool,
+    #[serde(default)]
+    pub six_dof_state: String,
+    pub selection: Option<ViewportHudSelection>,
+}
+
+fn default_nav_tool() -> String {
+    "select".to_string()
+}
+
+impl Default for ViewportHud {
+    fn default() -> Self {
+        Self {
+            nav_tool: default_nav_tool(),
+            sketch_mode: false,
+            can_undo: false,
+            can_redo: false,
+            six_dof_state: "disconnected".to_string(),
+            selection: None,
         }
     }
 }
@@ -124,6 +194,7 @@ pub(crate) struct ViewportModel {
     pub scene: SolidSceneDto,
     pub active_sketch: Option<SketchDto>,
     pub finished_sketches: Vec<SketchDto>,
+    pub datum_planes: Vec<DatumPlaneDefinitionDto>,
 }
 
 pub struct NativeViewport {

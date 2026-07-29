@@ -50,11 +50,12 @@ async fn native_viewport_sync_model(
     engine: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
 ) -> Result<(), String> {
-    let (scene, active_sketch, finished_sketches) = engine.viewport_snapshot();
+    let (scene, active_sketch, finished_sketches, datum_planes) = engine.viewport_snapshot();
     viewport.sync_model(ViewportModel {
         scene,
         active_sketch,
         finished_sketches,
+        datum_planes,
     })
 }
 
@@ -375,12 +376,13 @@ pub fn run() {
         .manage(SixDofMouseState::default())
         .setup(|app| {
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
-            let (scene, active_sketch, finished_sketches) =
+            let (scene, active_sketch, finished_sketches, datum_planes) =
                 app.state::<AppState>().viewport_snapshot();
             let _ = viewport.sync_model(ViewportModel {
                 scene,
                 active_sketch,
                 finished_sketches,
+                datum_planes,
             });
             app.manage(viewport);
             Ok(())
