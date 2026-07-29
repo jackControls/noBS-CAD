@@ -127,16 +127,6 @@ body {
 }
 
 /*
- * Bevy paints viewport-local HUD chrome in the native desktop path. Keep the
- * DOM controls as transparent hit targets so keyboard/accessibility and agent
- * automation retain the production React semantics even while an AppKit
- * fullscreen transition is settling the native cutout.
- */
-[data-native-viewport='bevy'] [data-native-hud] {
-  opacity: 0 !important;
-}
-
-/*
  * noBS CAD feature panels use an asymmetric lower corner, an iris edge rail,
  * and a quiet directional header wash. This is the shared visual signature
  * for browser and Tauri-hosted command dialogs.

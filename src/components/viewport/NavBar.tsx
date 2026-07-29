@@ -129,7 +129,7 @@ export function NavBar({
             title={t('navbar.undo')}
             disabled={!canUndo}
             onClick={() => void undoSketch()}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
           >
             <Undo2 size={15} />
           </button>
@@ -139,7 +139,7 @@ export function NavBar({
             title={t('navbar.redo')}
             disabled={!canRedo}
             onClick={() => void redoSketch()}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
           >
             <Redo2 size={15} />
           </button>
@@ -150,7 +150,7 @@ export function NavBar({
             title={t('navbar.lookAtSketch')}
             aria-label={t('navbar.lookAtSketch')}
             onClick={requestLookAt}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute hover:bg-edge hover:text-ink"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:bg-edge hover:text-ink"
           >
             <Focus size={15} />
           </button>
@@ -167,7 +167,7 @@ export function NavBar({
           disabled={!b.onClick}
           onClick={b.onClick}
           className={cx(
-            'flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
+            'flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
             b.active && 'bg-accent/30 text-accent hover:bg-accent/40 hover:text-accent',
           )}
         >
@@ -194,7 +194,7 @@ export function NavBar({
           }
         }}
         className={cx(
-          'relative flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
+          'relative flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
           sixDofMouseStatus.state === 'connected' && 'bg-accent/25 text-accent',
         )}
       >

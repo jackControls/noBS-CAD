@@ -152,6 +152,9 @@ export default function App() {
       if (s.document === null) return;
 
       if (e.key === 'Escape') {
+        // Escape cancels CAD state only; do not let the WebView/AppKit default
+        // simultaneously leave native macOS full-screen mode.
+        e.preventDefault();
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
         if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();

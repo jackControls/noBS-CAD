@@ -165,6 +165,8 @@ pub struct ViewportHudSelection {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportHud {
+    #[serde(default)]
+    pub render_native_chrome: bool,
     #[serde(default = "default_nav_tool")]
     pub nav_tool: String,
     #[serde(default)]
@@ -185,6 +187,7 @@ fn default_nav_tool() -> String {
 impl Default for ViewportHud {
     fn default() -> Self {
         Self {
+            render_native_chrome: false,
             nav_tool: default_nav_tool(),
             sketch_mode: false,
             can_undo: false,

@@ -96,8 +96,8 @@ const WORLD_UP = new CAD.Vector3(0, 0, 1);
 const AXIS_LENGTH = 120;
 let preservedCameraSnapshot: CameraSnapshot | null = null;
 
-/** Picker quad edge length (mm), per spec ~100×100. */
-const PLANE_SIZE = 100;
+/** Visible and pickable reference-plane edge length in both React and Bevy. */
+export const REFERENCE_PLANE_SIZE = 100;
 /** Half-height (mm) framed when snapping normal to a sketch plane. */
 const SKETCH_FIT_HALF_EXTENT = 75;
 /** Magnetic acquisition radius for valid modify-tool targets. */
@@ -670,7 +670,7 @@ export function Viewport() {
       group.position.set(...def.basis.origin);
 
       const mesh = new CAD.Mesh(
-        new CAD.PlaneGeometry(PLANE_SIZE, PLANE_SIZE),
+        new CAD.PlaneGeometry(REFERENCE_PLANE_SIZE, REFERENCE_PLANE_SIZE),
         new CAD.MeshBasicMaterial({
           color: def.color,
           transparent: true,
@@ -4371,7 +4371,10 @@ export function Viewport() {
           ),
         );
         group.position.set(...basis.origin);
-        const geometry = new CAD.PlaneGeometry(PLANE_SIZE, PLANE_SIZE);
+        const geometry = new CAD.PlaneGeometry(
+          REFERENCE_PLANE_SIZE,
+          REFERENCE_PLANE_SIZE,
+        );
         const mesh = new CAD.Mesh(
           geometry,
           new CAD.MeshBasicMaterial({
@@ -4766,7 +4769,9 @@ export function Viewport() {
       mode: SolidEdgePickMode = 'any',
     ): { bodyId: number; edgeId: number } | null => {
       raycaster.setFromCamera(ndcFromEvent(event), camera);
-      raycaster.params.Line = { threshold: Math.max(0.15, camera.position.distanceTo(controls.target) * 0.0025) };
+      raycaster.params.Line = {
+        threshold: Math.max(0.15, worldPerPixel() * 6),
+      };
       const hit = raycaster
         .intersectObjects(solidGroup.children, true)
         .find((candidate) =>
@@ -5339,6 +5344,23 @@ export function Viewport() {
       if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
     };
 
+    const onPointerLeave = () => {
+      const state = store.getState();
+      state.setHoveredPlane(null);
+      state.setHoveredDatumPlane(null);
+      state.setHoveredFace(null);
+      state.setHoveredEdge(null);
+      state.setHoveredEntity(null);
+      state.setRevolveAxisHover(null);
+      state.setHoveredCurvePick(null);
+      state.setHoveredProfilePick(null);
+      state.setHolePositionHover(null);
+      highlightDatumPlane(null, state.mode === 'pickPlane');
+      const tag = planeTagRef.current;
+      if (tag) tag.style.display = 'none';
+      surface.domElement.style.cursor = '';
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const state = store.getState();
@@ -5792,6 +5814,9 @@ export function Viewport() {
         return;
       }
       if (e.key !== 'Escape') return;
+      // Escape is application-owned. Prevent AppKit/WebKit's default from
+      // also taking the native window out of full-screen mode.
+      e.preventDefault();
       // The viewport listens in the capture phase so it sees Escape before
       // the inline input. Dismiss transient dimension feedback here first;
       // a later Escape can then exit the active sketch tool.
@@ -5805,6 +5830,7 @@ export function Viewport() {
       // Modal navigation exits first: Esc returns to Select.
       if (state.navTool !== 'select') {
         state.setNavTool('select');
+        e.stopPropagation();
         return;
       }
       if (state.mode === 'solid') {
@@ -5827,13 +5853,16 @@ export function Viewport() {
         e.stopPropagation();
       } else if (state.activeTool !== null) {
         state.setActiveTool(null);
+        e.stopPropagation();
       } else if (state.selectedEntity !== null || state.selectedEntities.length > 0) {
         state.setSelectedEntity(null);
         state.setSelectedEntities([]);
+        e.stopPropagation();
       }
     };
 
     surface.domElement.addEventListener('pointermove', onPointerMove);
+    surface.domElement.addEventListener('pointerleave', onPointerLeave);
     surface.domElement.addEventListener('pointerdown', onPointerDown);
     surface.domElement.addEventListener('click', onCanvasClick);
     surface.domElement.addEventListener('dblclick', onDoubleClick);
@@ -6822,6 +6851,7 @@ export function Viewport() {
       unsub();
       surface.domElement.removeEventListener('pointerdown', onNavPointerDown);
       surface.domElement.removeEventListener('pointermove', onPointerMove);
+      surface.domElement.removeEventListener('pointerleave', onPointerLeave);
       surface.domElement.removeEventListener('pointerdown', onPointerDown);
       surface.domElement.removeEventListener('click', onCanvasClick);
       surface.domElement.removeEventListener('dblclick', onDoubleClick);
