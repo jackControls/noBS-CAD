@@ -2,14 +2,14 @@
 //!
 //! React continues to own the CAD interaction model, accessibility tree, and
 //! hit targets. Bevy paints viewport-local HUD chrome as well as CAD graphics;
-//! form-heavy command dialogs remain real DOM islands. On macOS the WKWebView
-//! is visually clipped over a sibling NSView whose Metal surface is rendered
-//! by Bevy. Model synchronization stays entirely in-process: the OCCT
-//! tessellation is cloned from `AppState` instead of being serialized through
-//! JavaScript.
+//! form-heavy command dialogs remain real DOM islands. macOS clips WKWebView
+//! over a sibling Metal NSView; Windows clips an opaque DX12/Vulkan HWND around
+//! DOM islands and passes hit tests through to WebView2. Model synchronization
+//! stays entirely in-process: the OCCT tessellation is cloned from `AppState`
+//! instead of being serialized through JavaScript.
 
-#[cfg(target_os = "macos")]
-mod macos;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod platform;
 
 use nbcad_sketch::SketchDto;
 use nbcad_solid::{DatumPlaneDefinitionDto, SolidSceneDto};
@@ -261,18 +261,18 @@ pub(crate) struct ViewportModel {
 }
 
 pub struct NativeViewport {
-    #[cfg(target_os = "macos")]
-    inner: macos::MacNativeViewport,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    inner: platform::PlatformNativeViewport,
 }
 
 impl NativeViewport {
     pub fn install(app: &mut App) -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            macos::MacNativeViewport::install(app).map(|inner| Self { inner })
+            platform::PlatformNativeViewport::install(app).map(|inner| Self { inner })
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = app;
             Ok(Self {})
@@ -280,90 +280,90 @@ impl NativeViewport {
     }
 
     pub fn set_layout(&self, app: &AppHandle, layout: ViewportLayout) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.set_layout(app, layout)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, layout);
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub(crate) fn sync_model(&self, model: ViewportModel) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.sync_model(model)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = model;
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.set_camera(camera)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = camera;
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.set_preview(preview)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = preview;
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.set_presentation(presentation)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = presentation;
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub fn pick(&self, x: f32, y: f32) -> Result<Option<NativePick>, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.pick(x, y)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (x, y);
-            Err("the embedded native viewport is currently macOS-only".to_string())
+            Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
 
     pub fn metrics(&self) -> NativeViewportMetrics {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.inner.metrics()
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             NativeViewportMetrics {
                 backend: "unavailable".to_string(),

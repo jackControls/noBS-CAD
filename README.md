@@ -146,7 +146,9 @@ earn trust one operation at a time. We would love to hear from CAM experts!
 The Windows release path targets Windows 10 version 1803 or newer and Windows
 11. It produces a portable ZIP rather than an installer, uses the WebView2
 runtime supplied by Windows, and requires Microsoft's centrally installed
-Visual C++ v14 x64 Redistributable.
+Visual C++ v14 x64 Redistributable. The desktop build uses the same native Bevy
+viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS remain
+the real menu, tab, dialog, and accessibility interface.
 
 The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
 SDK, Rust, Node.js, `wasm-pack`, and the pinned OCCT 7.9.3 vcpkg dependency.
