@@ -19,7 +19,7 @@ pub use facade::ExportFacade;
 pub use materials::{
     brands, catalog_json, find_preset, material_catalog, presets_for_brand, MaterialPreset,
 };
-pub use pip_demo::print_in_place_latch;
+pub use pip_demo::{assert_box_clearances, print_in_place_clip, print_in_place_latch, CLEAR_MM};
 pub use slicer::SlicerTarget;
 pub use stl::write_stl;
 pub use threemf::write_3mf;
@@ -355,25 +355,28 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
 
-        // Print-in-place T-slot latch (housing + captive bolt).
-        let (pip_meshes, pip_apps) = print_in_place_latch();
+        // Print-in-place drawer clip (housing + drawer + latch), DFM-cleared.
+        let (pip_meshes, pip_apps) = print_in_place_clip();
+        assert_eq!(pip_meshes.len(), 3);
         for (name, target) in [
+            ("print_in_place_clip_bambu.3mf", SlicerTarget::BambuStudio),
+            ("print_in_place_clip_orca.3mf", SlicerTarget::OrcaSlicer),
+            ("print_in_place_clip_prusa.3mf", SlicerTarget::PrusaSlicer),
+            ("print_in_place_clip_cura.3mf", SlicerTarget::Cura),
+            // Alias names kept for older smoke paths / docs links.
             ("print_in_place_latch_bambu.3mf", SlicerTarget::BambuStudio),
-            ("print_in_place_latch_orca.3mf", SlicerTarget::OrcaSlicer),
             ("print_in_place_latch_prusa.3mf", SlicerTarget::PrusaSlicer),
-            ("print_in_place_latch_cura.3mf", SlicerTarget::Cura),
         ] {
             let bytes = write_3mf(&pip_meshes, &pip_apps, true, target).unwrap();
-            // Housing (9 boxes) + bolt (4 boxes) ⇒ well above a single cube package.
             let tri_floats: usize = pip_meshes.iter().map(|m| m.indices.len()).sum();
             assert!(
-                bytes.len() > 2_000 && tri_floats >= 13 * 36,
-                "{name} latch mesh under-built ({} bytes, {} index floats)",
+                bytes.len() > 2_500 && tri_floats >= 20 * 36,
+                "{name} clip mesh under-built ({} bytes, {} index floats)",
                 bytes.len(),
                 tri_floats
             );
             std::fs::write(dir.join(name), &bytes).unwrap();
         }
-        assert!(dir.join("print_in_place_latch_bambu.3mf").is_file());
+        assert!(dir.join("print_in_place_clip_bambu.3mf").is_file());
     }
 }

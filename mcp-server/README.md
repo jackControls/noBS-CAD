@@ -12,7 +12,9 @@ disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 `cad_list_all_tools`, `cad_cancel_recompute`, `cad_list_sessions`, `cad_attach`.
 
 **Print:** prefer `solid_export_3mf` (mm + materials + slicer Metadata). Also
-`solid_export_stl`, `solid_export_step` (CAD), and `material_catalog`.
+`solid_export_stl`, `solid_export_step` (CAD), `material_catalog`,
+`body_appearances` / `set_body_appearance`, `solid_export_preflight`, and
+`demo_export_pip_3mf`.
 
 ## Build and verify
 
@@ -104,13 +106,14 @@ features with stable datum IDs. Body-operation tools expose Shell, Mirror,
 one/two-direction Rectangular Pattern, Circular Pattern, Combine, and Split
 Body through the same replayable history as the interactive application.
 
-`cad_project_model` returns the authoritative versioned `model.json`, and
-`cad_load_project_model` transactionally restores and recomputes it. The
-outer ZIP-based `.nbcad` packaging and live desktop-session attachment are
-not part of this first server slice; currently each MCP process owns an
-independent document.
+`cad_project_model` returns the authoritative versioned `model.json`,
+`cad_load_project_model` transactionally restores and recomputes it, and
+`cad_new_project` clears to an empty document. File-bridge co-link uses
+`cad_list_sessions` / `cad_attach` (UI publishes under `NBCAD_SESSION_DIR`).
+Each MCP process still owns one headless document unless attached.
 
-There is no MCP `solid_export_3mf` tool yet; STEP export lives in the UI.
-3MF with materials/colors remains a documented target, not current MCP
-functionality.
+**Print handoff:** `solid_export_preflight` → `set_body_appearance` (optional) →
+`solid_export_3mf` (preferred for slicers). Use `solid_tessellate` to inspect
+triangle counts before exporting. `demo_export_pip_3mf` returns the built-in
+three-body PIP drawer clip without mutating the document.
 

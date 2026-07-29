@@ -18,7 +18,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 101;
+const MODELING_TOOL_COUNT: usize = 105;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -234,6 +234,12 @@ impl CadServer {
                 })
             } else if name == "solid_export_stl" || name == "solid_export_3mf" {
                 self.export_mesh(name, arguments)?
+            } else if name == "solid_tessellate" {
+                self.tessellate_tool(arguments)?
+            } else if name == "solid_export_preflight" {
+                self.export_preflight_tool()?
+            } else if name == "demo_export_pip_3mf" {
+                self.demo_pip_3mf_tool(arguments)?
             } else if name == "material_catalog" {
                 serde_json::from_str(&nbcad_export::catalog_json())
                     .map_err(|error| format!("catalog json: {error}"))?
@@ -498,6 +504,114 @@ impl CadServer {
             .set_body_appearance(appearance)
             .map_err(|error| error.to_string())?;
         Ok(json!({ "body_appearances": appearances }))
+    }
+
+    fn tessellate_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        if !self.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before tessellating.".to_string());
+        }
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments)
+                .map_err(|error| format!("bad tessellate arguments: {error}"))?
+        };
+        let scene = self.manager.solid_scene();
+        let mut meshes = self
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        let bodies: Vec<Value> = meshes
+            .iter()
+            .map(|mesh| {
+                let mut min = [f32::MAX; 3];
+                let mut max = [f32::MIN; 3];
+                for p in mesh.positions.chunks_exact(3) {
+                    for i in 0..3 {
+                        min[i] = min[i].min(p[i]);
+                        max[i] = max[i].max(p[i]);
+                    }
+                }
+                json!({
+                    "body_id": mesh.body_id.0,
+                    "name": mesh.name,
+                    "triangle_count": mesh.triangle_count(),
+                    "vertex_count": mesh.positions.len() / 3,
+                    "bbox_min": min,
+                    "bbox_max": max,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "linear_deflection": request.linear_deflection,
+            "angular_deflection": request.angular_deflection,
+            "body_count": bodies.len(),
+            "bodies": bodies,
+        }))
+    }
+
+    fn export_preflight_tool(&mut self) -> Result<Value, String> {
+        let scene = self.manager.solid_scene();
+        let errors: Vec<String> = scene
+            .errors
+            .iter()
+            .map(|error| format!("feature {}: {}", error.feature_id.0, error.message))
+            .collect();
+        let body_ids: Vec<u64> = scene.bodies.iter().map(|body| body.id.0).collect();
+        let appearances = self.manager.body_appearances();
+        let appearing: Vec<u64> = appearances.iter().map(|a| a.body_id.0).collect();
+        let missing_appearance: Vec<u64> = body_ids
+            .iter()
+            .copied()
+            .filter(|id| !appearing.contains(id))
+            .collect();
+        let ok = errors.is_empty() && !body_ids.is_empty();
+        Ok(json!({
+            "ok": ok,
+            "body_count": body_ids.len(),
+            "body_ids": body_ids,
+            "timeline_errors": errors,
+            "appearances_assigned": appearing.len(),
+            "bodies_missing_appearance": missing_appearance,
+            "hints": if !ok {
+                json!([
+                    "Fix timeline_errors before export.",
+                    "Empty documents cannot export meshes.",
+                    "Optional: set_body_appearance / material_catalog for colored 3MF."
+                ])
+            } else {
+                json!([
+                    "Ready for solid_export_3mf (preferred) or solid_export_stl / solid_export_step."
+                ])
+            },
+        }))
+    }
+
+    fn demo_pip_3mf_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments)
+                .map_err(|error| format!("bad demo export arguments: {error}"))?
+        };
+        let (meshes, appearances) = nbcad_export::print_in_place_clip();
+        let bytes = nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "format": "3mf",
+            "encoding": "base64",
+            "demo": "print_in_place_clip",
+            "body_count": meshes.len(),
+            "clearance_mm": nbcad_export::CLEAR_MM,
+            "slicer_target": request.slicer_target,
+            "byte_length": bytes.len(),
+            "bytes_base64": BASE64.encode(bytes),
+        }))
     }
 }
 
@@ -1072,6 +1186,14 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["model_json"],
             ),
         ),
+        ToolSpec::solid(
+            "cad_new_project",
+            "New project",
+            "Clear the headless document to a fresh empty project and recompute (resets botched sessions).",
+            "project_prepare_new",
+            Payload::Empty,
+            empty_schema(),
+        ),
         ToolSpec::direct(
             "sketch_begin",
             "Begin sketch",
@@ -1139,6 +1261,25 @@ fn tool_specs() -> Vec<ToolSpec> {
             object_schema(
                 json!({"from": point.clone(), "to_raw": point.clone(), "ctrl_held": {"type": "boolean"}}),
                 &["from", "to_raw"],
+            ),
+        ),
+        ToolSpec::direct(
+            "sketch_preview_line_locked",
+            "Preview locked line",
+            "Preview a length/angle-locked segment without mutating the sketch (dynamic-input parity).",
+            "preview_segment_locked",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "from": point.clone(),
+                    "to_hint": point.clone(),
+                    "length_mm": {"type": "number", "exclusiveMinimum": 0},
+                    "angle_deg": {"type": "number"},
+                    "length_text": {"type": "string"},
+                    "angle_text": {"type": "string"},
+                    "ctrl_held": {"type": "boolean"}
+                }),
+                &["from", "to_hint"],
             ),
         ),
         ToolSpec::direct(
@@ -1564,6 +1705,17 @@ fn tool_specs() -> Vec<ToolSpec> {
             object_schema(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
         ),
         ToolSpec::direct(
+            "sketch_set_grid_step",
+            "Set sketch grid step",
+            "Set the sketch grid step size in millimetres (matches UI grid precision).",
+            "set_grid_step",
+            Payload::Object,
+            object_schema(
+                json!({"step_mm": {"type": "number", "exclusiveMinimum": 0}}),
+                &["step_mm"],
+            ),
+        ),
+        ToolSpec::direct(
             "sketch_eval_expression",
             "Evaluate sketch expression",
             "Evaluate a number or parameter formula in the active sketch.",
@@ -1709,6 +1861,24 @@ fn tool_specs() -> Vec<ToolSpec> {
             "solid_scene",
             Payload::Empty,
             empty_schema(),
+        ),
+        ToolSpec::direct(
+            "solid_tessellate",
+            "Tessellate bodies",
+            "Tessellate active bodies with configurable deflection and return mesh stats (no file bytes). Use before export to judge triangle density.",
+            "solid_tessellate",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1}
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35}
+                }),
+                &[],
+            ),
         ),
         ToolSpec::direct(
             "solid_extrude_definitions",
@@ -2235,6 +2405,31 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["body_id"],
             ),
         ),
+        ToolSpec::direct(
+            "solid_export_preflight",
+            "Export preflight",
+            "Check timeline errors, active bodies, and appearance coverage before mesh/STEP export.",
+            "solid_export_preflight",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "demo_export_pip_3mf",
+            "Export PIP demo 3MF",
+            "Return the built-in three-body print-in-place drawer clip as base64 3MF (DFM clearances ≥ 0.4 mm). Does not mutate the document.",
+            "demo_export_pip_3mf",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "slicer_target": {
+                        "type": "string",
+                        "enum": ["standard", "bambu_studio", "orca_slicer", "prusa_slicer", "cura"],
+                        "default": "bambu_studio"
+                    }
+                }),
+                &[],
+            ),
+        ),
         ToolSpec::control(
             "cad_get_focus",
             "Get focus state",
@@ -2563,8 +2758,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 18,
-            "101 modeling tools plus 6 print/appearance helpers and 12 control tools"
+            MODELING_TOOL_COUNT + 20,
+            "105 modeling tools plus 8 print helpers and 12 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2575,9 +2770,11 @@ mod tests {
                         "solid_export_step"
                             | "solid_export_stl"
                             | "solid_export_3mf"
+                            | "solid_export_preflight"
                             | "material_catalog"
                             | "body_appearances"
                             | "set_body_appearance"
+                            | "demo_export_pip_3mf"
                             | "cad_get_focus"
                             | "cad_set_focus"
                             | "cad_list_focus_areas"
@@ -2630,9 +2827,11 @@ mod tests {
                 "solid_export_step"
                     | "solid_export_stl"
                     | "solid_export_3mf"
+                    | "solid_export_preflight"
                     | "material_catalog"
                     | "body_appearances"
                     | "set_body_appearance"
+                    | "demo_export_pip_3mf"
                     | "cad_get_focus"
                     | "cad_set_focus"
                     | "cad_list_focus_areas"
@@ -2653,14 +2852,14 @@ mod tests {
         assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
         // Modeling registry covers 8 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
-        assert_eq!(packs["document"], 4);
-        assert_eq!(packs["sketch"], 48);
+        assert_eq!(packs["document"], 5);
+        assert_eq!(packs["sketch"], 50);
         assert_eq!(packs["solid"], 10);
         assert!(packs["modify"] >= 6);
         assert!(packs["body_ops"] >= 10);
         assert!(packs["datums"] >= 6);
         assert!(packs["history"] >= 3);
-        assert_eq!(packs["inspect"], 11);
+        assert_eq!(packs["inspect"], 12);
         assert!(!packs.contains_key("print"));
     }
 

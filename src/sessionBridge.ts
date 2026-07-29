@@ -49,6 +49,8 @@ export function focusFromUi(
   }
   if (mode === 'sketch') return 'sketch';
   if (mode === 'pickPlane') return 'datums';
+  // Keep in sync with mcp-server/src/disclosure.rs focus_from_ui modes.
+  if (mode === 'solid') return 'solid';
   if (activeTool) return 'sketch';
   return 'document';
 }

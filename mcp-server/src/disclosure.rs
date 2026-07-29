@@ -72,7 +72,9 @@ impl FocusPack {
             FocusPack::Datums => "Construction planes and datum features.",
             FocusPack::History => "Rollback, delete, and reorder in feature history.",
             FocusPack::Inspect => "Read-only solid and sketch definition catalogs.",
-            FocusPack::Print => "Manufacturing export such as STEP.",
+            FocusPack::Print => {
+                "Manufacturing export: 3MF/STL/STEP, materials, appearance, and print demos."
+            }
         }
     }
 }
@@ -476,9 +478,10 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
     }
 
     let pack = match name {
-        "cad_set_document_name" | "cad_project_model" | "cad_load_project_model" => {
-            FocusPack::Document
-        }
+        "cad_set_document_name"
+        | "cad_project_model"
+        | "cad_load_project_model"
+        | "cad_new_project" => FocusPack::Document,
         "sketch_begin"
         | "sketch_finish"
         | "sketch_edit"
@@ -521,9 +524,11 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "sketch_undo"
         | "sketch_redo"
         | "sketch_set_grid_snap"
+        | "sketch_set_grid_step"
         | "sketch_eval_expression"
         | "sketch_set_dimension_style"
         | "sketch_preview_line"
+        | "sketch_preview_line_locked"
         | "sketch_preview_fillet"
         | "sketch_preview_offset"
         | "sketch_preview_trim" => FocusPack::Sketch,
@@ -573,13 +578,16 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "solid_fillet_definitions"
         | "solid_chamfer_definitions"
         | "solid_hole_definitions"
-        | "solid_body_feature_definitions" => FocusPack::Inspect,
+        | "solid_body_feature_definitions"
+        | "solid_tessellate" => FocusPack::Inspect,
         "solid_export_step"
         | "solid_export_stl"
         | "solid_export_3mf"
+        | "solid_export_preflight"
         | "material_catalog"
         | "body_appearances"
-        | "set_body_appearance" => FocusPack::Print,
+        | "set_body_appearance"
+        | "demo_export_pip_3mf" => FocusPack::Print,
         _ => FocusPack::Document,
     };
     (pack, false)
@@ -637,7 +645,8 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     ) {
         return Some(FocusPack::History);
     }
-    if name.ends_with("_definitions") || name == "solid_scene" {
+    if name.ends_with("_definitions") || name == "solid_scene" || name == "solid_tessellate"
+    {
         return Some(FocusPack::Inspect);
     }
     if matches!(
@@ -645,16 +654,28 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
         "solid_export_step"
             | "solid_export_stl"
             | "solid_export_3mf"
+            | "solid_export_preflight"
             | "material_catalog"
             | "body_appearances"
             | "set_body_appearance"
+            | "demo_export_pip_3mf"
     ) {
         return Some(FocusPack::Print);
+    }
+    if matches!(
+        name,
+        "cad_set_document_name"
+            | "cad_project_model"
+            | "cad_load_project_model"
+            | "cad_new_project"
+    ) {
+        return Some(FocusPack::Document);
     }
     None
 }
 
-#[allow(dead_code)]
+/// Shared focus mapping for UI co-link (`sessionBridge.ts`) and tests.
+/// Keep dialog keys identical to `activeSolidDialog` in the TypeScript publisher.
 pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option<&str>) -> FocusPack {
     if let Some(dialog) = solid_dialog {
         return match dialog {
@@ -758,7 +779,7 @@ mod tests {
     #[test]
     fn tags_cover_all_modeling_tools() {
         let modeling = [
-            "cad_set_document_name", "cad_project_model", "cad_load_project_model",
+            "cad_set_document_name", "cad_project_model", "cad_load_project_model", "cad_new_project",
             "sketch_begin", "sketch_finish", "sketch_edit", "sketch_active", "sketch_finished", "sketch_profiles",
             "sketch_add_line", "sketch_add_line_locked", "sketch_add_midpoint_line", "sketch_add_point",
             "sketch_add_rectangle", "sketch_add_rectangle_locked", "sketch_add_circle", "sketch_add_circle_locked",
@@ -768,8 +789,8 @@ mod tests {
             "sketch_trim", "sketch_extend", "sketch_break", "sketch_mirror", "sketch_rectangular_pattern",
             "sketch_circular_pattern", "sketch_move_copy", "sketch_scale", "sketch_polygon", "sketch_move_point",
             "sketch_toggle_fix", "sketch_delete_entities", "sketch_undo", "sketch_redo", "sketch_set_grid_snap",
-            "sketch_eval_expression", "sketch_set_dimension_style", "sketch_preview_line", "sketch_preview_fillet",
-            "sketch_preview_offset", "sketch_preview_trim",
+            "sketch_set_grid_step", "sketch_eval_expression", "sketch_set_dimension_style", "sketch_preview_line",
+            "sketch_preview_line_locked", "sketch_preview_fillet", "sketch_preview_offset", "sketch_preview_trim",
             "solid_extrude", "solid_edit_extrude", "solid_revolve", "solid_edit_revolve", "solid_sweep",
             "solid_edit_sweep", "solid_loft", "solid_edit_loft", "solid_rib", "solid_edit_rib",
             "solid_fillet", "solid_edit_fillet", "solid_chamfer", "solid_edit_chamfer", "solid_hole", "solid_edit_hole",
@@ -782,10 +803,10 @@ mod tests {
             "solid_set_rollback", "solid_delete_feature", "solid_reorder_feature",
             "solid_extrude_definitions", "solid_revolve_definitions", "solid_sweep_definitions", "solid_loft_definitions",
             "solid_rib_definitions", "solid_fillet_definitions", "solid_chamfer_definitions", "solid_hole_definitions",
-            "solid_body_feature_definitions",
+            "solid_body_feature_definitions", "solid_tessellate",
             "cad_document", "solid_scene", "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 101);
+        assert_eq!(modeling.len(), 105);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(
@@ -793,6 +814,18 @@ mod tests {
                 "unexpected default pack for {name}"
             );
             let _ = spine;
+        }
+        for name in [
+            "solid_export_3mf",
+            "solid_export_stl",
+            "solid_export_step",
+            "solid_export_preflight",
+            "material_catalog",
+            "body_appearances",
+            "set_body_appearance",
+            "demo_export_pip_3mf",
+        ] {
+            assert_eq!(tags_for_tool(name).0, FocusPack::Print, "{name}");
         }
     }
 }

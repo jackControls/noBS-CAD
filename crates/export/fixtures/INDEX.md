@@ -8,12 +8,15 @@
 
 ## Ready-to-print demo
 
-**`print_in_place_latch_*.3mf`** — captive T-slot latch (print-in-place):
+**`print_in_place_clip_*.3mf`** — three-body captive drawer clip (print-in-place):
 
-- Black housing + red sliding bolt (two bodies / filament slots)
-- ~0.4 mm clearance designed in — print as-is, then slide the bolt
-- Tip exits the front aperture when pushed forward
+- Black housing + red drawer + blue side latch (three bodies / filament slots)
+- Every inter-body box pair keeps ≥ 0.4 mm AABB clearance (no fused solids)
+- Drawer slides along Y; latch can slide −X into a drawer notch after print
 - Suggested: 0.2 mm layers, 15% infill, no supports, PLA
+- MCP: `demo_export_pip_3mf` returns the same demo as base64
+
+Legacy alias files `print_in_place_latch_*.3mf` are regenerated from the same clip.
 
 Also includes simple `cube_*.3mf` geometry checks.
 
