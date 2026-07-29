@@ -1,14 +1,17 @@
+#[cfg(target_os = "macos")]
+use std::ptr::NonNull;
 use std::{
     collections::HashMap,
     ffi::c_void,
     num::NonZeroU32,
-    ptr::NonNull,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Instant,
 };
+#[cfg(target_os = "windows")]
+use std::{num::NonZeroIsize, sync::OnceLock};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -23,16 +26,39 @@ use bevy::{
 use nbcad_core::PlaneBasis;
 use nbcad_sketch::{EntityDto, SketchDto};
 use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, FaceDto, SolidSceneDto};
+#[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSView, NSWindow, NSWindowOrderingMode};
+#[cfg(target_os = "macos")]
 use objc2_core_graphics::CGMutablePath;
+#[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
+#[cfg(target_os = "macos")]
 use objc2_quartz_core::{kCAFillRuleEvenOdd, CAShapeLayer};
+#[cfg(target_os = "macos")]
+use raw_window_handle::AppKitWindowHandle;
+#[cfg(target_os = "windows")]
+use raw_window_handle::Win32WindowHandle;
 use raw_window_handle::{
-    AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle,
-    RawWindowHandle, WindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle, WindowHandle,
 };
 use tauri::Manager;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM},
+    Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF},
+    System::LibraryLoader::GetModuleHandleW,
+    UI::{
+        HiDpi::GetDpiForWindow,
+        WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, GetParent, RegisterClassW, SetWindowPos, ShowWindow,
+            CS_OWNDC, HTTRANSPARENT, HWND_TOP, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
+            SW_HIDE, SW_SHOWNA, WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
+            WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_NOPARENTNOTIFY,
+        },
+    },
+};
 
 use super::{
     NativePick, NativeViewportMetrics, ViewportCamera, ViewportHud, ViewportHudSelection,
@@ -41,6 +67,12 @@ use super::{
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
+
+#[cfg(target_os = "macos")]
+const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
+#[cfg(target_os = "windows")]
+const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu DX12-Vulkan / embedded HWND";
+
 #[derive(Default)]
 struct NativePointers {
     webview: AtomicUsize,
@@ -115,7 +147,7 @@ impl Default for PickState {
     }
 }
 
-pub struct MacNativeViewport {
+pub struct PlatformNativeViewport {
     app: tauri::AppHandle,
     runtime: Arc<AtomicUsize>,
     pending: Arc<Mutex<PendingRenderCommands>>,
@@ -125,7 +157,7 @@ pub struct MacNativeViewport {
     metrics: Arc<Mutex<MetricsState>>,
 }
 
-impl MacNativeViewport {
+impl PlatformNativeViewport {
     pub fn install(app: &mut tauri::App) -> Result<Self, String> {
         let main_window = app
             .get_webview_window("main")
@@ -144,9 +176,11 @@ impl MacNativeViewport {
 
         main_window
             .with_webview(move |platform| {
-                // Tauri guarantees this closure runs on AppKit's main thread.
+                // Tauri guarantees this closure runs on the native UI thread.
+                #[cfg(target_os = "macos")]
                 let marker =
                     MainThreadMarker::new().expect("Tauri with_webview must run on main thread");
+                #[cfg(target_os = "macos")]
                 let result = unsafe {
                     install_native_views(
                         marker,
@@ -154,6 +188,19 @@ impl MacNativeViewport {
                         platform.ns_window(),
                         install_pointers.clone(),
                     )
+                };
+                #[cfg(target_os = "windows")]
+                let result = unsafe {
+                    let controller = platform.controller();
+                    let mut webview_hwnd = Default::default();
+                    controller
+                        .ParentWindow(&mut webview_hwnd)
+                        .map_err(|error| {
+                            format!("WebView2 did not expose its container HWND: {error}")
+                        })
+                        .and_then(|_| {
+                            install_native_views(webview_hwnd.0, install_pointers.clone())
+                        })
                 };
 
                 let (view_pointer, scale_factor) = match result {
@@ -185,9 +232,9 @@ impl MacNativeViewport {
                 });
                 render_frames(&mut render_runtime.app, 2, &install_metrics);
 
-                // The Bevy App and raw-window-metal surface are AppKit
-                // main-thread-bound. The allocation lives for the process and
-                // is dereferenced only by run_on_main_thread closures.
+                // The Bevy App and its native surface stay on the native UI
+                // thread. The allocation lives for the process and is
+                // dereferenced only by run_on_main_thread closures.
                 let runtime_pointer = Box::into_raw(render_runtime) as usize;
                 install_runtime.store(runtime_pointer, Ordering::Release);
                 if let Ok(mut current) = install_metrics.lock() {
@@ -195,15 +242,11 @@ impl MacNativeViewport {
                     current.scale_factor = scale_factor;
                 }
                 eprintln!(
-                    "native Bevy viewport installed below WKWebView ({scale_factor:.2}x backing scale)"
+                    "native Bevy viewport installed ({NATIVE_BACKEND}, {scale_factor:.2}x scale)"
                 );
-                drain_render_commands(
-                    &install_runtime,
-                    &install_pending,
-                    &install_metrics,
-                );
+                drain_render_commands(&install_runtime, &install_pending, &install_metrics);
             })
-            .map_err(|error| format!("could not access native WKWebView: {error}"))?;
+            .map_err(|error| format!("could not access the native webview: {error}"))?;
 
         Ok(Self {
             app: app_handle,
@@ -342,7 +385,7 @@ impl MacNativeViewport {
         NativeViewportMetrics {
             available: true,
             ready: metrics.ready,
-            backend: "Bevy 0.19 / wgpu Metal / embedded NSView".to_string(),
+            backend: NATIVE_BACKEND.to_string(),
             logical_width: metrics.logical_width,
             logical_height: metrics.logical_height,
             scale_factor: metrics.scale_factor,
@@ -364,6 +407,7 @@ impl MacNativeViewport {
 
 /// Installs a sibling NSView directly below the WKWebView. The NSWindow stays
 /// opaque; only the WKWebView's layer gets a viewport-shaped mask.
+#[cfg(target_os = "macos")]
 unsafe fn install_native_views(
     marker: MainThreadMarker,
     webview_pointer: *mut c_void,
@@ -398,6 +442,7 @@ unsafe fn install_native_views(
     Ok((view_pointer, ns_window.backingScaleFactor()))
 }
 
+#[cfg(target_os = "macos")]
 unsafe fn apply_native_layout(
     webview_pointer: usize,
     viewport_pointer: usize,
@@ -452,6 +497,7 @@ unsafe fn apply_native_layout(
     ns_window.backingScaleFactor()
 }
 
+#[cfg(target_os = "macos")]
 fn dom_rect_to_view_rect(view: &NSView, rect: ViewportRect) -> NSRect {
     let bounds = view.bounds();
     let y = if view.isFlipped() {
@@ -463,6 +509,223 @@ fn dom_rect_to_view_rect(view: &NSView, rect: ViewportRect) -> NSRect {
         NSPoint::new(rect.x, y),
         NSSize::new(rect.width.max(0.0), rect.height.max(0.0)),
     )
+}
+
+#[cfg(target_os = "windows")]
+static WINDOWS_VIEWPORT_CLASS: OnceLock<Result<(), u32>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn windows_viewport_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        // Pointer input remains owned by the real DOM viewport behind this
+        // opaque render sibling. That preserves the React interaction kernel
+        // and accessibility tree without a transparent WebView2 surface.
+        WM_NCHITTEST => HTTRANSPARENT as LRESULT,
+        // The swapchain owns every visible pixel; suppress background erases
+        // that would otherwise flash while resizing.
+        WM_ERASEBKGND => 1,
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn register_windows_viewport_class() -> Result<(), String> {
+    let registration = WINDOWS_VIEWPORT_CLASS.get_or_init(|| unsafe {
+        let module = GetModuleHandleW(std::ptr::null());
+        if module.is_null() {
+            return Err(GetLastError());
+        }
+        let class = WNDCLASSW {
+            style: CS_OWNDC,
+            lpfnWndProc: Some(windows_viewport_proc),
+            hInstance: module,
+            lpszClassName: windows_sys::w!("noBS.CAD.BevyViewport"),
+            ..Default::default()
+        };
+        if RegisterClassW(&class) == 0 {
+            let error = GetLastError();
+            if error != ERROR_CLASS_ALREADY_EXISTS {
+                return Err(error);
+            }
+        }
+        Ok(())
+    });
+    match *registration {
+        Ok(()) => Ok(()),
+        Err(code) => Err(format!(
+            "could not register the native viewport window class (Win32 error {code})"
+        )),
+    }
+}
+
+/// Installs an opaque Win32 child above Wry's WebView2 container. Its window
+/// region is cut around DOM overlay islands, and `WM_NCHITTEST` passes pointer
+/// input through to WebView2. This avoids both transparent top-level windows
+/// and a transparent WebView2 compositor.
+#[cfg(target_os = "windows")]
+unsafe fn install_native_views(
+    webview_pointer: *mut c_void,
+    pointers: Arc<NativePointers>,
+) -> Result<(usize, f64), String> {
+    if webview_pointer.is_null() {
+        return Err("WebView2 returned a null container HWND".to_string());
+    }
+    let webview = webview_pointer as HWND;
+    let window = unsafe { GetParent(webview) };
+    if window.is_null() {
+        return Err("WebView2 container is not attached to a Win32 parent".to_string());
+    }
+    register_windows_viewport_class()?;
+
+    let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+    if module.is_null() {
+        return Err(format!(
+            "could not resolve the application module (Win32 error {})",
+            unsafe { GetLastError() }
+        ));
+    }
+    let viewport = unsafe {
+        CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_NOPARENTNOTIFY,
+            windows_sys::w!("noBS.CAD.BevyViewport"),
+            std::ptr::null(),
+            WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+            0,
+            0,
+            1,
+            1,
+            window,
+            std::ptr::null_mut(),
+            module,
+            std::ptr::null(),
+        )
+    };
+    if viewport.is_null() {
+        return Err(format!(
+            "could not create the native viewport HWND (Win32 error {})",
+            unsafe { GetLastError() }
+        ));
+    }
+
+    pointers.webview.store(webview as usize, Ordering::Release);
+    pointers
+        .viewport
+        .store(viewport as usize, Ordering::Release);
+    pointers.window.store(window as usize, Ordering::Release);
+
+    Ok((viewport as usize, windows_scale_factor(window)))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_scale_factor(window: HWND) -> f64 {
+    let dpi = unsafe { GetDpiForWindow(window) };
+    if dpi == 0 {
+        1.0
+    } else {
+        dpi as f64 / 96.0
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn apply_native_layout(
+    _webview_pointer: usize,
+    viewport_pointer: usize,
+    window_pointer: usize,
+    layout: &ViewportLayout,
+) -> f64 {
+    let viewport = viewport_pointer as HWND;
+    let window = window_pointer as HWND;
+    let scale_factor = windows_scale_factor(window);
+    let rect = layout.viewport;
+    let visible = rect.width >= 2.0 && rect.height >= 2.0;
+    if !visible {
+        unsafe {
+            ShowWindow(viewport, SW_HIDE);
+        }
+        return scale_factor;
+    }
+
+    let x = (rect.x * scale_factor).round() as i32;
+    let y = (rect.y * scale_factor).round() as i32;
+    let width = (rect.width * scale_factor).round().max(1.0) as i32;
+    let height = (rect.height * scale_factor).round().max(1.0) as i32;
+    let positioned = unsafe {
+        SetWindowPos(
+            viewport,
+            HWND_TOP,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+        )
+    };
+    if positioned == 0 {
+        eprintln!("native viewport resize failed (Win32 error {})", unsafe {
+            GetLastError()
+        });
+    }
+
+    apply_windows_viewport_region(viewport, layout, width, height, scale_factor);
+    unsafe {
+        ShowWindow(viewport, SW_SHOWNA);
+    }
+    scale_factor
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_viewport_region(
+    viewport: HWND,
+    layout: &ViewportLayout,
+    width: i32,
+    height: i32,
+    scale_factor: f64,
+) {
+    let region = unsafe { CreateRectRgn(0, 0, width, height) };
+    if region.is_null() {
+        return;
+    }
+
+    for overlay in &layout.overlays {
+        let Some(intersection) = intersect_rect(*overlay, layout.viewport) else {
+            continue;
+        };
+        let left = ((intersection.x - layout.viewport.x) * scale_factor)
+            .floor()
+            .clamp(0.0, width as f64) as i32;
+        let top = ((intersection.y - layout.viewport.y) * scale_factor)
+            .floor()
+            .clamp(0.0, height as f64) as i32;
+        let right = ((intersection.x + intersection.width - layout.viewport.x) * scale_factor)
+            .ceil()
+            .clamp(0.0, width as f64) as i32;
+        let bottom = ((intersection.y + intersection.height - layout.viewport.y) * scale_factor)
+            .ceil()
+            .clamp(0.0, height as f64) as i32;
+        if right <= left || bottom <= top {
+            continue;
+        }
+        let overlay_region = unsafe { CreateRectRgn(left, top, right, bottom) };
+        if overlay_region.is_null() {
+            continue;
+        }
+        unsafe {
+            CombineRgn(region, region, overlay_region, RGN_DIFF);
+            DeleteObject(overlay_region);
+        }
+    }
+
+    // SetWindowRgn takes ownership on success.
+    if unsafe { SetWindowRgn(viewport, region, 1) } == 0 {
+        unsafe {
+            DeleteObject(region);
+        }
+    }
 }
 
 fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
@@ -479,22 +742,39 @@ fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
 }
 
 #[derive(Debug)]
-struct AppKitViewHandle(usize);
+struct NativeViewHandle(usize);
 
-unsafe impl Send for AppKitViewHandle {}
-unsafe impl Sync for AppKitViewHandle {}
+unsafe impl Send for NativeViewHandle {}
+unsafe impl Sync for NativeViewHandle {}
 
-impl HasWindowHandle for AppKitViewHandle {
+impl HasWindowHandle for NativeViewHandle {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let pointer = NonNull::new(self.0 as *mut c_void).expect("NSView handle cannot be null");
-        let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer));
-        Ok(unsafe { WindowHandle::borrow_raw(raw) })
+        #[cfg(target_os = "macos")]
+        {
+            let pointer =
+                NonNull::new(self.0 as *mut c_void).expect("NSView handle cannot be null");
+            let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer));
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let pointer = NonZeroIsize::new(self.0 as isize).expect("viewport HWND cannot be null");
+            let raw = RawWindowHandle::Win32(Win32WindowHandle::new(pointer));
+            Ok(unsafe { WindowHandle::borrow_raw(raw) })
+        }
     }
 }
 
-impl HasDisplayHandle for AppKitViewHandle {
+impl HasDisplayHandle for NativeViewHandle {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        Ok(DisplayHandle::appkit())
+        #[cfg(target_os = "macos")]
+        {
+            Ok(DisplayHandle::appkit())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Ok(DisplayHandle::windows())
+        }
     }
 }
 
@@ -628,9 +908,9 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         (entity, holder.clone())
     };
 
-    let wrapped_view = WindowWrapper::new(AppKitViewHandle(view_pointer));
+    let wrapped_view = WindowWrapper::new(NativeViewHandle(view_pointer));
     let raw_handle = RawHandleWrapper::new(&wrapped_view)
-        .map_err(|error| format!("could not wrap embedded NSView: {error}"))?;
+        .map_err(|error| format!("could not wrap the embedded native view: {error}"))?;
     *holder
         .0
         .lock()
@@ -1960,14 +2240,14 @@ fn push_render_command(
     }
 }
 
-/// Drains coalesced mutations on AppKit's main thread. `raw-window-metal`
-/// requires NSView access from this thread, so the Bevy App is deliberately
-/// kept behind a process-lifetime pointer that is never dereferenced elsewhere.
+/// Drains coalesced mutations on the platform UI thread. The Bevy App is kept
+/// behind a process-lifetime pointer that is never dereferenced elsewhere.
 fn drain_render_commands(
     runtime_pointer: &Arc<AtomicUsize>,
     pending: &Arc<Mutex<PendingRenderCommands>>,
     metrics: &Arc<Mutex<MetricsState>>,
 ) {
+    #[cfg(target_os = "macos")]
     debug_assert!(MainThreadMarker::new().is_some());
     let pointer = runtime_pointer.load(Ordering::Acquire);
     if pointer == 0 {

@@ -21,6 +21,28 @@ Permanent Microsoft x64 Redistributable download:
 
 <https://aka.ms/vc14/vc_redist.x64.exe>
 
+## Native viewport architecture
+
+The Windows desktop build does not fall back to the browser renderer. Bevy
+renders the real OCCT tessellation into an opaque Win32 child window using
+wgpu's DX12/Vulkan backends. React and CSS continue to own the surrounding
+menus, tabs, command dialogs, pointer interaction kernel, and accessibility
+tree.
+
+Wry hosts WebView2 in one child HWND and noBS CAD creates the Bevy viewport as
+an adjacent child HWND. The Bevy window is placed above the viewport portion of
+WebView2, then its Win32 window region is cut around every live DOM overlay.
+`WM_NCHITTEST` passes viewport pointer input through to WebView2, so orbit,
+sketch, datum, edge, and transient-preview interactions use the same DOM event
+path as macOS without requiring a transparent Tauri window or transparent
+WebView2 compositor.
+
+DOM rectangles stay in logical CSS pixels. Each native layout update reads the
+current per-monitor Win32 DPI, positions the child window in physical pixels,
+and resizes Bevy's swapchain to the same physical extent. Moving between
+different-DPI monitors invalidates the frontend layout cache even when its CSS
+geometry is unchanged.
+
 ## Reproducible dependency set
 
 The root `vcpkg.json` pins the vcpkg registry and overrides Open CASCADE

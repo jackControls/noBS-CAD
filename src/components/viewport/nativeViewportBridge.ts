@@ -434,7 +434,14 @@ export function attachNativeViewport(container: HTMLElement): () => void {
           palette: collectPalette(),
           hud: collectHud(),
         };
-        const key = JSON.stringify(payload);
+        // CSS geometry can stay identical while the native backing scale
+        // changes after moving between Retina/DPI monitors. Keep the ratio in
+        // the deduplication key so the platform host gets a fresh layout and
+        // rebuilds its physical swapchain.
+        const key = JSON.stringify({
+          ...payload,
+          devicePixelRatio: window.devicePixelRatio,
+        });
         if (key === lastLayoutKey) continue;
         const layout = {
           revision: ++layoutRevision,
