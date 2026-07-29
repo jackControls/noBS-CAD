@@ -577,7 +577,9 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         "solid_export_step"
         | "solid_export_stl"
         | "solid_export_3mf"
-        | "material_catalog" => FocusPack::Print,
+        | "material_catalog"
+        | "body_appearances"
+        | "set_body_appearance" => FocusPack::Print,
         _ => FocusPack::Document,
     };
     (pack, false)
@@ -640,7 +642,12 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     }
     if matches!(
         name,
-        "solid_export_step" | "solid_export_stl" | "solid_export_3mf" | "material_catalog"
+        "solid_export_step"
+            | "solid_export_stl"
+            | "solid_export_3mf"
+            | "material_catalog"
+            | "body_appearances"
+            | "set_body_appearance"
     ) {
         return Some(FocusPack::Print);
     }

@@ -26,18 +26,28 @@ After #24’s soft disclosure, focus `print` advertises:
 | `solid_export_3mf` | Base64 ZIP 3MF (mm, colors, optional slicer Metadata). **Prefer this.** |
 | `solid_export_stl` | Base64 binary STL (no appearance) |
 | `material_catalog` | Built-in filament presets (brand / type / color ids) |
+| `body_appearances` | Current per-body color/filament assignments |
+| `set_body_appearance` | Assign filament — prefer `body_id` + `preset_id` |
 | `solid_export_step` | Base64 AP242 STEP (CAD handoff; keep using for CAD tools) |
 
 ### Typical agent recipe
 
 1. Model (or `cad_attach` a UI session from #24’s file bridge).
 2. Optional: `cad_set_focus` → `print`.
-3. Optional: `material_catalog` then set body appearance in the document.
+3. `material_catalog` → `set_body_appearance` with `body_id` + `preset_id`.
 4. Call `solid_export_3mf` with `slicer_target` (`bambu_studio` default, or
    `orca_slicer` / `prusa_slicer` / `cura` / `standard`).
 5. Decode `bytes_base64` → write `.3mf` → open in the slicer with
    **Import / drag onto plate** (not “Open Project” if you want to keep your
    printer profile).
+
+### Redeploy local MCP
+
+```powershell
+cargo run -p xtask -- install-mcp
+```
+
+Then reload MCP / restart Cursor so `nobs-cad` picks up the new binary.
 
 Response shape:
 

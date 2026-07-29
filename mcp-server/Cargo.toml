@@ -12,6 +12,7 @@ repository = "https://github.com/jackControls/noBS-CAD"
 [dependencies]
 base64 = "0.22"
 serde_json = "1"
+nbcad-core = { path = "../crates/core" }
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }

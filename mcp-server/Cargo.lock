@@ -291,6 +291,7 @@ name = "nbcad-mcp"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "nbcad-core",
  "nbcad-export",
  "nbcad-occt",
  "nbcad-sketch",

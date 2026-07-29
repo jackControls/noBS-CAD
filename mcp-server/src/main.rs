@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use nbcad_core::BodyId;
 use nbcad_export::MeshExportRequest;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
@@ -236,6 +237,11 @@ impl CadServer {
             } else if name == "material_catalog" {
                 serde_json::from_str(&nbcad_export::catalog_json())
                     .map_err(|error| format!("catalog json: {error}"))?
+            } else if name == "body_appearances" {
+                serde_json::to_value(self.manager.body_appearances())
+                    .map_err(|error| format!("encode appearances: {error}"))?
+            } else if name == "set_body_appearance" {
+                self.set_body_appearance_tool(arguments)?
             } else {
                 parse_engine_envelope(host::handle(
                     &mut self.manager,
@@ -466,6 +472,32 @@ impl CadServer {
             "byte_length": bytes.len(),
             "bytes_base64": BASE64.encode(bytes),
         }))
+    }
+
+    fn set_body_appearance_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        let appearance = if let Some(preset_id) = arguments
+            .get("preset_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            let body_id = arguments
+                .get("body_id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "set_body_appearance with preset_id requires body_id".to_string())?;
+            let preset = nbcad_export::find_preset(preset_id).ok_or_else(|| {
+                format!("unknown material preset_id '{preset_id}' (call material_catalog)")
+            })?;
+            preset.to_appearance(BodyId(body_id))
+        } else {
+            serde_json::from_value(arguments).map_err(|error| {
+                format!("invalid body appearance (or pass body_id + preset_id): {error}")
+            })?
+        };
+        let appearances = self
+            .manager
+            .set_body_appearance(appearance)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "body_appearances": appearances }))
     }
 }
 
@@ -2158,6 +2190,51 @@ fn tool_specs() -> Vec<ToolSpec> {
             Payload::Empty,
             empty_schema(),
         ),
+        ToolSpec::direct(
+            "body_appearances",
+            "List body appearances",
+            "Return per-body color/filament assignments used by 3MF export and the viewport.",
+            "body_appearances",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "set_body_appearance",
+            "Set body appearance",
+            "Assign filament/color to a body. Prefer body_id + preset_id from material_catalog; or pass a full BodyAppearance object.",
+            "set_body_appearance",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Target body id from solid_scene."
+                    },
+                    "preset_id": {
+                        "type": "string",
+                        "description": "Catalog preset id (e.g. bambu.pla.basic.red). When set, other fields are filled from the catalog."
+                    },
+                    "color": {
+                        "type": "object",
+                        "properties": {
+                            "r": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "g": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "b": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "a": {"type": "integer", "minimum": 0, "maximum": 255}
+                        }
+                    },
+                    "material_name": {"type": "string"},
+                    "filament_type": {"type": "string"},
+                    "brand": {"type": "string"},
+                    "color_name": {"type": "string"},
+                    "filament_id": {"type": ["string", "null"]},
+                    "density_g_cm3": {"type": ["number", "null"]},
+                    "diameter_mm": {"type": "number", "exclusiveMinimum": 0}
+                }),
+                &["body_id"],
+            ),
+        ),
         ToolSpec::control(
             "cad_get_focus",
             "Get focus state",
@@ -2486,8 +2563,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 16,
-            "101 modeling tools plus 4 print/export helpers and 12 control tools"
+            MODELING_TOOL_COUNT + 18,
+            "101 modeling tools plus 6 print/appearance helpers and 12 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2499,6 +2576,8 @@ mod tests {
                             | "solid_export_stl"
                             | "solid_export_3mf"
                             | "material_catalog"
+                            | "body_appearances"
+                            | "set_body_appearance"
                             | "cad_get_focus"
                             | "cad_set_focus"
                             | "cad_list_focus_areas"
@@ -2552,6 +2631,8 @@ mod tests {
                     | "solid_export_stl"
                     | "solid_export_3mf"
                     | "material_catalog"
+                    | "body_appearances"
+                    | "set_body_appearance"
                     | "cad_get_focus"
                     | "cad_set_focus"
                     | "cad_list_focus_areas"
@@ -2802,6 +2883,33 @@ mod tests {
         assert!(bytes.len() > 32);
         // ZIP local file header
         assert_eq!(&bytes[0..2], b"PK");
+    }
+
+    #[test]
+    fn set_body_appearance_from_preset_then_exports_3mf() {
+        let (mut server, update) = mcp_box();
+        let body_id = update["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extrude returns a body id");
+        let assigned = server
+            .call_tool(
+                "set_body_appearance",
+                json!({
+                    "body_id": body_id,
+                    "preset_id": "bambu.pla.basic.red"
+                }),
+            )
+            .expect("preset appearance assign");
+        let appearances = assigned["body_appearances"].as_array().unwrap();
+        assert_eq!(appearances.len(), 1);
+        assert_eq!(appearances[0]["preset_id"], "bambu.pla.basic.red");
+        assert_eq!(appearances[0]["brand"], "Bambu Lab");
+        let listed = server.call_tool("body_appearances", json!({})).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        let exported = server
+            .call_tool("solid_export_3mf", json!({"slicer_target": "bambu_studio"}))
+            .unwrap();
+        assert_eq!(&BASE64.decode(exported["bytes_base64"].as_str().unwrap()).unwrap()[0..2], b"PK");
     }
 
     #[test]
