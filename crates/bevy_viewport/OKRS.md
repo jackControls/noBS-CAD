@@ -33,8 +33,10 @@ Cycle: exploratory spike (pre-ADR acceptance). Owner: spike PR authors. Related:
 |----|--------|--------|
 | KR4.1 Launcher presents **desktop** vs **experimental** | Met |
 | KR4.2 Three React surfaces ported via Feathers | Mode, Appearance, Selection | Met |
-| KR4.3 UI and picks share `CadSession` resource | Met |
+| KR4.3 UI and picks share session via States + messages | Met |
 | KR4.4 Appearance changes tint the 3D fixture | Met |
+| KR4.5 Simulate on Virtual + Fixed game time (cantilever mock) | Met — not FEA |
+| KR4.6 Release wasm under prior ~123 MB; document size | Met — **34.7 MB** bindgen bg.wasm |
 
 See [docs/bevy-viewport/ui-ports.md](../../docs/bevy-viewport/ui-ports.md).
 

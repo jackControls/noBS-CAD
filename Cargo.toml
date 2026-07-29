@@ -14,3 +14,11 @@ members = [
     "crates/bevy_viewport",
     "crates/bevy_launcher",
 ]
+
+# Slim wasm release for the Bevy experimental shell (launcher uses --profile wasm-release).
+[profile.wasm-release]
+inherits = "release"
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true

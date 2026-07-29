@@ -1,6 +1,6 @@
 # Bevy viewport spike (#20)
 
-**Status:** exploratory spike on Bevy **0.19.0**  
+**Status:** engine-grade shell rebuild on Bevy **0.19.0** (plugins / States / Virtual+Fixed)  
 **ADR:** [0002 Bevy as viewport / ECS subsystem](https://github.com/jackControls/noBS-CAD/pull/5) (proposed; deferred behind MCP co-link)  
 **Non-goals (honored):** no ribbon rewrite, no mesh-only CAD, no Tauri embed yet, OCCT remains B-rep truth.
 
@@ -9,45 +9,68 @@
 `nbcad-bevy-viewport` implements a small `ViewportBackend` trait and a Bevy app that:
 
 1. Accepts a host-neutral `TessellatedTriangleSoup` (fixture unit cube today).
-2. Draws it with PBR/unlit materials plus a sanity-check built-in cuboid and ground plane.
-3. Orbits with **RMB drag**, zooms with **scroll**, reports mesh **picks** on click.
-4. Shares one binary (`bevy_desktop`) for native desktop and `wasm32-unknown-unknown`.
+2. Draws it with PBR materials, a reference grid, and a Solid-mode fixture.
+3. Orbits with **RMB drag**, zooms with **scroll**, reports mesh **picks** on click (Solid).
+4. Runs a **game-time** structural mock in Simulate (`Time<Virtual>` + `FixedUpdate` @ 64 Hz).
+5. Shares one binary (`bevy_desktop`) for native desktop and `wasm32-unknown-unknown`.
 
-`nbcad-bevy-launcher` chooses the target:
+`nbcad-bevy-launcher` chooses the target (interactive menu or `--target`):
 
 ```bash
+cargo run -p nbcad-bevy-launcher
 cargo run -p nbcad-bevy-launcher -- --target desktop
-cargo run -p nbcad-bevy-launcher -- --target wasm
+cargo run -p nbcad-bevy-launcher -- --target experimental --release
 ```
 
-Wasm path: `cargo build --target wasm32-unknown-unknown` → `wasm-bindgen --target web` into [`web/`](web/) → local HTTP serve (`py -3 -m http.server`).
+Wasm path: `cargo build --target wasm32-unknown-unknown --profile wasm-release` → `wasm-bindgen --target web` → optional `wasm-opt -Os` → local HTTP serve. Writes `web/LAUNCH_URL.txt`.
 
-## Validation evidence (2026-07-28 / follow-up)
+## Architecture
+
+```text
+ShellPlugin
+  ├─ SessionPlugin     CadMode States + CadSession + messages
+  ├─ ViewportMeshPlugin soup mesh + solid layer + grid
+  ├─ CameraPlugin      orbit + mode bookmarks (scroll = zoom)
+  ├─ PickingBridgePlugin
+  ├─ ChromeUiPlugin    Feathers product chrome
+  ├─ InputMapPlugin
+  └─ SimPlugin         Virtual clock + Fixed bend + present
+```
+
+Invariant unchanged: **OCCT = B-rep truth**. Bevy is display/ECS/sim visualization only.
+
+## Validation evidence (2026-07-29 rebuild)
 
 | Path | Result |
 |------|--------|
-| Unit tests | `cargo test -p nbcad-bevy-viewport --lib` — cube + backend + empty reject + **orbit look-at** |
-| Desktop | `bevy_desktop` release binary launched and stayed alive |
-| Wasm build | `wasm32-unknown-unknown` (debug + release) succeeded |
-| Wasm in browser | Mesh/ground visible after camera orbit fix |
-| Docs structure | INDEX / OKRS / AGENTIC at crate, src, web, crates/, docs/bevy-viewport/ |
-| Plan review | [docs/bevy-viewport/plan-review.md](../../docs/bevy-viewport/plan-review.md) |
+| Unit tests | `cargo test -p nbcad-bevy-viewport --lib` — cube, backend, empty reject, orbit look-at, **fixed dt**, **pause freezes bend**, load response |
+| Desktop smoke | `bevy_desktop` launched and stayed alive (Simulate default) |
+| Wasm build | `wasm32-unknown-unknown` **wasm-release** succeeded |
+| Feature prune | `default-features = false` + `3d` + `ui` + `bevy_feathers` (no audio) |
+| Wasm size | See measured table below |
 
-### Bugs found and fixed during spike
+### Measured wasm size (release)
 
-- **Orbit camera sign error:** placing the camera with `rotation * +Z` looked away from the fixture. Fixed to `target - transform.forward() * distance` (matches Bevy’s `camera_orbit` example). Without this fix the clear color and UI could appear while the mesh sat behind the camera.
+| Artifact | Size | Notes |
+|----------|------|-------|
+| Prior default-features release `.wasm` | ~**115–123 MB** | Pre-rebuild baseline |
+| `wasm-release` `bevy_desktop.wasm` | **37.8 MB** | LTO + `codegen-units=1` + `opt-level=s` |
+| After `wasm-bindgen` `bevy_desktop_bg.wasm` | **34.7 MB** | Served to browser |
+| `wasm-opt -Os` | optional | Not on PATH on the measurement host; launcher runs it when available |
+
+Target band from the rebuild plan: ~15–40 MB. **34.7 MB** is inside that band.
 
 ### Limits / risks
 
-- **Debug wasm is huge (~380 MB).** Release builds are required for practical web use; document size in any future product path.
-- **`wasm-server-runner` install failed on this Windows host** (aws-lc needs cmake/NASM). Launcher uses `wasm-bindgen-cli` + Python HTTP instead.
-- **Shadows off on the spike** for backend portability; CAD viewport will want controlled lighting later.
+- **Still large for a “tiny” web demo** — further cuts need dropping glTF/post-process/LUTs deliberately (custom feature set beyond the `3d` profile).
+- **Sim is a mock**, not FEA / OCCT stress.
+- **Shadows off** on the spike for backend portability.
 - **Not wired into Tauri / Three.js replacement.** ADR phase 2+.
-- **Picking is mesh-entity level**, not stable OCCT face IDs. Face/edge identity must stay in the Rust kernel.
+- **Picking is mesh-entity level**, not stable OCCT face IDs.
 
 ## Kill / continue criteria (for ADR 0002)
 
-**Continue** if: Bevy can stay a pure display/ECS shell fed by OCCT tessellation, picking can map back to kernel IDs, and binary/feature flags stay manageable for desktop.
+**Continue** if: Bevy can stay a pure display/ECS shell fed by OCCT tessellation, picking can map back to kernel IDs, and binary/feature flags stay manageable for desktop (+ acceptable experimental wasm).
 
 **Kill or narrow** if: Bevy pressure pushes mesh-only modeling, forces a ribbon rewrite, or wasm/desktop parity costs more than keeping Three.js on web + a thinner native renderer.
 

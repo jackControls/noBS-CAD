@@ -1,13 +1,11 @@
 # Index — `crates/bevy_launcher`
 
-CLI chooser for the Bevy viewport spike.
+**Guide:** [`docs/bevy-viewport/README.md`](../../docs/bevy-viewport/README.md)
 
 | Path | Role |
 |------|------|
+| [AGENTIC.md](AGENTIC.md) | Short agent notes |
 | [README.md](README.md) | Usage |
-| [AGENTIC.md](AGENTIC.md) | Agent maintenance notes |
-| [OKRS.md](OKRS.md) | Points at viewport OKRs |
-| [Cargo.toml](Cargo.toml) | Package (no Bevy dep — shells out to cargo) |
-| [src/main.rs](src/main.rs) | `--target desktop\|wasm` [+ `--release`] |
+| [src/main.rs](src/main.rs) | desktop vs experimental |
 
-Sibling: [`../bevy_viewport/INDEX.md`](../bevy_viewport/INDEX.md).
+No Bevy dependency — shells out to `cargo`.

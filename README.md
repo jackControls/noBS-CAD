@@ -83,9 +83,7 @@ cargo run -p nbcad-bevy-launcher
 # [1] desktop  |  [2] experimental (wasm)
 ```
 
-See [`crates/bevy_viewport/SPIKE.md`](crates/bevy_viewport/SPIKE.md),
-[`crates/bevy_viewport/INDEX.md`](crates/bevy_viewport/INDEX.md), and
-[`docs/bevy-viewport/`](docs/bevy-viewport/INDEX.md).
+**Guide (humans + agents):** [`docs/bevy-viewport/README.md`](docs/bevy-viewport/README.md)
 
 ## 3D mouse compatibility
 

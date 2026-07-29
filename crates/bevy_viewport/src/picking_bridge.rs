@@ -1,21 +1,27 @@
-//! Mesh picking observers and status text.
+//! Mesh picks → session selection.
 
 use bevy::color::palettes::tailwind::{CYAN_300, RED_500};
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 
-use crate::cad_session::CadSession;
+use crate::session::{CadMode, SetSelection};
 
-#[derive(Resource, Clone)]
-pub struct PickStatus {
-    pub message: String,
+#[derive(Component, Clone)]
+pub struct FixtureMaterials {
+    pub base: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
-pub struct StatusText;
-
-#[derive(Component)]
 pub struct FixtureBody;
+
+pub struct PickingBridgePlugin;
+
+impl Plugin for PickingBridgePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MeshPickingPlugin)
+            .add_systems(Update, draw_pick_gizmos.run_if(in_state(CadMode::Solid)));
+    }
+}
 
 pub fn recolor<E: EntityEvent>(
     new_material: Handle<StandardMaterial>,
@@ -27,12 +33,15 @@ pub fn recolor<E: EntityEvent>(
     }
 }
 
-pub fn on_click_report(
+pub fn on_solid_click(
     click: On<Pointer<Click>>,
     names: Query<&Name, With<FixtureBody>>,
-    mut status: ResMut<PickStatus>,
-    mut session: ResMut<CadSession>,
+    mode: Res<State<CadMode>>,
+    mut selection: MessageWriter<SetSelection>,
 ) {
+    if *mode.get() != CadMode::Solid {
+        return;
+    }
     let label = names
         .get(click.entity)
         .map(|name| name.as_str())
@@ -42,13 +51,14 @@ pub fn on_click_report(
         .position
         .map(|p| format!("({:.2}, {:.2}, {:.2}) mm", p.x, p.y, p.z))
         .unwrap_or_else(|| "—".into());
-    status.message = format!("Picked {label} at {hit}");
-    session.selection = format!("{label}  ·  hit {hit}  ·  mode {}", session.mode.label());
-    session.body_name = label.to_string();
-    info!("{}", status.message);
+    selection.write(SetSelection {
+        text: format!("Picked {label} at {hit}"),
+        body_name: Some(label.to_string()),
+    });
+    info!("Picked {label} at {hit}");
 }
 
-pub fn draw_pick_gizmos(pointers: Query<&PointerInteraction>, mut gizmos: Gizmos) {
+fn draw_pick_gizmos(pointers: Query<&PointerInteraction>, mut gizmos: Gizmos) {
     for (point, normal) in pointers
         .iter()
         .filter_map(|interaction| interaction.get_nearest_hit())
@@ -56,14 +66,5 @@ pub fn draw_pick_gizmos(pointers: Query<&PointerInteraction>, mut gizmos: Gizmos
     {
         gizmos.sphere(point, 0.04, RED_500);
         gizmos.arrow(point, point + normal.normalize() * 0.35, CYAN_300);
-    }
-}
-
-pub fn sync_status_text(status: Res<PickStatus>, mut texts: Query<&mut Text, With<StatusText>>) {
-    if !status.is_changed() {
-        return;
-    }
-    for mut text in &mut texts {
-        *text = Text::new(status.message.clone());
     }
 }

@@ -1,8 +1,14 @@
-# Agentic guidance — bevy launcher
+# Agentic entry — `nbcad-bevy-launcher`
 
-- Prefer changing flags / serve logic here rather than documenting one-off cargo lines in chat.
-- Keep this crate free of Bevy so `cargo check -p nbcad-bevy-launcher` stays fast.
-- When wasm serve fails on Windows, try `py -3` before `python` (Store alias trap).
-- Do not reintroduce `wasm-server-runner` as a hard dependency until cmake/NASM are documented for contributors.
+**Start here:** [`docs/bevy-viewport/README.md`](../../docs/bevy-viewport/README.md)
 
-Viewport rules: [../bevy_viewport/AGENTIC.md](../bevy_viewport/AGENTIC.md).
+## This crate only
+
+- Menu: **desktop** vs **experimental** (`src/main.rs`)  
+- No Bevy dependency — keep `cargo check -p nbcad-bevy-launcher` fast  
+- On Windows, prefer `py -3` for the static server (not the Store `python` stub)
+
+```bash
+cargo run -p nbcad-bevy-launcher -- --target desktop
+cargo run -p nbcad-bevy-launcher -- --target experimental --release
+```

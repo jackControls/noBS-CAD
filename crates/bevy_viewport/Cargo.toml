@@ -12,9 +12,14 @@ name = "bevy_desktop"
 path = "src/bin/bevy_desktop.rs"
 
 [dependencies]
-bevy = { version = "0.19.0", default-features = true, features = ["bevy_feathers"] }
+# Lean feature set: 3d + ui + Feathers. No audio (default profile includes it).
+bevy = { version = "0.19.0", default-features = false, features = [
+    "3d",
+    "ui",
+    "bevy_feathers",
+] }
 
 [features]
 default = []
-# Documented for wasm builds; Bevy enables web APIs via target cfg.
+# Documented for wasm builds; Bevy enables web APIs via target cfg / default_platform.
 webgl2 = []

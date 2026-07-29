@@ -1,11 +1,14 @@
-//! Choose desktop or experimental (wasm) for the Bevy CAD shell spike.
+//! Interactive Bevy shell launcher — choose desktop or experimental (wasm).
 //!
-//! Usage:
-//!   cargo run -p nbcad-bevy-launcher
-//!   cargo run -p nbcad-bevy-launcher -- --target desktop
-//!   cargo run -p nbcad-bevy-launcher -- --target experimental --release
+//! ```text
+//! cargo run -p nbcad-bevy-launcher
+//! ```
+//!
+//! No args → menu. `--target …` skips the menu (CI / agents).
+//! Experimental writes `crates/bevy_viewport/web/LAUNCH_URL.txt` for agent hand-off.
 
 use std::env;
+use std::fs;
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -31,9 +34,7 @@ fn main() -> ExitCode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
-    /// Native Bevy window: 3D viz + Feathers UI + CadSession bridge.
     Desktop,
-    /// Browser wasm path (experimental parity).
     Experimental,
 }
 
@@ -45,10 +46,7 @@ struct Options {
 
 fn parse_options(args: Vec<String>) -> Result<Options, String> {
     if args.is_empty() {
-        return Ok(Options {
-            target: prompt_target(),
-            release: false,
-        });
+        return Ok(prompt_interactive());
     }
 
     let mut target = None;
@@ -78,9 +76,24 @@ fn parse_options(args: Vec<String>) -> Result<Options, String> {
     }
 
     Ok(Options {
-        target: target.unwrap_or_else(prompt_target),
+        target: target.unwrap_or_else(|| prompt_interactive().target),
         release,
     })
+}
+
+fn prompt_interactive() -> Options {
+    let target = prompt_target();
+    let release = match target {
+        Target::Desktop => prompt_yes_no(
+            "Build desktop as release? (slower compile, smoother) [y/N]: ",
+            false,
+        ),
+        Target::Experimental => prompt_yes_no(
+            "Build experimental wasm as release? (recommended) [Y/n]: ",
+            true,
+        ),
+    };
+    Options { target, release }
 }
 
 fn parse_target_value(value: &str) -> Result<Target, String> {
@@ -95,10 +108,14 @@ fn parse_target_value(value: &str) -> Result<Target, String> {
 
 fn prompt_target() -> Target {
     eprintln!();
-    eprintln!("noBS CAD — Bevy shell launcher");
-    eprintln!("  [1] desktop       native window (viz + UI + Rust CAD bridge)");
-    eprintln!("  [2] experimental  wasm in browser (parity spike)");
-    eprint!("Select [1/2] (default: 1 desktop): ");
+    eprintln!("╔══════════════════════════════════════════════════════════╗");
+    eprintln!("║  noBS CAD — Bevy shell launcher                          ║");
+    eprintln!("╠══════════════════════════════════════════════════════════╣");
+    eprintln!("║  [1] desktop         native window                       ║");
+    eprintln!("║  [2] experimental    wasm in browser                     ║");
+    eprintln!("║                      → writes LAUNCH_URL.txt for agents  ║");
+    eprintln!("╚══════════════════════════════════════════════════════════╝");
+    eprint!("Select [1/2] (default: 1): ");
     let _ = io::stderr().flush();
     let mut line = String::new();
     if io::stdin().read_line(&mut line).is_err() {
@@ -111,20 +128,32 @@ fn prompt_target() -> Target {
     parse_target_value(trimmed).unwrap_or(Target::Desktop)
 }
 
+fn prompt_yes_no(prompt: &str, default_yes: bool) -> bool {
+    eprint!("{prompt}");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line).is_err() {
+        return default_yes;
+    }
+    let t = line.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return default_yes;
+    }
+    matches!(t.as_str(), "y" | "yes" | "1")
+}
+
 fn print_usage() {
     eprintln!(
         "Usage:\n  \
-         cargo run -p nbcad-bevy-launcher\n  \
+         cargo run -p nbcad-bevy-launcher\n      ← interactive menu (use this on reload)\n  \
          cargo run -p nbcad-bevy-launcher -- --target desktop\n  \
          cargo run -p nbcad-bevy-launcher -- --target experimental --release\n\n\
-         desktop:       native Bevy — 3D + Feathers UI + CadSession bridge\n\
-         experimental:  wasm browser path (alias: wasm)\n\
-         --release:     release profile (recommended for experimental)"
+         experimental writes: crates/bevy_viewport/web/LAUNCH_URL.txt"
     );
 }
 
 fn run_desktop(release: bool) -> ExitCode {
-    eprintln!("Launching Bevy desktop shell…");
+    eprintln!("→ Launching DESKTOP shell ({})…", profile_name(release));
     let mut cmd = Command::new(env!("CARGO"));
     cmd.args(["run", "-p", "nbcad-bevy-viewport", "--bin", "bevy_desktop"]);
     if release {
@@ -141,8 +170,8 @@ fn run_desktop(release: bool) -> ExitCode {
 }
 
 fn run_experimental(release: bool) -> ExitCode {
-    let profile = if release { "release" } else { "debug" };
-    eprintln!("Building Bevy experimental wasm shell ({profile})…");
+    let profile = wasm_profile_name(release);
+    eprintln!("→ Building EXPERIMENTAL wasm shell ({profile})…");
     let mut build = Command::new(env!("CARGO"));
     build.args([
         "build",
@@ -154,7 +183,8 @@ fn run_experimental(release: bool) -> ExitCode {
         "wasm32-unknown-unknown",
     ]);
     if release {
-        build.arg("--release");
+        // Slim wasm profile: LTO + single codegen unit (see workspace Cargo.toml).
+        build.args(["--profile", "wasm-release"]);
     }
     match build.status() {
         Ok(status) if status.success() => {}
@@ -175,7 +205,7 @@ fn run_experimental(release: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    eprintln!("Running wasm-bindgen --target web…");
+    eprintln!("→ wasm-bindgen --target web…");
     let bindgen = Command::new("wasm-bindgen")
         .args([
             "--out-dir",
@@ -202,10 +232,32 @@ fn run_experimental(release: bool) -> ExitCode {
         }
     }
 
+    maybe_wasm_opt(&web_dir);
+
     let port = free_port().unwrap_or(4173);
     let url = format!("http://127.0.0.1:{port}/");
-    eprintln!("Serving experimental shell at {url}");
-    eprintln!("Ctrl+C to stop.");
+
+    let url_file = web_dir.join("LAUNCH_URL.txt");
+    let _ = fs::write(
+        &url_file,
+        format!(
+            "{url}\n\n\
+             Paste this URL to the agent for browser testing.\n\
+             Served from: {}\n\
+             Profile: {profile}\n",
+            web_dir.display()
+        ),
+    );
+
+    eprintln!();
+    eprintln!("╔══════════════════════════════════════════════════════════╗");
+    eprintln!("║  EXPERIMENTAL WASM READY                                 ║");
+    eprintln!("║  URL:  {url}");
+    eprintln!("║  Hand-off file: crates/bevy_viewport/web/LAUNCH_URL.txt  ║");
+    eprintln!("║  Paste that URL to the agent to test in-browser.         ║");
+    eprintln!("╚══════════════════════════════════════════════════════════╝");
+    eprintln!("Ctrl+C stops the server.");
+    eprintln!();
 
     let mut child = match spawn_http_server(port, &web_dir) {
         Ok(child) => child,
@@ -215,7 +267,7 @@ fn run_experimental(release: bool) -> ExitCode {
         }
     };
 
-    thread::sleep(Duration::from_millis(400));
+    thread::sleep(Duration::from_millis(500));
     let _ = open_browser(&url);
     match child.wait() {
         Ok(status) if status.success() => ExitCode::SUCCESS,
@@ -223,6 +275,72 @@ fn run_experimental(release: bool) -> ExitCode {
         Err(error) => {
             eprintln!("HTTP server error: {error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn profile_name(release: bool) -> &'static str {
+    if release {
+        "release"
+    } else {
+        "debug"
+    }
+}
+
+fn wasm_profile_name(release: bool) -> &'static str {
+    if release {
+        "wasm-release"
+    } else {
+        "debug"
+    }
+}
+
+/// Run `wasm-opt -Os` when binaryen is on PATH (best-effort).
+fn maybe_wasm_opt(web_dir: &Path) {
+    let candidates = [
+        web_dir.join("bevy_desktop_bg.wasm"),
+        web_dir.join("bevy_desktop.wasm"),
+    ];
+    let Some(wasm) = candidates.into_iter().find(|p| p.is_file()) else {
+        eprintln!("→ wasm-opt skipped (no bindgen .wasm found)");
+        return;
+    };
+    let before = fs::metadata(&wasm).map(|m| m.len()).unwrap_or(0);
+    eprintln!(
+        "→ wasm-opt -Os ({:.1} MB)…",
+        before as f64 / (1024.0 * 1024.0)
+    );
+    let tmp = wasm.with_extension("opt.wasm");
+    let status = Command::new("wasm-opt")
+        .args([
+            "-Os",
+            "--enable-bulk-memory",
+            "--enable-nontrapping-float-to-int",
+            wasm.to_str().unwrap(),
+            "-o",
+            tmp.to_str().unwrap(),
+        ])
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            if let Err(error) = fs::rename(&tmp, &wasm) {
+                eprintln!("wasm-opt produced output but replace failed: {error}");
+                let _ = fs::remove_file(&tmp);
+                return;
+            }
+            let after = fs::metadata(&wasm).map(|m| m.len()).unwrap_or(0);
+            eprintln!(
+                "   wasm-opt done: {:.1} MB → {:.1} MB",
+                before as f64 / (1024.0 * 1024.0),
+                after as f64 / (1024.0 * 1024.0)
+            );
+        }
+        Ok(_) => {
+            eprintln!("   wasm-opt failed; keeping bindgen output");
+            let _ = fs::remove_file(&tmp);
+        }
+        Err(_) => {
+            eprintln!("   wasm-opt not on PATH (optional: install Binaryen)");
         }
     }
 }

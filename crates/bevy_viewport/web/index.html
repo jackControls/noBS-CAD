@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>noBS CAD — Bevy wasm spike (#20)</title>
+    <title>noBS CAD — Bevy experimental (wasm)</title>
     <style>
       html,
       body {
         margin: 0;
         height: 100%;
-        background: #1e2124;
+        background: #02050a;
         color: #e8eaed;
         font-family: "Segoe UI", system-ui, sans-serif;
       }
@@ -20,23 +20,24 @@
       }
       #status {
         position: absolute;
-        top: 8px;
-        left: 12px;
-        font-size: 12px;
-        opacity: 0.85;
+        top: 10px;
+        left: 14px;
+        font-size: 13px;
+        opacity: 0.9;
         pointer-events: none;
+        text-shadow: 0 1px 4px #000;
       }
     </style>
   </head>
   <body>
-    <div id="status">Loading Bevy wasm spike…</div>
+    <div id="status">Loading Bevy experimental wasm…</div>
     <script type="module">
       import init from "./bevy_desktop.js";
       const status = document.getElementById("status");
       try {
         await init();
         status.textContent =
-          "Bevy wasm spike running. Click cube to pick. RMB orbits. Scroll zooms.";
+          "Experimental wasm live · 1/2/3 modes · scroll=load in Simulate · Space=pause";
       } catch (error) {
         status.textContent = "Failed to start: " + error;
         console.error(error);

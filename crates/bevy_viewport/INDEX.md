@@ -1,15 +1,16 @@
 # Index — `crates/bevy_viewport`
 
-Bevy **0.19** display/ECS viewport spike for issue [#20](https://github.com/jackControls/noBS-CAD/issues/20).
+Bevy **0.19** shell spike ([#20](https://github.com/jackControls/noBS-CAD/issues/20)).
+
+**Humans + agents start here:** [`docs/bevy-viewport/README.md`](../../docs/bevy-viewport/README.md)
 
 | Path | Role |
 |------|------|
-| [README.md](README.md) | How to run desktop / wasm |
-| [SPIKE.md](SPIKE.md) | Findings, validation, kill criteria |
-| [OKRS.md](OKRS.md) | Objectives and key results for this spike |
-| [AGENTIC.md](AGENTIC.md) | How agents maintain this crate (committed; root `AGENTS.md` is gitignored) |
-| [Cargo.toml](Cargo.toml) | Package + Bevy 0.19 pin |
-| [src/](src/INDEX.md) | Rust modules |
-| [web/](web/INDEX.md) | Wasm host page + bindgen outputs (generated files gitignored) |
+| [AGENTIC.md](AGENTIC.md) | Crate edit map (short) |
+| [README.md](README.md) | Local run notes |
+| [SPIKE.md](SPIKE.md) | Findings / kill criteria |
+| [OKRS.md](OKRS.md) | Objectives |
+| [src/](src/INDEX.md) | Modules |
+| [web/](web/INDEX.md) | Wasm host (generated assets gitignored) |
 
 **Invariant:** OCCT = solid truth. Bevy never authors B-rep.

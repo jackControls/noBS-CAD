@@ -1,20 +1,23 @@
-//! Bevy viewport spike (issue #20 / ADR 0002).
+//! Bevy viewport shell (issue #20 / ADR 0002).
 //!
 //! **Display / ECS only.** OCCT remains solid truth. This crate draws a
-//! tessellated triangle soup, orbits a camera, and reports mesh picks.
-//! It does not model B-rep, features, or ribbon UI.
+//! tessellated triangle soup, orbits a camera, and runs a Virtual/Fixed
+//! structural mock. It does not model B-rep or replace the Tauri viewport.
 //!
-//! Module map: see [`INDEX.md`](../INDEX.md) in this crate.
+//! Module map: see [`INDEX.md`](INDEX.md) in this crate.
 
 mod app;
 mod backend;
-mod cad_session;
-mod camera;
+mod camera_ctrl;
+mod chrome_ui;
+mod input_map;
 mod mesh_convert;
-mod picking;
-mod scene;
+mod picking_bridge;
+mod session;
+mod shell;
+mod sim;
 mod soup;
-mod ui;
+mod viewport_mesh;
 
 pub use backend::{BevyViewportBackend, ViewportBackend, ViewportError};
 pub use soup::TessellatedTriangleSoup;

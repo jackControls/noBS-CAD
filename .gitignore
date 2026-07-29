@@ -44,3 +44,5 @@ scripts/probe-*.mjs
 crates/bevy_viewport/web/bevy_desktop.js
 crates/bevy_viewport/web/bevy_desktop_bg.wasm
 crates/bevy_viewport/web/*.d.ts
+
+crates/bevy_viewport/web/LAUNCH_URL.txt
