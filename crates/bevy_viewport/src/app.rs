@@ -6,10 +6,12 @@ use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 
 use crate::backend::ViewportError;
+use crate::cad_session::CadSession;
 use crate::camera::{orbit_camera, OrbitSettings};
 use crate::picking::{draw_pick_gizmos, sync_status_text, PickStatus};
-use crate::scene::{setup_scene, SpikeMesh};
+use crate::scene::{apply_session_appearance, setup_scene, SpikeMesh};
 use crate::soup::TessellatedTriangleSoup;
+use crate::ui::CadUiPlugin;
 
 pub fn run_bevy_app(mesh: TessellatedTriangleSoup) -> Result<(), ViewportError> {
     if mesh.positions.len() % 3 != 0 {
@@ -31,7 +33,6 @@ pub fn run_bevy_app(mesh: TessellatedTriangleSoup) -> Result<(), ViewportError> 
     #[cfg(target_arch = "wasm32")]
     let render_plugin = RenderPlugin {
         render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-            // Prefer WebGL2 in browsers where WebGPU is flaky.
             backends: Some(Backends::BROWSER_WEBGPU | Backends::GL),
             ..default()
         })),
@@ -44,18 +45,20 @@ pub fn run_bevy_app(mesh: TessellatedTriangleSoup) -> Result<(), ViewportError> 
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "noBS CAD — Bevy viewport spike (#20)".into(),
-                    resolution: (1280, 800).into(),
+                    title: "noBS CAD — Bevy shell (viz + UI + bridge)".into(),
+                    resolution: (1440, 900).into(),
                     ..default()
                 }),
                 ..default()
             })
             .set(render_plugin),
         MeshPickingPlugin,
+        CadUiPlugin,
     ))
-    .insert_resource(ClearColor(Color::srgb(0.12, 0.13, 0.15)))
+    .insert_resource(ClearColor(Color::srgb(0.10, 0.11, 0.13)))
     .insert_resource(SpikeMesh(mesh))
     .insert_resource(OrbitSettings::default())
+    .insert_resource(CadSession::default())
     .insert_resource(PickStatus {
         message: "Click the cube to pick. RMB drag orbits. Scroll zooms. Esc quits (desktop)."
             .into(),
@@ -67,6 +70,7 @@ pub fn run_bevy_app(mesh: TessellatedTriangleSoup) -> Result<(), ViewportError> 
             orbit_camera,
             draw_pick_gizmos,
             sync_status_text,
+            apply_session_appearance.run_if(resource_changed::<CadSession>),
             #[cfg(not(target_arch = "wasm32"))]
             quit_on_escape,
         ),

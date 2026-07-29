@@ -79,8 +79,8 @@ An isolated Bevy **0.19** display/ECS spike lives in
 replace the Three.js viewport or OCCT. Launch desktop or wasm with:
 
 ```bash
-cargo run -p nbcad-bevy-launcher -- --target desktop
-cargo run -p nbcad-bevy-launcher -- --target wasm
+cargo run -p nbcad-bevy-launcher
+# [1] desktop  |  [2] experimental (wasm)
 ```
 
 See [`crates/bevy_viewport/SPIKE.md`](crates/bevy_viewport/SPIKE.md),

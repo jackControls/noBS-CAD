@@ -4,6 +4,8 @@ use bevy::color::palettes::tailwind::{CYAN_300, RED_500};
 use bevy::picking::pointer::PointerInteraction;
 use bevy::prelude::*;
 
+use crate::cad_session::CadSession;
+
 #[derive(Resource, Clone)]
 pub struct PickStatus {
     pub message: String,
@@ -29,6 +31,7 @@ pub fn on_click_report(
     click: On<Pointer<Click>>,
     names: Query<&Name, With<FixtureBody>>,
     mut status: ResMut<PickStatus>,
+    mut session: ResMut<CadSession>,
 ) {
     let label = names
         .get(click.entity)
@@ -37,9 +40,11 @@ pub fn on_click_report(
     let hit = click
         .hit
         .position
-        .map(|p| format!(" at ({:.2}, {:.2}, {:.2})", p.x, p.y, p.z))
-        .unwrap_or_default();
-    status.message = format!("Picked {label}{hit}");
+        .map(|p| format!("({:.2}, {:.2}, {:.2}) mm", p.x, p.y, p.z))
+        .unwrap_or_else(|| "—".into());
+    status.message = format!("Picked {label} at {hit}");
+    session.selection = format!("{label}  ·  hit {hit}  ·  mode {}", session.mode.label());
+    session.body_name = label.to_string();
     info!("{}", status.message);
 }
 

@@ -1,8 +1,10 @@
-//! Startup scene: fixture soup + sanity cuboid + lights + camera + HUD.
+//! Startup scene: fixture soup + lights + camera.
+//! HUD chrome lives in `ui` (Feathers); legacy StatusText kept for pick debug.
 
 use bevy::color::palettes::tailwind::{CYAN_300, GRAY_300, YELLOW_300};
 use bevy::prelude::*;
 
+use crate::cad_session::CadSession;
 use crate::camera::{apply_orbit, OrbitCamera, OrbitSettings};
 use crate::mesh_convert::triangle_soup_to_mesh;
 use crate::picking::{on_click_report, recolor, FixtureBody, StatusText};
@@ -17,13 +19,13 @@ pub fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     spike: Res<SpikeMesh>,
     orbit: Res<OrbitSettings>,
+    session: Res<CadSession>,
 ) {
     let mesh_handle = meshes.add(triangle_soup_to_mesh(&spike.0));
     let base = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.85, 0.35, 0.2),
+        base_color: session.color,
         metallic: 0.05,
         perceptual_roughness: 0.55,
-        // Unlit keeps the fixture visible even if lights fail on a given backend.
         unlit: true,
         ..default()
     });
@@ -52,7 +54,6 @@ pub fn setup_scene(
         .observe(recolor::<Pointer<Release>>(hover.clone()))
         .observe(on_click_report);
 
-    // Built-in mesh as a second visual sanity check (offset so both are visible).
     commands.spawn((
         Name::new("BuiltinCuboid"),
         Mesh3d(meshes.add(Cuboid::new(0.6, 0.6, 0.6))),
@@ -104,16 +105,28 @@ pub fn setup_scene(
     apply_orbit(&mut camera_transform, &orbit);
     commands.spawn((Camera3d::default(), camera_transform, OrbitCamera));
 
+    // Lightweight fallback HUD (Feathers selection panel is primary).
     commands.spawn((
-        Text::new(
-            "Click the cube to pick. RMB drag orbits. Scroll zooms. Esc quits (desktop).",
-        ),
+        Text::new("RMB orbit · scroll zoom · Esc quit"),
         Node {
             position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
+            bottom: px(12),
+            right: px(12),
             ..default()
         },
         StatusText,
     ));
+}
+
+/// Push CadSession appearance onto the pickable fixture material.
+pub fn apply_session_appearance(
+    session: Res<CadSession>,
+    bodies: Query<&MeshMaterial3d<StandardMaterial>, With<FixtureBody>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for handle in &bodies {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.base_color = session.color;
+        }
+    }
 }

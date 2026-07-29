@@ -1,12 +1,14 @@
 # nbcad-bevy-launcher
 
 ```bash
+cargo run -p nbcad-bevy-launcher
 cargo run -p nbcad-bevy-launcher -- --target desktop
-cargo run -p nbcad-bevy-launcher -- --target wasm
-cargo run -p nbcad-bevy-launcher -- --target wasm --release
+cargo run -p nbcad-bevy-launcher -- --target experimental --release
 ```
 
-- **desktop** — `cargo run -p nbcad-bevy-viewport --bin bevy_desktop`
-- **wasm** — build `wasm32-unknown-unknown`, `wasm-bindgen` into `crates/bevy_viewport/web`, serve with Python (`py -3` preferred on Windows)
+Interactive menu:
 
-See sibling [bevy_viewport/SPIKE.md](../bevy_viewport/SPIKE.md).
+1. **desktop** — native Bevy (3D + Feathers UI + `CadSession` bridge)
+2. **experimental** — wasm in browser (alias: `wasm`)
+
+See [docs/bevy-viewport/ui-ports.md](../../docs/bevy-viewport/ui-ports.md).

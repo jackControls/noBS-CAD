@@ -8,11 +8,13 @@
 
 mod app;
 mod backend;
+mod cad_session;
 mod camera;
 mod mesh_convert;
 mod picking;
 mod scene;
 mod soup;
+mod ui;
 
 pub use backend::{BevyViewportBackend, ViewportBackend, ViewportError};
 pub use soup::TessellatedTriangleSoup;

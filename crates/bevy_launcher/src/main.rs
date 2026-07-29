@@ -1,8 +1,9 @@
-//! Choose desktop or wasm for the Bevy viewport spike.
+//! Choose desktop or experimental (wasm) for the Bevy CAD shell spike.
 //!
 //! Usage:
+//!   cargo run -p nbcad-bevy-launcher
 //!   cargo run -p nbcad-bevy-launcher -- --target desktop
-//!   cargo run -p nbcad-bevy-launcher -- --target wasm --release
+//!   cargo run -p nbcad-bevy-launcher -- --target experimental --release
 
 use std::env;
 use std::io::{self, Write};
@@ -24,14 +25,16 @@ fn main() -> ExitCode {
 
     match options.target {
         Target::Desktop => run_desktop(options.release),
-        Target::Wasm => run_wasm(options.release),
+        Target::Experimental => run_experimental(options.release),
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
+    /// Native Bevy window: 3D viz + Feathers UI + CadSession bridge.
     Desktop,
-    Wasm,
+    /// Browser wasm path (experimental parity).
+    Experimental,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +70,9 @@ fn parse_options(args: Vec<String>) -> Result<Options, String> {
             other if other.starts_with("--target=") => {
                 target = Some(parse_target_value(&other["--target=".len()..])?);
             }
-            "desktop" | "wasm" => target = Some(parse_target_value(&arg)?),
+            "desktop" | "experimental" | "wasm" | "native" | "web" => {
+                target = Some(parse_target_value(&arg)?);
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -80,17 +85,21 @@ fn parse_options(args: Vec<String>) -> Result<Options, String> {
 
 fn parse_target_value(value: &str) -> Result<Target, String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "desktop" | "native" | "d" => Ok(Target::Desktop),
-        "wasm" | "web" | "w" => Ok(Target::Wasm),
+        "desktop" | "native" | "d" | "1" => Ok(Target::Desktop),
+        "experimental" | "experiment" | "wasm" | "web" | "e" | "2" => Ok(Target::Experimental),
         other => Err(format!(
-            "unknown target '{other}' (expected desktop or wasm)"
+            "unknown target '{other}' (expected desktop or experimental)"
         )),
     }
 }
 
 fn prompt_target() -> Target {
-    print!("Bevy spike target [desktop/wasm] (default: desktop): ");
-    let _ = io::stdout().flush();
+    eprintln!();
+    eprintln!("noBS CAD — Bevy shell launcher");
+    eprintln!("  [1] desktop       native window (viz + UI + Rust CAD bridge)");
+    eprintln!("  [2] experimental  wasm in browser (parity spike)");
+    eprint!("Select [1/2] (default: 1 desktop): ");
+    let _ = io::stderr().flush();
     let mut line = String::new();
     if io::stdin().read_line(&mut line).is_err() {
         return Target::Desktop;
@@ -105,17 +114,17 @@ fn prompt_target() -> Target {
 fn print_usage() {
     eprintln!(
         "Usage:\n  \
+         cargo run -p nbcad-bevy-launcher\n  \
          cargo run -p nbcad-bevy-launcher -- --target desktop\n  \
-         cargo run -p nbcad-bevy-launcher -- --target wasm\n  \
-         cargo run -p nbcad-bevy-launcher -- --target wasm --release\n\n\
-         desktop: native Bevy window (mesh + orbit + pick)\n\
-         wasm:    build wasm32, wasm-bindgen into crates/bevy_viewport/web, serve locally\n\
-         --release: use release profile (strongly recommended for wasm size)"
+         cargo run -p nbcad-bevy-launcher -- --target experimental --release\n\n\
+         desktop:       native Bevy — 3D + Feathers UI + CadSession bridge\n\
+         experimental:  wasm browser path (alias: wasm)\n\
+         --release:     release profile (recommended for experimental)"
     );
 }
 
 fn run_desktop(release: bool) -> ExitCode {
-    eprintln!("Launching Bevy desktop spike…");
+    eprintln!("Launching Bevy desktop shell…");
     let mut cmd = Command::new(env!("CARGO"));
     cmd.args(["run", "-p", "nbcad-bevy-viewport", "--bin", "bevy_desktop"]);
     if release {
@@ -125,15 +134,15 @@ fn run_desktop(release: bool) -> ExitCode {
         Ok(status) if status.success() => ExitCode::SUCCESS,
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
-            eprintln!("failed to launch desktop spike: {error}");
+            eprintln!("failed to launch desktop shell: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn run_wasm(release: bool) -> ExitCode {
+fn run_experimental(release: bool) -> ExitCode {
     let profile = if release { "release" } else { "debug" };
-    eprintln!("Building Bevy wasm spike ({profile}, wasm32-unknown-unknown)…");
+    eprintln!("Building Bevy experimental wasm shell ({profile})…");
     let mut build = Command::new(env!("CARGO"));
     build.args([
         "build",
@@ -163,10 +172,6 @@ fn run_wasm(release: bool) -> ExitCode {
     let web_dir = manifest_dir.join("crates/bevy_viewport/web");
     if !wasm_path.is_file() {
         eprintln!("missing wasm artifact at {}", wasm_path.display());
-        return ExitCode::FAILURE;
-    }
-    if !web_dir.join("index.html").is_file() {
-        eprintln!("missing {}", web_dir.join("index.html").display());
         return ExitCode::FAILURE;
     }
 
@@ -199,17 +204,13 @@ fn run_wasm(release: bool) -> ExitCode {
 
     let port = free_port().unwrap_or(4173);
     let url = format!("http://127.0.0.1:{port}/");
-    eprintln!("Serving {} at {url}", web_dir.display());
-    eprintln!("Open that URL in a WebGL2 browser. Ctrl+C to stop.");
+    eprintln!("Serving experimental shell at {url}");
+    eprintln!("Ctrl+C to stop.");
 
     let mut child = match spawn_http_server(port, &web_dir) {
         Ok(child) => child,
         Err(error) => {
             eprintln!("could not start local HTTP server: {error}");
-            eprintln!(
-                "Serve {} yourself and open index.html via http://",
-                web_dir.display()
-            );
             return ExitCode::FAILURE;
         }
     };
