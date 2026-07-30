@@ -447,9 +447,63 @@ try {
     'the XZ hit target must end at the same 100 mm boundary Bevy draws',
   );
 
+  await page.mouse.move(planeTargets.xz.x, planeTargets.xz.y);
+  await page.mouse.click(planeTargets.xz.x, planeTargets.xz.y);
+  await page.waitForFunction(
+    () => window.__appStore.getState().mode === 'sketch',
+  );
+  await page.locator('button[title="Line"]').click();
+  const sketchPaletteMask = await page.evaluate(async () => {
+    const bridge = await import(
+      '/src/components/viewport/nativeViewportBridge.ts'
+    );
+    const palette = document
+      .querySelector('[data-sketch-palette]')
+      .getBoundingClientRect();
+    const overlays = bridge.collectNativeViewportOverlayRects();
+    const covered = (x, y) =>
+      overlays.some(
+        (rect) =>
+          x > rect.x &&
+          x < rect.x + rect.width &&
+          y > rect.y &&
+          y < rect.y + rect.height,
+      );
+    const inset = 2;
+    return {
+      activeTool: window.__appStore.getState().activeTool,
+      topLeft: covered(palette.left + inset, palette.top + inset),
+      topRight: covered(palette.right - inset, palette.top + inset),
+      center: covered(
+        palette.left + palette.width / 2,
+        palette.top + palette.height / 2,
+      ),
+      bottomLeft: covered(
+        palette.left + inset,
+        palette.bottom - inset,
+      ),
+      bottomRight: covered(
+        palette.right - inset,
+        palette.bottom - inset,
+      ),
+    };
+  });
+  assert.deepEqual(
+    sketchPaletteMask,
+    {
+      activeTool: 'line',
+      topLeft: true,
+      topRight: true,
+      center: true,
+      bottomLeft: true,
+      bottomRight: true,
+    },
+    'the entire Sketch Palette must remain above the native viewport while Line is active',
+  );
+
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
-    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
+    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, complete Line-tool palette, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
   );
 } finally {
   await browser.close();
