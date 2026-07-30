@@ -100,6 +100,7 @@ export function AppMenuControls() {
             <div
               role="menu"
               data-testid="file-menu"
+              data-native-viewport-overlay
               className="absolute left-0 top-[86px] z-50 w-64 rounded border border-edge bg-panel py-1 shadow-xl shadow-black/50"
             >
               <FileMenuItem

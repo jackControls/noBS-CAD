@@ -2084,6 +2084,9 @@ fn draw_cad_gizmos(
     }
 
     for sketch in &model.finished_sketches {
+        if state.hidden_sketch_names.contains(&sketch.name) {
+            continue;
+        }
         draw_sketch(&mut gizmos, sketch, |_| {
             Some(rgba(palette.0.finished_sketch, 0.58))
         });

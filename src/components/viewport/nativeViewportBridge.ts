@@ -99,6 +99,7 @@ interface NativePresentation {
   hoveredSketchEntityId: number | null;
   hiddenBodyIds: number[];
   hiddenDatumPlaneIds: number[];
+  hiddenSketchNames: string[];
 }
 
 export interface NativeViewportLineLayer {
@@ -364,7 +365,25 @@ function hiddenReferences(
   return ids;
 }
 
-function collectPresentation(): NativePresentation {
+function hiddenNames(
+  nodes: BrowserNode[],
+  hidden: Record<number, boolean>,
+  kind: BrowserNode['kind'],
+): string[] {
+  const names: string[] = [];
+  const visit = (entries: BrowserNode[]) => {
+    for (const node of entries) {
+      if (node.kind === kind && node.name !== null && hidden[node.id]) {
+        names.push(node.name);
+      }
+      visit(node.children);
+    }
+  };
+  visit(nodes);
+  return names;
+}
+
+export function collectNativeViewportPresentation(): NativePresentation {
   const state = useAppStore.getState();
   const bodyHoverKinds = new Set([
     'combine',
@@ -408,6 +427,7 @@ function collectPresentation(): NativePresentation {
       state.hidden,
       'construction_plane',
     ),
+    hiddenSketchNames: hiddenNames(browser, state.hidden, 'sketch'),
   };
 }
 
@@ -428,7 +448,7 @@ function pumpPresentation(): void {
 
 function syncPresentation(): void {
   if (!active) return;
-  const presentation = collectPresentation();
+  const presentation = collectNativeViewportPresentation();
   const key = JSON.stringify(presentation);
   if (key === lastPresentationKey) return;
   lastPresentationKey = key;

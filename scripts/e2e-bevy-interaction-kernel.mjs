@@ -349,6 +349,50 @@ try {
     () => window.__appStore?.getState().document !== null,
   );
 
+  await page.getByTestId('file-menu-button').click();
+  await page.getByTestId('file-menu').waitFor({ state: 'visible' });
+  const fileMenuMask = await page.evaluate(async () => {
+    const bridge = await import(
+      '/src/components/viewport/nativeViewportBridge.ts'
+    );
+    const menu = document
+      .querySelector('[data-testid="file-menu"]')
+      .getBoundingClientRect();
+    const overlays = bridge.collectNativeViewportOverlayRects();
+    const covered = (x, y) =>
+      overlays.some(
+        (rect) =>
+          x > rect.x &&
+          x < rect.x + rect.width &&
+          y > rect.y &&
+          y < rect.y + rect.height,
+      );
+    const inset = 2;
+    return {
+      topLeft: covered(menu.left + inset, menu.top + inset),
+      topRight: covered(menu.right - inset, menu.top + inset),
+      center: covered(
+        menu.left + menu.width / 2,
+        menu.top + menu.height / 2,
+      ),
+      bottomRight: covered(
+        menu.right - inset,
+        menu.bottom - inset,
+      ),
+    };
+  });
+  assert.deepEqual(
+    fileMenuMask,
+    {
+      topLeft: true,
+      topRight: true,
+      center: true,
+      bottomRight: true,
+    },
+    'the complete windowed File menu must remain above the native viewport',
+  );
+  await page.getByTestId('file-menu-button').click();
+
   await page.getByRole('button', { name: 'BUILD' }).click();
   await page.locator('[data-ribbon-menu]').waitFor({ state: 'visible' });
   const menuMask = await page.evaluate(async () => {
@@ -500,10 +544,49 @@ try {
     },
     'the entire Sketch Palette must remain above the native viewport while Line is active',
   );
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Finish Sketch', exact: true }).click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().mode === 'solid',
+  );
+  const finishedSketch = await page.evaluate(() => {
+    const visit = (nodes) => {
+      for (const node of nodes) {
+        if (node.kind === 'sketch') return node;
+        const child = visit(node.children);
+        if (child) return child;
+      }
+      return null;
+    };
+    return visit(window.__appStore.getState().document.browser);
+  });
+  assert.ok(finishedSketch, 'finishing the sketch must add it to the browser');
+  const sketchRow = page.locator(
+    `[data-browser-node-id="${finishedSketch.id}"]`,
+  );
+  await sketchRow.hover();
+  await sketchRow
+    .locator('button[title="Toggle visibility"]')
+    .click();
+  await page.waitForFunction(
+    (id) => window.__appStore.getState().hidden[id] === true,
+    finishedSketch.id,
+  );
+  const hiddenSketchPresentation = await page.evaluate(async () => {
+    const bridge = await import(
+      '/src/components/viewport/nativeViewportBridge.ts'
+    );
+    return bridge.collectNativeViewportPresentation().hiddenSketchNames;
+  });
+  assert.deepEqual(
+    hiddenSketchPresentation,
+    [finishedSketch.name],
+    'the browser eye toggle must hide the same finished sketch in Bevy',
+  );
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
-    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, complete Line-tool palette, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
+    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, complete windowed menus, complete Line-tool palette, Bevy sketch visibility, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
   );
 } finally {
   await browser.close();

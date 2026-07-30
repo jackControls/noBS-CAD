@@ -139,6 +139,8 @@ pub struct ViewportPresentation {
     pub hidden_body_ids: Vec<u64>,
     #[serde(default)]
     pub hidden_datum_plane_ids: Vec<u64>,
+    #[serde(default)]
+    pub hidden_sketch_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]

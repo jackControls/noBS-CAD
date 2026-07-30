@@ -1,6 +1,7 @@
-//! Cross-platform raw-HID adapter for common 3Dconnexion six-degree-of-
-//! freedom mice. It deliberately contains no vendor SDK code: browser and
-//! desktop transports emit one small, shared motion event consumed by the
+//! Cross-platform 3Dconnexion adapter. macOS prefers the installed 3DxWare
+//! client framework so the official driver remains the sole owner of the
+//! physical device; raw HID stays available as the Windows/macOS fallback.
+//! Both transports emit one small, shared motion event consumed by the
 //! viewport camera.
 
 use std::sync::{
@@ -24,7 +25,7 @@ pub struct SixDofMouseInfo {
     pub serial_number: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct MotionPacket {
     #[serde(skip_serializing_if = "Option::is_none")]
     translation: Option<[i16; 3]>,
@@ -37,27 +38,41 @@ struct ButtonPacket {
     button: u32,
 }
 
-struct Worker {
+struct RawHidWorker {
     stop: Arc<AtomicBool>,
     thread: std::thread::JoinHandle<()>,
+}
+
+enum SixDofConnection {
+    RawHid(RawHidWorker),
+    #[cfg(target_os = "macos")]
+    InstalledDriver(mac_driver::Connection),
 }
 
 #[derive(Default)]
 pub struct SixDofMouseState {
     operation: Mutex<()>,
-    worker: Mutex<Option<Worker>>,
+    connection: Mutex<Option<SixDofConnection>>,
 }
 
 impl SixDofMouseState {
     fn stop(&self) {
-        if let Some(worker) = self
-            .worker
+        if let Some(connection) = self
+            .connection
             .lock()
             .expect("six-dof mouse worker mutex poisoned")
             .take()
         {
-            worker.stop.store(true, Ordering::Relaxed);
-            let _ = worker.thread.join();
+            match connection {
+                SixDofConnection::RawHid(worker) => {
+                    worker.stop.store(true, Ordering::Relaxed);
+                    let _ = worker.thread.join();
+                }
+                #[cfg(target_os = "macos")]
+                SixDofConnection::InstalledDriver(connection) => {
+                    connection.disconnect();
+                }
+            }
         }
     }
 }
@@ -121,11 +136,35 @@ pub async fn six_dof_mouse_connect(
         .lock()
         .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
     state.stop();
+    #[cfg(target_os = "macos")]
+    let installed_driver_error = match mac_driver::Connection::connect(app.clone()) {
+        Ok((connection, info)) => {
+            *state
+                .connection
+                .lock()
+                .map_err(|_| "six-dof mouse connection mutex poisoned".to_string())? =
+                Some(SixDofConnection::InstalledDriver(connection));
+            return Ok(info);
+        }
+        Err(error) => Some(error),
+    };
     let api = hidapi::HidApi::new().map_err(|error| error.to_string())?;
     let info = api
         .device_list()
         .find(|candidate| supported_device(candidate))
-        .ok_or_else(|| "No supported 3D mouse was found.".to_string())?;
+        .ok_or_else(|| {
+            #[cfg(target_os = "macos")]
+            {
+                return format!(
+                    "The installed 3Dconnexion driver could not be used ({}) and no raw multi-axis device was found.",
+                    installed_driver_error.as_deref().unwrap_or("unknown error"),
+                );
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "No supported 3D mouse was found.".to_string()
+            }
+        })?;
     let result = SixDofMouseInfo {
         vendor_id: info.vendor_id(),
         product_id: info.product_id(),
@@ -194,10 +233,10 @@ pub async fn six_dof_mouse_connect(
         })
         .map_err(|error| error.to_string())?;
     *state
-        .worker
+        .connection
         .lock()
         .map_err(|_| "six-dof mouse worker mutex poisoned".to_string())? =
-        Some(Worker { stop, thread });
+        Some(SixDofConnection::RawHid(RawHidWorker { stop, thread }));
     Ok(result)
 }
 
@@ -209,6 +248,296 @@ pub async fn six_dof_mouse_disconnect(state: State<'_, SixDofMouseState>) -> Res
         .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
     state.stop();
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+mod mac_driver {
+    use std::ffi::{c_char, c_int, c_void, CStr, CString};
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    const FRAMEWORK_PATH: &str =
+        "/Library/Frameworks/3DconnexionClient.framework/3DconnexionClient";
+    const RTLD_NOW: c_int = 0x2;
+    const CONNEXION_MESSAGE_DEVICE_STATE: u32 = 0x3364_5352;
+    const CONNEXION_COMMAND_HANDLE_BUTTONS: u16 = 2;
+    const CONNEXION_COMMAND_HANDLE_AXIS: u16 = 3;
+    const CONNEXION_CLIENT_MODE_TAKE_OVER: u16 = 1;
+    const CONNEXION_MASK_ALL: u32 = 0x3fff;
+    const CONNEXION_MASK_ALL_BUTTONS: u32 = 0xffff_ffff;
+    const NBCAD_SIGNATURE: u32 = u32::from_be_bytes(*b"NBCD");
+
+    type MessageHandler =
+        unsafe extern "C" fn(product_id: u32, message_type: u32, argument: *mut c_void);
+    type AddedHandler = unsafe extern "C" fn(product_id: u32);
+    type RemovedHandler = unsafe extern "C" fn(product_id: u32);
+    type SetHandlers = unsafe extern "C" fn(
+        Option<MessageHandler>,
+        Option<AddedHandler>,
+        Option<RemovedHandler>,
+        bool,
+    ) -> i16;
+    type CleanupHandlers = unsafe extern "C" fn();
+    type RegisterClient =
+        unsafe extern "C" fn(signature: u32, name: *mut u8, mode: u16, mask: u32) -> u16;
+    type SetButtonMask = unsafe extern "C" fn(client_id: u16, mask: u32);
+    type UnregisterClient = unsafe extern "C" fn(client_id: u16);
+
+    extern "C" {
+        fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+        fn dlclose(handle: *mut c_void) -> c_int;
+        fn dlerror() -> *const c_char;
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    struct ConnexionDeviceState {
+        version: u16,
+        client: u16,
+        command: u16,
+        param: i16,
+        value: i32,
+        time: u64,
+        report: [u8; 8],
+        buttons8: u16,
+        axis: [i16; 6],
+        address: u16,
+        buttons: u32,
+    }
+
+    struct CallbackState {
+        app: AppHandle,
+        client_id: u16,
+        previous_buttons: u32,
+    }
+
+    static CALLBACK_STATE: OnceLock<Mutex<Option<CallbackState>>> = OnceLock::new();
+
+    fn callback_state() -> &'static Mutex<Option<CallbackState>> {
+        CALLBACK_STATE.get_or_init(|| Mutex::new(None))
+    }
+
+    unsafe extern "C" fn message_handler(
+        _product_id: u32,
+        message_type: u32,
+        argument: *mut c_void,
+    ) {
+        if message_type != CONNEXION_MESSAGE_DEVICE_STATE || argument.is_null() {
+            return;
+        }
+        let device = unsafe { &*argument.cast::<ConnexionDeviceState>() };
+        let Ok(mut guard) = callback_state().lock() else {
+            return;
+        };
+        let Some(callback) = guard.as_mut() else {
+            return;
+        };
+        if device.client != callback.client_id {
+            return;
+        }
+        if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
+            let _ = callback.app.emit(
+                "six-dof-mouse-motion",
+                MotionPacket {
+                    translation: Some([device.axis[0], device.axis[1], device.axis[2]]),
+                    rotation: Some([device.axis[3], device.axis[4], device.axis[5]]),
+                },
+            );
+        }
+        if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
+            || device.buttons != callback.previous_buttons
+        {
+            let newly_pressed = device.buttons & !callback.previous_buttons;
+            callback.previous_buttons = device.buttons;
+            for index in 0..32 {
+                if newly_pressed & (1 << index) != 0 {
+                    let _ = callback
+                        .app
+                        .emit("six-dof-mouse-button", ButtonPacket { button: index + 1 });
+                }
+            }
+        }
+    }
+
+    unsafe fn last_dl_error() -> String {
+        let error = unsafe { dlerror() };
+        if error.is_null() {
+            "unknown dynamic-loader error".to_string()
+        } else {
+            unsafe { CStr::from_ptr(error) }
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    unsafe fn load_symbol<T: Copy>(handle: *mut c_void, name: &'static [u8]) -> Result<T, String> {
+        let symbol = unsafe { dlsym(handle, name.as_ptr().cast()) };
+        if symbol.is_null() {
+            let label = CStr::from_bytes_with_nul(name)
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "unknown symbol".to_string());
+            return Err(format!(
+                "3Dconnexion driver symbol {label} is unavailable: {}",
+                unsafe { last_dl_error() },
+            ));
+        }
+        Ok(unsafe { std::mem::transmute_copy(&symbol) })
+    }
+
+    struct Api {
+        handle: usize,
+        set_handlers: SetHandlers,
+        cleanup_handlers: CleanupHandlers,
+        register_client: RegisterClient,
+        set_button_mask: SetButtonMask,
+        unregister_client: UnregisterClient,
+    }
+
+    impl Api {
+        fn load() -> Result<Self, String> {
+            let path = CString::new(FRAMEWORK_PATH).expect("framework path contains no NUL");
+            let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW) };
+            if handle.is_null() {
+                return Err(format!(
+                    "3Dconnexion driver framework is unavailable: {}",
+                    unsafe { last_dl_error() },
+                ));
+            }
+            let symbols = unsafe {
+                (|| {
+                    Ok(Self {
+                        handle: handle as usize,
+                        set_handlers: load_symbol(handle, b"SetConnexionHandlers\0")?,
+                        cleanup_handlers: load_symbol(handle, b"CleanupConnexionHandlers\0")?,
+                        register_client: load_symbol(handle, b"RegisterConnexionClient\0")?,
+                        set_button_mask: load_symbol(handle, b"SetConnexionClientButtonMask\0")?,
+                        unregister_client: load_symbol(handle, b"UnregisterConnexionClient\0")?,
+                    })
+                })()
+            };
+            if symbols.is_err() {
+                unsafe {
+                    dlclose(handle);
+                }
+            }
+            symbols
+        }
+    }
+
+    pub struct Connection {
+        api: Api,
+        client_id: u16,
+    }
+
+    impl Connection {
+        pub fn connect(app: AppHandle) -> Result<(Self, SixDofMouseInfo), String> {
+            let api = Api::load()?;
+            {
+                let mut callback = callback_state()
+                    .lock()
+                    .map_err(|_| "3Dconnexion callback mutex poisoned".to_string())?;
+                if callback.is_some() {
+                    unsafe {
+                        dlclose(api.handle as *mut c_void);
+                    }
+                    return Err("A 3Dconnexion driver client is already active.".to_string());
+                }
+                *callback = Some(CallbackState {
+                    app,
+                    client_id: 0,
+                    previous_buttons: 0,
+                });
+            }
+
+            let handler_result =
+                unsafe { (api.set_handlers)(Some(message_handler), None, None, true) };
+            if handler_result != 0 {
+                *callback_state()
+                    .lock()
+                    .map_err(|_| "3Dconnexion callback mutex poisoned".to_string())? = None;
+                unsafe {
+                    dlclose(api.handle as *mut c_void);
+                }
+                return Err(format!(
+                    "3Dconnexion driver rejected its message handler ({handler_result})."
+                ));
+            }
+
+            let mut name = b"noBS CAD\0".to_vec();
+            let client_id = unsafe {
+                (api.register_client)(
+                    NBCAD_SIGNATURE,
+                    name.as_mut_ptr(),
+                    CONNEXION_CLIENT_MODE_TAKE_OVER,
+                    CONNEXION_MASK_ALL,
+                )
+            };
+            if client_id == 0 {
+                unsafe {
+                    (api.cleanup_handlers)();
+                }
+                *callback_state()
+                    .lock()
+                    .map_err(|_| "3Dconnexion callback mutex poisoned".to_string())? = None;
+                unsafe {
+                    dlclose(api.handle as *mut c_void);
+                }
+                return Err("3Dconnexion driver did not register noBS CAD.".to_string());
+            }
+            unsafe {
+                (api.set_button_mask)(client_id, CONNEXION_MASK_ALL_BUTTONS);
+            }
+            if let Some(callback) = callback_state()
+                .lock()
+                .map_err(|_| "3Dconnexion callback mutex poisoned".to_string())?
+                .as_mut()
+            {
+                callback.client_id = client_id;
+            }
+            eprintln!("3Dconnexion installed-driver client registered (client_id={client_id})");
+
+            Ok((
+                Self { api, client_id },
+                SixDofMouseInfo {
+                    vendor_id: CURRENT_VENDOR_ID,
+                    product_id: 0,
+                    product_name: "3Dconnexion SpaceMouse (installed driver)".to_string(),
+                    serial_number: None,
+                },
+            ))
+        }
+
+        pub fn disconnect(self) {
+            drop(self);
+        }
+    }
+
+    impl Drop for Connection {
+        fn drop(&mut self) {
+            unsafe {
+                (self.api.unregister_client)(self.client_id);
+                (self.api.cleanup_handlers)();
+            }
+            if let Ok(mut callback) = callback_state().lock() {
+                *callback = None;
+            }
+            unsafe {
+                dlclose(self.api.handle as *mut c_void);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn connexion_device_state_matches_the_installed_framework_abi() {
+            assert_eq!(std::mem::size_of::<ConnexionDeviceState>(), 56);
+        }
+    }
 }
 
 #[cfg(test)]
