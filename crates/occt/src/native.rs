@@ -1,4 +1,6 @@
 use cxx::UniquePtr;
+use nbcad_core::BodyAppearance;
+use nbcad_export::{self, MeshExportRequest, TriangleMesh};
 use nbcad_solid::{
     CombineOperation, ExtrudeOperation, HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadHand,
     HoleThreadRepresentation, KernelBodyDto, KernelCurveDto, KernelEdgeDto, KernelFaceDto,
@@ -100,6 +102,12 @@ mod ffi {
         fn apply_job(self: Pin<&mut Kernel>, job: &FfiJob) -> Result<()>;
         fn body_ids(self: &Kernel) -> Vec<u64>;
         fn mesh(self: &Kernel, body_id: u64) -> Result<FfiMesh>;
+        fn mesh_with_deflection(
+            self: &Kernel,
+            body_id: u64,
+            linear_deflection: f64,
+            angular_deflection: f64,
+        ) -> Result<FfiMesh>;
         fn export_step(
             self: &Kernel,
             body_ids: &Vec<u64>,
@@ -192,6 +200,67 @@ impl OcctKernel {
             .as_ref()
             .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
             .export_step(&body_ids, &thread_metadata_hex)
+            .map_err(|error| OcctError(error.to_string()))
+    }
+
+    /// Tessellate selected (or all) live bodies with configurable deflection.
+    pub fn tessellate_bodies(
+        &self,
+        request: &MeshExportRequest,
+    ) -> Result<Vec<TriangleMesh>, OcctError> {
+        let kernel = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?;
+        let available = kernel.body_ids();
+        if available.is_empty() {
+            return Err(OcctError(
+                "There are no active bodies to export.".to_string(),
+            ));
+        }
+        let selected: Vec<u64> = if request.body_ids.is_empty() {
+            available
+        } else {
+            let mut ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids.dedup();
+            for body_id in &ids {
+                if !available.contains(body_id) {
+                    return Err(OcctError(format!("Selected body {body_id} is not active.")));
+                }
+            }
+            ids
+        };
+        let mut meshes = Vec::with_capacity(selected.len());
+        for body_id in selected {
+            let raw = kernel
+                .mesh_with_deflection(
+                    body_id,
+                    request.linear_deflection,
+                    request.angular_deflection,
+                )
+                .map_err(|error| OcctError(error.to_string()))?;
+            let body = from_ffi_mesh(raw)?;
+            meshes.push(TriangleMesh::from_kernel_body(
+                &body,
+                format!("Body{}", body_id),
+            ));
+        }
+        Ok(meshes)
+    }
+
+    pub fn export_stl(&self, request: &MeshExportRequest) -> Result<Vec<u8>, OcctError> {
+        let meshes = self.tessellate_bodies(request)?;
+        nbcad_export::write_stl(&meshes).map_err(|error| OcctError(error.to_string()))
+    }
+
+    pub fn export_3mf(
+        &self,
+        request: &MeshExportRequest,
+        appearances: &[BodyAppearance],
+    ) -> Result<Vec<u8>, OcctError> {
+        let meshes = self.tessellate_bodies(request)?;
+        nbcad_export::ExportFacade::export_3mf(&meshes, appearances, request)
             .map_err(|error| OcctError(error.to_string()))
     }
 }

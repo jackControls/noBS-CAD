@@ -1,93 +1,64 @@
 # MCP harness notes
 
 How agents and tests can drive noBS CAD **locally** through MCP.
-
 This page separates **what exists today** from **proposed** architecture.
 Proposals: [proposed-architecture.md](proposed-architecture.md).
 Product directions: [goals.md](goals.md).
 
 ## Why MCP
-
 MCP gives coding agents a tool API without turning noBS CAD into a cloud
 service. The goal is a **strong local automation** surface for testing and
 agent-driven modeling.
-
-**Invariant:** no required cloud control plane. Automation stays on the user’s
+**Invariant:** no required cloud control plane. Automation stays on the user's
 machine (or CI runner).
 
-## Today (as-built)
-
+## Today (as-built on this branch)
 | Topic | Current state |
 |-------|----------------|
-| Transport | **stdio** JSON-RPC (`nbcad-mcp`) — supported local path |
-| Tools | Large static list covering most sketch/solid ops; `tools.listChanged: false` |
+| Transport | **stdio** JSON-RPC (`nbcad-mcp`) — logs on **stderr** |
+| Tools | **105** modeling tools + control/export helpers |
+| Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
+| Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
-| UI relationship | MCP and the visible UI own **separate documents** (same planner crates, different instances) |
-| Geometry | Same native OCCT replay path as desktop for solid ops when OCCT is available |
-| Print/export via MCP | Model JSON load/export tools exist; **no** 3MF MCP export yet |
+| Sessions | Read-only snapshot dirs: `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` |
+| Geometry | Same native OCCT replay path as desktop when OCCT is available |
+| Export | STEP + STL + **3MF** (`solid_export_*`, `material_catalog`); 3MF preferred for slicers |
 
-Honest use today: treat headless MCP as an **engine / automation probe**, not as
-proof that the open UI document changed.
+### Soft disclosure (not a jail)
+Spine → active pack → soft packs (60 s TTL, LRU 2). Hidden tools stay
+**callable**; results include `_disclosure`. Escape hatch: `full_static` or
+`cad_list_all_tools`. Prefer `dynamic` for main agents.
 
+### Focus packs
+```text
+document | sketch | solid | modify | body_ops | datums | history | inspect | print
+```
+Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
+
+### Read-only session snapshots (not live UI co-link)
+Headless goldens work **without** attach.
+With attach:
+1. `cad_list_sessions` — directories under `NBCAD_SESSION_DIR` (skips `_*-prefixed` control dirs).
+2. `cad_attach` — **requires** valid `model.json`; loads into this MCP process; optional `focus.json`. **Never writes back.**
+3. `cad_refresh` — explicit re-read of the attached session from disk.
+4. `cad_detach` — clears the attached session id.
+This is Jack’s **read-only snapshot** model for the disclosure/export PR.
+UI publishing, UUID session ids, and revisioned sync remain follow-up work
+([#31](https://github.com/jackControls/noBS-CAD/pull/31)).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
 
 ### Stdio (current supported path)
+Agents and CI spawn `nbcad-mcp` as an MCP stdio server. One process owns one
+document. Prefer `solid_export_3mf` for slicer handoff; STEP for CAD interchange.
 
-```text
-Client spawns nbcad-mcp
-  → JSON-RPC on stdin
-  → JSON-RPC on stdout
-  → logs on stderr only
-```
+### Disclosure notify behavior
+Focus / mode / soft-TTL changes schedule `notifications/tools/list_changed`.
+The server wakes on that deadline even if the client is idle — it does **not**
+require a later `ping` or tool call to flush the notification.
 
-```json
-{
-  "mcpServers": {
-    "nbcad": {
-      "command": "/absolute/path/to/nbcad-mcp"
-    }
-  }
-}
-```
-
-Stdio is the **current** supported local transport. It is not declared an
-irreversible forever architecture choice—local/offline behavior is the
-invariant; internal IPC may evolve with engineering evidence.
-
-## Proposed next (not shipped)
-
-See [proposed-architecture.md](proposed-architecture.md) for detail:
-
-1. **Focus-scoped tools** — `tools.listChanged: true` and
-   `notifications/tools/list_changed` when focus changes.
-2. **Co-link** MCP to **one** active UI document (first useful milestone).
-3. **Multi-window broker** — deferred until use cases justify it (not P0).
-4. **3MF + materials/colors** — target with testable scope.
-
-## Rust boundaries (for automation work)
-
-| Crate area | Role |
-|------------|------|
-| `core`, `sketch`, `solid` | Host-neutral model logic |
-| `occt` | Native geometry adapter |
-| `wasm` | Browser adapter path |
-
-## Related projects (ideas, check licenses)
-
-| Project | Why it matters |
-|---------|----------------|
-| [Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio) | Rust CAD + headless act→observe→act automation (**GPL-3** — ideas, not code copy) |
-| [FreeCAD](https://www.freecad.org/) | Mature open parametric CAD |
-| [SolveSpace](https://solvespace.com/) | Compact constraint CAD |
-| [OpenSCAD](https://openscad.org/) | Code-first solids |
-| [Cascade Studio](https://github.com/zalo/CascadeStudio) | Browser OCCT experiments |
-| [replicad](https://github.com/sgenoud/replicad) | TypeScript OCCT wrapper |
-| [AI-CAD](https://github.com/vespo92/AI-CAD) | Parametric CAD with an MCP server (different stack) |
-
-## Related docs
-
-- [goals.md](goals.md)
-- [proposed-architecture.md](proposed-architecture.md)
-- [agent-mcp.md](agent-mcp.md)
-- [mcp-server/README.md](../mcp-server/README.md)
+## Proposed (not shipped here)
+- Live UI ↔ MCP in-process co-link / writer lock
+- MCP client installer (`install-mcp`) and UI launch/window control
+- Multi-window broker
+See [proposed-architecture.md](proposed-architecture.md).

@@ -949,6 +949,47 @@ export interface StepExportRequest {
   thread_metadata: StepThreadMetadataDto[];
 }
 
+/** 8-bit RGBA. Alpha is kept for UI; 3MF export flattens to opaque RGB. */
+export interface Rgba8 {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+/** Per-body color and print material for viewport + 3MF / slicer metadata. */
+export interface BodyAppearance {
+  body_id: number;
+  color: Rgba8;
+  material_name: string;
+  filament_type: string;
+  brand: string;
+  color_name: string;
+  filament_id: string | null;
+  preset_id: string | null;
+  density_g_cm3: number | null;
+  diameter_mm: number;
+}
+
+/** Mesh export selection. Empty body_ids exports every active body. */
+export interface MeshExportRequest {
+  body_ids: number[];
+  linear_deflection: number;
+  angular_deflection: number;
+  include_appearance: boolean;
+  slicer_target?:
+    | 'standard'
+    | 'bambu_studio'
+    | 'orca_slicer'
+    | 'prusa_slicer'
+    | 'cura';
+}
+
+export const DEFAULT_BODY_COLOR: Rgba8 = { r: 180, g: 180, b: 180, a: 255 };
+export const DEFAULT_MATERIAL_NAME = 'Generic';
+export const DEFAULT_MESH_LINEAR_DEFLECTION = 0.15;
+export const DEFAULT_MESH_ANGULAR_DEFLECTION = 0.35;
+
 /** Dynamic-input locked segment request (mm / degrees from +u, CCW).
  * `*_text` carries the raw typed text (number or formula, D9). */
 export interface LockedSegmentRequest {

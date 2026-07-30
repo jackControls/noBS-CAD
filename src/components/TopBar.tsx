@@ -16,7 +16,9 @@ import {
 import { useTranslation } from '../i18n';
 import {
   closeProject,
+  export3mf,
   exportStep,
+  exportStl,
   importStep,
   newProject,
   openProject,
@@ -145,6 +147,30 @@ export function AppMenuControls() {
                 label={t('file.exportStepSelected')}
                 disabled={selectedBody === null}
                 onClick={() => run(() => exportStep(true))}
+              />
+              <FileMenuItem
+                icon={<FileDown size={14} />}
+                label={t('file.export3mfAll')}
+                disabled={bodyCount === 0}
+                onClick={() => run(() => export3mf(false))}
+              />
+              <FileMenuItem
+                icon={<FileDown size={14} />}
+                label={t('file.export3mfSelected')}
+                disabled={selectedBody === null}
+                onClick={() => run(() => export3mf(true))}
+              />
+              <FileMenuItem
+                icon={<FileDown size={14} />}
+                label={t('file.exportStlAll')}
+                disabled={bodyCount === 0}
+                onClick={() => run(() => exportStl(false))}
+              />
+              <FileMenuItem
+                icon={<FileDown size={14} />}
+                label={t('file.exportStlSelected')}
+                disabled={selectedBody === null}
+                onClick={() => run(() => exportStl(true))}
               />
               <div className="my-1 border-t border-edge" />
               <FileMenuItem

@@ -19,6 +19,10 @@ class Kernel {
   void apply_job(const FfiJob& job);
   rust::Vec<std::uint64_t> body_ids() const;
   FfiMesh mesh(std::uint64_t body_id) const;
+  FfiMesh mesh_with_deflection(
+      std::uint64_t body_id,
+      double linear_deflection,
+      double angular_deflection) const;
   rust::Vec<std::uint8_t> export_step(
       const rust::Vec<std::uint64_t>& body_ids,
       rust::Str thread_metadata_hex) const;

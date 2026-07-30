@@ -204,6 +204,54 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
+    pub fn export_stl(&self, payload: &str) -> Result<Vec<u8>, String> {
+        let request: nbcad_export::MeshExportRequest = serde_json::from_str(payload)
+            .map_err(|error| format!("bad request payload: {error}"))?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "engine lock poisoned".to_string())?;
+        if !inner.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before exporting STL.".to_string());
+        }
+        let scene = inner.manager.solid_scene();
+        let mut meshes = inner
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())
+    }
+
+    pub fn export_3mf(&self, payload: &str) -> Result<Vec<u8>, String> {
+        let request: nbcad_export::MeshExportRequest = serde_json::from_str(payload)
+            .map_err(|error| format!("bad request payload: {error}"))?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "engine lock poisoned".to_string())?;
+        if !inner.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before exporting 3MF.".to_string());
+        }
+        let scene = inner.manager.solid_scene();
+        let appearances = inner.manager.body_appearances();
+        let mut meshes = inner
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+            .map_err(|error| error.to_string())
+    }
+
     fn with_request<T: DeserializeOwned>(
         &self,
         payload: &str,

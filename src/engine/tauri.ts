@@ -13,6 +13,7 @@ import type {
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
+  BodyAppearance,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -73,6 +74,7 @@ import type {
   SolidSceneDto,
   SolidUpdateDto,
   StepExportRequest,
+  MeshExportRequest,
   SweepDefinitionDto,
   SweepRequest,
   ToolResult,
@@ -125,6 +127,14 @@ export class TauriEngine implements Engine {
 
   async solidScene(): Promise<SolidSceneDto> {
     return this.call('engine_solid_scene');
+  }
+
+  async bodyAppearances(): Promise<BodyAppearance[]> {
+    return this.call('engine_body_appearances');
+  }
+
+  async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {
+    return this.call('engine_set_body_appearance', appearance);
   }
 
   async extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]> {
@@ -296,6 +306,20 @@ export class TauriEngine implements Engine {
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {
     const bytes = await invoke<number[]>('engine_export_step', {
+      payload: JSON.stringify(request),
+    });
+    return Uint8Array.from(bytes);
+  }
+
+  async exportStl(request: MeshExportRequest): Promise<Uint8Array> {
+    const bytes = await invoke<number[]>('engine_export_stl', {
+      payload: JSON.stringify(request),
+    });
+    return Uint8Array.from(bytes);
+  }
+
+  async export3mf(request: MeshExportRequest): Promise<Uint8Array> {
+    const bytes = await invoke<number[]>('engine_export_3mf', {
       payload: JSON.stringify(request),
     });
     return Uint8Array.from(bytes);

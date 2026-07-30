@@ -60,6 +60,8 @@ engine_command!(engine_edit_sketch, "edit_sketch");
 engine_command!(engine_active_sketch, "active_sketch", no_payload);
 engine_command!(engine_profile_catalog, "profile_catalog", no_payload);
 engine_command!(engine_solid_scene, "solid_scene", no_payload);
+engine_command!(engine_body_appearances, "body_appearances", no_payload);
+engine_command!(engine_set_body_appearance, "set_body_appearance");
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
@@ -264,6 +266,16 @@ fn engine_export_step(state: tauri::State<'_, AppState>, payload: &str) -> Resul
     state.export_step(payload)
 }
 
+#[tauri::command]
+fn engine_export_stl(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
+    state.export_stl(payload)
+}
+
+#[tauri::command]
+fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
+    state.export_3mf(payload)
+}
+
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[tauri::command]
@@ -275,6 +287,7 @@ fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| format!("could not read file: {error}"))
 }
 
+/// Write bytes to a path atomically (temp file + rename).
 #[tauri::command]
 fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
@@ -315,6 +328,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(SixDofMouseState::default())
+        .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
             ping,
             get_document,
@@ -329,12 +343,16 @@ pub fn run() {
             engine_project_new,
             engine_project_load,
             engine_export_step,
+            engine_export_stl,
+            engine_export_3mf,
             engine_end_sketch,
             engine_finished_sketches,
             engine_edit_sketch,
             engine_active_sketch,
             engine_profile_catalog,
             engine_solid_scene,
+            engine_body_appearances,
+            engine_set_body_appearance,
             engine_extrude_definitions,
             engine_revolve_definitions,
             engine_sweep_definitions,

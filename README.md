@@ -65,16 +65,22 @@ noBS CAD feature history.
 
 The repository includes a stateful, headless
 [MCP server](mcp-server/README.md) for local testing and agent-driven
-experiments. It covers most currently implemented sketch and solid-modeling
-tools over **stdio**, keeps one feature history per process, and uses the same
-Rust planning model and native OCCT adapter as the desktop app for solid
-operations.
+modeling over **stdio**. It uses the same Rust planning model and native OCCT
+adapter as the desktop app and registers **105** sketch/solid modeling tools
+(plus control and export helpers).
 
-**Today:** the MCP process and the visible UI still own **separate** documents.
-Use MCP as an engine/automation probe; co-linking one active UI document is a
-proposed next step ([docs/proposed-architecture.md](docs/proposed-architecture.md)).
+Default **dynamic** disclosure advertises a focus-scoped subset (spine + active
+and soft packs with TTL) — guidance for agents, not a hard jail. Out-of-focus
+tools stay callable. Use `full_static` or `cad_list_all_tools` when a client
+ignores `notifications/tools/list_changed`.
 
-Notes: [docs/mcp-harness.md](docs/mcp-harness.md).
+Export via MCP: **STEP** (CAD interchange), **STL** (geometry-only mesh), and
+**3MF** (preferred for slicers; per-body color/material plus compatible slicer
+Metadata hints — not a full pre-sliced project). Session helpers
+(`cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach`) load
+**read-only** snapshots from `NBCAD_SESSION_DIR`; live UI co-link is not shipped.
+
+Details: [docs/mcp-harness.md](docs/mcp-harness.md).
 
 ## 3D mouse compatibility
 

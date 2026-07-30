@@ -39,6 +39,7 @@ import { HoleDialog } from './components/HoleDialog';
 import { SketchPlaneOriginDialog } from './components/SketchPlaneOriginDialog';
 import { ConstructionPlaneDialog } from './components/ConstructionPlaneDialog';
 import { BodyFeatureDialog } from './components/BodyFeatureDialog';
+import { BodyAppearancePanel } from './components/BodyAppearancePanel';
 import { SketchPatternDialog } from './components/SketchPatternDialog';
 import {
   installProjectRecovery,
@@ -229,6 +230,7 @@ export default function App() {
           <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
             <Viewport key={resolvedTheme} />
+            <BodyAppearancePanel />
             {mode === 'sketch' && <SketchPalette />}
             <CommentsPanel />
           </main>

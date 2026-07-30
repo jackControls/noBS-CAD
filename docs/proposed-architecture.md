@@ -35,6 +35,9 @@ offline/local behavior is the invariant; internal IPC can evolve with evidence.
 
 Spec reference: [MCP tools / listChanged](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
+**Branch note (`feat/3mf-print-export`):** soft disclosure prototype is implemented;
+see [mcp-harness.md](mcp-harness.md). `main` still uses a static list until merge.
+
 ---
 
 ## 2. Co-link MCP ↔ one active UI document — Proposed (first milestone)
@@ -50,6 +53,10 @@ headless MCP without UI remains valid for CI goldens.
 
 This is the useful first automation milestone. Prototype before treating it as
 required product behavior.
+
+**Branch note:** `cad_list_sessions` / `cad_attach` / `cad_refresh` /
+`cad_detach` implement **read-only snapshot** load from headless session dirs
+(require valid `model.json`; no MCP writeback). Not a live shared UI document.
 
 ---
 
@@ -78,6 +85,9 @@ metadata ([goals.md](goals.md)).
 
 Describe as a **target with testable scope**, not current functionality.
 (No 3MF writer on `main` today.)
+
+**Branch note (`feat/3mf-print-export`):** native 3MF/STL export + MCP print pack
+(Metadata hints for Bambu/Orca/Prusa/Cura — not a full sliced G-code project).
 
 ---
 

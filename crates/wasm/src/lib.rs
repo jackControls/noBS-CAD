@@ -79,6 +79,14 @@ impl WasmEngine {
         host::handle(&mut self.manager, "solid_scene", "")
     }
 
+    pub fn body_appearances(&mut self) -> String {
+        host::handle(&mut self.manager, "body_appearances", "")
+    }
+
+    pub fn set_body_appearance(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "set_body_appearance", payload)
+    }
+
     pub fn extrude_definitions(&mut self) -> String {
         host::handle(&mut self.manager, "extrude_definitions", "")
     }

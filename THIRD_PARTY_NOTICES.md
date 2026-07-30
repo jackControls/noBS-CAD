@@ -30,6 +30,7 @@ the Open CASCADE Technology software.
 | three.js | 3D viewport | MIT |
 | Zustand | Application state | MIT |
 | fflate | Local `.nbcad` ZIP files | MIT |
+| zip (Rust) | 3MF package writer | MIT or Apache-2.0 |
 | Lucide | General-purpose interface icons | ISC |
 | Tauri and the dialog plugin | Native application shell | MIT or Apache-2.0 |
 

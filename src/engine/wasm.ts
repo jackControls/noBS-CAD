@@ -10,12 +10,19 @@
 import init, { WasmEngine as WasmEngineInner } from '../engine-wasm/pkg/nbcad_wasm';
 import { unwrapEnvelope, type Engine } from './index';
 import { BrowserOcctKernel } from './occtBrowser';
+
+/** wasm-pack typings lag until `npm run build:wasm`; keep additive methods typed here. */
+type WasmEngineMethods = WasmEngineInner & {
+  body_appearances(): string;
+  set_body_appearance(payload: string): string;
+};
 import type {
   AddConstraintResult,
   AddLineResult,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
+  BodyAppearance,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -77,6 +84,7 @@ import type {
   SolidSceneDto,
   SolidUpdateDto,
   StepExportRequest,
+  MeshExportRequest,
   SweepDefinitionDto,
   SweepRequest,
   ToolResult,
@@ -132,6 +140,16 @@ export class WasmEngine implements Engine {
 
   async solidScene(): Promise<SolidSceneDto> {
     return unwrapEnvelope(this.inner.solid_scene());
+  }
+
+  async bodyAppearances(): Promise<BodyAppearance[]> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).body_appearances());
+  }
+
+  async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).set_body_appearance(JSON.stringify(appearance)),
+    );
   }
 
   async extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]> {
@@ -386,6 +404,14 @@ export class WasmEngine implements Engine {
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {
     return (await this.browserKernel()).exportStep(request);
+  }
+
+  async exportStl(request: MeshExportRequest): Promise<Uint8Array> {
+    return (await this.browserKernel()).exportStl(request);
+  }
+
+  async export3mf(request: MeshExportRequest): Promise<Uint8Array> {
+    return (await this.browserKernel()).export3mf(request);
   }
 
   private async executeSolidPlan(plan: RecomputePlanDto): Promise<SolidUpdateDto> {

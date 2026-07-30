@@ -1,11 +1,26 @@
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use nbcad_core::BodyId;
+use nbcad_export::MeshExportRequest;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
-use nbcad_solid::{CommitKernelRequest, RecomputePlanDto};
+use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod disclosure;
+mod session;
+
+use disclosure::{
+    auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
+    FocusPack,
+};
+
 const LATEST_PROTOCOL: &str = "2025-06-18";
+const MODELING_TOOL_COUNT: usize = 105;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -22,6 +37,7 @@ enum Payload {
 enum Execution {
     Direct,
     SolidReplay,
+    Control,
 }
 
 struct ToolSpec {
@@ -32,6 +48,8 @@ struct ToolSpec {
     payload: Payload,
     execution: Execution,
     input_schema: Value,
+    pack: FocusPack,
+    spine: bool,
 }
 
 impl ToolSpec {
@@ -43,6 +61,7 @@ impl ToolSpec {
         payload: Payload,
         input_schema: Value,
     ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
         Self {
             name,
             title,
@@ -51,6 +70,8 @@ impl ToolSpec {
             payload,
             execution: Execution::Direct,
             input_schema,
+            pack,
+            spine,
         }
     }
 
@@ -62,6 +83,7 @@ impl ToolSpec {
         payload: Payload,
         input_schema: Value,
     ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
         Self {
             name,
             title,
@@ -70,6 +92,28 @@ impl ToolSpec {
             payload,
             execution: Execution::SolidReplay,
             input_schema,
+            pack,
+            spine,
+        }
+    }
+
+    fn control(
+        name: &'static str,
+        title: &'static str,
+        description: &'static str,
+        input_schema: Value,
+    ) -> Self {
+        let (pack, spine) = tags_for_tool(name);
+        Self {
+            name,
+            title,
+            description,
+            engine_method: "",
+            payload: Payload::Empty,
+            execution: Execution::Control,
+            input_schema,
+            pack,
+            spine,
         }
     }
 }
@@ -77,6 +121,11 @@ impl ToolSpec {
 struct CadServer {
     manager: SketchManager,
     kernel: OcctKernel,
+    disclosure: DisclosureState,
+    /// Session id last successfully loaded via read-only `cad_attach` / `cad_refresh`.
+    /// MCP never writes this session's files back (no last-writer-wins vs a UI).
+    attached_document_id: Option<String>,
+    pending_recompute_transaction: Option<u64>,
 }
 
 impl CadServer {
@@ -84,6 +133,9 @@ impl CadServer {
         Ok(Self {
             manager: SketchManager::new(),
             kernel: OcctKernel::new().map_err(|error| error.to_string())?,
+            disclosure: DisclosureState::new(),
+            attached_document_id: None,
+            pending_recompute_transaction: None,
         })
     }
 
@@ -93,7 +145,22 @@ impl CadServer {
             .iter()
             .find(|spec| spec.name == name)
             .ok_or_else(|| format!("unknown tool: {name}"))?;
-        let payload = match spec.payload {
+        let execution = spec.execution;
+        let engine_method = spec.engine_method;
+        let payload_kind = spec.payload;
+        let pack = spec.pack;
+        let spine = spec.spine;
+
+        if execution == Execution::Control {
+            return self.call_control(name, arguments);
+        }
+
+        if self.disclosure.advertisement_state(pack, spine) == AdvertisementState::HiddenButCallable
+        {
+            self.disclosure.re_promote(pack);
+        }
+
+        let payload = match payload_kind {
             Payload::Empty => String::new(),
             Payload::Object => serde_json::to_string(&arguments)
                 .map_err(|error| format!("could not encode arguments: {error}"))?,
@@ -148,39 +215,409 @@ impl CadServer {
             }
         };
 
-        if spec.execution == Execution::Direct {
-            return parse_engine_envelope(host::handle(
+        let mut value = if execution == Execution::Direct {
+            if name == "solid_export_step" {
+                let request: StepExportRequest = if arguments.is_null() {
+                    StepExportRequest::default()
+                } else {
+                    serde_json::from_value(arguments)
+                        .map_err(|error| format!("invalid STEP export request: {error}"))?
+                };
+                let bytes = self
+                    .kernel
+                    .export_step(&request)
+                    .map_err(|error| error.to_string())?;
+                json!({
+                    "format": "step",
+                    "encoding": "base64",
+                    "bytes_base64": BASE64.encode(bytes),
+                })
+            } else if name == "solid_export_stl" || name == "solid_export_3mf" {
+                self.export_mesh(name, arguments)?
+            } else if name == "solid_tessellate" {
+                self.tessellate_tool(arguments)?
+            } else if name == "solid_export_preflight" {
+                self.export_preflight_tool()?
+            } else if name == "demo_export_pip_3mf" {
+                self.demo_pip_3mf_tool(arguments)?
+            } else if name == "material_catalog" {
+                serde_json::from_str(&nbcad_export::catalog_json())
+                    .map_err(|error| format!("catalog json: {error}"))?
+            } else if name == "body_appearances" {
+                serde_json::to_value(self.manager.body_appearances())
+                    .map_err(|error| format!("encode appearances: {error}"))?
+            } else if name == "set_body_appearance" {
+                self.set_body_appearance_tool(arguments)?
+            } else {
+                parse_engine_envelope(host::handle(&mut self.manager, engine_method, &payload))?
+            }
+        } else {
+            let plan_value =
+                parse_engine_envelope(host::handle(&mut self.manager, engine_method, &payload))?;
+            let plan: RecomputePlanDto = serde_json::from_value(plan_value)
+                .map_err(|error| format!("engine returned an invalid recompute plan: {error}"))?;
+            let transaction_id = plan.transaction_id;
+            self.pending_recompute_transaction = Some(transaction_id);
+            let scene = match self.kernel.recompute(&plan) {
+                Ok(scene) => scene,
+                Err(error) => {
+                    self.manager.cancel_solid_recompute(transaction_id);
+                    self.pending_recompute_transaction = None;
+                    return Err(error.to_string());
+                }
+            };
+            let commit = CommitKernelRequest {
+                transaction_id,
+                scene,
+            };
+            let committed = parse_engine_envelope(host::handle(
                 &mut self.manager,
-                spec.engine_method,
-                &payload,
+                "solid_commit",
+                &serde_json::to_string(&commit)
+                    .map_err(|error| format!("could not encode kernel result: {error}"))?,
+            ))?;
+            self.pending_recompute_transaction = None;
+            committed
+        };
+
+        if let Some(focus) = auto_focus_for_tool(name) {
+            self.disclosure.auto_hint(focus);
+        }
+        value = annotate_disclosure(value, &self.disclosure, pack, spine);
+        Ok(value)
+    }
+
+    fn call_control(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let value = match name {
+            "cad_get_focus" => self.disclosure.status_json(),
+            "cad_set_focus" => {
+                let focus_name = arguments
+                    .get("focus")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing required argument 'focus'".to_string())?;
+                let focus = FocusPack::parse(focus_name)
+                    .ok_or_else(|| format!("unknown focus '{focus_name}'"))?;
+                let explicit = arguments
+                    .get("explicit")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                self.disclosure.set_focus(focus, explicit);
+                self.disclosure.status_json()
+            }
+            "cad_list_focus_areas" => DisclosureState::focus_areas_json(),
+            "cad_get_tool_disclosure_mode" => {
+                json!({ "mode": self.disclosure.status_json()["mode"] })
+            }
+            "cad_set_tool_disclosure_mode" => {
+                let mode_name = arguments
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing required argument 'mode'".to_string())?;
+                let mode = DisclosureMode::parse(mode_name)
+                    .ok_or_else(|| format!("unknown disclosure mode '{mode_name}'"))?;
+                self.disclosure.set_mode(mode);
+                json!({ "mode": mode.as_str() })
+            }
+            "cad_list_all_tools" => full_tool_catalog(),
+            "cad_cancel_recompute" => {
+                if let Some(transaction_id) = self.pending_recompute_transaction.take() {
+                    self.manager.cancel_solid_recompute(transaction_id);
+                    json!({ "cancelled": true, "transaction_id": transaction_id })
+                } else {
+                    json!({ "cancelled": false, "reason": "no in-flight solid recompute" })
+                }
+            }
+            "cad_list_sessions" => session::sessions_list_json(),
+            "cad_attach" => self.attach_read_only_snapshot(&arguments)?,
+            "cad_refresh" => self.refresh_read_only_snapshot()?,
+            "cad_detach" => {
+                let previous = self.attached_document_id.take();
+                json!({
+                    "detached": true,
+                    "session_id": previous,
+                    "session_mode": "read_only_snapshot",
+                })
+            }
+            other => return Err(format!("unknown control tool: {other}")),
+        };
+        Ok(value)
+    }
+
+    /// Load `model.json` (+ optional `focus.json`) into this process.
+    /// Marks attached only after a successful model load (Jack §3).
+    fn attach_read_only_snapshot(&mut self, arguments: &Value) -> Result<Value, String> {
+        let session_id = arguments
+            .get("session_id")
+            .or_else(|| arguments.get("document_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
+        if !session::list_sessions()?.iter().any(|id| id == session_id) {
+            return Err(format!(
+                "session '{session_id}' was not found under {}",
+                session::session_dir().display()
             ));
         }
+        self.load_snapshot_model(session_id)?;
+        self.apply_snapshot_focus(session_id);
+        self.attached_document_id = Some(session_id.to_string());
+        Ok(json!({
+            "attached": true,
+            "session_id": session_id,
+            "document_id": session_id,
+            "focus": self.disclosure.active().as_str(),
+            "session_mode": "read_only_snapshot",
+            "writeback": false,
+        }))
+    }
 
+    /// Re-read the currently attached session from disk into this process.
+    fn refresh_read_only_snapshot(&mut self) -> Result<Value, String> {
+        let Some(session_id) = self.attached_document_id.clone() else {
+            return Err("no session attached; call cad_attach first".to_string());
+        };
+        self.load_snapshot_model(&session_id)?;
+        self.apply_snapshot_focus(&session_id);
+        Ok(json!({
+            "refreshed": true,
+            "session_id": session_id,
+            "focus": self.disclosure.active().as_str(),
+            "session_mode": "read_only_snapshot",
+            "writeback": false,
+        }))
+    }
+
+    fn load_snapshot_model(&mut self, session_id: &str) -> Result<(), String> {
+        let model_json = session::require_model_json(session_id)?;
         let plan_value = parse_engine_envelope(host::handle(
             &mut self.manager,
-            spec.engine_method,
-            &payload,
+            "project_prepare_load",
+            &serde_json::to_string(&Value::String(model_json)).map_err(|e| e.to_string())?,
         ))?;
         let plan: RecomputePlanDto = serde_json::from_value(plan_value)
-            .map_err(|error| format!("engine returned an invalid recompute plan: {error}"))?;
+            .map_err(|error| format!("invalid model.json / recompute plan: {error}"))?;
         let transaction_id = plan.transaction_id;
         let scene = match self.kernel.recompute(&plan) {
             Ok(scene) => scene,
             Err(error) => {
                 self.manager.cancel_solid_recompute(transaction_id);
-                return Err(error.to_string());
+                return Err(format!(
+                    "session '{session_id}' model failed to recompute: {error}"
+                ));
             }
         };
-        let commit = CommitKernelRequest {
-            transaction_id,
-            scene,
-        };
-        parse_engine_envelope(host::handle(
+        let _ = parse_engine_envelope(host::handle(
             &mut self.manager,
             "solid_commit",
-            &serde_json::to_string(&commit)
-                .map_err(|error| format!("could not encode kernel result: {error}"))?,
-        ))
+            &serde_json::to_string(&CommitKernelRequest {
+                transaction_id,
+                scene,
+            })
+            .map_err(|e| e.to_string())?,
+        ))?;
+        Ok(())
+    }
+
+    fn apply_snapshot_focus(&mut self, session_id: &str) {
+        let Ok(focus_json) = session::read_session_file(session_id, "focus.json") else {
+            return;
+        };
+        let Ok(focus_value) = serde_json::from_str::<Value>(&focus_json) else {
+            return;
+        };
+        if let Some(focus_name) = focus_value.get("focus").and_then(Value::as_str) {
+            if let Some(focus) = FocusPack::parse(focus_name) {
+                self.disclosure.set_focus(focus, false);
+                self.disclosure.clear_explicit_lock();
+            }
+        }
+    }
+
+    fn export_mesh(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        if !self.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before exporting mesh files.".to_string());
+        }
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments)
+                .map_err(|error| format!("bad mesh export arguments: {error}"))?
+        };
+        let scene = self.manager.solid_scene();
+        let appearances = self.manager.body_appearances();
+        let mut meshes = self
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        let bytes = if name == "solid_export_stl" {
+            nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())?
+        } else {
+            nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+                .map_err(|error| error.to_string())?
+        };
+        Ok(json!({
+            "format": if name == "solid_export_stl" { "stl" } else { "3mf" },
+            "encoding": "base64",
+            "slicer_target": request.slicer_target,
+            "byte_length": bytes.len(),
+            "bytes_base64": BASE64.encode(bytes),
+        }))
+    }
+
+    fn set_body_appearance_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        let appearance = if let Some(preset_id) = arguments
+            .get("preset_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            let body_id = arguments
+                .get("body_id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| "set_body_appearance with preset_id requires body_id".to_string())?;
+            let preset = nbcad_export::find_preset(preset_id).ok_or_else(|| {
+                format!("unknown material preset_id '{preset_id}' (call material_catalog)")
+            })?;
+            preset.to_appearance(BodyId(body_id))
+        } else {
+            serde_json::from_value(arguments).map_err(|error| {
+                format!("invalid body appearance (or pass body_id + preset_id): {error}")
+            })?
+        };
+        let appearances = self
+            .manager
+            .set_body_appearance(appearance)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "body_appearances": appearances }))
+    }
+
+    fn tessellate_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        if !self.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before tessellating.".to_string());
+        }
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments)
+                .map_err(|error| format!("bad tessellate arguments: {error}"))?
+        };
+        let scene = self.manager.solid_scene();
+        let mut meshes = self
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|error| error.to_string())?;
+        for mesh in &mut meshes {
+            if let Some(body) = scene.bodies.iter().find(|body| body.id == mesh.body_id) {
+                mesh.name = body.name.clone();
+            }
+        }
+        let bodies: Vec<Value> = meshes
+            .iter()
+            .map(|mesh| {
+                let mut min = [f32::MAX; 3];
+                let mut max = [f32::MIN; 3];
+                for p in mesh.positions.chunks_exact(3) {
+                    for i in 0..3 {
+                        min[i] = min[i].min(p[i]);
+                        max[i] = max[i].max(p[i]);
+                    }
+                }
+                json!({
+                    "body_id": mesh.body_id.0,
+                    "name": mesh.name,
+                    "triangle_count": mesh.triangle_count(),
+                    "vertex_count": mesh.positions.len() / 3,
+                    "bbox_min": min,
+                    "bbox_max": max,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "linear_deflection": request.linear_deflection,
+            "angular_deflection": request.angular_deflection,
+            "body_count": bodies.len(),
+            "bodies": bodies,
+        }))
+    }
+
+    fn export_preflight_tool(&mut self) -> Result<Value, String> {
+        let scene = self.manager.solid_scene();
+        let errors: Vec<String> = scene
+            .errors
+            .iter()
+            .map(|error| format!("feature {}: {}", error.feature_id.0, error.message))
+            .collect();
+        let body_ids: Vec<u64> = scene.bodies.iter().map(|body| body.id.0).collect();
+        let appearances = self.manager.body_appearances();
+        let appearing: Vec<u64> = appearances.iter().map(|a| a.body_id.0).collect();
+        let missing_appearance: Vec<u64> = body_ids
+            .iter()
+            .copied()
+            .filter(|id| !appearing.contains(id))
+            .collect();
+        let ok = errors.is_empty() && !body_ids.is_empty();
+        Ok(json!({
+            "ok": ok,
+            "body_count": body_ids.len(),
+            "body_ids": body_ids,
+            "timeline_errors": errors,
+            "appearances_assigned": appearing.len(),
+            "bodies_missing_appearance": missing_appearance,
+            "hints": if !ok {
+                json!([
+                    "Fix timeline_errors before export.",
+                    "Empty documents cannot export meshes.",
+                    "Optional: set_body_appearance / material_catalog for colored 3MF."
+                ])
+            } else {
+                json!([
+                    "Ready for solid_export_3mf (preferred) or solid_export_stl / solid_export_step."
+                ])
+            },
+        }))
+    }
+
+    fn demo_pip_3mf_tool(&mut self, arguments: Value) -> Result<Value, String> {
+        let request: MeshExportRequest = if arguments.is_null() {
+            MeshExportRequest::default()
+        } else {
+            serde_json::from_value(arguments.clone())
+                .map_err(|error| format!("bad demo export arguments: {error}"))?
+        };
+        let kind = arguments
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("cam_bolt");
+        let (meshes, appearances, demo) = match kind {
+            "clip" | "latch" => {
+                let (m, a) = nbcad_export::print_in_place_clip();
+                (m, a, "print_in_place_clip")
+            }
+            "cam_bolt" | "cam" => {
+                let (m, a) = nbcad_export::print_in_place_cam_bolt();
+                (m, a, "print_in_place_cam_bolt")
+            }
+            other => {
+                return Err(format!(
+                    "unknown demo kind '{other}' (expected cam_bolt or clip)"
+                ))
+            }
+        };
+        let bytes = nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "format": "3mf",
+            "encoding": "base64",
+            "demo": demo,
+            "body_count": meshes.len(),
+            "clearance_mm": nbcad_export::CLEAR_MM,
+            "slicer_target": request.slicer_target,
+            "byte_length": bytes.len(),
+            "bytes_base64": BASE64.encode(bytes),
+        }))
     }
 }
 
@@ -196,6 +633,53 @@ fn parse_engine_envelope(raw: String) -> Result<Value, String> {
             .unwrap_or("unknown noBS CAD engine error")
             .to_string())
     }
+}
+
+fn annotate_disclosure(
+    mut value: Value,
+    disclosure: &DisclosureState,
+    pack: FocusPack,
+    spine: bool,
+) -> Value {
+    let note = disclosure.disclosure_note(pack, spine);
+    // Only annotate JSON objects so string/array engine payloads (e.g.
+    // cad_project_model) keep their historical shapes for goldens/clients.
+    if let Value::Object(object) = &mut value {
+        object.insert("_disclosure".to_string(), note);
+    }
+    value
+}
+
+fn tool_entry(tool: &ToolSpec) -> Value {
+    json!({
+        "name": tool.name,
+        "title": tool.title,
+        "description": tool.description,
+        "inputSchema": tool.input_schema
+    })
+}
+
+fn full_tool_catalog() -> Value {
+    Value::Array(
+        tool_specs()
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name,
+                    "title": tool.title,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                    "execution": match tool.execution {
+                        Execution::Direct => "direct",
+                        Execution::SolidReplay => "solid_replay",
+                        Execution::Control => "control",
+                    },
+                    "pack": tool.pack.as_str(),
+                    "spine": tool.spine,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn empty_schema() -> Value {
@@ -672,7 +1156,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         &["reference", "body_id", "edge_id", "angle_deg"],
     );
 
-    vec![
+    let mut tools = vec![
         ToolSpec::direct(
             "cad_document",
             "Inspect CAD document",
@@ -707,6 +1191,14 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({"model_json": {"type": "string", "minLength": 2}}),
                 &["model_json"],
             ),
+        ),
+        ToolSpec::solid(
+            "cad_new_project",
+            "New project",
+            "Clear the headless document to a fresh empty project and recompute (resets botched sessions).",
+            "project_prepare_new",
+            Payload::Empty,
+            empty_schema(),
         ),
         ToolSpec::direct(
             "sketch_begin",
@@ -775,6 +1267,25 @@ fn tool_specs() -> Vec<ToolSpec> {
             object_schema(
                 json!({"from": point.clone(), "to_raw": point.clone(), "ctrl_held": {"type": "boolean"}}),
                 &["from", "to_raw"],
+            ),
+        ),
+        ToolSpec::direct(
+            "sketch_preview_line_locked",
+            "Preview locked line",
+            "Preview a length/angle-locked segment without mutating the sketch (dynamic-input parity).",
+            "preview_segment_locked",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "from": point.clone(),
+                    "to_hint": point.clone(),
+                    "length_mm": {"type": "number", "exclusiveMinimum": 0},
+                    "angle_deg": {"type": "number"},
+                    "length_text": {"type": "string"},
+                    "angle_text": {"type": "string"},
+                    "ctrl_held": {"type": "boolean"}
+                }),
+                &["from", "to_hint"],
             ),
         ),
         ToolSpec::direct(
@@ -1200,6 +1711,17 @@ fn tool_specs() -> Vec<ToolSpec> {
             object_schema(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
         ),
         ToolSpec::direct(
+            "sketch_set_grid_step",
+            "Set sketch grid step",
+            "Set the sketch grid step size in millimetres (matches UI grid precision).",
+            "set_grid_step",
+            Payload::Object,
+            object_schema(
+                json!({"step_mm": {"type": "number", "exclusiveMinimum": 0}}),
+                &["step_mm"],
+            ),
+        ),
+        ToolSpec::direct(
             "sketch_eval_expression",
             "Evaluate sketch expression",
             "Evaluate a number or parameter formula in the active sketch.",
@@ -1345,6 +1867,24 @@ fn tool_specs() -> Vec<ToolSpec> {
             "solid_scene",
             Payload::Empty,
             empty_schema(),
+        ),
+        ToolSpec::direct(
+            "solid_tessellate",
+            "Tessellate bodies",
+            "Tessellate active bodies with configurable deflection and return mesh stats (no file bytes). Use before export to judge triangle density.",
+            "solid_tessellate",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1}
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35}
+                }),
+                &[],
+            ),
         ),
         ToolSpec::direct(
             "solid_extrude_definitions",
@@ -1752,23 +2292,264 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["feature_id", "target_index"],
             ),
         ),
-    ]
+        ToolSpec::direct(
+            "solid_export_step",
+            "Export STEP",
+            "Export selected or all active bodies as AP242 STEP bytes encoded in base64. Prefer solid_export_3mf for slicers.",
+            "solid_export_step",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "uniqueItems": true
+                    },
+                    "thread_metadata": {
+                        "type": "array",
+                        "items": {"type": "object", "additionalProperties": true}
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::direct(
+            "solid_export_stl",
+            "Export STL",
+            "Tessellate active bodies and return binary STL (millimetres) as base64. Appearance is not included.",
+            "solid_export_stl",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": "Empty exports every active body."
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35}
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::direct(
+            "solid_export_3mf",
+            "Export 3MF",
+            "Tessellate active bodies into a standard 3MF (mm, basematerials) with optional slicer Metadata (Bambu/Orca/Prusa/Cura). Preferred print handoff vs STEP.",
+            "solid_export_3mf",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": "Empty exports every active body."
+                    },
+                    "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
+                    "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35},
+                    "include_appearance": {"type": "boolean", "default": true},
+                    "slicer_target": {
+                        "type": "string",
+                        "enum": ["standard", "bambu_studio", "orca_slicer", "prusa_slicer", "cura"],
+                        "default": "bambu_studio",
+                        "description": "Embed slicer-compatible Metadata plus consortium basematerials."
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::direct(
+            "material_catalog",
+            "Material catalog",
+            "Return built-in filament presets (Generic, Bambu Lab, Prusa, Polymaker, Hatchbox, Overture, Elegoo, Creality, Sunlu, eSun, Anycubic).",
+            "material_catalog",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "body_appearances",
+            "List body appearances",
+            "Return per-body color/filament assignments used by 3MF export and the viewport.",
+            "body_appearances",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "set_body_appearance",
+            "Set body appearance",
+            "Assign filament/color to a body. Prefer body_id + preset_id from material_catalog; or pass a full BodyAppearance object.",
+            "set_body_appearance",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "body_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Target body id from solid_scene."
+                    },
+                    "preset_id": {
+                        "type": "string",
+                        "description": "Catalog preset id (e.g. bambu.pla.basic.red). When set, other fields are filled from the catalog."
+                    },
+                    "color": {
+                        "type": "object",
+                        "properties": {
+                            "r": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "g": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "b": {"type": "integer", "minimum": 0, "maximum": 255},
+                            "a": {"type": "integer", "minimum": 0, "maximum": 255}
+                        }
+                    },
+                    "material_name": {"type": "string"},
+                    "filament_type": {"type": "string"},
+                    "brand": {"type": "string"},
+                    "color_name": {"type": "string"},
+                    "filament_id": {"type": ["string", "null"]},
+                    "density_g_cm3": {"type": ["number", "null"]},
+                    "diameter_mm": {"type": "number", "exclusiveMinimum": 0}
+                }),
+                &["body_id"],
+            ),
+        ),
+        ToolSpec::direct(
+            "solid_export_preflight",
+            "Export preflight",
+            "Check timeline errors, active bodies, and appearance coverage before mesh/STEP export.",
+            "solid_export_preflight",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "demo_export_pip_3mf",
+            "Export PIP demo 3MF",
+            "Return a built-in print-in-place demo as base64 3MF (AABB clearance smoke ≥ 0.4 mm). Does not mutate the document. kind=cam_bolt (default, 4-body wedge+dial) or clip (3-body drawer).",
+            "demo_export_pip_3mf",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "kind": {
+                        "type": "string",
+                        "enum": ["cam_bolt", "clip"],
+                        "default": "cam_bolt"
+                    },
+                    "slicer_target": {
+                        "type": "string",
+                        "enum": ["standard", "bambu_studio", "orca_slicer", "prusa_slicer", "cura"],
+                        "default": "bambu_studio"
+                    }
+                }),
+                &[],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_get_focus",
+            "Get focus state",
+            "Return the active focus pack, soft packs, TTLs, and disclosure mode.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_set_focus",
+            "Set focus",
+            "Set the active modeling focus pack and schedule a throttled tools/list_changed notification.",
+            object_schema(
+                json!({
+                    "focus": {
+                        "type": "string",
+                        "enum": ["document", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
+                    },
+                    "explicit": {
+                        "type": "boolean",
+                        "description": "When true, auto-focus hints are ignored until cleared."
+                    }
+                }),
+                &["focus"],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_list_focus_areas",
+            "List focus areas",
+            "Return the supported focus packs and human-readable descriptions.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_get_tool_disclosure_mode",
+            "Get disclosure mode",
+            "Return the current tool disclosure mode: dynamic or full_static.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_set_tool_disclosure_mode",
+            "Set disclosure mode",
+            "Switch between dynamic focus-scoped advertisement and the full_static escape hatch.",
+            object_schema(
+                json!({
+                    "mode": {
+                        "type": "string",
+                        "enum": ["dynamic", "full_static"]
+                    }
+                }),
+                &["mode"],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_list_all_tools",
+            "List full tool catalog",
+            "Return every registered tool with schemas and focus tags without changing advertisement.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_cancel_recompute",
+            "Cancel solid recompute",
+            "Abort an in-flight solid replay if one is pending in this MCP process.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_list_sessions",
+            "List read-only session snapshots",
+            "List model session directories under NBCAD_SESSION_DIR (skips _* control dirs). Use with cad_attach for a read-only load into this MCP process. Not a live UI co-link.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_attach",
+            "Attach read-only session snapshot",
+            "Require and load model.json from a session directory into this MCP process; optional focus.json. Fails if the model is missing or invalid. Never writes back to the session dir.",
+            object_schema(
+                json!({
+                    "session_id": {"type": "string", "minLength": 1}
+                }),
+                &["session_id"],
+            ),
+        ),
+        ToolSpec::control(
+            "cad_refresh",
+            "Refresh attached session snapshot",
+            "Re-read model.json (and optional focus.json) for the currently attached session. Explicit refresh — MCP does not watch the filesystem.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_detach",
+            "Detach session snapshot",
+            "Clear the attached session id. Leaves the in-memory document as last loaded; does not delete session files.",
+            empty_schema(),
+        ),
+    ];
+    for tool in &mut tools {
+        let (pack, spine) = tags_for_tool(tool.name);
+        tool.pack = pack;
+        tool.spine = spine;
+    }
+    tools
 }
 
-fn tool_list_result() -> Value {
+fn tool_list_result(disclosure: &mut DisclosureState) -> Value {
+    disclosure.tick_soft_expiry();
     Value::Object(Map::from_iter([(
         "tools".to_string(),
         Value::Array(
             tool_specs()
-                .into_iter()
-                .map(|tool| {
-                    json!({
-                        "name": tool.name,
-                        "title": tool.title,
-                        "description": tool.description,
-                        "inputSchema": tool.input_schema
-                    })
-                })
+                .iter()
+                .filter(|tool| disclosure.is_advertised(tool.name, tool.pack, tool.spine))
+                .map(tool_entry)
                 .collect(),
         ),
     )]))
@@ -1809,10 +2590,12 @@ fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {
     })
 }
 
-fn handle_message(server: &mut CadServer, message: Value) -> Option<Value> {
-    let method = message.get("method")?.as_str()?;
+fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Vec::new();
+    };
     let id = message.get("id").cloned();
-    match method {
+    let mut responses = match method {
         "initialize" => {
             let requested = message
                 .pointer("/params/protocolVersion")
@@ -1822,52 +2605,87 @@ fn handle_message(server: &mut CadServer, message: Value) -> Option<Value> {
                 "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
                 _ => LATEST_PROTOCOL,
             };
-            Some(response(
+            vec![response(
                 id.unwrap_or(Value::Null),
                 json!({
                     "protocolVersion": protocol,
-                    "capabilities": { "tools": { "listChanged": false } },
+                    "capabilities": { "tools": { "listChanged": true } },
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls."
+                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable."
                 }),
-            ))
+            )]
         }
-        "notifications/initialized" | "notifications/cancelled" => None,
-        "ping" => id.map(|id| response(id, json!({}))),
-        "tools/list" => Some(response(id.unwrap_or(Value::Null), tool_list_result())),
+        "notifications/initialized" | "notifications/cancelled" => Vec::new(),
+        "ping" => id.map(|id| response(id, json!({}))).into_iter().collect(),
+        "tools/list" => vec![response(
+            id.unwrap_or(Value::Null),
+            tool_list_result(&mut server.disclosure),
+        )],
         "tools/call" => {
             let id = id.unwrap_or(Value::Null);
             let Some(name) = message.pointer("/params/name").and_then(Value::as_str) else {
-                return Some(error_response(
+                return vec![error_response(
                     id,
                     -32602,
                     "tools/call is missing params.name",
-                ));
+                )];
             };
             let arguments = message
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             if !tool_specs().iter().any(|tool| tool.name == name) {
-                return Some(error_response(id, -32602, format!("unknown tool: {name}")));
+                return vec![error_response(id, -32602, format!("unknown tool: {name}"))];
             }
             let result = match server.call_tool(name, arguments) {
                 Ok(value) => success_result(value),
                 Err(error) => tool_error(error),
             };
-            Some(response(id, result))
+            vec![response(id, result)]
         }
-        _ if id.is_none() => None,
-        _ => Some(error_response(
+        _ if id.is_none() => Vec::new(),
+        _ => vec![error_response(
             id.unwrap_or(Value::Null),
             -32601,
             format!("method not found: {method}"),
-        )),
+        )],
+    };
+    if let Some(notification) = server.disclosure.take_notify_if_due() {
+        responses.push(notification);
     }
+    responses
+}
+
+/// Emit due soft-TTL / list_changed notifications without waiting for another
+/// client RPC. Used by the stdin+timeout worker (Jack §2) and by unit tests.
+fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
+    server.disclosure.tick_soft_expiry();
+    let mut outgoing = Vec::new();
+    if let Some(notification) = server.disclosure.take_notify_if_due() {
+        outgoing.push(notification);
+    }
+    outgoing
+}
+
+fn write_jsonrpc_messages(stdout: &mut impl Write, messages: &[Value]) -> bool {
+    for message in messages {
+        if serde_json::to_writer(&mut *stdout, message).is_err()
+            || writeln!(stdout).is_err()
+            || stdout.flush().is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+enum StdinEvent {
+    Line(String),
+    Eof,
 }
 
 fn main() {
@@ -1878,29 +2696,71 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let stdin = io::stdin();
+
+    // Jack §2: do not block forever on stdin. A reader thread feeds lines;
+    // the main loop wakes on the next disclosure deadline so list_changed /
+    // soft-TTL can flush with no later client ping.
+    let (tx, rx) = mpsc::channel::<StdinEvent>();
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(StdinEvent::Line(line)).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(StdinEvent::Eof);
+    });
+
     let mut stdout = io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        if line.trim().is_empty() {
+    loop {
+        let due = idle_due_messages(&mut server);
+        if !due.is_empty() {
+            if !write_jsonrpc_messages(&mut stdout, &due) {
+                break;
+            }
             continue;
         }
-        let outgoing = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(&mut server, message),
-            Err(error) => Some(error_response(
-                Value::Null,
-                -32700,
-                format!("parse error: {error}"),
-            )),
+
+        let event = match server.disclosure.ms_until_wake() {
+            Some(ms) => match rx.recv_timeout(Duration::from_millis(ms.max(1))) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => {
+                    let due = idle_due_messages(&mut server);
+                    if !write_jsonrpc_messages(&mut stdout, &due) {
+                        break;
+                    }
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(event) => event,
+                Err(_) => break,
+            },
         };
-        if let Some(outgoing) = outgoing {
-            if serde_json::to_writer(&mut stdout, &outgoing).is_err()
-                || writeln!(&mut stdout).is_err()
-                || stdout.flush().is_err()
-            {
-                break;
+
+        match event {
+            StdinEvent::Eof => break,
+            StdinEvent::Line(line) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let outgoing = match serde_json::from_str::<Value>(&line) {
+                    Ok(message) => handle_message(&mut server, message),
+                    Err(error) => vec![error_response(
+                        Value::Null,
+                        -32700,
+                        format!("parse error: {error}"),
+                    )],
+                };
+                if !write_jsonrpc_messages(&mut stdout, &outgoing) {
+                    break;
+                }
             }
         }
     }
@@ -1949,46 +2809,51 @@ mod tests {
 
     #[test]
     fn tool_registry_is_granular_and_protocol_lists_revolve() {
-        let listed = tool_list_result();
-        let tools = listed["tools"].as_array().unwrap();
+        let catalog = full_tool_catalog();
+        let all_tools = catalog.as_array().unwrap();
         assert_eq!(
-            tools.len(),
-            101,
-            "update the public MCP tool count when the registry changes"
+            all_tools.len(),
+            MODELING_TOOL_COUNT + 19,
+            "105 modeling tools plus 8 print helpers and 11 control tools"
         );
-        assert!(tools.iter().any(|tool| tool["name"] == "sketch_fillet"));
-        assert!(tools
+        let modeling_count = all_tools
             .iter()
-            .any(|tool| tool["name"] == "sketch_rectangular_pattern"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "sketch_circular_pattern"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_extrude"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_revolve"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_sweep"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_loft"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_rib"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_fillet"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_chamfer"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_hole"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "construction_plane_offset"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_shell"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_mirror"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_rectangular_pattern"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_circular_pattern"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_combine"));
-        assert!(tools.iter().any(|tool| tool["name"] == "solid_split_body"));
-        assert!(tools
-            .iter()
-            .any(|tool| tool["name"] == "solid_reorder_feature"));
+            .filter(|tool| {
+                !matches!(
+                    tool["name"].as_str(),
+                    Some(
+                        "solid_export_step"
+                            | "solid_export_stl"
+                            | "solid_export_3mf"
+                            | "solid_export_preflight"
+                            | "material_catalog"
+                            | "body_appearances"
+                            | "set_body_appearance"
+                            | "demo_export_pip_3mf"
+                            | "cad_get_focus"
+                            | "cad_set_focus"
+                            | "cad_list_focus_areas"
+                            | "cad_get_tool_disclosure_mode"
+                            | "cad_set_tool_disclosure_mode"
+                            | "cad_list_all_tools"
+                            | "cad_cancel_recompute"
+                            | "cad_list_sessions"
+                            | "cad_attach"
+                            | "cad_refresh"
+                            | "cad_detach"
+                    )
+                )
+            })
+            .count();
+        assert_eq!(modeling_count, MODELING_TOOL_COUNT);
 
         let mut server = CadServer::new().unwrap();
+        let listed = tool_list_result(&mut server.disclosure);
+        let tools = listed["tools"].as_array().unwrap();
+        assert!(tools.len() < all_tools.len());
+        assert!(tools.iter().any(|tool| tool["name"] == "cad_document"));
+        assert!(tools.iter().any(|tool| tool["name"] == "cad_get_focus"));
+
         let initialized = handle_message(
             &mut server,
             json!({
@@ -1998,9 +2863,481 @@ mod tests {
                 "params": { "protocolVersion": "2025-06-18" }
             }),
         )
+        .pop()
         .unwrap();
         assert_eq!(initialized["result"]["protocolVersion"], LATEST_PROTOCOL);
-        assert!(initialized["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(
+            initialized["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+    }
+
+    #[test]
+    fn focus_pack_matrix_covers_modeling_registry() {
+        let mut packs = std::collections::BTreeMap::<&str, usize>::new();
+        for tool in tool_specs() {
+            if matches!(
+                tool.name,
+                "solid_export_step"
+                    | "solid_export_stl"
+                    | "solid_export_3mf"
+                    | "solid_export_preflight"
+                    | "material_catalog"
+                    | "body_appearances"
+                    | "set_body_appearance"
+                    | "demo_export_pip_3mf"
+                    | "cad_get_focus"
+                    | "cad_set_focus"
+                    | "cad_list_focus_areas"
+                    | "cad_get_tool_disclosure_mode"
+                    | "cad_set_tool_disclosure_mode"
+                    | "cad_list_all_tools"
+                    | "cad_cancel_recompute"
+                    | "cad_list_sessions"
+                    | "cad_attach"
+                    | "cad_refresh"
+                    | "cad_detach"
+            ) {
+                continue;
+            }
+            *packs.entry(tool.pack.as_str()).or_default() += 1;
+        }
+        assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
+        // Modeling registry covers 8 packs; print helpers are outside MODELING_TOOL_COUNT.
+        assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
+        assert_eq!(packs["document"], 5);
+        assert_eq!(packs["sketch"], 50);
+        assert_eq!(packs["solid"], 10);
+        assert!(packs["modify"] >= 6);
+        assert!(packs["body_ops"] >= 10);
+        assert!(packs["datums"] >= 6);
+        assert!(packs["history"] >= 3);
+        assert_eq!(packs["inspect"], 12);
+        assert!(!packs.contains_key("print"));
+    }
+
+    #[test]
+    fn dynamic_disclosure_lists_active_and_soft_tools() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "cad_set_focus",
+                json!({"focus": "sketch", "explicit": true}),
+            )
+            .unwrap();
+        let mut listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.iter().any(|name| name.starts_with("sketch_")));
+        assert!(!names.iter().any(|name| *name == "solid_extrude"));
+
+        server
+            .call_tool("cad_set_focus", json!({"focus": "solid", "explicit": true}))
+            .unwrap();
+        listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.iter().any(|name| *name == "solid_extrude"));
+    }
+
+    #[test]
+    fn soft_hidden_tools_remain_callable() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "cad_set_focus",
+                json!({"focus": "document", "explicit": true}),
+            )
+            .unwrap();
+        DisclosureState::advance_for_test(
+            disclosure::SOFT_TTL_MS + disclosure::FOCUS_THROTTLE_MS + 1,
+        );
+        server.disclosure.tick_soft_expiry();
+        let listed = tool_list_result(&mut server.disclosure);
+        let names: Vec<_> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(!names.iter().any(|name| *name == "sketch_begin"));
+        let result = server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        // Hidden side-call re-promotes the pack (steerability); still no hard jail.
+        assert_eq!(result["_disclosure"]["state"], "soft");
+        let listed_after = tool_list_result(&mut server.disclosure);
+        assert!(listed_after["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "sketch_begin"));
+    }
+
+    #[test]
+    fn full_static_lists_entire_registry() {
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "cad_set_tool_disclosure_mode",
+                json!({"mode": "full_static"}),
+            )
+            .unwrap();
+        let listed = tool_list_result(&mut server.disclosure);
+        let catalog = full_tool_catalog();
+        assert_eq!(
+            listed["tools"].as_array().unwrap().len(),
+            catalog.as_array().unwrap().len()
+        );
+    }
+
+    #[test]
+    fn every_focus_pack_lists_representative_tools() {
+        let expectations: &[(&str, &str)] = &[
+            ("document", "cad_project_model"),
+            ("sketch", "sketch_begin"),
+            ("solid", "solid_extrude"),
+            ("modify", "solid_fillet"),
+            ("body_ops", "solid_shell"),
+            ("datums", "construction_plane_offset"),
+            ("history", "solid_delete_feature"),
+            ("inspect", "solid_scene"),
+            ("print", "solid_export_3mf"),
+        ];
+        for (focus, tool_name) in expectations {
+            let mut server = CadServer::new().unwrap();
+            server
+                .call_tool("cad_set_focus", json!({ "focus": focus, "explicit": true }))
+                .unwrap();
+            let listed = tool_list_result(&mut server.disclosure);
+            let names: Vec<_> = listed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect();
+            assert!(
+                names.iter().any(|name| name == tool_name),
+                "focus '{focus}' should advertise '{tool_name}'"
+            );
+            assert!(
+                names.iter().any(|name| *name == "cad_get_focus"),
+                "spine control tools must remain advertised under '{focus}'"
+            );
+        }
+    }
+
+    #[test]
+    fn focus_change_emits_list_changed_without_later_rpc() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        let responses = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "sketch", "explicit": true}
+                }
+            }),
+        );
+        assert!(
+            responses.iter().all(|message| {
+                message.get("method").and_then(Value::as_str)
+                    != Some("notifications/tools/list_changed")
+            }),
+            "throttled notify must not flush on the focus-changing response itself"
+        );
+        assert!(
+            server.disclosure.ms_until_wake().is_some(),
+            "focus change must schedule a wake for the notify worker"
+        );
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let idle = idle_due_messages(&mut server);
+        assert!(
+            idle.iter().any(|message| {
+                message.get("method").and_then(Value::as_str)
+                    == Some("notifications/tools/list_changed")
+            }),
+            "notify worker must emit list_changed after throttle without a later ping/RPC"
+        );
+    }
+
+    #[test]
+    fn soft_ttl_expiry_emits_list_changed_without_later_rpc() {
+        DisclosureState::set_clock_for_test(0);
+        let mut server = CadServer::new().unwrap();
+        let _ = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "sketch", "explicit": true}
+                }
+            }),
+        );
+        let _ = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "cad_set_focus",
+                    "arguments": {"focus": "solid", "explicit": true}
+                }
+            }),
+        );
+        // Clear the focus-change notify so only soft-TTL expiry remains under test.
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let _ = idle_due_messages(&mut server);
+
+        DisclosureState::advance_for_test(disclosure::SOFT_TTL_MS + 1);
+        let after_expiry = idle_due_messages(&mut server);
+        // Expiry schedules a throttled notify; may or may not be due in the same tick.
+        if after_expiry.iter().any(|message| {
+            message.get("method").and_then(Value::as_str)
+                == Some("notifications/tools/list_changed")
+        }) {
+            return;
+        }
+        DisclosureState::advance_for_test(disclosure::FOCUS_THROTTLE_MS);
+        let idle = idle_due_messages(&mut server);
+        assert!(
+            idle.iter().any(|message| {
+                message.get("method").and_then(Value::as_str)
+                    == Some("notifications/tools/list_changed")
+            }),
+            "soft-TTL expiry must emit list_changed via the notify worker without a later RPC"
+        );
+    }
+
+    #[test]
+    fn read_only_snapshot_attach_refresh_detach() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = format!("attach-{}", session::now_ms());
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+        session::write_session(&unique, "focus.json", "{\"focus\":\"solid\"}").unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        // Missing model must refuse attach (and leave nothing attached).
+        let missing = format!("missing-{unique}");
+        std::fs::create_dir_all(dir.join(&missing)).unwrap();
+        assert!(server
+            .call_tool("cad_attach", json!({"session_id": missing}))
+            .is_err());
+        assert!(server.attached_document_id.is_none());
+
+        let attached = server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        assert_eq!(attached["attached"], true);
+        assert_eq!(attached["session_mode"], "read_only_snapshot");
+        assert_eq!(attached["writeback"], false);
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(unique.as_str())
+        );
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(!scene["bodies"].as_array().unwrap().is_empty());
+
+        let refreshed = server.call_tool("cad_refresh", json!({})).unwrap();
+        assert_eq!(refreshed["refreshed"], true);
+        assert_eq!(refreshed["session_id"], unique);
+
+        let detached = server.call_tool("cad_detach", json!({})).unwrap();
+        assert_eq!(detached["detached"], true);
+        assert!(server.attached_document_id.is_none());
+        assert!(server.call_tool("cad_refresh", json!({})).is_err());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn solid_export_3mf_returns_base64_payload() {
+        let (mut server, _) = mcp_box();
+        let exported = server
+            .call_tool("solid_export_3mf", json!({"slicer_target": "bambu_studio"}))
+            .expect("3MF export should succeed for a simple box");
+        assert_eq!(exported["format"], "3mf");
+        assert_eq!(exported["encoding"], "base64");
+        let b64 = exported["bytes_base64"].as_str().expect("base64 payload");
+        assert!(b64.len() > 32);
+        let bytes = BASE64.decode(b64).expect("valid base64");
+        assert!(bytes.len() > 32);
+        // ZIP local file header
+        assert_eq!(&bytes[0..2], b"PK");
+    }
+
+    fn parse_3mf_model_mesh(xml: &str) -> nbcad_export::TriangleMesh {
+        use nbcad_core::BodyId;
+        let mut positions = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<vertex x=\"") {
+                let parts: Vec<&str> = rest.split('"').collect();
+                if parts.len() >= 6 {
+                    let x: f32 = parts[0].parse().unwrap();
+                    let y: f32 = parts[2].parse().unwrap();
+                    let z: f32 = parts[4].parse().unwrap();
+                    positions.extend_from_slice(&[x, y, z]);
+                }
+            }
+        }
+        let mut indices = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<triangle v1=\"") {
+                let parts: Vec<&str> = rest.split('"').collect();
+                if parts.len() >= 6 {
+                    indices.push(parts[0].parse().unwrap());
+                    indices.push(parts[2].parse().unwrap());
+                    indices.push(parts[4].parse().unwrap());
+                }
+            }
+        }
+        nbcad_export::TriangleMesh {
+            body_id: BodyId(1),
+            name: "exported".into(),
+            positions,
+            indices,
+        }
+    }
+
+    #[test]
+    fn occt_box_export_3mf_is_index_welded() {
+        let (mut server, _) = mcp_box();
+        let request = MeshExportRequest::default();
+        let raw_meshes = server
+            .kernel
+            .tessellate_bodies(&request)
+            .expect("OCCT tessellation should succeed for a simple box");
+        assert_eq!(raw_meshes.len(), 1);
+        let raw = &raw_meshes[0];
+        let raw_vertex_count = raw.positions.len() / 3;
+        let tri_count = raw.triangle_count();
+        assert!(tri_count > 0);
+        assert!(
+            raw_vertex_count >= tri_count * 3 - 2,
+            "OCCT soup should emit ~3 positions per triangle (got {raw_vertex_count} verts, {tri_count} tris)"
+        );
+        assert!(
+            nbcad_export::boundary_edge_count(raw) > 0,
+            "raw OCCT mesh should have boundary edges before export weld"
+        );
+
+        let exported = server
+            .call_tool("solid_export_3mf", json!({"slicer_target": "standard"}))
+            .expect("3MF export should succeed");
+        let bytes = BASE64
+            .decode(exported["bytes_base64"].as_str().unwrap())
+            .unwrap();
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("3MF should be a zip");
+        let mut model = archive.by_name("3D/3dmodel.model").unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut model, &mut xml).unwrap();
+
+        let vertex_count = xml.matches("<vertex ").count();
+        let triangle_count = xml.matches("<triangle ").count();
+        assert_eq!(triangle_count, tri_count);
+        assert!(
+            vertex_count < tri_count * 3,
+            "exported 3MF should be welded ({vertex_count} verts vs {triangle_count} tris)"
+        );
+        assert!(
+            vertex_count <= raw_vertex_count / 2,
+            "welded vertex count should be far below raw soup"
+        );
+        // Planar OCCT box should weld to the 8 corners (not a hand-built fixture).
+        assert_eq!(
+            vertex_count, 8,
+            "OCCT unit-box 3MF should weld to 8 corners (got {vertex_count})"
+        );
+
+        let parsed = parse_3mf_model_mesh(&xml);
+        assert_eq!(parsed.positions.len() / 3, vertex_count);
+        assert_eq!(parsed.triangle_count(), triangle_count);
+        assert_eq!(
+            nbcad_export::boundary_edge_count(&parsed),
+            0,
+            "exported 3MF mesh should be manifold (no boundary edges)"
+        );
+        assert_eq!(
+            nbcad_export::invalid_model_edge_count(&parsed),
+            0,
+            "every exported edge should have two oppositely oriented triangle uses"
+        );
+    }
+
+    #[test]
+    fn set_body_appearance_from_preset_then_exports_3mf() {
+        let (mut server, update) = mcp_box();
+        let body_id = update["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extrude returns a body id");
+        let assigned = server
+            .call_tool(
+                "set_body_appearance",
+                json!({
+                    "body_id": body_id,
+                    "preset_id": "bambu.pla.basic.red"
+                }),
+            )
+            .expect("preset appearance assign");
+        let appearances = assigned["body_appearances"].as_array().unwrap();
+        assert_eq!(appearances.len(), 1);
+        assert_eq!(appearances[0]["preset_id"], "bambu.pla.basic.red");
+        assert_eq!(appearances[0]["brand"], "Bambu Lab");
+        let listed = server.call_tool("body_appearances", json!({})).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        let exported = server
+            .call_tool("solid_export_3mf", json!({"slicer_target": "bambu_studio"}))
+            .unwrap();
+        assert_eq!(
+            &BASE64
+                .decode(exported["bytes_base64"].as_str().unwrap())
+                .unwrap()[0..2],
+            b"PK"
+        );
+    }
+
+    #[test]
+    fn solid_export_step_returns_base64_payload() {
+        let (mut server, _) = mcp_box();
+        let exported = server
+            .call_tool("solid_export_step", json!({}))
+            .expect("STEP export should succeed for a simple box");
+        assert_eq!(exported["format"], "step");
+        assert_eq!(exported["encoding"], "base64");
+        assert!(exported["bytes_base64"].as_str().unwrap().len() > 16);
     }
 
     #[test]

@@ -5,4 +5,11 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/sketch", "crates/solid", "crates/occt", "crates/wasm"]
+members = [
+    "crates/core",
+    "crates/sketch",
+    "crates/solid",
+    "crates/occt",
+    "crates/export",
+    "crates/wasm",
+]

@@ -7,7 +7,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use nbcad_core::{
-    DimensionStyle, DocumentSettings, FeatureId, FeatureKind, FeatureTree, PlaneBasis, PlaneRef,
+    BodyAppearance, DimensionStyle, DocumentSettings, FeatureId, FeatureKind, FeatureTree,
+    PlaneBasis, PlaneRef,
 };
 use nbcad_solid::{
     BodyFeatureDefinitionDto, DatumPlaneDefinitionDto, ExtrudeDefinitionDto, HoleDefinitionDto,
@@ -47,6 +48,10 @@ pub(crate) struct ProjectModelV2 {
     pub datum_planes: Vec<DatumPlaneDefinitionDto>,
     #[serde(default)]
     pub body_features: Vec<BodyFeatureDefinitionDto>,
+    /// Per-body viewport / manufacturing appearance. Additive; missing on
+    /// older projects deserializes as empty.
+    #[serde(default)]
+    pub body_appearances: Vec<BodyAppearance>,
     pub counters: ProjectCountersV2,
     pub preferences: ProjectPreferencesV2,
 }

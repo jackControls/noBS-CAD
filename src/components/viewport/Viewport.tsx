@@ -227,6 +227,13 @@ export function Viewport() {
     const COLOR_BODY = threeThemeColor('--cad-body', '#8b9bac');
     const COLOR_BODY_SELECTED = threeThemeColor('--cad-body-selected', '#69a9d4');
     const COLOR_BODY_TOOL = threeThemeColor('--cad-body-tool', '#b58a43');
+
+    const bodyBaseColor = (bodyId: number, appearances: ReturnType<typeof useAppStore.getState>['bodyAppearances']) => {
+      const appearance = appearances.find((entry) => entry.body_id === bodyId);
+      if (!appearance) return COLOR_BODY;
+      const { r, g, b } = appearance.color;
+      return (r << 16) | (g << 8) | b;
+    };
     const COLOR_FACE_HOVER = threeThemeColor('--cad-face-hover', '#9ed5f3');
     const COLOR_FACE_SELECTED = threeThemeColor('--cad-face-selected', '#30aee8');
     const COLOR_EDGE = threeThemeColor('--cad-edge', '#29333d');
@@ -4172,7 +4179,7 @@ export function Viewport() {
                   ? bodySelectionIndex === 0
                     ? COLOR_BODY_SELECTED
                     : COLOR_BODY_TOOL
-                  : COLOR_BODY,
+                  : bodyBaseColor(bodyId, s.bodyAppearances),
           );
           material.emissive.setHex(faceSelected ? 0x063b55 : faceHovered ? 0x05293a : 0x000000);
           material.emissiveIntensity = faceSelected || faceHovered ? 0.32 : 0;
@@ -4321,7 +4328,7 @@ export function Viewport() {
           geometry.computeBoundingBox();
           geometry.computeBoundingSphere();
           const material = new THREE.MeshStandardMaterial({
-            color: COLOR_BODY,
+            color: bodyBaseColor(body.id, useAppStore.getState().bodyAppearances),
             roughness: 0.72,
             metalness: 0.03,
             side: THREE.DoubleSide,
@@ -6120,6 +6127,7 @@ export function Viewport() {
     let lastSolidScene = store.getState().solidScene;
     let lastSolidHidden = store.getState().hidden;
     let lastSolidDocument = store.getState().document;
+    let lastBodyAppearances = store.getState().bodyAppearances;
     let lastSolidSelection = {
       body: store.getState().selectedBody,
       bodies: store.getState().selectedBodies.join(','),
@@ -6195,11 +6203,13 @@ export function Viewport() {
       if (
         s.solidScene !== lastSolidScene ||
         s.hidden !== lastSolidHidden ||
-        s.document !== lastSolidDocument
+        s.document !== lastSolidDocument ||
+        s.bodyAppearances !== lastBodyAppearances
       ) {
         lastSolidScene = s.solidScene;
         lastSolidHidden = s.hidden;
         lastSolidDocument = s.document;
+        lastBodyAppearances = s.bodyAppearances;
         rebuildSolids();
       }
       if (

@@ -5,6 +5,7 @@
 //! Tauri shell exchanges snapshots of this model with the frontend via
 //! [`DocumentDto`].
 
+mod appearance;
 mod browser;
 mod document;
 mod dto;
@@ -13,6 +14,10 @@ mod ids;
 mod plane;
 mod units;
 
+pub use appearance::{
+    BodyAppearance, Rgba8, DEFAULT_BODY_COLOR, DEFAULT_BRAND, DEFAULT_FILAMENT_DIAMETER_MM,
+    DEFAULT_FILAMENT_TYPE, DEFAULT_MATERIAL_NAME,
+};
 pub use browser::{BrowserNode, BrowserNodeKind, NodeId};
 pub use document::Document;
 pub use dto::DocumentDto;

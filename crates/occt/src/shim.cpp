@@ -1451,12 +1451,23 @@ rust::Vec<std::uint64_t> Kernel::body_ids() const {
 }
 
 FfiMesh Kernel::mesh(std::uint64_t body_id) const {
+  return mesh_with_deflection(body_id, 0.15, 0.35);
+}
+
+FfiMesh Kernel::mesh_with_deflection(
+    std::uint64_t body_id,
+    double linear_deflection,
+    double angular_deflection) const {
   const auto found = impl_->bodies.find(body_id);
   if (found == impl_->bodies.end()) {
     throw std::runtime_error("body is missing");
   }
   const TopoDS_Shape& shape = found->second;
-  BRepMesh_IncrementalMesh mesher(shape, 0.15, false, 0.35, true);
+  const double linear =
+      linear_deflection > 0.0 ? linear_deflection : 0.15;
+  const double angular =
+      angular_deflection > 0.0 ? angular_deflection : 0.35;
+  BRepMesh_IncrementalMesh mesher(shape, linear, false, angular, true);
   mesher.Perform();
 
   FfiMesh output;

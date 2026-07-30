@@ -18,21 +18,21 @@ These broaden the original noBS CAD goal; they do not replace it.
 | **Strong local automation** | **MCP** as a serious, fully local control and testing surface. |
 | **Simulation / analysis** | Longer-term module family, **staged** (see below) — not one feature. |
 
-Education-style tutorials (“quests”) that reuse golden automation scenarios are
+Education-style tutorials ("quests") that reuse golden automation scenarios are
 interesting later. They are **not** a top-level committed product goal today.
 
 ## Simulation in stages
 
 Do not treat fit, motion, and strength as one deliverable:
 
-1. **Geometric fit / interference** — approachable on today’s solid bodies.
+1. **Geometric fit / interference** — approachable on today's solid bodies.
 2. **Motion** — needs assemblies, joints, and kinematics infrastructure.
 3. **Strength / FEA** — needs a separately validated meshing, material, load,
    and solver stack; much later.
 
 ## Near-term engineering priorities
 
-1. Make today’s sketching, solid modeling, history, undo, and project-file
+1. Make today's sketching, solid modeling, history, undo, and project-file
    workflows more dependable.
 2. Harden and expand modeled hole-thread coverage (ISO metric / Unified base
    capability has landed); edge cases and regression tests.
@@ -40,10 +40,12 @@ Do not treat fit, motion, and strength as one deliverable:
 4. Improve preview, selection, and recompute performance.
 5. Turn reported failures into focused regression tests.
 6. Grow MCP as a local automation/testing surface (see
-   [mcp-harness.md](mcp-harness.md)); keep UI and MCP honesty about today’s
-   separate documents.
-7. Define testable scope for 3MF + materials/colors as a **target**, not as
-   current functionality.
+   [mcp-harness.md](mcp-harness.md)). On branch `feat/3mf-print-export`:
+   soft focus-scoped disclosure with a real `list_changed` wake loop, plus
+   read-only session snapshots (`cad_attach` / `cad_refresh` / `cad_detach`) —
+   not live UI co-link.
+7. Native **3MF** / **STL** export with materials/colors is landing on
+   `feat/3mf-print-export`; treat `main` as STEP-first until that merges.
 
 ## Related reading
 
