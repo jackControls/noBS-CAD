@@ -1900,6 +1900,7 @@ dependencies = [
  "cxx-build",
  "nbcad-core",
  "nbcad-solid",
+ "serde_json",
 ]
 
 [[package]]

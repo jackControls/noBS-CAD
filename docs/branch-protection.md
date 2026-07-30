@@ -6,7 +6,7 @@
 - **One approving review** is the expected bar (either `@jackControls` or
   `@jeffglousher` may approve the other’s PR; authors do not self-approve).
 - **Required CI status checks** are still **deferred** until reliable jobs
-  exist (see engine/MCP CI work). The Windows portable workflow is valuable
+  exist (see engine/MCP CI work). The desktop packaging workflow is valuable
   but is not treated as a hard required gate for every docs PR yet.
 
 ## When enabling a formal `main` protection rule
