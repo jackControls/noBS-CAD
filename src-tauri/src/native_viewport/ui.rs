@@ -1096,24 +1096,14 @@ pub(crate) fn spawn_reference_dialog(
                 top: percent(50.0),
                 width: px(440.0),
                 flex_direction: FlexDirection::Column,
-                border: UiRect {
-                    left: px(2.0),
-                    right: px(1.0),
-                    top: px(1.0),
-                    bottom: px(1.0),
-                },
+                border: UiRect::all(px(1.5)),
                 border_radius: BorderRadius::all(px(14.0)),
                 overflow: Overflow::clip(),
                 ..default()
             },
             UiTransform::from_translation(Val2::percent(-50.0, -50.0)),
             BackgroundColor(theme.panel),
-            BorderColor {
-                top: theme.edge,
-                right: theme.edge,
-                bottom: theme.edge,
-                left: theme.accent.with_alpha(0.78),
-            },
+            BorderColor::all(theme.accent.with_alpha(0.78)),
             theme.dialog_shadow(),
             ZIndex(1_100),
         ))
@@ -1133,18 +1123,6 @@ pub(crate) fn spawn_reference_dialog(
                     BorderColor::all(theme.edge),
                 ))
                 .with_children(|header| {
-                    header.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(18.0),
-                            top: px(0.0),
-                            width: px(58.0),
-                            height: px(2.0),
-                            border_radius: BorderRadius::MAX,
-                            ..default()
-                        },
-                        BackgroundColor(theme.accent.with_alpha(0.95)),
-                    ));
                     header.spawn((
                         Node {
                             width: px(18.0),
