@@ -243,35 +243,6 @@ const DEFAULT_PALETTE: Record<PaletteOptionKey, boolean> = {
 const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
 
-const MCP_SESSION_STORAGE_KEY = 'nbcad.mcpSessionId';
-
-function isUuidV4(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
-}
-
-function loadOrCreateMcpSessionId(): string {
-  try {
-    const existing = localStorage.getItem(MCP_SESSION_STORAGE_KEY);
-    if (existing && isUuidV4(existing)) return existing;
-  } catch {
-    // ignore storage failures (private mode)
-  }
-  const id =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0').slice(-12)}`;
-  try {
-    localStorage.setItem(MCP_SESSION_STORAGE_KEY, id);
-  } catch {
-    // ignore
-  }
-  return id;
-}
-
-const INITIAL_MCP_SESSION_ID = loadOrCreateMcpSessionId();
-
 interface AppState {
   mode: AppMode;
   /** Active ribbon tab id ('solid', 'sketch', ...). */
@@ -283,11 +254,6 @@ interface AppState {
   projectFileName: string | null;
   /** Which engine host the frontend is talking to (D8). */
   engineKind: 'tauri' | 'wasm' | null;
-  /**
-   * Stable UUID v4 for the read-only MCP snapshot bridge.
-   * Not the document name — agents attach with this id.
-   */
-  mcpSessionId: string;
   /** Live snapshot of the active sketch session (null outside sketch mode). */
   activeSketch: SketchDto | null;
   /** Snapshots of finished sketches (M1d): rendered muted in 3D solid mode. */
@@ -564,7 +530,6 @@ export const useAppStore = create<AppState>()((set) => ({
   dirty: false,
   projectFileName: null,
   engineKind: null,
-  mcpSessionId: INITIAL_MCP_SESSION_ID,
   activeSketch: null,
   finishedSketches: [],
   solidScene: { bodies: [], errors: [] },

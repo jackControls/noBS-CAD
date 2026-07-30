@@ -328,6 +328,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(session_bridge::SessionBridgeState::default())
         .manage(SixDofMouseState::default())
         .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
@@ -335,6 +336,7 @@ pub fn run() {
             get_document,
             read_binary_file,
             write_binary_file_atomic,
+            session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
             session_bridge::mcp_session_bridge_heartbeat,
             six_dof_mouse::six_dof_mouse_devices,

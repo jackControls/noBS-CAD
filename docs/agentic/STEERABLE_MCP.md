@@ -31,7 +31,8 @@ Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 **read-only snapshot bridge** under `NBCAD_SESSION_DIR`:
 
 - session ids are **UUID v4** (document names rejected);
-- desktop publishes `<uuid>/{model.json,focus.json,heartbeat.json}` (atomic + generation guard);
+- Tauri owns one UUID per desktop window and publishes
+  `<uuid>/{model.json,focus.json,heartbeat.json}` with pre-export generation reservations;
 - attach **fails** if `model.json` is missing or invalid;
 - MCP **never** writes the session files back after editing in memory;
 - refresh is explicit (no filesystem watcher);

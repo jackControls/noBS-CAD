@@ -58,5 +58,5 @@ Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on sh
 
 - Env: `NBCAD_SESSION_DIR` (else `%TEMP%/nbcad-sessions`)
 - Layout: `<uuid>/{model.json,focus.json,heartbeat.json}` (UUID v4 ids)
-- Desktop Tauri publishes atomically with a generation guard
+- Tauri owns one UUID per desktop window and reserves publish generations before async export
 - `cad_attach`: read-only load into the MCP process; never writeback; not live co-link

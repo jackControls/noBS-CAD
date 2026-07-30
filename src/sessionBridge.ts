@@ -74,24 +74,28 @@ function activeSolidDialog(state: ReturnType<typeof useAppStore.getState>): stri
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let started = false;
-let publishGeneration = 0;
+
+interface PublishReservation {
+  session_id: string;
+  generation: number;
+}
 
 async function publishNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri') return;
-  const sessionId = state.mcpSessionId;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
-  const generation = ++publishGeneration;
   try {
+    // Reserve before export so a slower older export cannot overwrite a newer one.
+    // Tauri owns this counter across WebView reloads and scopes it per window.
+    const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
     const engine = await getEngine();
     const model = await engine.exportProjectModel();
     const modelJson = typeof model === 'string' ? model : JSON.stringify(model);
     await invoke('mcp_session_bridge_write', {
       payload: JSON.stringify({
-        session_id: sessionId,
         focus,
         model_json: modelJson,
-        generation,
+        generation: reservation.generation,
       }),
     });
   } catch (error) {
@@ -104,9 +108,7 @@ async function heartbeatNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri') return;
   try {
-    await invoke('mcp_session_bridge_heartbeat', {
-      payload: JSON.stringify({ session_id: state.mcpSessionId }),
-    });
+    await invoke('mcp_session_bridge_heartbeat');
   } catch (error) {
     console.debug('[sessionBridge] heartbeat failed', error);
   }
