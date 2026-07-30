@@ -64,11 +64,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "profile_catalog" => ok_json(manager.profile_catalog()),
         "solid_scene" => ok_json(manager.solid_scene()),
         "body_appearances" => ok_json(manager.body_appearances()),
-        "set_body_appearance" => {
-            with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
-                manager.set_body_appearance(appearance)
-            })
-        }
+        "set_body_appearance" => with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
+            manager.set_body_appearance(appearance)
+        }),
         "extrude_definitions" => ok_json(manager.extrude_definitions()),
         "revolve_definitions" => ok_json(manager.revolve_definitions()),
         "sweep_definitions" => ok_json(manager.sweep_definitions()),

@@ -23,8 +23,8 @@ STEP never invents colors from this store.
 
 ## Catalog
 
-Edit **`crates/export/presets/catalog.json`**, then copy to **`src/materials/catalog.json`**.
+Edit **`crates/export/presets/catalog.json`** as the source of truth.
 
-Rust loads via `include_str!`; `build.rs` mirrors the JSON into `src/materials/` for Vite. Brands today: Generic, Bambu Lab, Prusa, Polymaker, Hatchbox, Overture, Elegoo, Creality, Sunlu, eSun, Anycubic.
+Rust loads via `include_str!`. After changing the catalog, explicitly regenerate the Vite mirror with `cargo test -p nbcad-export regen_frontend_catalog_mirror -- --ignored --exact`; the normal test suite fails if the mirror drifts. Brands today: Generic, Bambu Lab, Prusa, Polymaker, Hatchbox, Overture, Elegoo, Creality, Sunlu, eSun, Anycubic.
 
 Filament IDs are **best-effort** — vendors change SKUs; never block export if an id is stale.

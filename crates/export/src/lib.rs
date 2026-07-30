@@ -20,11 +20,14 @@ pub use facade::ExportFacade;
 pub use materials::{
     brands, catalog_json, find_preset, material_catalog, presets_for_brand, MaterialPreset,
 };
+pub use mesh_weld::{
+    boundary_edge_count, invalid_model_edge_count, validate_3mf_model_mesh, weld_triangle_mesh,
+    DEFAULT_WELD_EPSILON,
+};
 pub use pip_demo::{
     assert_box_clearances, print_in_place_cam_bolt, print_in_place_clip, print_in_place_latch,
     CLEAR_MM,
 };
-pub use mesh_weld::{boundary_edge_count, weld_triangle_mesh, DEFAULT_WELD_EPSILON};
 pub use slicer::SlicerTarget;
 pub use stl::write_stl;
 pub use threemf::write_3mf;
@@ -246,8 +249,8 @@ mod tests {
 
     #[test]
     fn threemf_standard_includes_millimeter_and_basematerial() {
-        let bytes = write_3mf(&[unit_cube(1)], &[red_pla(1)], true, SlicerTarget::Standard)
-            .unwrap();
+        let bytes =
+            write_3mf(&[unit_cube(1)], &[red_pla(1)], true, SlicerTarget::Standard).unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         {
             let mut model = archive.by_name("3D/3dmodel.model").unwrap();
@@ -272,9 +275,10 @@ mod tests {
             "unwelded OCCT-style soup should have boundary edges"
         );
 
-        let welded = weld_triangle_mesh(&raw, DEFAULT_WELD_EPSILON);
+        let welded = weld_triangle_mesh(&raw, DEFAULT_WELD_EPSILON).unwrap();
         assert_eq!(welded.positions.len() / 3, 8);
         assert_eq!(boundary_edge_count(&welded), 0);
+        assert_eq!(invalid_model_edge_count(&welded), 0);
 
         let bytes = write_3mf(&[raw], &[red_pla(1)], true, SlicerTarget::Standard).unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
@@ -365,9 +369,7 @@ mod tests {
             assert!(text.contains("filament_diameter"));
         }
         {
-            let mut model = archive
-                .by_name("Metadata/Slic3r_PE_model.config")
-                .unwrap();
+            let mut model = archive.by_name("Metadata/Slic3r_PE_model.config").unwrap();
             let mut text = String::new();
             std::io::Read::read_to_string(&mut model, &mut text).unwrap();
             assert!(text.contains(r#"key="extruder""#));
@@ -379,8 +381,13 @@ mod tests {
 
     #[test]
     fn threemf_orca_mirrors_bambu_metadata_shape() {
-        let bytes =
-            write_3mf(&[unit_cube(1)], &[red_pla(1)], true, SlicerTarget::OrcaSlicer).unwrap();
+        let bytes = write_3mf(
+            &[unit_cube(1)],
+            &[red_pla(1)],
+            true,
+            SlicerTarget::OrcaSlicer,
+        )
+        .unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("Metadata/project_settings.config").is_ok());
     }
@@ -514,9 +521,15 @@ mod tests {
         let (cam_meshes, cam_apps) = print_in_place_cam_bolt();
         assert_eq!(cam_meshes.len(), 4);
         for (name, target) in [
-            ("print_in_place_cam_bolt_bambu.3mf", SlicerTarget::BambuStudio),
+            (
+                "print_in_place_cam_bolt_bambu.3mf",
+                SlicerTarget::BambuStudio,
+            ),
             ("print_in_place_cam_bolt_orca.3mf", SlicerTarget::OrcaSlicer),
-            ("print_in_place_cam_bolt_prusa.3mf", SlicerTarget::PrusaSlicer),
+            (
+                "print_in_place_cam_bolt_prusa.3mf",
+                SlicerTarget::PrusaSlicer,
+            ),
             ("print_in_place_cam_bolt_cura.3mf", SlicerTarget::Cura),
         ] {
             let bytes = write_3mf(&cam_meshes, &cam_apps, true, target).unwrap();

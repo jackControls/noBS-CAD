@@ -1,20 +1,12 @@
 //! Binary STL writer (geometry only; millimetres assumed).
 
-use crate::mesh_weld::{weld_triangle_mesh, DEFAULT_WELD_EPSILON};
 use crate::{ExportError, TriangleMesh};
 
 pub fn write_stl(meshes: &[TriangleMesh]) -> Result<Vec<u8>, ExportError> {
     if meshes.is_empty() {
         return Err(ExportError("There are no active bodies to export.".into()));
     }
-    let welded: Vec<TriangleMesh> = meshes
-        .iter()
-        .map(|mesh| weld_triangle_mesh(mesh, DEFAULT_WELD_EPSILON))
-        .collect();
-    let triangle_count: u32 = welded
-        .iter()
-        .map(|mesh| mesh.triangle_count() as u32)
-        .sum();
+    let triangle_count: u32 = meshes.iter().map(|mesh| mesh.triangle_count() as u32).sum();
     let mut out = Vec::with_capacity(84 + triangle_count as usize * 50);
     let mut header = [0u8; 80];
     let label = b"noBS CAD binary STL (millimetres)";
@@ -22,7 +14,7 @@ pub fn write_stl(meshes: &[TriangleMesh]) -> Result<Vec<u8>, ExportError> {
     out.extend_from_slice(&header);
     out.extend_from_slice(&triangle_count.to_le_bytes());
 
-    for mesh in &welded {
+    for mesh in meshes {
         if mesh.positions.len() % 3 != 0 {
             return Err(ExportError(format!(
                 "body {} has a malformed position buffer",

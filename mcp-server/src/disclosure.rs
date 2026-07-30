@@ -65,7 +65,9 @@ impl FocusPack {
     pub fn description(self) -> &'static str {
         match self {
             FocusPack::Document => "Document name, project export/load, and session metadata.",
-            FocusPack::Sketch => "Sketch creation, constraints, dimensions, and sketch modify tools.",
+            FocusPack::Sketch => {
+                "Sketch creation, constraints, dimensions, and sketch modify tools."
+            }
             FocusPack::Solid => "Solid creators: extrude, revolve, sweep, loft, and rib.",
             FocusPack::Modify => "Edge and face modifiers: fillet, chamfer, and hole.",
             FocusPack::BodyOps => "Body operations: shell, mirror, patterns, combine, and split.",
@@ -547,22 +549,11 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "sketch_preview_fillet"
         | "sketch_preview_offset"
         | "sketch_preview_trim" => FocusPack::Sketch,
-        "solid_extrude"
-        | "solid_edit_extrude"
-        | "solid_revolve"
-        | "solid_edit_revolve"
-        | "solid_sweep"
-        | "solid_edit_sweep"
-        | "solid_loft"
-        | "solid_edit_loft"
-        | "solid_rib"
+        "solid_extrude" | "solid_edit_extrude" | "solid_revolve" | "solid_edit_revolve"
+        | "solid_sweep" | "solid_edit_sweep" | "solid_loft" | "solid_edit_loft" | "solid_rib"
         | "solid_edit_rib" => FocusPack::Solid,
-        "solid_fillet"
-        | "solid_edit_fillet"
-        | "solid_chamfer"
-        | "solid_edit_chamfer"
-        | "solid_hole"
-        | "solid_edit_hole" => FocusPack::Modify,
+        "solid_fillet" | "solid_edit_fillet" | "solid_chamfer" | "solid_edit_chamfer"
+        | "solid_hole" | "solid_edit_hole" => FocusPack::Modify,
         "solid_shell"
         | "solid_edit_shell"
         | "solid_mirror"
@@ -660,8 +651,7 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     ) {
         return Some(FocusPack::History);
     }
-    if name.ends_with("_definitions") || name == "solid_scene" || name == "solid_tessellate"
-    {
+    if name.ends_with("_definitions") || name == "solid_scene" || name == "solid_tessellate" {
         return Some(FocusPack::Inspect);
     }
     if matches!(
@@ -691,7 +681,11 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
 
 /// Focus mapping for tests and future UI snapshot bridge (parked).
 /// Keep dialog keys aligned with `activeSolidDialog` in the desktop app.
-pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option<&str>) -> FocusPack {
+pub fn focus_from_ui(
+    mode: &str,
+    active_tool: Option<&str>,
+    solid_dialog: Option<&str>,
+) -> FocusPack {
     if let Some(dialog) = solid_dialog {
         return match dialog {
             // Keep keys aligned with activeSolidDialog in the desktop app.
@@ -703,10 +697,9 @@ pub fn focus_from_ui(mode: &str, active_tool: Option<&str>, solid_dialog: Option
             | "combine"
             | "split_body" => FocusPack::BodyOps,
             "extrude" | "revolve" | "sweep" | "loft" | "rib" => FocusPack::Solid,
-            "construction_plane"
-            | "offset_plane"
-            | "midplane"
-            | "plane_at_angle" => FocusPack::Datums,
+            "construction_plane" | "offset_plane" | "midplane" | "plane_at_angle" => {
+                FocusPack::Datums
+            }
             _ => FocusPack::Solid,
         };
     }
@@ -744,10 +737,7 @@ mod tests {
             focus_from_ui("solid", None, Some("fillet")),
             FocusPack::Modify
         );
-        assert_eq!(
-            focus_from_ui("sketch", None, None),
-            FocusPack::Sketch
-        );
+        assert_eq!(focus_from_ui("sketch", None, None), FocusPack::Sketch);
     }
 
     #[test]
@@ -794,32 +784,111 @@ mod tests {
     #[test]
     fn tags_cover_all_modeling_tools() {
         let modeling = [
-            "cad_set_document_name", "cad_project_model", "cad_load_project_model", "cad_new_project",
-            "sketch_begin", "sketch_finish", "sketch_edit", "sketch_active", "sketch_finished", "sketch_profiles",
-            "sketch_add_line", "sketch_add_line_locked", "sketch_add_midpoint_line", "sketch_add_point",
-            "sketch_add_rectangle", "sketch_add_rectangle_locked", "sketch_add_circle", "sketch_add_circle_locked",
-            "sketch_add_arc_3pt", "sketch_add_arc_center", "sketch_add_slot", "sketch_add_spline",
-            "sketch_add_constraint", "sketch_add_constraints", "sketch_add_dimension", "sketch_edit_dimension",
-            "sketch_move_dimension", "sketch_delete_dimension", "sketch_fillet", "sketch_chamfer", "sketch_offset",
-            "sketch_trim", "sketch_extend", "sketch_break", "sketch_mirror", "sketch_rectangular_pattern",
-            "sketch_circular_pattern", "sketch_move_copy", "sketch_scale", "sketch_polygon", "sketch_move_point",
-            "sketch_toggle_fix", "sketch_delete_entities", "sketch_undo", "sketch_redo", "sketch_set_grid_snap",
-            "sketch_set_grid_step", "sketch_eval_expression", "sketch_set_dimension_style", "sketch_preview_line",
-            "sketch_preview_line_locked", "sketch_preview_fillet", "sketch_preview_offset", "sketch_preview_trim",
-            "solid_extrude", "solid_edit_extrude", "solid_revolve", "solid_edit_revolve", "solid_sweep",
-            "solid_edit_sweep", "solid_loft", "solid_edit_loft", "solid_rib", "solid_edit_rib",
-            "solid_fillet", "solid_edit_fillet", "solid_chamfer", "solid_edit_chamfer", "solid_hole", "solid_edit_hole",
-            "solid_shell", "solid_edit_shell", "solid_mirror", "solid_edit_mirror", "solid_rectangular_pattern",
-            "solid_edit_rectangular_pattern", "solid_circular_pattern", "solid_edit_circular_pattern",
-            "solid_combine", "solid_edit_combine", "solid_split_body", "solid_edit_split_body",
-            "construction_plane_definitions", "construction_plane_offset", "construction_plane_edit_offset",
-            "construction_plane_midplane", "construction_plane_edit_midplane", "construction_plane_at_angle",
+            "cad_set_document_name",
+            "cad_project_model",
+            "cad_load_project_model",
+            "cad_new_project",
+            "sketch_begin",
+            "sketch_finish",
+            "sketch_edit",
+            "sketch_active",
+            "sketch_finished",
+            "sketch_profiles",
+            "sketch_add_line",
+            "sketch_add_line_locked",
+            "sketch_add_midpoint_line",
+            "sketch_add_point",
+            "sketch_add_rectangle",
+            "sketch_add_rectangle_locked",
+            "sketch_add_circle",
+            "sketch_add_circle_locked",
+            "sketch_add_arc_3pt",
+            "sketch_add_arc_center",
+            "sketch_add_slot",
+            "sketch_add_spline",
+            "sketch_add_constraint",
+            "sketch_add_constraints",
+            "sketch_add_dimension",
+            "sketch_edit_dimension",
+            "sketch_move_dimension",
+            "sketch_delete_dimension",
+            "sketch_fillet",
+            "sketch_chamfer",
+            "sketch_offset",
+            "sketch_trim",
+            "sketch_extend",
+            "sketch_break",
+            "sketch_mirror",
+            "sketch_rectangular_pattern",
+            "sketch_circular_pattern",
+            "sketch_move_copy",
+            "sketch_scale",
+            "sketch_polygon",
+            "sketch_move_point",
+            "sketch_toggle_fix",
+            "sketch_delete_entities",
+            "sketch_undo",
+            "sketch_redo",
+            "sketch_set_grid_snap",
+            "sketch_set_grid_step",
+            "sketch_eval_expression",
+            "sketch_set_dimension_style",
+            "sketch_preview_line",
+            "sketch_preview_line_locked",
+            "sketch_preview_fillet",
+            "sketch_preview_offset",
+            "sketch_preview_trim",
+            "solid_extrude",
+            "solid_edit_extrude",
+            "solid_revolve",
+            "solid_edit_revolve",
+            "solid_sweep",
+            "solid_edit_sweep",
+            "solid_loft",
+            "solid_edit_loft",
+            "solid_rib",
+            "solid_edit_rib",
+            "solid_fillet",
+            "solid_edit_fillet",
+            "solid_chamfer",
+            "solid_edit_chamfer",
+            "solid_hole",
+            "solid_edit_hole",
+            "solid_shell",
+            "solid_edit_shell",
+            "solid_mirror",
+            "solid_edit_mirror",
+            "solid_rectangular_pattern",
+            "solid_edit_rectangular_pattern",
+            "solid_circular_pattern",
+            "solid_edit_circular_pattern",
+            "solid_combine",
+            "solid_edit_combine",
+            "solid_split_body",
+            "solid_edit_split_body",
+            "construction_plane_definitions",
+            "construction_plane_offset",
+            "construction_plane_edit_offset",
+            "construction_plane_midplane",
+            "construction_plane_edit_midplane",
+            "construction_plane_at_angle",
             "construction_plane_edit_at_angle",
-            "solid_set_rollback", "solid_delete_feature", "solid_reorder_feature",
-            "solid_extrude_definitions", "solid_revolve_definitions", "solid_sweep_definitions", "solid_loft_definitions",
-            "solid_rib_definitions", "solid_fillet_definitions", "solid_chamfer_definitions", "solid_hole_definitions",
-            "solid_body_feature_definitions", "solid_tessellate",
-            "cad_document", "solid_scene", "solid_recompute",
+            "solid_set_rollback",
+            "solid_delete_feature",
+            "solid_reorder_feature",
+            "solid_extrude_definitions",
+            "solid_revolve_definitions",
+            "solid_sweep_definitions",
+            "solid_loft_definitions",
+            "solid_rib_definitions",
+            "solid_fillet_definitions",
+            "solid_chamfer_definitions",
+            "solid_hole_definitions",
+            "solid_body_feature_definitions",
+            "solid_tessellate",
+            "cad_document",
+            "solid_scene",
+            "solid_recompute",
         ];
         assert_eq!(modeling.len(), 105);
         for name in modeling {

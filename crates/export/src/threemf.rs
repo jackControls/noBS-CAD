@@ -7,7 +7,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
-use crate::mesh_weld::{weld_triangle_mesh, DEFAULT_WELD_EPSILON};
+use crate::mesh_weld::{validate_3mf_model_mesh, weld_triangle_mesh, DEFAULT_WELD_EPSILON};
 use crate::slicer::SlicerTarget;
 use crate::{ExportError, TriangleMesh};
 
@@ -24,7 +24,10 @@ pub fn write_3mf(
     let welded: Vec<TriangleMesh> = meshes
         .iter()
         .map(|mesh| weld_triangle_mesh(mesh, DEFAULT_WELD_EPSILON))
-        .collect();
+        .collect::<Result<_, _>>()?;
+    for mesh in &welded {
+        validate_3mf_model_mesh(mesh)?;
+    }
 
     let model_xml = build_3mf_model_xml(&welded, appearances, include_appearance, target)?;
     let mut cursor = Cursor::new(Vec::new());
@@ -47,7 +50,8 @@ pub fn write_3mf(
         )
         .map_err(io_err)?;
 
-        zip.start_file("3D/3dmodel.model", options).map_err(zip_err)?;
+        zip.start_file("3D/3dmodel.model", options)
+            .map_err(zip_err)?;
         zip.write_all(model_xml.as_bytes()).map_err(io_err)?;
 
         if include_appearance {
@@ -135,10 +139,7 @@ fn write_bambu_metadata(
         .iter()
         .map(|a| format!("{:.2}", a.diameter_mm))
         .collect();
-    let filament_settings_id: Vec<String> = slots
-        .iter()
-        .map(|a| a.material_name.clone())
-        .collect();
+    let filament_settings_id: Vec<String> = slots.iter().map(|a| a.material_name.clone()).collect();
     let filament_vendor: Vec<String> = slots.iter().map(|a| a.brand.clone()).collect();
 
     let project = serde_json::json!({
@@ -283,13 +284,14 @@ fn write_prusa_metadata(
         .collect();
     let settings: Vec<String> = meshes
         .iter()
-        .map(|mesh| appearance_for(appearances, mesh.body_id).material_name.clone())
+        .map(|mesh| {
+            appearance_for(appearances, mesh.body_id)
+                .material_name
+                .clone()
+        })
         .collect();
 
-    config.push_str(&format!(
-        "filament_colour = {}\n",
-        colours.join(";")
-    ));
+    config.push_str(&format!("filament_colour = {}\n", colours.join(";")));
     config.push_str(&format!("filament_type = {}\n", types.join(";")));
     config.push_str(&format!(
         "filament_settings_id = {}\n",
@@ -308,10 +310,7 @@ fn write_prusa_metadata(
             )
         })
         .collect();
-    config.push_str(&format!(
-        "filament_diameter = {}\n",
-        diameters.join(";")
-    ));
+    config.push_str(&format!("filament_diameter = {}\n", diameters.join(";")));
 
     zip.start_file("Metadata/Slic3r_PE.config", options)
         .map_err(zip_err)?;

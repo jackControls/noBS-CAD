@@ -115,7 +115,7 @@ export function BodyAppearancePanel() {
   };
 
   return (
-    <aside className="pointer-events-auto absolute right-3 top-3 z-20 w-64 rounded border border-edge bg-panel/95 p-3 shadow-sm backdrop-blur">
+    <aside className="pointer-events-auto absolute right-[156px] top-3 z-20 w-64 rounded border border-edge bg-panel/95 p-3 shadow-sm backdrop-blur">
       <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-mute">
         <Palette size={14} />
         {t('bodyAppearance.title')}

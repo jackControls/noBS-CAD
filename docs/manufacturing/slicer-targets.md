@@ -4,7 +4,7 @@
 
 | Target | Package contents |
 |--------|------------------|
-| `standard` | `3D/3dmodel.model` + `m:basematerials` |
+| `standard` | `3D/3dmodel.model` + core `basematerials` |
 | `bambu_studio` (default) | + `Metadata/project_settings.config` (filament_* arrays, X1C/P1S/A1/H2D-compatible printer list) + `model_settings.config` (per-object extruder) |
 | `orca_slicer` | Same Metadata shape; Application / printer_model tagged Orca |
 | `prusa_slicer` | + `Metadata/Slic3r_PE.config` filament arrays + `Slic3r_PE_model.config` object/volume extruder metadata (required — PS ignores basematerials) |
@@ -12,7 +12,7 @@
 
 ## What this is / is not
 
-**Is:** model-only 3MF that opens with recognizable filament colors/slots in brand slicers.  
+**Is:** model-only 3MF that opens with recognizable filament colors/slots in brand slicers.
 **Is not:** a full sliced project (no G-code, wipe tower, AMS pairing, or process profiles). Users still pick a printer profile in the slicer.
 
 ## Research notes

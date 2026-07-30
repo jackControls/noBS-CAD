@@ -92,7 +92,7 @@ pub fn brands() -> Vec<&'static str> {
     let mut out = Vec::new();
     for preset in catalog_entries() {
         let brand = preset.brand.as_str();
-        if !out.iter().any(|existing| *existing == brand) {
+        if !out.contains(&brand) {
             out.push(brand);
         }
     }
@@ -136,16 +136,22 @@ mod tests {
         assert_eq!(appearance.brand, "Bambu Lab");
         assert_eq!(appearance.filament_type, "PLA");
         assert_eq!(appearance.color.r, 200);
-        assert_eq!(
-            appearance.preset_id.as_deref(),
-            Some("bambu.pla.basic.red")
-        );
+        assert_eq!(appearance.preset_id.as_deref(), Some("bambu.pla.basic.red"));
     }
 
     #[test]
     fn catalog_json_roundtrips_count() {
         let value: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
         assert_eq!(value.as_array().unwrap().len(), material_catalog().len());
+    }
+
+    #[test]
+    fn frontend_catalog_mirror_matches_source() {
+        let frontend = include_str!("../../../src/materials/catalog.json");
+        assert_eq!(
+            CATALOG_JSON, frontend,
+            "run the ignored regen_frontend_catalog_mirror test after editing the catalog"
+        );
     }
 
     /// Copies `presets/catalog.json` into `src/materials/catalog.json` for the Vite UI.

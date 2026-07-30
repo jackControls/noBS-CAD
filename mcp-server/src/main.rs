@@ -155,8 +155,7 @@ impl CadServer {
             return self.call_control(name, arguments);
         }
 
-        if self.disclosure.advertisement_state(pack, spine)
-            == AdvertisementState::HiddenButCallable
+        if self.disclosure.advertisement_state(pack, spine) == AdvertisementState::HiddenButCallable
         {
             self.disclosure.re_promote(pack);
         }
@@ -250,18 +249,11 @@ impl CadServer {
             } else if name == "set_body_appearance" {
                 self.set_body_appearance_tool(arguments)?
             } else {
-                parse_engine_envelope(host::handle(
-                    &mut self.manager,
-                    engine_method,
-                    &payload,
-                ))?
+                parse_engine_envelope(host::handle(&mut self.manager, engine_method, &payload))?
             }
         } else {
-            let plan_value = parse_engine_envelope(host::handle(
-                &mut self.manager,
-                engine_method,
-                &payload,
-            ))?;
+            let plan_value =
+                parse_engine_envelope(host::handle(&mut self.manager, engine_method, &payload))?;
             let plan: RecomputePlanDto = serde_json::from_value(plan_value)
                 .map_err(|error| format!("engine returned an invalid recompute plan: {error}"))?;
             let transaction_id = plan.transaction_id;
@@ -313,7 +305,9 @@ impl CadServer {
                 self.disclosure.status_json()
             }
             "cad_list_focus_areas" => DisclosureState::focus_areas_json(),
-            "cad_get_tool_disclosure_mode" => json!({ "mode": self.disclosure.status_json()["mode"] }),
+            "cad_get_tool_disclosure_mode" => {
+                json!({ "mode": self.disclosure.status_json()["mode"] })
+            }
             "cad_set_tool_disclosure_mode" => {
                 let mode_name = arguments
                     .get("mode")
@@ -397,8 +391,7 @@ impl CadServer {
         let plan_value = parse_engine_envelope(host::handle(
             &mut self.manager,
             "project_prepare_load",
-            &serde_json::to_string(&Value::String(model_json))
-                .map_err(|e| e.to_string())?,
+            &serde_json::to_string(&Value::String(model_json)).map_err(|e| e.to_string())?,
         ))?;
         let plan: RecomputePlanDto = serde_json::from_value(plan_value)
             .map_err(|error| format!("invalid model.json / recompute plan: {error}"))?;
@@ -407,7 +400,9 @@ impl CadServer {
             Ok(scene) => scene,
             Err(error) => {
                 self.manager.cancel_solid_recompute(transaction_id);
-                return Err(format!("session '{session_id}' model failed to recompute: {error}"));
+                return Err(format!(
+                    "session '{session_id}' model failed to recompute: {error}"
+                ));
             }
         };
         let _ = parse_engine_envelope(host::handle(
@@ -2926,7 +2921,10 @@ mod tests {
         DisclosureState::set_clock_for_test(0);
         let mut server = CadServer::new().unwrap();
         server
-            .call_tool("cad_set_focus", json!({"focus": "sketch", "explicit": true}))
+            .call_tool(
+                "cad_set_focus",
+                json!({"focus": "sketch", "explicit": true}),
+            )
             .unwrap();
         let mut listed = tool_list_result(&mut server.disclosure);
         let names: Vec<_> = listed["tools"]
@@ -2956,9 +2954,14 @@ mod tests {
         DisclosureState::set_clock_for_test(0);
         let mut server = CadServer::new().unwrap();
         server
-            .call_tool("cad_set_focus", json!({"focus": "document", "explicit": true}))
+            .call_tool(
+                "cad_set_focus",
+                json!({"focus": "document", "explicit": true}),
+            )
             .unwrap();
-        DisclosureState::advance_for_test(disclosure::SOFT_TTL_MS + disclosure::FOCUS_THROTTLE_MS + 1);
+        DisclosureState::advance_for_test(
+            disclosure::SOFT_TTL_MS + disclosure::FOCUS_THROTTLE_MS + 1,
+        );
         server.disclosure.tick_soft_expiry();
         let listed = tool_list_result(&mut server.disclosure);
         let names: Vec<_> = listed["tools"]
@@ -3017,10 +3020,7 @@ mod tests {
         for (focus, tool_name) in expectations {
             let mut server = CadServer::new().unwrap();
             server
-                .call_tool(
-                    "cad_set_focus",
-                    json!({ "focus": focus, "explicit": true }),
-                )
+                .call_tool("cad_set_focus", json!({ "focus": focus, "explicit": true }))
                 .unwrap();
             let listed = tool_list_result(&mut server.disclosure);
             let names: Vec<_> = listed["tools"]
@@ -3160,7 +3160,10 @@ mod tests {
         assert_eq!(attached["attached"], true);
         assert_eq!(attached["session_mode"], "read_only_snapshot");
         assert_eq!(attached["writeback"], false);
-        assert_eq!(server.attached_document_id.as_deref(), Some(unique.as_str()));
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(unique.as_str())
+        );
         let scene = server.call_tool("solid_scene", json!({})).unwrap();
         assert!(!scene["bodies"].as_array().unwrap().is_empty());
 
@@ -3171,9 +3174,7 @@ mod tests {
         let detached = server.call_tool("cad_detach", json!({})).unwrap();
         assert_eq!(detached["detached"], true);
         assert!(server.attached_document_id.is_none());
-        assert!(server
-            .call_tool("cad_refresh", json!({}))
-            .is_err());
+        assert!(server.call_tool("cad_refresh", json!({})).is_err());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
@@ -3183,10 +3184,7 @@ mod tests {
     fn solid_export_3mf_returns_base64_payload() {
         let (mut server, _) = mcp_box();
         let exported = server
-            .call_tool(
-                "solid_export_3mf",
-                json!({"slicer_target": "bambu_studio"}),
-            )
+            .call_tool("solid_export_3mf", json!({"slicer_target": "bambu_studio"}))
             .expect("3MF export should succeed for a simple box");
         assert_eq!(exported["format"], "3mf");
         assert_eq!(exported["encoding"], "base64");
@@ -3292,6 +3290,11 @@ mod tests {
             0,
             "exported 3MF mesh should be manifold (no boundary edges)"
         );
+        assert_eq!(
+            nbcad_export::invalid_model_edge_count(&parsed),
+            0,
+            "every exported edge should have two oppositely oriented triangle uses"
+        );
     }
 
     #[test]
@@ -3318,7 +3321,12 @@ mod tests {
         let exported = server
             .call_tool("solid_export_3mf", json!({"slicer_target": "bambu_studio"}))
             .unwrap();
-        assert_eq!(&BASE64.decode(exported["bytes_base64"].as_str().unwrap()).unwrap()[0..2], b"PK");
+        assert_eq!(
+            &BASE64
+                .decode(exported["bytes_base64"].as_str().unwrap())
+                .unwrap()[0..2],
+            b"PK"
+        );
     }
 
     #[test]

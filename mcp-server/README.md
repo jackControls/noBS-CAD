@@ -4,8 +4,8 @@
 It covers most sketch and solid-modeling tools with **soft focus-scoped
 disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 
-> Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).  
-> Proposed ideas (in-process co-link, multi-window broker, …):  
+> Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).
+> Proposed ideas (in-process co-link, multi-window broker, …):
 > [docs/proposed-architecture.md](../docs/proposed-architecture.md).
 
 **Spine controls:** `cad_get_focus`, `cad_set_focus`, disclosure mode get/set,
@@ -113,4 +113,3 @@ UI live co-link is parked for follow-up.
 `solid_export_3mf` (preferred for slicers). Use `solid_tessellate` to inspect
 triangle counts before exporting. `demo_export_pip_3mf` returns a built-in
 print-in-place demo (AABB clearance smoke ≥ 0.4 mm) without mutating the document.
-

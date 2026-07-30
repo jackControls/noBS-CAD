@@ -128,7 +128,7 @@ export function OrientationDial({
 
   return (
     <aside
-      className="absolute right-3 bottom-3 z-10 w-[132px] select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
+      className="absolute right-3 top-3 z-10 w-[132px] select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
       data-orientation-dial
       aria-label={t('orientationDial.label')}
     >

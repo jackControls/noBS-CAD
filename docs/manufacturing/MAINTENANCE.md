@@ -14,7 +14,7 @@ Primary `C:\Users\jeffg\dev\noBS-CAD` stays on `main` (or other work). Do not st
 
 1. **Schema** — `crates/core/src/appearance.rs` (additive serde defaults only; no schema bump).
 2. **Writers / catalog** — `crates/export/` (`lib`, `threemf`, `stl`, `slicer`, `materials`, `facade`).
-3. **Catalog sync** — edit only `crates/export/presets/catalog.json`. `nbcad-export` `build.rs` mirrors it to `src/materials/catalog.json` on cargo build; if you only touch UI, copy manually or run `cargo build -p nbcad-export`.
+3. **Catalog sync** — edit only `crates/export/presets/catalog.json`, then run `cargo test -p nbcad-export regen_frontend_catalog_mirror -- --ignored --exact`. The normal export tests verify that `src/materials/catalog.json` remains identical without mutating the source tree during a build.
 4. **Hosts** — `crates/sketch` persistence, `crates/occt` tessellate, `src-tauri`, `mcp-server`.
 5. **UI** — `BodyAppearancePanel`, `projectFiles`, i18n, store.
 6. **Docs** — update this folder’s INDEX/OKRs/VALIDATION when behavior changes.

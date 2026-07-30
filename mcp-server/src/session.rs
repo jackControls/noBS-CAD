@@ -40,7 +40,11 @@ pub fn list_sessions() -> Result<Vec<String>, String> {
     let mut sessions = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
-        if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
             let name = entry.file_name().to_string_lossy().into_owned();
             // `_ui` and other underscore-prefixed dirs are control/plumbing, not models.
             if name.starts_with('_') {
@@ -61,9 +65,7 @@ pub fn read_session_file(session_id: &str, filename: &str) -> Result<String, Str
 /// Require `model.json` for the session. Missing file → hard error (Jack §3).
 pub fn require_model_json(session_id: &str) -> Result<String, String> {
     read_session_file(session_id, "model.json").map_err(|error| {
-        format!(
-            "session '{session_id}' has no valid model.json ({error}); attach refused"
-        )
+        format!("session '{session_id}' has no valid model.json ({error}); attach refused")
     })
 }
 
@@ -94,10 +96,7 @@ pub fn write_session(session_id: &str, filename: &str, content: &str) -> Result<
     }
     fs::rename(&temporary, &path).map_err(|error| {
         let _ = fs::remove_file(&temporary);
-        format!(
-            "could not replace {}: {error}",
-            path.display()
-        )
+        format!("could not replace {}: {error}", path.display())
     })
 }
 

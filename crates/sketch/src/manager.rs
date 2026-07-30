@@ -535,7 +535,9 @@ impl SketchManager {
                 .preset_id
                 .map(|id| id.trim().to_string())
                 .filter(|id| !id.is_empty()),
-            density_g_cm3: appearance.density_g_cm3.filter(|d| d.is_finite() && *d > 0.0),
+            density_g_cm3: appearance
+                .density_g_cm3
+                .filter(|d| d.is_finite() && *d > 0.0),
             diameter_mm: if appearance.diameter_mm.is_finite() && appearance.diameter_mm > 0.0 {
                 appearance.diameter_mm
             } else {
@@ -551,8 +553,7 @@ impl SketchManager {
         } else {
             self.body_appearances.push(next);
         }
-        self.body_appearances
-            .sort_by_key(|entry| entry.body_id.0);
+        self.body_appearances.sort_by_key(|entry| entry.body_id.0);
         Ok(self.body_appearances.clone())
     }
 

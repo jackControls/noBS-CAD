@@ -221,18 +221,12 @@ impl OcctKernel {
         let selected: Vec<u64> = if request.body_ids.is_empty() {
             available
         } else {
-            let mut ids = request
-                .body_ids
-                .iter()
-                .map(|id| id.0)
-                .collect::<Vec<_>>();
+            let mut ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
             ids.sort_unstable();
             ids.dedup();
             for body_id in &ids {
                 if !available.contains(body_id) {
-                    return Err(OcctError(format!(
-                        "Selected body {body_id} is not active."
-                    )));
+                    return Err(OcctError(format!("Selected body {body_id} is not active.")));
                 }
             }
             ids
