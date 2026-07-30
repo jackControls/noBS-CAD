@@ -753,7 +753,7 @@ fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
     let debug = mcp_binary_path(repo_root, "debug");
 
     let found = if release.is_file() {
-        Some(release)
+        Some(release.clone())
     } else if debug.is_file() {
         if !options.dry_run {
             eprintln!(
@@ -761,7 +761,7 @@ fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
                 debug.display()
             );
         }
-        Some(debug)
+        Some(debug.clone())
     } else {
         None
     };
