@@ -8,7 +8,7 @@
 //! All modeling logic lives in the engine crates, never here.
 
 mod session_bridge;
-mod native_viewport;
+pub mod native_viewport;
 mod six_dof_mouse;
 mod state;
 

@@ -15,6 +15,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:bevy-ui:capture": "node scripts/capture-bevy-ui.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "stage:occt": "node scripts/stage-occt-macos.mjs",

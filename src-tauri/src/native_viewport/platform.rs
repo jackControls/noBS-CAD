@@ -1,18 +1,3 @@
-#[cfg(target_os = "macos")]
-use std::ptr::NonNull;
-use std::{
-    collections::HashMap,
-    ffi::c_void,
-    num::NonZeroU32,
-    sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    time::Instant,
-};
-#[cfg(target_os = "windows")]
-use std::{num::NonZeroIsize, sync::OnceLock};
-
 use bevy::{
     asset::RenderAssetUsages,
     mesh::Indices,
@@ -43,6 +28,20 @@ use raw_window_handle::Win32WindowHandle;
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle, WindowHandle,
 };
+#[cfg(target_os = "macos")]
+use std::ptr::NonNull;
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    num::NonZeroU32,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
+#[cfg(target_os = "windows")]
+use std::{num::NonZeroIsize, sync::OnceLock};
 use tauri::Manager;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
@@ -62,10 +61,11 @@ use windows_sys::Win32::{
     },
 };
 
+use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets};
 use super::{
     NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
-    ViewportHudSelection, ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane,
-    ViewportPalette, ViewportPresentation, ViewportPreview, ViewportRect,
+    ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
+    ViewportPresentation, ViewportPreview, ViewportRect,
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
@@ -980,22 +980,7 @@ struct NativeOriginPlane {
 }
 
 #[derive(Component)]
-struct NativeHudRoot;
-
-#[derive(Component)]
 struct NativeAnnotationRoot;
-
-#[derive(Component, Clone, Copy)]
-struct HudAxisMark {
-    axis: Vec3,
-    fraction: f32,
-    radius: f32,
-}
-
-#[derive(Component, Clone, Copy)]
-struct HudAxisLabel {
-    axis: Vec3,
-}
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadHighlightGizmos;
@@ -1054,7 +1039,8 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         .init_resource::<ViewportSizeResource>()
         .init_resource::<PresentationResource>()
         .init_resource::<RenderedRevisions>()
-        .add_systems(Startup, setup_scene)
+        .init_resource::<ViewportUiAssets>()
+        .add_systems(Startup, (ui::load_system_font, setup_scene).chain())
         .add_systems(
             Update,
             (
@@ -1090,6 +1076,7 @@ fn setup_scene(
         Name::new("React-synchronized CAD camera"),
         NativeCadCamera,
         Camera3d::default(),
+        BoxShadowSamples(6),
         Projection::Perspective(PerspectiveProjection {
             fov: camera.vertical_fov_degrees.to_radians(),
             near: 0.1,
@@ -1462,6 +1449,7 @@ fn rebuild_native_hud(
     mut commands: Commands,
     hud: Res<HudResource>,
     palette: Res<PaletteResource>,
+    assets: Res<ViewportUiAssets>,
     mut revisions: ResMut<RenderedRevisions>,
     existing: Query<Entity, With<NativeHudRoot>>,
     cameras: Query<Entity, With<NativeCadCamera>>,
@@ -1478,435 +1466,7 @@ fn rebuild_native_hud(
         return;
     };
 
-    if hud.hud.dim_opacity > 0.001 {
-        commands.spawn((
-            Name::new("Native modal dim layer"),
-            NativeHudRoot,
-            UiTargetCamera(camera),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0.0),
-                top: px(0.0),
-                width: percent(100.0),
-                height: percent(100.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(
-                0.0,
-                0.0,
-                0.0,
-                hud.hud.dim_opacity.clamp(0.0, 0.85),
-            )),
-            ZIndex(1_000),
-        ));
-    }
-    if !hud.hud.render_native_chrome {
-        return;
-    }
-
-    let panel = rgba(palette.0.panel, 0.94);
-    let header = rgba(palette.0.header, 0.96);
-    let ink = rgb(palette.0.ink);
-    let mute = rgb(palette.0.mute);
-    let edge = rgba(palette.0.ui_edge, 0.92);
-    let accent = rgb(palette.0.accent);
-
-    commands
-        .spawn((
-            Name::new("Native orientation dial"),
-            NativeHudRoot,
-            UiTargetCamera(camera),
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(12.0),
-                top: px(12.0),
-                width: px(132.0),
-                padding: UiRect::axes(px(8.0), px(6.0)),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(12.0)),
-                ..default()
-            },
-            BackgroundColor(panel),
-            BorderColor::all(edge),
-            ZIndex(20),
-        ))
-        .with_children(|card| {
-            card.spawn((
-                Text::new("ORIENTATION DIAL"),
-                TextFont::from_font_size(8.0),
-                TextColor(mute),
-                Node {
-                    height: px(12.0),
-                    ..default()
-                },
-            ));
-
-            card.spawn(Node {
-                position_type: PositionType::Relative,
-                width: px(104.0),
-                height: px(104.0),
-                flex_shrink: 0.0,
-                ..default()
-            })
-            .with_children(|dial| {
-                for (label, left, top) in [
-                    ("F", 38.0, 0.0),
-                    ("R", 76.0, 42.0),
-                    ("B", 38.0, 84.0),
-                    ("L", 0.0, 42.0),
-                ] {
-                    dial.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(left),
-                            top: px(top),
-                            width: px(28.0),
-                            height: px(20.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(px(1.0)),
-                            border_radius: BorderRadius::all(px(10.0)),
-                            ..default()
-                        },
-                        BackgroundColor(header),
-                        BorderColor::all(edge),
-                    ))
-                    .with_child((
-                        Text::new(label),
-                        TextFont::from_font_size(9.0),
-                        TextColor(mute),
-                    ));
-                }
-
-                dial.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(14.0),
-                        top: px(14.0),
-                        width: px(76.0),
-                        height: px(76.0),
-                        border: UiRect::all(px(1.0)),
-                        border_radius: BorderRadius::MAX,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                    BackgroundColor(rgba(palette.0.background, 0.82)),
-                    BorderColor::all(edge),
-                ))
-                .with_children(|indicator| {
-                    for angle_index in 0..20 {
-                        let angle = angle_index as f32 * std::f32::consts::TAU / 20.0;
-                        indicator.spawn((
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(37.0 + angle.cos() * 31.0),
-                                top: px(37.0 + angle.sin() * 31.0),
-                                width: px(2.0),
-                                height: px(2.0),
-                                border_radius: BorderRadius::MAX,
-                                ..default()
-                            },
-                            BackgroundColor(rgba(palette.0.grid_major, 0.65)),
-                        ));
-                    }
-
-                    for (axis, label, color) in [
-                        (Vec3::X, "X", Color::srgb(0.88, 0.36, 0.39)),
-                        (Vec3::Y, "Y", Color::srgb(0.35, 0.68, 0.45)),
-                        (Vec3::Z, "Z", Color::srgb(0.26, 0.65, 0.91)),
-                    ] {
-                        for index in 1..=9 {
-                            let fraction = index as f32 / 9.0;
-                            let radius = if index == 9 { 2.5 } else { 1.15 };
-                            indicator.spawn((
-                                HudAxisMark {
-                                    axis,
-                                    fraction,
-                                    radius,
-                                },
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    width: px(radius * 2.0),
-                                    height: px(radius * 2.0),
-                                    border_radius: BorderRadius::MAX,
-                                    ..default()
-                                },
-                                BackgroundColor(color),
-                            ));
-                        }
-                        indicator.spawn((
-                            HudAxisLabel { axis },
-                            Text::new(label),
-                            TextFont::from_font_size(8.0),
-                            TextColor(color),
-                            Node {
-                                position_type: PositionType::Absolute,
-                                ..default()
-                            },
-                        ));
-                    }
-
-                    indicator.spawn((
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(35.5),
-                            top: px(35.5),
-                            width: px(5.0),
-                            height: px(5.0),
-                            border_radius: BorderRadius::MAX,
-                            ..default()
-                        },
-                        BackgroundColor(ink),
-                    ));
-                });
-            });
-
-            card.spawn(Node {
-                width: percent(100.0),
-                height: px(20.0),
-                margin: UiRect::top(px(4.0)),
-                column_gap: px(4.0),
-                ..default()
-            })
-            .with_children(|row| {
-                for (label, emphasized) in [("+Z", false), ("ISO", true), ("-Z", false)] {
-                    row.spawn((
-                        Node {
-                            height: px(20.0),
-                            flex_grow: 1.0,
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(px(1.0)),
-                            border_radius: BorderRadius::all(px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(header),
-                        BorderColor::all(edge),
-                    ))
-                    .with_child((
-                        Text::new(label),
-                        TextFont::from_font_size(9.0),
-                        TextColor(if emphasized { ink } else { mute }),
-                    ));
-                }
-            });
-            card.spawn((
-                Text::new("Drag the dial to orbit"),
-                TextFont::from_font_size(8.0),
-                TextColor(rgba(palette.0.mute, 0.72)),
-                Node {
-                    margin: UiRect::top(px(3.0)),
-                    ..default()
-                },
-            ));
-        });
-
-    commands
-        .spawn((
-            Name::new("Native viewport navigation"),
-            NativeHudRoot,
-            UiTargetCamera(camera),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0.0),
-                bottom: px(12.0),
-                width: percent(100.0),
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            ZIndex(20),
-        ))
-        .with_children(|center| {
-            center
-                .spawn((
-                    Node {
-                        height: px(34.0),
-                        padding: UiRect::axes(px(6.0), px(4.0)),
-                        align_items: AlignItems::Center,
-                        column_gap: px(2.0),
-                        border: UiRect::all(px(1.0)),
-                        border_radius: BorderRadius::all(px(5.0)),
-                        ..default()
-                    },
-                    BackgroundColor(header),
-                    BorderColor::all(edge),
-                ))
-                .with_children(|bar| {
-                    let mut buttons = Vec::new();
-                    if hud.hud.sketch_mode {
-                        buttons.extend([
-                            ("U", false, !hud.hud.can_undo),
-                            ("R", false, !hud.hud.can_redo),
-                            ("N", false, false),
-                        ]);
-                    }
-                    buttons.extend([
-                        ("O", hud.hud.nav_tool == "orbit", false),
-                        ("P", hud.hud.nav_tool == "pan", false),
-                        ("+", hud.hud.nav_tool == "zoom", false),
-                        ("[]", hud.hud.nav_tool == "zoomWindow", false),
-                        ("F", false, false),
-                        ("D", false, true),
-                        ("G", false, true),
-                        (
-                            "3D",
-                            hud.hud.six_dof_state == "connected",
-                            hud.hud.six_dof_state == "unsupported",
-                        ),
-                    ]);
-
-                    for (index, (label, active, disabled)) in buttons.into_iter().enumerate() {
-                        if hud.hud.sketch_mode && index == 3 {
-                            spawn_hud_separator(bar, edge);
-                        }
-                        if label == "3D" {
-                            spawn_hud_separator(bar, edge);
-                        }
-                        bar.spawn((
-                            Node {
-                                width: px(24.0),
-                                height: px(24.0),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border_radius: BorderRadius::all(px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(if active {
-                                rgba(palette.0.accent, 0.30)
-                            } else {
-                                Color::NONE
-                            }),
-                        ))
-                        .with_child((
-                            Text::new(label),
-                            TextFont::from_font_size(if label.len() > 1 { 7.5 } else { 10.0 }),
-                            TextColor(if disabled {
-                                rgba(palette.0.mute, 0.35)
-                            } else if active {
-                                accent
-                            } else {
-                                mute
-                            }),
-                        ));
-                    }
-                });
-        });
-
-    if let Some(selection) = &hud.hud.selection {
-        spawn_selection_hud(&mut commands, camera, selection, header, edge, ink, mute);
-    }
-}
-
-fn spawn_hud_separator(parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, color: Color) {
-    parent.spawn((
-        Node {
-            width: px(1.0),
-            height: px(16.0),
-            margin: UiRect::horizontal(px(4.0)),
-            ..default()
-        },
-        BackgroundColor(color),
-    ));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_selection_hud(
-    commands: &mut Commands,
-    camera: Entity,
-    selection: &ViewportHudSelection,
-    header: Color,
-    edge: Color,
-    ink: Color,
-    mute: Color,
-) {
-    commands
-        .spawn((
-            Name::new("Native selection readout"),
-            NativeHudRoot,
-            UiTargetCamera(camera),
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(12.0),
-                bottom: px(48.0),
-                min_width: px(208.0),
-                max_width: px(280.0),
-                padding: UiRect::all(px(10.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(4.0),
-                border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(5.0)),
-                ..default()
-            },
-            BackgroundColor(header),
-            BorderColor::all(edge),
-            ZIndex(20),
-        ))
-        .with_children(|card| {
-            card.spawn(Node {
-                min_width: px(218.0),
-                padding: UiRect::bottom(px(6.0)),
-                margin: UiRect::bottom(px(2.0)),
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                column_gap: px(16.0),
-                border: UiRect::bottom(px(1.0)),
-                ..default()
-            })
-            .with_children(|header_row| {
-                header_row.spawn((
-                    Text::new(selection.title.clone()),
-                    TextFont::from_font_size(9.0),
-                    TextColor(mute),
-                ));
-                header_row.spawn((
-                    Text::new(selection.subject.clone()),
-                    TextFont::from_font_size(11.0),
-                    TextColor(ink),
-                ));
-            });
-
-            for row in &selection.rows {
-                card.spawn(Node {
-                    width: percent(100.0),
-                    justify_content: JustifyContent::SpaceBetween,
-                    column_gap: px(16.0),
-                    ..default()
-                })
-                .with_children(|values| {
-                    values.spawn((
-                        Text::new(row.label.clone()),
-                        TextFont::from_font_size(11.0),
-                        TextColor(mute),
-                    ));
-                    values.spawn((
-                        Text::new(row.value.clone()),
-                        TextFont::from_font_size(11.0),
-                        TextColor(ink),
-                    ));
-                });
-            }
-
-            if let Some(footer) = &selection.footer {
-                card.spawn((
-                    Node {
-                        width: percent(100.0),
-                        justify_content: JustifyContent::FlexEnd,
-                        padding: UiRect::top(px(4.0)),
-                        margin: UiRect::top(px(2.0)),
-                        border: UiRect::top(px(1.0)),
-                        ..default()
-                    },
-                    BorderColor::all(edge),
-                ))
-                .with_child((
-                    Text::new(footer.clone()),
-                    TextFont::from_font_size(9.0),
-                    TextColor(mute),
-                ));
-            }
-        });
+    ui::spawn_viewport_hud(&mut commands, camera, &hud.hud, &palette.0, &assets);
 }
 
 fn update_native_hud_orientation(
@@ -1914,30 +1474,8 @@ fn update_native_hud_orientation(
     mut marks: Query<(&HudAxisMark, &mut Node)>,
     mut labels: Query<(&HudAxisLabel, &mut Node), Without<HudAxisMark>>,
 ) {
-    let position = Vec3::from_array(camera.camera.position);
-    let target = Vec3::from_array(camera.camera.target);
-    let forward = (target - position).normalize_or_zero();
-    let up_hint = Vec3::from_array(camera.camera.up).normalize_or_zero();
-    let mut right = forward.cross(up_hint).normalize_or_zero();
-    if right == Vec3::ZERO {
-        right = Vec3::X;
-    }
-    let screen_up = right.cross(forward).normalize_or_zero();
-
-    for (mark, mut node) in &mut marks {
-        let endpoint = Vec2::new(mark.axis.dot(right), -mark.axis.dot(screen_up)) * 25.0;
-        let point = Vec2::splat(38.0) + endpoint * mark.fraction;
-        node.left = px(point.x - mark.radius);
-        node.top = px(point.y - mark.radius);
-    }
-    for (label, mut node) in &mut labels {
-        let endpoint = Vec2::new(label.axis.dot(right), -label.axis.dot(screen_up)) * 25.0;
-        let point = Vec2::splat(38.0) + endpoint;
-        node.left = px(point.x + if endpoint.x >= 0.0 { 4.0 } else { -8.0 });
-        node.top = px(point.y + if endpoint.y >= 0.0 { 2.0 } else { -10.0 });
-    }
+    ui::update_orientation_nodes(camera.camera, &mut marks, &mut labels);
 }
-
 fn camera_transform(camera: ViewportCamera) -> Transform {
     let position = Vec3::from_array(camera.position);
     let target = Vec3::from_array(camera.target);

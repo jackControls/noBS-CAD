@@ -1,37 +1,85 @@
-# ADR 0002 — Bevy as viewport / ECS subsystem
+# ADR 0002 — Native Bevy viewport boundary
 
-- Status: Proposed — **deferred**
-- Date: 2026-07-27
+- Status: Accepted
+- Date: 2026-07-30
 - Tracking: [#20](https://github.com/jackControls/noBS-CAD/issues/20)
-- Queue: after core CAD reliability and MCP co-link work; not blocked on the
-  deferred multi-window proposal (#12)
 
 ## Context
 
-The interactive viewport uses Three.js from the React app. That works for
-browser e2e but couples rendering, picking, and input to the web stack. Bevy
-is a Rust engine with ECS, input, and rendering suited to a native desktop
-CAD viewport.
+The desktop viewport needs native GPU rendering, accurate picking, low-latency
+camera input, Retina / HiDPI correctness, and a path toward CAM simulation.
+Putting those responsibilities in the webview couples the most performance-
+sensitive part of the application to browser rendering and native-view
+composition.
 
 Bevy must **not** replace OCCT. Solids remain B-rep; Bevy displays tessellated
 meshes, handles camera/picking/gizmos/3D-mouse, and hosts selection visualization.
 
-## Decision (proposed)
+React remains valuable for the document shell, accessibility, browser
+automation, and form-heavy workflows. A production boundary therefore needs
+to preserve DOM semantics without drawing the same viewport control twice.
 
-1. Introduce a `bevy_viewport` (name TBD) crate behind a **viewport trait**.
-2. Phase 1: spike — mesh draw + camera + pick ray from tessellation.
-3. Phase 2: desktop shell embeds Bevy; React overlays remain for dialogs initially.
-4. Phase 3: retire Three.js on desktop; browser may keep Three/WASM longer.
+## Decision
+
+The desktop application uses four explicit layers:
+
+1. **OCCT and the Rust document model are authoritative.** OCCT creates and
+   edits B-rep geometry. Tessellation, topology IDs, sketch geometry, and
+   presentation state are passed in-process to the viewport.
+2. **Bevy owns the complete viewport surface.** This includes meshes, edges,
+   sketches, datum/origin geometry, picking, camera navigation, transient
+   previews, selection highlighting, the orientation dial, viewport prompt,
+   status/readout cards, and the bottom navigation bar.
+3. **React owns the application shell and command forms.** Ribbon, browser,
+   project tabs, timeline, menus, and form-heavy feature dialogs remain DOM
+   elements. Transparent DOM proxies retain keyboard, pointer, accessibility,
+   and browser-test semantics for Bevy-owned viewport controls.
+4. **Tauri owns native composition.** The Bevy surface is an opaque native
+   child beneath the webview. The platform host clips the webview around the
+   viewport while preserving real DOM islands such as menus and dialogs above
+   it. CSS transparency is not used as the compositor contract.
+
+Bevy UI is built from the stable core `bevy_ui` flex/grid primitives. The
+experimental, unstyled `bevy_ui_widgets` crate is not a production dependency.
+`ViewportUiTheme` and the component builders in
+`src-tauri/src/native_viewport/ui.rs` are the canonical style implementation
+for native viewport UI.
+
+The bridge sends explicit palette, HUD, interaction, camera, and presentation
+state. It does not send screenshots or serialized OCCT geometry through
+JavaScript.
+
+## Visual regression channel
+
+The `dev-ui-lab` Cargo feature builds a headless, GPU-backed Bevy render target
+using the same production UI builders as the embedded viewport. The capture is
+served by a development-only Vite route beside a React reference surface:
+
+```text
+npm run dev:bevy-ui:capture
+npm run dev
+http://127.0.0.1:5173/?bevy-ui-lab=compare
+```
+
+The lab may include a representative feature dialog to validate that the Bevy
+style system can reproduce the shared visual language. It is a visual contract,
+not a second command-form implementation.
 
 ## Consequences
 
 - Clear boundary: OCCT = truth, Bevy = presentation/interaction.
-- Larger Rust desktop binary; need careful feature flags.
+- Viewport-local pixels no longer depend on webview/native-view overlap.
+- React keeps the DOM surfaces that benefit most from accessibility and agent
+  inspection.
+- Native controls and transparent DOM proxies require stable control IDs.
+- The Rust desktop binary is larger; Bevy features remain explicitly selected.
+- The visual lab is feature-gated and excluded from production binaries.
 - License audit into `THIRD_PARTY_NOTICES.md` before merge.
 - 3Dconnexion / 6DoF input can move closer to Rust HID paths already in Tauri.
 
 ## Non-goals
 
-- Rewriting ribbon UI in Bevy in the first spike
+- Rewriting the ribbon, browser, timeline, menus, or command forms in Bevy
 - Mesh-only modeling
-- Jumping the queue ahead of the MCP harness / co-link work
+- Maintaining a second browser renderer for the desktop viewport
+- Using the visual regression image as the production renderer

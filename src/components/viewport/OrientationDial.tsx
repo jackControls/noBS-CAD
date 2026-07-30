@@ -161,6 +161,7 @@ export function OrientationDial({
         <div className="absolute left-1/2 top-1/2 h-[76px] w-[76px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-edge bg-viewport/80 shadow-inner">
           <svg
             ref={indicatorRef}
+            data-native-hud-control="orientation:orbit"
             viewBox="0 0 76 76"
             role="img"
             aria-label={t('orientationDial.axes')}

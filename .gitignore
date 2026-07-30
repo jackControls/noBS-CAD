@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-ssr
+public/__bevy_ui__/
 target
 src-tauri/target
 src-tauri/gen

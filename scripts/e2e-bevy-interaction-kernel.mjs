@@ -231,22 +231,22 @@ try {
         'canvas[data-cad-interaction-surface="true"]',
       ) !== null;
 
-    // Native mode exposes the real DOM chrome, not an invisible interaction
-    // copy over a visually different Bevy control.
+    // Native mode keeps the real DOM chrome as a semantic/input proxy while
+    // Bevy owns the pixels. Hidden proxies must not become compositor islands.
     const surface = document.querySelector(
       'canvas[data-cad-interaction-surface="true"]',
     );
     const viewportRoot = surface?.parentElement;
     if (viewportRoot) viewportRoot.dataset.nativeViewport = 'bevy';
+    document.documentElement.dataset.nativeViewport = 'bevy';
     const hudRoots = [...document.querySelectorAll('[data-native-hud]')];
-    const visibleDomHud =
+    const nativeHudProxies =
       hudRoots.length >= 2 &&
-      hudRoots.every((element) => getComputedStyle(element).opacity !== '0');
-    const nativeOverlayIslands = [
-      document.querySelector(
-        '[data-orientation-dial] [data-native-viewport-overlay]',
-      ),
-      document.querySelector('[data-native-hud="navigation"]'),
+      hudRoots.every((element) => getComputedStyle(element).opacity === '0') &&
+      [...document.querySelectorAll(
+        '[data-native-hud] button, [data-native-hud-control]',
+      )].every((element) => getComputedStyle(element).pointerEvents !== 'none');
+    const shellOverlayIslands = [
       document.querySelector('[data-testid="project-tabs"]'),
       [...document.querySelectorAll('[data-native-viewport-overlay]')].find(
         (element) => element.textContent?.includes('COMMENTS'),
@@ -262,7 +262,6 @@ try {
         (button) =>
           Number.parseFloat(getComputedStyle(button).transitionDuration) > 0,
       );
-    if (viewportRoot) delete viewportRoot.dataset.nativeViewport;
 
     const unionInputs = [
       { x: 240, y: 92, width: 1200, height: 28 },
@@ -293,25 +292,24 @@ try {
           ),
       );
 
-    const dialCard = document.querySelector(
-      '[data-orientation-dial] [data-native-viewport-overlay]',
-    );
-    const dialRect = dialCard?.getBoundingClientRect();
-    const roundedDialIsland = dialRect
-      ? nativeBridge
-          .collectNativeViewportOverlayRects()
-          .some(
-            (rect) =>
-              approximately(rect.x, dialRect.x) &&
-              approximately(rect.y, dialRect.y) &&
-              approximately(rect.width, dialRect.width) &&
-              approximately(rect.height, dialRect.height) &&
-              (rect.cornerRadius ?? 0) >= 11,
-          )
-      : false;
+    const nativeHudExcludedFromCompositor = hudRoots.every((element) => {
+      const bounds = element.getBoundingClientRect();
+      return !nativeBridge.collectNativeViewportOverlayRects().some(
+        (rect) =>
+          rect.x < bounds.right &&
+          rect.x + rect.width > bounds.left &&
+          rect.y < bounds.bottom &&
+          rect.y + rect.height > bounds.top,
+      );
+    });
+    delete document.documentElement.dataset.nativeViewport;
+    if (viewportRoot) delete viewportRoot.dataset.nativeViewport;
 
     const store = window.__appStore.getState();
     store.setNavTool('orbit');
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
     const escape = new KeyboardEvent('keydown', {
       key: 'Escape',
       bubbles: true,
@@ -358,11 +356,11 @@ try {
       orbit,
       transientPreview,
       inputSurface,
-      visibleDomHud,
-      nativeOverlayIslands,
+      nativeHudProxies,
+      shellOverlayIslands,
       animatedHud,
       exactOverlayUnion,
-      roundedDialIsland,
+      nativeHudExcludedFromCompositor,
       roundedModalCompositing,
       escapeOwned,
     };
@@ -383,11 +381,11 @@ try {
       orbit: true,
       transientPreview: true,
       inputSurface: true,
-      visibleDomHud: true,
-      nativeOverlayIslands: true,
+      nativeHudProxies: true,
+      shellOverlayIslands: true,
       animatedHud: true,
       exactOverlayUnion: true,
-      roundedDialIsland: true,
+      nativeHudExcludedFromCompositor: true,
       roundedModalCompositing: true,
       escapeOwned: true,
     },
@@ -396,6 +394,8 @@ try {
 
   await page.waitForFunction(
     () => window.__appStore?.getState().document !== null,
+    undefined,
+    { timeout: 90_000 },
   );
 
   await page.getByTestId('file-menu-button').click();

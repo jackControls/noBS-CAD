@@ -118,6 +118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -728,6 +737,7 @@ dependencies = [
  "bevy_input",
  "bevy_input_focus",
  "bevy_light",
+ "bevy_log",
  "bevy_material",
  "bevy_math",
  "bevy_mesh",

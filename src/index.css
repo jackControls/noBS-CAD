@@ -127,6 +127,16 @@ body {
 }
 
 /*
+ * Desktop production boundary: Bevy paints viewport-local chrome. These DOM
+ * nodes remain in the accessibility tree and retain the exact hit geometry,
+ * but are visually transparent and therefore are not punched back into the
+ * native surface by collectNativeViewportOverlayRects().
+ */
+:root[data-native-viewport='bevy'] [data-native-hud] {
+  opacity: 0 !important;
+}
+
+/*
  * noBS CAD feature panels use an asymmetric lower corner, an iris edge rail,
  * and a quiet directional header wash. This is the shared visual signature
  * for browser and Tauri-hosted command dialogs.

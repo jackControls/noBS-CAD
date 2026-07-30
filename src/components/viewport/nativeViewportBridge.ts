@@ -84,6 +84,11 @@ interface NativeHud {
   canUndo: boolean;
   canRedo: boolean;
   sixDofState: string;
+  hoveredControl: string;
+  pressedControl: string;
+  prompt: string | null;
+  dofLabel: string | null;
+  coordinateReadout: string | null;
   dimOpacity: number;
   selection: NativeHudSelection | null;
 }
@@ -164,6 +169,8 @@ let layoutRevision = Date.now() * 1000;
 let pendingPresentation: NativePresentation | null = null;
 let presentationInFlight = false;
 let lastPresentationKey = '';
+let hoveredHudControl = '';
+let pressedHudControl = '';
 
 function isTauriRuntime(): boolean {
   return '__TAURI_INTERNALS__' in window;
@@ -197,6 +204,16 @@ export function nativeViewportMetrics(): NativeViewportMetrics | null {
 }
 
 function rectFor(element: Element): NativeRect | null {
+  // Viewport HUD descendants can still report their own opacity as `1` even
+  // when an ancestor proxy is transparent. Keep the production ownership
+  // boundary explicit so no child of a Bevy-owned HUD is ever punched back
+  // through the native surface as a DOM island.
+  if (
+    document.documentElement.dataset.nativeViewport === 'bevy' &&
+    element.closest('[data-native-hud]')
+  ) {
+    return null;
+  }
   const style = getComputedStyle(element);
   if (
     style.display === 'none' ||
@@ -362,6 +379,19 @@ function elementText(element: Element | null): string {
   return element?.textContent?.trim().replace(/\s+/g, ' ') ?? '';
 }
 
+function nativeHudControl(target: EventTarget | null): string {
+  if (!(target instanceof Element)) return '';
+  const explicit = target.closest<HTMLElement>('[data-native-hud-control]');
+  if (explicit) return explicit.dataset.nativeHudControl ?? '';
+  const nav = target.closest<HTMLElement>('[data-native-nav-id]');
+  if (nav) return `nav:${nav.dataset.nativeNavId ?? ''}`;
+  const orientation = target.closest<HTMLElement>('[data-orientation-preset]');
+  if (orientation) {
+    return `orientation:${orientation.dataset.orientationPreset ?? ''}`;
+  }
+  return '';
+}
+
 function collectSelectionHud(): NativeHudSelection | null {
   const root = document.querySelector('[data-native-hud="selection"]');
   if (!root) return null;
@@ -403,16 +433,23 @@ export function collectNativeViewportDimOpacity(): number {
 function collectHud(): NativeHud {
   const state = useAppStore.getState();
   const navigation = document.querySelector('[data-native-hud="navigation"]');
+  const prompt = elementText(document.querySelector('[data-native-hud="prompt"]'));
+  const dofLabel = elementText(document.querySelector('[data-native-hud="dof"]'));
+  const coordinateReadout = elementText(
+    document.querySelector('[data-native-hud="coordinate"]'),
+  );
   return {
-    // React is the single visual and interaction source for viewport chrome.
-    // The native surface remains available for an all-Bevy shell experiment,
-    // but duplicating these controls makes CSS hit targets drift from pixels.
-    renderNativeChrome: false,
+    renderNativeChrome: true,
     navTool: state.navTool,
     sketchMode: state.mode === 'sketch',
     canUndo: state.activeSketch?.can_undo ?? false,
     canRedo: state.activeSketch?.can_redo ?? false,
     sixDofState: navigation?.getAttribute('data-native-six-dof-state') ?? 'disconnected',
+    hoveredControl: hoveredHudControl,
+    pressedControl: pressedHudControl,
+    prompt: prompt || null,
+    dofLabel: dofLabel || null,
+    coordinateReadout: coordinateReadout || null,
     dimOpacity: collectNativeViewportDimOpacity(),
     selection: collectSelectionHud(),
   };
@@ -600,6 +637,30 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       void flushLayout();
     });
   };
+  const onHudPointerOver = (event: PointerEvent) => {
+    const next = nativeHudControl(event.target);
+    if (next === hoveredHudControl) return;
+    hoveredHudControl = next;
+    scheduleLayout();
+  };
+  const onHudPointerOut = (event: PointerEvent) => {
+    const next = nativeHudControl(event.relatedTarget);
+    if (next === hoveredHudControl) return;
+    hoveredHudControl = next;
+    scheduleLayout();
+  };
+  const onHudPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const next = nativeHudControl(event.target);
+    if (!next || next === pressedHudControl) return;
+    pressedHudControl = next;
+    scheduleLayout();
+  };
+  const clearHudPointerPress = () => {
+    if (!pressedHudControl) return;
+    pressedHudControl = '';
+    scheduleLayout();
+  };
   const settleLayout = () => {
     const forceLayout = () => {
       // Native full-screen transitions can replace AppKit layers or reparent
@@ -664,6 +725,11 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   document.addEventListener('input', scheduleLayout, true);
   document.addEventListener('change', scheduleLayout, true);
   document.addEventListener('transitionend', scheduleLayout, true);
+  document.addEventListener('pointerover', onHudPointerOver, true);
+  document.addEventListener('pointerout', onHudPointerOut, true);
+  document.addEventListener('pointerdown', onHudPointerDown, true);
+  window.addEventListener('pointerup', clearHudPointerPress, true);
+  window.addEventListener('pointercancel', clearHudPointerPress, true);
   window.addEventListener('focus', settleLayout);
 
   if (isTauriRuntime()) {
@@ -716,6 +782,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     if (await probe()) {
       if (disposed) return;
       container.dataset.nativeViewport = 'bevy';
+      document.documentElement.dataset.nativeViewport = 'bevy';
       lastPreviewKey = '';
       lastLayoutKey = '';
       lastPresentationKey = '';
@@ -752,10 +819,18 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     document.removeEventListener('input', scheduleLayout, true);
     document.removeEventListener('change', scheduleLayout, true);
     document.removeEventListener('transitionend', scheduleLayout, true);
+    document.removeEventListener('pointerover', onHudPointerOver, true);
+    document.removeEventListener('pointerout', onHudPointerOut, true);
+    document.removeEventListener('pointerdown', onHudPointerDown, true);
+    window.removeEventListener('pointerup', clearHudPointerPress, true);
+    window.removeEventListener('pointercancel', clearHudPointerPress, true);
     window.removeEventListener('focus', settleLayout);
     for (const unlisten of nativeWindowUnlisteners) unlisten();
     nativeWindowUnlisteners = [];
     unsubscribe();
+    hoveredHudControl = '';
+    pressedHudControl = '';
+    delete document.documentElement.dataset.nativeViewport;
     delete container.dataset.nativeViewport;
   };
 }

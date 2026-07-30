@@ -7115,6 +7115,7 @@ export function Viewport() {
       {/* Pick-plane prompt (top-center). */}
       {pickingPlane && (
         <div
+          data-native-hud="prompt"
           data-native-viewport-overlay
           className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded border border-edge bg-header/90 px-3 py-1.5 text-xs text-ink backdrop-blur-sm"
         >
@@ -7153,6 +7154,7 @@ export function Viewport() {
       <div
         ref={readoutRef}
         data-testid="sketch-coordinate-readout"
+        data-native-hud="coordinate"
         data-native-viewport-overlay
         className="pointer-events-none absolute bottom-3 right-3 z-10 rounded border border-edge bg-header/90 px-2 py-1 font-mono text-[10px] tabular-nums text-mute"
         style={{ display: 'none' }}
@@ -7178,6 +7180,8 @@ function DofChip() {
   return (
     <button
       type="button"
+      data-native-hud="dof"
+      data-native-hud-control="dof"
       data-native-viewport-overlay
       title={t('sketch.dofToggle')}
       onClick={() => setShowDof(!showDof)}

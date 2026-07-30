@@ -1,15 +1,24 @@
 //! Native viewport bridge.
 //!
-//! React continues to own the CAD interaction model, accessibility tree, and
-//! hit targets. Bevy paints viewport-local HUD chrome as well as CAD graphics;
-//! form-heavy command dialogs remain real DOM islands. macOS clips WKWebView
-//! over a sibling Metal NSView; Windows clips an opaque DX12/Vulkan HWND around
-//! DOM islands and passes hit tests through to WebView2. Model synchronization
-//! stays entirely in-process: the OCCT tessellation is cloned from `AppState`
-//! instead of being serialized through JavaScript.
+//! Bevy owns viewport rendering and viewport-local visual state. React owns the
+//! application shell, accessible input proxies, and form-heavy command dialogs.
+//! The DOM proxies are transparent when the native surface is active, which
+//! keeps keyboard/screen-reader semantics without letting CSS and native pixels
+//! drift apart. macOS clips WKWebView over a sibling Metal NSView; Windows clips
+//! an opaque DX12/Vulkan HWND around real DOM islands and passes hit tests
+//! through to WebView2. Model synchronization stays entirely in-process: the
+//! OCCT tessellation is cloned from `AppState` instead of being serialized
+//! through JavaScript.
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod platform;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod ui;
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "dev-ui-lab"
+))]
+pub mod ui_lab;
 
 use nbcad_sketch::SketchDto;
 use nbcad_solid::{DatumPlaneDefinitionDto, SolidSceneDto};
@@ -182,6 +191,16 @@ pub struct ViewportHud {
     #[serde(default)]
     pub six_dof_state: String,
     #[serde(default)]
+    pub hovered_control: String,
+    #[serde(default)]
+    pub pressed_control: String,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub dof_label: Option<String>,
+    #[serde(default)]
+    pub coordinate_readout: Option<String>,
+    #[serde(default)]
     pub dim_opacity: f32,
     pub selection: Option<ViewportHudSelection>,
 }
@@ -199,6 +218,11 @@ impl Default for ViewportHud {
             can_undo: false,
             can_redo: false,
             six_dof_state: "disconnected".to_string(),
+            hovered_control: String::new(),
+            pressed_control: String::new(),
+            prompt: None,
+            dof_label: None,
+            coordinate_readout: None,
             dim_opacity: 0.0,
             selection: None,
         }

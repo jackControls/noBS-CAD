@@ -150,12 +150,14 @@ export default function App() {
         return;
       }
 
-      if (s.document === null) return;
-
       if (e.key === 'Escape') {
         // Escape cancels CAD state only; do not let the WebView/AppKit default
         // simultaneously leave native macOS full-screen mode.
         e.preventDefault();
+        // Keep navigation cancellation at the application boundary as well
+        // as the viewport boundary. This remains reliable while the document
+        // is loading or the native child view is being reparented.
+        if (s.navTool !== 'select') s.setNavTool('select');
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
         if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();
@@ -171,6 +173,8 @@ export default function App() {
         if (s.sketchPatternDialog !== null) s.closeSketchPatternDialog();
         return;
       }
+
+      if (s.document === null) return;
 
       if (s.mode === 'solid' && e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
