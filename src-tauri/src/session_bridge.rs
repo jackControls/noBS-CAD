@@ -26,6 +26,11 @@ struct PublishPayload {
     generation: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct HeartbeatPayload {
+    session_id: String,
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -166,6 +171,53 @@ pub fn mcp_session_bridge_write(payload: String) -> Result<serde_json::Value, St
     }))
 }
 
+/// Refresh `heartbeat.json` only — no model export / generation bump.
+///
+/// Keeps MCP `stale` false without racing heavy full publishes.
+#[tauri::command]
+pub fn mcp_session_bridge_heartbeat(payload: String) -> Result<serde_json::Value, String> {
+    let parsed: HeartbeatPayload = serde_json::from_str(&payload)
+        .map_err(|error| format!("invalid heartbeat payload: {error}"))?;
+    if !is_valid_session_id(&parsed.session_id) {
+        return Err(format!(
+            "session_id must be a UUID v4 string (got '{}')",
+            parsed.session_id
+        ));
+    }
+
+    let _guard = PUBLISH_LOCK
+        .lock()
+        .map_err(|_| "session publish lock poisoned".to_string())?;
+    let generation = LAST_APPLIED_GENERATION.load(Ordering::SeqCst);
+    let dir = session_root().join(&parsed.session_id);
+    if !dir.is_dir() {
+        return Ok(json!({
+            "skipped": true,
+            "reason": "no_session_dir",
+            "session_id": parsed.session_id,
+            "session_mode": "read_only_snapshot",
+        }));
+    }
+
+    let heartbeat_body = serde_json::to_string_pretty(&json!({
+        "updated_ms": now_ms(),
+        "generation": generation,
+        "session_id": parsed.session_id,
+        "session_mode": "read_only_snapshot",
+        "kind": "heartbeat",
+    }))
+    .map_err(|error| format!("encode heartbeat.json: {error}"))?;
+    atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)?;
+
+    Ok(json!({
+        "skipped": false,
+        "session_id": parsed.session_id,
+        "generation": generation,
+        "session_mode": "read_only_snapshot",
+        "writeback": false,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +277,43 @@ mod tests {
         assert!(session_dir.join("heartbeat.json").is_file());
         let focus = fs::read_to_string(session_dir.join("focus.json")).unwrap();
         assert!(focus.contains("\"focus\": \"print\"") || focus.contains("\"focus\":\"print\""));
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+        reset_generation(0);
+    }
+
+    #[test]
+    fn heartbeat_updates_without_touching_model() {
+        let _test = TEST_LOCK.lock().unwrap();
+        reset_generation(0);
+
+        let session_id = "123e4567-e89b-42d3-a456-426614174088";
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-hb-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let write = mcp_session_bridge_write(
+            json!({
+                "session_id": session_id,
+                "focus": "solid",
+                "model_json": "{\"version\":1,\"marker\":\"original\"}",
+                "generation": 2,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(write["skipped"], false);
+
+        let before = fs::read_to_string(dir.join(session_id).join("model.json")).unwrap();
+        let result = mcp_session_bridge_heartbeat(
+            json!({ "session_id": session_id }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(result["skipped"], false);
+        assert_eq!(result["generation"], 2);
+        let after = fs::read_to_string(dir.join(session_id).join("model.json")).unwrap();
+        assert_eq!(before, after);
+        let beat = fs::read_to_string(dir.join(session_id).join("heartbeat.json")).unwrap();
+        assert!(beat.contains("\"kind\": \"heartbeat\"") || beat.contains("\"kind\":\"heartbeat\""));
+
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
         reset_generation(0);

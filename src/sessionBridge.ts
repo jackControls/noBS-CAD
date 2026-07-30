@@ -76,28 +76,16 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let started = false;
 let publishGeneration = 0;
 
-async function publishNow(heartbeatOnly = false): Promise<void> {
+async function publishNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri') return;
   const sessionId = state.mcpSessionId;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   const generation = ++publishGeneration;
   try {
-    let modelJson = '{"version":1}';
-    if (!heartbeatOnly) {
-      const engine = await getEngine();
-      const model = await engine.exportProjectModel();
-      modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-    } else {
-      // Heartbeat keeps age fresh; still refresh model so attach stays current.
-      try {
-        const engine = await getEngine();
-        const model = await engine.exportProjectModel();
-        modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-      } catch {
-        // keep placeholder if export fails mid-heartbeat
-      }
-    }
+    const engine = await getEngine();
+    const model = await engine.exportProjectModel();
+    const modelJson = typeof model === 'string' ? model : JSON.stringify(model);
     await invoke('mcp_session_bridge_write', {
       payload: JSON.stringify({
         session_id: sessionId,
@@ -111,11 +99,24 @@ async function publishNow(heartbeatOnly = false): Promise<void> {
   }
 }
 
+/** Lightweight keep-alive — does not re-export the model or bump generation. */
+async function heartbeatNow(): Promise<void> {
+  const state = useAppStore.getState();
+  if (state.engineKind !== 'tauri') return;
+  try {
+    await invoke('mcp_session_bridge_heartbeat', {
+      payload: JSON.stringify({ session_id: state.mcpSessionId }),
+    });
+  } catch (error) {
+    console.debug('[sessionBridge] heartbeat failed', error);
+  }
+}
+
 export function scheduleSessionBridgePublish(): void {
   if (publishTimer) clearTimeout(publishTimer);
   publishTimer = setTimeout(() => {
     publishTimer = null;
-    void publishNow(false);
+    void publishNow();
   }, 300);
 }
 
@@ -136,6 +137,6 @@ export function startSessionBridge(): void {
   scheduleSessionBridgePublish();
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = setInterval(() => {
-    void publishNow(true);
+    void heartbeatNow();
   }, 10_000);
 }

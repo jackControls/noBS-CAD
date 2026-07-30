@@ -336,6 +336,7 @@ pub fn run() {
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_write,
+            session_bridge::mcp_session_bridge_heartbeat,
             six_dof_mouse::six_dof_mouse_devices,
             six_dof_mouse::six_dof_mouse_connect,
             six_dof_mouse::six_dof_mouse_disconnect,
