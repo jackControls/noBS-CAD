@@ -1096,7 +1096,7 @@ pub(crate) fn spawn_reference_dialog(
                 top: percent(50.0),
                 width: px(440.0),
                 flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1.5)),
+                border: UiRect::all(px(2.0)),
                 border_radius: BorderRadius::all(px(14.0)),
                 overflow: Overflow::clip(),
                 ..default()
