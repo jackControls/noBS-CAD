@@ -14,4 +14,4 @@
 3MF/STL export. See [docs/mcp-harness.md](docs/mcp-harness.md) and
 [mcp-server/OKRs.md](mcp-server/OKRs.md).
 
-**Follow-ups (not in this slice):** live UI co-link, MCP client installer.
+**Follow-ups:** revisioned MCP→UI sync; MCP client installer / UI launch (#32).

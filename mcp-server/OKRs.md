@@ -19,12 +19,13 @@ Parent directions: [../docs/goals.md](../docs/goals.md) · As-built:
 | M2.1 | `full_static` advertises full registry | On branch |
 | M2.2 | `cad_list_all_tools` always available | On branch |
 
-## M3 — Headless sessions (partial)
+## M3 — Snapshot bridge
 
 | KR | Target | Status |
 |----|--------|--------|
-| M3.1 | `cad_list_sessions` / `cad_attach` read-only load | On branch |
-| M3.2 | Live UI co-link / snapshot bridge | Proposed — not shipped |
+| M3.1 | `cad_list_sessions` / `cad_attach` / refresh / detach (read-only) | On branch |
+| M3.2 | UUID ids + desktop publisher + heartbeat metadata | On branch |
+| M3.3 | Revisioned MCP→UI sync | Proposed — not shipped |
 
 ## M4 — Print export (branch)
 

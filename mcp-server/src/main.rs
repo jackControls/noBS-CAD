@@ -351,6 +351,7 @@ impl CadServer {
             .or_else(|| arguments.get("document_id"))
             .and_then(Value::as_str)
             .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
+        session::require_valid_session_id(session_id)?;
         if !session::list_sessions()?.iter().any(|id| id == session_id) {
             return Err(format!(
                 "session '{session_id}' was not found under {}",
@@ -367,6 +368,7 @@ impl CadServer {
             "focus": self.disclosure.active().as_str(),
             "session_mode": "read_only_snapshot",
             "writeback": false,
+            "heartbeat": session::heartbeat_meta(session_id),
         }))
     }
 
@@ -2506,16 +2508,21 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_list_sessions",
             "List read-only session snapshots",
-            "List model session directories under NBCAD_SESSION_DIR (skips _* control dirs). Use with cad_attach for a read-only load into this MCP process. Not a live UI co-link.",
+            "List UUID v4 session directories under NBCAD_SESSION_DIR (skips _* control dirs and non-UUID names). Includes heartbeat age/stale metadata. Use with cad_attach. Snapshot bridge — not a live UI co-link.",
             empty_schema(),
         ),
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require and load model.json from a session directory into this MCP process; optional focus.json. Fails if the model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. Never writes back to the session dir.",
             object_schema(
                 json!({
-                    "session_id": {"type": "string", "minLength": 1}
+                    "session_id": {
+                        "type": "string",
+                        "minLength": 36,
+                        "maxLength": 36,
+                        "description": "UUID v4 session directory name"
+                    }
                 }),
                 &["session_id"],
             ),
@@ -3133,7 +3140,7 @@ mod tests {
     #[test]
     fn read_only_snapshot_attach_refresh_detach() {
         let _guard = session::ENV_LOCK.lock().unwrap();
-        let unique = format!("attach-{}", session::now_ms());
+        let unique = session::test_session_uuid();
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-{unique}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
         let (mut donor, _) = mcp_box();
@@ -3144,15 +3151,32 @@ mod tests {
             .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
         session::write_session(&unique, "model.json", &model_json).unwrap();
         session::write_session(&unique, "focus.json", "{\"focus\":\"solid\"}").unwrap();
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
 
         let mut server = CadServer::new().unwrap();
+        // Document-name ids are rejected (UUID v4 required).
+        assert!(server
+            .call_tool("cad_attach", json!({"session_id": "My Document"}))
+            .is_err());
         // Missing model must refuse attach (and leave nothing attached).
-        let missing = format!("missing-{unique}");
+        let missing = format!("00000000-0000-4000-8000-{:012x}", session::now_ms().wrapping_add(1) & 0xffffffffffff);
         std::fs::create_dir_all(dir.join(&missing)).unwrap();
         assert!(server
             .call_tool("cad_attach", json!({"session_id": missing}))
             .is_err());
         assert!(server.attached_document_id.is_none());
+
+        let listed = server.call_tool("cad_list_sessions", json!({})).unwrap();
+        assert_eq!(listed["sessions"][0], unique);
+        assert_eq!(listed["session_details"][0]["heartbeat"]["stale"], false);
 
         let attached = server
             .call_tool("cad_attach", json!({"session_id": unique}))

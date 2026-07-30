@@ -35,16 +35,17 @@ document | sketch | solid | modify | body_ops | datums | history | inspect | pri
 ```
 Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 
-### Read-only session snapshots (not live UI co-link)
+### Read-only snapshot bridge (not live UI co-link)
 Headless goldens work **without** attach.
+Desktop UI (Tauri) publishes:
+`<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
+(atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
-1. `cad_list_sessions` — directories under `NBCAD_SESSION_DIR` (skips `_*-prefixed` control dirs).
-2. `cad_attach` — **requires** valid `model.json`; loads into this MCP process; optional `focus.json`. **Never writes back.**
+1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`.
+2. `cad_attach` — **requires** UUID v4 + valid `model.json`; loads into this MCP process; optional `focus.json`. **Never writes back.**
 3. `cad_refresh` — explicit re-read of the attached session from disk.
 4. `cad_detach` — clears the attached session id.
-This is Jack’s **read-only snapshot** model for the disclosure/export PR.
-UI publishing, UUID session ids, and revisioned sync remain follow-up work
-([#31](https://github.com/jackControls/noBS-CAD/pull/31)).
+Revisioned MCP→UI sync remains future work. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
 

@@ -7,6 +7,7 @@
 //! path the WASM host uses, so native and browser behavior are identical.
 //! All modeling logic lives in the engine crates, never here.
 
+mod session_bridge;
 mod six_dof_mouse;
 mod state;
 
@@ -334,6 +335,7 @@ pub fn run() {
             get_document,
             read_binary_file,
             write_binary_file_atomic,
+            session_bridge::mcp_session_bridge_write,
             six_dof_mouse::six_dof_mouse_devices,
             six_dof_mouse::six_dof_mouse_connect,
             six_dof_mouse::six_dof_mouse_disconnect,
