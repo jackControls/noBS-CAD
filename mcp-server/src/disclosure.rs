@@ -310,11 +310,6 @@ impl DisclosureState {
             .map(|deadline| deadline.saturating_sub(now))
     }
 
-    pub fn take_notify_immediate(&mut self) -> Value {
-        self.pending_notify_at_ms = None;
-        list_changed_notification()
-    }
-
     pub fn is_advertised(&self, tool_name: &str, pack: FocusPack, spine: bool) -> bool {
         if spine || self.mode == DisclosureMode::FullStatic {
             return true;
