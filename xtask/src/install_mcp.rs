@@ -1,0 +1,1022 @@
+//! Detect agent clients from their user config locations and upsert `nobs-cad`.
+//!
+//! Jack §4 hardened control flow:
+//! - `--dry-run` performs zero build / copy / write
+//! - `--clients` is required for any real install write
+//! - config updates use `.bak.<pid>` + temp+rename
+//! - supported clients: cursor, vscode, claude, opencode (no Grok)
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde_json::{json, Map, Value};
+use std::env;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub const DEFAULT_SERVER_NAME: &str = "nobs-cad";
+
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub dry_run: bool,
+    pub build: bool,
+    pub binary: Option<PathBuf>,
+    pub clients: Option<Vec<ClientKind>>,
+    pub server_name: String,
+}
+
+impl Options {
+    pub fn parse(args: impl Iterator<Item = String>) -> Result<Self> {
+        let mut options = Self {
+            dry_run: false,
+            build: true,
+            binary: None,
+            clients: None,
+            server_name: DEFAULT_SERVER_NAME.to_string(),
+        };
+
+        let mut args = args.peekable();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--dry-run" => options.dry_run = true,
+                "--no-build" => options.build = false,
+                "--binary" => {
+                    let path = args
+                        .next()
+                        .ok_or_else(|| anyhow!("--binary requires a path"))?;
+                    options.binary = Some(PathBuf::from(path));
+                }
+                "--clients" => {
+                    let list = args
+                        .next()
+                        .ok_or_else(|| anyhow!("--clients requires a comma-separated list"))?;
+                    options.clients = Some(parse_clients(&list)?);
+                }
+                "--server-name" => {
+                    options.server_name = args
+                        .next()
+                        .ok_or_else(|| anyhow!("--server-name requires a value"))?;
+                }
+                "--help" | "-h" => bail!("help requested"),
+                other => bail!("unknown install-mcp option '{other}'"),
+            }
+        }
+        options.validate()?;
+        Ok(options)
+    }
+
+    /// Real installs require an explicit `--clients` list. Dry-run may omit it
+    /// to discover/print detected clients only.
+    pub fn validate(&self) -> Result<()> {
+        if !self.dry_run && self.clients.is_none() {
+            bail!(
+                "--clients is required for install writes \
+                 (use --dry-run to discover detected clients without writing)"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKind {
+    Cursor,
+    VsCode,
+    Claude,
+    OpenCode,
+}
+
+impl ClientKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cursor => "cursor",
+            Self::VsCode => "vscode",
+            Self::Claude => "claude",
+            Self::OpenCode => "opencode",
+        }
+    }
+
+    fn parse(name: &str) -> Result<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "cursor" => Ok(Self::Cursor),
+            "vscode" | "code" | "vs-code" => Ok(Self::VsCode),
+            "claude" => Ok(Self::Claude),
+            "opencode" | "open-code" => Ok(Self::OpenCode),
+            "grok" | "xai" => bail!(
+                "client '{name}' is not supported (no Grok until an official MCP contract)"
+            ),
+            other => bail!("unknown client '{other}' (supported: cursor,vscode,claude,opencode)"),
+        }
+    }
+}
+
+fn parse_clients(list: &str) -> Result<Vec<ClientKind>> {
+    let mut out = Vec::new();
+    for part in list.split(',') {
+        if part.trim().is_empty() {
+            continue;
+        }
+        out.push(ClientKind::parse(part)?);
+    }
+    if out.is_empty() {
+        bail!("--clients list is empty");
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone)]
+struct ServerLaunch {
+    command: PathBuf,
+    env: Map<String, Value>,
+}
+
+pub fn run(options: Options) -> Result<()> {
+    options.validate()?;
+
+    let repo_root = repo_root()?;
+    let binary = resolve_binary(&repo_root, &options)?;
+    let launch = ServerLaunch {
+        command: binary,
+        env: server_env(&repo_root),
+    };
+
+    println!("MCP binary: {}", launch.command.display());
+    if options.dry_run {
+        println!("mode: dry-run (zero build/copy/write)");
+    }
+
+    let discover_all = options.clients.is_none();
+    let wanted = options.clients.unwrap_or_else(|| {
+        vec![
+            ClientKind::Cursor,
+            ClientKind::VsCode,
+            ClientKind::Claude,
+            ClientKind::OpenCode,
+        ]
+    });
+
+    if discover_all {
+        println!("discover: scanning all supported clients (no --clients)");
+    }
+
+    let mut installed = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+
+    for kind in wanted {
+        let targets = discover_targets(kind);
+        if targets.is_empty() {
+            println!(
+                "skip  {:<10} (not detected — no user config/marker present)",
+                kind.as_str()
+            );
+            skipped += 1;
+            continue;
+        }
+        for target in targets {
+            if options.dry_run {
+                println!(
+                    "plan  {:<10} {}  ({})",
+                    kind.as_str(),
+                    target.path.display(),
+                    target.format.label()
+                );
+                installed += 1;
+                continue;
+            }
+            match upsert_target(&target, &options.server_name, &launch) {
+                Ok(action) => {
+                    println!(
+                        "{:<5} {:<10} {}  ({})",
+                        action.verb(),
+                        kind.as_str(),
+                        target.path.display(),
+                        target.format.label()
+                    );
+                    installed += 1;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "error {:<10} {}: {error:#}",
+                        kind.as_str(),
+                        target.path.display()
+                    );
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    println!(
+        "done: {installed} upsert(s), {skipped} client family(ies) skipped, {failed} error(s)"
+    );
+    if installed == 0 && failed == 0 {
+        println!(
+            "hint: install/open a client once so its user config directory exists, then re-run"
+        );
+    } else if !options.dry_run && installed > 0 {
+        println!("restart each client (or reload MCP) to pick up the new server");
+    }
+    if failed > 0 {
+        bail!("{failed} client config(s) failed; see errors above");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ConfigFormat {
+    /// `{ "mcpServers": { "name": { command, args, env } } }`
+    McpServers,
+    /// VS Code `{ "servers": { "name": { type, command, args, env } } }`
+    VsCodeServers,
+    /// OpenCode `{ "mcp": { "name": { type, command, ... } } }` or nested `mcp.servers`
+    OpenCodeMcp,
+}
+
+impl ConfigFormat {
+    fn label(self) -> &'static str {
+        match self {
+            Self::McpServers => "mcpServers",
+            Self::VsCodeServers => "servers",
+            Self::OpenCodeMcp => "opencode mcp",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Target {
+    path: PathBuf,
+    format: ConfigFormat,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Action {
+    Created,
+    Updated,
+}
+
+impl Action {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Created => "add",
+            Self::Updated => "update",
+        }
+    }
+}
+
+fn discover_targets(kind: ClientKind) -> Vec<Target> {
+    match kind {
+        ClientKind::Cursor => detect_json(
+            home_path(&[".cursor", "mcp.json"]),
+            &[home_path(&[".cursor"])],
+            ConfigFormat::McpServers,
+        ),
+        ClientKind::VsCode => {
+            let mut targets = Vec::new();
+            for (user_dir, markers) in vscode_user_dirs() {
+                targets.extend(detect_json(
+                    user_dir.join("mcp.json"),
+                    &markers,
+                    ConfigFormat::VsCodeServers,
+                ));
+            }
+            targets
+        }
+        ClientKind::Claude => {
+            let mut targets = Vec::new();
+            targets.extend(detect_json(
+                home_path(&[".claude.json"]),
+                &[home_path(&[".claude.json"]), home_path(&[".claude"])],
+                ConfigFormat::McpServers,
+            ));
+            // Claude Desktop (separate app)
+            if let Some(appdata) = env::var_os("APPDATA") {
+                let desktop = PathBuf::from(appdata)
+                    .join("Claude")
+                    .join("claude_desktop_config.json");
+                let marker = desktop
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| desktop.clone());
+                targets.extend(detect_json(
+                    desktop,
+                    &[marker],
+                    ConfigFormat::McpServers,
+                ));
+            } else {
+                let desktop = home_path(&[
+                    "Library",
+                    "Application Support",
+                    "Claude",
+                    "claude_desktop_config.json",
+                ]);
+                let marker = desktop
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| desktop.clone());
+                targets.extend(detect_json(
+                    desktop,
+                    &[marker],
+                    ConfigFormat::McpServers,
+                ));
+            }
+            targets
+        }
+        ClientKind::OpenCode => {
+            let mut markers = vec![
+                xdg_config_path(&["opencode"]),
+                home_path(&[".config", "opencode"]),
+            ];
+            if let Some(appdata) = env::var_os("APPDATA") {
+                markers.push(PathBuf::from(appdata).join("opencode"));
+            }
+            let path = xdg_config_path(&["opencode", "opencode.json"]);
+            let alt = home_path(&[".config", "opencode", "opencode.json"]);
+            let mut targets = detect_json(path, &markers, ConfigFormat::OpenCodeMcp);
+            if targets.is_empty() {
+                targets = detect_json(alt, &markers, ConfigFormat::OpenCodeMcp);
+            }
+            targets
+        }
+    }
+}
+
+fn detect_json(path: PathBuf, markers: &[PathBuf], format: ConfigFormat) -> Vec<Target> {
+    if path.exists() || markers.iter().any(|marker| marker.exists()) {
+        vec![Target { path, format }]
+    } else {
+        Vec::new()
+    }
+}
+
+fn vscode_user_dirs() -> Vec<(PathBuf, Vec<PathBuf>)> {
+    let mut dirs = Vec::new();
+    if let Some(appdata) = env::var_os("APPDATA") {
+        let appdata = PathBuf::from(appdata);
+        for product in ["Code", "Code - Insiders"] {
+            let user = appdata.join(product).join("User");
+            dirs.push((user.clone(), vec![user, appdata.join(product)]));
+        }
+    } else {
+        // macOS / Linux typical locations
+        dirs.push((
+            home_path(&["Library", "Application Support", "Code", "User"]),
+            vec![home_path(&["Library", "Application Support", "Code"])],
+        ));
+        dirs.push((
+            home_path(&[".config", "Code", "User"]),
+            vec![home_path(&[".config", "Code"])],
+        ));
+    }
+    dirs
+}
+
+fn home_path(parts: &[&str]) -> PathBuf {
+    let home = env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    parts.iter().fold(home, |acc, part| acc.join(part))
+}
+
+fn xdg_config_path(parts: &[&str]) -> PathBuf {
+    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
+        return parts.iter().fold(PathBuf::from(xdg), |acc, p| acc.join(p));
+    }
+    let mut base = home_path(&[".config"]);
+    for part in parts {
+        base = base.join(part);
+    }
+    base
+}
+
+fn upsert_target(
+    target: &Target,
+    server_name: &str,
+    launch: &ServerLaunch,
+) -> Result<Action> {
+    if let Some(parent) = target.path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+    }
+
+    let existed = target.path.exists();
+    let original = if existed {
+        fs::read_to_string(&target.path)
+            .with_context(|| format!("read {}", target.path.display()))?
+    } else {
+        String::new()
+    };
+
+    let next = match target.format {
+        ConfigFormat::McpServers => upsert_mcp_servers_json(&original, server_name, launch)?,
+        ConfigFormat::VsCodeServers => upsert_vscode_servers_json(&original, server_name, launch)?,
+        ConfigFormat::OpenCodeMcp => upsert_opencode_json(&original, server_name, launch)?,
+    };
+
+    // Preserve trailing newline style when possible.
+    let mut out = next;
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    atomic_write_with_backup(&target.path, &out)?;
+    Ok(if existed {
+        Action::Updated
+    } else {
+        Action::Created
+    })
+}
+
+/// Backup existing file as `path.bak.<pid>`, then write via temp + rename.
+pub fn atomic_write_with_backup(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    if path.exists() {
+        let backup = path.with_file_name(format!(
+            "{}.bak.{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| anyhow!("invalid config path {}", path.display()))?,
+            std::process::id()
+        ));
+        fs::copy(path, &backup).with_context(|| {
+            format!(
+                "backup {} → {}",
+                path.display(),
+                backup.display()
+            )
+        })?;
+    }
+
+    let parent = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let staging = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config"),
+        std::process::id()
+    ));
+
+    {
+        let mut file = fs::File::create(&staging)
+            .with_context(|| format!("create temp {}", staging.display()))?;
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("write temp {}", staging.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync temp {}", staging.display()))?;
+    }
+
+    fs::rename(&staging, path).with_context(|| {
+        format!(
+            "rename {} → {}",
+            staging.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn upsert_mcp_servers_json(original: &str, server_name: &str, launch: &ServerLaunch) -> Result<String> {
+    let mut root = parse_json_object(original, json!({ "mcpServers": {} }))
+        .context("parse JSON (mcpServers)")?;
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("root JSON value must be an object"))?;
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("mcpServers must be an object"))?;
+    servers.insert(server_name.to_string(), mcp_servers_entry(launch));
+    Ok(serde_json::to_string_pretty(&root)?)
+}
+
+fn upsert_vscode_servers_json(
+    original: &str,
+    server_name: &str,
+    launch: &ServerLaunch,
+) -> Result<String> {
+    let mut root = parse_json_object(original, json!({ "servers": {} }))
+        .context("parse JSON (VS Code servers)")?;
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("root JSON value must be an object"))?;
+    let servers = obj
+        .entry("servers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("servers must be an object"))?;
+    servers.insert(
+        server_name.to_string(),
+        json!({
+            "type": "stdio",
+            "command": path_string(&launch.command),
+            "args": [],
+            "env": Value::Object(launch.env.clone()),
+        }),
+    );
+    Ok(serde_json::to_string_pretty(&root)?)
+}
+
+fn upsert_opencode_json(original: &str, server_name: &str, launch: &ServerLaunch) -> Result<String> {
+    let mut root = parse_json_object(
+        original,
+        json!({
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": {}
+        }),
+    )
+    .context("parse JSON (OpenCode)")?;
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("root JSON value must be an object"))?;
+    let mcp = obj
+        .entry("mcp")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("mcp must be an object"))?;
+
+    let entry = json!({
+        "type": "local",
+        "command": [path_string(&launch.command)],
+        "enabled": true,
+        "environment": Value::Object(launch.env.clone()),
+    });
+
+    // Prefer nested `mcp.servers` when that object already exists (OpenCode v2).
+    if let Some(servers) = mcp.get_mut("servers").and_then(Value::as_object_mut) {
+        servers.insert(server_name.to_string(), entry);
+    } else {
+        mcp.insert(server_name.to_string(), entry);
+    }
+    Ok(serde_json::to_string_pretty(&root)?)
+}
+
+fn mcp_servers_entry(launch: &ServerLaunch) -> Value {
+    json!({
+        "command": path_string(&launch.command),
+        "args": [],
+        "env": Value::Object(launch.env.clone()),
+    })
+}
+
+/// Parse a JSON object, tolerating empty files, UTF-8 BOM, and light JSONC (`//` / `/* */`).
+fn parse_json_object(original: &str, empty_default: Value) -> Result<Value> {
+    let trimmed = original.trim_start_matches('\u{feff}').trim();
+    if trimmed.is_empty() {
+        return Ok(empty_default);
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => {
+            if value.is_object() {
+                Ok(value)
+            } else {
+                bail!("root JSON value must be an object")
+            }
+        }
+        Err(_) => {
+            let stripped = strip_jsonc_comments(trimmed);
+            let value: Value = serde_json::from_str(stripped.trim())
+                .context("invalid JSON (after stripping comments)")?;
+            if !value.is_object() {
+                bail!("root JSON value must be an object");
+            }
+            Ok(value)
+        }
+    }
+}
+
+fn strip_jsonc_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            out.push(b as char);
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_string = true;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if b == b'/' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'/' {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if bytes[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+                continue;
+            }
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
+fn path_string(path: &Path) -> String {
+    // Windows canonicalize() often yields \\?\C:\... which some MCP clients mishandle.
+    let raw = path.to_string_lossy();
+    if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+        stripped.to_string()
+    } else {
+        raw.into_owned()
+    }
+}
+
+/// Prepend OCCT `bin` once and keep a short, deduped PATH for MCP child processes.
+fn clean_path_with_occt_bin(occt_bin: &Path) -> String {
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let mut parts: Vec<String> = vec![path_string(occt_bin)];
+    if let Ok(existing) = env::var("PATH") {
+        for part in existing.split(sep) {
+            if part.is_empty() {
+                continue;
+            }
+            // Drop cargo/target noise and repeated OCCT bin prefixes from nested shells.
+            let lower = part.to_ascii_lowercase();
+            if lower.contains("\\target\\debug")
+                || lower.contains("/target/debug")
+                || lower.contains("vcpkg_installed")
+                    && lower.ends_with(&format!("{}bin", std::path::MAIN_SEPARATOR))
+            {
+                continue;
+            }
+            if parts
+                .iter()
+                .any(|existing_part| existing_part.eq_ignore_ascii_case(part))
+            {
+                continue;
+            }
+            parts.push(part.to_string());
+        }
+    }
+    // Cap length so client config files stay readable.
+    if parts.len() > 40 {
+        parts.truncate(40);
+    }
+    parts.join(&sep.to_string())
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    path.canonicalize()
+        .map(|canonical| {
+            let as_string = path_string(&canonical);
+            PathBuf::from(as_string)
+        })
+        .unwrap_or(path)
+}
+
+fn server_env(repo_root: &Path) -> Map<String, Value> {
+    let mut env_map = Map::new();
+    env_map.insert(
+        "NBCAD_REPO_ROOT".to_string(),
+        Value::String(path_string(repo_root)),
+    );
+    if let Some(occt) = default_occt_root(repo_root) {
+        env_map.insert(
+            "OCCT_ROOT".to_string(),
+            Value::String(occt.to_string_lossy().into_owned()),
+        );
+        let bin = occt.join("bin");
+        if bin.is_dir() {
+            env_map.insert(
+                "PATH".to_string(),
+                Value::String(clean_path_with_occt_bin(&bin)),
+            );
+        }
+    }
+    env_map
+}
+
+fn default_occt_root(repo_root: &Path) -> Option<PathBuf> {
+    if let Ok(explicit) = env::var("OCCT_ROOT") {
+        let path = PathBuf::from(explicit);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    let candidates = [
+        repo_root.join("vcpkg_installed").join("x64-windows"),
+        repo_root.join("vcpkg_installed").join("x64-linux"),
+        repo_root.join("vcpkg_installed").join("arm64-osx"),
+        repo_root.join("vcpkg_installed").join("x64-osx"),
+    ];
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+/// Resolve the MCP binary path.
+///
+/// Dry-run never builds or copies. Real installs honor `--binary`, else look for
+/// release then debug under `mcp-server/target/`, and only `cargo build --release`
+/// when `build=true`, not dry-run, and no binary was found/forced.
+fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
+    if let Some(path) = &options.binary {
+        if options.dry_run {
+            return Ok(path.clone());
+        }
+        if !path.is_file() {
+            bail!("--binary path does not exist: {}", path.display());
+        }
+        return Ok(normalize_path(path.clone()));
+    }
+
+    let release = mcp_binary_path(repo_root, "release");
+    let debug = mcp_binary_path(repo_root, "debug");
+
+    if release.is_file() {
+        return Ok(normalize_path(release));
+    }
+    if debug.is_file() {
+        if !options.dry_run {
+            eprintln!(
+                "warning: using debug MCP binary (release missing): {}",
+                debug.display()
+            );
+        }
+        return Ok(normalize_path(debug));
+    }
+
+    if options.dry_run {
+        // Planned path only — no cargo build.
+        println!(
+            "note: MCP binary not found yet; would build {}",
+            release.display()
+        );
+        return Ok(release);
+    }
+
+    if options.build {
+        build_mcp_server(repo_root)?;
+        if release.is_file() {
+            return Ok(normalize_path(release));
+        }
+        if debug.is_file() {
+            eprintln!(
+                "warning: using debug MCP binary after build (release missing): {}",
+                debug.display()
+            );
+            return Ok(normalize_path(debug));
+        }
+    }
+
+    bail!(
+        "MCP binary not found at {} (run without --no-build, or pass --binary)",
+        mcp_binary_path(repo_root, "release").display()
+    )
+}
+
+fn mcp_binary_path(repo_root: &Path, profile: &str) -> PathBuf {
+    let name = if cfg!(windows) {
+        "nbcad-mcp.exe"
+    } else {
+        "nbcad-mcp"
+    };
+    repo_root
+        .join("mcp-server")
+        .join("target")
+        .join(profile)
+        .join(name)
+}
+
+fn build_mcp_server(repo_root: &Path) -> Result<()> {
+    println!("building mcp-server (release)...");
+    let mut command = Command::new("cargo");
+    command.current_dir(repo_root).args([
+        "build",
+        "--release",
+        "--manifest-path",
+        "mcp-server/Cargo.toml",
+    ]);
+    if let Some(occt) = default_occt_root(repo_root) {
+        command.env("OCCT_ROOT", &occt);
+        let bin = occt.join("bin");
+        if bin.is_dir() {
+            let mut path = bin.to_string_lossy().into_owned();
+            if let Ok(existing) = env::var("PATH") {
+                let sep = if cfg!(windows) { ';' } else { ':' };
+                path.push(sep);
+                path.push_str(&existing);
+            }
+            command.env("PATH", path);
+        }
+    }
+    let status = command
+        .status()
+        .context("spawn cargo build for mcp-server")?;
+    if !status.success() {
+        bail!("cargo build --release --manifest-path mcp-server/Cargo.toml failed");
+    }
+    Ok(())
+}
+
+fn repo_root() -> Result<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest_dir
+        .parent()
+        .ok_or_else(|| anyhow!("xtask crate has no parent directory"))?;
+    Ok(root.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn launch_fixture() -> ServerLaunch {
+        let mut env = Map::new();
+        env.insert("OCCT_ROOT".to_string(), Value::String("/occt".into()));
+        ServerLaunch {
+            command: PathBuf::from("/repo/mcp-server/target/release/nbcad-mcp"),
+            env,
+        }
+    }
+
+    #[test]
+    fn options_dry_run_allows_omitting_clients() {
+        let options = Options::parse(["--dry-run".into()].into_iter()).unwrap();
+        assert!(options.dry_run);
+        assert!(options.clients.is_none());
+    }
+
+    #[test]
+    fn options_write_requires_clients() {
+        let err = Options::parse(std::iter::empty()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("--clients is required"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn options_write_with_clients_ok() {
+        let options =
+            Options::parse(["--clients".into(), "cursor,vscode".into(), "--no-build".into()].into_iter())
+                .unwrap();
+        assert!(!options.dry_run);
+        assert!(!options.build);
+        assert_eq!(
+            options.clients.as_deref(),
+            Some(&[ClientKind::Cursor, ClientKind::VsCode][..])
+        );
+    }
+
+    #[test]
+    fn reject_grok_and_xai_clients() {
+        for name in ["grok", "xai", "Grok", "XAI"] {
+            let err = ClientKind::parse(name).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("not supported") || msg.contains("Grok"),
+                "unexpected error for {name}: {msg}"
+            );
+        }
+        let err = Options::parse(
+            [String::from("--clients"), String::from("cursor,grok")].into_iter(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("not supported"));
+    }
+
+    #[test]
+    fn upsert_preserves_sibling_mcp_servers() {
+        let original = r#"{
+  "mcpServers": {
+    "other": { "command": "echo" }
+  }
+}"#;
+        let next = upsert_mcp_servers_json(original, "nobs-cad", &launch_fixture()).unwrap();
+        let value: Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(value["mcpServers"]["other"]["command"], "echo");
+        assert_eq!(
+            value["mcpServers"]["nobs-cad"]["command"],
+            "/repo/mcp-server/target/release/nbcad-mcp"
+        );
+        assert_eq!(
+            value["mcpServers"]["nobs-cad"]["env"]["OCCT_ROOT"],
+            "/occt"
+        );
+    }
+
+    #[test]
+    fn upsert_vscode_uses_servers_key() {
+        let next = upsert_vscode_servers_json("", "nobs-cad", &launch_fixture()).unwrap();
+        let value: Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(value["servers"]["nobs-cad"]["type"], "stdio");
+        assert!(value.get("mcpServers").is_none());
+    }
+
+    #[test]
+    fn upsert_opencode_respects_servers_nest() {
+        let original = r#"{
+  "mcp": {
+    "servers": {
+      "keep": { "type": "local", "command": ["true"] }
+    }
+  }
+}"#;
+        let next = upsert_opencode_json(original, "nobs-cad", &launch_fixture()).unwrap();
+        let value: Value = serde_json::from_str(&next).unwrap();
+        assert!(value["mcp"]["servers"]["keep"].is_object());
+        assert_eq!(value["mcp"]["servers"]["nobs-cad"]["type"], "local");
+    }
+
+    #[test]
+    fn upsert_opencode_flat_mcp_when_no_servers_key() {
+        let next = upsert_opencode_json("{}", "nobs-cad", &launch_fixture()).unwrap();
+        let value: Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(value["mcp"]["nobs-cad"]["type"], "local");
+        assert!(value["mcp"].get("servers").is_none());
+    }
+
+    #[test]
+    fn atomic_write_with_backup_creates_bak_and_replaces() {
+        let dir = std::env::temp_dir().join(format!(
+            "nbcad-xtask-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mcp.json");
+        fs::write(&path, "{\"old\":true}\n").unwrap();
+
+        atomic_write_with_backup(&path, "{\"new\":true}\n").unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert_eq!(written, "{\"new\":true}\n");
+
+        let backup = dir.join(format!("mcp.json.bak.{}", std::process::id()));
+        assert!(
+            backup.is_file(),
+            "expected backup at {}",
+            backup.display()
+        );
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "{\"old\":true}\n");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_with_backup_creates_new_file_without_bak() {
+        let dir = std::env::temp_dir().join(format!(
+            "nbcad-xtask-atomic-new-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fresh.json");
+
+        atomic_write_with_backup(&path, "{\"ok\":1}\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"ok\":1}\n");
+        assert!(!dir.join(format!("fresh.json.bak.{}", std::process::id())).exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_json_object_accepts_empty_and_jsonc() {
+        let empty = parse_json_object("  \n", json!({ "mcpServers": {} })).unwrap();
+        assert!(empty["mcpServers"].is_object());
+        let jsonc = parse_json_object(
+            "{\n  // comment\n  \"mcpServers\": {}\n}\n",
+            json!({}),
+        )
+        .unwrap();
+        assert!(jsonc["mcpServers"].is_object());
+    }
+}

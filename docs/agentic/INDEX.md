@@ -6,6 +6,7 @@ Committed operating docs for humans and coding agents working on noBS CAD.
 | Doc | Purpose |
 |-----|---------|
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
+| [INSTALL_MCP.md](INSTALL_MCP.md) | Hardened `xtask install-mcp` client wiring |
 | [MAINTENANCE.md](MAINTENANCE.md) | Build, OCCT, test, PR checklist |
 | [../mcp-harness.md](../mcp-harness.md) | Public as-built MCP notes |
 | [../../mcp-server/README.md](../../mcp-server/README.md) | Tool surface and build |

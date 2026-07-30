@@ -12,4 +12,5 @@ members = [
     "crates/occt",
     "crates/export",
     "crates/wasm",
+    "xtask",
 ]

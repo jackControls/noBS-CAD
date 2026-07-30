@@ -10,6 +10,7 @@ on:
       - 'crates/solid/**'
       - 'crates/occt/**'
       - 'crates/export/**'
+      - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
   pull_request:
@@ -20,6 +21,7 @@ on:
       - 'crates/solid/**'
       - 'crates/occt/**'
       - 'crates/export/**'
+      - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
 
@@ -98,3 +100,9 @@ jobs:
         run: |
           cargo test --locked -p nbcad-export
           if ($LASTEXITCODE -ne 0) { throw "nbcad-export tests failed" }
+
+      - name: xtask install-mcp tests
+        shell: pwsh
+        run: |
+          cargo test --locked -p xtask
+          if ($LASTEXITCODE -ne 0) { throw "xtask tests failed" }
