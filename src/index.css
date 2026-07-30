@@ -143,10 +143,18 @@ body {
  */
 .feature-dialog {
   isolation: isolate;
-  /* One continuous iris perimeter; disconnected accent rails look clipped. */
+  /* Paint the iris perimeter as a filled frame instead of a translucent
+     border stroke. It stays two physical pixels on every straight edge even
+     when a rounded dialog is composited at Retina scale. */
   border-radius: 14px;
-  border-width: 2px;
-  border-color: rgb(var(--accent-rgb) / 0.78);
+  border: 2px solid transparent;
+  background:
+    linear-gradient(rgb(var(--panel-rgb)), rgb(var(--panel-rgb))) padding-box,
+    linear-gradient(
+        rgb(var(--accent-rgb) / 0.78),
+        rgb(var(--accent-rgb) / 0.78)
+      )
+      border-box;
   box-shadow:
     0 18px 48px rgb(0 0 0 / var(--dialog-shadow-alpha)),
     0 0 0 1px rgb(var(--accent-rgb) / 0.08);

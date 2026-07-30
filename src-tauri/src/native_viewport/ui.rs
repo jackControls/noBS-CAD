@@ -1095,69 +1095,79 @@ pub(crate) fn spawn_reference_dialog(
                 left: percent(50.0),
                 top: percent(50.0),
                 width: px(440.0),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(2.0)),
+                padding: UiRect::all(px(2.0)),
                 border_radius: BorderRadius::all(px(14.0)),
                 overflow: Overflow::clip(),
                 ..default()
             },
             UiTransform::from_translation(Val2::percent(-50.0, -50.0)),
-            BackgroundColor(theme.panel),
-            BorderColor::all(theme.accent.with_alpha(0.78)),
+            BackgroundColor(theme.accent.with_alpha(0.78)),
             theme.dialog_shadow(),
             ZIndex(1_100),
         ))
-        .with_children(|dialog| {
-            dialog
+        .with_children(|frame| {
+            frame
                 .spawn((
                     Node {
-                        height: px(52.0),
-                        padding: UiRect::horizontal(px(16.0)),
-                        align_items: AlignItems::Center,
-                        column_gap: px(10.0),
-                        border: UiRect::bottom(px(1.0)),
-                        border_radius: BorderRadius::px(12.0, 12.0, 0.0, 0.0),
+                        width: percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        border_radius: BorderRadius::all(px(12.0)),
+                        overflow: Overflow::clip(),
                         ..default()
                     },
-                    BackgroundColor(theme.header),
-                    BorderColor::all(theme.edge),
+                    BackgroundColor(theme.panel),
                 ))
-                .with_children(|header| {
-                    header.spawn((
-                        Node {
-                            width: px(18.0),
-                            height: px(18.0),
-                            border: UiRect::all(px(2.0)),
-                            border_radius: BorderRadius::MAX,
-                            ..default()
-                        },
-                        BorderColor::all(theme.accent),
-                    ));
-                    header.spawn((
-                        Text::new("Sketch coordinate origin"),
-                        theme.text(assets, 16.0, FontWeight::SEMIBOLD),
-                        TextColor(theme.ink),
-                        Node {
-                            flex_grow: 1.0,
-                            ..default()
-                        },
-                    ));
-                    header.spawn((
-                        Text::new("×"),
-                        theme.text(assets, 22.0, FontWeight::NORMAL),
-                        TextColor(theme.mute),
-                    ));
-                });
+                .with_children(|dialog| {
+                    dialog
+                        .spawn((
+                            Node {
+                                height: px(52.0),
+                                padding: UiRect::horizontal(px(16.0)),
+                                align_items: AlignItems::Center,
+                                column_gap: px(10.0),
+                                border: UiRect::bottom(px(1.0)),
+                                border_radius: BorderRadius::px(12.0, 12.0, 0.0, 0.0),
+                                ..default()
+                            },
+                            BackgroundColor(theme.header),
+                            BorderColor::all(theme.edge),
+                        ))
+                        .with_children(|header| {
+                            header.spawn((
+                                Node {
+                                    width: px(18.0),
+                                    height: px(18.0),
+                                    border: UiRect::all(px(2.0)),
+                                    border_radius: BorderRadius::MAX,
+                                    ..default()
+                                },
+                                BorderColor::all(theme.accent),
+                            ));
+                            header.spawn((
+                                Text::new("Sketch coordinate origin"),
+                                theme.text(assets, 16.0, FontWeight::SEMIBOLD),
+                                TextColor(theme.ink),
+                                Node {
+                                    flex_grow: 1.0,
+                                    ..default()
+                                },
+                            ));
+                            header.spawn((
+                                Text::new("×"),
+                                theme.text(assets, 22.0, FontWeight::NORMAL),
+                                TextColor(theme.mute),
+                            ));
+                        });
 
-            dialog
-                .spawn(Node {
-                    padding: UiRect::all(px(20.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(14.0),
-                    ..default()
-                })
-                .with_children(|body| {
-                    body.spawn((
+                    dialog
+                        .spawn(Node {
+                            padding: UiRect::all(px(20.0)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(14.0),
+                            ..default()
+                        })
+                        .with_children(|body| {
+                            body.spawn((
                         Text::new(
                             "Choose where sketch (0, 0) is placed on planar face #603509456585486.",
                         ),
@@ -1168,42 +1178,43 @@ pub(crate) fn spawn_reference_dialog(
                             ..default()
                         },
                     ));
-                    spawn_dialog_choice(
-                        body,
-                        true,
-                        "Center of selected face",
-                        "Places zero at the area-weighted center of this face.",
-                        theme,
-                        assets,
-                    );
-                    spawn_dialog_choice(
-                        body,
-                        false,
-                        "Project the global origin",
-                        "Projects the document XYZ origin onto the selected face plane.",
-                        theme,
-                        assets,
-                    );
-                });
+                            spawn_dialog_choice(
+                                body,
+                                true,
+                                "Center of selected face",
+                                "Places zero at the area-weighted center of this face.",
+                                theme,
+                                assets,
+                            );
+                            spawn_dialog_choice(
+                                body,
+                                false,
+                                "Project the global origin",
+                                "Projects the document XYZ origin onto the selected face plane.",
+                                theme,
+                                assets,
+                            );
+                        });
 
-            dialog
-                .spawn((
-                    Node {
-                        height: px(54.0),
-                        padding: UiRect::horizontal(px(16.0)),
-                        justify_content: JustifyContent::FlexEnd,
-                        align_items: AlignItems::Center,
-                        column_gap: px(10.0),
-                        border: UiRect::top(px(1.0)),
-                        border_radius: BorderRadius::px(0.0, 0.0, 12.0, 12.0),
-                        ..default()
-                    },
-                    BackgroundColor(theme.header),
-                    BorderColor::all(theme.edge),
-                ))
-                .with_children(|footer| {
-                    spawn_dialog_action(footer, "Cancel", false, theme, assets);
-                    spawn_dialog_action(footer, "Create Sketch", true, theme, assets);
+                    dialog
+                        .spawn((
+                            Node {
+                                height: px(54.0),
+                                padding: UiRect::horizontal(px(16.0)),
+                                justify_content: JustifyContent::FlexEnd,
+                                align_items: AlignItems::Center,
+                                column_gap: px(10.0),
+                                border: UiRect::top(px(1.0)),
+                                border_radius: BorderRadius::px(0.0, 0.0, 12.0, 12.0),
+                                ..default()
+                            },
+                            BackgroundColor(theme.header),
+                            BorderColor::all(theme.edge),
+                        ))
+                        .with_children(|footer| {
+                            spawn_dialog_action(footer, "Cancel", false, theme, assets);
+                            spawn_dialog_action(footer, "Create Sketch", true, theme, assets);
+                        });
                 });
         });
 }
