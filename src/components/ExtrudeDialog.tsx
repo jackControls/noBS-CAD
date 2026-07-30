@@ -445,7 +445,10 @@ export function ExtrudeDialog() {
   if (openFeature === null) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim="0.15"
+      className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
+    >
       {selectedCatalog && selectedProfiles.length > 0 && extentType === 'distance' && (
         <ExtrudeManipulator
           basis={selectedCatalog.basis}

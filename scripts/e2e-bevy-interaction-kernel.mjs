@@ -109,6 +109,24 @@ try {
       nearEdgeRay.intersectObject(originPlane).length === 1 &&
       outsideRay.intersectObject(originPlane).length === 0;
 
+    // Runtime reference planes preserve a stable screen footprint instead of
+    // remaining a fixed 100 mm square at every zoom level.
+    const nearPlaneHalfSize = viewport.referencePlaneHalfSizeForView(
+      100,
+      45,
+      1200,
+      800,
+    );
+    const farPlaneHalfSize = viewport.referencePlaneHalfSizeForView(
+      200,
+      45,
+      1200,
+      800,
+    );
+    const viewportRelativeReferencePlane =
+      approximately(farPlaneHalfSize / nearPlaneHalfSize, 2) &&
+      nearPlaneHalfSize > 0;
+
     // Sketch pointer mapping: ray/world intersection transformed into local mm.
     const sketchBasis = new cad.Group();
     sketchBasis.position.set(4, -3, 2);
@@ -225,7 +243,9 @@ try {
       hudRoots.length >= 2 &&
       hudRoots.every((element) => getComputedStyle(element).opacity !== '0');
     const nativeOverlayIslands = [
-      document.querySelector('[data-orientation-dial]'),
+      document.querySelector(
+        '[data-orientation-dial] [data-native-viewport-overlay]',
+      ),
       document.querySelector('[data-native-hud="navigation"]'),
       document.querySelector('[data-testid="project-tabs"]'),
       [...document.querySelectorAll('[data-native-viewport-overlay]')].find(
@@ -273,21 +293,22 @@ try {
           ),
       );
 
-    const dial = document.querySelector('[data-orientation-dial]');
-    const dialUnderlayMatchesViewport =
-      dial?.hasAttribute('data-native-overlay-underlay') === true &&
-      getComputedStyle(dial).backgroundColor ===
-        getComputedStyle(document.documentElement)
-          .getPropertyValue('--viewport')
-          .trim()
-          .replace(
-            /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i,
-            (_, red, green, blue) =>
-              `rgb(${Number.parseInt(red, 16)}, ${Number.parseInt(
-                green,
-                16,
-              )}, ${Number.parseInt(blue, 16)})`,
-          );
+    const dialCard = document.querySelector(
+      '[data-orientation-dial] [data-native-viewport-overlay]',
+    );
+    const dialRect = dialCard?.getBoundingClientRect();
+    const roundedDialIsland = dialRect
+      ? nativeBridge
+          .collectNativeViewportOverlayRects()
+          .some(
+            (rect) =>
+              approximately(rect.x, dialRect.x) &&
+              approximately(rect.y, dialRect.y) &&
+              approximately(rect.width, dialRect.width) &&
+              approximately(rect.height, dialRect.height) &&
+              (rect.cornerRadius ?? 0) >= 11,
+          )
+      : false;
 
     const store = window.__appStore.getState();
     store.setNavTool('orbit');
@@ -300,6 +321,30 @@ try {
       window.dispatchEvent(escape) === false &&
       window.__appStore.getState().navTool === 'select';
 
+    store.setSettingsOpen(true);
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    const dialog = document.querySelector(
+      '[data-testid="appearance-dialog"]',
+    );
+    const dialogBounds = dialog?.getBoundingClientRect();
+    const roundedModalCompositing =
+      dialogBounds !== undefined &&
+      dialogBounds !== null &&
+      approximately(nativeBridge.collectNativeViewportDimOpacity(), 0.3) &&
+      nativeBridge
+        .collectNativeViewportOverlayRects()
+        .some(
+          (rect) =>
+            approximately(rect.x, dialogBounds.x) &&
+            approximately(rect.y, dialogBounds.y) &&
+            approximately(rect.width, dialogBounds.width) &&
+            approximately(rect.height, dialogBounds.height) &&
+            (rect.cornerRadius ?? 0) >= 13,
+        );
+    window.__appStore.getState().setSettingsOpen(false);
+
     return {
       projection,
       faceRay,
@@ -307,6 +352,7 @@ try {
       datumRay,
       originRay,
       finiteReferencePlane,
+      viewportRelativeReferencePlane,
       sketchPlane,
       profileRay,
       orbit,
@@ -316,7 +362,8 @@ try {
       nativeOverlayIslands,
       animatedHud,
       exactOverlayUnion,
-      dialUnderlayMatchesViewport,
+      roundedDialIsland,
+      roundedModalCompositing,
       escapeOwned,
     };
   });
@@ -330,6 +377,7 @@ try {
       datumRay: true,
       originRay: true,
       finiteReferencePlane: true,
+      viewportRelativeReferencePlane: true,
       sketchPlane: true,
       profileRay: true,
       orbit: true,
@@ -339,7 +387,8 @@ try {
       nativeOverlayIslands: true,
       animatedHud: true,
       exactOverlayUnion: true,
-      dialUnderlayMatchesViewport: true,
+      roundedDialIsland: true,
+      roundedModalCompositing: true,
       escapeOwned: true,
     },
     `Three-free interaction proof failed: ${JSON.stringify(result)}`,
@@ -436,15 +485,33 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'pickPlane',
   );
-  const planeTargets = await page.evaluate(() => {
+  const planeTargets = await page.evaluate(async () => {
+    const cad = await import('/src/components/viewport/cadInteraction.ts');
+    const viewportModule = await import(
+      '/src/components/viewport/Viewport.tsx'
+    );
     const surface = document.querySelector(
       'canvas[data-cad-interaction-surface="true"]',
     );
     const rect = surface.getBoundingClientRect();
+    const snapshot = window.__cameraApi.getSnapshot();
+    const position = new cad.Vector3(...snapshot.position);
+    const forward = new cad.Vector3(...snapshot.target)
+      .sub(position)
+      .normalize();
+    const depth = new cad.Vector3()
+      .sub(position)
+      .dot(forward);
+    const halfSize = viewportModule.referencePlaneHalfSizeForView(
+      depth,
+      45,
+      rect.width,
+      rect.height,
+    );
     return {
-      xz: window.__worldToScreen(35, 0, 35),
-      xzCorner: window.__worldToScreen(50, 0, 50),
-      outside: window.__worldToScreen(90, 0, 90),
+      xz: window.__worldToScreen(halfSize * 0.70, 0, halfSize * 0.70),
+      xzCorner: window.__worldToScreen(halfSize, 0, halfSize),
+      outside: window.__worldToScreen(halfSize * 1.8, 0, halfSize * 1.8),
       viewport: {
         left: rect.left,
         top: rect.top,
@@ -488,7 +555,7 @@ try {
   assert.equal(
     await page.evaluate(() => window.__appStore.getState().hoveredPlane),
     null,
-    'the XZ hit target must end at the same 100 mm boundary Bevy draws',
+    'the XZ hit target must end at the same viewport-relative boundary Bevy draws',
   );
 
   await page.mouse.move(planeTargets.xz.x, planeTargets.xz.y);
@@ -586,7 +653,7 @@ try {
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
-    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, complete windowed menus, complete Line-tool palette, Bevy sketch visibility, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
+    '  [ok] projection, viewport-relative planes, forgiving hover, rounded DOM islands, synchronized modal dimming, complete menus and palette, Bevy sketch visibility, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
   );
 } finally {
   await browser.close();

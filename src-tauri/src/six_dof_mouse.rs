@@ -319,6 +319,17 @@ mod mac_driver {
         CALLBACK_STATE.get_or_init(|| Mutex::new(None))
     }
 
+    fn canonical_motion(device: &ConnexionDeviceState) -> MotionPacket {
+        // ConnexionClient.framework on macOS exposes a right-handed device
+        // ordering: Tx, Tz, Ty, Rx, Rz, Ry. Normalize it at the transport
+        // boundary so the shared camera kernel always receives the documented
+        // Tx, Ty, Tz, Rx, Ry, Rz order used by raw HID and Windows.
+        MotionPacket {
+            translation: Some([device.axis[0], device.axis[2], device.axis[1]]),
+            rotation: Some([device.axis[3], device.axis[5], device.axis[4]]),
+        }
+    }
+
     unsafe extern "C" fn message_handler(
         _product_id: u32,
         message_type: u32,
@@ -338,13 +349,9 @@ mod mac_driver {
             return;
         }
         if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
-            let _ = callback.app.emit(
-                "six-dof-mouse-motion",
-                MotionPacket {
-                    translation: Some([device.axis[0], device.axis[1], device.axis[2]]),
-                    rotation: Some([device.axis[3], device.axis[4], device.axis[5]]),
-                },
-            );
+            let _ = callback
+                .app
+                .emit("six-dof-mouse-motion", canonical_motion(device));
         }
         if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
             || device.buttons != callback.previous_buttons
@@ -536,6 +543,30 @@ mod mac_driver {
         #[test]
         fn connexion_device_state_matches_the_installed_framework_abi() {
             assert_eq!(std::mem::size_of::<ConnexionDeviceState>(), 56);
+        }
+
+        #[test]
+        fn mac_driver_axes_are_normalized_to_the_cross_platform_order() {
+            let device = ConnexionDeviceState {
+                version: 0,
+                client: 0,
+                command: CONNEXION_COMMAND_HANDLE_AXIS,
+                param: 0,
+                value: 0,
+                time: 0,
+                report: [0; 8],
+                buttons8: 0,
+                axis: [10, 30, 20, 40, 60, 50],
+                address: 0,
+                buttons: 0,
+            };
+            assert_eq!(
+                canonical_motion(&device),
+                MotionPacket {
+                    translation: Some([10, 20, 30]),
+                    rotation: Some([40, 50, 60]),
+                }
+            );
         }
     }
 }

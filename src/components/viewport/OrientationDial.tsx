@@ -139,13 +139,12 @@ export function OrientationDial({
 
   return (
     <div
-      className="absolute right-3 top-3 z-10 w-[132px] bg-viewport"
+      className="absolute right-3 top-3 z-10 w-[132px]"
       data-orientation-dial
       data-native-hud="orientation"
-      data-native-viewport-overlay
-      data-native-overlay-underlay
     >
       <aside
+        data-native-viewport-overlay
         className="select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
         aria-label={t('orientationDial.label')}
       >

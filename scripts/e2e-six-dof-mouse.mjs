@@ -314,15 +314,35 @@ try {
       { vendorId: 0x046d, usagePage: 0x01, usage: 0x08 },
     ]);
 
-    const before = await readOrientation(page);
-    await page.evaluate(() => {
-      // Report 1 on the current Bluetooth device contains XYZ translation
-      // followed by XYZ rotation. Drive full-scale X rotation (350).
-      window.__sixDofMock.dispatchReport(1, [0, 0, 0, 0, 0, 0, 0x5e, 0x01, 0, 0, 0, 0]);
-    });
-    await page.waitForTimeout(140);
-    const after = await readOrientation(page);
-    assert.notDeepEqual(after, before, 'combined six-axis input orbits the viewport');
+    let previousOrientation = await readOrientation(page);
+    const axisReports = [
+      {
+        name: 'pitch',
+        bytes: [0, 0, 0, 0, 0, 0, 0x5e, 0x01, 0, 0, 0, 0],
+      },
+      {
+        name: 'roll',
+        bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0x5e, 0x01, 0, 0],
+      },
+      {
+        name: 'yaw',
+        bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x5e, 0x01],
+      },
+    ];
+    for (const report of axisReports) {
+      await page.evaluate(
+        (bytes) => window.__sixDofMock.dispatchReport(1, bytes),
+        report.bytes,
+      );
+      await page.waitForTimeout(140);
+      const nextOrientation = await readOrientation(page);
+      assert.notDeepEqual(
+        nextOrientation,
+        previousOrientation,
+        `${report.name} input independently changes the viewport orientation`,
+      );
+      previousOrientation = nextOrientation;
+    }
 
     await page.evaluate(() => {
       window.__sixDofMock.physicalDevice.opened = false;

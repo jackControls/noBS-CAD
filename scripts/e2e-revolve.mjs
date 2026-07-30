@@ -35,7 +35,17 @@ const clickSketch = async (x, y) => {
     ([sketchX, sketchY]) => window.__sketchToScreen(sketchX, sketchY),
     [x, y],
   );
-  await page.mouse.click(point.x, point.y);
+  // Move first, as a real pointer does. The dynamic-input cluster follows
+  // pointermove; wait until its previous frame no longer covers the intended
+  // geometry point before pressing.
+  await page.mouse.move(point.x, point.y);
+  await page.waitForFunction(
+    ({ clientX, clientY }) =>
+      !document.elementFromPoint(clientX, clientY)?.closest('[data-dyn-input]'),
+    { clientX: point.x, clientY: point.y },
+  );
+  await page.mouse.down();
+  await page.mouse.up();
 };
 const shot = (name) => page.screenshot({ path: path.join(shots, `${name}.png`) });
 
@@ -52,8 +62,26 @@ try {
   await page.getByText('XY Plane', { exact: true }).click();
   await page.waitForFunction(() => window.__appStore.getState().mode === 'sketch');
   await page.locator('button[title="Rectangle"]').click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().activeTool === 'rect2pt',
+  );
   await clickSketch(10, -15);
+  await page.waitForFunction(() => {
+    const dyn = window.__appStore.getState().dynInput;
+    return (
+      dyn.active
+      && dyn.fields.some((field) => field.key === 'width')
+      && dyn.fields.some((field) => field.key === 'height')
+    );
+  });
   await clickSketch(30, 15);
+  await page.waitForFunction(() => {
+    const state = window.__appStore.getState();
+    return (
+      state.activeSketch?.entities.filter((entity) => entity.kind === 'line')
+        .length === 4
+    );
+  });
   await page.getByRole('button', { name: 'FINISH SKETCH', exact: true }).click();
   await page.waitForFunction(() => window.__appStore.getState().mode === 'solid');
 

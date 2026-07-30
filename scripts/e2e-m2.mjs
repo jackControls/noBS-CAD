@@ -244,6 +244,50 @@ try {
     app.selectedBody === body.id && Number.isSafeInteger(body.id),
     `selected=${app.selectedBody} body=${body.id}`,
   );
+  await page.waitForTimeout(100);
+  const dynamicOrbitCenters = await page.evaluate(() => {
+    const body = window.__appStore.getState().solidScene.bodies[0];
+    const coordinates = body.mesh.positions;
+    const bounds = {
+      min: [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+      max: [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY],
+    };
+    for (let index = 0; index + 2 < coordinates.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        bounds.min[axis] = Math.min(bounds.min[axis], coordinates[index + axis]);
+        bounds.max[axis] = Math.max(bounds.max[axis], coordinates[index + axis]);
+      }
+    }
+    const inside = (point) =>
+      point.every(
+        (value, axis) =>
+          value >= bounds.min[axis] - 1e-4 &&
+          value <= bounds.max[axis] + 1e-4,
+      );
+    const driverView = window.__cameraApi.getSixDofDriverView();
+    driverView.setViewTarget([5_000, -4_000, 3_000]);
+    window.__cameraApi.orbitBy(12, -8);
+    const touchpadTarget = window.__cameraApi.getSnapshot().target;
+
+    driverView.setViewTarget([-4_000, 3_000, 5_000]);
+    window.__cameraApi.navigateSixDof({
+      translation: [0, 0, 0],
+      rotation: [0.35, 0, 0],
+      deltaSeconds: 1 / 60,
+    });
+    const sixDofTarget = window.__cameraApi.getSnapshot().target;
+    window.__cameraApi.fit();
+    return {
+      touchpad: inside(touchpadTarget),
+      sixDof: inside(sixDofTarget),
+    };
+  });
+  check(
+    'touchpad and 3D-mouse orbit reacquire a visible model pivot',
+    dynamicOrbitCenters.touchpad && dynamicOrbitCenters.sixDof,
+    JSON.stringify(dynamicOrbitCenters),
+  );
+  await page.waitForTimeout(350);
   const selectedBodyVisual = await page.evaluate(
     (bodyId) => window.__solidBodyVisualState(bodyId),
     body.id,

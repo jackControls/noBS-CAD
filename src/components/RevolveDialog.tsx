@@ -229,7 +229,10 @@ export function RevolveDialog() {
   };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim="0.15"
+      className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
+    >
       <form
         data-testid="revolve-dialog"
         onSubmit={submit}

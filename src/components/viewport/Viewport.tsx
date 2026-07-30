@@ -96,8 +96,28 @@ const WORLD_UP = new CAD.Vector3(0, 0, 1);
 const AXIS_LENGTH = 120;
 let preservedCameraSnapshot: CameraSnapshot | null = null;
 
-/** Visible and pickable reference-plane edge length in both React and Bevy. */
+/** Base geometry edge length; runtime scaling keeps planes viewport-relative. */
 export const REFERENCE_PLANE_SIZE = 100;
+/** Reference planes occupy this fraction of the shorter viewport dimension. */
+export const REFERENCE_PLANE_SCREEN_FRACTION = 0.32;
+export function referencePlaneHalfSizeForView(
+  depth: number,
+  verticalFovDegrees: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): number {
+  const height = Math.max(1, viewportHeight);
+  const worldPerPixel =
+    (2 *
+      Math.max(0.001, depth) *
+      Math.tan(CAD.MathUtils.degToRad(verticalFovDegrees / 2))) /
+    height;
+  return (
+    worldPerPixel *
+    Math.max(1, Math.min(viewportWidth, viewportHeight)) *
+    (REFERENCE_PLANE_SCREEN_FRACTION / 2)
+  );
+}
 /** Half-height (mm) framed when snapping normal to a sketch plane. */
 const SKETCH_FIT_HALF_EXTENT = 75;
 /** Magnetic acquisition radius for valid modify-tool targets. */
@@ -321,12 +341,16 @@ export function Viewport() {
     // right = orbit, wheel = zoom. The pointerdown listener is registered
     // BEFORE CadOrbitControls is constructed so the remapping is observed.
     let controlsRef: CadOrbitControls | null = null;
+    let acquireOrbitPivot: () => void = () => undefined;
     // Bevy is event-driven, so the interaction controller should wake only
     // for input/state changes or an animation that is still settling.
     let wakeControllerFrame: () => void = () => undefined;
     const onNavPointerDown = (e: PointerEvent) => {
       if (e.button === 1 && e.shiftKey && controlsRef) {
         controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.ROTATE;
+      }
+      if (e.button === 2 || (e.button === 1 && e.shiftKey)) {
+        acquireOrbitPivot();
       }
       cancelCameraAnimation();
       wakeControllerFrame();
@@ -1574,6 +1598,69 @@ export function Viewport() {
       return (2 * dist * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) / height;
     };
 
+    const referencePlaneHalfSize = (origin: CAD.Vector3) => {
+      const forward = new CAD.Vector3(0, 0, -1)
+        .applyQuaternion(camera.quaternion)
+        .normalize();
+      const depth = Math.max(
+        camera.near * 2,
+        origin.clone().sub(camera.position).dot(forward),
+      );
+      return referencePlaneHalfSizeForView(
+        depth,
+        camera.fov,
+        surface.domElement.clientWidth,
+        surface.domElement.clientHeight,
+      );
+    };
+
+    const updateReferencePlaneInteractionScale = () => {
+      for (const pickerPlane of picker) {
+        const definition = PICKER_PLANES.find(
+          (candidate) => candidate.plane === pickerPlane.plane,
+        );
+        const group = pickerPlane.mesh.parent;
+        if (!definition || !group) continue;
+        const halfSize = referencePlaneHalfSize(
+          new CAD.Vector3(...definition.basis.origin),
+        );
+        group.scale.setScalar(halfSize / (REFERENCE_PLANE_SIZE / 2));
+        group.updateWorldMatrix(true, true);
+      }
+      for (const group of datumGroup.children) {
+        const rawOrigin = group.userData.referencePlaneOrigin;
+        if (!Array.isArray(rawOrigin) || rawOrigin.length !== 3) continue;
+        const halfSize = referencePlaneHalfSize(
+          new CAD.Vector3(
+            Number(rawOrigin[0]),
+            Number(rawOrigin[1]),
+            Number(rawOrigin[2]),
+          ),
+        );
+        group.scale.setScalar(halfSize / (REFERENCE_PLANE_SIZE / 2));
+        group.updateWorldMatrix(true, true);
+      }
+    };
+
+    const navigationPivotRaycaster = new CAD.Raycaster();
+    acquireOrbitPivot = () => {
+      if (!solidGroup.visible || solidGroup.children.length === 0) return;
+      scene.updateMatrixWorld(true);
+      navigationPivotRaycaster.setFromCamera(new CAD.Vector2(0, 0), camera);
+      const hit = navigationPivotRaycaster
+        .intersectObjects(solidGroup.children, true)
+        .find(
+          (candidate) =>
+            candidate.object.userData.faceId !== undefined &&
+            candidate.object.userData.bodyId !== undefined,
+        );
+      if (!hit) return;
+      // A hit from the center ray is already collinear with the current view,
+      // so adopting it changes only the future rotation center—never the
+      // current pixels. This is the stable close-up behavior used by CAD apps.
+      controls.target.copy(hit.point);
+    };
+
     const sketchPlane = new CAD.Plane();
     const pointerToSketch = (e: PointerEvent): Vec2 | null => {
       if (!sketchGroup.visible) return null;
@@ -1671,6 +1758,7 @@ export function Viewport() {
      * visible dead strips even though Bevy still draws several screen pixels.
      */
     const pickOriginPlane = (event: PointerEvent): OriginPlane | null => {
+      updateReferencePlaneInteractionScale();
       raycaster.setFromCamera(ndcFromEvent(event), camera);
       const exact = raycaster.intersectObjects(picker.map((plane) => plane.mesh));
       const exactPlane = exact[0]?.object.userData.plane as OriginPlane | undefined;
@@ -1685,12 +1773,9 @@ export function Viewport() {
       }> = [];
       for (const definition of PICKER_PLANES) {
         const origin = new CAD.Vector3(...definition.basis.origin);
-        const u = new CAD.Vector3(...definition.basis.u).multiplyScalar(
-          REFERENCE_PLANE_SIZE / 2,
-        );
-        const v = new CAD.Vector3(...definition.basis.v).multiplyScalar(
-          REFERENCE_PLANE_SIZE / 2,
-        );
+        const halfSize = referencePlaneHalfSize(origin);
+        const u = new CAD.Vector3(...definition.basis.u).multiplyScalar(halfSize);
+        const v = new CAD.Vector3(...definition.basis.v).multiplyScalar(halfSize);
         const corners = [
           origin.clone().sub(u).sub(v),
           origin.clone().add(u).sub(v),
@@ -4473,6 +4558,7 @@ export function Viewport() {
           ),
         );
         group.position.set(...basis.origin);
+        group.userData.referencePlaneOrigin = [...basis.origin];
         const geometry = new CAD.PlaneGeometry(
           REFERENCE_PLANE_SIZE,
           REFERENCE_PLANE_SIZE,
@@ -5174,6 +5260,7 @@ export function Viewport() {
       }
 
       if (state.mode === 'pickPlane') {
+        updateReferencePlaneInteractionScale();
         const faceHit = pickSolidFace(e);
         if (faceHit) {
           highlightDatumPlane(null, true);
@@ -5638,13 +5725,12 @@ export function Viewport() {
       const p = pointerToSketch(e);
       if (!p) return;
 
-      // Double-click ends the active tool run: a spline commits, while every
-      // other tool cancels.
-      if (e.detail >= 2) {
-        if (toolRun) {
-          if (toolRun.tool === 'splineFit') commitSpline();
-          else endToolRun();
-        }
+      // A spline must consume its second pointerdown before it appends an
+      // extra fit point. Other tools are ended by the dedicated `dblclick`
+      // listener below. Handling all e.detail >= 2 events here used to drop
+      // a legitimate fast second corner while the first snap was pending.
+      if (e.detail >= 2 && toolRun?.tool === 'splineFit') {
+        commitSpline();
         return;
       }
 
@@ -6017,6 +6103,8 @@ export function Viewport() {
     );
     let sixDofDriverControlsWereEnabled = true;
     const sixDofDriverPivot = controls.target.clone();
+    let lastProgrammaticOrbitAt = Number.NEGATIVE_INFINITY;
+    let lastSixDofInputAt = Number.NEGATIVE_INFINITY;
 
     const alignSixDofTargetToCamera = (distance: number) => {
       const forward = new CAD.Vector3(0, 0, -1)
@@ -6203,6 +6291,11 @@ export function Viewport() {
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
         cancelCameraAnimation();
+        const now = performance.now();
+        if (now - lastProgrammaticOrbitAt > 180) {
+          acquireOrbitPivot();
+        }
+        lastProgrammaticOrbitAt = now;
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height) so every orbit
         // input feels identical to right-drag orbit in the canvas.
@@ -6226,6 +6319,11 @@ export function Viewport() {
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
+        const now = performance.now();
+        if (now - lastSixDofInputAt > 140) {
+          acquireOrbitPivot();
+        }
+        lastSixDofInputAt = now;
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const distance = Math.max(1, camera.position.distanceTo(controls.target));
         const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();

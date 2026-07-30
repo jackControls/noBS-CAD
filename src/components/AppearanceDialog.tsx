@@ -42,6 +42,7 @@ export function AppearanceDialog() {
 
   return (
     <div
+      data-native-viewport-dim="0.30"
       className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 px-4"
       onClick={() => setOpen(false)}
     >

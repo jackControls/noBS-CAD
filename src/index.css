@@ -133,7 +133,11 @@ body {
  */
 .feature-dialog {
   isolation: isolate;
-  border-radius: 14px 14px 14px 5px;
+  /*
+   * Keep one physical radius on every corner. The native viewport compositor
+   * mirrors this silhouette exactly on macOS and Windows.
+   */
+  border-radius: 14px;
   border-left-width: 2px;
   border-left-color: rgb(var(--accent-rgb) / 0.78);
   box-shadow:

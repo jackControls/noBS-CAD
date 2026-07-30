@@ -47,7 +47,9 @@ use tauri::Manager;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM},
-    Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF},
+    Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
+    },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         HiDpi::GetDpiForWindow,
@@ -67,8 +69,9 @@ use super::{
 };
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
-/// Matches the React interaction plane's 100 mm edge length.
+/// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
+const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
@@ -531,7 +534,17 @@ unsafe fn apply_native_layout(
                 let overlay_rect =
                     webview.convertRectToLayer(dom_rect_to_view_rect(webview, intersection));
                 unsafe {
-                    CGMutablePath::add_rect(Some(&path), std::ptr::null(), overlay_rect);
+                    if intersection.corner_radius > 0.5 {
+                        CGMutablePath::add_rounded_rect(
+                            Some(&path),
+                            std::ptr::null(),
+                            overlay_rect,
+                            intersection.corner_radius,
+                            intersection.corner_radius,
+                        );
+                    } else {
+                        CGMutablePath::add_rect(Some(&path), std::ptr::null(), overlay_rect);
+                    }
                 }
             }
         }
@@ -781,7 +794,14 @@ fn apply_windows_viewport_region(
         if right <= left || bottom <= top {
             continue;
         }
-        let overlay_region = unsafe { CreateRectRgn(left, top, right, bottom) };
+        let corner_diameter = (intersection.corner_radius * 2.0 * scale_factor).round() as i32;
+        let overlay_region = if corner_diameter > 1 {
+            unsafe {
+                CreateRoundRectRgn(left, top, right, bottom, corner_diameter, corner_diameter)
+            }
+        } else {
+            unsafe { CreateRectRgn(left, top, right, bottom) }
+        };
         if overlay_region.is_null() {
             continue;
         }
@@ -809,6 +829,17 @@ fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
         y: top,
         width: right - left,
         height: bottom - top,
+        corner_radius: if left == a.x
+            && top == a.y
+            && right == a.x + a.width
+            && bottom == a.y + a.height
+        {
+            a.corner_radius
+                .min((right - left) / 2.0)
+                .min((bottom - top) / 2.0)
+        } else {
+            0.0
+        },
     })
 }
 
@@ -877,6 +908,21 @@ struct PaletteResource(ViewportPalette);
 struct HudResource {
     hud: ViewportHud,
     revision: u64,
+}
+
+#[derive(Resource, Clone, Copy)]
+struct ViewportSizeResource {
+    logical_width: f32,
+    logical_height: f32,
+}
+
+impl Default for ViewportSizeResource {
+    fn default() -> Self {
+        Self {
+            logical_width: INITIAL_PHYSICAL_SIZE as f32,
+            logical_height: INITIAL_PHYSICAL_SIZE as f32,
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -1005,6 +1051,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         .init_resource::<PreviewResource>()
         .init_resource::<PaletteResource>()
         .init_resource::<HudResource>()
+        .init_resource::<ViewportSizeResource>()
         .init_resource::<PresentationResource>()
         .init_resource::<RenderedRevisions>()
         .add_systems(Startup, setup_scene)
@@ -1013,6 +1060,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
             (
                 rebuild_occt_meshes,
                 apply_camera,
+                resize_reference_planes,
                 apply_native_presentation_styles,
                 rebuild_native_annotations,
                 rebuild_native_hud,
@@ -1180,6 +1228,56 @@ fn apply_camera(
                 .clamp(1.0, 150.0)
                 .to_radians();
         }
+    }
+}
+
+fn reference_plane_half_size(
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    origin: Vec3,
+) -> f32 {
+    let position = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
+    let depth = (origin - position).dot(forward).max(0.2);
+    let height = viewport.logical_height.max(1.0);
+    let world_per_pixel =
+        2.0 * depth * (camera.vertical_fov_degrees.to_radians() * 0.5).tan() / height;
+    world_per_pixel
+        * viewport.logical_width.min(viewport.logical_height).max(1.0)
+        * (REFERENCE_PLANE_SCREEN_FRACTION * 0.5)
+}
+
+fn reference_plane_transform(origin: Vec3, half_size: f32) -> Transform {
+    let scale = (half_size / REFERENCE_PLANE_HALF_SIZE).max(1.0e-6);
+    Transform::from_translation(origin * (1.0 - scale)).with_scale(Vec3::splat(scale))
+}
+
+fn resize_reference_planes(
+    camera: Res<CameraResource>,
+    viewport: Res<ViewportSizeResource>,
+    model: Res<ModelResource>,
+    mut origin_planes: Query<&mut Transform, (With<NativeOriginPlane>, Without<NativeDatumPlane>)>,
+    mut datum_planes: Query<
+        (&NativeDatumPlane, &mut Transform),
+        (Without<NativeOriginPlane>, Without<NativeCadFace>),
+    >,
+) {
+    let size = *viewport;
+    let origin_half_size = reference_plane_half_size(camera.camera, size, Vec3::ZERO);
+    for mut transform in &mut origin_planes {
+        *transform = reference_plane_transform(Vec3::ZERO, origin_half_size);
+    }
+    for (plane, mut transform) in &mut datum_planes {
+        let Some(definition) = model
+            .datum_planes
+            .iter()
+            .find(|candidate| candidate.datum_id.0 == plane.datum_id)
+        else {
+            continue;
+        };
+        let origin = basis_vector(definition.basis.origin);
+        let half_size = reference_plane_half_size(camera.camera, size, origin);
+        *transform = reference_plane_transform(origin, half_size);
     }
 }
 
@@ -1376,12 +1474,35 @@ fn rebuild_native_hud(
     for entity in &existing {
         commands.entity(entity).despawn();
     }
-    if !hud.hud.render_native_chrome {
-        return;
-    }
     let Ok(camera) = cameras.single() else {
         return;
     };
+
+    if hud.hud.dim_opacity > 0.001 {
+        commands.spawn((
+            Name::new("Native modal dim layer"),
+            NativeHudRoot,
+            UiTargetCamera(camera),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0.0),
+                top: px(0.0),
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(
+                0.0,
+                0.0,
+                0.0,
+                hud.hud.dim_opacity.clamp(0.0, 0.85),
+            )),
+            ZIndex(1_000),
+        ));
+    }
+    if !hud.hud.render_native_chrome {
+        return;
+    }
 
     let panel = rgba(palette.0.panel, 0.94);
     let header = rgba(palette.0.header, 0.96);
@@ -1934,6 +2055,8 @@ fn draw_cad_gizmos(
     mut gizmos: Gizmos,
     mut highlights: Gizmos<CadHighlightGizmos>,
     model: Res<ModelResource>,
+    camera: Res<CameraResource>,
+    viewport: Res<ViewportSizeResource>,
     preview: Res<PreviewResource>,
     palette: Res<PaletteResource>,
     presentation: Res<PresentationResource>,
@@ -1951,6 +2074,7 @@ fn draw_cad_gizmos(
     }
 
     if state.mode == ViewportMode::PickPlane {
+        let origin_half_size = reference_plane_half_size(camera.camera, *viewport, Vec3::ZERO);
         for (name, basis, _) in origin_plane_bases() {
             let plane = match name {
                 "XY" => ViewportOriginPlane::Xy,
@@ -1965,24 +2089,29 @@ fn draw_cad_gizmos(
             draw_plane_outline(
                 &mut highlights,
                 &basis,
-                REFERENCE_PLANE_HALF_SIZE,
+                origin_half_size,
                 origin_plane_color(plane, alpha),
             );
         }
-        gizmos.sphere(Vec3::ZERO, 0.46, Color::srgba(0.94, 0.95, 0.98, 0.98));
+        gizmos.sphere(
+            Vec3::ZERO,
+            origin_half_size * 0.0092,
+            Color::srgba(0.94, 0.95, 0.98, 0.98),
+        );
+        let axis_length = origin_half_size * 0.28;
         gizmos.arrow(
             Vec3::ZERO,
-            Vec3::X * 14.0,
+            Vec3::X * axis_length,
             Color::srgba(0.88, 0.36, 0.39, 0.98),
         );
         gizmos.arrow(
             Vec3::ZERO,
-            Vec3::Y * 14.0,
+            Vec3::Y * axis_length,
             Color::srgba(0.35, 0.68, 0.45, 0.98),
         );
         gizmos.arrow(
             Vec3::ZERO,
-            Vec3::Z * 14.0,
+            Vec3::Z * axis_length,
             Color::srgba(0.26, 0.65, 0.91, 0.98),
         );
     } else if state.mode == ViewportMode::Sketch {
@@ -1997,10 +2126,12 @@ fn draw_cad_gizmos(
             continue;
         }
         let hovered = state.hovered_datum_plane_id == Some(plane.datum_id.0);
+        let origin = basis_vector(plane.basis.origin);
+        let half_size = reference_plane_half_size(camera.camera, *viewport, origin);
         draw_plane_outline(
             &mut gizmos,
             &plane.basis,
-            REFERENCE_PLANE_HALF_SIZE,
+            half_size,
             Color::srgba(
                 0.88,
                 0.68,
@@ -2551,6 +2682,14 @@ fn apply_render_command(
                         .set_physical_resolution(physical_width, physical_height);
                 }
             }
+            {
+                let mut viewport = runtime
+                    .app
+                    .world_mut()
+                    .resource_mut::<ViewportSizeResource>();
+                viewport.logical_width = logical_width as f32;
+                viewport.logical_height = logical_height as f32;
+            }
             let palette_changed = runtime.app.world().resource::<PaletteResource>().0 != palette;
             if palette_changed {
                 *runtime.app.world_mut().resource_mut::<ClearColor>() =
@@ -2756,6 +2895,7 @@ mod tests {
             y: 120.0,
             width: 1_200.0,
             height: 700.0,
+            corner_radius: 0.0,
         };
 
         let mapped = dom_rect_to_content_rect(bounds, content, true, viewport);
@@ -2773,6 +2913,7 @@ mod tests {
             y: 120.0,
             width: 1_200.0,
             height: 728.0,
+            corner_radius: 0.0,
         };
 
         let mapped = dom_rect_to_content_rect(bounds, bounds, true, viewport);
@@ -2787,12 +2928,14 @@ mod tests {
             y: 50.0,
             width: 300.0,
             height: 200.0,
+            corner_radius: 0.0,
         };
         let overlay = ViewportRect {
             x: 80.0,
             y: 40.0,
             width: 80.0,
             height: 50.0,
+            corner_radius: 12.0,
         };
         assert_eq!(
             intersect_rect(overlay, viewport)
@@ -2800,6 +2943,55 @@ mod tests {
                 .width,
             60.0
         );
+        assert_eq!(
+            intersect_rect(viewport, viewport)
+                .expect("identical rectangles overlap")
+                .corner_radius,
+            0.0
+        );
+        assert_eq!(
+            intersect_rect(
+                ViewportRect {
+                    x: 120.0,
+                    y: 70.0,
+                    width: 80.0,
+                    height: 60.0,
+                    corner_radius: 14.0,
+                },
+                viewport,
+            )
+            .expect("rounded overlay is inside viewport")
+            .corner_radius,
+            14.0
+        );
+        assert_eq!(
+            intersect_rect(overlay, viewport)
+                .expect("clipped overlay overlaps")
+                .corner_radius,
+            0.0
+        );
+    }
+
+    #[test]
+    fn reference_planes_scale_with_camera_depth() {
+        let viewport = ViewportSizeResource {
+            logical_width: 1_200.0,
+            logical_height: 800.0,
+        };
+        let near = ViewportCamera {
+            position: [0.0, 0.0, 100.0],
+            target: [0.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            vertical_fov_degrees: 45.0,
+        };
+        let far = ViewportCamera {
+            position: [0.0, 0.0, 200.0],
+            ..near
+        };
+        let near_half = reference_plane_half_size(near, viewport, Vec3::ZERO);
+        let far_half = reference_plane_half_size(far, viewport, Vec3::ZERO);
+        assert!(near_half > 0.0);
+        assert!((far_half / near_half - 2.0).abs() < 1.0e-5);
     }
 
     #[test]

@@ -39,6 +39,8 @@ export interface NativeRect {
   y: number;
   width: number;
   height: number;
+  /** CSS border radius used by the native compositor for this DOM island. */
+  cornerRadius?: number;
 }
 
 interface NativePalette {
@@ -82,6 +84,7 @@ interface NativeHud {
   canUndo: boolean;
   canRedo: boolean;
   sixDofState: string;
+  dimOpacity: number;
   selection: NativeHudSelection | null;
 }
 
@@ -132,6 +135,7 @@ const overlaySelector = [
   '[data-native-viewport-overlay]',
   '.feature-dialog',
   '[role="dialog"]',
+  '[role="alertdialog"]',
   '[data-ribbon-menu]',
   '[data-testid="extrude-dialog"]',
   '[data-testid="revolve-dialog"]',
@@ -203,11 +207,30 @@ function rectFor(element: Element): NativeRect | null {
   }
   const rect = element.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return null;
+  const radius = (value: string, extent: number) => {
+    const parsed = Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return value.trim().endsWith('%') ? (parsed / 100) * extent : parsed;
+  };
+  // The native hosts currently support one conservative radius per island.
+  // Using the smallest CSS corner ensures Bevy never covers actual DOM pixels.
+  const cornerRadius = Math.max(
+    0,
+    Math.min(
+      radius(style.borderTopLeftRadius, Math.min(rect.width, rect.height)),
+      radius(style.borderTopRightRadius, Math.min(rect.width, rect.height)),
+      radius(style.borderBottomRightRadius, Math.min(rect.width, rect.height)),
+      radius(style.borderBottomLeftRadius, Math.min(rect.width, rect.height)),
+      rect.width / 2,
+      rect.height / 2,
+    ),
+  );
   return {
     x: rect.left,
     y: rect.top,
     width: rect.width,
     height: rect.height,
+    cornerRadius,
   };
 }
 
@@ -229,10 +252,34 @@ function subtractRect(source: NativeRect, cut: NativeRect): NativeRect[] {
   const sourceRight = source.x + source.width;
   const sourceBottom = source.y + source.height;
   return [
-    { x: source.x, y: source.y, width: source.width, height: top - source.y },
-    { x: source.x, y: bottom, width: source.width, height: sourceBottom - bottom },
-    { x: source.x, y: top, width: left - source.x, height: bottom - top },
-    { x: right, y: top, width: sourceRight - right, height: bottom - top },
+    {
+      x: source.x,
+      y: source.y,
+      width: source.width,
+      height: top - source.y,
+      cornerRadius: 0,
+    },
+    {
+      x: source.x,
+      y: bottom,
+      width: source.width,
+      height: sourceBottom - bottom,
+      cornerRadius: 0,
+    },
+    {
+      x: source.x,
+      y: top,
+      width: left - source.x,
+      height: bottom - top,
+      cornerRadius: 0,
+    },
+    {
+      x: right,
+      y: top,
+      width: sourceRight - right,
+      height: bottom - top,
+      cornerRadius: 0,
+    },
   ].filter((rect) => rect.width > 0.01 && rect.height > 0.01);
 }
 
@@ -330,6 +377,29 @@ function collectSelectionHud(): NativeHudSelection | null {
   };
 }
 
+export function collectNativeViewportDimOpacity(): number {
+  let opacity = 0;
+  for (const element of document.querySelectorAll(
+    '[data-native-viewport-dim]',
+  )) {
+    const style = getComputedStyle(element);
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      Number(style.opacity) === 0
+    ) {
+      continue;
+    }
+    const requested = Number.parseFloat(
+      element.getAttribute('data-native-viewport-dim') ?? '0',
+    );
+    if (Number.isFinite(requested)) {
+      opacity = Math.max(opacity, requested);
+    }
+  }
+  return Math.max(0, Math.min(0.85, opacity));
+}
+
 function collectHud(): NativeHud {
   const state = useAppStore.getState();
   const navigation = document.querySelector('[data-native-hud="navigation"]');
@@ -343,6 +413,7 @@ function collectHud(): NativeHud {
     canUndo: state.activeSketch?.can_undo ?? false,
     canRedo: state.activeSketch?.can_redo ?? false,
     sixDofState: navigation?.getAttribute('data-native-six-dof-state') ?? 'disconnected',
+    dimOpacity: collectNativeViewportDimOpacity(),
     selection: collectSelectionHud(),
   };
 }
@@ -550,7 +621,9 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   resize.observe(container);
   const refreshObservedLayoutElements = () => {
     const next = new Set(
-      document.querySelectorAll(`${overlaySelector}, [data-native-hud]`),
+      document.querySelectorAll(
+        `${overlaySelector}, [data-native-hud], [data-native-viewport-dim]`,
+      ),
     );
     for (const element of observedLayoutElements) {
       if (!next.has(element)) {
@@ -582,6 +655,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       'disabled',
       'data-native-nav-active',
       'data-native-six-dof-state',
+      'data-native-viewport-dim',
     ],
   });
   window.addEventListener('resize', settleLayout);

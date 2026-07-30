@@ -23,6 +23,8 @@ pub struct ViewportRect {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    #[serde(default)]
+    pub corner_radius: f64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -179,6 +181,8 @@ pub struct ViewportHud {
     pub can_redo: bool,
     #[serde(default)]
     pub six_dof_state: String,
+    #[serde(default)]
+    pub dim_opacity: f32,
     pub selection: Option<ViewportHudSelection>,
 }
 
@@ -195,6 +199,7 @@ impl Default for ViewportHud {
             can_undo: false,
             can_redo: false,
             six_dof_state: "disconnected".to_string(),
+            dim_opacity: 0.0,
             selection: None,
         }
     }
