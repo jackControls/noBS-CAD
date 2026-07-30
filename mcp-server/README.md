@@ -9,8 +9,8 @@ disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 > [docs/proposed-architecture.md](../docs/proposed-architecture.md).
 
 **Spine controls:** `cad_get_focus`, `cad_set_focus`, disclosure mode get/set,
-`cad_list_all_tools`, `cad_cancel_recompute`, `cad_list_sessions`, `cad_attach`
-(headless read-only load).
+`cad_list_all_tools`, `cad_cancel_recompute`, `cad_list_sessions`, `cad_attach`,
+`cad_refresh`, `cad_detach` (read-only session snapshots).
 
 **Print:** prefer `solid_export_3mf` (mm + materials + slicer Metadata). Also
 `solid_export_stl`, `solid_export_step` (CAD), `material_catalog`,
@@ -103,10 +103,11 @@ Body through the same replayable history as the interactive application.
 
 `cad_project_model` returns the authoritative versioned `model.json`,
 `cad_load_project_model` transactionally restores and recomputes it, and
-`cad_new_project` clears to an empty document. Headless session attach uses
-`cad_list_sessions` / `cad_attach` (read-only load from `NBCAD_SESSION_DIR`).
+`cad_new_project` clears to an empty document. Read-only session snapshots use
+`cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` under
+`NBCAD_SESSION_DIR` (require valid `model.json`; never write back).
 Each MCP process still owns one headless document unless attached.
-UI snapshot bridge is parked for follow-up.
+UI live co-link is parked for follow-up.
 
 **Print handoff:** `solid_export_preflight` → `set_body_appearance` (optional) →
 `solid_export_3mf` (preferred for slicers). Use `solid_tessellate` to inspect

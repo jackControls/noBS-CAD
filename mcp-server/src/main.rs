@@ -122,6 +122,8 @@ struct CadServer {
     manager: SketchManager,
     kernel: OcctKernel,
     disclosure: DisclosureState,
+    /// Session id last successfully loaded via read-only `cad_attach` / `cad_refresh`.
+    /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
     pending_recompute_transaction: Option<u64>,
 }
@@ -332,72 +334,107 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
-            "cad_attach" => {
-                let session_id = arguments
-                    .get("session_id")
-                    .or_else(|| arguments.get("document_id"))
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        "missing required argument 'session_id' (or document_id)".to_string()
-                    })?;
-                if !session::list_sessions()?.iter().any(|id| id == session_id) {
-                    return Err(format!(
-                        "session '{session_id}' was not found under {}",
-                        session::session_dir().display()
-                    ));
-                }
-                self.attached_document_id = Some(session_id.to_string());
-                if let Ok(model_json) = session::read_session_file(session_id, "model.json") {
-                    // Load via solid replay path (same as cad_load_project_model).
-                    let plan_value = parse_engine_envelope(host::handle(
-                        &mut self.manager,
-                        "project_prepare_load",
-                        &serde_json::to_string(&Value::String(model_json.clone()))
-                            .map_err(|e| e.to_string())?,
-                    ))?;
-                    let plan: RecomputePlanDto = serde_json::from_value(plan_value)
-                        .map_err(|error| format!("invalid recompute plan: {error}"))?;
-                    let transaction_id = plan.transaction_id;
-                    let scene = match self.kernel.recompute(&plan) {
-                        Ok(scene) => scene,
-                        Err(error) => {
-                            self.manager.cancel_solid_recompute(transaction_id);
-                            return Err(error.to_string());
-                        }
-                    };
-                    let _ = parse_engine_envelope(host::handle(
-                        &mut self.manager,
-                        "solid_commit",
-                        &serde_json::to_string(&CommitKernelRequest {
-                            transaction_id,
-                            scene,
-                        })
-                        .map_err(|e| e.to_string())?,
-                    ))?;
-                }
-                if let Ok(focus_json) = session::read_session_file(session_id, "focus.json") {
-                    if let Ok(focus_value) = serde_json::from_str::<Value>(&focus_json) {
-                        if let Some(focus_name) =
-                            focus_value.get("focus").and_then(Value::as_str)
-                        {
-                            if let Some(focus) = FocusPack::parse(focus_name) {
-                                self.disclosure.set_focus(focus, false);
-                                self.disclosure.clear_explicit_lock();
-                            }
-                        }
-                    }
-                }
+            "cad_attach" => self.attach_read_only_snapshot(&arguments)?,
+            "cad_refresh" => self.refresh_read_only_snapshot()?,
+            "cad_detach" => {
+                let previous = self.attached_document_id.take();
                 json!({
-                    "attached": true,
-                    "session_id": session_id,
-                    "document_id": session_id,
-                    "focus": self.disclosure.active().as_str(),
-                    "co_link": "session_dir_headless",
+                    "detached": true,
+                    "session_id": previous,
+                    "session_mode": "read_only_snapshot",
                 })
             }
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
+    }
+
+    /// Load `model.json` (+ optional `focus.json`) into this process.
+    /// Marks attached only after a successful model load (Jack §3).
+    fn attach_read_only_snapshot(&mut self, arguments: &Value) -> Result<Value, String> {
+        let session_id = arguments
+            .get("session_id")
+            .or_else(|| arguments.get("document_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
+        if !session::list_sessions()?.iter().any(|id| id == session_id) {
+            return Err(format!(
+                "session '{session_id}' was not found under {}",
+                session::session_dir().display()
+            ));
+        }
+        self.load_snapshot_model(session_id)?;
+        self.apply_snapshot_focus(session_id);
+        self.attached_document_id = Some(session_id.to_string());
+        Ok(json!({
+            "attached": true,
+            "session_id": session_id,
+            "document_id": session_id,
+            "focus": self.disclosure.active().as_str(),
+            "session_mode": "read_only_snapshot",
+            "writeback": false,
+        }))
+    }
+
+    /// Re-read the currently attached session from disk into this process.
+    fn refresh_read_only_snapshot(&mut self) -> Result<Value, String> {
+        let Some(session_id) = self.attached_document_id.clone() else {
+            return Err("no session attached; call cad_attach first".to_string());
+        };
+        self.load_snapshot_model(&session_id)?;
+        self.apply_snapshot_focus(&session_id);
+        Ok(json!({
+            "refreshed": true,
+            "session_id": session_id,
+            "focus": self.disclosure.active().as_str(),
+            "session_mode": "read_only_snapshot",
+            "writeback": false,
+        }))
+    }
+
+    fn load_snapshot_model(&mut self, session_id: &str) -> Result<(), String> {
+        let model_json = session::require_model_json(session_id)?;
+        let plan_value = parse_engine_envelope(host::handle(
+            &mut self.manager,
+            "project_prepare_load",
+            &serde_json::to_string(&Value::String(model_json))
+                .map_err(|e| e.to_string())?,
+        ))?;
+        let plan: RecomputePlanDto = serde_json::from_value(plan_value)
+            .map_err(|error| format!("invalid model.json / recompute plan: {error}"))?;
+        let transaction_id = plan.transaction_id;
+        let scene = match self.kernel.recompute(&plan) {
+            Ok(scene) => scene,
+            Err(error) => {
+                self.manager.cancel_solid_recompute(transaction_id);
+                return Err(format!("session '{session_id}' model failed to recompute: {error}"));
+            }
+        };
+        let _ = parse_engine_envelope(host::handle(
+            &mut self.manager,
+            "solid_commit",
+            &serde_json::to_string(&CommitKernelRequest {
+                transaction_id,
+                scene,
+            })
+            .map_err(|e| e.to_string())?,
+        ))?;
+        Ok(())
+    }
+
+    fn apply_snapshot_focus(&mut self, session_id: &str) {
+        let Ok(focus_json) = session::read_session_file(session_id, "focus.json") else {
+            return;
+        };
+        let Ok(focus_value) = serde_json::from_str::<Value>(&focus_json) else {
+            return;
+        };
+        if let Some(focus_name) = focus_value.get("focus").and_then(Value::as_str) {
+            if let Some(focus) = FocusPack::parse(focus_name) {
+                self.disclosure.set_focus(focus, false);
+                self.disclosure.clear_explicit_lock();
+            }
+        }
     }
 
     fn export_mesh(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -2473,20 +2510,32 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_list_sessions",
-            "List headless session directories",
-            "List session directories under NBCAD_SESSION_DIR for read-only cad_attach. UI file-bridge publisher is parked for follow-up.",
+            "List read-only session snapshots",
+            "List model session directories under NBCAD_SESSION_DIR (skips _* control dirs). Use with cad_attach for a read-only load into this MCP process. Not a live UI co-link.",
             empty_schema(),
         ),
         ToolSpec::control(
             "cad_attach",
-            "Attach headless session (read-only load)",
-            "Load model.json and focus.json from a headless session directory. Does not write back to disk. UI snapshot bridge is parked for follow-up.",
+            "Attach read-only session snapshot",
+            "Require and load model.json from a session directory into this MCP process; optional focus.json. Fails if the model is missing or invalid. Never writes back to the session dir.",
             object_schema(
                 json!({
                     "session_id": {"type": "string", "minLength": 1}
                 }),
                 &["session_id"],
             ),
+        ),
+        ToolSpec::control(
+            "cad_refresh",
+            "Refresh attached session snapshot",
+            "Re-read model.json (and optional focus.json) for the currently attached session. Explicit refresh — MCP does not watch the filesystem.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_detach",
+            "Detach session snapshot",
+            "Clear the attached session id. Leaves the in-memory document as last loaded; does not delete session files.",
+            empty_schema(),
         ),
     ];
     for tool in &mut tools {
@@ -2616,7 +2665,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
     responses
 }
 
-/// Tick soft TTL and emit any due `tools/list_changed` without a further client RPC.
+/// Emit due soft-TTL / list_changed notifications without waiting for another
+/// client RPC. Used by the stdin+timeout worker (Jack §2) and by unit tests.
 fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
     server.disclosure.tick_soft_expiry();
     let mut outgoing = Vec::new();
@@ -2651,6 +2701,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // Jack §2: do not block forever on stdin. A reader thread feeds lines;
+    // the main loop wakes on the next disclosure deadline so list_changed /
+    // soft-TTL can flush with no later client ping.
     let (tx, rx) = mpsc::channel::<StdinEvent>();
     thread::spawn(move || {
         let stdin = io::stdin();
@@ -2764,8 +2818,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 17,
-            "105 modeling tools plus 8 print helpers and 9 control tools"
+            MODELING_TOOL_COUNT + 19,
+            "105 modeling tools plus 8 print helpers and 11 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2790,6 +2844,8 @@ mod tests {
                             | "cad_cancel_recompute"
                             | "cad_list_sessions"
                             | "cad_attach"
+                            | "cad_refresh"
+                            | "cad_detach"
                     )
                 )
             })
@@ -2844,6 +2900,8 @@ mod tests {
                     | "cad_cancel_recompute"
                     | "cad_list_sessions"
                     | "cad_attach"
+                    | "cad_refresh"
+                    | "cad_detach"
             ) {
                 continue;
             }
@@ -3073,7 +3131,7 @@ mod tests {
     }
 
     #[test]
-    fn file_bridge_attach_roundtrip() {
+    fn read_only_snapshot_attach_refresh_detach() {
         let _guard = session::ENV_LOCK.lock().unwrap();
         let unique = format!("attach-{}", session::now_ms());
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-{unique}"));
@@ -3088,17 +3146,37 @@ mod tests {
         session::write_session(&unique, "focus.json", "{\"focus\":\"solid\"}").unwrap();
 
         let mut server = CadServer::new().unwrap();
+        // Missing model must refuse attach (and leave nothing attached).
+        let missing = format!("missing-{unique}");
+        std::fs::create_dir_all(dir.join(&missing)).unwrap();
+        assert!(server
+            .call_tool("cad_attach", json!({"session_id": missing}))
+            .is_err());
+        assert!(server.attached_document_id.is_none());
+
         let attached = server
             .call_tool("cad_attach", json!({"session_id": unique}))
             .unwrap();
         assert_eq!(attached["attached"], true);
+        assert_eq!(attached["session_mode"], "read_only_snapshot");
+        assert_eq!(attached["writeback"], false);
         assert_eq!(server.attached_document_id.as_deref(), Some(unique.as_str()));
         let scene = server.call_tool("solid_scene", json!({})).unwrap();
         assert!(!scene["bodies"].as_array().unwrap().is_empty());
 
+        let refreshed = server.call_tool("cad_refresh", json!({})).unwrap();
+        assert_eq!(refreshed["refreshed"], true);
+        assert_eq!(refreshed["session_id"], unique);
+
+        let detached = server.call_tool("cad_detach", json!({})).unwrap();
+        assert_eq!(detached["detached"], true);
+        assert!(server.attached_document_id.is_none());
+        assert!(server
+            .call_tool("cad_refresh", json!({}))
+            .is_err());
+
         std::env::remove_var("NBCAD_SESSION_DIR");
-        let _ = std::fs::remove_dir_all(dir.join(&unique));
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

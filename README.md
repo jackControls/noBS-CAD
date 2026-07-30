@@ -76,9 +76,9 @@ ignores `notifications/tools/list_changed`.
 
 Export via MCP: **STEP** (CAD interchange), **STL** (geometry-only mesh), and
 **3MF** (preferred for slicers; per-body color/material plus compatible slicer
-Metadata hints — not a full pre-sliced project). Headless session directories
-(`cad_list_sessions` / `cad_attach`) support read-only load from
-`NBCAD_SESSION_DIR`; live UI co-link is not shipped.
+Metadata hints — not a full pre-sliced project). Session helpers
+(`cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach`) load
+**read-only** snapshots from `NBCAD_SESSION_DIR`; live UI co-link is not shipped.
 
 Details: [docs/mcp-harness.md](docs/mcp-harness.md).
 

@@ -27,9 +27,16 @@ Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 
 ## Headless sessions (honest scope)
 
-`cad_list_sessions` / `cad_attach` load a **read-only** snapshot from
-`NBCAD_SESSION_DIR`. They do not co-link a live UI document. MCP and the
-visible app still own separate documents unless/until in-process co-link ships.
+`cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` implement a
+**read-only snapshot** load from `NBCAD_SESSION_DIR`:
+
+- attach **fails** if `model.json` is missing or invalid;
+- MCP **never** writes the session files back after editing in memory;
+- refresh is explicit (no filesystem watcher);
+- this is **not** a live UI co-link.
+
+UI publishing + UUID session ids + revisioned sync are follow-up ([PR #31](https://github.com/jackControls/noBS-CAD/pull/31)).
+
 
 ## Print export
 

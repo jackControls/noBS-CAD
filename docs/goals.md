@@ -41,8 +41,9 @@ Do not treat fit, motion, and strength as one deliverable:
 5. Turn reported failures into focused regression tests.
 6. Grow MCP as a local automation/testing surface (see
    [mcp-harness.md](mcp-harness.md)). On branch `feat/3mf-print-export`:
-   soft focus-scoped disclosure and headless `cad_list_sessions` /
-   `cad_attach` (read-only load) — not live UI co-link.
+   soft focus-scoped disclosure with a real `list_changed` wake loop, plus
+   read-only session snapshots (`cad_attach` / `cad_refresh` / `cad_detach`) —
+   not live UI co-link.
 7. Native **3MF** / **STL** export with materials/colors is landing on
    `feat/3mf-print-export`; treat `main` as STEP-first until that merges.
 

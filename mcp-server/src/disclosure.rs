@@ -485,6 +485,8 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_attach"
+            | "cad_refresh"
+            | "cad_detach"
     );
     if spine {
         let pack = match name {

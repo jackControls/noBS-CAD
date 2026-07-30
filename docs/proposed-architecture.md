@@ -54,8 +54,9 @@ headless MCP without UI remains valid for CI goldens.
 This is the useful first automation milestone. Prototype before treating it as
 required product behavior.
 
-**Branch note:** `cad_list_sessions` / `cad_attach` load read-only snapshots from
-headless session dirs only — not a live shared UI document.
+**Branch note:** `cad_list_sessions` / `cad_attach` / `cad_refresh` /
+`cad_detach` implement **read-only snapshot** load from headless session dirs
+(require valid `model.json`; no MCP writeback). Not a live shared UI document.
 
 ---
 
