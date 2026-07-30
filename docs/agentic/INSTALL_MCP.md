@@ -101,7 +101,7 @@ Shapes used:
 
 ### Binary resolution
 
-1. `--binary PATH` if provided
+1. `--binary PATH` if provided (copied to the user install dir on write)
 2. Else `mcp-server/target/release/nbcad-mcp(.exe)` if present
 3. Else `mcp-server/target/debug/nbcad-mcp(.exe)` if present
 4. Else, **only when not `--dry-run` and not `--no-build`**:
@@ -110,7 +110,14 @@ Shapes used:
 cargo build --release --manifest-path mcp-server/Cargo.toml
 ```
 
-Dry-run never runs that build; it prints the planned release path if missing.
+On **write** installs the chosen binary is copied to a stable user path so client
+configs do not point at `target/` (wiped by `cargo clean`):
+
+- Windows: `%LOCALAPPDATA%\nbcad\mcp\nbcad-mcp.exe`
+- Unix: `$XDG_DATA_HOME/nbcad/mcp/nbcad-mcp` or `~/.local/share/nbcad/mcp/nbcad-mcp`
+
+Dry-run never builds or copies; it prints the planned user path when the binary
+is missing.
 
 Point at a custom binary:
 
@@ -126,8 +133,11 @@ cargo run -p xtask -- install-mcp --clients cursor --binary path\to\nbcad-mcp.ex
 2. For a real install that needs a build: OCCT available — see
    [MAINTENANCE.md](MAINTENANCE.md) and [WINDOWS_PACKAGING.md](../WINDOWS_PACKAGING.md).
 3. At least one requested client already present (config dir or file).
+4. Client config must be **plain JSON** (no `//` / `/* */` JSONC). The upsert
+   pretty-prints and would drop comments — installs refuse JSONC rather than
+   silently destroy them.
 
-Local MCP behavior (disclosure, co-link, tools): [../mcp-harness.md](../mcp-harness.md).
+Local MCP behavior (disclosure, tools): [../mcp-harness.md](../mcp-harness.md).
 
 ---
 
@@ -144,10 +154,12 @@ Local MCP behavior (disclosure, co-link, tools): [../mcp-harness.md](../mcp-harn
 ## Safety notes
 
 - Writes only to **user** configs (not committed project MCP files).
+- Atomic update: existing file copied to `*.bak.<pid>`, then temp+rename.
 - Does not delete other servers.
 - Does not enable cloud transport; `nbcad-mcp` stays **local stdio**.
 - Does **not** launch UI or touch session control channels.
 - Prefer `--dry-run` first to see paths before writing.
+- Refuses JSONC-with-comments rather than rewriting them away.
 
 ---
 
@@ -177,8 +189,15 @@ cargo test -p xtask
 ## Related docs
 
 | Doc | Why |
+|------|------|
+| [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure packs |
+| [mcp-harness.md](../mcp-harness.md) | Local MCP surface |
+## Related docs
+
+| Doc | Why |
 |-----|-----|
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
 | [MAINTENANCE.md](MAINTENANCE.md) | OCCT / `cargo test` for mcp-server |
 | [../mcp-harness.md](../mcp-harness.md) | As-built MCP surface |
 | [../../mcp-server/README.md](../../mcp-server/README.md) | Build the server itself |
+

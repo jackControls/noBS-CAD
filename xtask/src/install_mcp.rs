@@ -409,6 +409,7 @@ fn upsert_target(
     } else {
         String::new()
     };
+    refuse_jsonc_rewrite(&target.path, &original)?;
 
     let next = match target.format {
         ConfigFormat::McpServers => upsert_mcp_servers_json(&original, server_name, launch)?,
@@ -565,6 +566,30 @@ fn mcp_servers_entry(launch: &ServerLaunch) -> Value {
         "args": [],
         "env": Value::Object(launch.env.clone()),
     })
+}
+
+/// Jack §4: do not silently destroy JSONC comments via pretty-print rewrite.
+///
+/// Empty files and strict JSON are fine. If the file only parses after comment
+/// stripping, refuse and ask the user to convert to plain JSON first.
+fn refuse_jsonc_rewrite(path: &Path, original: &str) -> Result<()> {
+    let trimmed = original.trim_start_matches('\u{feff}').trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if serde_json::from_str::<Value>(trimmed).is_ok() {
+        return Ok(());
+    }
+    let stripped = strip_jsonc_comments(trimmed);
+    if serde_json::from_str::<Value>(stripped.trim()).is_ok() {
+        bail!(
+            "refusing to rewrite JSONC with comments at {} — convert to plain JSON first \
+             (pretty-print upsert would drop // and /* */ comments)",
+            path.display()
+        );
+    }
+    // Invalid even after strip — let the upsert parser surface the real error.
+    Ok(())
 }
 
 /// Parse a JSON object, tolerating empty files, UTF-8 BOM, and light JSONC (`//` / `/* */`).
@@ -1072,5 +1097,13 @@ mod tests {
         )
         .unwrap();
         assert!(jsonc["mcpServers"].is_object());
+    }
+
+    #[test]
+    fn refuse_jsonc_rewrite_blocks_commented_configs() {
+        let path = PathBuf::from("fake-mcp.json");
+        refuse_jsonc_rewrite(&path, "{\n  // keep me\n  \"mcpServers\": {}\n}\n").unwrap_err();
+        refuse_jsonc_rewrite(&path, "{\n  \"mcpServers\": {}\n}\n").unwrap();
+        refuse_jsonc_rewrite(&path, "").unwrap();
     }
 }
