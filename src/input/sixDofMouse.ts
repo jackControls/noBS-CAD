@@ -314,25 +314,37 @@ export function createSixDofMouseController(
   }
 
   const connectNative = async () => {
+    nativeUnlisten.forEach((unlisten) => unlisten());
+    nativeUnlisten = [];
     const [{ invoke }, { listen }] = await Promise.all([
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/event'),
     ]);
-    const motionUnlisten = await listen<NativeMotionPacket>('six-dof-mouse-motion', (event) => {
-      accumulator.push(event.payload);
-    });
-    const buttonUnlisten = await listen<{ button: number }>('six-dof-mouse-button', (event) => {
-      onButton?.(event.payload.button);
-    });
-    nativeUnlisten = [motionUnlisten, buttonUnlisten];
+    const listeners: Array<() => void> = [];
     try {
+      listeners.push(
+        await listen<NativeMotionPacket>('six-dof-mouse-motion', (event) => {
+          accumulator.push(event.payload);
+        }),
+        await listen<{ button: number }>('six-dof-mouse-button', (event) => {
+          onButton?.(event.payload.button);
+        }),
+        await listen<string>('six-dof-mouse-error', (event) => {
+          accumulator.stop();
+          onStatus({
+            state: 'error',
+            message: `3D mouse input stopped: ${event.payload}`,
+          });
+        }),
+      );
+      nativeUnlisten = listeners;
       const device = await invoke<{ product_name: string }>('six_dof_mouse_connect');
       onStatus({
         state: 'connected',
         message: device.product_name || '3D mouse connected',
       });
     } catch (error) {
-      nativeUnlisten.forEach((unlisten) => unlisten());
+      listeners.forEach((unlisten) => unlisten());
       nativeUnlisten = [];
       throw error;
     }

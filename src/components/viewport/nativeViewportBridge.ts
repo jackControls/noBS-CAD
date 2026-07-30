@@ -34,7 +34,7 @@ export interface NativeViewportPick {
   distance: number;
 }
 
-interface NativeRect {
+export interface NativeRect {
   x: number;
   y: number;
   width: number;
@@ -219,37 +219,49 @@ function overlaps(a: NativeRect, b: NativeRect): boolean {
   );
 }
 
-function union(a: NativeRect, b: NativeRect): NativeRect {
-  const x = Math.min(a.x, b.x);
-  const y = Math.min(a.y, b.y);
-  const right = Math.max(a.x + a.width, b.x + b.width);
-  const bottom = Math.max(a.y + a.height, b.y + b.height);
-  return { x, y, width: right - x, height: bottom - y };
+function subtractRect(source: NativeRect, cut: NativeRect): NativeRect[] {
+  if (!overlaps(source, cut)) return [source];
+  const left = Math.max(source.x, cut.x);
+  const top = Math.max(source.y, cut.y);
+  const right = Math.min(source.x + source.width, cut.x + cut.width);
+  const bottom = Math.min(source.y + source.height, cut.y + cut.height);
+  const sourceRight = source.x + source.width;
+  const sourceBottom = source.y + source.height;
+  return [
+    { x: source.x, y: source.y, width: source.width, height: top - source.y },
+    { x: source.x, y: bottom, width: source.width, height: sourceBottom - bottom },
+    { x: source.x, y: top, width: left - source.x, height: bottom - top },
+    { x: right, y: top, width: sourceRight - right, height: bottom - top },
+  ].filter((rect) => rect.width > 0.01 && rect.height > 0.01);
 }
 
-/** CAShapeLayer uses even/odd fill, so overlapping islands must be merged. */
-function mergeOverlayRects(rects: NativeRect[]): NativeRect[] {
-  const merged: NativeRect[] = [];
+/**
+ * CAShapeLayer's even/odd mask requires disjoint islands. A bounding-box union
+ * is not equivalent to a geometric union: when a ribbon flyout overlaps the
+ * full-width project tab, it would expose the entire rectangular band between
+ * them. Subtracting previously accepted rectangles preserves the exact union
+ * while guaranteeing that no output rectangles overlap.
+ */
+export function disjointOverlayRects(rects: NativeRect[]): NativeRect[] {
+  const disjoint: NativeRect[] = [];
   for (const rect of rects) {
-    let candidate = rect;
-    let index = 0;
-    while (index < merged.length) {
-      if (overlaps(candidate, merged[index])) {
-        candidate = union(candidate, merged[index]);
-        merged.splice(index, 1);
-        index = 0;
-      } else {
-        index += 1;
+    let candidates = [rect];
+    for (const existing of disjoint) {
+      const next: NativeRect[] = [];
+      for (const candidate of candidates) {
+        next.push(...subtractRect(candidate, existing));
       }
+      candidates = next;
+      if (candidates.length === 0) break;
     }
-    merged.push(candidate);
+    disjoint.push(...candidates);
   }
-  return merged;
+  return disjoint;
 }
 
-function collectOverlays(): NativeRect[] {
+export function collectNativeViewportOverlayRects(): NativeRect[] {
   const elements = [...document.querySelectorAll(overlaySelector)];
-  return mergeOverlayRects(
+  return disjointOverlayRects(
     elements
       .map(rectFor)
       .filter((rect): rect is NativeRect => rect !== null),
@@ -459,7 +471,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
         if (!viewport) break;
         const payload = {
           viewport,
-          overlays: collectOverlays(),
+          overlays: collectNativeViewportOverlayRects(),
           palette: collectPalette(),
           hud: collectHud(),
         };

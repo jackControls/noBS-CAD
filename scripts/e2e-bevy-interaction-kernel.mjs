@@ -19,6 +19,9 @@ try {
   const result = await page.evaluate(async () => {
     const cad = await import('/src/components/viewport/cadInteraction.ts');
     const viewport = await import('/src/components/viewport/Viewport.tsx');
+    const nativeBridge = await import(
+      '/src/components/viewport/nativeViewportBridge.ts'
+    );
     const epsilon = 1e-6;
     const approximately = (actual, expected, tolerance = epsilon) =>
       Math.abs(actual - expected) <= tolerance;
@@ -241,6 +244,51 @@ try {
       );
     if (viewportRoot) delete viewportRoot.dataset.nativeViewport;
 
+    const unionInputs = [
+      { x: 240, y: 92, width: 1200, height: 28 },
+      { x: 150, y: 92, width: 260, height: 210 },
+    ];
+    const disjoint = nativeBridge.disjointOverlayRects(unionInputs);
+    const disjointArea = disjoint.reduce(
+      (area, rect) => area + rect.width * rect.height,
+      0,
+    );
+    const exactOverlayUnion =
+      disjointArea === 1200 * 28 + 260 * 210 - 170 * 28 &&
+      !disjoint.some(
+        (rect) =>
+          900 >= rect.x &&
+          900 <= rect.x + rect.width &&
+          200 >= rect.y &&
+          200 <= rect.y + rect.height,
+      ) &&
+      disjoint.every(
+        (rect, index) =>
+          disjoint.slice(index + 1).every(
+            (other) =>
+              rect.x + rect.width <= other.x ||
+              other.x + other.width <= rect.x ||
+              rect.y + rect.height <= other.y ||
+              other.y + other.height <= rect.y,
+          ),
+      );
+
+    const dial = document.querySelector('[data-orientation-dial]');
+    const dialUnderlayMatchesViewport =
+      dial?.hasAttribute('data-native-overlay-underlay') === true &&
+      getComputedStyle(dial).backgroundColor ===
+        getComputedStyle(document.documentElement)
+          .getPropertyValue('--viewport')
+          .trim()
+          .replace(
+            /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i,
+            (_, red, green, blue) =>
+              `rgb(${Number.parseInt(red, 16)}, ${Number.parseInt(
+                green,
+                16,
+              )}, ${Number.parseInt(blue, 16)})`,
+          );
+
     const store = window.__appStore.getState();
     store.setNavTool('orbit');
     const escape = new KeyboardEvent('keydown', {
@@ -267,6 +315,8 @@ try {
       visibleDomHud,
       nativeOverlayIslands,
       animatedHud,
+      exactOverlayUnion,
+      dialUnderlayMatchesViewport,
       escapeOwned,
     };
   });
@@ -288,6 +338,8 @@ try {
       visibleDomHud: true,
       nativeOverlayIslands: true,
       animatedHud: true,
+      exactOverlayUnion: true,
+      dialUnderlayMatchesViewport: true,
       escapeOwned: true,
     },
     `Three-free interaction proof failed: ${JSON.stringify(result)}`,
@@ -296,6 +348,46 @@ try {
   await page.waitForFunction(
     () => window.__appStore?.getState().document !== null,
   );
+
+  await page.getByRole('button', { name: 'BUILD' }).click();
+  await page.locator('[data-ribbon-menu]').waitFor({ state: 'visible' });
+  const menuMask = await page.evaluate(async () => {
+    const bridge = await import(
+      '/src/components/viewport/nativeViewportBridge.ts'
+    );
+    const menu = document
+      .querySelector('[data-ribbon-menu]')
+      .getBoundingClientRect();
+    const viewport = document
+      .querySelector('canvas[data-cad-interaction-surface="true"]')
+      .getBoundingClientRect();
+    const overlays = bridge.collectNativeViewportOverlayRects();
+    const covered = (x, y) =>
+      overlays.some(
+        (rect) =>
+          x > rect.x &&
+          x < rect.x + rect.width &&
+          y > rect.y &&
+          y < rect.y + rect.height,
+      );
+    const y = Math.min(menu.bottom - 2, viewport.bottom - 2);
+    const insideX =
+      (Math.max(menu.left, viewport.left) +
+        Math.min(menu.right, viewport.right)) /
+      2;
+    const clearX = viewport.left + viewport.width * 0.6;
+    return {
+      menuCovered: covered(insideX, y),
+      unrelatedViewportClear: !covered(clearX, y),
+    };
+  });
+  assert.deepEqual(
+    menuMask,
+    { menuCovered: true, unrelatedViewportClear: true },
+    'a ribbon flyout must expose only its own pixels, not a full viewport band',
+  );
+  await page.getByRole('button', { name: 'BUILD' }).click();
+
   await page.locator('button[title="Create Sketch"]').click();
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'pickPlane',
@@ -307,6 +399,7 @@ try {
     const rect = surface.getBoundingClientRect();
     return {
       xz: window.__worldToScreen(35, 0, 35),
+      xzCorner: window.__worldToScreen(50, 0, 50),
       outside: window.__worldToScreen(90, 0, 90),
       viewport: {
         left: rect.left,
@@ -316,7 +409,11 @@ try {
       },
     };
   });
-  for (const point of [planeTargets.xz, planeTargets.outside]) {
+  for (const point of [
+    planeTargets.xz,
+    planeTargets.xzCorner,
+    planeTargets.outside,
+  ]) {
     assert.ok(
       point.x > planeTargets.viewport.left &&
         point.x < planeTargets.viewport.right &&
@@ -326,6 +423,19 @@ try {
     );
   }
   await page.mouse.move(planeTargets.xz.x, planeTargets.xz.y);
+  await page.waitForFunction(
+    () => window.__appStore.getState().hoveredPlane === 'xz',
+  );
+  const outward = {
+    x: planeTargets.outside.x - planeTargets.xzCorner.x,
+    y: planeTargets.outside.y - planeTargets.xzCorner.y,
+  };
+  const outwardLength = Math.hypot(outward.x, outward.y);
+  const nearVisibleEdge = {
+    x: planeTargets.xzCorner.x + (outward.x / outwardLength) * 4,
+    y: planeTargets.xzCorner.y + (outward.y / outwardLength) * 4,
+  };
+  await page.mouse.move(nearVisibleEdge.x, nearVisibleEdge.y);
   await page.waitForFunction(
     () => window.__appStore.getState().hoveredPlane === 'xz',
   );
@@ -339,7 +449,7 @@ try {
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
-    '  [ok] projection, exact XZ-plane hover bounds, hover-ready DOM islands, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
+    '  [ok] projection, forgiving finite-plane hover, exact DOM mask islands, rounded-HUD underlay, Escape ownership, orbit, sketch mapping, and Bevy preview transport',
   );
 } finally {
   await browser.close();

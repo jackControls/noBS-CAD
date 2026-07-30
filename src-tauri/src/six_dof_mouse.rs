@@ -13,6 +13,8 @@ use tauri::{AppHandle, Emitter, State};
 
 const CURRENT_VENDOR_ID: u16 = 0x256f;
 const LEGACY_VENDOR_ID: u16 = 0x046d;
+const GENERIC_DESKTOP_USAGE_PAGE: u16 = 0x01;
+const MULTI_AXIS_CONTROLLER_USAGE: u16 = 0x08;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SixDofMouseInfo {
@@ -60,18 +62,27 @@ impl SixDofMouseState {
     }
 }
 
-fn supported_device(info: &hidapi::DeviceInfo) -> bool {
-    if info.vendor_id() == CURRENT_VENDOR_ID {
-        return true;
-    }
-    if info.vendor_id() != LEGACY_VENDOR_ID {
+fn supported_descriptor(vendor_id: u16, usage_page: u16, usage: u16, product_name: &str) -> bool {
+    if usage_page != GENERIC_DESKTOP_USAGE_PAGE || usage != MULTI_AXIS_CONTROLLER_USAGE {
         return false;
     }
-    let product = info
-        .product_string()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    if vendor_id == CURRENT_VENDOR_ID {
+        return true;
+    }
+    if vendor_id != LEGACY_VENDOR_ID {
+        return false;
+    }
+    let product = product_name.to_ascii_lowercase();
     product.contains("space") || product.contains("3dconnexion") || product.contains("cadman")
+}
+
+fn supported_device(info: &hidapi::DeviceInfo) -> bool {
+    supported_descriptor(
+        info.vendor_id(),
+        info.usage_page(),
+        info.usage(),
+        info.product_string().unwrap_or_default(),
+    )
 }
 
 fn vector(data: &[u8], offset: usize) -> Option<[i16; 3]> {
@@ -198,4 +209,31 @@ pub async fn six_dof_mouse_disconnect(state: State<'_, SixDofMouseState>) -> Res
         .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
     state.stop();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_only_the_multi_axis_hid_interface() {
+        assert!(supported_descriptor(
+            CURRENT_VENDOR_ID,
+            GENERIC_DESKTOP_USAGE_PAGE,
+            MULTI_AXIS_CONTROLLER_USAGE,
+            "SpaceMouse Wireless BT",
+        ));
+        assert!(!supported_descriptor(
+            CURRENT_VENDOR_ID,
+            GENERIC_DESKTOP_USAGE_PAGE,
+            0x02,
+            "3Dconnexion Virtual Mouse",
+        ));
+        assert!(!supported_descriptor(
+            CURRENT_VENDOR_ID,
+            0xff00,
+            0x01,
+            "3Dconnexion Virtual Data",
+        ));
+    }
 }

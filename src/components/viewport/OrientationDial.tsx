@@ -138,13 +138,17 @@ export function OrientationDial({
   );
 
   return (
-    <aside
-      className="absolute right-3 top-3 z-10 w-[132px] select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
+    <div
+      className="absolute right-3 top-3 z-10 w-[132px] bg-viewport"
       data-orientation-dial
       data-native-hud="orientation"
       data-native-viewport-overlay
-      aria-label={t('orientationDial.label')}
+      data-native-overlay-underlay
     >
+      <aside
+        className="select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
+        aria-label={t('orientationDial.label')}
+      >
       <div className="mb-0.5 text-center text-[8px] font-semibold tracking-[0.16em] text-mute">
         {t('orientationDial.label')}
       </div>
@@ -213,6 +217,7 @@ export function OrientationDial({
         </button>
       </div>
       <div className="mt-1 text-center text-[8px] text-mute/70">{t('orientationDial.orbit')}</div>
-    </aside>
+      </aside>
+    </div>
   );
 }

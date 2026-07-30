@@ -102,6 +102,8 @@ export const REFERENCE_PLANE_SIZE = 100;
 const SKETCH_FIT_HALF_EXTENT = 75;
 /** Magnetic acquisition radius for valid modify-tool targets. */
 const MODIFY_CAPTURE_PX = 14;
+/** Screen-space forgiveness around visible origin-plane fills and outlines. */
+const ORIGIN_PLANE_CAPTURE_PX = 8;
 /** Maximum screen-space reach beyond a line endpoint for Point acquisition. */
 const POINT_EXTENSION_REACH_PX = 96;
 /** Reject near-tied extension candidates rather than constrain arbitrarily. */
@@ -1638,6 +1640,99 @@ export function Viewport() {
       const len2 = abx * abx + aby * aby;
       const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2));
       return Math.hypot(p.x - (a.x + t * abx), p.y - (a.y + t * aby));
+    };
+
+    const pointInScreenPolygon = (point: Vec2, polygon: Vec2[]): boolean => {
+      let inside = false;
+      for (
+        let current = 0, previous = polygon.length - 1;
+        current < polygon.length;
+        previous = current++
+      ) {
+        const a = polygon[current];
+        const b = polygon[previous];
+        if (
+          a.y > point.y !== b.y > point.y &&
+          point.x <
+            ((b.x - a.x) * (point.y - a.y)) /
+              (b.y - a.y || Number.EPSILON) +
+              a.x
+        ) {
+          inside = !inside;
+        }
+      }
+      return inside;
+    };
+
+    /**
+     * Exact rays own unambiguous plane interiors. A small projected-polygon
+     * fallback covers the rendered outline thickness and planes that become
+     * nearly edge-on in ISO views, where an infinitely thin ray/plane test has
+     * visible dead strips even though Bevy still draws several screen pixels.
+     */
+    const pickOriginPlane = (event: PointerEvent): OriginPlane | null => {
+      raycaster.setFromCamera(ndcFromEvent(event), camera);
+      const exact = raycaster.intersectObjects(picker.map((plane) => plane.mesh));
+      const exactPlane = exact[0]?.object.userData.plane as OriginPlane | undefined;
+      if (exactPlane) return exactPlane;
+
+      const viewport = surface.domElement.getBoundingClientRect();
+      const pointer = { x: event.clientX, y: event.clientY };
+      const candidates: Array<{
+        plane: OriginPlane;
+        distance: number;
+        facing: number;
+      }> = [];
+      for (const definition of PICKER_PLANES) {
+        const origin = new CAD.Vector3(...definition.basis.origin);
+        const u = new CAD.Vector3(...definition.basis.u).multiplyScalar(
+          REFERENCE_PLANE_SIZE / 2,
+        );
+        const v = new CAD.Vector3(...definition.basis.v).multiplyScalar(
+          REFERENCE_PLANE_SIZE / 2,
+        );
+        const corners = [
+          origin.clone().sub(u).sub(v),
+          origin.clone().add(u).sub(v),
+          origin.clone().add(u).add(v),
+          origin.clone().sub(u).add(v),
+        ].map((world) => {
+          const projected = world.project(camera);
+          return {
+            x: viewport.left + ((projected.x + 1) / 2) * viewport.width,
+            y: viewport.top + ((1 - projected.y) / 2) * viewport.height,
+            z: projected.z,
+          };
+        });
+        if (corners.some((corner) => corner.z < -1 || corner.z > 1)) continue;
+        const polygon = corners.map(({ x, y }) => ({ x, y }));
+        const inside = pointInScreenPolygon(pointer, polygon);
+        let distance = inside ? 0 : Number.POSITIVE_INFINITY;
+        if (!inside) {
+          for (let index = 0; index < polygon.length; index += 1) {
+            distance = Math.min(
+              distance,
+              pointToSegment(
+                pointer,
+                polygon[index],
+                polygon[(index + 1) % polygon.length],
+              ),
+            );
+          }
+        }
+        if (distance > ORIGIN_PLANE_CAPTURE_PX) continue;
+        const normal = new CAD.Vector3(...definition.basis.normal).normalize();
+        candidates.push({
+          plane: definition.plane,
+          distance,
+          facing: Math.abs(normal.dot(raycaster.ray.direction)),
+        });
+      }
+      candidates.sort(
+        (left, right) =>
+          left.distance - right.distance || right.facing - left.facing,
+      );
+      return candidates[0]?.plane ?? null;
     };
 
     const projectToSegment = (p: Vec2, a: Vec2, b: Vec2): Vec2 => {
@@ -5123,8 +5218,7 @@ export function Viewport() {
         }
         state.setHoveredDatumPlane(null);
         highlightDatumPlane(null, true);
-        const hits = raycaster.intersectObjects(picker.map((p) => p.mesh));
-        const plane = (hits[0]?.object.userData.plane ?? null) as OriginPlane | null;
+        const plane = pickOriginPlane(e);
         if (plane !== state.hoveredPlane) state.setHoveredPlane(plane);
         const tag = planeTagRef.current;
         if (tag) {
