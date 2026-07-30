@@ -9,6 +9,7 @@ on:
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
+      - 'crates/export/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
   pull_request:
@@ -18,6 +19,7 @@ on:
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
+      - 'crates/export/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
 
@@ -90,3 +92,9 @@ jobs:
           $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
           cargo test --manifest-path mcp-server/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
+
+      - name: Export crate tests
+        shell: pwsh
+        run: |
+          cargo test --locked -p nbcad-export
+          if ($LASTEXITCODE -ne 0) { throw "nbcad-export tests failed" }

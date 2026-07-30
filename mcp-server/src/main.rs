@@ -3198,6 +3198,102 @@ mod tests {
         assert_eq!(&bytes[0..2], b"PK");
     }
 
+    fn parse_3mf_model_mesh(xml: &str) -> nbcad_export::TriangleMesh {
+        use nbcad_core::BodyId;
+        let mut positions = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<vertex x=\"") {
+                let parts: Vec<&str> = rest.split('"').collect();
+                if parts.len() >= 6 {
+                    let x: f32 = parts[0].parse().unwrap();
+                    let y: f32 = parts[2].parse().unwrap();
+                    let z: f32 = parts[4].parse().unwrap();
+                    positions.extend_from_slice(&[x, y, z]);
+                }
+            }
+        }
+        let mut indices = Vec::new();
+        for line in xml.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("<triangle v1=\"") {
+                let parts: Vec<&str> = rest.split('"').collect();
+                if parts.len() >= 6 {
+                    indices.push(parts[0].parse().unwrap());
+                    indices.push(parts[2].parse().unwrap());
+                    indices.push(parts[4].parse().unwrap());
+                }
+            }
+        }
+        nbcad_export::TriangleMesh {
+            body_id: BodyId(1),
+            name: "exported".into(),
+            positions,
+            indices,
+        }
+    }
+
+    #[test]
+    fn occt_box_export_3mf_is_index_welded() {
+        let (mut server, _) = mcp_box();
+        let request = MeshExportRequest::default();
+        let raw_meshes = server
+            .kernel
+            .tessellate_bodies(&request)
+            .expect("OCCT tessellation should succeed for a simple box");
+        assert_eq!(raw_meshes.len(), 1);
+        let raw = &raw_meshes[0];
+        let raw_vertex_count = raw.positions.len() / 3;
+        let tri_count = raw.triangle_count();
+        assert!(tri_count > 0);
+        assert!(
+            raw_vertex_count >= tri_count * 3 - 2,
+            "OCCT soup should emit ~3 positions per triangle (got {raw_vertex_count} verts, {tri_count} tris)"
+        );
+        assert!(
+            nbcad_export::boundary_edge_count(raw) > 0,
+            "raw OCCT mesh should have boundary edges before export weld"
+        );
+
+        let exported = server
+            .call_tool("solid_export_3mf", json!({"slicer_target": "standard"}))
+            .expect("3MF export should succeed");
+        let bytes = BASE64
+            .decode(exported["bytes_base64"].as_str().unwrap())
+            .unwrap();
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("3MF should be a zip");
+        let mut model = archive.by_name("3D/3dmodel.model").unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut model, &mut xml).unwrap();
+
+        let vertex_count = xml.matches("<vertex ").count();
+        let triangle_count = xml.matches("<triangle ").count();
+        assert_eq!(triangle_count, tri_count);
+        assert!(
+            vertex_count < tri_count * 3,
+            "exported 3MF should be welded ({vertex_count} verts vs {triangle_count} tris)"
+        );
+        assert!(
+            vertex_count <= raw_vertex_count / 2,
+            "welded vertex count should be far below raw soup"
+        );
+        // Planar OCCT box should weld to the 8 corners (not a hand-built fixture).
+        assert_eq!(
+            vertex_count, 8,
+            "OCCT unit-box 3MF should weld to 8 corners (got {vertex_count})"
+        );
+
+        let parsed = parse_3mf_model_mesh(&xml);
+        assert_eq!(parsed.positions.len() / 3, vertex_count);
+        assert_eq!(parsed.triangle_count(), triangle_count);
+        assert_eq!(
+            nbcad_export::boundary_edge_count(&parsed),
+            0,
+            "exported 3MF mesh should be manifold (no boundary edges)"
+        );
+    }
+
     #[test]
     fn set_body_appearance_from_preset_then_exports_3mf() {
         let (mut server, update) = mcp_box();

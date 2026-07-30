@@ -147,4 +147,22 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
         assert_eq!(value.as_array().unwrap().len(), material_catalog().len());
     }
+
+    /// Copies `presets/catalog.json` into `src/materials/catalog.json` for the Vite UI.
+    /// Run explicitly when the preset catalog changes: `cargo test -p nbcad-export regen_frontend_catalog_mirror -- --ignored --exact`
+    #[test]
+    #[ignore]
+    fn regen_frontend_catalog_mirror() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let source = manifest_dir.join("presets/catalog.json");
+        let dest = manifest_dir.join("../../src/materials/catalog.json");
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).expect("create src/materials/");
+        }
+        let bytes = fs::read(&source).expect("read presets/catalog.json");
+        fs::write(&dest, &bytes).expect("mirror catalog.json into src/materials/");
+    }
 }

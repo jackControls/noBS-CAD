@@ -7,6 +7,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
+use crate::mesh_weld::{weld_triangle_mesh, DEFAULT_WELD_EPSILON};
 use crate::slicer::SlicerTarget;
 use crate::{ExportError, TriangleMesh};
 
@@ -20,7 +21,12 @@ pub fn write_3mf(
         return Err(ExportError("There are no active bodies to export.".into()));
     }
 
-    let model_xml = build_3mf_model_xml(meshes, appearances, include_appearance, target)?;
+    let welded: Vec<TriangleMesh> = meshes
+        .iter()
+        .map(|mesh| weld_triangle_mesh(mesh, DEFAULT_WELD_EPSILON))
+        .collect();
+
+    let model_xml = build_3mf_model_xml(&welded, appearances, include_appearance, target)?;
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
@@ -47,13 +53,13 @@ pub fn write_3mf(
         if include_appearance {
             match target {
                 SlicerTarget::BambuStudio | SlicerTarget::OrcaSlicer => {
-                    write_bambu_metadata(&mut zip, options, meshes, appearances, target)?;
+                    write_bambu_metadata(&mut zip, options, &welded, appearances, target)?;
                 }
                 SlicerTarget::PrusaSlicer => {
-                    write_prusa_metadata(&mut zip, options, meshes, appearances)?;
+                    write_prusa_metadata(&mut zip, options, &welded, appearances)?;
                 }
                 SlicerTarget::Cura => {
-                    write_cura_metadata(&mut zip, options, meshes, appearances)?;
+                    write_cura_metadata(&mut zip, options, &welded, appearances)?;
                 }
                 SlicerTarget::Standard => {}
             }
@@ -360,8 +366,7 @@ fn build_3mf_model_xml(
     let mut xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US"
-  xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
-  xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+  xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
   <metadata name="Application">{}</metadata>
   <metadata name="Title">noBS CAD export</metadata>
   <resources>
@@ -370,19 +375,19 @@ fn build_3mf_model_xml(
     );
 
     if include_appearance {
-        xml.push_str(r#"    <m:basematerials id="1">"#);
+        xml.push_str(r#"    <basematerials id="1">"#);
         xml.push('\n');
         for mesh in meshes {
             let appearance = appearance_for(appearances, mesh.body_id);
             let color = appearance.color.opaque_rgb();
             let name = xml_escape(appearance.display_label());
             xml.push_str(&format!(
-                r#"      <m:base name="{name}" displaycolor="{}"/>"#,
+                r#"      <base name="{name}" displaycolor="{}"/>"#,
                 color.to_hex_rgb()
             ));
             xml.push('\n');
         }
-        xml.push_str("    </m:basematerials>\n");
+        xml.push_str("    </basematerials>\n");
     }
 
     for (index, mesh) in meshes.iter().enumerate() {

@@ -6,6 +6,7 @@
 
 mod facade;
 mod materials;
+mod mesh_weld;
 mod pip_demo;
 mod slicer;
 mod stl;
@@ -23,6 +24,7 @@ pub use pip_demo::{
     assert_box_clearances, print_in_place_cam_bolt, print_in_place_clip, print_in_place_latch,
     CLEAR_MM,
 };
+pub use mesh_weld::{boundary_edge_count, weld_triangle_mesh, DEFAULT_WELD_EPSILON};
 pub use slicer::SlicerTarget;
 pub use stl::write_stl;
 pub use threemf::write_3mf;
@@ -160,6 +162,58 @@ mod tests {
         }
     }
 
+    /// OCCT-style cube: 12 triangles × 3 unique positions each (36 verts, no shared indices).
+    fn unwelded_unit_cube(body_id: u64) -> TriangleMesh {
+        let s = 20.0_f32;
+        let corners: [[f32; 3]; 8] = [
+            [0.0, 0.0, 0.0],
+            [s, 0.0, 0.0],
+            [s, s, 0.0],
+            [0.0, s, 0.0],
+            [0.0, 0.0, s],
+            [s, 0.0, s],
+            [s, s, s],
+            [0.0, s, s],
+        ];
+        let tri_corners: [[usize; 3]; 12] = [
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [3, 7, 6],
+            [3, 6, 2],
+            [0, 4, 7],
+            [0, 7, 3],
+            [1, 2, 6],
+            [1, 6, 5],
+        ];
+        let mut positions = Vec::with_capacity(36 * 3);
+        let mut indices = Vec::with_capacity(36);
+        for tri in tri_corners {
+            let base = (positions.len() / 3) as u32;
+            for corner_idx in tri {
+                positions.extend_from_slice(&corners[corner_idx]);
+            }
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }
+        TriangleMesh {
+            body_id: BodyId(body_id),
+            name: format!("Body{body_id}"),
+            positions,
+            indices,
+        }
+    }
+
+    fn count_3mf_vertices(xml: &str) -> usize {
+        xml.matches("<vertex ").count()
+    }
+
+    fn count_3mf_triangles(xml: &str) -> usize {
+        xml.matches("<triangle ").count()
+    }
+
     fn red_pla(body_id: u64) -> BodyAppearance {
         let mut appearance = find_preset("bambu.pla.basic.red")
             .unwrap()
@@ -200,10 +254,35 @@ mod tests {
             let mut xml = String::new();
             std::io::Read::read_to_string(&mut model, &mut xml).unwrap();
             assert!(xml.contains(r#"unit="millimeter""#));
-            assert!(xml.contains("basematerials"));
+            assert!(xml.contains("<basematerials"));
+            assert!(!xml.contains("<m:basematerials"));
+            assert!(xml.contains("<base "));
             assert!(xml.contains("#C82828"));
         }
         assert!(archive.by_name("Metadata/project_settings.config").is_err());
+    }
+
+    #[test]
+    fn unwelded_cube_welds_to_eight_vertices_on_3mf_export() {
+        let raw = unwelded_unit_cube(1);
+        assert_eq!(raw.positions.len() / 3, 36);
+        assert_eq!(raw.triangle_count(), 12);
+        assert!(
+            boundary_edge_count(&raw) > 0,
+            "unwelded OCCT-style soup should have boundary edges"
+        );
+
+        let welded = weld_triangle_mesh(&raw, DEFAULT_WELD_EPSILON);
+        assert_eq!(welded.positions.len() / 3, 8);
+        assert_eq!(boundary_edge_count(&welded), 0);
+
+        let bytes = write_3mf(&[raw], &[red_pla(1)], true, SlicerTarget::Standard).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut model = archive.by_name("3D/3dmodel.model").unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut model, &mut xml).unwrap();
+        assert_eq!(count_3mf_vertices(&xml), 8);
+        assert_eq!(count_3mf_triangles(&xml), 12);
     }
 
     #[test]
@@ -339,9 +418,58 @@ mod tests {
         assert_eq!(via_facade, direct);
     }
 
-    /// Regenerates `fixtures/smoke/*.3mf` for manual KR3.6 slicer open checks.
     #[test]
-    fn write_manual_smoke_fixtures() {
+    fn print_in_place_demo_meshes_are_well_formed() {
+        use std::io::Cursor;
+
+        // Print-in-place drawer clip (housing + drawer + latch), AABB clearance smoke.
+        let (pip_meshes, pip_apps) = print_in_place_clip();
+        assert_eq!(pip_meshes.len(), 3);
+        for target in [
+            SlicerTarget::BambuStudio,
+            SlicerTarget::OrcaSlicer,
+            SlicerTarget::PrusaSlicer,
+            SlicerTarget::Cura,
+        ] {
+            let bytes = write_3mf(&pip_meshes, &pip_apps, true, target).unwrap();
+            let tri_floats: usize = pip_meshes.iter().map(|m| m.indices.len()).sum();
+            assert!(
+                bytes.len() > 2_500 && tri_floats >= 20 * 36,
+                "clip mesh under-built for {target:?} ({} bytes, {} index floats)",
+                bytes.len(),
+                tri_floats
+            );
+            let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+            assert!(archive.by_name("3D/3dmodel.model").is_ok());
+        }
+
+        // Four-body cam bolt (wedge drive + dial lock), AABB clearance smoke.
+        let (cam_meshes, cam_apps) = print_in_place_cam_bolt();
+        assert_eq!(cam_meshes.len(), 4);
+        for target in [
+            SlicerTarget::BambuStudio,
+            SlicerTarget::OrcaSlicer,
+            SlicerTarget::PrusaSlicer,
+            SlicerTarget::Cura,
+        ] {
+            let bytes = write_3mf(&cam_meshes, &cam_apps, true, target).unwrap();
+            let tri_floats: usize = cam_meshes.iter().map(|m| m.indices.len()).sum();
+            assert!(
+                bytes.len() > 3_000 && tri_floats >= 28 * 36,
+                "cam-bolt mesh under-built for {target:?} ({} bytes, {} index floats)",
+                bytes.len(),
+                tri_floats
+            );
+            let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+            assert!(archive.by_name("3D/3dmodel.model").is_ok());
+        }
+    }
+
+    /// Regenerates `fixtures/smoke/*.3mf` for manual KR3.6 slicer open checks.
+    /// Run explicitly: `cargo test -p nbcad-export regen_manual_smoke_fixtures -- --ignored --exact`
+    #[test]
+    #[ignore]
+    fn regen_manual_smoke_fixtures() {
         use std::path::PathBuf;
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/smoke");
         std::fs::create_dir_all(&dir).unwrap();
