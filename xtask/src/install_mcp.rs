@@ -736,8 +736,8 @@ fn default_occt_root(repo_root: &Path) -> Option<PathBuf> {
 /// Resolve the MCP binary path.
 ///
 /// Dry-run never builds or copies. Real installs honor `--binary`, else look for
-/// release then debug under `mcp-server/target/`, and only `cargo build --release`
-/// when `build=true`, not dry-run, and no binary was found/forced.
+/// release then debug under `mcp-server/target/`, build when needed, then copy to a
+/// stable user path so clients are not pointed at `target/` (wiped by `cargo clean`).
 fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
     if let Some(path) = &options.binary {
         if options.dry_run {
@@ -746,45 +746,63 @@ fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
         if !path.is_file() {
             bail!("--binary path does not exist: {}", path.display());
         }
-        return Ok(normalize_path(path.clone()));
+        return install_user_binary(path);
     }
 
     let release = mcp_binary_path(repo_root, "release");
     let debug = mcp_binary_path(repo_root, "debug");
 
-    if release.is_file() {
-        return Ok(normalize_path(release));
-    }
-    if debug.is_file() {
+    let found = if release.is_file() {
+        Some(release)
+    } else if debug.is_file() {
         if !options.dry_run {
             eprintln!(
                 "warning: using debug MCP binary (release missing): {}",
                 debug.display()
             );
         }
-        return Ok(normalize_path(debug));
+        Some(debug)
+    } else {
+        None
+    };
+
+    if let Some(built) = found {
+        if options.dry_run {
+            return Ok(normalize_path(built));
+        }
+        return install_user_binary(&built);
     }
 
     if options.dry_run {
-        // Planned path only — no cargo build.
+        // Planned path only — no cargo build / copy.
+        let planned = user_mcp_install_dir()
+            .map(|dir| {
+                dir.join(if cfg!(windows) {
+                    "nbcad-mcp.exe"
+                } else {
+                    "nbcad-mcp"
+                })
+            })
+            .unwrap_or_else(|_| release.clone());
         println!(
-            "note: MCP binary not found yet; would build {}",
-            release.display()
+            "note: MCP binary not found yet; would build {} and install to {}",
+            release.display(),
+            planned.display()
         );
-        return Ok(release);
+        return Ok(planned);
     }
 
     if options.build {
         build_mcp_server(repo_root)?;
         if release.is_file() {
-            return Ok(normalize_path(release));
+            return install_user_binary(&release);
         }
         if debug.is_file() {
             eprintln!(
                 "warning: using debug MCP binary after build (release missing): {}",
                 debug.display()
             );
-            return Ok(normalize_path(debug));
+            return install_user_binary(&debug);
         }
     }
 
@@ -792,6 +810,42 @@ fn resolve_binary(repo_root: &Path, options: &Options) -> Result<PathBuf> {
         "MCP binary not found at {} (run without --no-build, or pass --binary)",
         mcp_binary_path(repo_root, "release").display()
     )
+}
+
+/// Copy the built MCP binary to a stable user path (never called on dry-run).
+fn install_user_binary(built: &Path) -> Result<PathBuf> {
+    let dir = user_mcp_install_dir()?;
+    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let name = if cfg!(windows) {
+        "nbcad-mcp.exe"
+    } else {
+        "nbcad-mcp"
+    };
+    let dest = dir.join(name);
+    let staging = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::copy(built, &staging)
+        .with_context(|| format!("copy {} → {}", built.display(), staging.display()))?;
+    if dest.exists() {
+        let bak = dir.join(format!("{name}.prev"));
+        let _ = fs::remove_file(&bak);
+        let _ = fs::rename(&dest, &bak);
+    }
+    if let Err(error) = fs::rename(&staging, &dest) {
+        let _ = fs::remove_file(&staging);
+        return Err(error).with_context(|| format!("rename → {}", dest.display()));
+    }
+    Ok(normalize_path(dest))
+}
+
+fn user_mcp_install_dir() -> Result<PathBuf> {
+    if let Some(base) = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+    {
+        return Ok(base.join("nbcad").join("mcp"));
+    }
+    bail!("could not resolve a user install directory (LOCALAPPDATA / HOME)");
 }
 
 fn mcp_binary_path(repo_root: &Path, profile: &str) -> PathBuf {
