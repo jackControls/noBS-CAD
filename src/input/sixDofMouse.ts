@@ -139,15 +139,15 @@ export function canonicalizeSixDofTranslation(
 }
 
 /**
- * Positive camera-API rotation describes the part following the cap. The
- * 3Dconnexion Rx/Ry/Rz signs describe the inverse view rotation, so all three
- * rotational channels reverse at this device boundary.
+ * Positive camera-API rotation describes the part following the cap. Driver
+ * Rx already matches tilt forward/back; Ry and Rz use the inverse sign for
+ * tilt left/right and twist in our camera basis.
  */
 export function canonicalizeSixDofRotation(
   device: [number, number, number],
 ): [number, number, number] {
   return [
-    reversedAxis(device[0]),
+    device[0],
     reversedAxis(device[1]),
     reversedAxis(device[2]),
   ];

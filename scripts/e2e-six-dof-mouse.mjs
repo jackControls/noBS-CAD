@@ -324,7 +324,7 @@ try {
       canonicalCalibration,
       {
         translation: [1, 2, 3],
-        rotation: [-1, 2, -3],
+        rotation: [1, 2, -3],
       },
       'device axes are converted to right/forward/up object-motion signs',
     );
