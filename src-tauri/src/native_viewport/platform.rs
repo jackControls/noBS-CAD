@@ -5,7 +5,7 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
     window::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
-        WindowPlugin, WindowResolution, WindowWrapper,
+        WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
     },
 };
 use nbcad_core::PlaneBasis;
@@ -2205,20 +2205,18 @@ fn apply_render_command(
         } => {
             let physical_width = (logical_width * scale_factor).round().max(1.0) as u32;
             let physical_height = (logical_height * scale_factor).round().max(1.0) as u32;
-            let size_changed = (runtime.logical_size.0 - logical_width as f32).abs() > 0.01
-                || (runtime.logical_size.1 - logical_height as f32).abs() > 0.01
-                || (runtime.scale_factor - scale_factor as f32).abs() > 0.001;
+            let logical_size_changed = (runtime.logical_size.0 - logical_width as f32).abs() > 0.01
+                || (runtime.logical_size.1 - logical_height as f32).abs() > 0.01;
+            let scale_factor_changed = (runtime.scale_factor - scale_factor as f32).abs() > 0.001;
+            let size_changed = logical_size_changed || scale_factor_changed;
             if size_changed {
-                let world = runtime.app.world_mut();
-                let mut query = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
-                if let Ok(mut window) = query.single_mut(world) {
-                    window
-                        .resolution
-                        .set_scale_factor_override(Some(scale_factor as f32));
-                    window
-                        .resolution
-                        .set_physical_resolution(physical_width, physical_height);
-                }
+                resize_embedded_window(
+                    runtime.app.world_mut(),
+                    logical_width as f32,
+                    logical_height as f32,
+                    scale_factor as f32,
+                    scale_factor_changed,
+                );
             }
             {
                 let mut viewport = runtime
@@ -2259,7 +2257,10 @@ fn apply_render_command(
                     logical_width, logical_height, physical_width, physical_height, scale_factor
                 );
             }
-            *dirty |= size_changed || palette_changed || hud_changed;
+            // A full-screen transition can reparent/recreate the native layer
+            // without changing its final dimensions. Every accepted layout is
+            // therefore also an explicit redraw request.
+            *dirty = true;
         }
         RenderCommand::Model(next) => {
             runtime.model = next;
@@ -2305,6 +2306,48 @@ fn apply_render_command(
             }
         }
     }
+}
+
+fn resize_embedded_window(
+    world: &mut World,
+    logical_width: f32,
+    logical_height: f32,
+    scale_factor: f32,
+    scale_factor_changed: bool,
+) -> bool {
+    let physical_width = (logical_width * scale_factor).round().max(1.0) as u32;
+    let physical_height = (logical_height * scale_factor).round().max(1.0) as u32;
+    let window_entity = {
+        let mut query = world.query_filtered::<(Entity, &mut Window), With<PrimaryWindow>>();
+        let Ok((window_entity, mut window)) = query.single_mut(world) else {
+            return false;
+        };
+        window
+            .resolution
+            .set_scale_factor_override(Some(scale_factor));
+        window
+            .resolution
+            .set_physical_resolution(physical_width, physical_height);
+        window_entity
+    };
+
+    // This embedded renderer does not run bevy_winit, so no OS adapter exists
+    // to translate host resize notifications into Bevy messages. camera_system
+    // relies on these messages to recompute PerspectiveProjection::aspect_ratio;
+    // without one, the swapchain stretches the old projection until camera
+    // motion happens to mark Projection as changed.
+    world.write_message(WindowResized {
+        window: window_entity,
+        width: logical_width,
+        height: logical_height,
+    });
+    if scale_factor_changed {
+        world.write_message(WindowScaleFactorChanged {
+            window: window_entity,
+            scale_factor: scale_factor as f64,
+        });
+    }
+    true
 }
 
 fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<MetricsState>>) {
@@ -2530,6 +2573,50 @@ mod tests {
         let far_half = reference_plane_half_size(far, viewport, Vec3::ZERO);
         assert!(near_half > 0.0);
         assert!((far_half / near_half - 2.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn embedded_resize_updates_pixels_and_notifies_bevy_camera_system() {
+        let mut app = App::new();
+        app.add_message::<WindowResized>()
+            .add_message::<WindowScaleFactorChanged>();
+        let window_entity = app
+            .world_mut()
+            .spawn((PrimaryWindow, Window::default()))
+            .id();
+
+        assert!(resize_embedded_window(
+            app.world_mut(),
+            800.0,
+            600.0,
+            2.0,
+            true,
+        ));
+
+        let window = app
+            .world()
+            .get::<Window>(window_entity)
+            .expect("primary window should remain available");
+        assert_eq!(window.resolution.physical_width(), 1_600);
+        assert_eq!(window.resolution.physical_height(), 1_200);
+
+        let resized = app.world().resource::<Messages<WindowResized>>();
+        assert_eq!(
+            resized.iter_current_update_messages().next(),
+            Some(&WindowResized {
+                window: window_entity,
+                width: 800.0,
+                height: 600.0,
+            })
+        );
+        let scale_changed = app.world().resource::<Messages<WindowScaleFactorChanged>>();
+        assert_eq!(
+            scale_changed.iter_current_update_messages().next(),
+            Some(&WindowScaleFactorChanged {
+                window: window_entity,
+                scale_factor: 2.0,
+            })
+        );
     }
 
     #[test]

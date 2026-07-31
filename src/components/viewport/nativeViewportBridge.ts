@@ -637,6 +637,15 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       void flushLayout();
     });
   };
+  const flushResizeLayout = () => {
+    if (disposed) return;
+    // WebKit can defer requestAnimationFrame while AppKit is in its live-resize
+    // run loop. ResizeObserver and Tauri window callbacks still arrive, so
+    // send their latest geometry immediately. flushLayout coalesces callbacks
+    // while an IPC request is in flight and prevents a resize-event backlog.
+    layoutRequested = true;
+    void flushLayout();
+  };
   const onHudPointerOver = (event: PointerEvent) => {
     const next = nativeHudControl(event.target);
     if (next === hoveredHudControl) return;
@@ -667,7 +676,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       // the WKWebView without changing the final DOM rectangle. Epoch makes
       // those lifecycle passes reach Rust even when CSS geometry deduplicates.
       layoutEpoch += 1;
-      scheduleLayout();
+      flushResizeLayout();
     };
     forceLayout();
     for (const timer of settleTimers) window.clearTimeout(timer);
@@ -678,8 +687,9 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   };
 
   const observedLayoutElements = new Set<Element>();
-  const resize = new ResizeObserver(scheduleLayout);
-  resize.observe(container);
+  const viewportResize = new ResizeObserver(flushResizeLayout);
+  const overlayResize = new ResizeObserver(scheduleLayout);
+  viewportResize.observe(container);
   const refreshObservedLayoutElements = () => {
     const next = new Set(
       document.querySelectorAll(
@@ -688,14 +698,14 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     );
     for (const element of observedLayoutElements) {
       if (!next.has(element)) {
-        resize.unobserve(element);
+        overlayResize.unobserve(element);
         observedLayoutElements.delete(element);
       }
     }
     for (const element of next) {
       if (observedLayoutElements.has(element)) continue;
       observedLayoutElements.add(element);
-      resize.observe(element);
+      overlayResize.observe(element);
     }
   };
   refreshObservedLayoutElements();
@@ -811,7 +821,8 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     if (layoutFrame !== 0) cancelAnimationFrame(layoutFrame);
     if (probeTimer !== 0) window.clearTimeout(probeTimer);
     for (const timer of settleTimers) window.clearTimeout(timer);
-    resize.disconnect();
+    viewportResize.disconnect();
+    overlayResize.disconnect();
     mutation.disconnect();
     window.removeEventListener('resize', settleLayout);
     window.visualViewport?.removeEventListener('resize', settleLayout);
