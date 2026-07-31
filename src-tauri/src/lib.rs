@@ -7,8 +7,8 @@
 //! path the WASM host uses, so native and browser behavior are identical.
 //! All modeling logic lives in the engine crates, never here.
 
-mod session_bridge;
 pub mod native_viewport;
+mod session_bridge;
 mod six_dof_mouse;
 mod state;
 
