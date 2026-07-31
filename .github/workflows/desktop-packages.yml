@@ -115,6 +115,9 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     env:
+      # Pull-request/manual packages retain symbols for diagnostics. A v* tag
+      # is the production boundary and must ship a stripped Rust executable.
+      CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
       VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
 
@@ -246,6 +249,10 @@ jobs:
     if: needs.classify_changes.outputs.macos_should_build == 'true'
     runs-on: macos-15
     timeout-minutes: 120
+    env:
+      # Pull-request/manual packages retain symbols for diagnostics. A v* tag
+      # is the production boundary and must ship a stripped Rust executable.
+      CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
 
     steps:
       - name: Check out noBS CAD

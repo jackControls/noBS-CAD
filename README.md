@@ -188,6 +188,21 @@ src-tauri/target/release/bundle/macos/noBS CAD.app
 src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 ```
 
+Development packages intentionally retain Rust symbols for crash diagnosis.
+The desktop packaging workflow treats a `v*` Git tag as the production
+boundary and sets `CARGO_PROFILE_RELEASE_STRIP=symbols` for both macOS and
+Windows. To reproduce a stripped production package locally, set that variable
+before running the platform bundle command:
+
+```sh
+CARGO_PROFILE_RELEASE_STRIP=symbols npm run bundle:macos
+```
+
+```powershell
+$env:CARGO_PROFILE_RELEASE_STRIP = "symbols"
+npm run bundle:windows:portable
+```
+
 See [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md) for
 native SDK overrides, the Apple-silicon GitHub Actions build, and packaging
 details.
