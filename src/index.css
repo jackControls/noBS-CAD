@@ -178,3 +178,11 @@ body {
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Tabs stay a fixed ribbon-height control even when the document list scrolls. */
+.project-tab-scroll {
+  scrollbar-width: none;
+}
+.project-tab-scroll::-webkit-scrollbar {
+  display: none;
+}

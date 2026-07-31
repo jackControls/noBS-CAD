@@ -1,6 +1,6 @@
 /**
- * Single-document lifecycle regression:
- * close/new behavior plus authoritative Rename, Save, and Save As naming.
+ * Multi-document lifecycle regression:
+ * new/switch/close tab behavior plus authoritative Rename, Save, and Save As.
  */
 import assert from 'node:assert/strict';
 import { strFromU8, unzipSync } from 'fflate';
@@ -8,7 +8,8 @@ import { chromium } from 'playwright';
 
 const BASE = 'http://localhost:7199';
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const page = await context.newPage();
 await page.addInitScript(() => {
   window.__testFiles = {};
   window.__savePickerCalls = [];
@@ -42,18 +43,6 @@ const pageErrors = [];
 page.on('pageerror', (error) => pageErrors.push(String(error)));
 
 const state = () => page.evaluate(() => window.__appStore.getState());
-const renameVisibleDocument = (name, dirty = false) =>
-  page.evaluate(
-    ({ nextName, nextDirty }) => {
-      const current = window.__appStore.getState().document;
-      window.__appStore.setState({
-        document: { ...current, name: nextName },
-        dirty: nextDirty,
-        projectFileName: `${nextName}.nbcad`,
-      });
-    },
-    { nextName: name, nextDirty: dirty },
-  );
 const waitForFreshDocument = () =>
   page.waitForFunction(() => {
     const app = window.__appStore.getState();
@@ -94,52 +83,95 @@ const renameThroughMenu = async (name) => {
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => window.__appStore.getState().document !== null);
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document !== null &&
+      window.__appStore.getState().projectTabs.length === 1,
+  );
 
-  const closeButton = () => page.getByRole('button', { name: 'Close document' });
+  const closeButton = () =>
+    page.getByRole('button', { name: 'Close document', exact: true });
   const newButton = page.getByRole('button', { name: 'New design' });
 
-  await renameVisibleDocument('Close Me');
-  await closeButton().click();
-  await waitForFreshDocument();
-  assert.equal(
-    await closeButton().count(),
-    1,
-    'closing the current design immediately opens a fresh document',
-  );
-  assert.equal(
-    await page.getByRole('button', { name: 'Create Sketch' }).first().isDisabled(),
-    false,
-    'modeling commands remain available in the fresh design',
-  );
-
-  await renameVisibleDocument('Replace Me');
+  await renameThroughMenu('First Design');
   await newButton.click();
   await waitForFreshDocument();
   let app = await state();
+  assert.equal(app.projectTabs.length, 2, 'New opens a second document tab');
+  assert.equal(
+    await page.getByRole('tab', { name: 'First Design' }).count(),
+    1,
+    'the previous design remains available',
+  );
   assert.equal(app.document.name, 'Untitled');
   assert.equal(app.document.features.length, 0);
   assert.equal(app.finishedSketches.length, 0);
   assert.equal(app.solidScene.bodies.length, 0);
   assert.equal(app.dirty, false);
 
-  await renameVisibleDocument('Unsaved Design', true);
+  await renameThroughMenu('Second Design');
+  await page.getByRole('tab', { name: 'First Design' }).click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().document?.name === 'First Design',
+  );
+  app = await state();
+  assert.equal(app.projectTabs.length, 2);
+  assert.equal(app.dirty, true, 'each tab restores its own dirty state');
+
+  await page.getByRole('tab', { name: 'Second Design' }).click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().document?.name === 'Second Design',
+  );
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem('nbcad:recovery:v1');
+    if (!raw) return false;
+    try {
+      return JSON.parse(raw).tabs?.length === 2;
+    } catch {
+      return false;
+    }
+  });
+  assert.deepEqual(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('nbcad:recovery:v1')).tabs
+        .map((tab) => tab.name)
+        .sort(),
+    ),
+    ['First Design', 'Second Design'],
+    'crash recovery retains every dirty document tab',
+  );
   const cancelConfirmation = nextConfirmation(false);
   await closeButton().click();
   assert.match(await cancelConfirmation, /discard its unsaved changes/i);
   app = await state();
-  assert.equal(app.document.name, 'Unsaved Design', 'Cancel keeps the design open');
+  assert.equal(app.document.name, 'Second Design', 'Cancel keeps the tab open');
   assert.equal(app.dirty, true, 'Cancel preserves unsaved state');
+  assert.equal(app.projectTabs.length, 2);
 
   const discardConfirmation = nextConfirmation(true);
   await closeButton().click();
   assert.match(await discardConfirmation, /discard its unsaved changes/i);
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document?.name === 'First Design' &&
+      window.__appStore.getState().projectTabs.length === 1,
+  );
+  app = await state();
+  assert.equal(app.document.name, 'First Design', 'closing activates the adjacent tab');
+  assert.equal(app.dirty, true);
+  assert.equal(await closeButton().count(), 1);
+
+  const closeLastConfirmation = nextConfirmation(true);
+  await closeButton().click();
+  assert.match(await closeLastConfirmation, /discard its unsaved changes/i);
   await waitForFreshDocument();
   app = await state();
-  assert.equal(app.document.name, 'Untitled', 'Discard opens a fresh design');
-  assert.equal(app.dirty, false);
-  assert.equal(app.projectFileName, null);
-  assert.equal(await closeButton().count(), 1);
+  assert.equal(app.projectTabs.length, 1, 'closing the last tab leaves one fresh design');
+  assert.equal(
+    await page.getByRole('button', { name: 'Create Sketch' }).first().isDisabled(),
+    false,
+    'modeling commands remain available in the fresh design',
+  );
 
   const ribbonTools = await page.getByTestId('ribbon-tools').boundingBox();
   const appControls = await page.getByTestId('app-menu-controls').boundingBox();
@@ -229,9 +261,88 @@ try {
     'Internal Project Name',
     'ordinary Save persists an explicit rename instead of restoring the filename',
   );
+
+  await newButton.click();
+  await waitForFreshDocument();
+  await renameThroughMenu('Other Project');
+  await page.evaluate(() => {
+    window.__nextSaveName = 'Other Project File.nbcad';
+  });
+  await page.getByTestId('file-menu-button').click();
+  await page.getByRole('menuitem', { name: 'Save As…' }).click();
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().projectFileName ===
+        'Other Project File.nbcad' &&
+      !window.__appStore.getState().dirty,
+  );
+
+  await page.getByRole('tab', { name: 'Internal Project Name' }).click();
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document?.name === 'Internal Project Name' &&
+      window.__appStore.getState().projectFileName === 'Saved From Dialog.nbcad',
+  );
+  await renameThroughMenu('Internal Target Reused');
+  await page.getByTestId('file-menu-button').click();
+  await page.getByRole('menuitem', { name: /^Save(?! As)/ }).click();
+  await page.waitForFunction(() => !window.__appStore.getState().dirty);
+  assert.equal(
+    await page.evaluate(() => window.__savePickerCalls.length),
+    2,
+    'switching tabs restores each document\'s own reusable Save target',
+  );
+  bytes = Uint8Array.from(
+    await page.evaluate(() => window.__testFiles['Saved From Dialog.nbcad']),
+  );
+  model = JSON.parse(strFromU8(unzipSync(bytes)['model.json']));
+  assert.equal(model.document.name, 'Internal Target Reused');
+
+  await renameThroughMenu('Recovery One');
+  await newButton.click();
+  await waitForFreshDocument();
+  await renameThroughMenu('Recovery Two');
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem('nbcad:recovery:v1');
+    if (!raw) return false;
+    try {
+      return JSON.parse(raw).tabs?.length === 2;
+    } catch {
+      return false;
+    }
+  });
+
+  const recoveryPage = await context.newPage();
+  const recoveryErrors = [];
+  recoveryPage.on('pageerror', (error) => recoveryErrors.push(String(error)));
+  const recoveryPrompt = new Promise((resolve) => {
+    recoveryPage.once('dialog', async (dialog) => {
+      assert.match(dialog.message(), /recover the last unsaved/i);
+      await dialog.accept();
+      resolve();
+    });
+  });
+  await recoveryPage.goto(BASE, { waitUntil: 'networkidle' });
+  await recoveryPrompt;
+  await recoveryPage.waitForFunction(
+    () =>
+      window.__appStore.getState().projectTabs.length === 2 &&
+      window.__appStore.getState().document?.name === 'Recovery Two',
+  );
+  assert.deepEqual(
+    (await recoveryPage.getByRole('tab').allTextContents()).sort(),
+    ['Recovery One', 'Recovery Two'],
+    'startup recovery restores all unsaved document tabs',
+  );
+  assert.equal(
+    await recoveryPage.evaluate(() => window.__appStore.getState().dirty),
+    true,
+  );
+  assert.deepEqual(recoveryErrors, []);
+  await recoveryPage.close();
   assert.deepEqual(pageErrors, []);
 
-  console.log('  [ok] lifecycle, menu hierarchy, Rename, Save, and Save As');
+  console.log('  [ok] document tabs, menu hierarchy, Rename, Save, and Save As');
 } finally {
   await browser.close();
 }

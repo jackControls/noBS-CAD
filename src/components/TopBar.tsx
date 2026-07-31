@@ -26,6 +26,7 @@ import {
   saveProject,
 } from '../files/projectFiles';
 import { useAppStore } from '../store/appStore';
+import { switchProjectTab } from '../files/projectTabs';
 
 export function AppMenuControls() {
   const { t } = useTranslation();
@@ -33,11 +34,13 @@ export function AppMenuControls() {
   const selectedBody = useAppStore((s) => s.selectedBody);
   const bodyCount = useAppStore((s) => s.solidScene.bodies.length);
   const modelBusy = useAppStore((s) => s.solidBusy);
+  const projectBusy = useAppStore((s) => s.projectBusy);
+  const setProjectBusy = useAppStore((s) => s.setProjectBusy);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const interactionBusy = busy || modelBusy;
+  const interactionBusy = busy || modelBusy || projectBusy;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -49,8 +52,10 @@ export function AppMenuControls() {
   }, [menuOpen]);
 
   const run = (action: () => Promise<unknown>) => {
+    if (useAppStore.getState().projectBusy) return;
     setMenuOpen(false);
     setBusy(true);
+    setProjectBusy(true);
     void action()
       .catch((error) => {
         useAppStore.getState().setConstraintDialog({
@@ -58,7 +63,10 @@ export function AppMenuControls() {
           message: error instanceof Error ? error.message : String(error),
         });
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        setBusy(false);
+        useAppStore.getState().setProjectBusy(false);
+      });
   };
 
   const openSettings = () => {
@@ -211,10 +219,21 @@ export function ProjectTabBar() {
   const document = useAppStore((s) => s.document);
   const dirty = useAppStore((s) => s.dirty);
   const projectFileName = useAppStore((s) => s.projectFileName);
+  const projectTabs = useAppStore((s) => s.projectTabs);
+  const activeProjectTabId = useAppStore((s) => s.activeProjectTabId);
   const modelBusy = useAppStore((s) => s.solidBusy);
+  const projectBusy = useAppStore((s) => s.projectBusy);
   const [busy, setBusy] = useState(false);
-  const docName = document?.name ?? t('app.untitledDocument');
-  const interactionBusy = busy || modelBusy;
+  const activeTabRef = useRef<HTMLDivElement>(null);
+  const interactionBusy = busy || modelBusy || projectBusy;
+
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }, [activeProjectTabId]);
 
   const run = (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -233,39 +252,81 @@ export function ProjectTabBar() {
       data-testid="project-tabs"
       data-tauri-drag-region
       data-native-viewport-overlay
-      className="flex h-7 shrink-0 items-stretch border-b border-edge bg-panel"
+      role="tablist"
+      aria-label={t('file.openDocuments')}
+      className="project-tab-scroll flex h-7 shrink-0 items-stretch overflow-x-auto overflow-y-hidden border-b border-edge bg-panel"
     >
-      {document !== null && (
-        <div className="flex min-w-48 max-w-72 items-center gap-1.5 border-r border-t-2 border-edge border-t-accent bg-header px-3 text-xs text-ink">
-          <span
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              dirty ? 'bg-[#e8963c]' : 'bg-mute/40'
+      {projectTabs.map((tab, index) => {
+        const active = tab.id === activeProjectTabId;
+        const docName = active
+          ? document?.name ?? tab.name
+          : tab.name;
+        const tabDirty = active ? dirty : tab.dirty;
+        const fileName = active ? projectFileName : tab.fileName;
+        const closeLabel = active
+          ? t('topbar.closeDocument')
+          : `${t('topbar.closeDocument')}: ${docName}`;
+        const switchRelative = (offset: number) => {
+          const target = projectTabs[index + offset];
+          if (target) run(() => switchProjectTab(target.id));
+        };
+        return (
+          <div
+            key={tab.id}
+            ref={active ? activeTabRef : undefined}
+            data-project-tab-id={tab.id}
+            className={`flex min-w-48 max-w-72 shrink-0 items-center gap-1.5 border-r border-t-2 border-edge px-3 text-xs text-ink ${
+              active
+                ? 'border-t-accent bg-header'
+                : 'border-t-transparent bg-panel text-mute hover:bg-header'
             }`}
-            title={dirty ? t('file.unsaved') : t('file.saved')}
-          />
-          <button
-            type="button"
-            data-testid="project-title"
-            title={`${projectFileName ?? docName} — ${t('file.renameHint')}`}
-            aria-label={t('file.rename')}
-            disabled={interactionBusy}
-            onDoubleClick={() => run(renameProject)}
-            className="min-w-0 flex-1 truncate rounded px-1 text-left hover:bg-edge disabled:pointer-events-none"
           >
-            {docName}
-          </button>
-          <button
-            type="button"
-            title={t('topbar.closeDocument')}
-            aria-label={t('topbar.closeDocument')}
-            disabled={interactionBusy}
-            onClick={() => run(closeProject)}
-            className="shrink-0 rounded p-0.5 text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50"
-          >
-            <X size={11} />
-          </button>
-        </div>
-      )}
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                tabDirty ? 'bg-[#e8963c]' : 'bg-mute/40'
+              }`}
+              title={tabDirty ? t('file.unsaved') : t('file.saved')}
+            />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              data-testid={active ? 'project-title' : 'project-tab'}
+              title={`${fileName ?? docName}${active ? ` — ${t('file.renameHint')}` : ''}`}
+              disabled={interactionBusy}
+              onClick={() => {
+                if (!active) run(() => switchProjectTab(tab.id));
+              }}
+              onDoubleClick={() => {
+                if (active) run(renameProject);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault();
+                  switchRelative(-1);
+                } else if (event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  switchRelative(1);
+                }
+              }}
+              className="min-w-0 flex-1 truncate rounded px-1 text-left hover:bg-edge disabled:pointer-events-none"
+            >
+              {docName}
+            </button>
+            <button
+              type="button"
+              title={closeLabel}
+              aria-label={closeLabel}
+              disabled={interactionBusy}
+              onClick={() => run(() => closeProject(tab.id))}
+              className="shrink-0 rounded p-0.5 text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

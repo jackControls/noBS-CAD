@@ -87,6 +87,16 @@ function bodyBrowserNode(document: DocumentDto | null, bodyId: number | null): N
  */
 export type AppMode = 'solid' | 'pickPlane' | 'sketch';
 
+/** Lightweight window-level document metadata. The active OCCT/Bevy model
+ * remains in the engine; inactive model snapshots and native save targets are
+ * intentionally kept outside the inspectable UI store. */
+export interface ProjectTabSummary {
+  id: string;
+  name: string;
+  fileName: string | null;
+  dirty: boolean;
+}
+
 /** Sketch tools (M1a–M1c). `null` = select/edit. */
 export type SketchTool =
   | 'line'
@@ -252,6 +262,10 @@ interface AppState {
   dirty: boolean;
   /** Current project file name, without exposing the native path. */
   projectFileName: string | null;
+  /** Open documents in this application window. */
+  projectTabs: ProjectTabSummary[];
+  /** Tab whose model is currently hydrated into the single native engine. */
+  activeProjectTabId: string | null;
   /** Which engine host the frontend is talking to (D8). */
   engineKind: 'tauri' | 'wasm' | null;
   /** Live snapshot of the active sketch session (null outside sketch mode). */
@@ -333,6 +347,8 @@ interface AppState {
   constructionPlaneDialog: { kind: ConstructionPlaneKind; featureId: number } | null;
   bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
   sketchPatternDialog: 'rectangular' | 'circular' | null;
+  /** File chooser/export operation that must keep the active tab stable. */
+  projectBusy: boolean;
   solidBusy: boolean;
   palette: Record<PaletteOptionKey, boolean>;
 
@@ -460,6 +476,7 @@ interface AppState {
   closeBodyFeatureDialog: () => void;
   openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
   closeSketchPatternDialog: () => void;
+  setProjectBusy: (busy: boolean) => void;
   setSolidBusy: (busy: boolean) => void;
   setPaletteOption: (key: PaletteOptionKey, value: boolean) => void;
 }
@@ -533,6 +550,8 @@ export const useAppStore = create<AppState>()((set) => ({
   document: null,
   dirty: false,
   projectFileName: null,
+  projectTabs: [],
+  activeProjectTabId: null,
   engineKind: null,
   activeSketch: null,
   finishedSketches: [],
@@ -584,6 +603,7 @@ export const useAppStore = create<AppState>()((set) => ({
   constructionPlaneDialog: null,
   bodyFeatureDialog: null,
   sketchPatternDialog: null,
+  projectBusy: false,
   solidBusy: false,
   palette: { ...DEFAULT_PALETTE },
 
@@ -1428,6 +1448,8 @@ export const useAppStore = create<AppState>()((set) => ({
     }),
 
   closeSketchPatternDialog: () => set({ sketchPatternDialog: null }),
+
+  setProjectBusy: (busy) => set({ projectBusy: busy }),
 
   setSolidBusy: (busy) => set({ solidBusy: busy }),
 

@@ -43,10 +43,15 @@ import { BodyAppearancePanel } from './components/BodyAppearancePanel';
 import { SketchPatternDialog } from './components/SketchPatternDialog';
 import {
   installProjectRecovery,
+  newProject,
   offerProjectRecovery,
   openProject,
   saveProject,
 } from './files/projectFiles';
+import {
+  hasUnsavedProjects,
+  initializeProjectTabs,
+} from './files/projectTabs';
 import { SYSTEM_DARK_QUERY } from './theme';
 
 export default function App() {
@@ -62,7 +67,10 @@ export default function App() {
     if (initialized.current) return;
     initialized.current = true;
     void loadDocument()
-      .then(() => offerProjectRecovery())
+      .then(async () => {
+        await offerProjectRecovery();
+        await initializeProjectTabs();
+      })
       .catch((error) => {
         useAppStore.getState().setConstraintDialog({
           titleKey: 'file.errorTitle',
@@ -83,7 +91,7 @@ export default function App() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!useAppStore.getState().dirty) return;
+      if (!hasUnsavedProjects()) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -100,26 +108,33 @@ export default function App() {
       // Never steal keys from text inputs.
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const s = useAppStore.getState();
+      const runProjectAction = (action: () => Promise<unknown>) => {
+        if (s.projectBusy || s.solidBusy) return;
+        s.setProjectBusy(true);
+        void action()
+          .catch((error) => {
+            useAppStore.getState().setConstraintDialog({
+              titleKey: 'file.errorTitle',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(() => useAppStore.getState().setProjectBusy(false));
+      };
 
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (s.document === null) return;
-        void saveProject(e.shiftKey).catch((error) => {
-          s.setConstraintDialog({
-            titleKey: 'file.errorTitle',
-            message: error instanceof Error ? error.message : String(error),
-          });
-        });
+        runProjectAction(() => saveProject(e.shiftKey));
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
         e.preventDefault();
-        void openProject().catch((error) => {
-          s.setConstraintDialog({
-            titleKey: 'file.errorTitle',
-            message: error instanceof Error ? error.message : String(error),
-          });
-        });
+        runProjectAction(openProject);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        runProjectAction(newProject);
         return;
       }
 
