@@ -3,7 +3,8 @@
 //! Jack §4 hardened control flow:
 //! - `--dry-run` performs zero build / copy / write
 //! - `--clients` is required for any real install write
-//! - config updates use `.bak.<pid>` + temp+rename
+//! - duplicate client names are collapsed before any config is touched
+//! - config updates use `.bak.<pid>` + portable-permission-preserving temp+rename
 //! - supported clients: cursor, vscode, claude, opencode (no Grok)
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -102,9 +103,9 @@ impl ClientKind {
             "vscode" | "code" | "vs-code" => Ok(Self::VsCode),
             "claude" => Ok(Self::Claude),
             "opencode" | "open-code" => Ok(Self::OpenCode),
-            "grok" | "xai" => bail!(
-                "client '{name}' is not supported (no Grok until an official MCP contract)"
-            ),
+            "grok" | "xai" => {
+                bail!("client '{name}' is not supported (no Grok until an official MCP contract)")
+            }
             other => bail!("unknown client '{other}' (supported: cursor,vscode,claude,opencode)"),
         }
     }
@@ -116,7 +117,10 @@ fn parse_clients(list: &str) -> Result<Vec<ClientKind>> {
         if part.trim().is_empty() {
             continue;
         }
-        out.push(ClientKind::parse(part)?);
+        let kind = ClientKind::parse(part)?;
+        if !out.contains(&kind) {
+            out.push(kind);
+        }
     }
     if out.is_empty() {
         bail!("--clients list is empty");
@@ -229,7 +233,7 @@ enum ConfigFormat {
     McpServers,
     /// VS Code `{ "servers": { "name": { type, command, args, env } } }`
     VsCodeServers,
-    /// OpenCode `{ "mcp": { "name": { type, command, ... } } }` or nested `mcp.servers`
+    /// OpenCode v2 `{ "mcp": { "servers": { "name": { type, command, ... } } } }`
     OpenCodeMcp,
 }
 
@@ -298,11 +302,7 @@ fn discover_targets(kind: ClientKind) -> Vec<Target> {
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| desktop.clone());
-                targets.extend(detect_json(
-                    desktop,
-                    &[marker],
-                    ConfigFormat::McpServers,
-                ));
+                targets.extend(detect_json(desktop, &[marker], ConfigFormat::McpServers));
             } else {
                 let desktop = home_path(&[
                     "Library",
@@ -314,11 +314,7 @@ fn discover_targets(kind: ClientKind) -> Vec<Target> {
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| desktop.clone());
-                targets.extend(detect_json(
-                    desktop,
-                    &[marker],
-                    ConfigFormat::McpServers,
-                ));
+                targets.extend(detect_json(desktop, &[marker], ConfigFormat::McpServers));
             }
             targets
         }
@@ -390,15 +386,10 @@ fn xdg_config_path(parts: &[&str]) -> PathBuf {
     base
 }
 
-fn upsert_target(
-    target: &Target,
-    server_name: &str,
-    launch: &ServerLaunch,
-) -> Result<Action> {
+fn upsert_target(target: &Target, server_name: &str, launch: &ServerLaunch) -> Result<Action> {
     if let Some(parent) = target.path.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
     }
 
@@ -431,12 +422,25 @@ fn upsert_target(
 }
 
 /// Backup existing file as `path.bak.<pid>`, then write via temp + rename.
+///
+/// The existing portable permissions (Unix mode bits or the Windows read-only
+/// flag) are applied to the staging file before any config content is written.
 pub fn atomic_write_with_backup(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
 
-    if path.exists() {
+    let original_permissions = if path.exists() {
+        Some(
+            fs::metadata(path)
+                .with_context(|| format!("read metadata {}", path.display()))?
+                .permissions(),
+        )
+    } else {
+        None
+    };
+
+    if original_permissions.is_some() {
         let backup = path.with_file_name(format!(
             "{}.bak.{}",
             path.file_name()
@@ -444,13 +448,8 @@ pub fn atomic_write_with_backup(path: &Path, contents: &str) -> Result<()> {
                 .ok_or_else(|| anyhow!("invalid config path {}", path.display()))?,
             std::process::id()
         ));
-        fs::copy(path, &backup).with_context(|| {
-            format!(
-                "backup {} → {}",
-                path.display(),
-                backup.display()
-            )
-        })?;
+        fs::copy(path, &backup)
+            .with_context(|| format!("backup {} → {}", path.display(), backup.display()))?;
     }
 
     let parent = path
@@ -468,23 +467,26 @@ pub fn atomic_write_with_backup(path: &Path, contents: &str) -> Result<()> {
     {
         let mut file = fs::File::create(&staging)
             .with_context(|| format!("create temp {}", staging.display()))?;
+        if let Some(permissions) = original_permissions {
+            file.set_permissions(permissions)
+                .with_context(|| format!("preserve permissions on {}", staging.display()))?;
+        }
         file.write_all(contents.as_bytes())
             .with_context(|| format!("write temp {}", staging.display()))?;
         file.sync_all()
             .with_context(|| format!("sync temp {}", staging.display()))?;
     }
 
-    fs::rename(&staging, path).with_context(|| {
-        format!(
-            "rename {} → {}",
-            staging.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&staging, path)
+        .with_context(|| format!("rename {} → {}", staging.display(), path.display()))?;
     Ok(())
 }
 
-fn upsert_mcp_servers_json(original: &str, server_name: &str, launch: &ServerLaunch) -> Result<String> {
+fn upsert_mcp_servers_json(
+    original: &str,
+    server_name: &str,
+    launch: &ServerLaunch,
+) -> Result<String> {
     let mut root = parse_json_object(original, json!({ "mcpServers": {} }))
         .context("parse JSON (mcpServers)")?;
     let obj = root
@@ -526,12 +528,18 @@ fn upsert_vscode_servers_json(
     Ok(serde_json::to_string_pretty(&root)?)
 }
 
-fn upsert_opencode_json(original: &str, server_name: &str, launch: &ServerLaunch) -> Result<String> {
+fn upsert_opencode_json(
+    original: &str,
+    server_name: &str,
+    launch: &ServerLaunch,
+) -> Result<String> {
     let mut root = parse_json_object(
         original,
         json!({
             "$schema": "https://opencode.ai/config.json",
-            "mcp": {}
+            "mcp": {
+                "servers": {}
+            }
         }),
     )
     .context("parse JSON (OpenCode)")?;
@@ -547,16 +555,18 @@ fn upsert_opencode_json(original: &str, server_name: &str, launch: &ServerLaunch
     let entry = json!({
         "type": "local",
         "command": [path_string(&launch.command)],
-        "enabled": true,
         "environment": Value::Object(launch.env.clone()),
     });
 
-    // Prefer nested `mcp.servers` when that object already exists (OpenCode v2).
-    if let Some(servers) = mcp.get_mut("servers").and_then(Value::as_object_mut) {
-        servers.insert(server_name.to_string(), entry);
-    } else {
-        mcp.insert(server_name.to_string(), entry);
-    }
+    // Migrate an entry written by the pre-v2 installer, then always use the
+    // OpenCode v2 `mcp.servers` schema. V2 auto-connects unless `disabled`.
+    mcp.remove(server_name);
+    let servers = mcp
+        .entry("servers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("mcp.servers must be an object"))?;
+    servers.insert(server_name.to_string(), entry);
     Ok(serde_json::to_string_pretty(&root)?)
 }
 
@@ -620,49 +630,53 @@ fn parse_json_object(original: &str, empty_default: Value) -> Result<Value> {
 
 fn strip_jsonc_comments(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
+    let mut chars = input.chars().peekable();
     let mut in_string = false;
     let mut escaped = false;
-    while i < bytes.len() {
-        let b = bytes[i];
+    while let Some(ch) = chars.next() {
         if in_string {
-            out.push(b as char);
+            out.push(ch);
             if escaped {
                 escaped = false;
-            } else if b == b'\\' {
+            } else if ch == '\\' {
                 escaped = true;
-            } else if b == b'"' {
+            } else if ch == '"' {
                 in_string = false;
             }
-            i += 1;
             continue;
         }
-        if b == b'"' {
+        if ch == '"' {
             in_string = true;
             out.push('"');
-            i += 1;
             continue;
         }
-        if b == b'/' && i + 1 < bytes.len() {
-            if bytes[i + 1] == b'/' {
-                i += 2;
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
+        if ch == '/' {
+            if chars.peek() == Some(&'/') {
+                chars.next();
+                for comment_ch in chars.by_ref() {
+                    if comment_ch == '\n' {
+                        out.push('\n');
+                        break;
+                    }
                 }
                 continue;
             }
-            if bytes[i + 1] == b'*' {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
+            if chars.peek() == Some(&'*') {
+                chars.next();
+                let mut saw_star = false;
+                for comment_ch in chars.by_ref() {
+                    if saw_star && comment_ch == '/' {
+                        break;
+                    }
+                    if comment_ch == '\n' {
+                        out.push('\n');
+                    }
+                    saw_star = comment_ch == '*';
                 }
-                i = (i + 2).min(bytes.len());
                 continue;
             }
         }
-        out.push(b as char);
-        i += 1;
+        out.push(ch);
     }
     out
 }
@@ -958,11 +972,34 @@ mod tests {
 
     #[test]
     fn options_write_with_clients_ok() {
-        let options =
-            Options::parse(["--clients".into(), "cursor,vscode".into(), "--no-build".into()].into_iter())
-                .unwrap();
+        let options = Options::parse(
+            [
+                "--clients".into(),
+                "cursor,vscode".into(),
+                "--no-build".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
         assert!(!options.dry_run);
         assert!(!options.build);
+        assert_eq!(
+            options.clients.as_deref(),
+            Some(&[ClientKind::Cursor, ClientKind::VsCode][..])
+        );
+    }
+
+    #[test]
+    fn options_duplicate_clients_are_processed_once() {
+        let options = Options::parse(
+            [
+                "--clients".into(),
+                "cursor,CURSOR,vscode,cursor".into(),
+                "--no-build".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
         assert_eq!(
             options.clients.as_deref(),
             Some(&[ClientKind::Cursor, ClientKind::VsCode][..])
@@ -979,10 +1016,9 @@ mod tests {
                 "unexpected error for {name}: {msg}"
             );
         }
-        let err = Options::parse(
-            [String::from("--clients"), String::from("cursor,grok")].into_iter(),
-        )
-        .unwrap_err();
+        let err =
+            Options::parse([String::from("--clients"), String::from("cursor,grok")].into_iter())
+                .unwrap_err();
         assert!(format!("{err:#}").contains("not supported"));
     }
 
@@ -1000,10 +1036,7 @@ mod tests {
             value["mcpServers"]["nobs-cad"]["command"],
             "/repo/mcp-server/target/release/nbcad-mcp"
         );
-        assert_eq!(
-            value["mcpServers"]["nobs-cad"]["env"]["OCCT_ROOT"],
-            "/occt"
-        );
+        assert_eq!(value["mcpServers"]["nobs-cad"]["env"]["OCCT_ROOT"], "/occt");
     }
 
     #[test]
@@ -1027,14 +1060,43 @@ mod tests {
         let value: Value = serde_json::from_str(&next).unwrap();
         assert!(value["mcp"]["servers"]["keep"].is_object());
         assert_eq!(value["mcp"]["servers"]["nobs-cad"]["type"], "local");
+        assert!(value["mcp"]["servers"]["nobs-cad"].get("enabled").is_none());
     }
 
     #[test]
-    fn upsert_opencode_flat_mcp_when_no_servers_key() {
-        let next = upsert_opencode_json("{}", "nobs-cad", &launch_fixture()).unwrap();
+    fn upsert_opencode_fresh_config_uses_v2_schema() {
+        let next = upsert_opencode_json("", "nobs-cad", &launch_fixture()).unwrap();
         let value: Value = serde_json::from_str(&next).unwrap();
-        assert_eq!(value["mcp"]["nobs-cad"]["type"], "local");
-        assert!(value["mcp"].get("servers").is_none());
+        let entry = &value["mcp"]["servers"]["nobs-cad"];
+        assert_eq!(value["$schema"], "https://opencode.ai/config.json");
+        assert_eq!(entry["type"], "local");
+        assert_eq!(
+            entry["command"][0],
+            "/repo/mcp-server/target/release/nbcad-mcp"
+        );
+        assert!(entry.get("enabled").is_none());
+        assert!(value["mcp"].get("nobs-cad").is_none());
+    }
+
+    #[test]
+    fn upsert_opencode_migrates_legacy_flat_entry() {
+        let original = r#"{
+  "mcp": {
+    "nobs-cad": {
+      "type": "local",
+      "command": ["old"],
+      "enabled": true
+    }
+  }
+}"#;
+        let next = upsert_opencode_json(original, "nobs-cad", &launch_fixture()).unwrap();
+        let value: Value = serde_json::from_str(&next).unwrap();
+        assert!(value["mcp"].get("nobs-cad").is_none());
+        assert_eq!(
+            value["mcp"]["servers"]["nobs-cad"]["command"][0],
+            "/repo/mcp-server/target/release/nbcad-mcp"
+        );
+        assert!(value["mcp"]["servers"]["nobs-cad"].get("enabled").is_none());
     }
 
     #[test]
@@ -1057,11 +1119,7 @@ mod tests {
         assert_eq!(written, "{\"new\":true}\n");
 
         let backup = dir.join(format!("mcp.json.bak.{}", std::process::id()));
-        assert!(
-            backup.is_file(),
-            "expected backup at {}",
-            backup.display()
-        );
+        assert!(backup.is_file(), "expected backup at {}", backup.display());
         assert_eq!(fs::read_to_string(&backup).unwrap(), "{\"old\":true}\n");
 
         let _ = fs::remove_dir_all(&dir);
@@ -1082,7 +1140,36 @@ mod tests {
 
         atomic_write_with_backup(&path, "{\"ok\":1}\n").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"ok\":1}\n");
-        assert!(!dir.join(format!("fresh.json.bak.{}", std::process::id())).exists());
+        assert!(!dir
+            .join(format!("fresh.json.bak.{}", std::process::id()))
+            .exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_with_backup_preserves_unix_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "nbcad-xtask-atomic-mode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("private.json");
+        fs::write(&path, "{\"secret\":\"old\"}\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        atomic_write_with_backup(&path, "{\"secret\":\"new\"}\n").unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"secret\":\"new\"}\n");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1091,11 +1178,8 @@ mod tests {
     fn parse_json_object_accepts_empty_and_jsonc() {
         let empty = parse_json_object("  \n", json!({ "mcpServers": {} })).unwrap();
         assert!(empty["mcpServers"].is_object());
-        let jsonc = parse_json_object(
-            "{\n  // comment\n  \"mcpServers\": {}\n}\n",
-            json!({}),
-        )
-        .unwrap();
+        let jsonc =
+            parse_json_object("{\n  // comment\n  \"mcpServers\": {}\n}\n", json!({})).unwrap();
         assert!(jsonc["mcpServers"].is_object());
     }
 
@@ -1105,5 +1189,23 @@ mod tests {
         refuse_jsonc_rewrite(&path, "{\n  // keep me\n  \"mcpServers\": {}\n}\n").unwrap_err();
         refuse_jsonc_rewrite(&path, "{\n  \"mcpServers\": {}\n}\n").unwrap();
         refuse_jsonc_rewrite(&path, "").unwrap();
+    }
+
+    #[test]
+    fn jsonc_detection_preserves_unicode_and_string_slashes() {
+        let original = r#"{
+  // 保留这个注释
+  "name": "José 東京",
+  "url": "https://example.com/a/*literal*/",
+  "mcpServers": {}
+}"#;
+        let stripped = strip_jsonc_comments(original);
+        let value: Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(value["name"], "José 東京");
+        assert_eq!(value["url"], "https://example.com/a/*literal*/");
+
+        let path = PathBuf::from("unicode-mcp.json");
+        let error = refuse_jsonc_rewrite(&path, original).unwrap_err();
+        assert!(format!("{error:#}").contains("refusing to rewrite JSONC"));
     }
 }

@@ -50,6 +50,12 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Rust formatting
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw "cargo fmt check failed" }
+
       - name: MSVC environment
         id: msvc
         shell: pwsh
