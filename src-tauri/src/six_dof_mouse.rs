@@ -332,8 +332,12 @@ mod mac_driver {
         fn dlerror() -> *const c_char;
     }
 
-    #[repr(C)]
-    #[derive(Debug, Clone, Copy)]
+    // ConnexionClient.h wraps ConnexionDeviceState in `#pragma pack(push,2)`.
+    // Matching only its field order is not enough: without the 2-byte packing,
+    // Rust inserts four bytes before `time` and every motion axis is read from
+    // the wrong offset.
+    #[repr(C, packed(2))]
+    #[derive(Clone, Copy)]
     struct ConnexionDeviceState {
         version: u16,
         client: u16,
@@ -346,6 +350,24 @@ mod mac_driver {
         axis: [i16; 6],
         address: u16,
         buttons: u32,
+    }
+
+    impl ConnexionDeviceState {
+        fn value(&self) -> i32 {
+            // `value` has 4-byte alignment in Rust but only 2-byte alignment in
+            // the driver ABI.
+            unsafe { std::ptr::addr_of!(self.value).read_unaligned() }
+        }
+
+        fn time(&self) -> u64 {
+            // The packed driver ABI places this 64-bit field at byte 12.
+            unsafe { std::ptr::addr_of!(self.time).read_unaligned() }
+        }
+
+        fn buttons(&self) -> u32 {
+            // The packed driver ABI places this 32-bit field at byte 44.
+            unsafe { std::ptr::addr_of!(self.buttons).read_unaligned() }
+        }
     }
 
     struct CallbackState {
@@ -364,18 +386,20 @@ mod mac_driver {
         // ConnexionClient.h defines the processed axis array as
         // x, y, z, rx, ry, rz. Keep that official order: the shared camera
         // kernel interprets it as right, forward, up and pitch, roll, yaw.
+        let axis = device.axis;
+        let report = device.report;
         MotionPacket {
-            translation: Some([device.axis[0], device.axis[1], device.axis[2]]),
-            rotation: Some([device.axis[3], device.axis[4], device.axis[5]]),
+            translation: Some([axis[0], axis[1], axis[2]]),
+            rotation: Some([axis[3], axis[4], axis[5]]),
             transport: Some("installed_driver"),
-            driver_time: Some(device.time),
-            report_id: device.report.first().copied(),
-            raw_report: Some(device.report.to_vec()),
+            driver_time: Some(device.time()),
+            report_id: report.first().copied(),
+            raw_report: Some(report.to_vec()),
             product_id: None,
             driver_version: Some(device.version),
             command: Some(device.command),
             parameter: Some(device.param),
-            value: Some(device.value),
+            value: Some(device.value()),
             address: Some(device.address),
         }
     }
@@ -403,11 +427,12 @@ mod mac_driver {
             motion.product_id = Some(product_id);
             let _ = callback.app.emit("six-dof-mouse-motion", motion);
         }
+        let buttons = device.buttons();
         if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
-            || device.buttons != callback.previous_buttons
+            || buttons != callback.previous_buttons
         {
-            let newly_pressed = device.buttons & !callback.previous_buttons;
-            callback.previous_buttons = device.buttons;
+            let newly_pressed = buttons & !callback.previous_buttons;
+            callback.previous_buttons = buttons;
             for index in 0..32 {
                 if newly_pressed & (1 << index) != 0 {
                     let _ = callback
@@ -592,7 +617,19 @@ mod mac_driver {
 
         #[test]
         fn connexion_device_state_matches_the_installed_framework_abi() {
-            assert_eq!(std::mem::size_of::<ConnexionDeviceState>(), 56);
+            assert_eq!(std::mem::size_of::<ConnexionDeviceState>(), 48);
+            assert_eq!(std::mem::align_of::<ConnexionDeviceState>(), 2);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, version), 0);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, client), 2);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, command), 4);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, param), 6);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, value), 8);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, time), 12);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, report), 20);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, buttons8), 28);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, axis), 30);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, address), 42);
+            assert_eq!(std::mem::offset_of!(ConnexionDeviceState, buttons), 44);
         }
 
         #[test]
