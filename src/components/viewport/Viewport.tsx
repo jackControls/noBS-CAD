@@ -89,6 +89,11 @@ import {
   syncNativeViewportPreview,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
+import {
+  recordNavigationDiagnostic,
+  registerNavigationDiagnosticContext,
+  toggleNavigationDiagnostics,
+} from '../../input/navigationDiagnostics';
 
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
 const HOME_TARGET = new CAD.Vector3(0, 0, 0);
@@ -341,22 +346,12 @@ export function Viewport() {
     // right = orbit, wheel = zoom. The pointerdown listener is registered
     // BEFORE CadOrbitControls is constructed so the remapping is observed.
     let controlsRef: CadOrbitControls | null = null;
-    let orbitPivotNeedsRefresh = true;
-    let refreshOrbitPivot: () => void = () => undefined;
-    const markOrbitPivotForRefresh = () => {
-      orbitPivotNeedsRefresh = true;
-    };
     // Bevy is event-driven, so the interaction controller should wake only
     // for input/state changes or an animation that is still settling.
     let wakeControllerFrame: () => void = () => undefined;
     const onNavPointerDown = (e: PointerEvent) => {
       if (e.button === 1 && e.shiftKey && controlsRef) {
         controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.ROTATE;
-      }
-      if (e.button === 2 || (e.button === 1 && e.shiftKey)) {
-        refreshOrbitPivot();
-      } else if (e.button === 1) {
-        markOrbitPivotForRefresh();
       }
       cancelCameraAnimation();
       wakeControllerFrame();
@@ -451,6 +446,18 @@ export function Viewport() {
       cancelCameraAnimation();
       wakeControllerFrame();
       const unit = e.deltaMode === 1 ? 16 : 1; // lines → px
+      recordNavigationDiagnostic('touchpad.wheel.raw', {
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        deltaZ: e.deltaZ,
+        deltaMode: e.deltaMode,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        timeStamp: e.timeStamp,
+        unit,
+      });
       if (e.shiftKey) {
         // Shift+swipe = orbit. Same macOS natural-scrolling inversion as
         // pan (owner 2026-07-19): wheel deltas run opposite to pointer
@@ -1648,31 +1655,6 @@ export function Viewport() {
       }
     };
 
-    const navigationPivotRaycaster = new CAD.Raycaster();
-    refreshOrbitPivot = () => {
-      if (!orbitPivotNeedsRefresh) return;
-      if (!solidGroup.visible || solidGroup.children.length === 0) return;
-      // Keep one pivot across every orbit input until pan, dolly, or an
-      // explicit target update changes the user's area of interest. A
-      // time-based refresh can fire between slow touchpad events and switch
-      // to a different face while the model is turning.
-      orbitPivotNeedsRefresh = false;
-      scene.updateMatrixWorld(true);
-      navigationPivotRaycaster.setFromCamera(new CAD.Vector2(0, 0), camera);
-      const hit = navigationPivotRaycaster
-        .intersectObjects(solidGroup.children, true)
-        .find(
-          (candidate) =>
-            candidate.object.userData.faceId !== undefined &&
-            candidate.object.userData.bodyId !== undefined,
-        );
-      if (!hit) return;
-      // A hit from the center ray is already collinear with the current view,
-      // so adopting it changes only the future rotation center—never the
-      // current pixels. This is the stable close-up behavior used by CAD apps.
-      controls.target.copy(hit.point);
-    };
-
     const sketchPlane = new CAD.Plane();
     const pointerToSketch = (e: PointerEvent): Vec2 | null => {
       if (!sketchGroup.visible) return null;
@@ -2390,7 +2372,6 @@ export function Viewport() {
     // --- Modal nav-tool drag helpers (camera never locked, D7) ---
     const panBy = (dxPx: number, dyPx: number) => {
       cancelCameraAnimation();
-      markOrbitPivotForRefresh();
       const wpp = worldPerPixel();
       const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
       const upv = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
@@ -2402,7 +2383,6 @@ export function Viewport() {
 
     const dollyBy = (factor: number) => {
       cancelCameraAnimation();
-      markOrbitPivotForRefresh();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       offset.setLength(Math.min(5000, Math.max(2, offset.length())));
       camera.position.copy(controls.target).add(offset);
@@ -5570,8 +5550,6 @@ export function Viewport() {
       // Modal nav tool: left-drag applies it (a clean click in pick-plane
       // mode still picks the plane — handled on pointerup).
       if (state.navTool !== 'select') {
-        if (state.navTool === 'orbit') refreshOrbitPivot();
-        else markOrbitPivotForRefresh();
         navDrag = {
           tool: state.navTool,
           x: e.clientX,
@@ -5996,6 +5974,16 @@ export function Viewport() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.shiftKey &&
+        e.key.toLowerCase() === 'd'
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void toggleNavigationDiagnostics().catch(() => undefined);
+        return;
+      }
       const state = store.getState();
       // Dynamic input captures typing/Tab/Enter/Esc while a tool runs
       // (create tools via toolRun, modify tools via modTool/polygon/scale).
@@ -6192,7 +6180,6 @@ export function Viewport() {
         if (!target.every(Number.isFinite)) return;
         cancelCameraAnimation();
         controls.target.set(...target);
-        markOrbitPivotForRefresh();
         if (sixDofDriverMotion) sixDofDriverTargetUpdated = true;
         wakeControllerFrame();
       },
@@ -6306,7 +6293,12 @@ export function Viewport() {
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
         cancelCameraAnimation();
-        refreshOrbitPivot();
+        const before = {
+          position: camera.position.toArray(),
+          target: controls.target.toArray(),
+          up: camera.up.toArray(),
+          quaternion: camera.quaternion.toArray(),
+        };
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height) so every orbit
         // input feels identical to right-drag orbit in the canvas.
@@ -6326,11 +6318,27 @@ export function Viewport() {
         offset.applyQuaternion(quatInv);
         camera.position.copy(controls.target).add(offset);
         camera.lookAt(controls.target);
+        recordNavigationDiagnostic('camera.orbit.applied', {
+          input: { dx, dy },
+          viewportHeight: height,
+          before,
+          after: {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            up: camera.up.toArray(),
+            quaternion: camera.quaternion.toArray(),
+          },
+        });
         wakeControllerFrame();
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
-        refreshOrbitPivot();
+        const before = {
+          position: camera.position.toArray(),
+          target: controls.target.toArray(),
+          up: camera.up.toArray(),
+          quaternion: camera.quaternion.toArray(),
+        };
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const distance = Math.max(1, camera.position.distanceTo(controls.target));
         const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
@@ -6358,6 +6366,27 @@ export function Viewport() {
         camera.position.copy(controls.target).add(offset);
         camera.up.applyQuaternion(turn).normalize();
         camera.lookAt(controls.target);
+        recordNavigationDiagnostic('camera.sixdof.applied', {
+          input: { translation, rotation, deltaSeconds },
+          integration: {
+            dt,
+            distance,
+            translationSpeed,
+            angle,
+            right: right.toArray(),
+            forward: forward.toArray(),
+            up: up.toArray(),
+            translationDelta: delta.toArray(),
+            turn: turn.toArray(),
+          },
+          before,
+          after: {
+            position: camera.position.toArray(),
+            target: controls.target.toArray(),
+            up: camera.up.toArray(),
+            quaternion: camera.quaternion.toArray(),
+          },
+        });
         wakeControllerFrame();
       },
       getSixDofDriverView: () => sixDofDriverView,
@@ -6376,6 +6405,30 @@ export function Viewport() {
       },
     };
     apiRef.current = api;
+    const unregisterNavigationDiagnosticContext = registerNavigationDiagnosticContext(() => {
+      const rect = surface.domElement.getBoundingClientRect();
+      return {
+        camera: {
+          ...api.getSnapshot(),
+          quaternion: camera.quaternion.toArray(),
+          verticalFovDegrees: camera.fov,
+          aspect: camera.aspect,
+        },
+        viewport: {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          clientWidth: surface.domElement.clientWidth,
+          clientHeight: surface.domElement.clientHeight,
+          backingWidth: surface.domElement.width,
+          backingHeight: surface.domElement.height,
+          devicePixelRatio: window.devicePixelRatio,
+        },
+        mode: store.getState().mode,
+        navTool: store.getState().navTool,
+      };
+    });
     // E2E/debug handles: let automation verify camera poses and project
     // sketch mm coordinates to screen pixels for deterministic input.
     (window as unknown as { __cameraApi?: ViewportCameraApi }).__cameraApi = api;
@@ -7070,6 +7123,7 @@ export function Viewport() {
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown, true);
       controls.removeEventListener('change', onControlsChange);
+      unregisterNavigationDiagnosticContext();
       wakeControllerFrame = () => undefined;
       controls.dispose();
       scene.traverse((child) => {

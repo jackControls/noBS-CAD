@@ -331,6 +331,10 @@ export class Quaternion {
     return new Quaternion(this.x, this.y, this.z, this.w);
   }
 
+  toArray(): [number, number, number, number] {
+    return [this.x, this.y, this.z, this.w];
+  }
+
   normalize(): this {
     const length = Math.hypot(this.x, this.y, this.z, this.w);
     if (length === 0) return this.set(0, 0, 0, 1);

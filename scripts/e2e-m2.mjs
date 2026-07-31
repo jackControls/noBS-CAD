@@ -245,39 +245,13 @@ try {
     `selected=${app.selectedBody} body=${body.id}`,
   );
   await page.waitForTimeout(100);
-  const dynamicOrbitCenters = await page.evaluate(async () => {
-    const body = window.__appStore.getState().solidScene.bodies[0];
-    const coordinates = body.mesh.positions;
-    const bounds = {
-      min: [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
-      max: [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY],
-    };
-    for (let index = 0; index + 2 < coordinates.length; index += 3) {
-      for (let axis = 0; axis < 3; axis += 1) {
-        bounds.min[axis] = Math.min(bounds.min[axis], coordinates[index + axis]);
-        bounds.max[axis] = Math.max(bounds.max[axis], coordinates[index + axis]);
-      }
-    }
-    const inside = (point) =>
-      point.every(
-        (value, axis) =>
-          value >= bounds.min[axis] - 1e-4 &&
-          value <= bounds.max[axis] + 1e-4,
-      );
-    const driverView = window.__cameraApi.getSixDofDriverView();
-    driverView.setViewTarget([5_000, -4_000, 3_000]);
+  const stableOrbitCenter = await page.evaluate(async () => {
+    const initialTarget = window.__cameraApi.getSnapshot().target;
     window.__cameraApi.orbitBy(12, -8);
     const touchpadTarget = window.__cameraApi.getSnapshot().target;
     await new Promise((resolve) => setTimeout(resolve, 260));
     window.__cameraApi.orbitBy(8, -5);
     const touchpadTargetAfterPause = window.__cameraApi.getSnapshot().target;
-    const touchpadPivotDelta = Math.hypot(
-      ...touchpadTarget.map(
-        (value, axis) => value - touchpadTargetAfterPause[axis],
-      ),
-    );
-
-    driverView.setViewTarget([-4_000, 3_000, 5_000]);
     window.__cameraApi.navigateSixDof({
       translation: [0, 0, 0],
       rotation: [0.35, 0, 0],
@@ -285,18 +259,20 @@ try {
     });
     const sixDofTarget = window.__cameraApi.getSnapshot().target;
     window.__cameraApi.fit();
+    const delta = (point) =>
+      Math.hypot(...point.map((value, axis) => value - initialTarget[axis]));
     return {
-      touchpad: inside(touchpadTarget),
-      touchpadStable: touchpadPivotDelta < 1e-6,
-      sixDof: inside(sixDofTarget),
+      firstOrbitDelta: delta(touchpadTarget),
+      pausedOrbitDelta: delta(touchpadTargetAfterPause),
+      sixDofRotationDelta: delta(sixDofTarget),
     };
   });
   check(
-    'touchpad and 3D-mouse use one stable visible model pivot',
-    dynamicOrbitCenters.touchpad &&
-      dynamicOrbitCenters.touchpadStable &&
-      dynamicOrbitCenters.sixDof,
-    JSON.stringify(dynamicOrbitCenters),
+    'touchpad and 3D-mouse rotation keep one explicit target',
+    stableOrbitCenter.firstOrbitDelta < 1e-6 &&
+      stableOrbitCenter.pausedOrbitDelta < 1e-6 &&
+      stableOrbitCenter.sixDofRotationDelta < 1e-6,
+    JSON.stringify(stableOrbitCenter),
   );
   await page.waitForTimeout(350);
   const selectedBodyVisual = await page.evaluate(

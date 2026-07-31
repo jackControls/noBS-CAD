@@ -5,6 +5,7 @@ import {
   type DriverBridgeConnection,
   type SixDofDriverView,
 } from './threeDConnexionBridge';
+import { recordNavigationDiagnostic } from './navigationDiagnostics';
 
 export type SixDofMouseConnectionStatus =
   | { state: 'unsupported'; message: string }
@@ -73,6 +74,16 @@ interface HidNavigator {
 interface NativeMotionPacket {
   translation?: [number, number, number] | null;
   rotation?: [number, number, number] | null;
+  transport?: string;
+  driverTime?: number;
+  reportId?: number;
+  rawReport?: number[];
+  productId?: number;
+  driverVersion?: number;
+  command?: number;
+  parameter?: number;
+  value?: number;
+  address?: number;
 }
 
 const VENDOR_IDS = new Set([0x256f, 0x046d]);
@@ -151,7 +162,13 @@ function createMotionAccumulator(onMotion: (motion: SixDofMotion) => void) {
     const deltaSeconds = previousFrame > 0 ? (now - previousFrame) / 1000 : 1 / 60;
     previousFrame = now;
     if (active(translation) || active(rotation)) {
-      onMotion({ translation, rotation, deltaSeconds });
+      const motion = {
+        translation: [...translation] as [number, number, number],
+        rotation: [...rotation] as [number, number, number],
+        deltaSeconds,
+      };
+      recordNavigationDiagnostic('sixdof.accumulator.frame', motion);
+      onMotion(motion);
       frame = requestAnimationFrame(tick);
     } else {
       previousFrame = 0;
@@ -173,6 +190,11 @@ function createMotionAccumulator(onMotion: (motion: SixDofMotion) => void) {
         rotation = packet.rotation.map(normalizeAxis) as [number, number, number];
         rotationAt = now;
       }
+      recordNavigationDiagnostic('sixdof.accumulator.native-push', {
+        packet,
+        normalizedTranslation: translation,
+        normalizedRotation: rotation,
+      });
       schedule();
     },
     pushNormalized(packet: NativeMotionPacket) {
@@ -185,6 +207,11 @@ function createMotionAccumulator(onMotion: (motion: SixDofMotion) => void) {
         rotation = packet.rotation;
         rotationAt = now;
       }
+      recordNavigationDiagnostic('sixdof.accumulator.normalized-push', {
+        packet,
+        normalizedTranslation: translation,
+        normalizedRotation: rotation,
+      });
       schedule();
     },
     stop() {
@@ -242,14 +269,34 @@ export function createSixDofMouseController(
     }
     const report = (rawEvent: Event) => {
       const event = rawEvent as HidInputReportEventLike;
+      const rawBytes = Array.from(
+        new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength),
+      );
       if (event.reportId === 1) {
         const translation = readVector(event.data);
         const rotation = readVector(event.data, 6);
+        recordNavigationDiagnostic('sixdof.webhid.report', {
+          reportId: event.reportId,
+          rawBytes,
+          translation,
+          rotation,
+        });
         accumulator.pushNormalized({ translation, rotation });
       } else if (event.reportId === 2) {
-        accumulator.pushNormalized({ rotation: readVector(event.data) });
+        const rotation = readVector(event.data);
+        recordNavigationDiagnostic('sixdof.webhid.report', {
+          reportId: event.reportId,
+          rawBytes,
+          rotation,
+        });
+        accumulator.pushNormalized({ rotation });
       } else if (event.reportId === 3 && event.data.byteLength >= 1) {
         const mask = readButtonMask(event.data);
+        recordNavigationDiagnostic('sixdof.webhid.buttons', {
+          reportId: event.reportId,
+          rawBytes,
+          mask,
+        });
         const newlyPressed = mask & ~previousButtonMask;
         previousButtonMask = mask;
         for (let index = 0; index < 32; index += 1) {
@@ -324,6 +371,7 @@ export function createSixDofMouseController(
     try {
       listeners.push(
         await listen<NativeMotionPacket>('six-dof-mouse-motion', (event) => {
+          recordNavigationDiagnostic('sixdof.native.packet', event.payload);
           accumulator.push(event.payload);
         }),
         await listen<{ button: number }>('six-dof-mouse-button', (event) => {
@@ -339,6 +387,7 @@ export function createSixDofMouseController(
       );
       nativeUnlisten = listeners;
       const device = await invoke<{ product_name: string }>('six_dof_mouse_connect');
+      recordNavigationDiagnostic('sixdof.native.connected', device);
       onStatus({
         state: 'connected',
         message: device.product_name || '3D mouse connected',

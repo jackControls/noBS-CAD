@@ -9,6 +9,7 @@
 
 mod session_bridge;
 pub mod native_viewport;
+mod navigation_diagnostics;
 mod six_dof_mouse;
 mod state;
 
@@ -20,6 +21,7 @@ use native_viewport::{
     NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
     ViewportModel, ViewportPresentation, ViewportPreview,
 };
+use navigation_diagnostics::NavigationDiagnosticsState;
 use nbcad_core::DocumentDto;
 use six_dof_mouse::SixDofMouseState;
 use state::AppState;
@@ -396,6 +398,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(session_bridge::SessionBridgeState::default())
+        .manage(NavigationDiagnosticsState::default())
         .manage(SixDofMouseState::default())
         .setup(|app| {
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
@@ -420,6 +423,10 @@ pub fn run() {
             native_viewport_set_presentation,
             native_viewport_pick,
             native_viewport_metrics,
+            navigation_diagnostics::navigation_diagnostics_start,
+            navigation_diagnostics::navigation_diagnostics_append,
+            navigation_diagnostics::navigation_diagnostics_capture,
+            navigation_diagnostics::navigation_diagnostics_stop,
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,
