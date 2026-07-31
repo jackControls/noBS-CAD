@@ -48,7 +48,6 @@ import {
   saveProject,
 } from './files/projectFiles';
 import { SYSTEM_DARK_QUERY } from './theme';
-import { NavigationDiagnosticsBadge } from './components/NavigationDiagnosticsBadge';
 import { toggleNavigationDiagnostics } from './input/navigationDiagnostics';
 
 export default function App() {
@@ -270,7 +269,6 @@ export default function App() {
       <BodyFeatureDialog />
       <SketchPatternDialog />
       <AppearanceDialog />
-      <NavigationDiagnosticsBadge />
     </div>
   );
 }

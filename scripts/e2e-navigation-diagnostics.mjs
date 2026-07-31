@@ -50,8 +50,10 @@ try {
     };
   });
 
-  await page.keyboard.press('Meta+Shift+D');
-  await page.getByText('NAV INPUT REC').waitFor();
+  const recorder = page.getByTestId('navigation-recorder-toggle');
+  await recorder.click();
+  await page.getByText('RECORDING', { exact: true }).waitFor();
+  assert.equal(await recorder.getAttribute('aria-pressed'), 'true');
   await page.evaluate(() => {
     const canvas = document.querySelector('canvas');
     canvas.dispatchEvent(
@@ -65,8 +67,9 @@ try {
     );
   });
   await page.waitForTimeout(700);
-  await page.keyboard.press('Meta+Shift+D');
-  await page.getByText('Navigation recording saved').waitFor();
+  await recorder.click();
+  await page.getByText('REC SAVED', { exact: true }).waitFor();
+  assert.equal(await recorder.getAttribute('aria-pressed'), 'false');
 
   const result = await page.evaluate(() => ({
     calls: window.__navigationDiagnosticTest.calls.map((call) => call.command),
