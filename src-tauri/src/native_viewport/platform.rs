@@ -111,6 +111,7 @@ enum RenderCommand {
         hud: ViewportHud,
     },
     Model(ViewportModel),
+    DropModelSession(String),
     Camera(ViewportCamera),
     Preview(ViewportPreview),
     Presentation(ViewportPresentation),
@@ -120,6 +121,7 @@ enum RenderCommand {
 struct PendingRenderCommands {
     resize: Option<(f64, f64, f64, ViewportPalette, ViewportHud)>,
     model: Option<ViewportModel>,
+    drop_model_sessions: Vec<String>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
     presentation: Option<ViewportPresentation>,
@@ -226,6 +228,8 @@ impl PlatformNativeViewport {
                 let mut render_runtime = Box::new(MainThreadRenderRuntime {
                     app: bevy_app,
                     model: ViewportModel {
+                        session_id: "__bootstrap__".to_string(),
+                        geometry_revision: 0,
                         scene: SolidSceneDto::default(),
                         active_sketch: None,
                         finished_sketches: Vec::new(),
@@ -314,6 +318,10 @@ impl PlatformNativeViewport {
             state.scene = model.scene.clone();
         }
         self.enqueue(RenderCommand::Model(model))
+    }
+
+    pub fn drop_model_session(&self, session_id: String) -> Result<(), String> {
+        self.enqueue(RenderCommand::DropModelSession(session_id))
     }
 
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
@@ -882,12 +890,17 @@ impl HasDisplayHandle for NativeViewHandle {
 
 #[derive(Resource, Default)]
 struct ModelResource {
+    session_id: String,
+    geometry_revision: u64,
     scene: SolidSceneDto,
     active_sketch: Option<SketchDto>,
     finished_sketches: Vec<SketchDto>,
     datum_planes: Vec<DatumPlaneDefinitionDto>,
     revision: u64,
 }
+
+#[derive(Resource, Default)]
+struct ModelGeometryCache(HashMap<String, u64>);
 
 #[derive(Resource)]
 struct CameraResource {
@@ -964,7 +977,10 @@ struct NativeCadFace {
 }
 
 #[derive(Component)]
-struct NativeModelGeometry;
+struct NativeModelGeometry {
+    session_id: String,
+    geometry_revision: u64,
+}
 
 #[derive(Component)]
 struct NativeCadCamera;
@@ -1032,6 +1048,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
             ..default()
         })
         .init_resource::<ModelResource>()
+        .init_resource::<ModelGeometryCache>()
         .init_resource::<CameraResource>()
         .init_resource::<PreviewResource>()
         .init_resource::<PaletteResource>()
@@ -1133,7 +1150,8 @@ fn rebuild_occt_meshes(
     mut commands: Commands,
     model: Res<ModelResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    existing: Query<Entity, With<NativeModelGeometry>>,
+    mut cache: ResMut<ModelGeometryCache>,
+    mut existing: Query<(Entity, &NativeModelGeometry, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<PaletteResource>,
@@ -1143,9 +1161,22 @@ fn rebuild_occt_meshes(
     }
     revisions.model = model.revision;
 
-    for entity in &existing {
-        commands.entity(entity).despawn();
+    for (entity, geometry, mut visibility) in &mut existing {
+        if geometry.session_id == model.session_id {
+            if geometry.geometry_revision != model.geometry_revision {
+                commands.entity(entity).despawn();
+            }
+        } else {
+            *visibility = Visibility::Hidden;
+        }
     }
+
+    if cache.0.get(&model.session_id) == Some(&model.geometry_revision) {
+        return;
+    }
+    cache
+        .0
+        .insert(model.session_id.clone(), model.geometry_revision);
 
     for body in &model.scene.bodies {
         for face in &body.faces {
@@ -1162,7 +1193,10 @@ fn rebuild_occt_meshes(
                     body_id: body.id.0,
                     face_id: face.id.0,
                 },
-                NativeModelGeometry,
+                NativeModelGeometry {
+                    session_id: model.session_id.clone(),
+                    geometry_revision: model.geometry_revision,
+                },
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: rgb(palette.0.body),
@@ -1181,7 +1215,10 @@ fn rebuild_occt_meshes(
             NativeDatumPlane {
                 datum_id: plane.datum_id.0,
             },
-            NativeModelGeometry,
+            NativeModelGeometry {
+                session_id: model.session_id.clone(),
+                geometry_revision: model.geometry_revision,
+            },
             Mesh3d(meshes.add(reference_plane_mesh(
                 &plane.basis,
                 REFERENCE_PLANE_HALF_SIZE,
@@ -1245,7 +1282,7 @@ fn resize_reference_planes(
     model: Res<ModelResource>,
     mut origin_planes: Query<&mut Transform, (With<NativeOriginPlane>, Without<NativeDatumPlane>)>,
     mut datum_planes: Query<
-        (&NativeDatumPlane, &mut Transform),
+        (&NativeDatumPlane, &NativeModelGeometry, &mut Transform),
         (Without<NativeOriginPlane>, Without<NativeCadFace>),
     >,
 ) {
@@ -1254,7 +1291,10 @@ fn resize_reference_planes(
     for mut transform in &mut origin_planes {
         *transform = reference_plane_transform(Vec3::ZERO, origin_half_size);
     }
-    for (plane, mut transform) in &mut datum_planes {
+    for (plane, geometry, mut transform) in &mut datum_planes {
+        if geometry.session_id != model.session_id {
+            continue;
+        }
         let Some(definition) = model
             .datum_planes
             .iter()
@@ -1270,12 +1310,14 @@ fn resize_reference_planes(
 
 #[allow(clippy::type_complexity)]
 fn apply_native_presentation_styles(
+    model: Res<ModelResource>,
     presentation: Res<PresentationResource>,
     palette: Res<PaletteResource>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut faces: Query<
         (
             &NativeCadFace,
+            &NativeModelGeometry,
             &MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
@@ -1284,6 +1326,7 @@ fn apply_native_presentation_styles(
     mut datum_planes: Query<
         (
             &NativeDatumPlane,
+            &NativeModelGeometry,
             &MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
@@ -1299,7 +1342,11 @@ fn apply_native_presentation_styles(
     >,
 ) {
     let state = &presentation.0;
-    for (face, handle, mut visibility) in &mut faces {
+    for (face, geometry, handle, mut visibility) in &mut faces {
+        if geometry.session_id != model.session_id {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
         *visibility = if state.hidden_body_ids.contains(&face.body_id) {
             Visibility::Hidden
         } else {
@@ -1333,7 +1380,11 @@ fn apply_native_presentation_styles(
         };
     }
 
-    for (plane, handle, mut visibility) in &mut datum_planes {
+    for (plane, geometry, handle, mut visibility) in &mut datum_planes {
+        if geometry.session_id != model.session_id {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
         *visibility = if state.hidden_datum_plane_ids.contains(&plane.datum_id) {
             Visibility::Hidden
         } else {
@@ -2086,6 +2137,11 @@ fn push_render_command(
             hud,
         } => pending.resize = Some((logical_width, logical_height, scale_factor, palette, hud)),
         RenderCommand::Model(model) => pending.model = Some(model),
+        RenderCommand::DropModelSession(session_id) => {
+            if !pending.drop_model_sessions.contains(&session_id) {
+                pending.drop_model_sessions.push(session_id);
+            }
+        }
         RenderCommand::Camera(camera) => pending.camera = Some(camera),
         RenderCommand::Preview(preview) => pending.preview = Some(preview),
         RenderCommand::Presentation(presentation) => {
@@ -2125,6 +2181,7 @@ fn drain_render_commands(
             };
             if pending.resize.is_none()
                 && pending.model.is_none()
+                && pending.drop_model_sessions.is_empty()
                 && pending.camera.is_none()
                 && pending.preview.is_none()
                 && pending.presentation.is_none()
@@ -2135,6 +2192,7 @@ fn drain_render_commands(
             (
                 pending.resize.take(),
                 pending.model.take(),
+                std::mem::take(&mut pending.drop_model_sessions),
                 pending.camera.take(),
                 pending.preview.take(),
                 pending.presentation.take(),
@@ -2162,10 +2220,18 @@ fn drain_render_commands(
         if let Some(model) = commands.1 {
             apply_render_command(RenderCommand::Model(model), runtime, metrics, &mut dirty);
         }
-        if let Some(camera) = commands.2 {
+        for session_id in commands.2 {
+            apply_render_command(
+                RenderCommand::DropModelSession(session_id),
+                runtime,
+                metrics,
+                &mut dirty,
+            );
+        }
+        if let Some(camera) = commands.3 {
             apply_render_command(RenderCommand::Camera(camera), runtime, metrics, &mut dirty);
         }
-        if let Some(preview) = commands.3 {
+        if let Some(preview) = commands.4 {
             apply_render_command(
                 RenderCommand::Preview(preview),
                 runtime,
@@ -2173,7 +2239,7 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if let Some(presentation) = commands.4 {
+        if let Some(presentation) = commands.5 {
             apply_render_command(
                 RenderCommand::Presentation(presentation),
                 runtime,
@@ -2265,6 +2331,8 @@ fn apply_render_command(
         RenderCommand::Model(next) => {
             runtime.model = next;
             let mut resource = runtime.app.world_mut().resource_mut::<ModelResource>();
+            resource.session_id = runtime.model.session_id.clone();
+            resource.geometry_revision = runtime.model.geometry_revision;
             resource.scene = runtime.model.scene.clone();
             resource.active_sketch = runtime.model.active_sketch.clone();
             resource.finished_sketches = runtime.model.finished_sketches.clone();
@@ -2280,6 +2348,10 @@ fn apply_render_command(
                     .map(|body| body.mesh.indices.len() / 3)
                     .sum();
             }
+            *dirty = true;
+        }
+        RenderCommand::DropModelSession(session_id) => {
+            drop_cached_model_session(runtime.app.world_mut(), &session_id);
             *dirty = true;
         }
         RenderCommand::Camera(next) => {
@@ -2306,6 +2378,23 @@ fn apply_render_command(
             }
         }
     }
+}
+
+fn drop_cached_model_session(world: &mut World, session_id: &str) {
+    let entities = {
+        let mut query = world.query::<(Entity, &NativeModelGeometry)>();
+        query
+            .iter(world)
+            .filter_map(|(entity, geometry)| (geometry.session_id == session_id).then_some(entity))
+            .collect::<Vec<_>>()
+    };
+    for entity in entities {
+        world.despawn(entity);
+    }
+    world
+        .resource_mut::<ModelGeometryCache>()
+        .0
+        .remove(session_id);
 }
 
 fn resize_embedded_window(
@@ -2685,7 +2774,7 @@ mod tests {
             }"#,
         );
 
-        let (scene, _, _, _) = state.viewport_snapshot();
+        let (_, _, scene, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(scene.bodies[0].mesh.indices.len(), 36);
         let hit = pick_occt_scene(

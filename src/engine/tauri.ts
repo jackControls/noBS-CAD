@@ -296,6 +296,30 @@ export class TauriEngine implements Engine {
     return this.call('engine_project_export_model');
   }
 
+  private async projectSessionCall<T>(
+    command: string,
+    sessionId: string,
+  ): Promise<T> {
+    const json = await invoke<string>(command, { sessionId });
+    return unwrapEnvelope(json);
+  }
+
+  async bindProjectSession(sessionId: string): Promise<void> {
+    return this.projectSessionCall('engine_project_session_bind', sessionId);
+  }
+
+  async createProjectSession(sessionId: string): Promise<SolidUpdateDto> {
+    return this.projectSessionCall('engine_project_session_create', sessionId);
+  }
+
+  async activateProjectSession(sessionId: string): Promise<boolean> {
+    return this.projectSessionCall('engine_project_session_activate', sessionId);
+  }
+
+  async dropProjectSession(sessionId: string): Promise<void> {
+    await this.projectSessionCall('engine_project_session_drop', sessionId);
+  }
+
   async newProject(): Promise<SolidUpdateDto> {
     return this.call('engine_project_new');
   }

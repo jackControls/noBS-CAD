@@ -51,6 +51,7 @@ import {
 import {
   hasUnsavedProjects,
   initializeProjectTabs,
+  installProjectTabRetention,
 } from './files/projectTabs';
 import { SYSTEM_DARK_QUERY } from './theme';
 
@@ -80,6 +81,8 @@ export default function App() {
   }, [loadDocument]);
 
   useEffect(() => installProjectRecovery(), []);
+
+  useEffect(() => installProjectTabRetention(), []);
 
   useEffect(() => {
     const media = window.matchMedia(SYSTEM_DARK_QUERY);

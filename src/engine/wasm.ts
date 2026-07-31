@@ -93,11 +93,24 @@ import type {
   UndoResult,
 } from './types';
 
+interface WasmProjectContext {
+  inner: WasmEngineInner;
+  kernelPromise: Promise<BrowserOcctKernel> | null;
+}
+
 export class WasmEngine implements Engine {
   readonly kind = 'wasm' as const;
-  private kernelPromise: Promise<BrowserOcctKernel> | null = null;
+  private readonly contexts = new Map<string, WasmProjectContext>();
+  private activeContext: WasmProjectContext;
+  private activeSessionId: string | null = null;
 
-  private constructor(private readonly inner: WasmEngineInner) {}
+  private constructor(inner: WasmEngineInner) {
+    this.activeContext = { inner, kernelPromise: null };
+  }
+
+  private get inner(): WasmEngineInner {
+    return this.activeContext.inner;
+  }
 
   /** Instantiate the wasm module and construct the engine. */
   static async create(): Promise<WasmEngine> {
@@ -390,6 +403,65 @@ export class WasmEngine implements Engine {
     return unwrapEnvelope(this.inner.project_export_model());
   }
 
+  async bindProjectSession(sessionId: string): Promise<void> {
+    this.validateSessionId(sessionId);
+    if (this.activeSessionId === sessionId) return;
+    const retained = this.contexts.get(sessionId);
+    if (retained) {
+      this.activeContext = retained;
+      this.activeSessionId = sessionId;
+      return;
+    }
+    if (this.activeSessionId !== null || this.contexts.size !== 0) {
+      throw new Error('the bootstrap project session is already bound');
+    }
+    this.contexts.set(sessionId, this.activeContext);
+    this.activeSessionId = sessionId;
+  }
+
+  async createProjectSession(sessionId: string): Promise<SolidUpdateDto> {
+    this.validateSessionId(sessionId);
+    if (this.contexts.has(sessionId)) {
+      throw new Error('project session already exists');
+    }
+    if (this.contexts.size >= 128) {
+      throw new Error('too many resident project sessions');
+    }
+    const context: WasmProjectContext = {
+      inner: new WasmEngineInner(),
+      kernelPromise: null,
+    };
+    this.contexts.set(sessionId, context);
+    this.activeContext = context;
+    this.activeSessionId = sessionId;
+    return this.currentUpdate();
+  }
+
+  async activateProjectSession(sessionId: string): Promise<boolean> {
+    this.validateSessionId(sessionId);
+    const context = this.contexts.get(sessionId);
+    if (!context) return false;
+    this.activeContext = context;
+    this.activeSessionId = sessionId;
+    return true;
+  }
+
+  async dropProjectSession(sessionId: string): Promise<void> {
+    this.validateSessionId(sessionId);
+    if (this.activeSessionId === sessionId) {
+      throw new Error('cannot drop the active project session');
+    }
+    const context = this.contexts.get(sessionId);
+    if (!context) return;
+    this.contexts.delete(sessionId);
+    context.inner.free();
+    if (context.kernelPromise) {
+      void context.kernelPromise
+        .then((kernel) => kernel.dispose())
+        .catch(() => undefined);
+    }
+  }
+
   async newProject(): Promise<SolidUpdateDto> {
     const plan = unwrapEnvelope<RecomputePlanDto>(this.inner.project_prepare_new());
     return this.executeSolidPlan(plan);
@@ -415,17 +487,36 @@ export class WasmEngine implements Engine {
   }
 
   private async executeSolidPlan(plan: RecomputePlanDto): Promise<SolidUpdateDto> {
-    const scene = plan.jobs.length === 0
-      ? { bodies: [], errors: plan.errors ?? [] }
-      : (await this.browserKernel()).recompute(plan);
+    let scene;
+    if (plan.jobs.length === 0) {
+      if (this.activeContext.kernelPromise) {
+        (await this.activeContext.kernelPromise).clear();
+      }
+      scene = { bodies: [], errors: plan.errors ?? [] };
+    } else {
+      scene = (await this.browserKernel()).recompute(plan);
+    }
     return unwrapEnvelope(
       this.inner.solid_commit(JSON.stringify({ transaction_id: plan.transaction_id, scene })),
     );
   }
 
   private browserKernel(): Promise<BrowserOcctKernel> {
-    this.kernelPromise ??= BrowserOcctKernel.create();
-    return this.kernelPromise;
+    this.activeContext.kernelPromise ??= BrowserOcctKernel.create();
+    return this.activeContext.kernelPromise;
+  }
+
+  private currentUpdate(): SolidUpdateDto {
+    return {
+      document: unwrapEnvelope(this.inner.document()),
+      scene: unwrapEnvelope(this.inner.solid_scene()),
+    };
+  }
+
+  private validateSessionId(sessionId: string): void {
+    if (sessionId.length === 0 || sessionId.length > 128 || sessionId === '__bootstrap__') {
+      throw new Error('invalid project session id');
+    }
   }
 
   async previewSegment(request: SegmentRequest): Promise<PreviewDto> {

@@ -1610,9 +1610,17 @@ export class BrowserOcctKernel {
     return new BrowserOcctKernel(await loadOc());
   }
 
-  recompute(plan: RecomputePlanDto): KernelSceneDto {
+  clear(): void {
     for (const shape of this.bodies.values()) shape.delete();
     this.bodies.clear();
+  }
+
+  dispose(): void {
+    this.clear();
+  }
+
+  recompute(plan: RecomputePlanDto): KernelSceneDto {
+    this.clear();
     const errors: KernelFeatureErrorDto[] = [...(plan.errors ?? [])];
 
     for (const operation of plan.jobs) {

@@ -134,6 +134,14 @@ export interface Engine {
   reorderFeature(featureId: number, targetIndex: number): Promise<SolidUpdateDto>;
   setDocumentName(name: string): Promise<DocumentDto>;
   exportProjectModel(): Promise<string>;
+  /** Bind the bootstrap engine context to the first frontend tab. */
+  bindProjectSession(sessionId: string): Promise<void>;
+  /** Create and activate a blank retained modeling context for a new tab. */
+  createProjectSession(sessionId: string): Promise<SolidUpdateDto>;
+  /** Activate a retained context; false means it was evicted. */
+  activateProjectSession(sessionId: string): Promise<boolean>;
+  /** Release an inactive tab's native/WASM modeling context. */
+  dropProjectSession(sessionId: string): Promise<void>;
   newProject(): Promise<SolidUpdateDto>;
   loadProjectModel(modelJson: string): Promise<SolidUpdateDto>;
   exportStep(request: StepExportRequest): Promise<Uint8Array>;

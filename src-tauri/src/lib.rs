@@ -21,6 +21,7 @@ use native_viewport::{
     ViewportModel, ViewportPresentation, ViewportPreview,
 };
 use nbcad_core::DocumentDto;
+use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
 use state::AppState;
 use tauri::Manager;
@@ -29,6 +30,39 @@ use tauri::Manager;
 #[tauri::command]
 fn ping() -> String {
     "pong".to_string()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemMemoryStatus {
+    total_bytes: u64,
+    available_bytes: u64,
+    pressure: &'static str,
+}
+
+/// Portable physical-memory pressure estimate used by the tab retention
+/// policy. sysinfo has native macOS and Windows backends; conservative
+/// thresholds avoid evicting professional documents during normal caching.
+#[tauri::command]
+fn system_memory_status() -> SystemMemoryStatus {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total_bytes = system.total_memory();
+    let available_bytes = system.available_memory();
+    let critical_threshold = (total_bytes / 20).max(512 * 1024 * 1024);
+    let constrained_threshold = (total_bytes / 10).max(1024 * 1024 * 1024);
+    let pressure = if available_bytes <= critical_threshold {
+        "critical"
+    } else if available_bytes <= constrained_threshold {
+        "constrained"
+    } else {
+        "normal"
+    };
+    SystemMemoryStatus {
+        total_bytes,
+        available_bytes,
+        pressure,
+    }
 }
 
 /// Snapshot of the current document (name, settings, browser tree).
@@ -51,8 +85,11 @@ async fn native_viewport_sync_model(
     engine: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
 ) -> Result<(), String> {
-    let (scene, active_sketch, finished_sketches, datum_planes) = engine.viewport_snapshot();
+    let (session_id, geometry_revision, scene, active_sketch, finished_sketches, datum_planes) =
+        engine.viewport_snapshot();
     viewport.sync_model(ViewportModel {
+        session_id,
+        geometry_revision,
         scene,
         active_sketch,
         finished_sketches,
@@ -330,6 +367,53 @@ fn engine_project_new(state: tauri::State<'_, AppState>) -> String {
 }
 
 #[tauri::command]
+fn engine_project_session_bind(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    session_id: &str,
+) -> String {
+    let result = state.bind_project_session(session_id);
+    let succeeded = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    if succeeded {
+        // Recovery can hydrate the bootstrap context before its frontend tab
+        // id is known. Discard that temporary cache so it cannot be retained
+        // alongside the same model under its permanent id.
+        let _ = viewport.drop_model_session("__bootstrap__".to_string());
+    }
+    result
+}
+
+#[tauri::command]
+fn engine_project_session_create(state: tauri::State<'_, AppState>, session_id: &str) -> String {
+    state.create_project_session(session_id)
+}
+
+#[tauri::command]
+fn engine_project_session_activate(state: tauri::State<'_, AppState>, session_id: &str) -> String {
+    state.activate_project_session(session_id)
+}
+
+#[tauri::command]
+fn engine_project_session_drop(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    session_id: &str,
+) -> String {
+    let result = state.drop_project_session(session_id);
+    let succeeded = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    if succeeded {
+        let _ = viewport.drop_model_session(session_id.to_string());
+    }
+    result
+}
+
+#[tauri::command]
 fn engine_export_step(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
     state.export_step(payload)
 }
@@ -399,9 +483,17 @@ pub fn run() {
         .manage(SixDofMouseState::default())
         .setup(|app| {
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
-            let (scene, active_sketch, finished_sketches, datum_planes) =
-                app.state::<AppState>().viewport_snapshot();
+            let (
+                session_id,
+                geometry_revision,
+                scene,
+                active_sketch,
+                finished_sketches,
+                datum_planes,
+            ) = app.state::<AppState>().viewport_snapshot();
             let _ = viewport.sync_model(ViewportModel {
+                session_id,
+                geometry_revision,
                 scene,
                 active_sketch,
                 finished_sketches,
@@ -412,6 +504,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            system_memory_status,
             get_document,
             native_viewport_set_layout,
             native_viewport_sync_model,
@@ -433,6 +526,10 @@ pub fn run() {
             engine_project_export_model,
             engine_project_new,
             engine_project_load,
+            engine_project_session_bind,
+            engine_project_session_create,
+            engine_project_session_activate,
+            engine_project_session_drop,
             engine_export_step,
             engine_export_stl,
             engine_export_3mf,

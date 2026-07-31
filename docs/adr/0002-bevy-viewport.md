@@ -49,6 +49,29 @@ The bridge sends explicit palette, HUD, interaction, camera, and presentation
 state. It does not send screenshots or serialized OCCT geometry through
 JavaScript.
 
+## Document tabs and memory retention
+
+Each open desktop tab normally retains three coordinated layers: its Rust
+document plus OCCT kernel/B-reps, its Bevy mesh entities, and a reference to its
+last frontend document mirror. A normal tab switch activates those retained
+layers; it does not replay the feature tree, serialize the tessellation back
+through JavaScript, or reconstruct unchanged Bevy meshes.
+
+The serialized parametric model remains the durable recovery and eviction
+boundary. The active tab is never evicted. An inactive tab becomes cold after
+60 minutes without use, or earlier under a portable physical-memory pressure
+estimate. Constrained pressure releases the least-recently-used inactive tab;
+critical pressure releases every inactive tab. Releasing a tab drops its OCCT
+context, Bevy mesh cache, and frontend mesh mirror while retaining its model
+snapshot and save target. Selecting a cold tab performs one transactional
+recompute and then makes it warm again.
+
+The pressure probe uses the same `sysinfo` system backend on macOS and Windows
+with deliberately conservative thresholds (10%/1 GiB constrained and
+5%/512 MiB critical, whichever threshold is larger). This is a safety valve,
+not a fixed resident-tab cap or an instruction to discard useful filesystem
+caches.
+
 ## Camera and 6DoF interaction contract
 
 Viewport navigation describes **part motion from the user's stationary point of

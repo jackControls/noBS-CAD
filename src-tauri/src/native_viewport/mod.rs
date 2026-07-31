@@ -351,6 +351,8 @@ pub struct NativeViewportMetrics {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ViewportModel {
+    pub session_id: String,
+    pub geometry_revision: u64,
     pub scene: SolidSceneDto,
     pub active_sketch: Option<SketchDto>,
     pub finished_sketches: Vec<SketchDto>,
@@ -398,6 +400,19 @@ impl NativeViewport {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = model;
+            Err("the embedded native viewport is unavailable on this platform".to_string())
+        }
+    }
+
+    pub(crate) fn drop_model_session(&self, session_id: String) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.inner.drop_model_session(session_id)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = session_id;
             Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }
