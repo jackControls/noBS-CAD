@@ -26,7 +26,6 @@ import {
   saveProject,
 } from '../files/projectFiles';
 import { useAppStore } from '../store/appStore';
-import { NavigationDiagnosticsControl } from './NavigationDiagnosticsControl';
 
 export function AppMenuControls() {
   const { t } = useTranslation();
@@ -267,7 +266,6 @@ export function ProjectTabBar() {
           </button>
         </div>
       )}
-      <NavigationDiagnosticsControl />
     </div>
   );
 }

@@ -32,26 +32,6 @@ struct MotionPacket {
     translation: Option<[i16; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rotation: Option<[i16; 3]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    transport: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    driver_time: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    report_id: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    raw_report: Option<Vec<u8>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    product_id: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    driver_version: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    command: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parameter: Option<i16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    address: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -220,16 +200,6 @@ pub async fn six_dof_mouse_connect(
                             MotionPacket {
                                 translation: vector(data, 0),
                                 rotation: vector(data, 6),
-                                transport: Some("raw_hid"),
-                                driver_time: None,
-                                report_id: Some(report_id),
-                                raw_report: Some(data.to_vec()),
-                                product_id: None,
-                                driver_version: None,
-                                command: None,
-                                parameter: None,
-                                value: None,
-                                address: None,
                             },
                         );
                     }
@@ -239,16 +209,6 @@ pub async fn six_dof_mouse_connect(
                             MotionPacket {
                                 translation: None,
                                 rotation: vector(data, 0),
-                                transport: Some("raw_hid"),
-                                driver_time: None,
-                                report_id: Some(report_id),
-                                raw_report: Some(data.to_vec()),
-                                product_id: None,
-                                driver_version: None,
-                                command: None,
-                                parameter: None,
-                                value: None,
-                                address: None,
                             },
                         );
                     }
@@ -353,17 +313,6 @@ mod mac_driver {
     }
 
     impl ConnexionDeviceState {
-        fn value(&self) -> i32 {
-            // `value` has 4-byte alignment in Rust but only 2-byte alignment in
-            // the driver ABI.
-            unsafe { std::ptr::addr_of!(self.value).read_unaligned() }
-        }
-
-        fn time(&self) -> u64 {
-            // The packed driver ABI places this 64-bit field at byte 12.
-            unsafe { std::ptr::addr_of!(self.time).read_unaligned() }
-        }
-
         fn buttons(&self) -> u32 {
             // The packed driver ABI places this 32-bit field at byte 44.
             unsafe { std::ptr::addr_of!(self.buttons).read_unaligned() }
@@ -387,25 +336,14 @@ mod mac_driver {
         // x, y, z, rx, ry, rz. Keep that official order: the shared camera
         // kernel interprets it as right, forward, up and pitch, roll, yaw.
         let axis = device.axis;
-        let report = device.report;
         MotionPacket {
             translation: Some([axis[0], axis[1], axis[2]]),
             rotation: Some([axis[3], axis[4], axis[5]]),
-            transport: Some("installed_driver"),
-            driver_time: Some(device.time()),
-            report_id: report.first().copied(),
-            raw_report: Some(report.to_vec()),
-            product_id: None,
-            driver_version: Some(device.version),
-            command: Some(device.command),
-            parameter: Some(device.param),
-            value: Some(device.value()),
-            address: Some(device.address),
         }
     }
 
     unsafe extern "C" fn message_handler(
-        product_id: u32,
+        _product_id: u32,
         message_type: u32,
         argument: *mut c_void,
     ) {
@@ -423,9 +361,9 @@ mod mac_driver {
             return;
         }
         if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
-            let mut motion = canonical_motion(device);
-            motion.product_id = Some(product_id);
-            let _ = callback.app.emit("six-dof-mouse-motion", motion);
+            let _ = callback
+                .app
+                .emit("six-dof-mouse-motion", canonical_motion(device));
         }
         let buttons = device.buttons();
         if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
@@ -652,16 +590,6 @@ mod mac_driver {
                 MotionPacket {
                     translation: Some([10, 20, 30]),
                     rotation: Some([40, 50, 60]),
-                    transport: Some("installed_driver"),
-                    driver_time: Some(0),
-                    report_id: Some(0),
-                    raw_report: Some(vec![0; 8]),
-                    product_id: None,
-                    driver_version: Some(0),
-                    command: Some(CONNEXION_COMMAND_HANDLE_AXIS),
-                    parameter: Some(0),
-                    value: Some(0),
-                    address: Some(0),
                 }
             );
         }

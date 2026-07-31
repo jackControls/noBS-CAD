@@ -52,7 +52,6 @@
     "e2e:project-lifecycle": "node scripts/run-e2e.mjs e2e-project-lifecycle.mjs",
     "e2e:theme": "node scripts/run-e2e.mjs e2e-theme.mjs",
     "e2e:six-dof": "node scripts/run-e2e.mjs e2e-six-dof-mouse.mjs",
-    "e2e:navigation-diagnostics": "node scripts/run-e2e.mjs e2e-navigation-diagnostics.mjs",
     "e2e:bevy-kernel": "node scripts/run-e2e.mjs e2e-bevy-interaction-kernel.mjs",
     "e2e:files": "node scripts/run-e2e.mjs e2e-m2.mjs"
   },

@@ -23,7 +23,6 @@ pub mod ui_lab;
 use nbcad_sketch::SketchDto;
 use nbcad_solid::{DatumPlaneDefinitionDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tauri::{App, AppHandle};
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -439,19 +438,6 @@ impl NativeViewport {
         {
             let _ = presentation;
             Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn capture(&self, path: PathBuf) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            self.inner.capture(path)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            let _ = path;
-            Err("native viewport capture is unavailable on this platform".to_string())
         }
     }
 

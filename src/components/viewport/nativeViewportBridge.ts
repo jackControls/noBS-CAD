@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { recordNavigationDiagnostic } from '../../input/navigationDiagnostics';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
@@ -931,7 +930,6 @@ export function syncNativeViewportCamera(
     .join(',');
   if (key === lastCameraKey) return;
   lastCameraKey = key;
-  recordNavigationDiagnostic('native.camera.pending', next);
   window.dispatchEvent(new CustomEvent('nbcad:camera-change'));
   pendingCamera = next;
   if (pendingCameraFrame !== 0) return;
@@ -940,15 +938,7 @@ export function syncNativeViewportCamera(
     const cameraState = pendingCamera;
     pendingCamera = null;
     if (!cameraState) return;
-    recordNavigationDiagnostic('native.camera.send', cameraState);
-    void invoke('native_viewport_set_camera', { camera: cameraState })
-      .then(() => recordNavigationDiagnostic('native.camera.ack', cameraState))
-      .catch((error) =>
-        recordNavigationDiagnostic('native.camera.error', {
-          camera: cameraState,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
+    void invoke('native_viewport_set_camera', { camera: cameraState }).catch(() => undefined);
   });
 }
 

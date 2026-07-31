@@ -2,10 +2,7 @@ use bevy::{
     asset::RenderAssetUsages,
     mesh::Indices,
     prelude::*,
-    render::{
-        render_resource::PrimitiveTopology,
-        view::screenshot::{save_to_disk, Screenshot},
-    },
+    render::render_resource::PrimitiveTopology,
     window::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
         WindowPlugin, WindowResolution, WindowWrapper,
@@ -37,7 +34,6 @@ use std::{
     collections::HashMap,
     ffi::c_void,
     num::NonZeroU32,
-    path::PathBuf,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -118,7 +114,6 @@ enum RenderCommand {
     Camera(ViewportCamera),
     Preview(ViewportPreview),
     Presentation(ViewportPresentation),
-    Capture(PathBuf),
 }
 
 #[derive(Default)]
@@ -128,7 +123,6 @@ struct PendingRenderCommands {
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
     presentation: Option<ViewportPresentation>,
-    captures: Vec<PathBuf>,
     scheduled: bool,
 }
 
@@ -363,10 +357,6 @@ impl PlatformNativeViewport {
             state.hidden_body_ids = presentation.hidden_body_ids.clone();
         }
         self.enqueue(RenderCommand::Presentation(presentation))
-    }
-
-    pub fn capture(&self, path: PathBuf) -> Result<(), String> {
-        self.enqueue(RenderCommand::Capture(path))
     }
 
     pub fn pick(&self, x: f32, y: f32) -> Result<Option<NativePick>, String> {
@@ -2101,7 +2091,6 @@ fn push_render_command(
         RenderCommand::Presentation(presentation) => {
             pending.presentation = Some(presentation);
         }
-        RenderCommand::Capture(path) => pending.captures.push(path),
     }
     if pending.scheduled {
         false
@@ -2139,7 +2128,6 @@ fn drain_render_commands(
                 && pending.camera.is_none()
                 && pending.preview.is_none()
                 && pending.presentation.is_none()
-                && pending.captures.is_empty()
             {
                 pending.scheduled = false;
                 return;
@@ -2150,7 +2138,6 @@ fn drain_render_commands(
                 pending.camera.take(),
                 pending.preview.take(),
                 pending.presentation.take(),
-                std::mem::take(&mut pending.captures),
             )
         };
 
@@ -2194,20 +2181,10 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        let capture_requested = !commands.5.is_empty();
-        for path in commands.5 {
-            apply_render_command(RenderCommand::Capture(path), runtime, metrics, &mut dirty);
-        }
         if dirty {
             // Two updates account for Bevy's extracted/pipelined render world.
             // With no queued changes there is no timer and no idle render loop.
-            // GPU readback needs several main/render-world exchanges before
-            // ScreenshotCaptured can write the PNG.
-            render_frames(
-                &mut runtime.app,
-                if capture_requested { 8 } else { 2 },
-                metrics,
-            );
+            render_frames(&mut runtime.app, 2, metrics);
         }
     }
 }
@@ -2326,14 +2303,6 @@ fn apply_render_command(
                 resource.0 = next;
                 *dirty = true;
             }
-        }
-        RenderCommand::Capture(path) => {
-            runtime
-                .app
-                .world_mut()
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path));
-            *dirty = true;
         }
     }
 }

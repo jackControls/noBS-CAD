@@ -49,6 +49,39 @@ The bridge sends explicit palette, HUD, interaction, camera, and presentation
 state. It does not send screenshots or serialized OCCT geometry through
 JavaScript.
 
+## Camera and 6DoF interaction contract
+
+Viewport navigation describes **part motion from the user's stationary point of
+view**. Touchpad orbit and 3D-mouse rotation share the center of the visible
+OCCT tessellation as their pivot. That presentation pivot is independent from
+the camera target reported to a 3Dconnexion driver; a driver-side automatic
+pivot update must not move it.
+
+The macOS installed-driver path was calibrated against real cap motions on
+2026-07-31. Device input is canonicalized once at the adapter boundary:
+
+| Physical cap motion | Dominant driver value | Camera API value |
+|---------------------|-----------------------|------------------|
+| Push right | `+Tx` | `+X` |
+| Push away | `-Ty` | `+Y` |
+| Lift | `-Tz` | `+Z` |
+| Tilt forward | `+Rx` | `+Rx` |
+| Tilt right | `-Ry` | `+Ry` |
+| Twist clockwise | `+Rz` | `-Rz` |
+
+Equivalently, translation maps as `[Tx, -Ty, -Tz]` and rotation as
+`[Rx, -Ry, -Rz]`. In particular, forward/backward tilt keeps the driver's
+`Rx` sign. Preserve this canonical basis across native-driver, raw-HID, and
+browser-driver transports. The executable contracts are
+`scripts/e2e-six-dof-mouse.mjs` and
+`scripts/e2e-bevy-interaction-kernel.mjs`.
+
+Navigation input is transient. Production builds do not expose an input
+recorder, persist raw 6DoF/touchpad packets or camera traces, or periodically
+capture the user's viewport. Regression debugging uses synthetic automated
+inputs. The feature-gated visual lab below captures only its fixed development
+fixture and never attaches to a live user document or input stream.
+
 ## Visual regression channel
 
 The `dev-ui-lab` Cargo feature builds a headless, GPU-backed Bevy render target

@@ -48,7 +48,6 @@ import {
   saveProject,
 } from './files/projectFiles';
 import { SYSTEM_DARK_QUERY } from './theme';
-import { toggleNavigationDiagnostics } from './input/navigationDiagnostics';
 
 export default function App() {
   const { t } = useTranslation();
@@ -98,16 +97,6 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === 'd'
-      ) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void toggleNavigationDiagnostics().catch(() => undefined);
-        return;
-      }
       // Never steal keys from text inputs.
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const s = useAppStore.getState();

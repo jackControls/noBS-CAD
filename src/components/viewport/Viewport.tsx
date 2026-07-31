@@ -89,11 +89,6 @@ import {
   syncNativeViewportPreview,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
-import {
-  recordNavigationDiagnostic,
-  registerNavigationDiagnosticContext,
-  toggleNavigationDiagnostics,
-} from '../../input/navigationDiagnostics';
 
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
 const HOME_TARGET = new CAD.Vector3(0, 0, 0);
@@ -446,18 +441,6 @@ export function Viewport() {
       cancelCameraAnimation();
       wakeControllerFrame();
       const unit = e.deltaMode === 1 ? 16 : 1; // lines → px
-      recordNavigationDiagnostic('touchpad.wheel.raw', {
-        deltaX: e.deltaX,
-        deltaY: e.deltaY,
-        deltaZ: e.deltaZ,
-        deltaMode: e.deltaMode,
-        shiftKey: e.shiftKey,
-        ctrlKey: e.ctrlKey,
-        metaKey: e.metaKey,
-        altKey: e.altKey,
-        timeStamp: e.timeStamp,
-        unit,
-      });
       if (e.shiftKey) {
         // Shift+swipe = orbit. Same macOS natural-scrolling inversion as
         // pan (owner 2026-07-19): wheel deltas run opposite to pointer
@@ -5974,16 +5957,6 @@ export function Viewport() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === 'd'
-      ) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void toggleNavigationDiagnostics().catch(() => undefined);
-        return;
-      }
       const state = store.getState();
       // Dynamic input captures typing/Tab/Enter/Esc while a tool runs
       // (create tools via toolRun, modify tools via modTool/polygon/scale).
@@ -6360,12 +6333,6 @@ export function Viewport() {
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
         cancelCameraAnimation();
-        const before = {
-          position: camera.position.toArray(),
-          target: controls.target.toArray(),
-          up: camera.up.toArray(),
-          quaternion: camera.quaternion.toArray(),
-        };
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height), but derive a rigid
         // camera-rig turn around the actual model center rather than assuming
@@ -6376,7 +6343,6 @@ export function Viewport() {
           pivot = controls.target.clone();
           offset = camera.position.clone().sub(pivot);
         }
-        const orbitRadiusBefore = offset.length();
         const frameBefore = orbitFrameQuaternion(
           camera.position,
           pivot,
@@ -6403,30 +6369,10 @@ export function Viewport() {
         );
         const turn = frameAfter.multiply(frameBefore.invert()).normalize();
         applyCameraRigTurn(turn, pivot);
-        recordNavigationDiagnostic('camera.orbit.applied', {
-          input: { dx, dy },
-          viewportHeight: height,
-          pivot: pivot.toArray(),
-          orbitRadiusBefore,
-          orbitRadiusAfter: camera.position.distanceTo(pivot),
-          before,
-          after: {
-            position: camera.position.toArray(),
-            target: controls.target.toArray(),
-            up: camera.up.toArray(),
-            quaternion: camera.quaternion.toArray(),
-          },
-        });
         wakeControllerFrame();
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
-        const before = {
-          position: camera.position.toArray(),
-          target: controls.target.toArray(),
-          up: camera.up.toArray(),
-          quaternion: camera.quaternion.toArray(),
-        };
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const pivot = currentOrbitPivot();
         const distance = Math.max(1, camera.position.distanceTo(pivot));
@@ -6452,28 +6398,6 @@ export function Viewport() {
         const yaw = new CAD.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);
         const turn = yaw.multiply(pitch).multiply(roll);
         applyCameraRigTurn(turn, pivot);
-        recordNavigationDiagnostic('camera.sixdof.applied', {
-          input: { translation, rotation, deltaSeconds },
-          integration: {
-            dt,
-            distance,
-            translationSpeed,
-            angle,
-            right: right.toArray(),
-            forward: forward.toArray(),
-            up: up.toArray(),
-            pivot: pivot.toArray(),
-            translationDelta: delta.toArray(),
-            turn: turn.toArray(),
-          },
-          before,
-          after: {
-            position: camera.position.toArray(),
-            target: controls.target.toArray(),
-            up: camera.up.toArray(),
-            quaternion: camera.quaternion.toArray(),
-          },
-        });
         wakeControllerFrame();
       },
       getSixDofDriverView: () => sixDofDriverView,
@@ -6492,30 +6416,6 @@ export function Viewport() {
       },
     };
     apiRef.current = api;
-    const unregisterNavigationDiagnosticContext = registerNavigationDiagnosticContext(() => {
-      const rect = surface.domElement.getBoundingClientRect();
-      return {
-        camera: {
-          ...api.getSnapshot(),
-          quaternion: camera.quaternion.toArray(),
-          verticalFovDegrees: camera.fov,
-          aspect: camera.aspect,
-        },
-        viewport: {
-          left: rect.left,
-          top: rect.top,
-          width: rect.width,
-          height: rect.height,
-          clientWidth: surface.domElement.clientWidth,
-          clientHeight: surface.domElement.clientHeight,
-          backingWidth: surface.domElement.width,
-          backingHeight: surface.domElement.height,
-          devicePixelRatio: window.devicePixelRatio,
-        },
-        mode: store.getState().mode,
-        navTool: store.getState().navTool,
-      };
-    });
     // E2E/debug handles: let automation verify camera poses and project
     // sketch mm coordinates to screen pixels for deterministic input.
     (window as unknown as { __cameraApi?: ViewportCameraApi }).__cameraApi = api;
@@ -7213,7 +7113,6 @@ export function Viewport() {
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown, true);
       controls.removeEventListener('change', onControlsChange);
-      unregisterNavigationDiagnosticContext();
       wakeControllerFrame = () => undefined;
       controls.dispose();
       scene.traverse((child) => {
