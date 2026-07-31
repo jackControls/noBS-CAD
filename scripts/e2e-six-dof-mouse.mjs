@@ -313,6 +313,21 @@ try {
       { vendorId: 0x256f, usagePage: 0x01, usage: 0x08 },
       { vendorId: 0x046d, usagePage: 0x01, usage: 0x08 },
     ]);
+    const canonicalCalibration = await page.evaluate(async () => {
+      const input = await import('/src/input/sixDofMouse.ts');
+      return {
+        translation: input.canonicalizeSixDofTranslation([1, -2, -3]),
+        rotation: input.canonicalizeSixDofRotation([1, -2, 3]),
+      };
+    });
+    assert.deepEqual(
+      canonicalCalibration,
+      {
+        translation: [1, 2, 3],
+        rotation: [-1, 2, -3],
+      },
+      'device axes are converted to right/forward/up object-motion signs',
+    );
 
     let previousOrientation = await readOrientation(page);
     const axisReports = [

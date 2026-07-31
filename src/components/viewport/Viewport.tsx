@@ -6077,6 +6077,73 @@ export function Viewport() {
       return bounds;
     };
 
+    // Orbit pivot and camera look target are deliberately separate. Panning
+    // changes `controls.target`, but orbiting a panned view should still turn
+    // the part around its geometric center without first snapping the view.
+    const sharedOrbitPivot = initialTarget.clone();
+    let sharedOrbitPivotAvailable = false;
+
+    const refreshSharedOrbitPivot = () => {
+      scene.updateMatrixWorld(true);
+      const solidBounds =
+        solidGroup.visible && solidGroup.children.length > 0
+          ? new CAD.Box3().setFromObject(solidGroup, true)
+          : new CAD.Box3();
+      const bounds = solidBounds.isEmpty() ? getVisibleBounds() : solidBounds;
+      sharedOrbitPivotAvailable = !bounds.isEmpty();
+      if (sharedOrbitPivotAvailable) {
+        sharedOrbitPivot
+          .addVectors(bounds.min, bounds.max)
+          .multiplyScalar(0.5);
+      }
+    };
+
+    const currentOrbitPivot = () =>
+      sharedOrbitPivotAvailable
+        ? sharedOrbitPivot.clone()
+        : controls.target.clone();
+
+    const orbitFrameQuaternion = (
+      position: CAD.Vector3,
+      pivot: CAD.Vector3,
+      upReference: CAD.Vector3,
+    ) => {
+      const z = position.clone().sub(pivot).normalize();
+      if (z.lengthSq() < 1e-12) z.z = 1;
+      let x = new CAD.Vector3().crossVectors(upReference, z).normalize();
+      if (x.lengthSq() < 1e-12) {
+        z.x += 1e-6;
+        x = new CAD.Vector3().crossVectors(upReference, z).normalize();
+      }
+      const y = new CAD.Vector3().crossVectors(z, x).normalize();
+      return new CAD.Quaternion().setFromRotationMatrix(
+        new CAD.Matrix4().makeBasis(x, y, z),
+      );
+    };
+
+    /**
+     * Rotate the complete camera rig around a world-space geometry pivot.
+     * Rotating position, look target, and up together keeps the pivot at the
+     * same screen pixel, so choosing the model center never causes a jump.
+     */
+    const applyCameraRigTurn = (
+      turn: CAD.Quaternion,
+      pivot: CAD.Vector3,
+    ) => {
+      const positionOffset = camera.position
+        .clone()
+        .sub(pivot)
+        .applyQuaternion(turn);
+      const targetOffset = controls.target
+        .clone()
+        .sub(pivot)
+        .applyQuaternion(turn);
+      camera.position.copy(pivot).add(positionOffset);
+      controls.target.copy(pivot).add(targetOffset);
+      camera.up.applyQuaternion(turn).normalize();
+      camera.lookAt(controls.target);
+    };
+
     const fitVisibleGeometry = () => {
       const bounds = getVisibleBounds();
       if (bounds.isEmpty()) {
@@ -6300,9 +6367,21 @@ export function Viewport() {
           quaternion: camera.quaternion.toArray(),
         };
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
-        // up-mapped frame, deltas scaled by element height) so every orbit
-        // input feels identical to right-drag orbit in the canvas.
-        const offset = camera.position.clone().sub(controls.target);
+        // up-mapped frame, deltas scaled by element height), but derive a rigid
+        // camera-rig turn around the actual model center rather than assuming
+        // the potentially panned look target is also the orbit pivot.
+        let pivot = currentOrbitPivot();
+        let offset = camera.position.clone().sub(pivot);
+        if (offset.lengthSq() < 1e-12) {
+          pivot = controls.target.clone();
+          offset = camera.position.clone().sub(pivot);
+        }
+        const orbitRadiusBefore = offset.length();
+        const frameBefore = orbitFrameQuaternion(
+          camera.position,
+          pivot,
+          camera.up,
+        );
         const quat = new CAD.Quaternion().setFromUnitVectors(
           camera.up.clone().normalize(),
           new CAD.Vector3(0, 1, 0),
@@ -6316,11 +6395,20 @@ export function Viewport() {
         spherical.makeSafe();
         offset.setFromSpherical(spherical);
         offset.applyQuaternion(quatInv);
-        camera.position.copy(controls.target).add(offset);
-        camera.lookAt(controls.target);
+        const nextPosition = pivot.clone().add(offset);
+        const frameAfter = orbitFrameQuaternion(
+          nextPosition,
+          pivot,
+          camera.up,
+        );
+        const turn = frameAfter.multiply(frameBefore.invert()).normalize();
+        applyCameraRigTurn(turn, pivot);
         recordNavigationDiagnostic('camera.orbit.applied', {
           input: { dx, dy },
           viewportHeight: height,
+          pivot: pivot.toArray(),
+          orbitRadiusBefore,
+          orbitRadiusAfter: camera.position.distanceTo(pivot),
           before,
           after: {
             position: camera.position.toArray(),
@@ -6340,7 +6428,8 @@ export function Viewport() {
           quaternion: camera.quaternion.toArray(),
         };
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
-        const distance = Math.max(1, camera.position.distanceTo(controls.target));
+        const pivot = currentOrbitPivot();
+        const distance = Math.max(1, camera.position.distanceTo(pivot));
         const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
         const up = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
         const forward = new CAD.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
@@ -6362,10 +6451,7 @@ export function Viewport() {
         const roll = new CAD.Quaternion().setFromAxisAngle(forward, -rotation[1] * angle);
         const yaw = new CAD.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);
         const turn = yaw.multiply(pitch).multiply(roll);
-        const offset = camera.position.clone().sub(controls.target).applyQuaternion(turn);
-        camera.position.copy(controls.target).add(offset);
-        camera.up.applyQuaternion(turn).normalize();
-        camera.lookAt(controls.target);
+        applyCameraRigTurn(turn, pivot);
         recordNavigationDiagnostic('camera.sixdof.applied', {
           input: { translation, rotation, deltaSeconds },
           integration: {
@@ -6376,6 +6462,7 @@ export function Viewport() {
             right: right.toArray(),
             forward: forward.toArray(),
             up: up.toArray(),
+            pivot: pivot.toArray(),
             translationDelta: delta.toArray(),
             turn: turn.toArray(),
           },
@@ -6748,6 +6835,7 @@ export function Viewport() {
       edgeHover: store.getState().hoveredEdge,
     };
     rebuildSolids();
+    refreshSharedOrbitPivot();
     let lastDatumPlanes = store.getState().datumPlanes;
     let lastDatumHidden = store.getState().hidden;
     let lastDatumDocument = store.getState().document;
@@ -6809,6 +6897,7 @@ export function Viewport() {
         lastHoleSupportFace = resolvedHoleSupportFace(s)?.id ?? null;
         lastCurvePicker = s.curvePicker;
         rebuildFinished();
+        refreshSharedOrbitPivot();
       }
       if (s.profilePicker !== lastProfilePicker || s.hidden !== lastProfileHidden) {
         lastProfilePicker = s.profilePicker;
@@ -6826,6 +6915,7 @@ export function Viewport() {
         lastSolidDocument = s.document;
         lastBodyAppearances = s.bodyAppearances;
         rebuildSolids();
+        refreshSharedOrbitPivot();
       }
       if (
         s.datumPlanes !== lastDatumPlanes ||

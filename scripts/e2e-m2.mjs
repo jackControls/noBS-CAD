@@ -246,32 +246,69 @@ try {
   );
   await page.waitForTimeout(100);
   const stableOrbitCenter = await page.evaluate(async () => {
-    const initialTarget = window.__cameraApi.getSnapshot().target;
+    const api = window.__cameraApi;
+    const positions =
+      window.__appStore.getState().solidScene.bodies[0].mesh.positions;
+    const minimum = [Infinity, Infinity, Infinity];
+    const maximum = [-Infinity, -Infinity, -Infinity];
+    for (let index = 0; index < positions.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis], positions[index + axis]);
+        maximum[axis] = Math.max(maximum[axis], positions[index + axis]);
+      }
+    }
+    const center = minimum.map(
+      (value, axis) => (value + maximum[axis]) / 2,
+    );
+    const measure = () => {
+      const snapshot = api.getSnapshot();
+      const screen = api.worldToScreen(center);
+      return {
+        radius: Math.hypot(
+          ...snapshot.position.map((value, axis) => value - center[axis]),
+        ),
+        screen,
+      };
+    };
+    const initial = measure();
     window.__cameraApi.orbitBy(12, -8);
-    const touchpadTarget = window.__cameraApi.getSnapshot().target;
+    const firstTouchpad = measure();
     await new Promise((resolve) => setTimeout(resolve, 260));
     window.__cameraApi.orbitBy(8, -5);
-    const touchpadTargetAfterPause = window.__cameraApi.getSnapshot().target;
+    const secondTouchpad = measure();
     window.__cameraApi.navigateSixDof({
       translation: [0, 0, 0],
       rotation: [0.35, 0, 0],
       deltaSeconds: 1 / 60,
     });
-    const sixDofTarget = window.__cameraApi.getSnapshot().target;
+    const sixDof = measure();
     window.__cameraApi.fit();
-    const delta = (point) =>
-      Math.hypot(...point.map((value, axis) => value - initialTarget[axis]));
+    const radiusDrift = (sample) => Math.abs(sample.radius - initial.radius);
+    const screenDrift = (sample) =>
+      initial.screen && sample.screen
+        ? Math.hypot(
+            sample.screen.x - initial.screen.x,
+            sample.screen.y - initial.screen.y,
+          )
+        : Infinity;
     return {
-      firstOrbitDelta: delta(touchpadTarget),
-      pausedOrbitDelta: delta(touchpadTargetAfterPause),
-      sixDofRotationDelta: delta(sixDofTarget),
+      center,
+      firstOrbitRadiusDrift: radiusDrift(firstTouchpad),
+      pausedOrbitRadiusDrift: radiusDrift(secondTouchpad),
+      sixDofRadiusDrift: radiusDrift(sixDof),
+      firstOrbitScreenDrift: screenDrift(firstTouchpad),
+      pausedOrbitScreenDrift: screenDrift(secondTouchpad),
+      sixDofScreenDrift: screenDrift(sixDof),
     };
   });
   check(
-    'touchpad and 3D-mouse rotation keep one explicit target',
-    stableOrbitCenter.firstOrbitDelta < 1e-6 &&
-      stableOrbitCenter.pausedOrbitDelta < 1e-6 &&
-      stableOrbitCenter.sixDofRotationDelta < 1e-6,
+    'touchpad and 3D-mouse rotate around the visible body center',
+    stableOrbitCenter.firstOrbitRadiusDrift < 1e-5 &&
+      stableOrbitCenter.pausedOrbitRadiusDrift < 1e-5 &&
+      stableOrbitCenter.sixDofRadiusDrift < 1e-5 &&
+      stableOrbitCenter.firstOrbitScreenDrift < 0.05 &&
+      stableOrbitCenter.pausedOrbitScreenDrift < 0.05 &&
+      stableOrbitCenter.sixDofScreenDrift < 0.05,
     JSON.stringify(stableOrbitCenter),
   );
   await page.waitForTimeout(350);

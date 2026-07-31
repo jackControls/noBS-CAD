@@ -126,6 +126,33 @@ function normalizeAxis(raw: number): number {
   return Math.abs(normalized) < 0.025 ? 0 : normalized;
 }
 
+const reversedAxis = (value: number) => (value === 0 ? 0 : -value);
+
+/**
+ * Convert the 3Dconnexion device basis into the camera API's object-motion
+ * basis. A physical push right is +X, while away and lift arrive as -Y/-Z.
+ */
+export function canonicalizeSixDofTranslation(
+  device: [number, number, number],
+): [number, number, number] {
+  return [device[0], reversedAxis(device[1]), reversedAxis(device[2])];
+}
+
+/**
+ * Positive camera-API rotation describes the part following the cap. The
+ * 3Dconnexion Rx/Ry/Rz signs describe the inverse view rotation, so all three
+ * rotational channels reverse at this device boundary.
+ */
+export function canonicalizeSixDofRotation(
+  device: [number, number, number],
+): [number, number, number] {
+  return [
+    reversedAxis(device[0]),
+    reversedAxis(device[1]),
+    reversedAxis(device[2]),
+  ];
+}
+
 function readVector(data: DataView, byteOffset = 0): [number, number, number] | null {
   if (data.byteLength < byteOffset + 6) return null;
   return [
@@ -183,11 +210,21 @@ function createMotionAccumulator(onMotion: (motion: SixDofMotion) => void) {
     push(packet: NativeMotionPacket) {
       const now = performance.now();
       if (packet.translation) {
-        translation = packet.translation.map(normalizeAxis) as [number, number, number];
+        const normalizedDevice = packet.translation.map(normalizeAxis) as [
+          number,
+          number,
+          number,
+        ];
+        translation = canonicalizeSixDofTranslation(normalizedDevice);
         translationAt = now;
       }
       if (packet.rotation) {
-        rotation = packet.rotation.map(normalizeAxis) as [number, number, number];
+        const normalizedDevice = packet.rotation.map(normalizeAxis) as [
+          number,
+          number,
+          number,
+        ];
+        rotation = canonicalizeSixDofRotation(normalizedDevice);
         rotationAt = now;
       }
       recordNavigationDiagnostic('sixdof.accumulator.native-push', {
@@ -200,11 +237,11 @@ function createMotionAccumulator(onMotion: (motion: SixDofMotion) => void) {
     pushNormalized(packet: NativeMotionPacket) {
       const now = performance.now();
       if (packet.translation) {
-        translation = packet.translation;
+        translation = canonicalizeSixDofTranslation(packet.translation);
         translationAt = now;
       }
       if (packet.rotation) {
-        rotation = packet.rotation;
+        rotation = canonicalizeSixDofRotation(packet.rotation);
         rotationAt = now;
       }
       recordNavigationDiagnostic('sixdof.accumulator.normalized-push', {

@@ -194,7 +194,7 @@ try {
         1e-5,
       ) && orbitCamera.position.distanceTo(positionBefore) > 0.1;
 
-    // Raw 3D-mouse axes use the documented object-mode convention:
+    // Canonical camera-API axes use the documented object-mode convention:
     // +X right, +Y forward, +Z up. The camera moves oppositely so the part
     // follows the physical cap. Verify all three axes in the live camera path.
     const liveCamera = window.__cameraApi;
