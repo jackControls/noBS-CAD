@@ -44,8 +44,9 @@ Server key written into configs: **`nobs-cad`**.
 |------|----------|
 | `--dry-run` | **Zero** `cargo build`, binary copy, config write, or backup |
 | `--clients` | **Required** for install writes; omit only with `--dry-run` to discover |
-| Backups | Existing configs copied to `*.bak.<pid>` before replace |
-| Atomic write | Temp file + rename into place |
+| Duplicate clients | Repeated names are collapsed before any config is touched |
+| Backups | Existing configs copied once to `*.bak.<pid>` before replace |
+| Atomic write | Temp file inherits the existing portable permissions, then renames into place |
 | Supported clients | `cursor`, `vscode`, `claude`, `opencode` only |
 | Rejected | `grok` / `xai` (no official contract yet) |
 
@@ -77,7 +78,8 @@ Windows home is `%USERPROFILE%`. macOS/Linux home is `$HOME`.
 ## What “upsert” means
 
 1. Read the existing config if present (or start from an empty template).
-   Empty files and light JSONC (`//` / `/* */`) are accepted.
+   Empty files and strict JSON are accepted. Commented JSONC is refused so
+   comments are never destroyed by a pretty-print rewrite.
 2. Set / replace only the **`nobs-cad`** entry.
 3. Preserve every other server and unrelated settings.
 4. Backup (if the file existed) then write pretty JSON atomically.
@@ -86,8 +88,8 @@ Shapes used:
 
 - Cursor / Claude: top-level `mcpServers.nobs-cad`
 - VS Code: top-level `servers.nobs-cad` with `"type": "stdio"`
-- OpenCode: under the `mcp` object — flat `mcp.nobs-cad`, or nested
-  `mcp.servers.nobs-cad` when that nest already exists
+- OpenCode v2: `mcp.servers.nobs-cad`; servers connect automatically, so no
+  legacy `enabled` field is written
 
 ---
 
@@ -155,6 +157,9 @@ Local MCP behavior (disclosure, tools): [../mcp-harness.md](../mcp-harness.md).
 
 - Writes only to **user** configs (not committed project MCP files).
 - Atomic update: existing file copied to `*.bak.<pid>`, then temp+rename.
+- Existing portable config permissions, including Unix mode bits, are preserved
+  across replacement.
+- Duplicate names in `--clients` are processed once, preserving the first order.
 - Does not delete other servers.
 - Does not enable cloud transport; `nbcad-mcp` stays **local stdio**.
 - Does **not** launch UI or touch session control channels.
@@ -189,15 +194,8 @@ cargo test -p xtask
 ## Related docs
 
 | Doc | Why |
-|------|------|
-| [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure packs |
-| [mcp-harness.md](../mcp-harness.md) | Local MCP surface |
-## Related docs
-
-| Doc | Why |
 |-----|-----|
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
 | [MAINTENANCE.md](MAINTENANCE.md) | OCCT / `cargo test` for mcp-server |
 | [../mcp-harness.md](../mcp-harness.md) | As-built MCP surface |
 | [../../mcp-server/README.md](../../mcp-server/README.md) | Build the server itself |
-
