@@ -7,10 +7,10 @@
 | [Cargo.toml](Cargo.toml) | Crate deps |
 | [src/main.rs](src/main.rs) | Tool registry, RPC, goldens |
 | [src/disclosure.rs](src/disclosure.rs) | Soft focus packs + tags |
-| [src/session.rs](src/session.rs) | Headless session directories |
+| [src/session.rs](src/session.rs) | UUID snapshot dirs + heartbeat list metadata |
 | [src/ffi.rs](src/ffi.rs) | OCCT FFI glue |
 | [build.rs](build.rs) | Link / OCCT discovery |
 
 Upstream product docs: [../docs/mcp-harness.md](../docs/mcp-harness.md), [../docs/agentic/STEERABLE_MCP.md](../docs/agentic/STEERABLE_MCP.md).
 
-UI snapshot bridge and client installer are follow-ups (not in this slice).
+Client installer / UI launch are follow-ups (#32). Revisioned MCP→UI sync is future work.

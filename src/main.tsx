@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { I18nProvider } from './i18n';
+import { startSessionBridge } from './sessionBridge';
 import { useAppStore } from './store/appStore';
 import './index.css';
 
@@ -12,6 +13,7 @@ declare global {
   }
 }
 window.__appStore = useAppStore;
+startSessionBridge();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

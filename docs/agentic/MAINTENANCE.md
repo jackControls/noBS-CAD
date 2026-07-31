@@ -54,8 +54,9 @@ Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on sh
 | Re-promote | 15 s |
 | Default focus | `document` |
 
-## Headless sessions
+## Snapshot bridge sessions
 
 - Env: `NBCAD_SESSION_DIR` (else `%TEMP%/nbcad-sessions`)
-- Layout: `<session_id>/model.json` (+ optional `focus.json`)
-- `cad_attach`: read-only load into the MCP process; not live UI co-link
+- Layout: `<uuid>/{model.json,focus.json,heartbeat.json}` (UUID v4 ids)
+- Tauri owns one UUID per desktop window and reserves publish generations before async export
+- `cad_attach`: read-only load into the MCP process; never writeback; not live co-link

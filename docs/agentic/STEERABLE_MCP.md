@@ -25,17 +25,20 @@ Prefer `cad_list_all_tools` for planners over leaving the main session in `full_
 
 Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 
-## Headless sessions (honest scope)
+## Snapshot bridge (honest scope)
 
 `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` implement a
-**read-only snapshot** load from `NBCAD_SESSION_DIR`:
+**read-only snapshot bridge** under `NBCAD_SESSION_DIR`:
 
+- session ids are **UUID v4** (document names rejected);
+- Tauri owns one UUID per desktop window and publishes
+  `<uuid>/{model.json,focus.json,heartbeat.json}` with pre-export generation reservations;
 - attach **fails** if `model.json` is missing or invalid;
 - MCP **never** writes the session files back after editing in memory;
 - refresh is explicit (no filesystem watcher);
-- this is **not** a live UI co-link.
+- this is **not** a live UI co-link / LWW writeback.
 
-UI publishing + UUID session ids + revisioned sync are follow-up ([PR #31](https://github.com/jackControls/noBS-CAD/pull/31)).
+Revisioned MCP→UI sync remains future work. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 
 
 ## Print export
