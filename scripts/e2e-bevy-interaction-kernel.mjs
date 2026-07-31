@@ -194,6 +194,54 @@ try {
         1e-5,
       ) && orbitCamera.position.distanceTo(positionBefore) > 0.1;
 
+    // Raw 3D-mouse axes use the documented object-mode convention:
+    // +X right, +Y forward, +Z up. The camera moves oppositely so the part
+    // follows the physical cap. Verify all three axes in the live camera path.
+    const liveCamera = window.__cameraApi;
+    const driverView = liveCamera.getSixDofDriverView();
+    const baseMatrix = [...driverView.getViewMatrix()];
+    const baseTarget = [...driverView.getViewTarget()];
+    const baseSnapshot = liveCamera.getSnapshot();
+    const basePosition = new cad.Vector3(...baseSnapshot.position);
+    const baseForward = new cad.Vector3(...baseSnapshot.target)
+      .sub(basePosition)
+      .normalize();
+    const baseRight = new cad.Vector3()
+      .crossVectors(baseForward, new cad.Vector3(...baseSnapshot.up))
+      .normalize();
+    const baseUp = new cad.Vector3()
+      .crossVectors(baseRight, baseForward)
+      .normalize();
+    const resetLiveCamera = () => {
+      driverView.setViewMatrix(baseMatrix);
+      driverView.setViewTarget(baseTarget);
+    };
+    const translatedCameraDelta = (translation) => {
+      resetLiveCamera();
+      liveCamera.navigateSixDof({
+        translation,
+        rotation: [0, 0, 0],
+        deltaSeconds: 1 / 60,
+      });
+      return new cad.Vector3(...liveCamera.getSnapshot().position).sub(
+        basePosition,
+      );
+    };
+    const translationX = translatedCameraDelta([1, 0, 0]);
+    const translationY = translatedCameraDelta([0, 1, 0]);
+    const translationZ = translatedCameraDelta([0, 0, 1]);
+    const sixDofDirections =
+      translationX.dot(baseRight) < 0 &&
+      Math.abs(translationX.dot(baseForward)) < 1e-5 &&
+      Math.abs(translationX.dot(baseUp)) < 1e-5 &&
+      translationY.dot(baseForward) < 0 &&
+      Math.abs(translationY.dot(baseRight)) < 1e-5 &&
+      Math.abs(translationY.dot(baseUp)) < 1e-5 &&
+      translationZ.dot(baseUp) < 0 &&
+      Math.abs(translationZ.dot(baseRight)) < 1e-5 &&
+      Math.abs(translationZ.dot(baseForward)) < 1e-5;
+    resetLiveCamera();
+
     // Transient preview geometry is transformed into Bevy's world coordinates.
     const previewRoot = new cad.Group();
     previewRoot.position.set(5, 6, 7);
@@ -354,6 +402,7 @@ try {
       sketchPlane,
       profileRay,
       orbit,
+      sixDofDirections,
       transientPreview,
       inputSurface,
       nativeHudProxies,
@@ -379,6 +428,7 @@ try {
       sketchPlane: true,
       profileRay: true,
       orbit: true,
+      sixDofDirections: true,
       transientPreview: true,
       inputSurface: true,
       nativeHudProxies: true,

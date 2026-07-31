@@ -320,13 +320,12 @@ mod mac_driver {
     }
 
     fn canonical_motion(device: &ConnexionDeviceState) -> MotionPacket {
-        // ConnexionClient.framework on macOS exposes a right-handed device
-        // ordering: Tx, Tz, Ty, Rx, Rz, Ry. Normalize it at the transport
-        // boundary so the shared camera kernel always receives the documented
-        // Tx, Ty, Tz, Rx, Ry, Rz order used by raw HID and Windows.
+        // ConnexionClient.h defines the processed axis array as
+        // x, y, z, rx, ry, rz. Keep that official order: the shared camera
+        // kernel interprets it as right, forward, up and pitch, roll, yaw.
         MotionPacket {
-            translation: Some([device.axis[0], device.axis[2], device.axis[1]]),
-            rotation: Some([device.axis[3], device.axis[5], device.axis[4]]),
+            translation: Some([device.axis[0], device.axis[1], device.axis[2]]),
+            rotation: Some([device.axis[3], device.axis[4], device.axis[5]]),
         }
     }
 
@@ -546,7 +545,7 @@ mod mac_driver {
         }
 
         #[test]
-        fn mac_driver_axes_are_normalized_to_the_cross_platform_order() {
+        fn mac_driver_preserves_the_documented_axis_order() {
             let device = ConnexionDeviceState {
                 version: 0,
                 client: 0,
@@ -556,7 +555,7 @@ mod mac_driver {
                 time: 0,
                 report: [0; 8],
                 buttons8: 0,
-                axis: [10, 30, 20, 40, 60, 50],
+                axis: [10, 20, 30, 40, 50, 60],
                 address: 0,
                 buttons: 0,
             };

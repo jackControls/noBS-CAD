@@ -341,7 +341,11 @@ export function Viewport() {
     // right = orbit, wheel = zoom. The pointerdown listener is registered
     // BEFORE CadOrbitControls is constructed so the remapping is observed.
     let controlsRef: CadOrbitControls | null = null;
-    let acquireOrbitPivot: () => void = () => undefined;
+    let orbitPivotNeedsRefresh = true;
+    let refreshOrbitPivot: () => void = () => undefined;
+    const markOrbitPivotForRefresh = () => {
+      orbitPivotNeedsRefresh = true;
+    };
     // Bevy is event-driven, so the interaction controller should wake only
     // for input/state changes or an animation that is still settling.
     let wakeControllerFrame: () => void = () => undefined;
@@ -350,7 +354,9 @@ export function Viewport() {
         controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.ROTATE;
       }
       if (e.button === 2 || (e.button === 1 && e.shiftKey)) {
-        acquireOrbitPivot();
+        refreshOrbitPivot();
+      } else if (e.button === 1) {
+        markOrbitPivotForRefresh();
       }
       cancelCameraAnimation();
       wakeControllerFrame();
@@ -1643,8 +1649,14 @@ export function Viewport() {
     };
 
     const navigationPivotRaycaster = new CAD.Raycaster();
-    acquireOrbitPivot = () => {
+    refreshOrbitPivot = () => {
+      if (!orbitPivotNeedsRefresh) return;
       if (!solidGroup.visible || solidGroup.children.length === 0) return;
+      // Keep one pivot across every orbit input until pan, dolly, or an
+      // explicit target update changes the user's area of interest. A
+      // time-based refresh can fire between slow touchpad events and switch
+      // to a different face while the model is turning.
+      orbitPivotNeedsRefresh = false;
       scene.updateMatrixWorld(true);
       navigationPivotRaycaster.setFromCamera(new CAD.Vector2(0, 0), camera);
       const hit = navigationPivotRaycaster
@@ -2378,6 +2390,7 @@ export function Viewport() {
     // --- Modal nav-tool drag helpers (camera never locked, D7) ---
     const panBy = (dxPx: number, dyPx: number) => {
       cancelCameraAnimation();
+      markOrbitPivotForRefresh();
       const wpp = worldPerPixel();
       const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
       const upv = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
@@ -2389,6 +2402,7 @@ export function Viewport() {
 
     const dollyBy = (factor: number) => {
       cancelCameraAnimation();
+      markOrbitPivotForRefresh();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       offset.setLength(Math.min(5000, Math.max(2, offset.length())));
       camera.position.copy(controls.target).add(offset);
@@ -5556,6 +5570,8 @@ export function Viewport() {
       // Modal nav tool: left-drag applies it (a clean click in pick-plane
       // mode still picks the plane — handled on pointerup).
       if (state.navTool !== 'select') {
+        if (state.navTool === 'orbit') refreshOrbitPivot();
+        else markOrbitPivotForRefresh();
         navDrag = {
           tool: state.navTool,
           x: e.clientX,
@@ -6103,8 +6119,6 @@ export function Viewport() {
     );
     let sixDofDriverControlsWereEnabled = true;
     const sixDofDriverPivot = controls.target.clone();
-    let lastProgrammaticOrbitAt = Number.NEGATIVE_INFINITY;
-    let lastSixDofInputAt = Number.NEGATIVE_INFINITY;
 
     const alignSixDofTargetToCamera = (distance: number) => {
       const forward = new CAD.Vector3(0, 0, -1)
@@ -6178,6 +6192,7 @@ export function Viewport() {
         if (!target.every(Number.isFinite)) return;
         cancelCameraAnimation();
         controls.target.set(...target);
+        markOrbitPivotForRefresh();
         if (sixDofDriverMotion) sixDofDriverTargetUpdated = true;
         wakeControllerFrame();
       },
@@ -6291,11 +6306,7 @@ export function Viewport() {
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
         cancelCameraAnimation();
-        const now = performance.now();
-        if (now - lastProgrammaticOrbitAt > 180) {
-          acquireOrbitPivot();
-        }
-        lastProgrammaticOrbitAt = now;
+        refreshOrbitPivot();
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height) so every orbit
         // input feels identical to right-drag orbit in the canvas.
@@ -6319,11 +6330,7 @@ export function Viewport() {
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
-        const now = performance.now();
-        if (now - lastSixDofInputAt > 140) {
-          acquireOrbitPivot();
-        }
-        lastSixDofInputAt = now;
+        refreshOrbitPivot();
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const distance = Math.max(1, camera.position.distanceTo(controls.target));
         const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();

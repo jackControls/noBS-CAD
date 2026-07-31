@@ -245,7 +245,7 @@ try {
     `selected=${app.selectedBody} body=${body.id}`,
   );
   await page.waitForTimeout(100);
-  const dynamicOrbitCenters = await page.evaluate(() => {
+  const dynamicOrbitCenters = await page.evaluate(async () => {
     const body = window.__appStore.getState().solidScene.bodies[0];
     const coordinates = body.mesh.positions;
     const bounds = {
@@ -268,6 +268,14 @@ try {
     driverView.setViewTarget([5_000, -4_000, 3_000]);
     window.__cameraApi.orbitBy(12, -8);
     const touchpadTarget = window.__cameraApi.getSnapshot().target;
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    window.__cameraApi.orbitBy(8, -5);
+    const touchpadTargetAfterPause = window.__cameraApi.getSnapshot().target;
+    const touchpadPivotDelta = Math.hypot(
+      ...touchpadTarget.map(
+        (value, axis) => value - touchpadTargetAfterPause[axis],
+      ),
+    );
 
     driverView.setViewTarget([-4_000, 3_000, 5_000]);
     window.__cameraApi.navigateSixDof({
@@ -279,12 +287,15 @@ try {
     window.__cameraApi.fit();
     return {
       touchpad: inside(touchpadTarget),
+      touchpadStable: touchpadPivotDelta < 1e-6,
       sixDof: inside(sixDofTarget),
     };
   });
   check(
-    'touchpad and 3D-mouse orbit reacquire a visible model pivot',
-    dynamicOrbitCenters.touchpad && dynamicOrbitCenters.sixDof,
+    'touchpad and 3D-mouse use one stable visible model pivot',
+    dynamicOrbitCenters.touchpad &&
+      dynamicOrbitCenters.touchpadStable &&
+      dynamicOrbitCenters.sixDof,
     JSON.stringify(dynamicOrbitCenters),
   );
   await page.waitForTimeout(350);
