@@ -85,8 +85,15 @@ async fn native_viewport_sync_model(
     engine: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
 ) -> Result<(), String> {
-    let (session_id, geometry_revision, scene, active_sketch, finished_sketches, datum_planes) =
-        engine.viewport_snapshot();
+    let (
+        session_id,
+        geometry_revision,
+        scene,
+        active_sketch,
+        finished_sketches,
+        datum_planes,
+        profile_catalog,
+    ) = engine.viewport_snapshot();
     viewport.sync_model(ViewportModel {
         session_id,
         geometry_revision,
@@ -94,6 +101,7 @@ async fn native_viewport_sync_model(
         active_sketch,
         finished_sketches,
         datum_planes,
+        profile_catalog,
     })
 }
 
@@ -494,6 +502,7 @@ pub fn run() {
                 active_sketch,
                 finished_sketches,
                 datum_planes,
+                profile_catalog,
             ) = app.state::<AppState>().viewport_snapshot();
             let _ = viewport.sync_model(ViewportModel {
                 session_id,
@@ -502,6 +511,7 @@ pub fn run() {
                 active_sketch,
                 finished_sketches,
                 datum_planes,
+                profile_catalog,
             });
             app.manage(viewport);
             Ok(())

@@ -8,7 +8,7 @@ use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
     EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
     EditSolidChamferRequest, EditSolidFilletRequest, EditSweepRequest, ExtrudeRequest, HoleRequest,
-    LoftRequest, RecomputePlanDto, ReorderFeatureRequest, RevolveRequest, RibRequest,
+    LoftRequest, ProfileCatalogItemDto, RecomputePlanDto, ReorderFeatureRequest, RevolveRequest, RibRequest,
     SetRollbackRequest, SolidChamferRequest, SolidFilletRequest, SolidSceneDto, SolidUpdateDto,
     StepExportRequest, SweepRequest,
 };
@@ -183,6 +183,7 @@ impl AppState {
         Option<SketchDto>,
         Vec<SketchDto>,
         Vec<DatumPlaneDefinitionDto>,
+        Vec<ProfileCatalogItemDto>,
     ) {
         let workspace = self.inner.lock().expect("engine lock poisoned");
         let inner = workspace.active();
@@ -193,6 +194,7 @@ impl AppState {
             inner.manager.active_snapshot(),
             inner.manager.finished_sketches(),
             inner.manager.datum_plane_definitions(),
+            inner.manager.profile_catalog(),
         )
     }
 
@@ -526,13 +528,13 @@ mod tests {
             }"#,
         ));
 
-        let (before_id, before_revision, before_scene, _, _, _) = state.viewport_snapshot();
+        let (before_id, before_revision, before_scene, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(before_id, BOOTSTRAP_SESSION_ID);
         assert_eq!(before_scene.bodies.len(), 1);
         assert!(!before_scene.bodies[0].faces.is_empty());
 
         value(state.bind_project_session("recovered-tab"));
-        let (after_id, after_revision, after_scene, _, _, _) = state.viewport_snapshot();
+        let (after_id, after_revision, after_scene, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(after_id, "recovered-tab");
         assert_eq!(after_revision, before_revision);
         assert_eq!(after_scene.bodies.len(), before_scene.bodies.len());

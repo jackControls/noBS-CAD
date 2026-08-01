@@ -21,7 +21,9 @@ pub mod ui;
 pub mod ui_lab;
 
 use nbcad_sketch::SketchDto;
-use nbcad_solid::{DatumPlaneDefinitionDto, SolidSceneDto};
+use nbcad_solid::{
+    DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
 
@@ -156,6 +158,13 @@ pub struct ViewportPresentation {
     pub hidden_datum_plane_ids: Vec<u64>,
     #[serde(default)]
     pub hidden_sketch_names: Vec<String>,
+    #[serde(default)]
+    pub profile_picker_active: bool,
+    #[serde(default)]
+    pub selected_profiles: Vec<ProfileRefDto>,
+    #[serde(default)]
+    pub candidate_profiles: Vec<ProfileRefDto>,
+    pub hovered_profile: Option<ProfileRefDto>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -383,6 +392,7 @@ pub(crate) struct ViewportModel {
     pub active_sketch: Option<SketchDto>,
     pub finished_sketches: Vec<SketchDto>,
     pub datum_planes: Vec<DatumPlaneDefinitionDto>,
+    pub profile_catalog: Vec<ProfileCatalogItemDto>,
 }
 
 pub struct NativeViewport {

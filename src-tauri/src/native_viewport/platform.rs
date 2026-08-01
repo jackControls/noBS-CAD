@@ -10,7 +10,10 @@ use bevy::{
 };
 use nbcad_core::PlaneBasis;
 use nbcad_sketch::{EntityDto, SketchDto, Vec2 as SketchVec2};
-use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, FaceDto, SolidSceneDto};
+use nbcad_solid::{
+    BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto,
+    SolidSceneDto,
+};
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
@@ -249,6 +252,7 @@ impl PlatformNativeViewport {
                         active_sketch: None,
                         finished_sketches: Vec::new(),
                         datum_planes: Vec::new(),
+                        profile_catalog: Vec::new(),
                     },
                     camera: ViewportCamera::default(),
                     logical_size: (1.0, 1.0),
@@ -916,6 +920,7 @@ struct ModelResource {
     active_sketch: Option<SketchDto>,
     finished_sketches: Vec<SketchDto>,
     datum_planes: Vec<DatumPlaneDefinitionDto>,
+    profile_catalog: Vec<ProfileCatalogItemDto>,
     revision: u64,
 }
 
@@ -1007,6 +1012,12 @@ struct NativeModelGeometry {
 struct NativeCadCamera;
 
 #[derive(Component)]
+struct CadKeyLight;
+
+#[derive(Component)]
+struct CadFillLight;
+
+#[derive(Component)]
 struct NativeDatumPlane {
     datum_id: u64,
 }
@@ -1076,8 +1087,8 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
     let initial_palette = ViewportPalette::default();
     app.insert_resource(ClearColor(rgb(initial_palette.background)))
         .insert_resource(GlobalAmbientLight {
-            color: Color::srgb(0.92, 0.95, 1.0),
-            brightness: 450.0,
+            color: Color::srgb(1.0, 1.0, 1.0),
+            brightness: 900.0,
             ..default()
         })
         .init_resource::<ModelResource>()
@@ -1134,6 +1145,7 @@ fn setup_scene(
     point_config.depth_bias = SKETCH_DEPTH_BIAS;
 
     let camera = ViewportCamera::default();
+    let (key_transform, fill_transform) = camera_relative_light_transforms(camera);
     commands.spawn((
         Name::new("React-synchronized CAD camera"),
         NativeCadCamera,
@@ -1150,23 +1162,25 @@ fn setup_scene(
 
     commands.spawn((
         Name::new("CAD key light"),
+        CadKeyLight,
         DirectionalLight {
-            color: Color::srgb(1.0, 0.97, 0.92),
-            illuminance: 9_000.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(130.0, -110.0, 180.0).looking_at(Vec3::ZERO, Vec3::Z),
-    ));
-    commands.spawn((
-        Name::new("CAD fill light"),
-        DirectionalLight {
-            color: Color::srgb(0.72, 0.82, 1.0),
-            illuminance: 2_400.0,
+            color: Color::srgb(1.0, 1.0, 1.0),
+            illuminance: 2_200.0,
             shadow_maps_enabled: false,
             ..default()
         },
-        Transform::from_xyz(-120.0, 80.0, 70.0).looking_at(Vec3::ZERO, Vec3::Z),
+        key_transform,
+    ));
+    commands.spawn((
+        Name::new("CAD fill light"),
+        CadFillLight,
+        DirectionalLight {
+            color: Color::srgb(1.0, 1.0, 1.0),
+            illuminance: 2_200.0,
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        fill_transform,
     ));
 
     for (name, basis, color) in origin_plane_bases() {
@@ -1246,8 +1260,8 @@ fn rebuild_occt_meshes(
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: rgb(palette.0.body),
-                    metallic: 0.03,
-                    perceptual_roughness: 0.72,
+                    metallic: 0.0,
+                    perceptual_roughness: 0.86,
                     cull_mode: None,
                     ..default()
                 })),
@@ -1284,6 +1298,14 @@ fn apply_camera(
     camera: Res<CameraResource>,
     mut revisions: ResMut<RenderedRevisions>,
     mut query: Query<(&mut Transform, &mut Projection), With<NativeCadCamera>>,
+    mut key_lights: Query<
+        &mut Transform,
+        (With<CadKeyLight>, Without<CadFillLight>, Without<NativeCadCamera>),
+    >,
+    mut fill_lights: Query<
+        &mut Transform,
+        (With<CadFillLight>, Without<CadKeyLight>, Without<NativeCadCamera>),
+    >,
 ) {
     if revisions.camera == camera.revision {
         return;
@@ -1299,6 +1321,42 @@ fn apply_camera(
                 .to_radians();
         }
     }
+    let (key_transform, fill_transform) = camera_relative_light_transforms(camera.camera);
+    for mut transform in &mut key_lights {
+        *transform = key_transform;
+    }
+    for mut transform in &mut fill_lights {
+        *transform = fill_transform;
+    }
+}
+
+/// A neutral, camera-relative two-light studio rig. The equal left/right
+/// offsets remove the arbitrary world-side darkening that makes a CAD part
+/// appear fixed under a room light while preserving gentle normal cues.
+fn camera_relative_light_transforms(camera: ViewportCamera) -> (Transform, Transform) {
+    let target = Vec3::from_array(camera.target);
+    let eye = Vec3::from_array(camera.position);
+    let view = (eye - target).normalize_or_zero();
+    let view = if view.length_squared() < 1.0e-8 { Vec3::Y } else { view };
+    let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
+    let up_hint = if up_hint.length_squared() < 1.0e-8 {
+        Vec3::Z
+    } else {
+        up_hint
+    };
+    let right = view.cross(up_hint).normalize_or_zero();
+    let right = if right.length_squared() < 1.0e-8 {
+        view.any_orthonormal_vector()
+    } else {
+        right
+    };
+    let rig_distance = eye.distance(target).max(100.0);
+    let key_position = target + (view + right * 0.28).normalize() * rig_distance;
+    let fill_position = target + (view - right * 0.28).normalize() * rig_distance;
+    (
+        Transform::from_translation(key_position).looking_at(target, up_hint),
+        Transform::from_translation(fill_position).looking_at(target, up_hint),
+    )
 }
 
 fn world_per_pixel_at(camera: ViewportCamera, viewport: ViewportSizeResource, origin: Vec3) -> f32 {
@@ -1424,7 +1482,7 @@ fn apply_native_presentation_styles(
         material.emissive = if selected_face || hovered_face {
             rgb(color).to_linear() * 0.32
         } else {
-            LinearRgba::BLACK
+            rgb(color).to_linear() * 0.08
         };
     }
 
@@ -1885,6 +1943,71 @@ fn draw_cad_gizmos(
             );
         }
     }
+
+    // Explicit solid-command profile selection takes priority over body
+    // occlusion. This is essential for sketches on mid/offset planes inside a
+    // part: the user must see the selectable section before choosing it for
+    // Extrude, Revolve, Sweep, or Loft.
+    if state.profile_picker_active {
+        for catalog in &model.profile_catalog {
+            if state.hidden_sketch_names.contains(&catalog.sketch_name) {
+                continue;
+            }
+            for profile in catalog
+                .profiles
+                .iter()
+                .filter(|candidate| candidate.nesting_depth % 2 == 0)
+            {
+                if !state.candidate_profiles.iter().any(|candidate| {
+                    candidate.sketch_name == catalog.sketch_name
+                        && candidate.profile_index == profile.index
+                }) {
+                    continue;
+                }
+                let selected = state.selected_profiles.iter().any(|candidate| {
+                    candidate.sketch_name == catalog.sketch_name
+                        && candidate.profile_index == profile.index
+                });
+                let hovered = state.hovered_profile.as_ref().is_some_and(|candidate| {
+                    candidate.sketch_name == catalog.sketch_name
+                        && candidate.profile_index == profile.index
+                });
+                let candidate_color = rgba(palette.0.finished_sketch, 0.94);
+                draw_profile_loop(
+                    &mut sketch_gizmos,
+                    &catalog.basis,
+                    profile,
+                    candidate_color,
+                );
+                for hole in catalog.profiles.iter().filter(|candidate| {
+                    candidate.nesting_depth % 2 == 1
+                        && candidate.parent_index == Some(profile.index)
+                }) {
+                    draw_profile_loop(
+                        &mut sketch_gizmos,
+                        &catalog.basis,
+                        hole,
+                        candidate_color,
+                    );
+                }
+                if selected || hovered {
+                    let color = rgb(if selected {
+                        palette.0.edge_selected
+                    } else {
+                        palette.0.edge_hover
+                    });
+                    draw_profile_loop(&mut highlights, &catalog.basis, profile, color);
+                    for hole in catalog.profiles.iter().filter(|candidate| {
+                        candidate.nesting_depth % 2 == 1
+                            && candidate.parent_index == Some(profile.index)
+                    }) {
+                        draw_profile_loop(&mut highlights, &catalog.basis, hole, color);
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(sketch) = &model.active_sketch {
         let origin = basis_vector(sketch.basis.origin);
         let point_pixel_size = world_per_pixel_at(camera.camera, *viewport, origin);
@@ -2347,6 +2470,26 @@ fn sketch_world(basis: &PlaneBasis, x: f64, y: f64, offset: f32) -> Vec3 {
     ) + basis_vector(basis.normal) * offset
 }
 
+fn draw_profile_loop<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    profile: &ProfileLoopDto,
+    color: Color,
+) {
+    if profile.points.len() < 2 {
+        return;
+    }
+    for index in 0..profile.points.len() {
+        let start = profile.points[index];
+        let end = profile.points[(index + 1) % profile.points.len()];
+        gizmos.line(
+            sketch_world(basis, start.x, start.y, 0.08),
+            sketch_world(basis, end.x, end.y, 0.08),
+            color,
+        );
+    }
+}
+
 fn basis_vector(vector: [f64; 3]) -> Vec3 {
     Vec3::new(vector[0] as f32, vector[1] as f32, vector[2] as f32)
 }
@@ -2595,6 +2738,7 @@ fn apply_render_command(
             resource.active_sketch = runtime.model.active_sketch.clone();
             resource.finished_sketches = runtime.model.finished_sketches.clone();
             resource.datum_planes = runtime.model.datum_planes.clone();
+            resource.profile_catalog = runtime.model.profile_catalog.clone();
             resource.revision = resource.revision.wrapping_add(1);
             if let Ok(mut current) = metrics.lock() {
                 current.body_count = runtime.model.scene.bodies.len();
@@ -2878,6 +3022,113 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_engine_ok(response: String) -> serde_json::Value {
+        let envelope: serde_json::Value =
+            serde_json::from_str(&response).expect("engine response should be JSON");
+        assert_eq!(envelope["ok"], true, "engine error: {envelope}");
+        envelope["value"].clone()
+    }
+
+    #[test]
+    fn cad_studio_lights_are_camera_relative_and_bilaterally_balanced() {
+        let camera = ViewportCamera::default();
+        let target = Vec3::from_array(camera.target);
+        let view = (Vec3::from_array(camera.position) - target).normalize();
+        let up = Vec3::from_array(camera.up).normalize();
+        let right = view.cross(up).normalize();
+        let (key, fill) = camera_relative_light_transforms(camera);
+        let key_direction = (key.translation - target).normalize();
+        let fill_direction = (fill.translation - target).normalize();
+
+        assert!((key_direction.dot(view) - fill_direction.dot(view)).abs() < 1.0e-6);
+        assert!((key_direction.dot(right) + fill_direction.dot(right)).abs() < 1.0e-6);
+
+        let rotated = ViewportCamera {
+            position: [-170.0, -170.0, 130.0],
+            ..camera
+        };
+        let (rotated_key, rotated_fill) = camera_relative_light_transforms(rotated);
+        assert_ne!(key.translation, rotated_key.translation);
+        assert_ne!(fill.translation, rotated_fill.translation);
+    }
+
+    #[test]
+    fn native_model_carries_closed_profiles_from_an_internal_midplane_sketch() {
+        let state = crate::state::AppState::new();
+        assert_engine_ok(state.engine_call(
+            "begin_sketch",
+            r#"{"type":"origin_plane","plane":"xy"}"#,
+        ));
+        assert_engine_ok(state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-20.0,"y":-20.0},
+                "p2":{"x":20.0,"y":20.0},
+                "ctrl_held":false
+            }"#,
+        ));
+        assert_engine_ok(state.engine_call("end_sketch", ""));
+        assert_engine_ok(state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "operation":"new_body",
+                "extent":{"type":"distance","distance":20.0},
+                "taper_angle_deg":0.0,
+                "flip":false,
+                "target_body_ids":[]
+            }"#,
+        ));
+        assert_engine_ok(state.engine_call(
+            "datum_plane_create",
+            r#"{
+                "source":{
+                    "type":"offset",
+                    "reference":{"type":"origin_plane","plane":"xy"},
+                    "distance":20.0
+                }
+            }"#,
+        ));
+        assert_engine_ok(state.engine_call(
+            "datum_plane_create",
+            r#"{
+                "source":{
+                    "type":"midplane",
+                    "first":{"type":"origin_plane","plane":"xy"},
+                    "second":{"type":"datum_plane","datum_id":1}
+                }
+            }"#,
+        ));
+        assert_engine_ok(state.engine_call(
+            "begin_sketch",
+            r#"{"type":"datum_plane","datum_id":2}"#,
+        ));
+        assert_engine_ok(state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-5.0,"y":-5.0},
+                "p2":{"x":5.0,"y":5.0},
+                "ctrl_held":false
+            }"#,
+        ));
+        assert_engine_ok(state.engine_call("end_sketch", ""));
+
+        let (_, _, scene, _, _, datum_planes, profile_catalog) = state.viewport_snapshot();
+        assert_eq!(scene.bodies.len(), 1);
+        assert_eq!(datum_planes.len(), 2);
+        assert!((datum_planes[1].basis.origin[2] - 10.0).abs() < 1.0e-9);
+        let profile = profile_catalog
+            .iter()
+            .find(|entry| entry.sketch_name == "Sketch2")
+            .expect("the internal midplane sketch must reach the native model");
+        assert_eq!(profile.profiles.len(), 1);
+        assert_eq!(profile.profiles[0].nesting_depth, 0);
+        assert_eq!(profile.profiles[0].points.len(), 4);
+        assert!((profile.basis.origin[2] - 10.0).abs() < 1.0e-9);
+    }
 
     #[test]
     fn visible_sketch_points_use_the_persistent_always_on_top_layer() {
@@ -3169,7 +3420,7 @@ mod tests {
             }"#,
         );
 
-        let (_, _, scene, _, _, _) = state.viewport_snapshot();
+        let (_, _, scene, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(scene.bodies[0].mesh.indices.len(), 36);
         let hit = pick_occt_scene(
@@ -3265,8 +3516,15 @@ mod tests {
             }"#,
         );
 
-        let (session_id, geometry_revision, scene, active_sketch, finished_sketches, datum_planes) =
-            state.viewport_snapshot();
+        let (
+            session_id,
+            geometry_revision,
+            scene,
+            active_sketch,
+            finished_sketches,
+            datum_planes,
+            profile_catalog,
+        ) = state.viewport_snapshot();
         assert_eq!(session_id, BOOTSTRAP_SESSION_ID);
         let face_count = scene
             .bodies
@@ -3285,6 +3543,7 @@ mod tests {
             active_sketch,
             finished_sketches,
             datum_planes,
+            profile_catalog,
         };
         let mut app = App::new();
         app.init_resource::<ModelResource>()

@@ -14,6 +14,7 @@ import type {
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   OriginPlane,
+  PlaneRef,
   Point3Dto,
   ProfileCatalogItemDto,
   ProfileRefDto,
@@ -224,6 +225,15 @@ export interface SolidCurvePicker {
 }
 
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
+export type ConstructionPlanePickTarget =
+  | 'first_reference'
+  | 'second_reference'
+  | 'axis_edge'
+  | null;
+export interface ConstructionPlanePickedEdge {
+  bodyId: number;
+  edgeId: number;
+}
 export type BodyFeatureKind =
   | 'shell'
   | 'mirror'
@@ -345,6 +355,10 @@ interface AppState {
   holePositionSelections: FinishedSketchPointPick[];
   holePositionHover: FinishedSketchPointPick | null;
   constructionPlaneDialog: { kind: ConstructionPlaneKind; featureId: number } | null;
+  /** Active viewport role for the construction-plane dialog. */
+  constructionPlanePickTarget: ConstructionPlanePickTarget;
+  constructionPlanePickedReference: PlaneRef | null;
+  constructionPlanePickedEdge: ConstructionPlanePickedEdge | null;
   bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
   sketchPatternDialog: 'rectangular' | 'circular' | null;
   /** File chooser/export operation that must keep the active tab stable. */
@@ -472,6 +486,9 @@ interface AppState {
   setHolePositionHover: (selection: FinishedSketchPointPick | null) => void;
   openConstructionPlaneDialog: (kind: ConstructionPlaneKind, featureId?: number) => void;
   closeConstructionPlaneDialog: () => void;
+  setConstructionPlanePickTarget: (target: ConstructionPlanePickTarget) => void;
+  setConstructionPlanePickedReference: (reference: PlaneRef) => void;
+  setConstructionPlanePickedEdge: (edge: ConstructionPlanePickedEdge) => void;
   openBodyFeatureDialog: (kind: BodyFeatureKind, featureId?: number) => void;
   closeBodyFeatureDialog: () => void;
   openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
@@ -538,6 +555,9 @@ function resetDocumentUiState(): Partial<AppState> {
     holePositionSelections: [],
     holePositionHover: null,
     constructionPlaneDialog: null,
+    constructionPlanePickTarget: null,
+    constructionPlanePickedReference: null,
+    constructionPlanePickedEdge: null,
     bodyFeatureDialog: null,
     sketchPatternDialog: null,
     solidBusy: false,
@@ -601,6 +621,9 @@ export const useAppStore = create<AppState>()((set) => ({
   holePositionSelections: [],
   holePositionHover: null,
   constructionPlaneDialog: null,
+  constructionPlanePickTarget: null,
+  constructionPlanePickedReference: null,
+  constructionPlanePickedEdge: null,
   bodyFeatureDialog: null,
   sketchPatternDialog: null,
   projectBusy: false,
@@ -1396,27 +1419,78 @@ export const useAppStore = create<AppState>()((set) => ({
     }),
 
   openConstructionPlaneDialog: (kind, featureId = 0) =>
-    set({
-      constructionPlaneDialog: { kind, featureId },
-      bodyFeatureDialog: null,
-      extrudeDialogFeature: null,
-      revolveDialogFeature: null,
-      sweepDialogFeature: null,
-      loftDialogFeature: null,
-      ribDialogFeature: null,
-      filletDialogFeature: null,
-      chamferDialogFeature: null,
-      holeDialogFeature: null,
-      profilePicker: null,
-      curvePicker: null,
+    set((state) => {
+      const planarFaces = state.selectedFaces.filter((faceId) =>
+        state.solidScene.bodies.some((body) =>
+          body.faces.some((face) => face.id === faceId && face.plane !== null),
+        ),
+      );
+      const activeFaceIsPlanar = state.solidScene.bodies.some((body) =>
+        body.faces.some(
+          (face) => face.id === state.selectedFace && face.plane !== null,
+        ),
+      );
+      const constructionPlanePickTarget: ConstructionPlanePickTarget =
+        featureId > 0
+          ? null
+          : kind === 'midplane'
+            ? planarFaces.length >= 2
+              ? null
+              : planarFaces.length === 1
+                ? 'second_reference'
+                : 'first_reference'
+            : kind === 'offset'
+              ? activeFaceIsPlanar
+                ? null
+                : 'first_reference'
+              : 'first_reference';
+      return {
+        constructionPlaneDialog: { kind, featureId },
+        constructionPlanePickTarget,
+        constructionPlanePickedReference: null,
+        constructionPlanePickedEdge: null,
+        bodyFeatureDialog: null,
+        extrudeDialogFeature: null,
+        revolveDialogFeature: null,
+        sweepDialogFeature: null,
+        loftDialogFeature: null,
+        ribDialogFeature: null,
+        filletDialogFeature: null,
+        chamferDialogFeature: null,
+        holeDialogFeature: null,
+        profilePicker: null,
+        curvePicker: null,
+      };
     }),
 
-  closeConstructionPlaneDialog: () => set({ constructionPlaneDialog: null }),
+  closeConstructionPlaneDialog: () =>
+    set({
+      constructionPlaneDialog: null,
+      constructionPlanePickTarget: null,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
+    }),
+
+  setConstructionPlanePickTarget: (target) =>
+    set({
+      constructionPlanePickTarget: target,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
+    }),
+
+  setConstructionPlanePickedReference: (reference) =>
+    set({ constructionPlanePickedReference: reference }),
+
+  setConstructionPlanePickedEdge: (edge) =>
+    set({ constructionPlanePickedEdge: edge }),
 
   openBodyFeatureDialog: (kind, featureId = 0) =>
     set({
       bodyFeatureDialog: { kind, featureId },
       constructionPlaneDialog: null,
+      constructionPlanePickTarget: null,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
       extrudeDialogFeature: null,
       revolveDialogFeature: null,
       sweepDialogFeature: null,

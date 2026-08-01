@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../../store/appStore';
+import type { ProfileRefDto } from '../../engine/types';
 import type { BrowserNode } from '../../types/document';
 
 export interface NativeCameraState {
@@ -110,6 +111,10 @@ interface NativePresentation {
   hiddenBodyIds: number[];
   hiddenDatumPlaneIds: number[];
   hiddenSketchNames: string[];
+  profilePickerActive: boolean;
+  candidateProfiles: ProfileRefDto[];
+  selectedProfiles: ProfileRefDto[];
+  hoveredProfile: ProfileRefDto | null;
 }
 
 export interface NativeViewportLineLayer {
@@ -538,7 +543,12 @@ export function collectNativeViewportPresentation(): NativePresentation {
   const browser = state.document?.browser ?? [];
 
   return {
-    mode: state.mode === 'pickPlane' ? 'pick_plane' : state.mode,
+    mode:
+      state.mode === 'pickPlane' ||
+      state.constructionPlanePickTarget === 'first_reference' ||
+      state.constructionPlanePickTarget === 'second_reference'
+        ? 'pick_plane'
+        : state.mode,
     hoveredOriginPlane: state.hoveredPlane,
     hoveredDatumPlaneId: state.hoveredDatumPlane,
     selectedBodyIds: state.selectedBodies,
@@ -556,6 +566,18 @@ export function collectNativeViewportPresentation(): NativePresentation {
       'construction_plane',
     ),
     hiddenSketchNames: hiddenNames(browser, state.hidden, 'sketch'),
+    profilePickerActive: state.profilePicker !== null,
+    candidateProfiles:
+      state.profilePicker?.catalog.flatMap((entry) =>
+        entry.profiles
+          .filter((profile) => profile.nesting_depth % 2 === 0)
+          .map((profile) => ({
+            sketch_name: entry.sketch_name,
+            profile_index: profile.index,
+          })),
+      ) ?? [],
+    selectedProfiles: state.profilePicker?.selected ?? [],
+    hoveredProfile: state.profilePicker?.hovered ?? null,
   };
 }
 

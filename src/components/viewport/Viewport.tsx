@@ -36,6 +36,7 @@ import type {
   EntityDto,
   OriginPlane,
   PlaneBasis,
+  PlaneRef,
   Point3Dto,
   ProfileRefDto,
   PreviewCurve,
@@ -226,7 +227,42 @@ export function Viewport() {
   const planeTagRef = useRef<HTMLDivElement>(null);
   const zoomRectRef = useRef<HTMLDivElement>(null);
   const pickingPlane = useAppStore((s) => s.mode === 'pickPlane');
+  const constructionPlanePickTarget = useAppStore(
+    (s) => s.constructionPlanePickTarget,
+  );
+  const commandSelectionPrompt = useAppStore((s) => {
+    if (s.profilePicker) {
+      const owner =
+        s.profilePicker.owner === 'extrude'
+          ? 'Extrude'
+          : s.profilePicker.owner === 'revolve'
+            ? 'Revolve'
+            : s.profilePicker.owner === 'sweep'
+              ? 'Sweep'
+              : 'Loft';
+      return `Select closed sketch profiles for ${owner}`;
+    }
+    if (s.curvePicker) return 'Select finished sketch curves in the viewport';
+    if (s.revolveDialogFeature !== null) return 'Select a straight sketch line for the revolve axis';
+    if (s.filletDialogFeature !== null) return 'Select model edges to fillet';
+    if (s.chamferDialogFeature !== null) return 'Select model edges to chamfer';
+    if (s.holeDialogFeature !== null) return 'Select a planar face, then visible sketch points for holes';
+    if (s.bodyFeatureDialog?.kind === 'shell') return 'Select faces to remove for Shell';
+    if (s.bodyFeatureDialog?.kind === 'split_body') return 'Select the body to split';
+    if (s.bodyFeatureDialog) return 'Select the target and tool bodies in the viewport';
+    return null;
+  });
   const { t } = useTranslation();
+
+  const selectionPrompt = pickingPlane
+    ? t('sketch.pickPlanePrompt')
+    : constructionPlanePickTarget === 'first_reference'
+      ? 'Select the first planar face or reference plane (Esc to stop selecting)'
+      : constructionPlanePickTarget === 'second_reference'
+        ? 'Select the second parallel face or plane (Esc to stop selecting)'
+        : constructionPlanePickTarget === 'axis_edge'
+          ? 'Select a straight model edge for the plane axis (Esc to stop selecting)'
+          : commandSelectionPrompt;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -739,6 +775,15 @@ export function Viewport() {
       // subscription, and a nested set() re-enters it (infinite recursion).
       if (!visible && planeTagRef.current) planeTagRef.current.style.display = 'none';
     };
+
+    const referencePickerVisible = (
+      state: ReturnType<typeof useAppStore.getState>,
+    ) =>
+      state.mode === 'pickPlane' ||
+      state.constructionPlanePickTarget === 'first_reference' ||
+      state.constructionPlanePickTarget === 'second_reference';
+
+    setPickerVisible(referencePickerVisible(useAppStore.getState()));
 
     const highlightPickerPlane = (hovered: OriginPlane | null) => {
       for (const p of picker) {
@@ -4333,7 +4378,9 @@ export function Viewport() {
               transparent: true,
               opacity: selected ? 0.3 : hovered ? 0.24 : 0.13,
               side: CAD.DoubleSide,
-              depthTest: true,
+              // Explicit command candidates remain visible and pickable even
+              // when the sketch plane runs through the interior of a body.
+              depthTest: false,
               depthWrite: false,
               polygonOffset: true,
               polygonOffsetFactor: -2,
@@ -4380,10 +4427,6 @@ export function Viewport() {
         .intersectObjects(profileGroup.children, true)
         .find((candidate) => candidate.object.userData.profileSurface === true);
       if (!hit) return null;
-      const occluder = raycaster
-        .intersectObjects(solidGroup.children, true)
-        .find((candidate) => candidate.object.userData.solidFace === true);
-      if (occluder && occluder.distance + 0.02 < hit.distance) return null;
       return (hit.object.userData.profileRef as ProfileRefDto | undefined) ?? null;
     };
 
@@ -4588,6 +4631,10 @@ export function Viewport() {
 
     const rebuildDatumPlanes = () => {
       const s = store.getState();
+      const pickingReferences =
+        s.mode === 'pickPlane' ||
+        s.constructionPlanePickTarget === 'first_reference' ||
+        s.constructionPlanePickTarget === 'second_reference';
       const hidden = hiddenDatumIds();
       clearGroup(datumGroup);
       for (const definition of s.datumPlanes) {
@@ -4612,7 +4659,7 @@ export function Viewport() {
           new CAD.MeshBasicMaterial({
             color: 0xd8a64d,
             transparent: true,
-            opacity: s.mode === 'pickPlane' ? 0.14 : 0.08,
+            opacity: pickingReferences ? 0.14 : 0.08,
             side: CAD.DoubleSide,
             depthWrite: false,
           }),
@@ -4633,7 +4680,7 @@ export function Viewport() {
         group.add(mesh, border);
         datumGroup.add(group);
       }
-      highlightDatumPlane(null, s.mode === 'pickPlane');
+      highlightDatumPlane(null, pickingReferences);
     };
 
     const activeBodyFeaturePickMode = (
@@ -5026,8 +5073,53 @@ export function Viewport() {
       ) {
         return 'refinable';
       }
-      if (state.constructionPlaneDialog?.kind === 'at_angle') return 'straight';
+      if (state.constructionPlanePickTarget === 'axis_edge') return 'straight';
       return null;
+    };
+
+    type ConstructionReferenceHit = {
+      reference: PlaneRef;
+      label: string;
+      face: { bodyId: number; faceId: number; point: Point3Dto } | null;
+    };
+
+    const pickConstructionReference = (
+      event: PointerEvent,
+    ): ConstructionReferenceHit | null => {
+      const face = pickSolidFace(event);
+      if (face?.planar) {
+        return {
+          reference: { type: 'planar_face', face_id: face.faceId },
+          label: t('sketch.planarFace'),
+          face: {
+            bodyId: face.bodyId,
+            faceId: face.faceId,
+            point: face.point,
+          },
+        };
+      }
+      raycaster.setFromCamera(ndcFromEvent(event), camera);
+      const datumHit = raycaster
+        .intersectObjects(datumGroup.children, true)
+        .find((hit) => hit.object.userData.datumPlaneId !== undefined);
+      if (datumHit) {
+        const datumId = datumHit.object.userData.datumPlaneId as number;
+        return {
+          reference: { type: 'datum_plane', datum_id: datumId },
+          label:
+            (datumHit.object.userData.datumPlaneName as string | undefined) ??
+            t('browser.constructionPlane'),
+          face: null,
+        };
+      }
+      const plane = pickOriginPlane(event);
+      if (!plane) return null;
+      const definition = PICKER_PLANES.find((candidate) => candidate.plane === plane)!;
+      return {
+        reference: { type: 'origin_plane', plane },
+        label: t(definition.labelKey),
+        face: null,
+      };
     };
 
     const renderEntityGhost = (group: CAD.Group, ent: EntityDto, dx: number, dy: number) => {
@@ -5378,6 +5470,47 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           return;
         }
+        const constructionReferencePicking =
+          state.constructionPlanePickTarget === 'first_reference' ||
+          state.constructionPlanePickTarget === 'second_reference';
+        if (constructionReferencePicking) {
+          updateReferencePlaneInteractionScale();
+          const referenceHit = pickConstructionReference(e);
+          const reference = referenceHit?.reference;
+          state.setHoveredFace(
+            reference?.type === 'planar_face' ? reference.face_id : null,
+          );
+          state.setHoveredDatumPlane(
+            reference?.type === 'datum_plane' ? reference.datum_id : null,
+          );
+          state.setHoveredPlane(
+            reference?.type === 'origin_plane' ? reference.plane : null,
+          );
+          highlightDatumPlane(
+            reference?.type === 'datum_plane' ? reference.datum_id : null,
+            true,
+          );
+          highlightPickerPlane(
+            reference?.type === 'origin_plane' ? reference.plane : null,
+          );
+          const tag = planeTagRef.current;
+          if (tag) {
+            if (referenceHit) {
+              const rect = surface.domElement.getBoundingClientRect();
+              tag.textContent = referenceHit.label;
+              tag.style.display = 'block';
+              tag.style.left = `${e.clientX - rect.left + 14}px`;
+              tag.style.top = `${e.clientY - rect.top + 12}px`;
+            } else {
+              tag.style.display = 'none';
+            }
+          }
+          state.setHoveredEdge(null);
+          state.setHoveredProfilePick(null);
+          state.setHoveredCurvePick(null);
+          surface.domElement.style.cursor = referenceHit ? 'crosshair' : 'not-allowed';
+          return;
+        }
         const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
         if (bodyFeaturePickMode) {
           const candidate = pickSolidFace(e);
@@ -5580,7 +5713,13 @@ export function Viewport() {
       state.setHoveredCurvePick(null);
       state.setHoveredProfilePick(null);
       state.setHolePositionHover(null);
-      highlightDatumPlane(null, state.mode === 'pickPlane');
+      highlightDatumPlane(
+        null,
+        state.mode === 'pickPlane' ||
+          state.constructionPlanePickTarget === 'first_reference' ||
+          state.constructionPlanePickTarget === 'second_reference',
+      );
+      highlightPickerPlane(null);
       const tag = planeTagRef.current;
       if (tag) tag.style.display = 'none';
       surface.domElement.style.cursor = '';
@@ -5612,6 +5751,26 @@ export function Viewport() {
       }
 
       if (state.mode === 'solid') {
+        const constructionReferencePicking =
+          state.constructionPlanePickTarget === 'first_reference' ||
+          state.constructionPlanePickTarget === 'second_reference';
+        if (constructionReferencePicking) {
+          const referenceHit = pickConstructionReference(e);
+          if (!referenceHit) return;
+          if (referenceHit.face) {
+            state.selectSolidFeature(
+              'face',
+              referenceHit.face.bodyId,
+              referenceHit.face.faceId,
+              referenceHit.face.point,
+              state.constructionPlanePickTarget === 'second_reference',
+            );
+          } else {
+            state.clearSolidSelection();
+          }
+          state.setConstructionPlanePickedReference(referenceHit.reference);
+          return;
+        }
         const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
         if (bodyFeaturePickMode) {
           const candidate = pickSolidFace(e);
@@ -5648,7 +5807,16 @@ export function Viewport() {
         if (edgePickMode) {
           const edgeHit = pickSolidEdge(e, edgePickMode);
           if (edgeHit) {
-            if (edgePickMode === 'refinable') {
+            if (state.constructionPlanePickTarget === 'axis_edge') {
+              state.selectSolidFeature(
+                'edge',
+                edgeHit.bodyId,
+                edgeHit.edgeId,
+                null,
+                false,
+              );
+              state.setConstructionPlanePickedEdge(edgeHit);
+            } else if (edgePickMode === 'refinable') {
               const current =
                 state.selectedBody === edgeHit.bodyId ? state.selectedEdges : [];
               state.setSelectedBody(edgeHit.bodyId);
@@ -6058,6 +6226,11 @@ export function Viewport() {
         return;
       }
       if (state.mode === 'solid') {
+        if (state.constructionPlanePickTarget !== null) {
+          state.setConstructionPlanePickTarget(null);
+          e.stopPropagation();
+          return;
+        }
         if (
           state.selectedBody !== null ||
           state.selectedBodies.length > 0 ||
@@ -6748,6 +6921,7 @@ export function Viewport() {
     // --- Store subscription: mode transitions, snapshots, hover sync ---
     const store = useAppStore;
     let prevMode = store.getState().mode;
+    let lastReferencePickerVisible = referencePickerVisible(store.getState());
     let lastSketch: SketchDto | null = null;
     let lastHoveredPlane: OriginPlane | null = null;
     let lastLookAtNonce = store.getState().lookAtNonce;
@@ -6832,6 +7006,13 @@ export function Viewport() {
 
     const unsub = store.subscribe((s) => {
       wakeControllerFrame();
+      const referencesVisible = referencePickerVisible(s);
+      if (referencesVisible !== lastReferencePickerVisible) {
+        lastReferencePickerVisible = referencesVisible;
+        setPickerVisible(referencesVisible);
+        highlightPickerPlane(null);
+        highlightDatumPlane(null, referencesVisible);
+      }
       // Finished-sketch rendering: refresh on list or eye-toggle change.
       if (
         s.finishedSketches !== lastFinished ||
@@ -6912,14 +7093,6 @@ export function Viewport() {
         // Update prevMode FIRST so re-entrant notifications (if any store
         // write ever happens inside a branch) see a consistent mode.
         prevMode = s.mode;
-        if (s.mode === 'pickPlane') {
-          setPickerVisible(true);
-          highlightDatumPlane(null, true);
-        }
-        if (prev === 'pickPlane' && s.mode !== 'pickPlane') {
-          setPickerVisible(false);
-          highlightDatumPlane(null, false);
-        }
         if (s.mode === 'sketch' && s.activeSketch) {
           savedView = {
             position: camera.position.clone(),
@@ -7222,14 +7395,14 @@ export function Viewport() {
         background: 'linear-gradient(180deg, var(--vp-top) 0%, var(--vp-bottom) 100%)',
       }}
     >
-      {/* Pick-plane prompt (top-center). */}
-      {pickingPlane && (
+      {/* Active viewport selection role (top-center, mirrored by Bevy HUD). */}
+      {selectionPrompt && (
         <div
           data-native-hud="prompt"
           data-native-viewport-overlay
           className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded border border-edge bg-header/90 px-3 py-1.5 text-xs text-ink backdrop-blur-sm"
         >
-          {t('sketch.pickPlanePrompt')}
+          {selectionPrompt}
         </div>
       )}
       {/* Plane name tag (follows the cursor in pick-plane mode). */}

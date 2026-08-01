@@ -34,6 +34,38 @@ try {
   await page.waitForFunction(
     () => !document.querySelector('[data-testid="construction-plane-dialog"]')?.textContent?.includes('Loading'),
   );
+  assert.equal(
+    (await state()).constructionPlanePickTarget,
+    'first_reference',
+    'a new construction plane clearly enters reference-selection mode',
+  );
+  const selectionStatus = page.getByTestId('construction-plane-selection-status');
+  await selectionStatus.waitFor({ state: 'visible' });
+  assert.match(
+    (await selectionStatus.textContent()) ?? '',
+    /Viewport selection active.*reference plane/i,
+  );
+  assert.match(
+    (await page.locator('[data-native-hud="prompt"]').textContent()) ?? '',
+    /Select the first planar face or reference plane/i,
+    'the shared Bevy HUD prompt mirrors the active dialog role',
+  );
+  await page.keyboard.press('Escape');
+  assert.equal(
+    (await state()).constructionPlanePickTarget,
+    null,
+    'Escape stops reference picking without closing the command dialog',
+  );
+  await page.getByTestId('pick-construction-first-reference').click();
+  assert.equal((await state()).constructionPlanePickTarget, 'first_reference');
+
+  const reference = planeDialog.getByLabel('Reference plane');
+  await reference.selectOption('origin:xz');
+  assert.equal(
+    (await state()).constructionPlanePickTarget,
+    null,
+    'choosing a reference from the field ends viewport selection',
+  );
   const distance = planeDialog.getByLabel('Offset distance (mm)');
   await distance.click();
   await page.keyboard.type('25');
@@ -43,8 +75,15 @@ try {
     'mouse focus replaces the complete numeric value',
   );
 
-  const reference = planeDialog.getByLabel('Reference plane');
   await reference.click();
+  await page.keyboard.press('Tab');
+  assert.equal(
+    await page
+      .getByTestId('pick-construction-first-reference')
+      .evaluate((element) => element === document.activeElement),
+    true,
+    'Tab reaches the accessible viewport Pick action after the reference field',
+  );
   await page.keyboard.press('Tab');
   assert.equal(
     await distance.evaluate((element) => element === document.activeElement),
