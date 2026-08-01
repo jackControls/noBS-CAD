@@ -35,7 +35,8 @@
   --viewport: #2a2d33;
   --viewport-rgb: 42 45 51;
   --cad-defined: #e8e9ec;
-  --cad-hover: #9ccaff;
+  --cad-hover: #ffd166;
+  --cad-sketch-selected: #c4b9ff;
   --cad-preview: #8fc4ff;
   --cad-finished: #4ac7ff;
   --cad-body: #8b9bac;
@@ -87,7 +88,8 @@
   --viewport: #dce3ea;
   --viewport-rgb: 220 227 234;
   --cad-defined: #252b32;
-  --cad-hover: #006eae;
+  --cad-hover: #9c4400;
+  --cad-sketch-selected: #5038a8;
   --cad-preview: #147fbe;
   --cad-finished: #007fb4;
   --cad-body: #9fb3c5;

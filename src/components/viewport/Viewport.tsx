@@ -252,9 +252,12 @@ export function Viewport() {
     const CSS_GRIP_FILL = cssThemeColor('--cad-grip-fill', '#ffffff');
     const COLOR_SKETCH = interactionThemeColor('--sketchline', '#5da9ff');
     const COLOR_DEFINED = interactionThemeColor('--cad-defined', '#e8e9ec');
-    const COLOR_HOVER = interactionThemeColor('--cad-hover', '#9ccaff');
+    const COLOR_HOVER = interactionThemeColor('--cad-hover', '#ffd166');
     const COLOR_ACCENT = interactionThemeColor('--accent', '#7463d8');
-    const COLOR_SELECTED = COLOR_ACCENT;
+    const COLOR_SELECTED = interactionThemeColor(
+      '--cad-sketch-selected',
+      '#c4b9ff',
+    );
     const COLOR_PREVIEW = interactionThemeColor('--cad-preview', '#8fc4ff');
     const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#4ac7ff');
     const COLOR_BODY = interactionThemeColor('--cad-body', '#8b9bac');
@@ -1198,6 +1201,9 @@ export function Viewport() {
             : fullyDefined
               ? COLOR_DEFINED
               : COLOR_SKETCH;
+      const emphasized = (id: number) =>
+        selectedSet.has(id) || id === hoveredEntity;
+      const lineWidthOf = (id: number) => (emphasized(id) ? 2 : 1.25);
 
       const lines = new Map<number, { start: Vec2; end: Vec2 }>();
       const gripPoints: Array<{ x: number; y: number; id: number; fd: boolean }> = [];
@@ -1206,7 +1212,13 @@ export function Viewport() {
         switch (entity.kind) {
           case 'line':
             lines.set(entity.id, { start: entity.start, end: entity.end });
-            addScreenLine(entityGroup, entity.start, entity.end, color, 2.25);
+            addScreenLine(
+              entityGroup,
+              entity.start,
+              entity.end,
+              color,
+              lineWidthOf(entity.id),
+            );
             break;
           case 'point':
             gripPoints.push({ x: entity.position.x, y: entity.position.y, id: entity.id, fd: entity.fully_defined });
@@ -1216,7 +1228,7 @@ export function Viewport() {
               entityGroup,
               tessellateCircle(entity.center, entity.radius),
               color,
-              2.25,
+              lineWidthOf(entity.id),
             );
             gripPoints.push({ x: entity.center.x, y: entity.center.y, id: entity.id, fd: entity.fully_defined });
             break;
@@ -1225,14 +1237,14 @@ export function Viewport() {
               entityGroup,
               tessellateArc(entity.center, entity.radius, entity.start_angle, entity.end_angle),
               color,
-              2.25,
+              lineWidthOf(entity.id),
             );
             gripPoints.push({ x: entity.center.x, y: entity.center.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'spline': {
             const pts: number[] = [];
             for (const q of entity.tessellation) pts.push(q.x, q.y, 0.05);
-            addScreenPolyline(entityGroup, pts, color, 2.25);
+            addScreenPolyline(entityGroup, pts, color, lineWidthOf(entity.id));
             for (const q of entity.points) {
               gripPoints.push({ x: q.x, y: q.y, id: entity.id, fd: entity.fully_defined });
             }
@@ -1241,29 +1253,52 @@ export function Viewport() {
         }
       }
 
-      // Point + center grips (one CAD.Points, per-vertex colors) —
-      // hidden when the palette "Points" toggle is off.
+      // Point + center grips use separate normal/emphasis layers so hovered
+      // and selected points can grow without changing every marker.
       if (showGrips && gripPoints.length > 0) {
-        const positions: number[] = [];
-        const colors: number[] = [];
-        const c = new CAD.Color();
-        for (const p of gripPoints) {
-          positions.push(p.x, p.y, 0.1);
-          c.setHex(colorOf(p.id, p.fd));
-          colors.push(c.r, c.g, c.b);
-        }
-        const geometry = new CAD.BufferGeometry();
-        geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new CAD.Float32BufferAttribute(colors, 3));
-        const material = new CAD.PointsMaterial({
-          size: 7,
-          sizeAttenuation: false,
-          vertexColors: true,
-          depthTest: false,
-        });
-        const grips = new CAD.Points(geometry, material);
-        grips.renderOrder = 5;
-        entityGroup.add(grips);
+        const addGripLayer = (
+          points: typeof gripPoints,
+          size: number,
+          renderOrder: number,
+        ) => {
+          if (points.length === 0) return;
+          const positions: number[] = [];
+          const colors: number[] = [];
+          const c = new CAD.Color();
+          for (const point of points) {
+            positions.push(point.x, point.y, 0.1);
+            c.setHex(colorOf(point.id, point.fd));
+            colors.push(c.r, c.g, c.b);
+          }
+          const geometry = new CAD.BufferGeometry();
+          geometry.setAttribute(
+            'position',
+            new CAD.Float32BufferAttribute(positions, 3),
+          );
+          geometry.setAttribute(
+            'color',
+            new CAD.Float32BufferAttribute(colors, 3),
+          );
+          const material = new CAD.PointsMaterial({
+            size,
+            sizeAttenuation: false,
+            vertexColors: true,
+            depthTest: false,
+          });
+          const grips = new CAD.Points(geometry, material);
+          grips.renderOrder = renderOrder;
+          entityGroup.add(grips);
+        };
+        addGripLayer(
+          gripPoints.filter((point) => !emphasized(point.id)),
+          7,
+          5,
+        );
+        addGripLayer(
+          gripPoints.filter((point) => emphasized(point.id)),
+          10,
+          6,
+        );
       }
 
       // Constraint glyph marks (H/V next to lines, padlock on Fixed,
@@ -2065,7 +2100,7 @@ export function Viewport() {
           acquireGroup,
           [line.start.x, line.start.y, 0.13, line.end.x, line.end.y, 0.13],
           COLOR_HOVER,
-          2.25,
+          2,
         );
       }
       snapMarker.position.set(target.point.x, target.point.y, 0.18);
@@ -3710,7 +3745,7 @@ export function Viewport() {
                 if (seq !== previewSeq) return;
                 // Removed piece renders warning-red, kept piece preview-blue.
                 clearGroup(dimPreviewGroup);
-                renderCurveInto(dimPreviewGroup, preview.removed, 0xe05555, 2.75);
+                renderCurveInto(dimPreviewGroup, preview.removed, 0xe05555, 2);
                 for (const kept of preview.kept) {
                   renderCurveInto(dimPreviewGroup, kept, COLOR_PREVIEW, 1.75);
                 }
@@ -3838,13 +3873,13 @@ export function Viewport() {
         if (!ent) continue;
         switch (ent.kind) {
           case 'line':
-            addScreenPolyline(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2);
             break;
           case 'arc':
-            addScreenPolyline(picksGroup, tessellateArc(ent.center, ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, tessellateArc(ent.center, ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_SELECTED, 2);
             break;
           case 'circle':
-            addScreenPolyline(picksGroup, tessellateCircle(ent.center, ent.radius, 0.14), COLOR_SELECTED, 2.75);
+            addScreenPolyline(picksGroup, tessellateCircle(ent.center, ent.radius, 0.14), COLOR_SELECTED, 2);
             break;
         }
       }

@@ -73,6 +73,7 @@ const INITIAL_PHYSICAL_SIZE: u32 = 32;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
+const HIGHLIGHT_LINE_WIDTH: f32 = 2.0;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
@@ -982,10 +983,11 @@ struct RenderedRevisions {
 #[derive(Component)]
 struct NativeCadBody;
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component)]
 struct NativeCadFace {
     body_id: u64,
     face_id: u64,
+    boundary: Vec<(Vec3, Vec3)>,
 }
 
 #[derive(Component)]
@@ -1097,7 +1099,7 @@ fn setup_scene(
     mut gizmo_config: ResMut<GizmoConfigStore>,
 ) {
     let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
-    highlight_config.line.width = 2.6;
+    highlight_config.line.width = HIGHLIGHT_LINE_WIDTH;
     highlight_config.depth_bias = -1.0;
 
     let camera = ViewportCamera::default();
@@ -1204,6 +1206,7 @@ fn rebuild_occt_meshes(
                 NativeCadFace {
                     body_id: body.id.0,
                     face_id: face.id.0,
+                    boundary: face_boundary_segments(body, face),
                 },
                 NativeModelGeometry {
                     session_id: model.session_id.clone(),
@@ -1267,18 +1270,20 @@ fn apply_camera(
     }
 }
 
+fn world_per_pixel_at(camera: ViewportCamera, viewport: ViewportSizeResource, origin: Vec3) -> f32 {
+    let position = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
+    let depth = (origin - position).dot(forward).max(0.2);
+    let height = viewport.logical_height.max(1.0);
+    2.0 * depth * (camera.vertical_fov_degrees.to_radians() * 0.5).tan() / height
+}
+
 fn reference_plane_half_size(
     camera: ViewportCamera,
     viewport: ViewportSizeResource,
     origin: Vec3,
 ) -> f32 {
-    let position = Vec3::from_array(camera.position);
-    let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
-    let depth = (origin - position).dot(forward).max(0.2);
-    let height = viewport.logical_height.max(1.0);
-    let world_per_pixel =
-        2.0 * depth * (camera.vertical_fov_degrees.to_radians() * 0.5).tan() / height;
-    world_per_pixel
+    world_per_pixel_at(camera, viewport, origin)
         * viewport.logical_width.min(viewport.logical_height).max(1.0)
         * (REFERENCE_PLANE_SCREEN_FRACTION * 0.5)
 }
@@ -1661,6 +1666,7 @@ fn draw_cad_gizmos(
     preview: Res<PreviewResource>,
     palette: Res<PaletteResource>,
     presentation: Res<PresentationResource>,
+    face_boundaries: Query<(&NativeCadFace, &NativeModelGeometry)>,
 ) {
     let state = &presentation.0;
     let fine = rgba(palette.0.grid_fine, 0.28);
@@ -1796,22 +1802,25 @@ fn draw_cad_gizmos(
                 );
             }
         }
+    }
 
-        for face in &body.faces {
-            let selected = state.selected_face_ids.contains(&face.id.0);
-            let hovered = state.hovered_face_id == Some(face.id.0);
-            if selected || hovered {
-                draw_face_boundary(
-                    &mut highlights,
-                    body,
-                    face,
-                    rgb(if selected {
-                        palette.0.edge_selected
-                    } else {
-                        palette.0.edge_hover
-                    }),
-                );
-            }
+    for (face, geometry) in &face_boundaries {
+        if geometry.session_id != model.session_id || state.hidden_body_ids.contains(&face.body_id)
+        {
+            continue;
+        }
+        let selected = state.selected_face_ids.contains(&face.face_id);
+        let hovered = state.hovered_face_id == Some(face.face_id);
+        if !selected && !hovered {
+            continue;
+        }
+        let color = rgb(if selected {
+            palette.0.edge_selected
+        } else {
+            palette.0.edge_hover
+        });
+        for (start, end) in &face.boundary {
+            highlights.line(*start, *end, color);
         }
     }
 
@@ -1819,12 +1828,16 @@ fn draw_cad_gizmos(
         if state.hidden_sketch_names.contains(&sketch.name) {
             continue;
         }
-        draw_sketch(&mut gizmos, sketch, |_| {
+        let origin = basis_vector(sketch.basis.origin);
+        let point_radius = world_per_pixel_at(camera.camera, *viewport, origin) * 3.5;
+        draw_sketch(&mut gizmos, sketch, point_radius, |_| {
             Some(rgba(palette.0.finished_sketch, 0.58))
         });
     }
     if let Some(sketch) = &model.active_sketch {
-        draw_sketch(&mut gizmos, sketch, |entity| {
+        let origin = basis_vector(sketch.basis.origin);
+        let point_pixel_size = world_per_pixel_at(camera.camera, *viewport, origin);
+        draw_sketch(&mut gizmos, sketch, point_pixel_size * 3.5, |entity| {
             let (id, fully_defined) = sketch_entity_style(entity);
             Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
                 palette.0.selection
@@ -1836,7 +1849,7 @@ fn draw_cad_gizmos(
                 palette.0.active_sketch
             }))
         });
-        draw_sketch(&mut highlights, sketch, |entity| {
+        draw_sketch(&mut highlights, sketch, point_pixel_size * 5.0, |entity| {
             let (id, _) = sketch_entity_style(entity);
             if state.selected_sketch_entity_ids.contains(&id) {
                 Some(rgb(palette.0.selection))
@@ -1970,39 +1983,68 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     }
 }
 
-fn draw_face_boundary<Config: GizmoConfigGroup>(
-    gizmos: &mut Gizmos<Config>,
-    body: &BodyDto,
-    face: &FaceDto,
-    color: Color,
-) {
+fn face_boundary_segments(body: &BodyDto, face: &FaceDto) -> Vec<(Vec3, Vec3)> {
     let start = face.first_index as usize;
     let end = start
         .saturating_add(face.index_count as usize)
         .min(body.mesh.indices.len());
-    let mut counts = HashMap::<(u32, u32), u32>::new();
-    for triangle in body.mesh.indices[start..end].chunks_exact(3) {
+    triangle_boundary_segments(&body.mesh.positions, &body.mesh.indices[start..end])
+}
+
+#[derive(Clone, Copy)]
+struct BoundarySegment {
+    count: u32,
+    start: Vec3,
+    end: Vec3,
+}
+
+fn triangle_boundary_segments(positions: &[f32], indices: &[u32]) -> Vec<(Vec3, Vec3)> {
+    let point = |index: u32| {
+        let offset = index as usize * 3;
+        let value = positions.get(offset..offset + 3)?;
+        Some(Vec3::new(value[0], value[1], value[2]))
+    };
+    let point_key = |value: Vec3| {
+        [
+            (value.x * 1_000_000.0).round() as i64,
+            (value.y * 1_000_000.0).round() as i64,
+            (value.z * 1_000_000.0).round() as i64,
+        ]
+    };
+    let mut segments = HashMap::<([i64; 3], [i64; 3]), BoundarySegment>::new();
+    for triangle in indices.chunks_exact(3) {
         for (a, b) in [
             (triangle[0], triangle[1]),
             (triangle[1], triangle[2]),
             (triangle[2], triangle[0]),
         ] {
-            let edge = if a <= b { (a, b) } else { (b, a) };
-            *counts.entry(edge).or_default() += 1;
+            let (Some(start), Some(end)) = (point(a), point(b)) else {
+                continue;
+            };
+            let start_key = point_key(start);
+            let end_key = point_key(end);
+            if start_key == end_key {
+                continue;
+            }
+            let key = if start_key <= end_key {
+                (start_key, end_key)
+            } else {
+                (end_key, start_key)
+            };
+            segments
+                .entry(key)
+                .and_modify(|segment| segment.count += 1)
+                .or_insert(BoundarySegment {
+                    count: 1,
+                    start,
+                    end,
+                });
         }
     }
-    for ((a, b), count) in counts {
-        if count != 1 {
-            continue;
-        }
-        let Some(start) = mesh_position(body, a) else {
-            continue;
-        };
-        let Some(end) = mesh_position(body, b) else {
-            continue;
-        };
-        gizmos.line(start, end, color);
-    }
+    segments
+        .into_values()
+        .filter_map(|segment| (segment.count == 1).then_some((segment.start, segment.end)))
+        .collect()
 }
 
 fn sketch_entity_style(entity: &EntityDto) -> (u64, bool) {
@@ -2028,6 +2070,7 @@ fn sketch_entity_style(entity: &EntityDto) -> (u64, bool) {
 fn draw_sketch<Config, ColorFor>(
     gizmos: &mut Gizmos<Config>,
     sketch: &SketchDto,
+    point_radius: f32,
     mut color_for: ColorFor,
 ) where
     Config: GizmoConfigGroup,
@@ -2040,7 +2083,7 @@ fn draw_sketch<Config, ColorFor>(
         match entity {
             EntityDto::Point { position, .. } => {
                 let point = sketch_world(&sketch.basis, position.x, position.y, 0.05);
-                let radius = 0.22;
+                let radius = point_radius.max(0.03);
                 let u = basis_vector(sketch.basis.u) * radius;
                 let v = basis_vector(sketch.basis.v) * radius;
                 gizmos.line(point - u, point + u, color);
@@ -2847,6 +2890,32 @@ mod tests {
     }
 
     #[test]
+    fn highlighted_face_boundary_omits_shared_tessellation_diagonal() {
+        // OCCT intentionally emits separate vertices for every triangle so
+        // normals remain face-correct. The two copies of the diagonal still
+        // represent the same geometric segment and must cancel each other.
+        let positions = vec![
+            0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0, // first triangle
+            0.0, 0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 10.0, 0.0, // second triangle
+        ];
+        let segments = triangle_boundary_segments(&positions, &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(segments.len(), 4, "only the quad perimeter should remain");
+        let first = Vec3::ZERO;
+        let opposite = Vec3::new(10.0, 10.0, 0.0);
+        assert!(
+            !segments.iter().any(|(start, end)| {
+                (*start == first && *end == opposite) || (*start == opposite && *end == first)
+            }),
+            "the internal triangulation diagonal must not be rendered"
+        );
+    }
+
+    #[test]
+    fn native_highlight_stroke_respects_two_pixel_cap() {
+        assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
+    }
+
+    #[test]
     fn native_picker_hits_an_actual_occt_extrusion_snapshot() {
         let state = crate::state::AppState::new();
         state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#);
@@ -3008,6 +3077,7 @@ mod tests {
                     NativeCadFace {
                         body_id: body.id.0,
                         face_id: face.id.0,
+                        boundary: face_boundary_segments(body, face),
                     },
                     NativeModelGeometry {
                         session_id: session_id.clone(),

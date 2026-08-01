@@ -368,8 +368,8 @@ function collectPalette(): NativePalette {
     edgeSelected: cssRgb('--cad-edge-selected', '#ffc857'),
     activeSketch: cssRgb('--sketchline', '#5da9ff'),
     definedSketch: cssRgb('--cad-defined', '#e8e9ec'),
-    hover: cssRgb('--cad-hover', '#9ccaff'),
-    selection: cssRgb('--accent', '#7463d8'),
+    hover: cssRgb('--cad-hover', '#ffd166'),
+    selection: cssRgb('--cad-sketch-selected', '#c4b9ff'),
     finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
   };
