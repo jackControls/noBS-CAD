@@ -9,7 +9,7 @@ use bevy::{
     },
 };
 use nbcad_core::PlaneBasis;
-use nbcad_sketch::{EntityDto, SketchDto};
+use nbcad_sketch::{EntityDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{BodyDto, DatumPlaneDefinitionDto, FaceDto, SolidSceneDto};
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
@@ -73,6 +73,8 @@ const INITIAL_PHYSICAL_SIZE: u32 = 32;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
+const SKETCH_LINE_WIDTH: f32 = 1.25;
+const SKETCH_DEPTH_BIAS: f32 = -1.0;
 const HIGHLIGHT_LINE_WIDTH: f32 = 2.0;
 const SNAP_MARKER_HALF_SIZE_PX: f32 = 6.0;
 
@@ -1016,6 +1018,9 @@ struct NativeAnnotationRoot;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadHighlightGizmos;
 
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadSketchGizmos;
+
 fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
     let plugins = DefaultPlugins.build().set(WindowPlugin {
@@ -1033,7 +1038,8 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         close_when_requested: false,
     });
     app.add_plugins(plugins)
-        .init_gizmo_group::<CadHighlightGizmos>();
+        .init_gizmo_group::<CadHighlightGizmos>()
+        .init_gizmo_group::<CadSketchGizmos>();
 
     let (window_entity, holder) = {
         let world = app.world_mut();
@@ -1102,6 +1108,12 @@ fn setup_scene(
     let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
     highlight_config.line.width = HIGHLIGHT_LINE_WIDTH;
     highlight_config.depth_bias = -1.0;
+    let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
+    sketch_config.line.width = SKETCH_LINE_WIDTH;
+    // Visible sketches are reference graphics, not occluded model edges.
+    // Match the browser renderer's depthTest:false contract so a sketch on a
+    // face (or behind a body) remains readable until its eye toggle is hidden.
+    sketch_config.depth_bias = SKETCH_DEPTH_BIAS;
 
     let camera = ViewportCamera::default();
     commands.spawn((
@@ -1660,6 +1672,7 @@ fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
 
 fn draw_cad_gizmos(
     mut gizmos: Gizmos,
+    mut sketch_gizmos: Gizmos<CadSketchGizmos>,
     mut highlights: Gizmos<CadHighlightGizmos>,
     model: Res<ModelResource>,
     camera: Res<CameraResource>,
@@ -1831,25 +1844,37 @@ fn draw_cad_gizmos(
         }
         let origin = basis_vector(sketch.basis.origin);
         let point_radius = world_per_pixel_at(camera.camera, *viewport, origin) * 3.5;
-        draw_sketch(&mut gizmos, sketch, point_radius, |_| {
-            Some(rgba(palette.0.finished_sketch, 0.58))
+        draw_sketch(&mut sketch_gizmos, sketch, point_radius, |entity| {
+            Some(rgba(
+                palette.0.finished_sketch,
+                if matches!(entity, EntityDto::Point { .. }) {
+                    0.88
+                } else {
+                    0.58
+                },
+            ))
         });
     }
     if let Some(sketch) = &model.active_sketch {
         let origin = basis_vector(sketch.basis.origin);
         let point_pixel_size = world_per_pixel_at(camera.camera, *viewport, origin);
-        draw_sketch(&mut gizmos, sketch, point_pixel_size * 3.5, |entity| {
-            let (id, fully_defined) = sketch_entity_style(entity);
-            Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
-                palette.0.selection
-            } else if state.hovered_sketch_entity_id == Some(id) {
-                palette.0.hover
-            } else if fully_defined {
-                palette.0.defined_sketch
-            } else {
-                palette.0.active_sketch
-            }))
-        });
+        draw_sketch(
+            &mut sketch_gizmos,
+            sketch,
+            point_pixel_size * 3.5,
+            |entity| {
+                let (id, fully_defined) = sketch_entity_style(entity);
+                Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
+                    palette.0.selection
+                } else if state.hovered_sketch_entity_id == Some(id) {
+                    palette.0.hover
+                } else if fully_defined {
+                    palette.0.defined_sketch
+                } else {
+                    palette.0.active_sketch
+                }))
+            },
+        );
         draw_sketch(&mut highlights, sketch, point_pixel_size * 5.0, |entity| {
             let (id, _) = sketch_entity_style(entity);
             if state.selected_sketch_entity_ids.contains(&id) {
@@ -2168,14 +2193,7 @@ fn draw_sketch<Config, ColorFor>(
             continue;
         };
         match entity {
-            EntityDto::Point { position, .. } => {
-                let point = sketch_world(&sketch.basis, position.x, position.y, 0.05);
-                let radius = point_radius.max(0.03);
-                let u = basis_vector(sketch.basis.u) * radius;
-                let v = basis_vector(sketch.basis.v) * radius;
-                gizmos.line(point - u, point + u, color);
-                gizmos.line(point - v, point + v, color);
-            }
+            EntityDto::Point { .. } => {}
             EntityDto::Line { start, end, .. } => {
                 gizmos.line(
                     sketch_world(&sketch.basis, start.x, start.y, 0.05),
@@ -2226,7 +2244,36 @@ fn draw_sketch<Config, ColorFor>(
                 }
             }
         }
+        for position in sketch_grip_positions(entity) {
+            draw_sketch_grip(gizmos, &sketch.basis, position, point_radius, color);
+        }
     }
+}
+
+fn sketch_grip_positions(entity: &EntityDto) -> &[SketchVec2] {
+    match entity {
+        EntityDto::Point { position, .. } => std::slice::from_ref(position),
+        EntityDto::Arc { center, .. } | EntityDto::Circle { center, .. } => {
+            std::slice::from_ref(center)
+        }
+        EntityDto::Spline { points, .. } => points,
+        EntityDto::Line { .. } => &[],
+    }
+}
+
+fn draw_sketch_grip<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    position: &SketchVec2,
+    point_radius: f32,
+    color: Color,
+) {
+    let point = sketch_world(basis, position.x, position.y, 0.05);
+    let radius = point_radius.max(0.03);
+    let u = basis_vector(basis.u) * radius;
+    let v = basis_vector(basis.v) * radius;
+    gizmos.line(point - u, point + u, color);
+    gizmos.line(point - v, point + v, color);
 }
 
 fn draw_parametric_curve(
@@ -2782,6 +2829,24 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_sketch_points_use_the_persistent_always_on_top_layer() {
+        let point: EntityDto = serde_json::from_str(
+            r#"{
+                "kind": "point",
+                "id": 7,
+                "position": { "x": 0.0, "y": 0.0 },
+                "fully_defined": false
+            }"#,
+        )
+        .expect("standalone sketch point should deserialize");
+
+        assert_eq!(sketch_grip_positions(&point), &[SketchVec2::ZERO]);
+        assert_eq!(SKETCH_DEPTH_BIAS, -1.0);
+        assert!(SKETCH_LINE_WIDTH < HIGHLIGHT_LINE_WIDTH);
+        assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
+    }
 
     #[test]
     fn native_preview_preserves_endpoint_snap_semantics() {
