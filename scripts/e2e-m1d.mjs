@@ -327,8 +327,13 @@ try {
   check('finished sketch listed with its entities', s5.finishedSketches.length === 1 && s5.finishedSketches[0].entities.length > 0,
     JSON.stringify(s5.finishedSketches.map((f) => f.name)));
   const finishedVisuals = await page.evaluate(() => window.__finishedSketchVisualState());
+  const finishedPointStyles = finishedVisuals.pointRoles.map((role, index) => ({
+    role,
+    size: finishedVisuals.pointSizes[index],
+    opacity: finishedVisuals.pointOpacities[index],
+  }));
   check(
-    'finished sketch stays visible through solids without overpowering the model',
+    'finished sketch stays visible with restrained lines and compact high-contrast points',
     finishedVisuals.pointCount > 0 &&
       finishedVisuals.pointDepthTests.length > 0 &&
       finishedVisuals.pointDepthTests.every((depthTest) => !depthTest) &&
@@ -336,8 +341,12 @@ try {
       finishedVisuals.lineDepthTests.every((depthTest) => !depthTest) &&
       finishedVisuals.lineWidths.every((width) => width <= 1.15) &&
       finishedVisuals.lineOpacities.every((opacity) => opacity <= 0.42) &&
-      finishedVisuals.pointSizes.every((size) => size <= 4.5) &&
-      finishedVisuals.pointOpacities.every((opacity) => opacity <= 0.48),
+      finishedPointStyles.some(
+        (point) => point.role === 'finished-point-outline' && point.size <= 6 && point.opacity >= 0.95,
+      ) &&
+      finishedPointStyles.some(
+        (point) => point.role === 'finished-point-fill' && point.size <= 4 && point.opacity >= 0.95,
+      ),
     JSON.stringify(finishedVisuals),
   );
   await shot('m1d-05a-finished-visible-3d');
