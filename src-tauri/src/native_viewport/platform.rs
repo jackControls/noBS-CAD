@@ -67,6 +67,7 @@ use super::{
     ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
     ViewportPresentation, ViewportPreview, ViewportRect,
 };
+use crate::state::BOOTSTRAP_SESSION_ID;
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
@@ -111,6 +112,10 @@ enum RenderCommand {
         hud: ViewportHud,
     },
     Model(ViewportModel),
+    RebindModelSession {
+        from: String,
+        to: String,
+    },
     DropModelSession(String),
     Camera(ViewportCamera),
     Preview(ViewportPreview),
@@ -121,6 +126,7 @@ enum RenderCommand {
 struct PendingRenderCommands {
     resize: Option<(f64, f64, f64, ViewportPalette, ViewportHud)>,
     model: Option<ViewportModel>,
+    rebind_model_sessions: Vec<(String, String)>,
     drop_model_sessions: Vec<String>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
@@ -134,6 +140,7 @@ struct MainThreadRenderRuntime {
     camera: ViewportCamera,
     logical_size: (f32, f32),
     scale_factor: f32,
+    session_aliases: HashMap<String, String>,
 }
 
 struct PickState {
@@ -228,7 +235,7 @@ impl PlatformNativeViewport {
                 let mut render_runtime = Box::new(MainThreadRenderRuntime {
                     app: bevy_app,
                     model: ViewportModel {
-                        session_id: "__bootstrap__".to_string(),
+                        session_id: BOOTSTRAP_SESSION_ID.to_string(),
                         geometry_revision: 0,
                         scene: SolidSceneDto::default(),
                         active_sketch: None,
@@ -238,6 +245,7 @@ impl PlatformNativeViewport {
                     camera: ViewportCamera::default(),
                     logical_size: (1.0, 1.0),
                     scale_factor: scale_factor as f32,
+                    session_aliases: HashMap::new(),
                 });
                 render_frames(&mut render_runtime.app, 2, &install_metrics);
 
@@ -322,6 +330,10 @@ impl PlatformNativeViewport {
 
     pub fn drop_model_session(&self, session_id: String) -> Result<(), String> {
         self.enqueue(RenderCommand::DropModelSession(session_id))
+    }
+
+    pub fn rebind_model_session(&self, from: String, to: String) -> Result<(), String> {
+        self.enqueue(RenderCommand::RebindModelSession { from, to })
     }
 
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
@@ -2137,6 +2149,15 @@ fn push_render_command(
             hud,
         } => pending.resize = Some((logical_width, logical_height, scale_factor, palette, hud)),
         RenderCommand::Model(model) => pending.model = Some(model),
+        RenderCommand::RebindModelSession { from, to } => {
+            if !pending
+                .rebind_model_sessions
+                .iter()
+                .any(|(existing_from, existing_to)| existing_from == &from && existing_to == &to)
+            {
+                pending.rebind_model_sessions.push((from, to));
+            }
+        }
         RenderCommand::DropModelSession(session_id) => {
             if !pending.drop_model_sessions.contains(&session_id) {
                 pending.drop_model_sessions.push(session_id);
@@ -2181,6 +2202,7 @@ fn drain_render_commands(
             };
             if pending.resize.is_none()
                 && pending.model.is_none()
+                && pending.rebind_model_sessions.is_empty()
                 && pending.drop_model_sessions.is_empty()
                 && pending.camera.is_none()
                 && pending.preview.is_none()
@@ -2192,6 +2214,7 @@ fn drain_render_commands(
             (
                 pending.resize.take(),
                 pending.model.take(),
+                std::mem::take(&mut pending.rebind_model_sessions),
                 std::mem::take(&mut pending.drop_model_sessions),
                 pending.camera.take(),
                 pending.preview.take(),
@@ -2220,7 +2243,15 @@ fn drain_render_commands(
         if let Some(model) = commands.1 {
             apply_render_command(RenderCommand::Model(model), runtime, metrics, &mut dirty);
         }
-        for session_id in commands.2 {
+        for (from, to) in commands.2 {
+            apply_render_command(
+                RenderCommand::RebindModelSession { from, to },
+                runtime,
+                metrics,
+                &mut dirty,
+            );
+        }
+        for session_id in commands.3 {
             apply_render_command(
                 RenderCommand::DropModelSession(session_id),
                 runtime,
@@ -2228,10 +2259,10 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if let Some(camera) = commands.3 {
+        if let Some(camera) = commands.4 {
             apply_render_command(RenderCommand::Camera(camera), runtime, metrics, &mut dirty);
         }
-        if let Some(preview) = commands.4 {
+        if let Some(preview) = commands.5 {
             apply_render_command(
                 RenderCommand::Preview(preview),
                 runtime,
@@ -2239,7 +2270,7 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if let Some(presentation) = commands.5 {
+        if let Some(presentation) = commands.6 {
             apply_render_command(
                 RenderCommand::Presentation(presentation),
                 runtime,
@@ -2328,7 +2359,8 @@ fn apply_render_command(
             // therefore also an explicit redraw request.
             *dirty = true;
         }
-        RenderCommand::Model(next) => {
+        RenderCommand::Model(mut next) => {
+            next.session_id = canonical_model_session(&runtime.session_aliases, &next.session_id);
             runtime.model = next;
             let mut resource = runtime.app.world_mut().resource_mut::<ModelResource>();
             resource.session_id = runtime.model.session_id.clone();
@@ -2349,6 +2381,23 @@ fn apply_render_command(
                     .sum();
             }
             *dirty = true;
+        }
+        RenderCommand::RebindModelSession { from, to } => {
+            if from != to {
+                let to = canonical_model_session(&runtime.session_aliases, &to);
+                for alias in runtime.session_aliases.values_mut() {
+                    if *alias == from {
+                        *alias = to.clone();
+                    }
+                }
+                runtime.session_aliases.insert(from.clone(), to.clone());
+                if runtime.model.session_id == from {
+                    runtime.model.session_id = to.clone();
+                }
+                if rebind_cached_model_session(runtime.app.world_mut(), &from, &to) {
+                    *dirty = true;
+                }
+            }
         }
         RenderCommand::DropModelSession(session_id) => {
             drop_cached_model_session(runtime.app.world_mut(), &session_id);
@@ -2378,6 +2427,55 @@ fn apply_render_command(
             }
         }
     }
+}
+
+fn canonical_model_session(aliases: &HashMap<String, String>, session_id: &str) -> String {
+    let mut current = session_id;
+    for _ in 0..aliases.len() {
+        let Some(next) = aliases.get(current) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current.to_string()
+}
+
+/// Transfer already-uploaded GPU geometry to the permanent project-tab id.
+/// This preserves the recovered solid and avoids retessellating it during the
+/// startup handoff from the reserved bootstrap engine session.
+fn rebind_cached_model_session(world: &mut World, from: &str, to: &str) -> bool {
+    if from == to {
+        return false;
+    }
+
+    let mut changed = false;
+    {
+        let mut query = world.query::<&mut NativeModelGeometry>();
+        for mut geometry in query.iter_mut(world) {
+            if geometry.session_id == from {
+                geometry.session_id = to.to_string();
+                changed = true;
+            }
+        }
+    }
+    {
+        let mut model = world.resource_mut::<ModelResource>();
+        if model.session_id == from {
+            model.session_id = to.to_string();
+            changed = true;
+        }
+    }
+    {
+        let mut cache = world.resource_mut::<ModelGeometryCache>();
+        if let Some(revision) = cache.0.remove(from) {
+            cache.0.insert(to.to_string(), revision);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn drop_cached_model_session(world: &mut World, session_id: &str) {
@@ -2842,5 +2940,147 @@ mod tests {
             average_micros < 5_000.0,
             "native picking exceeded the demo's 5 ms CPU budget"
         );
+    }
+
+    #[test]
+    fn recovery_session_rebind_preserves_solid_faces_and_absorbs_late_bootstrap_sync() {
+        let state = crate::state::AppState::new();
+        state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#);
+        state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-10.0,"y":-10.0},
+                "p2":{"x":10.0,"y":10.0},
+                "ctrl_held":false
+            }"#,
+        );
+        state.engine_call("end_sketch", "");
+        state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "operation":"new_body",
+                "extent":{"type":"distance","distance":10.0},
+                "taper_angle_deg":0.0,
+                "flip":false,
+                "target_body_ids":[]
+            }"#,
+        );
+
+        let (session_id, geometry_revision, scene, active_sketch, finished_sketches, datum_planes) =
+            state.viewport_snapshot();
+        assert_eq!(session_id, BOOTSTRAP_SESSION_ID);
+        let face_count = scene
+            .bodies
+            .iter()
+            .map(|body| body.faces.len())
+            .sum::<usize>();
+        assert!(
+            face_count > 0,
+            "the recovery fixture must contain solid faces"
+        );
+
+        let bootstrap_model = ViewportModel {
+            session_id: session_id.clone(),
+            geometry_revision,
+            scene,
+            active_sketch,
+            finished_sketches,
+            datum_planes,
+        };
+        let mut app = App::new();
+        app.init_resource::<ModelResource>()
+            .init_resource::<ModelGeometryCache>();
+        {
+            let mut model = app.world_mut().resource_mut::<ModelResource>();
+            model.session_id = session_id.clone();
+            model.geometry_revision = geometry_revision;
+            model.scene = bootstrap_model.scene.clone();
+        }
+        app.world_mut()
+            .resource_mut::<ModelGeometryCache>()
+            .0
+            .insert(session_id.clone(), geometry_revision);
+        for body in &bootstrap_model.scene.bodies {
+            for face in &body.faces {
+                app.world_mut().spawn((
+                    NativeCadFace {
+                        body_id: body.id.0,
+                        face_id: face.id.0,
+                    },
+                    NativeModelGeometry {
+                        session_id: session_id.clone(),
+                        geometry_revision,
+                    },
+                    Visibility::Inherited,
+                ));
+            }
+        }
+
+        let mut runtime = MainThreadRenderRuntime {
+            app,
+            model: bootstrap_model.clone(),
+            camera: ViewportCamera::default(),
+            logical_size: (800.0, 600.0),
+            scale_factor: 2.0,
+            session_aliases: HashMap::new(),
+        };
+        let metrics = Arc::new(Mutex::new(MetricsState::default()));
+        let mut dirty = false;
+        apply_render_command(
+            RenderCommand::RebindModelSession {
+                from: session_id.clone(),
+                to: "recovered-tab".to_string(),
+            },
+            &mut runtime,
+            &metrics,
+            &mut dirty,
+        );
+
+        assert!(dirty, "renaming resident GPU geometry must redraw once");
+        assert_eq!(runtime.model.session_id, "recovered-tab");
+        assert_eq!(
+            runtime.app.world().resource::<ModelResource>().session_id,
+            "recovered-tab"
+        );
+        let cache = &runtime.app.world().resource::<ModelGeometryCache>().0;
+        assert_eq!(cache.get("recovered-tab"), Some(&geometry_revision));
+        assert!(!cache.contains_key(&session_id));
+        let retained_faces = {
+            let world = runtime.app.world_mut();
+            let mut query = world.query::<(&NativeCadFace, &NativeModelGeometry)>();
+            query
+                .iter(world)
+                .filter(|(_, geometry)| geometry.session_id == "recovered-tab")
+                .count()
+        };
+        assert_eq!(retained_faces, face_count);
+
+        // A native model snapshot can race with the bind command. Once the
+        // bootstrap id has been rebound, a late snapshot must resolve to the
+        // permanent tab instead of recreating the temporary session.
+        dirty = false;
+        apply_render_command(
+            RenderCommand::Model(bootstrap_model),
+            &mut runtime,
+            &metrics,
+            &mut dirty,
+        );
+        assert!(dirty);
+        assert_eq!(runtime.model.session_id, "recovered-tab");
+        assert_eq!(
+            runtime.app.world().resource::<ModelResource>().session_id,
+            "recovered-tab"
+        );
+        let faces_after_late_sync = {
+            let world = runtime.app.world_mut();
+            let mut query = world.query::<&NativeModelGeometry>();
+            query
+                .iter(world)
+                .filter(|geometry| geometry.session_id == "recovered-tab")
+                .count()
+        };
+        assert_eq!(faces_after_late_sync, face_count);
     }
 }

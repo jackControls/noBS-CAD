@@ -417,6 +417,19 @@ impl NativeViewport {
         }
     }
 
+    pub(crate) fn rebind_model_session(&self, from: String, to: String) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.inner.rebind_model_session(from, to)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = (from, to);
+            Err("the embedded native viewport is unavailable on this platform".to_string())
+        }
+    }
+
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {

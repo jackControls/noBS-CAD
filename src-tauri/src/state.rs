@@ -14,7 +14,7 @@ use nbcad_solid::{
 };
 use serde::de::DeserializeOwned;
 
-const BOOTSTRAP_SESSION_ID: &str = "__bootstrap__";
+pub(crate) const BOOTSTRAP_SESSION_ID: &str = "__bootstrap__";
 const MAX_PROJECT_SESSIONS: usize = 128;
 
 struct NativeEngine {
@@ -498,5 +498,51 @@ mod tests {
         value(state.activate_project_session("tab-a"));
         value(state.drop_project_session("tab-b"));
         assert_eq!(value(state.activate_project_session("tab-b")), false);
+    }
+
+    #[test]
+    fn binding_recovered_bootstrap_session_preserves_the_solid_model() {
+        let state = AppState::new();
+        value(state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#));
+        value(state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-10.0,"y":-10.0},
+                "p2":{"x":10.0,"y":10.0},
+                "ctrl_held":false
+            }"#,
+        ));
+        value(state.engine_call("end_sketch", ""));
+        value(state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "operation":"new_body",
+                "extent":{"type":"distance","distance":10.0},
+                "taper_angle_deg":0.0,
+                "flip":false,
+                "target_body_ids":[]
+            }"#,
+        ));
+
+        let (before_id, before_revision, before_scene, _, _, _) = state.viewport_snapshot();
+        assert_eq!(before_id, BOOTSTRAP_SESSION_ID);
+        assert_eq!(before_scene.bodies.len(), 1);
+        assert!(!before_scene.bodies[0].faces.is_empty());
+
+        value(state.bind_project_session("recovered-tab"));
+        let (after_id, after_revision, after_scene, _, _, _) = state.viewport_snapshot();
+        assert_eq!(after_id, "recovered-tab");
+        assert_eq!(after_revision, before_revision);
+        assert_eq!(after_scene.bodies.len(), before_scene.bodies.len());
+        assert_eq!(
+            after_scene.bodies[0].mesh.indices,
+            before_scene.bodies[0].mesh.indices
+        );
+        assert_eq!(
+            after_scene.bodies[0].mesh.positions,
+            before_scene.bodies[0].mesh.positions
+        );
     }
 }

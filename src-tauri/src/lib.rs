@@ -23,7 +23,7 @@ use native_viewport::{
 use nbcad_core::DocumentDto;
 use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
-use state::AppState;
+use state::{AppState, BOOTSTRAP_SESSION_ID};
 use tauri::Manager;
 
 /// Health-check command used by the frontend IPC wrapper.
@@ -379,9 +379,13 @@ fn engine_project_session_bind(
         .unwrap_or(false);
     if succeeded {
         // Recovery can hydrate the bootstrap context before its frontend tab
-        // id is known. Discard that temporary cache so it cannot be retained
-        // alongside the same model under its permanent id.
-        let _ = viewport.drop_model_session("__bootstrap__".to_string());
+        // id is known. Transfer the existing Bevy entities/cache rather than
+        // deleting the solid faces while leaving their edge overlay behind.
+        if let Err(error) =
+            viewport.rebind_model_session(BOOTSTRAP_SESSION_ID.to_string(), session_id.to_string())
+        {
+            eprintln!("could not rebind bootstrap viewport session: {error}");
+        }
     }
     result
 }
