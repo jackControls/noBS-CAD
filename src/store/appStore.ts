@@ -39,6 +39,10 @@ import {
   type ResolvedTheme,
   type ThemePreference,
 } from '../theme';
+import {
+  persistSixDofSpeed,
+  readSixDofSpeed,
+} from '../navigationPreferences';
 import type { DocumentDto, NodeId } from '../types/document';
 
 function scrubAppearances(
@@ -284,6 +288,7 @@ const DEFAULT_PALETTE: Record<PaletteOptionKey, boolean> = {
 
 const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
+const INITIAL_SIX_DOF_SPEED = readSixDofSpeed();
 
 interface AppState {
   mode: AppMode;
@@ -325,6 +330,8 @@ interface AppState {
   dimEditor: { dimId: number; initial: string; x: number; y: number } | null;
   /** Show the live "DOF: N" chip in the viewport (D4.3 optional display). */
   showDof: boolean;
+  /** Shared translation/rotation multiplier for raw/native 3D mouse input. */
+  sixDofSpeed: number;
   /** Global appearance preference; System is the first-run/default value. */
   themePreference: ThemePreference;
   resolvedTheme: ResolvedTheme;
@@ -420,6 +427,7 @@ interface AppState {
   setDimEditor: (editor: { dimId: number; initial: string; x: number; y: number } | null) => void;
   setHoveredEntity: (id: number | null) => void;
   setShowDof: (show: boolean) => void;
+  setSixDofSpeed: (speed: number) => void;
   setThemePreference: (preference: ThemePreference) => void;
   syncResolvedTheme: () => void;
   setSettingsOpen: (open: boolean) => void;
@@ -613,6 +621,7 @@ export const useAppStore = create<AppState>()((set) => ({
   dimEditor: null,
   hoveredEntity: null,
   showDof: false,
+  sixDofSpeed: INITIAL_SIX_DOF_SPEED,
   themePreference: INITIAL_THEME_PREFERENCE,
   resolvedTheme: INITIAL_RESOLVED_THEME,
   settingsOpen: false,
@@ -813,6 +822,8 @@ export const useAppStore = create<AppState>()((set) => ({
     set((s) => (s.hoveredEntity === id ? s : { hoveredEntity: id })),
 
   setShowDof: (show) => set({ showDof: show }),
+
+  setSixDofSpeed: (speed) => set({ sixDofSpeed: persistSixDofSpeed(speed) }),
 
   setThemePreference: (themePreference) => {
     persistThemePreference(themePreference);

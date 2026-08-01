@@ -42,6 +42,7 @@ export function ExtrudeDialog() {
   const configureProfilePicker = useAppStore((s) => s.configureProfilePicker);
   const replaceProfilePicks = useAppStore((s) => s.replaceProfilePicks);
   const toggleProfilePick = useAppStore((s) => s.toggleProfilePick);
+  const clearSolidSelection = useAppStore((s) => s.clearSolidSelection);
   const setSolidCommandPreview = useAppStore((s) => s.setSolidCommandPreview);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
@@ -151,8 +152,6 @@ export function ExtrudeDialog() {
     openFeature,
     planarFaces,
     scene.bodies,
-    selectedBody,
-    selectedFace,
     t,
   ]);
 
@@ -446,6 +445,11 @@ export function ExtrudeDialog() {
   };
 
   const chooseSketch = (name: string) => {
+    if (name === '') {
+      clearSolidSelection();
+      replaceProfilePicks('extrude', [], '');
+      return;
+    }
     const entry = catalog.find((item) => item.sketch_name === name);
     const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
     replaceProfilePicks(
@@ -457,8 +461,8 @@ export function ExtrudeDialog() {
     );
   };
 
-  const toggleProfile = (index: number) => {
-    toggleProfilePick({ sketch_name: sketchName, profile_index: index });
+  const toggleProfile = (profileSketchName: string, index: number) => {
+    toggleProfilePick({ sketch_name: profileSketchName, profile_index: index });
   };
 
   const toggleBody = (id: number) => {
@@ -651,6 +655,7 @@ export function ExtrudeDialog() {
                   onChange={(event) => chooseSketch(event.target.value)}
                   className={INPUT_CLASS}
                 >
+                  <option value="">{t('extrude.anyVisibleSketch')}</option>
                   {catalog.map((entry) => (
                     <option key={entry.sketch_name} value={entry.sketch_name}>
                       {entry.sketch_name}
@@ -681,32 +686,53 @@ export function ExtrudeDialog() {
                   <button
                     type="button"
                     data-testid="extrude-clear-profiles"
-                    disabled={profileIndices.length === 0}
-                    onClick={() => replaceProfilePicks('extrude', [], sketchName)}
+                    disabled={profileIndices.length === 0 && sketchName === ''}
+                    onClick={() => {
+                      clearSolidSelection();
+                      replaceProfilePicks('extrude', [], '');
+                    }}
                     className="mt-1.5 h-6 rounded border border-edge bg-header px-2 text-[10px] text-ink hover:border-accent/70 hover:bg-edge disabled:opacity-40"
                   >
                     {t('extrude.clearAndReselect')}
                   </button>
                 </div>
                 <div className="space-y-1 rounded border border-edge bg-header p-2">
-                  {selectedCatalog?.profiles.filter((profile) => profile.nesting_depth % 2 === 0).map((profile) => (
-                    <label
-                      key={profile.index}
-                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={profileIndices.includes(profile.index)}
-                        onChange={() => toggleProfile(profile.index)}
-                        className="accent-accent"
-                      />
-                      <span className="flex-1">
-                        {t('extrude.profile')} {profile.index + 1}
-                      </span>
-                      <span className="text-[10px] text-mute">
-                        {Math.abs(profile.area).toFixed(2)} mm²
-                      </span>
-                    </label>
+                  {(selectedCatalog ? [selectedCatalog] : catalog).map((entry) => (
+                    <div key={entry.sketch_name}>
+                      {!selectedCatalog && (
+                        <div className="px-1 pb-1 pt-1 text-[10px] font-semibold text-mute">
+                          {entry.sketch_name}
+                        </div>
+                      )}
+                      {entry.profiles
+                        .filter((profile) => profile.nesting_depth % 2 === 0)
+                        .map((profile) => {
+                          const checked = profilePicker?.selected.some(
+                            (candidate) =>
+                              candidate.sketch_name === entry.sketch_name
+                              && candidate.profile_index === profile.index,
+                          ) ?? false;
+                          return (
+                            <label
+                              key={`${entry.sketch_name}:${profile.index}`}
+                              className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleProfile(entry.sketch_name, profile.index)}
+                                className="accent-accent"
+                              />
+                              <span className="flex-1">
+                                {t('extrude.profile')} {profile.index + 1}
+                              </span>
+                              <span className="text-[10px] text-mute">
+                                {Math.abs(profile.area).toFixed(2)} mm²
+                              </span>
+                            </label>
+                          );
+                        })}
+                    </div>
                   ))}
                 </div>
                 <p className="mt-1.5 text-[10px] leading-4 text-mute">

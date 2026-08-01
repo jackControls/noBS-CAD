@@ -84,9 +84,25 @@ try {
   );
   const profileCheckbox = dialog.locator('input[type="checkbox"]').first();
   assert.equal(await profileCheckbox.isChecked(), true);
-  await profileCheckbox.uncheck();
+  await page.evaluate(() => {
+    window.__appStore.getState().selectSolidFeature('face', 999, 888, null, false);
+  });
+  await page.getByTestId('extrude-clear-profiles').click();
   await page.waitForFunction(
-    () => window.__appStore.getState().profilePicker?.selected.length === 0,
+    () =>
+      window.__appStore.getState().profilePicker?.selected.length === 0
+      && window.__appStore.getState().profilePicker?.sketchName === ''
+      && window.__appStore.getState().selectedFace === null,
+  );
+  assert.equal(
+    await page.getByTestId('extrude-sketch').inputValue(),
+    '',
+    'Clear & reselect removes the old sketch scope instead of trapping the picker',
+  );
+  assert.equal(
+    await page.evaluate(() => window.__nativeViewportTransient().triangles.length),
+    0,
+    'unselected candidates remain lightweight outlines instead of stacked x-ray fills',
   );
 
   // A repeated command invocation must not erase the initialized picker.
@@ -101,7 +117,15 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().profilePicker?.selected.length === 1,
   );
-  assert.equal(await profileCheckbox.isChecked(), true);
+  assert.notEqual(
+    await page.evaluate(() => window.__appStore.getState().profilePicker?.sketchName),
+    '',
+    'clicking any candidate region adopts its owning sketch',
+  );
+  assert.equal(
+    await dialog.locator('input[type="checkbox"]:checked').count(),
+    1,
+  );
   await page.waitForFunction(
     () =>
       window.__nativeViewportTransient().triangles.length >= 2

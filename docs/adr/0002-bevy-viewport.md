@@ -60,6 +60,13 @@ React retains only the accessible dimension input and drag hit target. Browser
 regressions inspect this semantic payload without maintaining a second 3D
 renderer.
 
+Transient Bevy geometry is retained. Candidate profiles use inexpensive gizmo
+outlines; only the hovered/selected region receives a translucent x-ray fill.
+Profile and tool meshes are uploaded when their semantic content changes, not
+when the camera, annotations, or screen-size arrow transform changes. Camera
+motion updates retained manipulator transforms in place. This keeps navigation
+allocation-free even while a solid command is open.
+
 ## Document tabs and memory retention
 
 Each open desktop tab normally retains three coordinated layers: its Rust
@@ -109,6 +116,11 @@ Equivalently, translation maps as `[Tx, -Ty, -Tz]` and rotation as
 browser-driver transports. The executable contracts are
 `scripts/e2e-six-dof-mouse.mjs` and
 `scripts/e2e-bevy-interaction-kernel.mjs`.
+
+Raw/native 6DoF translation and rotation share one persisted speed multiplier.
+The default is `1.5` (150% of the calibrated base rate), adjustable from 25%
+through 300% in Settings. The multiplier is applied after axis canonicalization
+so it cannot change the direction contract above.
 
 Navigation input is transient. Production builds do not expose an input
 recorder, persist raw 6DoF/touchpad packets or camera traces, or periodically

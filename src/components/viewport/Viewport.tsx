@@ -38,6 +38,7 @@ import type {
   PlaneBasis,
   PlaneRef,
   Point3Dto,
+  ProfileLoopDto,
   ProfileRefDto,
   PreviewCurve,
   PreviewDto,
@@ -940,6 +941,32 @@ export function Viewport() {
     const transientStart = new CAD.Vector3();
     const transientEnd = new CAD.Vector3();
     const transientPosition = new CAD.Vector3();
+    const profileRegionCache = new WeakMap<
+      ProfileLoopDto,
+      {
+        holes: ProfileLoopDto[];
+        region: ReturnType<typeof triangulateProfileRegion>;
+      }
+    >();
+    const cachedProfileRegion = (
+      outer: ProfileLoopDto,
+      holes: ProfileLoopDto[],
+    ) => {
+      const cached = profileRegionCache.get(outer);
+      if (
+        cached
+        && cached.holes.length === holes.length
+        && cached.holes.every((hole, index) => hole === holes[index])
+      ) {
+        return cached.region;
+      }
+      const region = triangulateProfileRegion(
+        outer.points,
+        holes.map((hole) => hole.points),
+      );
+      profileRegionCache.set(outer, { holes, region });
+      return region;
+    };
 
     /**
      * Convert the CPU interaction scene into a small semantic payload for
@@ -1218,10 +1245,7 @@ export function Viewport() {
                 profile.nesting_depth % 2 === 1
                 && profile.parent_index === outer.index,
             );
-            const region = triangulateProfileRegion(
-              outer.points,
-              holes.map((hole) => hole.points),
-            );
+            const region = cachedProfileRegion(outer, holes);
             if (!region) continue;
             const profileRef: ProfileRefDto = {
               sketch_name: catalog.sketch_name,
@@ -1231,13 +1255,18 @@ export function Viewport() {
               sameProfile(candidate, profileRef),
             );
             const hovered = sameProfile(picker.hovered, profileRef);
+            // Bevy already draws lightweight candidate outlines. Upload a
+            // translucent x-ray surface only for the profile the user is
+            // actually hovering or has selected; filling every candidate can
+            // create severe overdraw on sketch-heavy models.
+            if (!selected && !hovered) continue;
             const fill = rgbaFromHex(
               selected
                 ? COLOR_EDGE_SELECTED
                 : hovered
                   ? COLOR_EDGE_HOVER
                   : COLOR_FINISHED,
-              selected ? 0.32 : hovered ? 0.24 : 0.11,
+              selected ? 0.32 : 0.24,
             );
             const positions: number[] = [];
             for (const vertexIndex of region.indices) {
@@ -1274,10 +1303,7 @@ export function Viewport() {
               profile.nesting_depth % 2 === 1
               && profile.parent_index === outer.index,
           );
-          const region = triangulateProfileRegion(
-            outer.points,
-            holes.map((hole) => hole.points),
-          );
+          const region = cachedProfileRegion(outer, holes);
           if (!region) continue;
 
           for (let index = 0; index + 2 < region.indices.length; index += 3) {
@@ -5792,6 +5818,12 @@ export function Viewport() {
           surface.domElement.style.cursor = 'crosshair';
           return;
         }
+        if (state.profilePicker) {
+          state.setHoveredEdge(null);
+          state.setHoveredFace(null);
+          surface.domElement.style.cursor = 'not-allowed';
+          return;
+        }
         if (state.holeDialogFeature !== null) {
           const point = pickFinishedSketchPoint(e);
           const face = point ? null : pickSolidFace(e);
@@ -6081,6 +6113,10 @@ export function Viewport() {
           state.toggleProfilePick(profileHit);
           return;
         }
+        // A profile command owns the viewport selection role. Do not fall
+        // through to ordinary body/face selection and leave a misleading blue
+        // model highlight when the click was not a valid closed region.
+        if (state.profilePicker) return;
         if (state.holeDialogFeature !== null) {
           const pointHit = pickFinishedSketchPoint(e);
           if (pointHit) {
@@ -6834,6 +6870,7 @@ export function Viewport() {
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
         cancelCameraAnimation();
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
+        const speedMultiplier = store.getState().sixDofSpeed;
         const pivot = currentOrbitPivot();
         const distance = Math.max(1, camera.position.distanceTo(pivot));
         const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
@@ -6844,7 +6881,7 @@ export function Viewport() {
         // camera translates/rotates in the opposite direction. Translation
         // speed scales with view distance to stay useful from detail to
         // assembly scale.
-        const translationSpeed = distance * 0.9 * dt;
+        const translationSpeed = distance * 0.9 * dt * speedMultiplier;
         const delta = new CAD.Vector3()
           .addScaledVector(right, -translation[0] * translationSpeed)
           .addScaledVector(forward, -translation[1] * translationSpeed)
@@ -6852,7 +6889,7 @@ export function Viewport() {
         camera.position.add(delta);
         controls.target.add(delta);
 
-        const angle = 1.65 * dt;
+        const angle = 1.65 * dt * speedMultiplier;
         const pitch = new CAD.Quaternion().setFromAxisAngle(right, -rotation[0] * angle);
         const roll = new CAD.Quaternion().setFromAxisAngle(forward, -rotation[1] * angle);
         const yaw = new CAD.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);

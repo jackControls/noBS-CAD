@@ -96,7 +96,32 @@ try {
       });
     });
 
-    const connect = await waitForReady(page);
+    let connect = await waitForReady(page);
+    await page.evaluate(() => window.__appStore.getState().setSettingsOpen(true));
+    const speed = page.getByTestId('six-dof-speed');
+    await speed.waitFor({ state: 'visible' });
+    assert.equal(
+      await speed.inputValue(),
+      '1.5',
+      'new installs use the requested 150% 3D mouse speed',
+    );
+    await speed.fill('2');
+    await page.waitForFunction(
+      () => window.__appStore.getState().sixDofSpeed === 2,
+    );
+    assert.equal(
+      await page.evaluate(() => localStorage.getItem('nbcad.sixDofSpeed')),
+      '2',
+      '3D mouse speed is persisted as an application preference',
+    );
+    await page.reload({ waitUntil: 'networkidle' });
+    connect = await waitForReady(page);
+    assert.equal(
+      await page.evaluate(() => window.__appStore.getState().sixDofSpeed),
+      2,
+      'the 3D mouse speed survives an application reload',
+    );
+    await page.evaluate(() => window.__appStore.getState().setSixDofSpeed(1.5));
     assert.equal(
       await page.evaluate(() => window.__driverMock.client),
       null,

@@ -948,6 +948,10 @@ struct CameraResource {
 struct PreviewResource {
     value: ViewportPreview,
     revision: u64,
+    /// Changes only when GPU mesh content changes. Screen annotations and
+    /// sketch gizmos may update at camera frequency without reallocating the
+    /// retained profile/tool meshes.
+    mesh_revision: u64,
 }
 
 #[derive(Resource, Clone, Copy, Default)]
@@ -1002,7 +1006,6 @@ struct RenderedRevisions {
     hud: u64,
     annotations: u64,
     preview_meshes: u64,
-    preview_mesh_camera: u64,
 }
 
 #[derive(Component)]
@@ -1034,6 +1037,23 @@ struct NativeOverlayCamera;
 
 #[derive(Component)]
 struct NativePreviewMesh;
+
+#[derive(Clone, Copy)]
+enum NativePreviewArrowPartKind {
+    Shaft,
+    Head,
+    Base,
+}
+
+/// Semantic arrow data retained on each unit primitive. Camera movement only
+/// updates these transforms; it never allocates a new Mesh or Material.
+#[derive(Component, Clone, Copy)]
+struct NativePreviewArrowPart {
+    start: Vec3,
+    end: Vec3,
+    width: f32,
+    kind: NativePreviewArrowPartKind,
+}
 
 #[derive(Component)]
 struct CadKeyLight;
@@ -1134,6 +1154,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
                 resize_reference_planes,
                 apply_native_presentation_styles,
                 rebuild_native_preview_meshes,
+                update_native_preview_arrows,
                 rebuild_native_annotations,
                 rebuild_native_hud,
                 update_native_hud_orientation,
@@ -1592,22 +1613,22 @@ fn apply_native_presentation_styles(
 fn rebuild_native_preview_meshes(
     mut commands: Commands,
     preview: Res<PreviewResource>,
-    camera: Res<CameraResource>,
-    viewport: Res<ViewportSizeResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    existing: Query<Entity, With<NativePreviewMesh>>,
+    existing: Query<
+        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<NativePreviewMesh>,
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if revisions.preview_meshes == preview.revision
-        && revisions.preview_mesh_camera == camera.revision
-    {
+    if revisions.preview_meshes == preview.mesh_revision {
         return;
     }
-    revisions.preview_meshes = preview.revision;
-    revisions.preview_mesh_camera = camera.revision;
+    revisions.preview_meshes = preview.mesh_revision;
 
-    for entity in &existing {
+    for (entity, mesh, material) in &existing {
+        meshes.remove(mesh.0.id());
+        materials.remove(material.0.id());
         commands.entity(entity).despawn();
     }
 
@@ -1669,17 +1690,6 @@ fn rebuild_native_preview_meshes(
         if !length.is_finite() || length <= 1.0e-5 {
             continue;
         }
-        let direction = delta / length;
-        let center = start + delta * 0.5;
-        let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
-        let width = arrow.width.clamp(1.0, 4.0);
-        let shaft_radius = (world_per_pixel * width * 0.46).max(length * 0.003);
-        let head_length = (world_per_pixel * 11.0)
-            .max(length * 0.10)
-            .min(length * 0.42);
-        let shaft_length = (length - head_length).max(length * 0.05);
-        let head_radius = (world_per_pixel * width * 2.2).max(shaft_radius * 2.5);
-        let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
         let color = Color::srgba(
             arrow.color[0].clamp(0.0, 1.0),
             arrow.color[1].clamp(0.0, 1.0),
@@ -1697,13 +1707,18 @@ fn rebuild_native_preview_meshes(
         });
         let render_layer = arrow.xray.then(|| RenderLayers::layer(1));
 
-        let shaft_center = start + direction * (shaft_length * 0.5);
         let mut shaft = commands.spawn((
             Name::new("Native Extrude direction shaft"),
             NativePreviewMesh,
-            Mesh3d(meshes.add(Cylinder::new(shaft_radius, shaft_length))),
+            NativePreviewArrowPart {
+                start,
+                end,
+                width: arrow.width,
+                kind: NativePreviewArrowPartKind::Shaft,
+            },
+            Mesh3d(meshes.add(Cylinder::new(1.0, 1.0))),
             MeshMaterial3d(material.clone()),
-            Transform::from_translation(shaft_center).with_rotation(rotation),
+            Transform::default(),
             NotShadowCaster,
             NotShadowReceiver,
         ));
@@ -1711,13 +1726,18 @@ fn rebuild_native_preview_meshes(
             shaft.insert(layer);
         }
 
-        let head_center = start + direction * (shaft_length + head_length * 0.5);
         let mut head = commands.spawn((
             Name::new("Native Extrude direction head"),
             NativePreviewMesh,
-            Mesh3d(meshes.add(Cone::new(head_radius, head_length))),
+            NativePreviewArrowPart {
+                start,
+                end,
+                width: arrow.width,
+                kind: NativePreviewArrowPartKind::Head,
+            },
+            Mesh3d(meshes.add(Cone::new(1.0, 1.0))),
             MeshMaterial3d(material.clone()),
-            Transform::from_translation(head_center).with_rotation(rotation),
+            Transform::default(),
             NotShadowCaster,
             NotShadowReceiver,
         ));
@@ -1728,15 +1748,65 @@ fn rebuild_native_preview_meshes(
         let mut base = commands.spawn((
             Name::new("Native Extrude direction origin"),
             NativePreviewMesh,
-            Mesh3d(meshes.add(Sphere::new(head_radius * 0.54))),
+            NativePreviewArrowPart {
+                start,
+                end,
+                width: arrow.width,
+                kind: NativePreviewArrowPartKind::Base,
+            },
+            Mesh3d(meshes.add(Sphere::new(1.0))),
             MeshMaterial3d(material),
-            Transform::from_translation(start),
+            Transform::default(),
             NotShadowCaster,
             NotShadowReceiver,
         ));
         if let Some(layer) = render_layer {
             base.insert(layer);
         }
+    }
+}
+
+/// Preserve a constant logical-pixel arrow footprint without touching GPU
+/// assets. This is intentionally cheap enough to run on every demanded frame.
+fn update_native_preview_arrows(
+    camera: Res<CameraResource>,
+    viewport: Res<ViewportSizeResource>,
+    mut arrows: Query<(&NativePreviewArrowPart, &mut Transform)>,
+) {
+    for (arrow, mut transform) in &mut arrows {
+        let delta = arrow.end - arrow.start;
+        let length = delta.length();
+        if !length.is_finite() || length <= 1.0e-5 {
+            *transform = Transform::from_scale(Vec3::ZERO);
+            continue;
+        }
+        let direction = delta / length;
+        let center = arrow.start + delta * 0.5;
+        let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
+        let width = arrow.width.clamp(1.0, 4.0);
+        let shaft_radius = (world_per_pixel * width * 0.46).max(length * 0.003);
+        let head_length = (world_per_pixel * 11.0)
+            .max(length * 0.10)
+            .min(length * 0.42);
+        let shaft_length = (length - head_length).max(length * 0.05);
+        let head_radius = (world_per_pixel * width * 2.2).max(shaft_radius * 2.5);
+        let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
+
+        *transform = match arrow.kind {
+            NativePreviewArrowPartKind::Shaft => {
+                Transform::from_translation(arrow.start + direction * (shaft_length * 0.5))
+                    .with_rotation(rotation)
+                    .with_scale(Vec3::new(shaft_radius, shaft_length, shaft_radius))
+            }
+            NativePreviewArrowPartKind::Head => Transform::from_translation(
+                arrow.start + direction * (shaft_length + head_length * 0.5),
+            )
+            .with_rotation(rotation)
+            .with_scale(Vec3::new(head_radius, head_length, head_radius)),
+            NativePreviewArrowPartKind::Base => {
+                Transform::from_translation(arrow.start).with_scale(Vec3::splat(head_radius * 0.54))
+            }
+        };
     }
 }
 
@@ -2984,6 +3054,9 @@ fn apply_render_command(
         }
         RenderCommand::Preview(next) => {
             let mut resource = runtime.app.world_mut().resource_mut::<PreviewResource>();
+            if preview_mesh_content_changed(&resource.value, &next) {
+                resource.mesh_revision = resource.mesh_revision.wrapping_add(1);
+            }
             resource.value = next;
             resource.revision = resource.revision.wrapping_add(1);
             *dirty = true;
@@ -2999,6 +3072,10 @@ fn apply_render_command(
             }
         }
     }
+}
+
+fn preview_mesh_content_changed(current: &ViewportPreview, next: &ViewportPreview) -> bool {
+    current.triangles != next.triangles || current.arrows != next.arrows
 }
 
 fn canonical_model_session(aliases: &HashMap<String, String>, session_id: &str) -> String {
@@ -3389,6 +3466,46 @@ mod tests {
         assert_eq!(preview.arrows[0].width, 2.0);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
         assert!(SNAP_MARKER_HALF_SIZE_PX >= 5.0);
+    }
+
+    #[test]
+    fn camera_frequency_annotation_updates_do_not_rebuild_preview_meshes() {
+        let base: ViewportPreview = serde_json::from_str(
+            r#"{
+                "lines": [],
+                "points": [],
+                "triangles": [{
+                    "color": [0.2, 0.7, 1.0, 0.25],
+                    "positions": [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
+                    "xray": true
+                }],
+                "arrows": [{
+                    "start": [0.0, 0.0, 0.0],
+                    "end": [0.0, 0.0, 10.0],
+                    "color": [0.2, 0.7, 1.0, 1.0],
+                    "width": 2.0,
+                    "xray": true
+                }],
+                "annotations": [{
+                    "screen": [100.0, 100.0],
+                    "color": [1.0, 1.0, 1.0, 1.0],
+                    "text": "10 mm",
+                    "kind": "dimension"
+                }],
+                "marker": null
+            }"#,
+        )
+        .expect("preview should deserialize");
+        let mut moved_annotation = base.clone();
+        moved_annotation.annotations[0].screen = [420.0, 240.0];
+        assert!(
+            !preview_mesh_content_changed(&base, &moved_annotation),
+            "camera projection updates must keep retained GPU meshes"
+        );
+
+        let mut edited_tool = base.clone();
+        edited_tool.arrows[0].end[2] = 25.0;
+        assert!(preview_mesh_content_changed(&base, &edited_tool));
     }
 
     #[cfg(target_os = "macos")]

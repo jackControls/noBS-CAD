@@ -282,7 +282,7 @@ pub struct ViewportPointLayer {
     pub positions: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportTriangleLayer {
     /// sRGBA fill color. Positions are an already-triangulated world-space
@@ -296,7 +296,7 @@ pub struct ViewportTriangleLayer {
     pub xray: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportArrow {
     #[serde(default)]
