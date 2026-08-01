@@ -188,6 +188,42 @@ export async function redoSketch(): Promise<void> {
   }
 }
 
+/** Application-level Undo shared by the keyboard and native Edit menu.
+ * Sketch mode uses the sketch command stack. Solid mode preserves the current
+ * history contract: at the latest marker Undo removes the newest feature;
+ * while inspecting an earlier marker it steps the rollback cursor backward. */
+export async function undoApplicationHistory(): Promise<void> {
+  const state = useAppStore.getState();
+  if (state.projectBusy || state.solidBusy) return;
+  if (state.mode === 'sketch') {
+    if (state.activeSketch?.can_undo) await undoSketch();
+    return;
+  }
+  if (state.mode !== 'solid' || !state.document) return;
+  const current = state.document.rollback_index;
+  if (current === 0) return;
+  if (current === state.document.features.length) {
+    await deleteTimelineFeature(state.document.features[current - 1].id);
+  } else {
+    await setTimelineRollback(current - 1);
+  }
+}
+
+/** Application-level Redo shared by the keyboard and native Edit menu. */
+export async function redoApplicationHistory(): Promise<void> {
+  const state = useAppStore.getState();
+  if (state.projectBusy || state.solidBusy) return;
+  if (state.mode === 'sketch') {
+    if (state.activeSketch?.can_redo) await redoSketch();
+    return;
+  }
+  if (state.mode !== 'solid' || !state.document) return;
+  const current = state.document.rollback_index;
+  if (current < state.document.features.length) {
+    await setTimelineRollback(current + 1);
+  }
+}
+
 export async function deleteEntity(id: number): Promise<void> {
   return deleteEntities([id]);
 }

@@ -13,12 +13,10 @@ import {
   cancelPlanePick,
   deleteDimension,
   deleteEntities,
-  deleteTimelineFeature,
   openExtrude,
   openHole,
-  redoSketch,
-  setTimelineRollback,
-  undoSketch,
+  redoApplicationHistory,
+  undoApplicationHistory,
 } from './engine/controller';
 import { Ribbon } from './components/Ribbon';
 import { BrowserTree } from './components/BrowserTree';
@@ -54,6 +52,10 @@ import {
   installProjectTabRetention,
 } from './files/projectTabs';
 import { SYSTEM_DARK_QUERY } from './theme';
+import {
+  installNativeEditMenu,
+  nativeMacMenuOwnsUndoRedo,
+} from './nativeEditMenu';
 
 export default function App() {
   const { t } = useTranslation();
@@ -84,6 +86,8 @@ export default function App() {
 
   useEffect(() => installProjectTabRetention(), []);
 
+  useEffect(() => installNativeEditMenu(), []);
+
   useEffect(() => {
     const media = window.matchMedia(SYSTEM_DARK_QUERY);
     syncResolvedTheme();
@@ -109,7 +113,18 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // Never steal keys from text inputs.
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        // The custom native menu delegates text Undo/Redo back to WebKit. If
+        // WKWebView also exposes the key event, suppress its second edit.
+        if (
+          nativeMacMenuOwnsUndoRedo() &&
+          e.metaKey &&
+          e.key.toLowerCase() === 'z'
+        ) {
+          e.preventDefault();
+        }
+        return;
+      }
       const s = useAppStore.getState();
       const runProjectAction = (action: () => Promise<unknown>) => {
         if (s.projectBusy || s.solidBusy) return;
@@ -146,25 +161,12 @@ export default function App() {
       // the surviving graph. Shift+Undo still moves forward when the user
       // has explicitly moved the build cursor backward in the timeline.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-        if (s.mode === 'sketch') {
-          e.preventDefault();
-          if (e.shiftKey) void redoSketch();
-          else void undoSketch();
-        } else if (s.mode === 'solid' && s.document && !s.solidBusy) {
-          const current = s.document.rollback_index;
-          if (!e.shiftKey && current === s.document.features.length && current > 0) {
-            e.preventDefault();
-            void deleteTimelineFeature(s.document.features[current - 1].id);
-          } else {
-            const next = e.shiftKey
-              ? Math.min(s.document.features.length, current + 1)
-              : Math.max(0, current - 1);
-            if (next !== current) {
-              e.preventDefault();
-              void setTimelineRollback(next);
-            }
-          }
-        }
+        // On macOS/Tauri the native menu accelerator owns Cmd-Z; letting it
+        // emit one command avoids a duplicate webview keydown action.
+        if (nativeMacMenuOwnsUndoRedo()) return;
+        e.preventDefault();
+        if (e.shiftKey) void redoApplicationHistory();
+        else void undoApplicationHistory();
         return;
       }
 

@@ -281,6 +281,26 @@ try {
   );
   assert.equal(await page.getByTestId('timeline-history-cursor').getAttribute('aria-valuenow'), '1');
 
+  console.log('3b. Redo advances and Undo retreats the preserved history cursor');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document.rollback_index === 2
+      && window.__appStore.getState().solidScene.bodies.length === 1
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document.rollback_index === 1
+      && window.__appStore.getState().solidScene.bodies.length === 0
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
   console.log('4. Drag cursor forward to latest and rebuild');
   await dragCursorToEnd();
   await page.waitForFunction(

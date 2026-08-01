@@ -7,6 +7,7 @@
 //! path the WASM host uses, so native and browser behavior are identical.
 //! All modeling logic lives in the engine crates, never here.
 
+mod native_menu;
 pub mod native_viewport;
 mod session_bridge;
 mod six_dof_mouse;
@@ -488,11 +489,17 @@ fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> 
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(native_menu::NativeEditMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
-        .manage(SixDofMouseState::default())
+        .manage(SixDofMouseState::default());
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(native_menu::build)
+        .on_menu_event(native_menu::handle_event);
+    builder
         .setup(|app| {
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
             let (
@@ -527,6 +534,7 @@ pub fn run() {
             native_viewport_set_presentation,
             native_viewport_pick,
             native_viewport_metrics,
+            native_menu::native_edit_menu_set_state,
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,
