@@ -28,6 +28,7 @@
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GeomAbs_CurveType.hxx>
@@ -60,6 +61,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Solid.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Ax1.hxx>
@@ -668,6 +670,117 @@ void configure_pipe(const FfiJob& job, BRepOffsetAPI_MakePipeShell& pipe,
                         job.guide_curve_points, "guide rail");
     pipe.SetMode(guide, true, BRepFill_ContactOnBorder);
   }
+}
+
+TopoDS_Shape make_exact_face_tool(const FfiJob& job,
+                                  const TopoDS_Face& source_face) {
+  BRepAdaptor_Surface surface(source_face, true);
+  if (surface.GetType() != GeomAbs_Plane) {
+    throw std::runtime_error("Extrude source face is not planar");
+  }
+  gp_Vec direction(job.normal_x, job.normal_y, job.normal_z);
+  if (direction.SquareMagnitude() < 1e-18) {
+    throw std::runtime_error("extrude normal is degenerate");
+  }
+  direction.Normalize();
+
+  auto transformed_shape = [&](const TopoDS_Shape& shape, double offset,
+                               double scale, const gp_Pnt& center) {
+    if (!std::isfinite(scale) || scale <= 1e-6) {
+      throw std::runtime_error("taper collapses or inverts the planar face");
+    }
+    const gp_Vec translation = direction.Multiplied(offset);
+    gp_Trsf transform;
+    // Uniform scale about the face centroid followed by translation along
+    // the source normal. Applying this to TopoDS wires preserves their exact
+    // analytic edges rather than rebuilding them from tessellation.
+    transform.SetValues(
+        scale, 0.0, 0.0,
+        center.X() * (1.0 - scale) + translation.X(),
+        0.0, scale, 0.0,
+        center.Y() * (1.0 - scale) + translation.Y(),
+        0.0, 0.0, scale,
+        center.Z() * (1.0 - scale) + translation.Z());
+    BRepBuilderAPI_Transform transformed(shape, transform, true);
+    if (!transformed.IsDone() || transformed.Shape().IsNull()) {
+      throw std::runtime_error("OCCT could not transform the planar face");
+    }
+    return transformed.Shape();
+  };
+
+  if (std::abs(job.taper_angle_deg) < 1e-12) {
+    GProp_GProps properties;
+    BRepGProp::SurfaceProperties(source_face, properties);
+    const TopoDS_Shape shifted = transformed_shape(
+        source_face, job.start_offset, 1.0, properties.CentreOfMass());
+    const TopoDS_Face start_face = TopoDS::Face(shifted);
+    gp_Vec prism_direction = direction;
+    prism_direction.Multiply(job.end_offset - job.start_offset);
+    BRepPrimAPI_MakePrism prism(start_face, prism_direction, true, true);
+    if (!prism.IsDone() || prism.Shape().IsNull()) {
+      throw std::runtime_error("OCCT exact-face prism construction failed");
+    }
+    return prism.Shape();
+  }
+
+  GProp_GProps properties;
+  BRepGProp::SurfaceProperties(source_face, properties);
+  const gp_Pnt center = properties.CentreOfMass();
+  double radius_sum = 0.0;
+  std::size_t radius_count = 0;
+  for (TopExp_Explorer vertices(source_face, TopAbs_VERTEX); vertices.More();
+       vertices.Next()) {
+    radius_sum += center.Distance(BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current())));
+    ++radius_count;
+  }
+  if (radius_count == 0) {
+    throw std::runtime_error("planar face has no boundary vertices");
+  }
+  const double reference_radius =
+      std::max(radius_sum / static_cast<double>(radius_count), 1e-6);
+  const double tangent = std::tan(job.taper_angle_deg * kPi / 180.0);
+  const auto scale_at = [&](double offset) {
+    return 1.0 + tangent * offset / reference_radius;
+  };
+
+  const TopoDS_Wire outer = BRepTools::OuterWire(source_face);
+  if (outer.IsNull()) {
+    throw std::runtime_error("planar face has no outer boundary wire");
+  }
+  std::vector<TopoDS_Wire> wires{outer};
+  for (TopExp_Explorer explorer(source_face, TopAbs_WIRE); explorer.More();
+       explorer.Next()) {
+    const TopoDS_Wire wire = TopoDS::Wire(explorer.Current());
+    if (!wire.IsSame(outer)) {
+      wires.push_back(wire);
+    }
+  }
+
+  auto loft_wire = [&](const TopoDS_Wire& wire) {
+    const TopoDS_Wire first = TopoDS::Wire(transformed_shape(
+        wire, job.start_offset, scale_at(job.start_offset), center));
+    const TopoDS_Wire last = TopoDS::Wire(transformed_shape(
+        wire, job.end_offset, scale_at(job.end_offset), center));
+    BRepOffsetAPI_ThruSections loft(true, true, 1e-7);
+    loft.CheckCompatibility(true);
+    loft.AddWire(first);
+    loft.AddWire(last);
+    loft.Build(Message_ProgressRange());
+    if (!loft.IsDone() || loft.Shape().IsNull()) {
+      throw std::runtime_error("OCCT exact-wire tapered loft failed");
+    }
+    return loft.Shape();
+  };
+  TopoDS_Shape result = loft_wire(wires.front());
+  for (std::size_t index = 1; index < wires.size(); ++index) {
+    const TopoDS_Shape hole = loft_wire(wires[index]);
+    BRepAlgoAPI_Cut cut(result, hole, Message_ProgressRange());
+    if (!cut.IsDone() || cut.Shape().IsNull()) {
+      throw std::runtime_error("OCCT could not preserve a tapered face hole");
+    }
+    result = cut.Shape();
+  }
+  return result;
 }
 
 TopoDS_Shape make_tool(const FfiJob& job, std::size_t region_index) {
@@ -1363,23 +1476,40 @@ void Kernel::apply_job(const FfiJob& job) {
     impl_->bodies[job.result_body_ids[1]] = negative.Shape();
     return;
   }
-  if (job.profile_offsets.size() < 2 ||
-      job.profile_offsets[job.profile_offsets.size() - 1] * 3 !=
-          job.points.size()) {
-    throw std::runtime_error("profile buffers are malformed");
-  }
-  if (job.region_offsets.size() < 2 || job.region_offsets.front() != 0 ||
-      job.region_offsets.back() + 1 != job.profile_offsets.size()) {
-    throw std::runtime_error("profile region buffers are malformed");
-  }
-  const std::size_t profile_count = job.region_offsets.size() - 1;
   std::vector<TopoDS_Shape> tools;
-  if (job.kind == 3) {
-    tools.push_back(make_loft_tool(job));
+  if (job.source_body_id != 0) {
+    if (job.kind != 0 || job.source_face_index == UINT32_MAX) {
+      throw std::runtime_error("exact face source is only valid for Extrude");
+    }
+    auto source_body = impl_->bodies.find(job.source_body_id);
+    if (source_body == impl_->bodies.end()) {
+      throw std::runtime_error("Extrude source body is missing");
+    }
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(source_body->second, TopAbs_FACE, faces);
+    if (job.source_face_index >= static_cast<std::uint32_t>(faces.Extent())) {
+      throw std::runtime_error("referenced Extrude source face no longer exists");
+    }
+    tools.push_back(make_exact_face_tool(
+        job, TopoDS::Face(faces.FindKey(job.source_face_index + 1))));
   } else {
-    tools.reserve(profile_count);
-    for (std::size_t index = 0; index < profile_count; ++index) {
-      tools.push_back(make_tool(job, index));
+    if (job.profile_offsets.size() < 2 ||
+        job.profile_offsets[job.profile_offsets.size() - 1] * 3 !=
+            job.points.size()) {
+      throw std::runtime_error("profile buffers are malformed");
+    }
+    if (job.region_offsets.size() < 2 || job.region_offsets.front() != 0 ||
+        job.region_offsets.back() + 1 != job.profile_offsets.size()) {
+      throw std::runtime_error("profile region buffers are malformed");
+    }
+    const std::size_t profile_count = job.region_offsets.size() - 1;
+    if (job.kind == 3) {
+      tools.push_back(make_loft_tool(job));
+    } else {
+      tools.reserve(profile_count);
+      for (std::size_t index = 0; index < profile_count; ++index) {
+        tools.push_back(make_tool(job, index));
+      }
     }
   }
 

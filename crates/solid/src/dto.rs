@@ -196,8 +196,24 @@ impl Default for ExtrudeExtent {
     }
 }
 
+/// Stable application-level reference to one exact planar OCCT face.
+///
+/// The request deliberately carries the owning body as well as the FaceId:
+/// FaceId is stable for the body-local topology key, while the body id tells
+/// the kernel which live B-rep owns that topology during a full replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanarFaceSourceDto {
+    pub body_id: BodyId,
+    pub face_id: FaceId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtrudeRequest {
+    /// When present, Extrude consumes the referenced OCCT face instead of
+    /// sketch profiles. The exact TopoDS_Face (including every inner wire) is
+    /// resolved by the kernel; tessellation is never used as modeling input.
+    #[serde(default)]
+    pub source_face: Option<PlanarFaceSourceDto>,
     pub sketch_name: String,
     pub profile_indices: Vec<u32>,
     #[serde(default)]
@@ -611,6 +627,17 @@ pub struct StepExportRequest {
 pub struct ExtrudeDefinitionDto {
     pub feature_id: FeatureId,
     pub name: String,
+    /// Stable source identity retained in parametric history.
+    #[serde(default)]
+    pub source_face: Option<PlanarFaceSourceDto>,
+    /// Body-local OCCT topology label captured before this feature mutates
+    /// its target. It resolves the original exact TopoDS_Face on every replay.
+    #[serde(default)]
+    pub source_face_key: Option<String>,
+    /// Creation-time plane cache bootstraps project reload before a fresh
+    /// kernel scene is available. The face key remains the modeling truth.
+    #[serde(default)]
+    pub source_face_basis: Option<PlaneBasis>,
     pub sketch_name: String,
     pub profile_indices: Vec<u32>,
     pub operation: ExtrudeOperation,
@@ -1052,6 +1079,10 @@ pub enum KernelCurveDto {
 pub struct KernelExtrudeJobDto {
     pub feature_id: FeatureId,
     pub operation: ExtrudeOperation,
+    /// Exact B-rep face source. When set, `profiles` is empty and the OCCT
+    /// adapter resolves the original TopoDS_Face by body + topology key.
+    #[serde(default)]
+    pub source_face: Option<KernelPlanarFaceSourceDto>,
     pub profiles: Vec<KernelProfileDto>,
     pub normal: Point3Dto,
     pub start_offset: f64,
@@ -1059,6 +1090,13 @@ pub struct KernelExtrudeJobDto {
     pub taper_angle_deg: f64,
     pub target_body_ids: Vec<BodyId>,
     pub result_body_ids: Vec<BodyId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KernelPlanarFaceSourceDto {
+    pub body_id: BodyId,
+    pub face_id: FaceId,
+    pub face_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

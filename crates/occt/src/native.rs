@@ -20,6 +20,9 @@ mod ffi {
         operation: u8,
         points: Vec<f64>,
         profile_offsets: Vec<u32>,
+        /// Exact planar-face source. Zero / u32::MAX means sketch profiles.
+        source_body_id: u64,
+        source_face_index: u32,
         /// Prefix offsets into profile wires. Each region starts with its outer
         /// wire followed by zero or more inner (hole) wires.
         region_offsets: Vec<u32>,
@@ -400,6 +403,8 @@ fn empty_ffi_job(feature_id: u64, kind: u8) -> ffi::FfiJob {
         operation: 0,
         points: Vec::new(),
         profile_offsets: vec![0],
+        source_body_id: 0,
+        source_face_index: u32::MAX,
         region_offsets: vec![0],
         curve_kinds: Vec::new(),
         curve_profile_offsets: vec![0],
@@ -485,6 +490,19 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
             let mut job = empty_ffi_job(source.feature_id.0, 0);
             job.operation = operation_code(source.operation);
             set_profiles(&mut job, profile_buffers(&source.profiles));
+            if let Some(face) = &source.source_face {
+                job.source_body_id = face.body_id.0;
+                job.source_face_index = face
+                    .face_key
+                    .strip_prefix("face:")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .ok_or_else(|| {
+                        OcctError(format!(
+                            "invalid planar-face topology key '{}'",
+                            face.face_key
+                        ))
+                    })?;
+            }
             job.normal_x = source.normal.x;
             job.normal_y = source.normal.y;
             job.normal_z = source.normal.z;
@@ -873,14 +891,15 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nbcad_core::{BodyId, FeatureId};
+    use nbcad_core::{BodyId, FaceId, FeatureId};
     use nbcad_solid::{
         HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadDto, HoleThreadHand,
         HoleThreadRepresentation, HoleThreadSeries, HoleThreadStandard, KernelChamferJobDto,
         KernelCombineJobDto, KernelCurveDto, KernelExtrudeJobDto, KernelFilletJobDto,
-        KernelHoleJobDto, KernelImportStepJobDto, KernelJobDto, KernelLoftJobDto, KernelProfileDto,
-        KernelRevolveJobDto, KernelRibJobDto, KernelSweepJobDto, LoftContinuity, Point3Dto,
-        RecomputePlanDto, StepThreadMetadataDto, SweepOrientation, SweepTransition,
+        KernelHoleJobDto, KernelImportStepJobDto, KernelJobDto, KernelLoftJobDto,
+        KernelPlanarFaceSourceDto, KernelProfileDto, KernelRevolveJobDto, KernelRibJobDto,
+        KernelSweepJobDto, LoftContinuity, Point3Dto, RecomputePlanDto, StepThreadMetadataDto,
+        SweepOrientation, SweepTransition,
     };
 
     fn square(z: f64, half: f64) -> KernelProfileDto {
@@ -953,6 +972,7 @@ mod tests {
         KernelJobDto::Extrude(KernelExtrudeJobDto {
             feature_id: FeatureId(feature_id),
             operation: ExtrudeOperation::NewBody,
+            source_face: None,
             profiles: vec![square(0.0, 10.0)],
             normal: Point3Dto {
                 x: 0.0,
@@ -1001,6 +1021,7 @@ mod tests {
             jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
                 feature_id: FeatureId(2),
                 operation: ExtrudeOperation::NewBody,
+                source_face: None,
                 profiles: vec![KernelProfileDto {
                     profile_index: 0,
                     points: vec![
@@ -1159,6 +1180,7 @@ mod tests {
                 jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
                     feature_id: FeatureId(2),
                     operation: ExtrudeOperation::Join,
+                    source_face: None,
                     profiles: vec![
                         rectangle_profile(0, -10.0, 0.0, -5.0, 5.0),
                         rectangle_profile(1, 0.0, 10.0, -5.0, 5.0),
@@ -1197,6 +1219,7 @@ mod tests {
             KernelJobDto::Extrude(KernelExtrudeJobDto {
                 feature_id: FeatureId(feature_id),
                 operation: ExtrudeOperation::NewBody,
+                source_face: None,
                 profiles: vec![profile],
                 normal: Point3Dto {
                     x: 0.0,
@@ -1273,6 +1296,7 @@ mod tests {
                 jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
                     feature_id: FeatureId(2),
                     operation: ExtrudeOperation::NewBody,
+                    source_face: None,
                     profiles: vec![profile],
                     normal: Point3Dto {
                         x: 0.0,
@@ -1345,6 +1369,7 @@ mod tests {
                 jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
                     feature_id: FeatureId(2),
                     operation: ExtrudeOperation::NewBody,
+                    source_face: None,
                     profiles: vec![outer],
                     normal: Point3Dto {
                         x: 0.0,
@@ -1382,6 +1407,100 @@ mod tests {
                 assert!(
                     centroid[0].abs() >= 5.5 || centroid[1].abs() >= 5.5,
                     "a cap triangle filled the intended inner void at {centroid:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn occt_exact_planar_face_extrude_preserves_inner_boundary_wires() {
+        let mut outer = square(0.0, 20.0);
+        let mut inner = square(0.0, 6.0);
+        inner.profile_index = 1;
+        outer.holes.push(inner);
+        let base_job = KernelJobDto::Extrude(KernelExtrudeJobDto {
+            feature_id: FeatureId(2),
+            operation: ExtrudeOperation::NewBody,
+            source_face: None,
+            profiles: vec![outer],
+            normal: Point3Dto {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            start_offset: 0.0,
+            end_offset: 10.0,
+            taper_angle_deg: 0.0,
+            target_body_ids: Vec::new(),
+            result_body_ids: vec![BodyId(1)],
+        });
+
+        let mut kernel = OcctKernel::new().unwrap();
+        let base_scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![base_job.clone()],
+            })
+            .unwrap();
+        let source = base_scene.bodies[0]
+            .faces
+            .iter()
+            .find(|face| {
+                face.plane
+                    .is_some_and(|basis| basis.normal[2] > 0.9 && basis.origin[2] > 9.0)
+            })
+            .expect("hollow body should expose a planar top face");
+        let basis = source.plane.unwrap();
+        let scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 2,
+                errors: Vec::new(),
+                jobs: vec![
+                    base_job,
+                    KernelJobDto::Extrude(KernelExtrudeJobDto {
+                        feature_id: FeatureId(3),
+                        operation: ExtrudeOperation::NewBody,
+                        source_face: Some(KernelPlanarFaceSourceDto {
+                            body_id: BodyId(1),
+                            face_id: FaceId(42),
+                            face_key: source.key.clone(),
+                        }),
+                        profiles: Vec::new(),
+                        normal: basis.normal.into(),
+                        start_offset: 0.0,
+                        end_offset: 5.0,
+                        taper_angle_deg: 0.0,
+                        target_body_ids: Vec::new(),
+                        result_body_ids: vec![BodyId(2)],
+                    }),
+                ],
+            })
+            .unwrap();
+        assert!(scene.errors.is_empty(), "{:?}", scene.errors);
+        let body = scene
+            .bodies
+            .iter()
+            .find(|body| body.body_id == BodyId(2))
+            .expect("exact-face Extrude should create its reserved body");
+        assert_eq!(body.faces.len(), 10, "two annular caps plus eight walls");
+        for face in body
+            .faces
+            .iter()
+            .filter(|face| face.plane.is_some_and(|plane| plane.normal[2].abs() > 0.9))
+        {
+            let begin = face.first_index as usize;
+            let end = begin + face.index_count as usize;
+            for triangle in body.indices[begin..end].chunks_exact(3) {
+                let centroid = triangle.iter().fold([0.0f64; 2], |mut sum, index| {
+                    let offset = *index as usize * 3;
+                    sum[0] += body.positions[offset] as f64 / 3.0;
+                    sum[1] += body.positions[offset + 1] as f64 / 3.0;
+                    sum
+                });
+                assert!(
+                    centroid[0].abs() >= 5.5 || centroid[1].abs() >= 5.5,
+                    "exact-face cap filled its inner wire at {centroid:?}"
                 );
             }
         }
@@ -1886,6 +2005,7 @@ mod tests {
         let base = KernelJobDto::Extrude(KernelExtrudeJobDto {
             feature_id: FeatureId(2),
             operation: ExtrudeOperation::NewBody,
+            source_face: None,
             profiles: vec![KernelProfileDto {
                 profile_index: 0,
                 points: vec![

@@ -487,7 +487,23 @@ impl SolidDocument {
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         let mut definitions = self.extrudes.clone();
-        let count = request.profile_indices.len();
+        if request.source_face.is_some() && !request.profile_indices.is_empty() {
+            return Err(SolidError::InvalidHistory(
+                "Extrude cannot mix a planar face with sketch profiles".to_string(),
+            ));
+        }
+        let (source_face_key, source_face_basis) = match request.source_face {
+            Some(source) => {
+                let (key, basis) = resolve_planar_face_source(&self.scene, source)?;
+                (Some(key), Some(basis))
+            }
+            None => (None, None),
+        };
+        let count = if request.source_face.is_some() {
+            1
+        } else {
+            request.profile_indices.len()
+        };
         if count == 0 {
             return Err(SolidError::EmptySelection);
         }
@@ -498,8 +514,19 @@ impl SolidDocument {
         definitions.push(ExtrudeDefinitionDto {
             feature_id,
             name: name.into(),
-            sketch_name: request.sketch_name,
-            profile_indices: request.profile_indices,
+            source_face: request.source_face,
+            source_face_key,
+            source_face_basis,
+            sketch_name: if request.source_face.is_some() {
+                String::new()
+            } else {
+                request.sketch_name
+            },
+            profile_indices: if request.source_face.is_some() {
+                Vec::new()
+            } else {
+                request.profile_indices
+            },
             operation: request.operation,
             extent: request.extent,
             taper_angle_deg: request.taper_angle_deg,
@@ -531,16 +558,63 @@ impl SolidDocument {
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         let mut definitions = self.extrudes.clone();
+        if request.source_face.is_some() && !request.profile_indices.is_empty() {
+            return Err(SolidError::InvalidHistory(
+                "Extrude cannot mix a planar face with sketch profiles".to_string(),
+            ));
+        }
         let to_face_basis = extent_face_basis(request.extent, &self.scene);
+        let existing = definitions
+            .iter()
+            .find(|definition| definition.feature_id == feature_id)
+            .ok_or(SolidError::FeatureNotFound(feature_id))?;
+        let (source_face_key, source_face_basis) = match request.source_face {
+            Some(source) if existing.source_face == Some(source) => (
+                existing.source_face_key.clone().or_else(|| {
+                    resolve_planar_face_source(&self.scene, source)
+                        .ok()
+                        .map(|resolved| resolved.0)
+                }),
+                existing.source_face_basis.or_else(|| {
+                    resolve_planar_face_source(&self.scene, source)
+                        .ok()
+                        .map(|resolved| resolved.1)
+                }),
+            ),
+            Some(source) => {
+                let (key, basis) = resolve_planar_face_source(&self.scene, source)?;
+                (Some(key), Some(basis))
+            }
+            None => (None, None),
+        };
+        let source_count = if request.source_face.is_some() {
+            1
+        } else {
+            request.profile_indices.len()
+        };
+        if source_count == 0 {
+            return Err(SolidError::EmptySelection);
+        }
         let definition = definitions
             .iter_mut()
             .find(|definition| definition.feature_id == feature_id)
             .ok_or(SolidError::FeatureNotFound(feature_id))?;
-        while definition.new_body_ids.len() < request.profile_indices.len() {
+        while definition.new_body_ids.len() < source_count {
             definition.new_body_ids.push(self.alloc_body_id());
         }
-        definition.sketch_name = request.sketch_name;
-        definition.profile_indices = request.profile_indices;
+        definition.source_face = request.source_face;
+        definition.source_face_key = source_face_key;
+        definition.source_face_basis = source_face_basis;
+        definition.sketch_name = if request.source_face.is_some() {
+            String::new()
+        } else {
+            request.sketch_name
+        };
+        definition.profile_indices = if request.source_face.is_some() {
+            Vec::new()
+        } else {
+            request.profile_indices
+        };
         definition.operation = request.operation;
         definition.extent = request.extent;
         definition.taper_angle_deg = request.taper_angle_deg;
@@ -1771,8 +1845,9 @@ fn body_owners(
                 definition.feature_id,
                 definition.operation,
                 &definition.new_body_ids[..definition
-                    .profile_indices
-                    .len()
+                    .source_face
+                    .map(|_| 1)
+                    .unwrap_or(definition.profile_indices.len())
                     .min(definition.new_body_ids.len())],
                 &definition.target_body_ids,
             ),
@@ -1991,20 +2066,64 @@ fn make_jobs(
                 {
                     return Err(SolidError::InvalidTaper);
                 }
-                let sketch = find_input_sketch(
-                    catalog,
-                    active_features,
-                    &definition.sketch_name,
-                    definition.feature_id,
-                    feature_order,
-                )?;
-                if definition.profile_indices.is_empty() {
-                    return Err(SolidError::EmptySelection);
-                }
-                let profiles = kernel_profiles(sketch, &definition.profile_indices, |_| Ok(()))?;
+                let (profiles, source_face, source_basis) = if let Some(source) =
+                    definition.source_face
+                {
+                    if !definition.profile_indices.is_empty() {
+                        return Err(SolidError::InvalidHistory(format!(
+                            "{} mixes a planar face with sketch profiles",
+                            definition.name
+                        )));
+                    }
+                    if !available_bodies.contains(&source.body_id) {
+                        return Err(SolidError::MissingTarget(source.body_id));
+                    }
+                    let face_key = definition.source_face_key.clone().ok_or_else(|| {
+                        SolidError::InvalidHistory(format!(
+                            "{} has no saved OCCT face key",
+                            definition.name
+                        ))
+                    })?;
+                    let basis = definition
+                        .source_face_basis
+                        .or_else(|| {
+                            support_face_basis(previous_scene, source.body_id, source.face_id).ok()
+                        })
+                        .ok_or(SolidError::MissingFace(source.face_id))?;
+                    (
+                        Vec::new(),
+                        Some(KernelPlanarFaceSourceDto {
+                            body_id: source.body_id,
+                            face_id: source.face_id,
+                            face_key,
+                        }),
+                        basis,
+                    )
+                } else {
+                    let sketch = find_input_sketch(
+                        catalog,
+                        active_features,
+                        &definition.sketch_name,
+                        definition.feature_id,
+                        feature_order,
+                    )?;
+                    if definition.profile_indices.is_empty() {
+                        return Err(SolidError::EmptySelection);
+                    }
+                    (
+                        kernel_profiles(sketch, &definition.profile_indices, |_| Ok(()))?,
+                        None,
+                        sketch.basis,
+                    )
+                };
+                let source_count = if source_face.is_some() {
+                    1
+                } else {
+                    profiles.len()
+                };
                 let (mut start_offset, mut end_offset) = offsets(
                     definition.extent,
-                    sketch.basis,
+                    source_basis,
                     previous_scene,
                     definition.to_face_basis,
                 )?;
@@ -2022,10 +2141,10 @@ fn make_jobs(
                         .new_body_ids
                         .iter()
                         .copied()
-                        .take(profiles.len())
+                        .take(source_count)
                         .collect::<Vec<_>>(),
                     ExtrudeOperation::Join if definition.target_body_ids.is_empty() => {
-                        if profiles.len() < 2 {
+                        if source_count < 2 {
                             return Err(SolidError::InvalidExtent(
                                 "Join without a target needs at least two profiles".to_string(),
                             ));
@@ -2053,7 +2172,7 @@ fn make_jobs(
                         definition.target_body_ids.clone()
                     }
                 };
-                if result_body_ids.len() != profiles.len()
+                if result_body_ids.len() != source_count
                     && definition.operation == ExtrudeOperation::NewBody
                 {
                     return Err(SolidError::InvalidHistory(format!(
@@ -2070,8 +2189,9 @@ fn make_jobs(
                 jobs.push(KernelJobDto::Extrude(KernelExtrudeJobDto {
                     feature_id: definition.feature_id,
                     operation: definition.operation,
+                    source_face,
                     profiles,
-                    normal: sketch.basis.normal.into(),
+                    normal: source_basis.normal.into(),
                     start_offset,
                     end_offset,
                     taper_angle_deg: definition.taper_angle_deg,
@@ -3560,6 +3680,26 @@ fn face_keys_for(
         .collect()
 }
 
+fn resolve_planar_face_source(
+    scene: &SolidSceneDto,
+    source: PlanarFaceSourceDto,
+) -> Result<(String, PlaneBasis), SolidError> {
+    let body = scene
+        .bodies
+        .iter()
+        .find(|body| body.id == source.body_id)
+        .ok_or(SolidError::MissingTarget(source.body_id))?;
+    let face = body
+        .faces
+        .iter()
+        .find(|face| face.id == source.face_id)
+        .ok_or(SolidError::MissingFace(source.face_id))?;
+    let basis = face.plane.ok_or_else(|| {
+        SolidError::InvalidExtent("Extrude source face must be planar".to_string())
+    })?;
+    Ok((face.key.clone(), basis))
+}
+
 fn support_face_basis(
     scene: &SolidSceneDto,
     body_id: BodyId,
@@ -4359,6 +4499,7 @@ mod tests {
 
     fn request(indices: Vec<u32>) -> ExtrudeRequest {
         ExtrudeRequest {
+            source_face: None,
             sketch_name: "Sketch1".to_string(),
             profile_indices: indices,
             operation: ExtrudeOperation::NewBody,
@@ -4460,6 +4601,84 @@ mod tests {
         )
         .unwrap();
         assert_eq!(doc.scene().bodies[0].faces[0].id, face_id);
+    }
+
+    #[test]
+    fn planar_face_extrude_saves_stable_id_and_exact_occt_topology_key() {
+        let mut doc = SolidDocument::new();
+        let base = doc
+            .prepare_add(
+                FeatureId(2),
+                "Extrude1",
+                request(vec![0]),
+                &catalog(),
+                &active(&[1, 2]),
+            )
+            .unwrap();
+        let source_body_id = extrude_job(&base.jobs[0]).result_body_ids[0];
+        doc.commit(
+            base.transaction_id,
+            KernelSceneDto {
+                bodies: vec![raw_body(source_body_id)],
+                errors: Vec::new(),
+            },
+        )
+        .unwrap();
+        let source_face_id = doc.scene().bodies[0].faces[0].id;
+        let face_request = ExtrudeRequest {
+            source_face: Some(PlanarFaceSourceDto {
+                body_id: source_body_id,
+                face_id: source_face_id,
+            }),
+            sketch_name: String::new(),
+            profile_indices: Vec::new(),
+            operation: ExtrudeOperation::NewBody,
+            extent: ExtrudeExtent::Distance { distance: 8.0 },
+            taper_angle_deg: 0.0,
+            flip: false,
+            target_body_ids: Vec::new(),
+        };
+        let plan = doc
+            .prepare_add(
+                FeatureId(3),
+                "Extrude2",
+                face_request,
+                &catalog(),
+                &active(&[1, 2, 3]),
+            )
+            .unwrap();
+        let job = extrude_job(&plan.jobs[1]);
+        assert!(job.profiles.is_empty());
+        assert_eq!(job.normal, Point3Dto::from(catalog()[0].basis.normal));
+        assert_eq!(
+            job.source_face,
+            Some(KernelPlanarFaceSourceDto {
+                body_id: source_body_id,
+                face_id: source_face_id,
+                face_key: "face:0".to_string(),
+            })
+        );
+        let definition = doc
+            .pending
+            .as_ref()
+            .unwrap()
+            .extrudes
+            .iter()
+            .find(|definition| definition.feature_id == FeatureId(3))
+            .unwrap();
+        assert_eq!(definition.source_face.unwrap().face_id, source_face_id);
+        assert_eq!(definition.source_face_key.as_deref(), Some("face:0"));
+        assert_eq!(definition.source_face_basis, Some(catalog()[0].basis));
+
+        let saved = serde_json::to_string(&doc.pending.as_ref().unwrap().extrudes).unwrap();
+        let definitions: Vec<ExtrudeDefinitionDto> = serde_json::from_str(&saved).unwrap();
+        let mut restored = SolidDocument::restore_definitions(definitions).unwrap();
+        let replay = restored
+            .prepare_recompute(&catalog(), &active(&[1, 2, 3]))
+            .unwrap();
+        let replay_face = extrude_job(&replay.jobs[1]).source_face.as_ref().unwrap();
+        assert_eq!(replay_face.face_id, source_face_id);
+        assert_eq!(replay_face.face_key, "face:0");
     }
 
     #[test]

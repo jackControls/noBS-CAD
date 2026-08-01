@@ -67,6 +67,28 @@ when the camera, annotations, or screen-size arrow transform changes. Camera
 motion updates retained manipulator transforms in place. This keeps navigation
 allocation-free even while a solid command is open.
 
+## Exact solid-face feature sources
+
+A feature that consumes a planar solid face records the source as an owning
+`BodyId`, the stable document `FaceId`, and the creation-time OCCT topology key
+(`face:n`). The stable IDs are the parametric reference; the saved topology key
+resolves the corresponding `TopoDS_Face` in the source body's replay state.
+The face's plane basis is cached with the definition so preview and extent
+direction remain deterministic while the history graph is being rebuilt.
+
+Extrude passes that exact `TopoDS_Face` to both the native and browser OCCT
+kernels. A straight extrusion prisms the face directly. A tapered extrusion
+uses OCCT's exact outer `TopoDS_Wire` and every inner wire, lofting the outer
+boundary and subtracting the inner-wire tools. Holes, analytic curves, and wire
+orientation therefore come from B-rep topology rather than reconstructed
+display triangles.
+
+Bevy may use the selected face's tessellation for a fast translucent preview,
+hover fill, or direction manipulator. That mesh is presentation-only: it is
+never sent back to OCCT and never becomes modeling input. Feature replay fails
+clearly if the stored body/face reference cannot be resolved; it must not fall
+back to manufacturing a polygonal face from tessellation.
+
 ## Document tabs and memory retention
 
 Each open desktop tab normally retains three coordinated layers: its Rust

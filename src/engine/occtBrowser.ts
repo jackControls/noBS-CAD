@@ -9,7 +9,9 @@
 import type {
   gp_Ax2,
   OpenCascadeInstance,
+  TopoDS_Face,
   TopoDS_Shape,
+  TopoDS_Wire,
 } from 'opencascade.js';
 import type {
   KernelBodyDto,
@@ -387,6 +389,178 @@ function makeTool(
     return result;
   }
   return loftPair(oc, profile, firstTransform, lastTransform);
+}
+
+/** Build an Extrude tool from the original OCCT face. The face itself owns
+ * its outer wire and every inner wire, so no displayed triangle or sampled
+ * profile becomes modeling input. */
+function makeExactFaceTool(
+  oc: Oc,
+  job: KernelExtrudeJobDto,
+  sourceFace: TopoDS_Face,
+): TopoDS_Shape {
+  const basis = facePlane(oc, sourceFace);
+  if (!basis) throw new Error('Extrude source face is not planar');
+  const normal = unit(job.normal);
+  const properties = new oc.GProp_GProps_1();
+  oc.BRepGProp.SurfaceProperties_1(sourceFace, properties, false, false);
+  const rawCenter = properties.CentreOfMass();
+  const center: [number, number, number] = [
+    rawCenter.X(),
+    rawCenter.Y(),
+    rawCenter.Z(),
+  ];
+  rawCenter.delete();
+  properties.delete();
+
+  const transformShape = (
+    shape: TopoDS_Shape,
+    offset: number,
+    scale: number,
+  ): TopoDS_Shape => {
+    if (!Number.isFinite(scale) || scale <= 1e-6) {
+      throw new Error('Taper collapses or inverts the planar face');
+    }
+    const transform = new oc.gp_Trsf_1();
+    transform.SetValues(
+      scale, 0, 0, center[0] * (1 - scale) + normal[0] * offset,
+      0, scale, 0, center[1] * (1 - scale) + normal[1] * offset,
+      0, 0, scale, center[2] * (1 - scale) + normal[2] * offset,
+    );
+    try {
+      const maker = new oc.BRepBuilderAPI_Transform_2(shape, transform, true);
+      if (!maker.IsDone()) {
+        maker.delete();
+        throw new Error('OCCT could not transform the planar face');
+      }
+      const result = maker.Shape();
+      maker.delete();
+      if (result.IsNull()) {
+        result.delete();
+        throw new Error('OCCT planar-face transform produced a null shape');
+      }
+      return result;
+    } finally {
+      transform.delete();
+    }
+  };
+
+  if (Math.abs(job.taper_angle_deg) < 1e-12) {
+    const shifted = transformShape(sourceFace, job.start_offset, 1);
+    const startFace = oc.TopoDS.Face_1(shifted);
+    shifted.delete();
+    try {
+      const depth = job.end_offset - job.start_offset;
+      const direction = new oc.gp_Vec_4(
+        normal[0] * depth,
+        normal[1] * depth,
+        normal[2] * depth,
+      );
+      const prism = new oc.BRepPrimAPI_MakePrism_1(startFace, direction, true, true);
+      direction.delete();
+      if (!prism.IsDone()) {
+        prism.delete();
+        throw new Error('OCCT exact-face prism construction failed');
+      }
+      const result = prism.Shape();
+      prism.delete();
+      return result;
+    } finally {
+      startFace.delete();
+    }
+  }
+
+  const vertexMap = new oc.TopTools_IndexedMapOfShape_1();
+  oc.TopExp.MapShapes_1(
+    sourceFace,
+    oc.TopAbs_ShapeEnum.TopAbs_VERTEX as never,
+    vertexMap,
+  );
+  let radius = 0;
+  try {
+    if (vertexMap.Size() === 0) throw new Error('Planar face has no boundary vertices');
+    for (let index = 1; index <= vertexMap.Size(); index += 1) {
+      const raw = vertexMap.FindKey(index);
+      const vertex = oc.TopoDS.Vertex_1(raw);
+      raw.delete();
+      const position = oc.BRep_Tool.Pnt(vertex);
+      radius += Math.hypot(
+        position.X() - center[0],
+        position.Y() - center[1],
+        position.Z() - center[2],
+      );
+      position.delete();
+      vertex.delete();
+    }
+    radius = Math.max(radius / vertexMap.Size(), 1e-6);
+  } finally {
+    vertexMap.delete();
+  }
+
+  const outer = oc.BRepTools.OuterWire(sourceFace);
+  if (outer.IsNull()) {
+    outer.delete();
+    throw new Error('Planar face has no outer boundary wire');
+  }
+  const wires: TopoDS_Wire[] = [outer];
+  const wireMap = new oc.TopTools_IndexedMapOfShape_1();
+  oc.TopExp.MapShapes_1(
+    sourceFace,
+    oc.TopAbs_ShapeEnum.TopAbs_WIRE as never,
+    wireMap,
+  );
+  for (let index = 1; index <= wireMap.Size(); index += 1) {
+    const raw = wireMap.FindKey(index);
+    const wire = oc.TopoDS.Wire_1(raw);
+    raw.delete();
+    if (wire.IsSame(outer)) wire.delete();
+    else wires.push(wire);
+  }
+  wireMap.delete();
+
+  const tangent = Math.tan(job.taper_angle_deg * Math.PI / 180);
+  const scaleAt = (offset: number) => 1 + tangent * offset / radius;
+  const loftWire = (wire: TopoDS_Wire): TopoDS_Shape => {
+    const firstShape = transformShape(wire, job.start_offset, scaleAt(job.start_offset));
+    const lastShape = transformShape(wire, job.end_offset, scaleAt(job.end_offset));
+    const first = oc.TopoDS.Wire_1(firstShape);
+    const last = oc.TopoDS.Wire_1(lastShape);
+    firstShape.delete();
+    lastShape.delete();
+    try {
+      const loft = new oc.BRepOffsetAPI_ThruSections(true, true, 1e-7);
+      loft.CheckCompatibility(true);
+      loft.AddWire(first);
+      loft.AddWire(last);
+      const progress = new oc.Message_ProgressRange_1();
+      loft.Build(progress);
+      progress.delete();
+      if (!loft.IsDone()) {
+        loft.delete();
+        throw new Error('OCCT exact-wire tapered loft failed');
+      }
+      const result = loft.Shape();
+      loft.delete();
+      return result;
+    } finally {
+      first.delete();
+      last.delete();
+    }
+  };
+
+  try {
+    let result = loftWire(wires[0]);
+    for (const hole of wires.slice(1)) {
+      const cutter = loftWire(hole);
+      const next = booleanShape(oc, 'cut', result, cutter);
+      result.delete();
+      cutter.delete();
+      result = next;
+    }
+    return result;
+  } finally {
+    wires.forEach((wire) => wire.delete());
+  }
 }
 
 function makeSweepTool(oc: Oc, job: KernelSweepJobDto): TopoDS_Shape {
@@ -1718,10 +1892,23 @@ export class BrowserOcctKernel {
         const job = operation.job;
         let tools: TopoDS_Shape[];
         switch (operation.kind) {
-          case 'extrude':
-            tools = operation.job.profiles.map((profile) =>
-              makeTool(this.oc, operation.job, profile));
+          case 'extrude': {
+            const source = operation.job.source_face;
+            if (source) {
+              const sourceBody = this.bodies.get(source.body_id);
+              if (!sourceBody) throw new Error('Extrude source body is missing');
+              const [face] = selectedFaces(this.oc, sourceBody, [source.face_key]);
+              try {
+                tools = [makeExactFaceTool(this.oc, operation.job, face)];
+              } finally {
+                face.delete();
+              }
+            } else {
+              tools = operation.job.profiles.map((profile) =>
+                makeTool(this.oc, operation.job, profile));
+            }
             break;
+          }
           case 'revolve':
             tools = operation.job.profiles.map((profile) =>
               makeRevolveTool(this.oc, operation.job, profile));

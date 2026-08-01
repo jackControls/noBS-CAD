@@ -1534,8 +1534,10 @@ impl SketchManager {
         let mut record_solid = |feature_id: FeatureId,
                                 operation: ExtrudeOperation,
                                 targets: &[BodyId],
-                                outputs: &[BodyId]| {
+                                outputs: &[BodyId],
+                                additional_inputs: &[BodyId]| {
             let access = body_access.entry(feature_id).or_default();
+            access.inputs.extend(additional_inputs.iter().copied());
             match operation {
                 ExtrudeOperation::NewBody => {
                     access.outputs.extend(outputs.iter().copied());
@@ -1548,15 +1550,19 @@ impl SketchManager {
         };
 
         for definition in self.solids.definitions() {
-            sketch_inputs
-                .entry(definition.feature_id)
-                .or_default()
-                .insert(definition.sketch_name.clone());
+            if definition.source_face.is_none() {
+                sketch_inputs
+                    .entry(definition.feature_id)
+                    .or_default()
+                    .insert(definition.sketch_name.clone());
+            }
+            let source_body = definition.source_face.map(|source| source.body_id);
             record_solid(
                 definition.feature_id,
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                source_body.as_slice(),
             );
             if let ExtrudeExtent::ToFace { face_id } = definition.extent {
                 plane_inputs
@@ -1575,6 +1581,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                &[],
             );
         }
         for definition in self.solids.sweep_definitions() {
@@ -1589,6 +1596,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &[definition.new_body_id],
+                &[],
             );
         }
         for definition in self.solids.loft_definitions() {
@@ -1610,6 +1618,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &[definition.new_body_id],
+                &[],
             );
         }
         for definition in self.solids.rib_definitions() {
@@ -1622,6 +1631,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                &[],
             );
             if let Some(RibExtent::ToFace { face_id }) = definition.extent {
                 plane_inputs
@@ -3087,6 +3097,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3165,6 +3176,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3309,6 +3321,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3445,6 +3458,7 @@ mod project_tests {
         // resolves to the same outer region and carries the hole to the kernel.
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![inner.index],
                 operation: ExtrudeOperation::NewBody,
@@ -3559,6 +3573,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: profiles.iter().map(|profile| profile.index).collect(),
                 operation: ExtrudeOperation::NewBody,
@@ -3618,6 +3633,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: profiles.iter().map(|profile| profile.index).collect(),
                 operation: ExtrudeOperation::NewBody,
@@ -3864,6 +3880,7 @@ mod project_tests {
 
         let extrude = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -4021,6 +4038,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -4117,6 +4135,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,

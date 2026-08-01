@@ -347,7 +347,15 @@ export type ExtrudeExtent =
   | { type: 'through_all' }
   | { type: 'to_face'; face_id: number };
 
+/** Stable reference to an exact planar OCCT face owned by a live body. */
+export interface PlanarFaceSourceDto {
+  body_id: number;
+  face_id: number;
+}
+
 export interface ExtrudeRequest {
+  /** When set, OCCT extrudes the original TopoDS_Face, including inner wires. */
+  source_face?: PlanarFaceSourceDto | null;
   sketch_name: string;
   profile_indices: number[];
   operation: ExtrudeOperation;
@@ -360,6 +368,8 @@ export interface ExtrudeRequest {
 export interface ExtrudeDefinitionDto extends ExtrudeRequest {
   feature_id: number;
   name: string;
+  source_face_key?: string | null;
+  source_face_basis?: PlaneBasis | null;
   to_face_basis?: PlaneBasis | null;
   new_body_ids: number[];
 }
@@ -718,6 +728,11 @@ export type KernelCurveDto =
 export interface KernelExtrudeJobDto {
   feature_id: number;
   operation: ExtrudeOperation;
+  source_face?: {
+    body_id: number;
+    face_id: number;
+    face_key: string;
+  } | null;
   profiles: KernelProfileDto[];
   normal: Point3Dto;
   start_offset: number;

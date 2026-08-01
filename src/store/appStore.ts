@@ -15,6 +15,7 @@ import type {
   DatumPlaneUpdateDto,
   ExtrudeOperation,
   OriginPlane,
+  PlanarFaceSourceDto,
   PlaneBasis,
   PlaneRef,
   Point3Dto,
@@ -239,6 +240,9 @@ export interface SolidCurvePicker {
 export interface ExtrudeCommandPreview {
   kind: 'extrude';
   basis: PlaneBasis;
+  /** Exact kernel source identity. Preview geometry may use its tessellation,
+   * but the committed feature resolves the original OCCT TopoDS_Face. */
+  sourceFace: PlanarFaceSourceDto | null;
   profiles: ProfileLoopDto[];
   selectedProfileIndices: number[];
   startOffset: number;

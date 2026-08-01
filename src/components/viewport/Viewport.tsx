@@ -1292,6 +1292,101 @@ export function Viewport() {
         const surfaceColor = rgbaFromHex(operationColor, 0.20);
         const outlineColor = rgbaFromHex(operationColor, 0.96);
         const toolPositions: number[] = [];
+        let faceSourceAnchor: [number, number, number] | null = null;
+        if (solidPreview.sourceFace) {
+          const body = store.getState().solidScene.bodies.find(
+            (candidate) => candidate.id === solidPreview.sourceFace?.body_id,
+          );
+          const face = body?.faces.find(
+            (candidate) => candidate.id === solidPreview.sourceFace?.face_id,
+          );
+          if (body && face) {
+            const positionAt = (index: number): [number, number, number] => [
+              body.mesh.positions[index * 3],
+              body.mesh.positions[index * 3 + 1],
+              body.mesh.positions[index * 3 + 2],
+            ];
+            const offsetPoint = (
+              point: [number, number, number],
+              offset: number,
+            ): [number, number, number] => [
+              point[0] + solidPreview.basis.normal[0] * offset,
+              point[1] + solidPreview.basis.normal[1] * offset,
+              point[2] + solidPreview.basis.normal[2] * offset,
+            ];
+            const pointKey = (point: [number, number, number]) =>
+              point.map((value) => Math.round(value * 1e7)).join(':');
+            const boundary = new Map<
+              string,
+              { a: [number, number, number]; b: [number, number, number]; count: number }
+            >();
+            const anchor = [0, 0, 0] as [number, number, number];
+            let anchorCount = 0;
+            const faceIndices = body.mesh.indices.slice(
+              face.first_index,
+              face.first_index + face.index_count,
+            );
+            for (let index = 0; index + 2 < faceIndices.length; index += 3) {
+              const points = [
+                positionAt(faceIndices[index]),
+                positionAt(faceIndices[index + 1]),
+                positionAt(faceIndices[index + 2]),
+              ] as const;
+              for (const point of points) {
+                anchor[0] += point[0];
+                anchor[1] += point[1];
+                anchor[2] += point[2];
+                anchorCount += 1;
+              }
+              const start = points.map((point) =>
+                offsetPoint(point, solidPreview.startOffset));
+              const end = points.map((point) =>
+                offsetPoint(point, solidPreview.endOffset));
+              toolPositions.push(
+                ...start[0], ...start[1], ...start[2],
+                ...end[2], ...end[1], ...end[0],
+              );
+              for (const [a, b] of [[points[0], points[1]], [points[1], points[2]], [points[2], points[0]]] as const) {
+                const aKey = pointKey(a);
+                const bKey = pointKey(b);
+                const key = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+                const existing = boundary.get(key);
+                if (existing) existing.count += 1;
+                else boundary.set(key, { a: [...a], b: [...b], count: 1 });
+              }
+            }
+            for (const edge of boundary.values()) {
+              if (edge.count !== 1) continue;
+              const aStart = offsetPoint(edge.a, solidPreview.startOffset);
+              const bStart = offsetPoint(edge.b, solidPreview.startOffset);
+              const aEnd = offsetPoint(edge.a, solidPreview.endOffset);
+              const bEnd = offsetPoint(edge.b, solidPreview.endOffset);
+              toolPositions.push(
+                ...aStart, ...bStart, ...bEnd,
+                ...aStart, ...bEnd, ...aEnd,
+              );
+              appendSegment(
+                outlineColor,
+                1.5,
+                transientStart.set(...aStart),
+                transientEnd.set(...bStart),
+              );
+              appendSegment(
+                outlineColor,
+                1.5,
+                transientStart.set(...aEnd),
+                transientEnd.set(...bEnd),
+              );
+            }
+            if (anchorCount > 0) {
+              faceSourceAnchor = [
+                anchor[0] / anchorCount,
+                anchor[1] / anchorCount,
+                anchor[2] / anchorCount,
+              ];
+            }
+          }
+        }
         const selectedOuters = solidPreview.profiles.filter(
           (profile) =>
             profile.nesting_depth % 2 === 0
@@ -1399,7 +1494,22 @@ export function Viewport() {
         }
 
         const anchorPoints = selectedOuters.flatMap((profile) => profile.points);
-        if (anchorPoints.length > 0) {
+        if (faceSourceAnchor) {
+          arrows.push({
+            start: faceSourceAnchor,
+            end: [
+              faceSourceAnchor[0]
+                + solidPreview.basis.normal[0] * solidPreview.directionOffset,
+              faceSourceAnchor[1]
+                + solidPreview.basis.normal[1] * solidPreview.directionOffset,
+              faceSourceAnchor[2]
+                + solidPreview.basis.normal[2] * solidPreview.directionOffset,
+            ],
+            color: rgbaFromHex(COLOR_PREVIEW, 1),
+            width: 2,
+            xray: true,
+          });
+        } else if (anchorPoints.length > 0) {
           const anchor2d = anchorPoints.reduce(
             (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
             { x: 0, y: 0 },
@@ -5818,6 +5928,14 @@ export function Viewport() {
           surface.domElement.style.cursor = 'crosshair';
           return;
         }
+        if (state.profilePicker?.owner === 'extrude') {
+          const faceHit = pickSolidFace(e);
+          const planarFace = faceHit?.planar ? faceHit : null;
+          state.setHoveredEdge(null);
+          state.setHoveredFace(planarFace?.faceId ?? null);
+          surface.domElement.style.cursor = planarFace ? 'crosshair' : 'not-allowed';
+          return;
+        }
         if (state.profilePicker) {
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
@@ -6110,7 +6228,24 @@ export function Viewport() {
         }
         const profileHit = pickFinishedProfile(e);
         if (profileHit) {
+          if (state.profilePicker?.owner === 'extrude') {
+            state.clearSolidSelection();
+          }
           state.toggleProfilePick(profileHit);
+          return;
+        }
+        if (state.profilePicker?.owner === 'extrude') {
+          const faceHit = pickSolidFace(e);
+          if (faceHit?.planar) {
+            state.replaceProfilePicks('extrude', [], '');
+            state.selectSolidFeature(
+              'face',
+              faceHit.bodyId,
+              faceHit.faceId,
+              faceHit.point,
+              false,
+            );
+          }
           return;
         }
         // A profile command owns the viewport selection role. Do not fall
