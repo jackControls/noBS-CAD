@@ -39,6 +39,8 @@
   --cad-sketch-selected: #c4b9ff;
   --cad-preview: #8fc4ff;
   --cad-finished: #4ac7ff;
+  --cad-finished-point: #ff9f43;
+  --cad-finished-point-outline: #15191f;
   --cad-body: #8b9bac;
   --cad-body-selected: #69a9d4;
   --cad-body-tool: #b58a43;
@@ -92,6 +94,8 @@
   --cad-sketch-selected: #5038a8;
   --cad-preview: #147fbe;
   --cad-finished: #007fb4;
+  --cad-finished-point: #6b2d00;
+  --cad-finished-point-outline: #ffffff;
   --cad-body: #9fb3c5;
   --cad-body-selected: #4f98c5;
   --cad-body-tool: #d2a04b;

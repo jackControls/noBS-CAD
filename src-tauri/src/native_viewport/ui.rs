@@ -1332,6 +1332,8 @@ pub(crate) fn light_reference_palette() -> ViewportPalette {
         hover: [0.0, 110.0 / 255.0, 174.0 / 255.0],
         selection: [102.0 / 255.0, 84.0 / 255.0, 199.0 / 255.0],
         finished_sketch: [0.0, 127.0 / 255.0, 180.0 / 255.0],
+        finished_sketch_point: [107.0 / 255.0, 45.0 / 255.0, 0.0],
+        finished_sketch_point_outline: [1.0, 1.0, 1.0],
         preview: [20.0 / 255.0, 127.0 / 255.0, 190.0 / 255.0],
     }
 }

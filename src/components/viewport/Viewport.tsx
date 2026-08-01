@@ -261,6 +261,14 @@ export function Viewport() {
     );
     const COLOR_PREVIEW = interactionThemeColor('--cad-preview', '#8fc4ff');
     const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#4ac7ff');
+    const COLOR_FINISHED_POINT = interactionThemeColor(
+      '--cad-finished-point',
+      '#ff9f43',
+    );
+    const COLOR_FINISHED_POINT_OUTLINE = interactionThemeColor(
+      '--cad-finished-point-outline',
+      '#15191f',
+    );
     const COLOR_BODY = interactionThemeColor('--cad-body', '#8b9bac');
     const COLOR_BODY_SELECTED = interactionThemeColor('--cad-body-selected', '#69a9d4');
     const COLOR_BODY_TOOL = interactionThemeColor('--cad-body-tool', '#b58a43');
@@ -4033,6 +4041,7 @@ export function Viewport() {
           const selected = axisSelected || curveSelected;
           const hovered = axisHovered || curveHovered;
           const emphasized = selected || hovered;
+          const gripColor = emphasized ? color : COLOR_FINISHED_POINT;
           const linewidth = emphasized ? 1.15 * 1.5 : 1.15;
           const opacity = selected ? 1 : hovered ? 0.95 : 0.42;
           // Mirror the active-sketch point grips in solid mode. Point
@@ -4041,15 +4050,15 @@ export function Viewport() {
           if (s.palette.points) {
             switch (ent.kind) {
               case 'point':
-                addFinishedPoint(ent.position, 0.06, color, emphasized);
+                addFinishedPoint(ent.position, 0.06, gripColor, emphasized);
                 break;
               case 'circle':
               case 'arc':
-                addFinishedPoint(ent.center, 0.06, color, emphasized);
+                addFinishedPoint(ent.center, 0.06, gripColor, emphasized);
                 break;
               case 'spline':
                 ent.points.forEach((point) =>
-                  addFinishedPoint(point, 0.06, color, emphasized),
+                  addFinishedPoint(point, 0.06, gripColor, emphasized),
                 );
                 break;
             }
@@ -4092,7 +4101,7 @@ export function Viewport() {
                 addFinishedPoint(
                   { x: localX, y: localY },
                   localZ + 0.06,
-                  hovered ? COLOR_HOVER : COLOR_FINISHED,
+                  hovered ? COLOR_HOVER : COLOR_FINISHED_POINT,
                   true,
                 );
               }
@@ -4164,21 +4173,42 @@ export function Viewport() {
           }
         }
         if (pointPositions.length > 0) {
+          const outlineGeometry = new CAD.BufferGeometry();
+          outlineGeometry.setAttribute(
+            'position',
+            new CAD.Float32BufferAttribute(pointPositions, 3),
+          );
+          const outlineMaterial = new CAD.PointsMaterial({
+            size: 6,
+            sizeAttenuation: false,
+            color: COLOR_FINISHED_POINT_OUTLINE,
+            transparent: true,
+            opacity: 0.96,
+            depthTest: false,
+            depthWrite: false,
+          });
+          const outline = new CAD.Points(outlineGeometry, outlineMaterial);
+          outline.renderOrder = 14;
+          outline.userData.finishedSketchEmphasis = false;
+          outline.userData.finishedSketchPointRole = 'finished-point-outline';
+          g.add(outline);
+
           const geometry = new CAD.BufferGeometry();
           geometry.setAttribute('position', new CAD.Float32BufferAttribute(pointPositions, 3));
           geometry.setAttribute('color', new CAD.Float32BufferAttribute(pointColors, 3));
           const material = new CAD.PointsMaterial({
-            size: 4.5,
+            size: 4,
             sizeAttenuation: false,
             vertexColors: true,
             transparent: true,
-            opacity: 0.48,
+            opacity: 1,
             depthTest: false,
             depthWrite: false,
           });
           const points = new CAD.Points(geometry, material);
           points.renderOrder = 15;
           points.userData.finishedSketchEmphasis = false;
+          points.userData.finishedSketchPointRole = 'finished-point-fill';
           g.add(points);
         }
         if (emphasisPointPositions.length > 0) {

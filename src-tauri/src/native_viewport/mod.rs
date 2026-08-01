@@ -76,6 +76,8 @@ pub struct ViewportPalette {
     pub hover: [f32; 3],
     pub selection: [f32; 3],
     pub finished_sketch: [f32; 3],
+    pub finished_sketch_point: [f32; 3],
+    pub finished_sketch_point_outline: [f32; 3],
     pub preview: [f32; 3],
 }
 
@@ -105,6 +107,8 @@ impl Default for ViewportPalette {
             hover: [1.0, 209.0 / 255.0, 102.0 / 255.0],
             selection: [196.0 / 255.0, 185.0 / 255.0, 1.0],
             finished_sketch: [74.0 / 255.0, 199.0 / 255.0, 1.0],
+            finished_sketch_point: [1.0, 159.0 / 255.0, 67.0 / 255.0],
+            finished_sketch_point_outline: [21.0 / 255.0, 25.0 / 255.0, 31.0 / 255.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
         }
     }

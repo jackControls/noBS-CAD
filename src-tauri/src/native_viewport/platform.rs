@@ -75,6 +75,10 @@ const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
 const SKETCH_LINE_WIDTH: f32 = 1.25;
 const SKETCH_DEPTH_BIAS: f32 = -1.0;
+const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
+const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.999;
+const SKETCH_POINT_RADIUS_PX: f32 = 2.5;
+const SKETCH_POINT_OUTLINE_RADIUS_PX: f32 = 3.25;
 const HIGHLIGHT_LINE_WIDTH: f32 = 2.0;
 const SNAP_MARKER_HALF_SIZE_PX: f32 = 6.0;
 
@@ -1021,6 +1025,12 @@ struct CadHighlightGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadSketchGizmos;
 
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadSketchPointOutlineGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadSketchPointGizmos;
+
 fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
     let plugins = DefaultPlugins.build().set(WindowPlugin {
@@ -1039,7 +1049,9 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
     });
     app.add_plugins(plugins)
         .init_gizmo_group::<CadHighlightGizmos>()
-        .init_gizmo_group::<CadSketchGizmos>();
+        .init_gizmo_group::<CadSketchGizmos>()
+        .init_gizmo_group::<CadSketchPointOutlineGizmos>()
+        .init_gizmo_group::<CadSketchPointGizmos>();
 
     let (window_entity, holder) = {
         let world = app.world_mut();
@@ -1114,6 +1126,12 @@ fn setup_scene(
     // Match the browser renderer's depthTest:false contract so a sketch on a
     // face (or behind a body) remains readable until its eye toggle is hidden.
     sketch_config.depth_bias = SKETCH_DEPTH_BIAS;
+    let (point_outline_config, _) = gizmo_config.config_mut::<CadSketchPointOutlineGizmos>();
+    point_outline_config.line.width = SKETCH_POINT_OUTLINE_WIDTH;
+    point_outline_config.depth_bias = SKETCH_POINT_OUTLINE_DEPTH_BIAS;
+    let (point_config, _) = gizmo_config.config_mut::<CadSketchPointGizmos>();
+    point_config.line.width = SKETCH_LINE_WIDTH;
+    point_config.depth_bias = SKETCH_DEPTH_BIAS;
 
     let camera = ViewportCamera::default();
     commands.spawn((
@@ -1673,6 +1691,8 @@ fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
 fn draw_cad_gizmos(
     mut gizmos: Gizmos,
     mut sketch_gizmos: Gizmos<CadSketchGizmos>,
+    mut sketch_point_outlines: Gizmos<CadSketchPointOutlineGizmos>,
+    mut sketch_points: Gizmos<CadSketchPointGizmos>,
     mut highlights: Gizmos<CadHighlightGizmos>,
     model: Res<ModelResource>,
     camera: Res<CameraResource>,
@@ -1843,17 +1863,27 @@ fn draw_cad_gizmos(
             continue;
         }
         let origin = basis_vector(sketch.basis.origin);
-        let point_radius = world_per_pixel_at(camera.camera, *viewport, origin) * 3.5;
-        draw_sketch(&mut sketch_gizmos, sketch, point_radius, |entity| {
-            Some(rgba(
-                palette.0.finished_sketch,
-                if matches!(entity, EntityDto::Point { .. }) {
-                    0.88
-                } else {
-                    0.58
-                },
-            ))
-        });
+        let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, origin);
+        let curve_color = rgba(palette.0.finished_sketch, 0.58);
+        let point_color = rgb(palette.0.finished_sketch_point);
+        let point_outline_color = rgba(palette.0.finished_sketch_point_outline, 0.96);
+        for entity in &sketch.entities {
+            draw_sketch_curve(&mut sketch_gizmos, &sketch.basis, entity, curve_color);
+            draw_sketch_entity_grips(
+                &mut sketch_point_outlines,
+                &sketch.basis,
+                entity,
+                world_per_pixel * SKETCH_POINT_OUTLINE_RADIUS_PX,
+                point_outline_color,
+            );
+            draw_sketch_entity_grips(
+                &mut sketch_points,
+                &sketch.basis,
+                entity,
+                world_per_pixel * SKETCH_POINT_RADIUS_PX,
+                point_color,
+            );
+        }
     }
     if let Some(sketch) = &model.active_sketch {
         let origin = basis_vector(sketch.basis.origin);
@@ -2192,61 +2222,80 @@ fn draw_sketch<Config, ColorFor>(
         let Some(color) = color_for(entity) else {
             continue;
         };
-        match entity {
-            EntityDto::Point { .. } => {}
-            EntityDto::Line { start, end, .. } => {
+        draw_sketch_curve(gizmos, &sketch.basis, entity, color);
+        draw_sketch_entity_grips(gizmos, &sketch.basis, entity, point_radius, color);
+    }
+}
+
+fn draw_sketch_curve<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    entity: &EntityDto,
+    color: Color,
+) {
+    match entity {
+        EntityDto::Point { .. } => {}
+        EntityDto::Line { start, end, .. } => {
+            gizmos.line(
+                sketch_world(basis, start.x, start.y, 0.05),
+                sketch_world(basis, end.x, end.y, 0.05),
+                color,
+            );
+        }
+        EntityDto::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+            ..
+        } => {
+            let mut sweep = end_angle - start_angle;
+            while sweep <= 0.0 {
+                sweep += std::f64::consts::TAU;
+            }
+            let segments = ((sweep.abs() * 20.0).ceil() as usize).clamp(12, 128);
+            draw_parametric_curve(gizmos, segments, color, |ratio| {
+                let angle = start_angle + sweep * ratio;
+                sketch_world(
+                    basis,
+                    center.x + radius * angle.cos(),
+                    center.y + radius * angle.sin(),
+                    0.05,
+                )
+            });
+        }
+        EntityDto::Circle { center, radius, .. } => {
+            draw_parametric_curve(gizmos, 72, color, |ratio| {
+                let angle = std::f64::consts::TAU * ratio;
+                sketch_world(
+                    basis,
+                    center.x + radius * angle.cos(),
+                    center.y + radius * angle.sin(),
+                    0.05,
+                )
+            });
+        }
+        EntityDto::Spline { tessellation, .. } => {
+            for pair in tessellation.windows(2) {
                 gizmos.line(
-                    sketch_world(&sketch.basis, start.x, start.y, 0.05),
-                    sketch_world(&sketch.basis, end.x, end.y, 0.05),
+                    sketch_world(basis, pair[0].x, pair[0].y, 0.05),
+                    sketch_world(basis, pair[1].x, pair[1].y, 0.05),
                     color,
                 );
             }
-            EntityDto::Arc {
-                center,
-                radius,
-                start_angle,
-                end_angle,
-                ..
-            } => {
-                let mut sweep = end_angle - start_angle;
-                while sweep <= 0.0 {
-                    sweep += std::f64::consts::TAU;
-                }
-                let segments = ((sweep.abs() * 20.0).ceil() as usize).clamp(12, 128);
-                draw_parametric_curve(gizmos, segments, color, |ratio| {
-                    let angle = start_angle + sweep * ratio;
-                    sketch_world(
-                        &sketch.basis,
-                        center.x + radius * angle.cos(),
-                        center.y + radius * angle.sin(),
-                        0.05,
-                    )
-                });
-            }
-            EntityDto::Circle { center, radius, .. } => {
-                draw_parametric_curve(gizmos, 72, color, |ratio| {
-                    let angle = std::f64::consts::TAU * ratio;
-                    sketch_world(
-                        &sketch.basis,
-                        center.x + radius * angle.cos(),
-                        center.y + radius * angle.sin(),
-                        0.05,
-                    )
-                });
-            }
-            EntityDto::Spline { tessellation, .. } => {
-                for pair in tessellation.windows(2) {
-                    gizmos.line(
-                        sketch_world(&sketch.basis, pair[0].x, pair[0].y, 0.05),
-                        sketch_world(&sketch.basis, pair[1].x, pair[1].y, 0.05),
-                        color,
-                    );
-                }
-            }
         }
-        for position in sketch_grip_positions(entity) {
-            draw_sketch_grip(gizmos, &sketch.basis, position, point_radius, color);
-        }
+    }
+}
+
+fn draw_sketch_entity_grips<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    entity: &EntityDto,
+    point_radius: f32,
+    color: Color,
+) {
+    for position in sketch_grip_positions(entity) {
+        draw_sketch_grip(gizmos, basis, position, point_radius, color);
     }
 }
 
@@ -2844,7 +2893,12 @@ mod tests {
 
         assert_eq!(sketch_grip_positions(&point), &[SketchVec2::ZERO]);
         assert_eq!(SKETCH_DEPTH_BIAS, -1.0);
+        assert!(SKETCH_POINT_OUTLINE_DEPTH_BIAS > SKETCH_DEPTH_BIAS);
         assert!(SKETCH_LINE_WIDTH < HIGHLIGHT_LINE_WIDTH);
+        assert!(SKETCH_POINT_OUTLINE_WIDTH > SKETCH_LINE_WIDTH);
+        assert!(SKETCH_POINT_OUTLINE_WIDTH <= 2.0);
+        assert!(SKETCH_POINT_OUTLINE_RADIUS_PX > SKETCH_POINT_RADIUS_PX);
+        assert!(SKETCH_POINT_OUTLINE_RADIUS_PX < 3.5);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
     }
 

@@ -67,6 +67,8 @@ interface NativePalette {
   hover: [number, number, number];
   selection: [number, number, number];
   finishedSketch: [number, number, number];
+  finishedSketchPoint: [number, number, number];
+  finishedSketchPointOutline: [number, number, number];
   preview: [number, number, number];
 }
 
@@ -384,6 +386,11 @@ function collectPalette(): NativePalette {
     hover: cssRgb('--cad-hover', '#ffd166'),
     selection: cssRgb('--cad-sketch-selected', '#c4b9ff'),
     finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
+    finishedSketchPoint: cssRgb('--cad-finished-point', '#ff9f43'),
+    finishedSketchPointOutline: cssRgb(
+      '--cad-finished-point-outline',
+      '#15191f',
+    ),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
   };
 }
