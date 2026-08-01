@@ -2,7 +2,10 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
+  canRedoApplicationHistory,
+  canUndoApplicationHistory,
   redoApplicationHistory,
+  subscribeApplicationHistory,
   undoApplicationHistory,
 } from './engine/controller';
 import { useAppStore } from './store/appStore';
@@ -31,23 +34,10 @@ function availability(): { canUndo: boolean; canRedo: boolean } {
   // CAD command, so the event handler below delegates back to WebKit.
   if (activeTextEditor()) return { canUndo: true, canRedo: true };
 
-  const state = useAppStore.getState();
-  if (state.projectBusy || state.solidBusy) {
-    return { canUndo: false, canRedo: false };
-  }
-  if (state.mode === 'sketch') {
-    return {
-      canUndo: state.activeSketch?.can_undo ?? false,
-      canRedo: state.activeSketch?.can_redo ?? false,
-    };
-  }
-  if (state.mode === 'solid' && state.document) {
-    return {
-      canUndo: state.document.rollback_index > 0,
-      canRedo: state.document.rollback_index < state.document.features.length,
-    };
-  }
-  return { canUndo: false, canRedo: false };
+  return {
+    canUndo: canUndoApplicationHistory(),
+    canRedo: canRedoApplicationHistory(),
+  };
 }
 
 async function run(command: NativeEditCommand): Promise<void> {
@@ -84,6 +74,7 @@ export function installNativeEditMenu(): () => void {
   const syncAfterFocusChange = () => queueMicrotask(sync);
 
   const unsubscribeStore = useAppStore.subscribe(sync);
+  const unsubscribeHistory = subscribeApplicationHistory(sync);
   window.addEventListener('focusin', sync);
   window.addEventListener('focusout', syncAfterFocusChange);
   void listen<NativeEditCommand>('native-edit-command', (event) => {
@@ -99,6 +90,7 @@ export function installNativeEditMenu(): () => void {
   return () => {
     disposed = true;
     unsubscribeStore();
+    unsubscribeHistory();
     window.removeEventListener('focusin', sync);
     window.removeEventListener('focusout', syncAfterFocusChange);
     unlisten?.();

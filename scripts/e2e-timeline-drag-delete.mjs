@@ -253,6 +253,74 @@ try {
     'solid Undo must remove the feature definition, not only move the build cursor',
   );
 
+  console.log('1b. Cmd/Ctrl+Shift+Z restores the destructively undone feature');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1,Chamfer1'
+      && window.__appStore.getState().document.rollback_index === 3
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  assert.equal(
+    await page.evaluate(async () => (await window.__engine.chamferDefinitions()).length),
+    1,
+    'solid Redo must restore the exact deleted feature definition',
+  );
+
+  console.log('1c. The restored feature can be undone again');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1'
+      && window.__appStore.getState().document.rollback_index === 2
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  console.log('1d. Consecutive solid Undo/Redo commands retain their order');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1,Chamfer1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
   // Rebuild the original dependency chain for the cursor/reorder coverage.
   await buildHistory();
 

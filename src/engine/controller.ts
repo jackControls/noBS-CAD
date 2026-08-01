@@ -27,6 +27,35 @@ import {
   type BodyFeatureKind,
   type ConstructionPlaneKind,
 } from '../store/appStore';
+import {
+  authorizeNextSolidRedo,
+  beginHistoryMutation,
+  currentHistoryProjectKey,
+  hasValidSolidRedo,
+  pushSolidRedoSnapshot,
+  returnSolidRedoSnapshot,
+  takeSolidRedoSnapshot,
+} from './applicationHistory';
+
+export function canUndoApplicationHistory(): boolean {
+  const state = useAppStore.getState();
+  if (state.projectBusy || state.solidBusy) return false;
+  if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
+  return state.mode === 'solid' && (state.document?.rollback_index ?? 0) > 0;
+}
+
+export function canRedoApplicationHistory(): boolean {
+  const state = useAppStore.getState();
+  if (state.projectBusy || state.solidBusy) return false;
+  if (state.mode === 'sketch') return state.activeSketch?.can_redo ?? false;
+  if (state.mode !== 'solid' || !state.document) return false;
+  return (
+    state.document.rollback_index < state.document.features.length ||
+    hasValidSolidRedo()
+  );
+}
+
+export { subscribeApplicationHistory } from './applicationHistory';
 
 /** Arm Create Sketch: origin planes become pickable (Esc cancels). */
 export function startPlanePick(): void {
@@ -189,9 +218,9 @@ export async function redoSketch(): Promise<void> {
 }
 
 /** Application-level Undo shared by the keyboard and native Edit menu.
- * Sketch mode uses the sketch command stack. Solid mode preserves the current
- * history contract: at the latest marker Undo removes the newest feature;
- * while inspecting an earlier marker it steps the rollback cursor backward. */
+ * Sketch mode uses the sketch command stack. At the latest solid marker the
+ * feature is still removed from authoritative history, but its compact model
+ * snapshot is retained in memory so Redo can restore it exactly. */
 export async function undoApplicationHistory(): Promise<void> {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return;
@@ -203,7 +232,21 @@ export async function undoApplicationHistory(): Promise<void> {
   const current = state.document.rollback_index;
   if (current === 0) return;
   if (current === state.document.features.length) {
-    await deleteTimelineFeature(state.document.features[current - 1].id);
+    const engine = await getEngine();
+    const projectKey = currentHistoryProjectKey();
+    // Prune a stale branch before adding another consecutive Undo entry.
+    hasValidSolidRedo(projectKey);
+    const modelJson = await engine.exportProjectModel();
+    const finishHistoryMutation = beginHistoryMutation();
+    try {
+      const deleted = await deleteTimelineFeature(
+        state.document.features[current - 1].id,
+      );
+      if (!deleted) return;
+      pushSolidRedoSnapshot(projectKey, modelJson);
+    } finally {
+      finishHistoryMutation();
+    }
   } else {
     await setTimelineRollback(current - 1);
   }
@@ -221,6 +264,45 @@ export async function redoApplicationHistory(): Promise<void> {
   const current = state.document.rollback_index;
   if (current < state.document.features.length) {
     await setTimelineRollback(current + 1);
+    return;
+  }
+
+  const projectKey = currentHistoryProjectKey();
+  const entry = takeSolidRedoSnapshot(projectKey);
+  if (!entry) return;
+  const finishHistoryMutation = beginHistoryMutation();
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const update = await engine.loadProjectModel(entry.modelJson);
+    const [finishedSketches, datumPlanes, bodyAppearances] = await Promise.all([
+      engine.finishedSketches(),
+      engine.datumPlaneDefinitions(),
+      engine.bodyAppearances(),
+    ]);
+    state.applySolidUpdate(update);
+    state.setFinishedSketches(finishedSketches);
+    state.applyDatumPlaneUpdate({
+      document: update.document,
+      planes: datumPlanes,
+    });
+    state.setBodyAppearances(bodyAppearances);
+    // Let the store observer advance this tab's model generation while the
+    // history transaction is still protected, then authorize the next older
+    // Redo entry against the newly restored model.
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    authorizeNextSolidRedo(projectKey);
+  } catch (error) {
+    // The project load is transactional. If replay fails, retain the Redo
+    // entry and leave the current model untouched.
+    returnSolidRedoSnapshot(projectKey, entry);
+    state.setConstraintDialog({
+      titleKey: 'constraints.invalidTitle',
+      message: error instanceof Error ? error.message : 'Redo failed',
+    });
+  } finally {
+    state.setSolidBusy(false);
+    finishHistoryMutation();
   }
 }
 
