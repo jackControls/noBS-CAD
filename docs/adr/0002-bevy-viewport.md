@@ -77,11 +77,23 @@ per-frame compositor-mask updates or cover the Bevy arrowhead.
 ## Exact solid-face feature sources
 
 A feature that consumes a planar solid face records the source as an owning
-`BodyId`, the stable document `FaceId`, and the creation-time OCCT topology key
-(`face:n`). The stable IDs are the parametric reference; the saved topology key
-resolves the corresponding `TopoDS_Face` in the source body's replay state.
-The face's plane basis is cached with the definition so preview and extent
-direction remain deterministic while the history graph is being rebuilt.
+`BodyId`, a deterministic `FaceId`, and the creation-time OCCT topology key
+(`face:n`). These identifiers are stable only inside the source body's replay
+stage: a later Boolean can reuse the same body-local face slot for a different
+surface. The saved topology key therefore resolves the corresponding
+`TopoDS_Face` only while the kernel is at that feature's upstream history
+state. The face's plane basis is cached with the definition so preview and
+extent direction remain deterministic while the history graph is rebuilt.
+
+Construction-plane frames obey the same temporal boundary. A datum sourced
+from a solid face or edge resolves and persists its `PlaneBasis` at its own
+history landmark. A final downstream scene must never be used to re-resolve
+that upstream reference; the persisted creation-time frame remains
+authoritative while later topology-changing features are active. Project load
+briefly replays affected datum landmarks before returning to the saved history
+marker. This both normalizes valid projects and repairs older saves whose
+cached datum or dependent-sketch basis was contaminated by downstream face-slot
+reuse.
 
 Extrude passes that exact `TopoDS_Face` to both the native and browser OCCT
 kernels. A straight extrusion prisms the face directly. A tapered extrusion

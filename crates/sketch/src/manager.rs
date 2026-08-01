@@ -1878,6 +1878,19 @@ impl SketchManager {
             if !active.contains(&working[index].feature_id) {
                 continue;
             }
+            // The current OCCT scene is the result at the rollback marker,
+            // not the scene that existed when an earlier datum was created.
+            // A downstream boolean may reuse the same body-local `face:n`
+            // slot for a perpendicular face. Re-resolving an upstream datum
+            // against that later topology silently rotates the datum and all
+            // dependent sketches. Its persisted basis is authoritative until
+            // the history marker is at a stage where no later topology writer
+            // is active.
+            if datum_source_reads_solid_topology(&working[index].source)
+                && !self.scene_matches_history_stage(working[index].feature_id)
+            {
+                continue;
+            }
             let mut source = working[index].source.clone();
             match resolve_datum_source(&self.solids, &working, active, &mut source) {
                 Ok(basis) => {
@@ -1931,6 +1944,31 @@ impl SketchManager {
         } else {
             Ok(())
         }
+    }
+
+    /// Whether the current OCCT scene represents the topology visible at one
+    /// feature's position in history. Sketch and datum entries do not alter a
+    /// body; every other active feature can. Earlier face/edge references may
+    /// only be dereferenced when no such writer follows them in the active
+    /// prefix. This is the temporal half of persistent topology naming.
+    fn scene_matches_history_stage(&self, feature_id: FeatureId) -> bool {
+        let tree = self.document.features();
+        let Some(position) = tree
+            .features
+            .iter()
+            .position(|feature| feature.id == feature_id)
+        else {
+            return false;
+        };
+        if position >= tree.rollback_index {
+            return false;
+        }
+        !tree
+            .features
+            .iter()
+            .take(tree.rollback_index)
+            .skip(position + 1)
+            .any(|feature| !feature.suppressed && feature_changes_solid_topology(feature.kind))
     }
 
     fn active_feature_ids_at(&self, rollback_index: usize) -> BTreeSet<FeatureId> {
@@ -2359,6 +2397,25 @@ fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static 
         BodyFeatureRequestDto::Combine(_) => (FeatureKind::Combine, "Combine"),
         BodyFeatureRequestDto::SplitBody(_) => (FeatureKind::SplitBody, "SplitBody"),
         BodyFeatureRequestDto::ImportStep(_) => (FeatureKind::ImportStep, "Import"),
+    }
+}
+
+fn feature_changes_solid_topology(kind: FeatureKind) -> bool {
+    !matches!(kind, FeatureKind::Sketch | FeatureKind::ConstructionPlane)
+}
+
+fn datum_source_reads_solid_topology(source: &DatumPlaneSourceDto) -> bool {
+    match source {
+        DatumPlaneSourceDto::Offset { reference, .. } => {
+            matches!(reference, PlaneRef::PlanarFace { .. })
+        }
+        DatumPlaneSourceDto::Midplane { first, second } => matches!(
+            (first, second),
+            (PlaneRef::PlanarFace { .. }, _) | (_, PlaneRef::PlanarFace { .. })
+        ),
+        // Even when the reference plane is an origin/datum plane, At Angle
+        // reads a body edge and therefore has the same history-stage rule.
+        DatumPlaneSourceDto::AtAngle { .. } => true,
     }
 }
 

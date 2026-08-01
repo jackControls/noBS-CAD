@@ -7,6 +7,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { EngineError, unwrapEnvelope, type Engine } from './index';
+import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import type {
   AddConstraintResult,
   AddLineResult,
@@ -325,7 +326,8 @@ export class TauriEngine implements Engine {
   }
 
   async loadProjectModel(modelJson: string): Promise<SolidUpdateDto> {
-    return this.call('engine_project_load', modelJson);
+    const update = await this.call<SolidUpdateDto>('engine_project_load', modelJson);
+    return restoreLoadedDatumHistoryFrames(this, update);
   }
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {

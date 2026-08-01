@@ -9,6 +9,7 @@
  */
 import init, { WasmEngine as WasmEngineInner } from '../engine-wasm/pkg/nbcad_wasm';
 import { unwrapEnvelope, type Engine } from './index';
+import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import { BrowserOcctKernel } from './occtBrowser';
 
 /** wasm-pack typings lag until `npm run build:wasm`; keep additive methods typed here. */
@@ -471,7 +472,8 @@ export class WasmEngine implements Engine {
     const plan = unwrapEnvelope<RecomputePlanDto>(
       this.inner.project_prepare_load(JSON.stringify(modelJson)),
     );
-    return this.executeSolidPlan(plan);
+    const update = await this.executeSolidPlan(plan);
+    return restoreLoadedDatumHistoryFrames(this, update);
   }
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {
