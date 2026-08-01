@@ -87,6 +87,7 @@ import {
   pickNativeViewport,
   syncNativeViewportCamera,
   syncNativeViewportPreview,
+  type NativeViewportSnapKind,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
 
@@ -846,6 +847,28 @@ export function Viewport() {
     snapMarker.visible = false;
     sketchGroup.add(snapMarker);
 
+    let snapMarkerKind: NativeViewportSnapKind = 'grid';
+    const nativeSnapKind = (kind: SnapTarget['kind']): NativeViewportSnapKind =>
+      kind === 'none' ? 'grid' : kind;
+    const showSnapMarker = (
+      point: Vec2,
+      kind: NativeViewportSnapKind = 'grid',
+    ) => {
+      snapMarker.position.set(point.x, point.y, 0.18);
+      snapMarker.material.map =
+        kind === 'midpoint' || kind === 'reference_midpoint'
+          ? midpointTexture
+          : kind === 'origin'
+            ? originTexture
+            : snapTexture;
+      snapMarkerKind = kind;
+      snapMarker.visible = true;
+    };
+    const hideSnapMarker = () => {
+      snapMarker.visible = false;
+      snapMarkerKind = 'grid';
+    };
+
     // Rubber-band preview line (constant screen width).
     const previewMaterial = new ScreenLineMaterial({
       color: COLOR_PREVIEW,
@@ -1093,10 +1116,13 @@ export function Viewport() {
         include: (object) => object.userData.profileHighlightKind !== undefined,
       });
 
-      let marker: [number, number, number] | null = null;
+      let marker: NativeViewportTransient['marker'] = null;
       if (sketchGroup.visible && snapMarker.visible) {
         snapMarker.getWorldPosition(transientPosition);
-        marker = [transientPosition.x, transientPosition.y, transientPosition.z];
+        marker = {
+          position: [transientPosition.x, transientPosition.y, transientPosition.z],
+          kind: snapMarkerKind,
+        };
       }
       return {
         lines: [...lineLayers.values()],
@@ -1594,7 +1620,7 @@ export function Viewport() {
       dimDragging = null;
       dimPick = null;
       setPreviewPositions(null);
-      snapMarker.visible = false;
+      hideSnapMarker();
       hideChips();
       clearGroup(dimPreviewGroup);
       store.getState().hideDynInput();
@@ -2088,7 +2114,7 @@ export function Viewport() {
       modCornerTarget = target;
       clearGroup(acquireGroup);
       if (!target) {
-        snapMarker.visible = false;
+        hideSnapMarker();
         return;
       }
 
@@ -2103,9 +2129,7 @@ export function Viewport() {
           2,
         );
       }
-      snapMarker.position.set(target.point.x, target.point.y, 0.18);
-      snapMarker.material.map = snapTexture;
-      snapMarker.visible = true;
+      showSnapMarker(target.point, 'point');
     };
 
     const endModTool = () => {
@@ -2119,7 +2143,7 @@ export function Viewport() {
       clearGroup(dimPreviewGroup);
       clearGroup(picksGroup);
       clearGroup(acquireGroup);
-      snapMarker.visible = false;
+      hideSnapMarker();
       store.getState().hideDynInput();
     };
 
@@ -2185,13 +2209,12 @@ export function Viewport() {
             setPreviewPositions(tessellateArc(p.center, p.radius, a0, a1, 0.12));
             // Keep the magnetic marker at the acquired operation point,
             // matching Line's snapped rubber-band endpoint.
-            snapMarker.position.set(operationPoint.x, operationPoint.y, 0.18);
-            snapMarker.visible = true;
+            showSnapMarker(operationPoint, 'point');
           })
           .catch(() => {
             if (seq !== previewSeq) return;
             setPreviewPositions(null);
-            snapMarker.visible = false;
+            hideSnapMarker();
           });
         return;
       }
@@ -2213,8 +2236,7 @@ export function Viewport() {
         const cut1 = chamferPoint(v, l1, d);
         const cut2 = chamferPoint(v, l2, d);
         setPreviewPositions([cut1.x, cut1.y, 0.12, cut2.x, cut2.y, 0.12]);
-        snapMarker.position.set(operationPoint.x, operationPoint.y, 0.18);
-        snapMarker.visible = true;
+        showSnapMarker(operationPoint, 'point');
         return;
       }
 
@@ -2261,7 +2283,8 @@ export function Viewport() {
         3,
         Math.min(64, Math.round(Number.isFinite(evaluatedEdges) ? evaluatedEdges : 6)),
       );
-      const snapped = acquireCreateSnap(cursor).point;
+      const acquired = acquireCreateSnap(cursor);
+      const snapped = acquired.point;
       const cursorRadius = Math.hypot(
         snapped.x - polygonRun.center.x,
         snapped.y - polygonRun.center.y,
@@ -2288,9 +2311,7 @@ export function Viewport() {
       }
       if (seq !== previewSeq) return;
       setPreviewPositions(positions);
-      snapMarker.position.set(snapped.x, snapped.y, 0.18);
-      snapMarker.material.map = snapTexture;
-      snapMarker.visible = true;
+      showSnapMarker(snapped, nativeSnapKind(acquired.target.kind));
       store.getState().updateDynInput(
         {
           edges: String(edges),
@@ -2842,7 +2863,7 @@ export function Viewport() {
       toolRun = null;
       setPreviewPositions(null);
       clearGroup(acquireGroup);
-      snapMarker.visible = false;
+      hideSnapMarker();
       hideChips();
       store.getState().hideDynInput();
     };
@@ -2966,13 +2987,7 @@ export function Viewport() {
       snapKind?: SnapTarget['kind'],
     ) => {
       setPreviewPositions([from.x, from.y, 0.12, snapped.x, snapped.y, 0.12]);
-      snapMarker.position.set(snapped.x, snapped.y, 0.18);
-      // Green up-triangle for midpoint snaps, square otherwise.
-      snapMarker.material.map =
-        snapKind === 'midpoint' || snapKind === 'reference_midpoint'
-          ? midpointTexture
-          : snapTexture;
-      snapMarker.visible = true;
+      showSnapMarker(snapped, nativeSnapKind(snapKind ?? 'grid'));
       const rect = surface.domElement.getBoundingClientRect();
       showChips(inferences, e.clientX - rect.left, e.clientY - rect.top);
     };
@@ -3034,13 +3049,7 @@ export function Viewport() {
             const snapped = preview.snapped_to;
             const other = { x: 2 * anchor.x - snapped.x, y: 2 * anchor.y - snapped.y };
             setPreviewPositions([other.x, other.y, 0.12, snapped.x, snapped.y, 0.12]);
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map =
-              preview.snap.kind === 'midpoint' ||
-              preview.snap.kind === 'reference_midpoint'
-                ? midpointTexture
-                : snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snapped, nativeSnapKind(preview.snap.kind));
             const rect = surface.domElement.getBoundingClientRect();
             showChips(
               preview.inferences,
@@ -3061,11 +3070,18 @@ export function Viewport() {
               const pos2: number[] = [];
               for (const c of [...corners, corners[0]]) pos2.push(c.x, c.y, 0.12);
               setPreviewPositions(pos2);
-              snapMarker.position.set(corner.x, corner.y, 0.18);
-              snapMarker.material.map = snapTexture;
-              snapMarker.visible = true;
+              const preservesAcquisition =
+                Math.hypot(
+                  corner.x - snap.snapped_to.x,
+                  corner.y - snap.snapped_to.y,
+                ) < 1e-6;
+              showSnapMarker(
+                corner,
+                preservesAcquisition ? nativeSnapKind(snap.snap.kind) : 'grid',
+              );
             } else {
               setPreviewPositions(null);
+              hideSnapMarker();
             }
             store.getState().updateDynInput(
               {
@@ -3087,11 +3103,10 @@ export function Viewport() {
             const spec = circleSpec(mode, anchor, snap.snapped_to, locks);
             if (spec) {
               setPreviewPositions(tessellateCircle(spec.center, spec.radius, 0.12));
-              snapMarker.position.set(snap.snapped_to.x, snap.snapped_to.y, 0.18);
-              snapMarker.material.map = snapTexture;
-              snapMarker.visible = true;
+              showSnapMarker(snap.snapped_to, nativeSnapKind(snap.snap.kind));
             } else {
               setPreviewPositions(null);
+              hideSnapMarker();
             }
             store.getState().updateDynInput(
               { diameter: spec ? (spec.radius * 2).toFixed(2) : '0.00' },
@@ -3137,9 +3152,7 @@ export function Viewport() {
                 ]);
               }
             }
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
           });
           break;
         }
@@ -3157,9 +3170,7 @@ export function Viewport() {
               const a1 = angleOf(anchor, snapped);
               setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12));
             }
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
           });
           break;
         }
@@ -3198,9 +3209,7 @@ export function Viewport() {
                 pos.y,
               );
             }
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
           });
           break;
         }
@@ -3214,9 +3223,7 @@ export function Viewport() {
             } else {
               setPreviewPositions(null);
             }
-            snapMarker.position.set(snap.snapped_to.x, snap.snapped_to.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snap.snapped_to, nativeSnapKind(snap.snap.kind));
           });
           break;
         }
@@ -3403,13 +3410,13 @@ export function Viewport() {
       }
       startSnapPending = true;
       const seq = ++startSeq;
-      void snapCursor(p, tool === 'line' || tool === 'midpointLine')
-        .then((snapped) => {
+      void snapCursorInfo(p, tool === 'line' || tool === 'midpointLine')
+        .then((preview) => {
           startSnapPending = false;
           if (seq !== startSeq) return;
+          const snapped = preview.snapped_to;
           toolRun = { tool, points: [snapped] };
-          snapMarker.position.set(snapped.x, snapped.y, 0.18);
-          snapMarker.visible = true;
+          showSnapMarker(snapped, nativeSnapKind(preview.snap.kind));
           const fields = TOOL_FIELDS[tool];
           // Slot arms its width field only after the second center is picked —
           // before that the field has no meaning.
@@ -3711,8 +3718,8 @@ export function Viewport() {
             const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
             const candidate = target?.id ?? null;
             if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-            snapMarker.visible = target !== null;
-            if (target) snapMarker.position.set(target.point.x, target.point.y, 0.18);
+            if (target) showSnapMarker(target.point, 'curve');
+            else hideSnapMarker();
             const pos = clusterPos(e.clientX, e.clientY);
             if (!state.dynInput.active) {
               state.showDynInput(TOOL_FIELDS.offset!, pos.x, pos.y);
@@ -3734,8 +3741,8 @@ export function Viewport() {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           const candidate = target?.id ?? null;
           if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-          snapMarker.visible = target !== null;
-          if (target) snapMarker.position.set(target.point.x, target.point.y, 0.18);
+          if (target) showSnapMarker(target.point, 'curve');
+          else hideSnapMarker();
           const seq = ++previewSeq;
           if (candidate !== null && target && engine) {
             trimHover = candidate;
@@ -3763,34 +3770,33 @@ export function Viewport() {
           const target = acquireEntityTarget(p, LINE_TARGET_KINDS);
           const candidate = target?.id ?? null;
           if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-          snapMarker.visible = target !== null;
-          if (target) snapMarker.position.set(target.point.x, target.point.y, 0.18);
+          if (target) showSnapMarker(target.point, 'curve');
+          else hideSnapMarker();
           break;
         }
         case 'break': {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           const candidate = target?.id ?? null;
           if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-          snapMarker.visible = target !== null;
-          if (target) snapMarker.position.set(target.point.x, target.point.y, 0.18);
+          if (target) showSnapMarker(target.point, 'curve');
+          else hideSnapMarker();
           break;
         }
         case 'mirror': {
           const target = acquireEntityTarget(p, LINE_TARGET_KINDS);
           const candidate = target?.id ?? null;
           if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-          snapMarker.visible = target !== null;
-          if (target) snapMarker.position.set(target.point.x, target.point.y, 0.18);
+          if (target) showSnapMarker(target.point, 'curve');
+          else hideSnapMarker();
           break;
         }
         case 'moveCopy': {
           if (moveDrag && state.activeSketch) {
-            const snapped = acquireCreateSnap(p).point;
+            const acquired = acquireCreateSnap(p);
+            const snapped = acquired.point;
             const dx = snapped.x - moveDrag.base.x;
             const dy = snapped.y - moveDrag.base.y;
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            showSnapMarker(snapped, nativeSnapKind(acquired.target.kind));
             clearGroup(dimPreviewGroup);
             for (const id of currentSelection()) {
               const ent = state.activeSketch.entities.find((en) => en.id === id);
@@ -3802,10 +3808,8 @@ export function Viewport() {
         }
         case 'scale': {
           if (!scaleBase) {
-            const snapped = acquireCreateSnap(p).point;
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            const acquired = acquireCreateSnap(p);
+            showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
           } else {
             if (!state.dynInput.active) {
               const pos = clusterPos(e.clientX, e.clientY);
@@ -3818,10 +3822,8 @@ export function Viewport() {
         }
         case 'polygon': {
           if (!polygonRun) {
-            const snapped = acquireCreateSnap(p).point;
-            snapMarker.position.set(snapped.x, snapped.y, 0.18);
-            snapMarker.material.map = snapTexture;
-            snapMarker.visible = true;
+            const acquired = acquireCreateSnap(p);
+            showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
           } else {
             if (!state.dynInput.active) {
               const pos = clusterPos(e.clientX, e.clientY);
@@ -5510,13 +5512,12 @@ export function Viewport() {
               1.5,
             );
           }
-          snapMarker.position.set(
-            placement.position.x,
-            placement.position.y,
-            0.18,
-          );
-          snapMarker.material.map = snapTexture;
-          snapMarker.visible = true;
+          const acquired = acquireCreateSnap(p);
+          const placementKind =
+            placement.coincidentWith !== null || placement.extension
+              ? 'curve'
+              : nativeSnapKind(acquired.target.kind);
+          showSnapMarker(placement.position, placementKind);
           const rect = surface.domElement.getBoundingClientRect();
           showChips(
             placement.coincidentWith === null ? [] : ['coincident'],
@@ -5529,13 +5530,7 @@ export function Viewport() {
           p,
           !e.ctrlKey && (state.activeTool === 'line' || state.activeTool === 'midpointLine'),
         );
-        snapMarker.position.set(acquired.point.x, acquired.point.y, 0.18);
-        snapMarker.material.map =
-          acquired.target.kind === 'midpoint' ||
-          acquired.target.kind === 'reference_midpoint'
-            ? midpointTexture
-            : snapTexture;
-        snapMarker.visible = true;
+        showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
         return;
       }
 

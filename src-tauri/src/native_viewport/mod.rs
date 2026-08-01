@@ -295,6 +295,26 @@ pub struct ViewportAnnotation {
     pub kind: ViewportAnnotationKind,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportSnapKind {
+    #[default]
+    Grid,
+    Origin,
+    Point,
+    Midpoint,
+    ReferenceMidpoint,
+    Curve,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportSnapMarker {
+    pub position: [f32; 3],
+    #[serde(default)]
+    pub kind: ViewportSnapKind,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportPreview {
@@ -306,8 +326,10 @@ pub struct ViewportPreview {
     pub points: Vec<ViewportPointLayer>,
     #[serde(default)]
     pub annotations: Vec<ViewportAnnotation>,
-    /// Optional world-space sketch snap marker.
-    pub marker: Option<[f32; 3]>,
+    /// Optional semantic, world-space sketch snap marker. Keeping the kind
+    /// prevents the native viewport from flattening endpoints, midpoints,
+    /// origins, and ordinary grid acquisition into one ambiguous crosshair.
+    pub marker: Option<ViewportSnapMarker>,
 }
 
 impl Default for ViewportCamera {

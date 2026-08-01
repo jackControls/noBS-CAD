@@ -65,7 +65,7 @@ use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets
 use super::{
     NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
     ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
-    ViewportPresentation, ViewportPreview, ViewportRect,
+    ViewportPresentation, ViewportPreview, ViewportRect, ViewportSnapKind, ViewportSnapMarker,
 };
 use crate::state::BOOTSTRAP_SESSION_ID;
 
@@ -74,6 +74,7 @@ const INITIAL_PHYSICAL_SIZE: u32 = 32;
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
 const HIGHLIGHT_LINE_WIDTH: f32 = 2.0;
+const SNAP_MARKER_HALF_SIZE_PX: f32 = 6.0;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
@@ -1896,24 +1897,110 @@ fn draw_cad_gizmos(
     }
 
     if let Some(marker) = preview.value.marker {
-        let center = Vec3::from_array(marker);
-        let radius = 0.42;
-        let marker_color = Color::srgba(0.20, 0.52, 0.92, 1.0);
-        gizmos.line(
-            center - Vec3::X * radius,
-            center + Vec3::X * radius,
-            marker_color,
+        draw_snap_marker(
+            &mut highlights,
+            marker,
+            camera.camera,
+            *viewport,
+            &palette.0,
         );
-        gizmos.line(
-            center - Vec3::Y * radius,
-            center + Vec3::Y * radius,
-            marker_color,
-        );
-        gizmos.line(
-            center - Vec3::Z * radius,
-            center + Vec3::Z * radius,
-            marker_color,
-        );
+    }
+}
+
+fn draw_snap_marker(
+    gizmos: &mut Gizmos<CadHighlightGizmos>,
+    marker: ViewportSnapMarker,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    palette: &ViewportPalette,
+) {
+    let center = Vec3::from_array(marker.position);
+    let camera_position = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - camera_position).normalize_or_zero();
+    let camera_up = Vec3::from_array(camera.up).normalize_or_zero();
+    let mut right = forward.cross(camera_up).normalize_or_zero();
+    if right.length_squared() < 1.0e-8 {
+        right = Vec3::X;
+    }
+    let mut up = right.cross(forward).normalize_or_zero();
+    if up.length_squared() < 1.0e-8 {
+        up = Vec3::Y;
+    }
+    let world_per_pixel = world_per_pixel_at(camera, viewport, center);
+    let half = world_per_pixel * SNAP_MARKER_HALF_SIZE_PX;
+    let point_color = rgba(palette.hover, 1.0);
+    let secondary_color = rgba(palette.selection, 1.0);
+    let preview_color = rgba(palette.preview, 0.98);
+
+    match marker.kind {
+        ViewportSnapKind::Point => {
+            draw_marker_loop(
+                gizmos,
+                &[
+                    center - right * half - up * half,
+                    center + right * half - up * half,
+                    center + right * half + up * half,
+                    center - right * half + up * half,
+                ],
+                point_color,
+            );
+        }
+        ViewportSnapKind::Midpoint | ViewportSnapKind::ReferenceMidpoint => {
+            draw_marker_loop(
+                gizmos,
+                &[
+                    center + up * half,
+                    center + right * half - up * half,
+                    center - right * half - up * half,
+                ],
+                secondary_color,
+            );
+        }
+        ViewportSnapKind::Origin => {
+            draw_marker_loop(
+                gizmos,
+                &[
+                    center + up * half,
+                    center + right * half,
+                    center - up * half,
+                    center - right * half,
+                ],
+                secondary_color,
+            );
+            let inner = half * 0.42;
+            gizmos.line(
+                center - right * inner,
+                center + right * inner,
+                secondary_color,
+            );
+            gizmos.line(center - up * inner, center + up * inner, secondary_color);
+        }
+        ViewportSnapKind::Curve => {
+            draw_marker_loop(
+                gizmos,
+                &[
+                    center + up * half,
+                    center + right * half,
+                    center - up * half,
+                    center - right * half,
+                ],
+                point_color,
+            );
+        }
+        ViewportSnapKind::Grid => {
+            let arm = half * 0.72;
+            gizmos.line(center - right * arm, center + right * arm, preview_color);
+            gizmos.line(center - up * arm, center + up * arm, preview_color);
+        }
+    }
+}
+
+fn draw_marker_loop(gizmos: &mut Gizmos<CadHighlightGizmos>, points: &[Vec3], color: Color) {
+    if points.len() < 2 {
+        return;
+    }
+    for index in 0..points.len() {
+        gizmos.line(points[index], points[(index + 1) % points.len()], color);
     }
 }
 
@@ -2695,6 +2782,28 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_preview_preserves_endpoint_snap_semantics() {
+        let preview: ViewportPreview = serde_json::from_str(
+            r#"{
+                "lines": [],
+                "points": [],
+                "annotations": [],
+                "marker": {
+                    "position": [12.0, -4.0, 0.18],
+                    "kind": "point"
+                }
+            }"#,
+        )
+        .expect("semantic snap marker should deserialize across the Tauri boundary");
+
+        let marker = preview.marker.expect("endpoint marker should be retained");
+        assert_eq!(marker.kind, ViewportSnapKind::Point);
+        assert_eq!(marker.position, [12.0, -4.0, 0.18]);
+        assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
+        assert!(SNAP_MARKER_HALF_SIZE_PX >= 5.0);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

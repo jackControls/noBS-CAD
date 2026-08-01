@@ -129,11 +129,24 @@ export interface NativeViewportAnnotation {
   kind: 'dimension' | 'constraint';
 }
 
+export type NativeViewportSnapKind =
+  | 'grid'
+  | 'origin'
+  | 'point'
+  | 'midpoint'
+  | 'reference_midpoint'
+  | 'curve';
+
+export interface NativeViewportSnapMarker {
+  position: [number, number, number];
+  kind: NativeViewportSnapKind;
+}
+
 export interface NativeViewportTransient {
   lines: NativeViewportLineLayer[];
   points: NativeViewportPointLayer[];
   annotations: NativeViewportAnnotation[];
-  marker: [number, number, number] | null;
+  marker: NativeViewportSnapMarker | null;
 }
 
 const overlaySelector = [
@@ -878,7 +891,8 @@ function previewKey(preview: NativeViewportTransient): string {
     addString(annotation.text);
     addString(annotation.kind);
   }
-  preview.marker?.forEach(addNumber);
+  preview.marker?.position.forEach(addNumber);
+  if (preview.marker) addString(preview.marker.kind);
   return [
     preview.lines.length,
     preview.points.length,
