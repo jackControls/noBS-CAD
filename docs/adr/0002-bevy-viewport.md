@@ -67,6 +67,13 @@ when the camera, annotations, or screen-size arrow transform changes. Camera
 motion updates retained manipulator transforms in place. This keeps navigation
 allocation-free even while a solid command is open.
 
+The Extrude tool volume is a translucent fill without a duplicate edge cage;
+the source sketch remains visible in its normal retained sketch layer. Its DOM
+drag proxy is hit-test-only and never becomes a webview mask island. Projected
+DOM value input is removed from the native cutout while the camera is moving
+and positioned once after navigation settles, so orbit cannot trigger
+per-frame compositor-mask updates or cover the Bevy arrowhead.
+
 ## Exact solid-face feature sources
 
 A feature that consumes a planar solid face records the source as an owning

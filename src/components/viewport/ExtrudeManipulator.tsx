@@ -9,6 +9,7 @@ import type { PlaneBasis, ProfileLoopDto } from '../../engine/types';
 import { useTranslation } from '../../i18n';
 import { DimensionInput } from '../DimensionInput';
 import type { ViewportCameraApi } from './cameraApi';
+import { nativeViewportIsActive } from './nativeViewportBridge';
 
 interface Props {
   basis: PlaneBasis;
@@ -79,9 +80,10 @@ function dragValue(value: number) {
 }
 
 /**
- * React owns only the projected input/drag hit target. Bevy renders the actual
- * 3D shaft, head, and origin marker so native viewport clipping cannot split
- * the manipulator into mismatched DOM and native pieces.
+ * React owns only the projected input and an invisible drag hit target. Bevy
+ * renders the actual 3D shaft, head, and origin marker. The hit target must not
+ * become a visible DOM island: doing so masks the native arrowhead and forces
+ * the webview/native-view cutout to move on every camera frame.
  */
 export function ExtrudeManipulator({
   basis,
@@ -109,8 +111,22 @@ export function ExtrudeManipulator({
 
   useEffect(() => {
     let frame = 0;
-    const tick = () => {
-      frame = requestAnimationFrame(tick);
+    let settleTimer = 0;
+
+    const setDisplay = (element: HTMLElement, value: string) => {
+      if (element.style.display !== value) element.style.display = value;
+    };
+    const setVisibility = (element: HTMLElement, value: string) => {
+      if (element.style.visibility !== value) element.style.visibility = value;
+    };
+    const setPosition = (element: HTMLElement, left: number, top: number) => {
+      const nextLeft = `${left.toFixed(2)}px`;
+      const nextTop = `${top.toFixed(2)}px`;
+      if (element.style.left !== nextLeft) element.style.left = nextLeft;
+      if (element.style.top !== nextTop) element.style.top = nextTop;
+    };
+
+    const update = () => {
       const api = (
         window as unknown as {
           __cameraApi?: ViewportCameraApi;
@@ -128,8 +144,8 @@ export function ExtrudeManipulator({
         anchor[2] + normal[2],
       ]);
       if (!base || !unitTip) {
-        handle.style.display = 'none';
-        field.style.display = 'none';
+        setDisplay(handle, 'none');
+        setDisplay(field, 'none');
         projectionRef.current = null;
         return;
       }
@@ -156,18 +172,51 @@ export function ExtrudeManipulator({
         effectiveDistance,
       };
 
-      handle.style.display = '';
-      handle.style.left = `${tip.x}px`;
-      handle.style.top = `${tip.y}px`;
+      setPosition(handle, tip.x, tip.y);
+      setDisplay(handle, '');
+      setVisibility(handle, '');
 
       const midpointX = (base.x + tip.x) * 0.5 - unitY * 92;
       const midpointY = (base.y + tip.y) * 0.5 + unitX * 92;
-      field.style.display = '';
-      field.style.left = `${Math.min(window.innerWidth - 390, Math.max(250, midpointX))}px`;
-      field.style.top = `${Math.min(window.innerHeight - 80, Math.max(150, midpointY))}px`;
+      setPosition(
+        field,
+        Math.min(window.innerWidth - 390, Math.max(250, midpointX)),
+        Math.min(window.innerHeight - 80, Math.max(150, midpointY)),
+      );
+      setDisplay(field, '');
+      setVisibility(field, '');
     };
+
+    const settleAfterCameraMotion = () => {
+      const handle = handleRef.current;
+      const field = fieldRef.current;
+      if (handle) setVisibility(handle, 'hidden');
+      if (field) setVisibility(field, 'hidden');
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(update, 96);
+    };
+
+    const onCameraChange = () => {
+      if (nativeViewportIsActive()) settleAfterCameraMotion();
+    };
+
+    const tick = () => {
+      update();
+      // Browser development has no native camera event source. In the desktop
+      // build, stop polling as soon as Bevy is active; camera events hide the
+      // DOM islands during motion and position them once after navigation
+      // settles.
+      if (!nativeViewportIsActive()) frame = requestAnimationFrame(tick);
+    };
+    window.addEventListener('nbcad:camera-change', onCameraChange);
+    window.addEventListener('resize', settleAfterCameraMotion);
     tick();
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('nbcad:camera-change', onCameraChange);
+      window.removeEventListener('resize', settleAfterCameraMotion);
+    };
   }, [anchor, basis.normal, effectiveDistance]);
 
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -217,16 +266,16 @@ export function ExtrudeManipulator({
       <button
         ref={handleRef}
         type="button"
-        data-native-viewport-overlay
         data-testid="extrude-direction-handle"
         aria-label={t('extrude.dragHandle')}
         title={t('extrude.dragHandle')}
+        tabIndex={-1}
         disabled={disabled}
         onPointerDown={beginDrag}
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className="pointer-events-auto fixed z-[72] h-5 w-5 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full border-2 border-white/70 bg-accent shadow-lg shadow-black/50 hover:scale-110 disabled:opacity-50"
+        className="pointer-events-auto fixed z-[72] h-8 w-8 -translate-x-1/2 -translate-y-1/2 cursor-move touch-none opacity-0"
       />
 
       <label

@@ -98,6 +98,15 @@ try {
     return transient.arrows.length === 1
       && transient.triangles.some((layer) => layer.positions.length > 0);
   });
+  const facePreview = await page.evaluate(() => window.__nativeViewportTransient());
+  const facePreviewLines = facePreview.lines.flatMap((layer) => layer.segments);
+  for (let index = 0; index + 5 < facePreviewLines.length; index += 6) {
+    assert.ok(
+      Math.abs(facePreviewLines[index + 2]) < 0.5
+        && Math.abs(facePreviewLines[index + 5]) < 0.5,
+      'the exact-face tool volume must remain a fill, not a wireframe cage',
+    );
+  }
   await page.getByTestId('extrude-submit').click();
   try {
     await page.waitForFunction(

@@ -129,23 +129,45 @@ try {
   await page.waitForFunction(
     () =>
       window.__nativeViewportTransient().triangles.length >= 2
-      && window.__nativeViewportTransient().arrows.length === 1
-      && window
-        .__nativeViewportTransient()
-        .lines.some((layer) => layer.segments.length >= 6),
+      && window.__nativeViewportTransient().arrows.length === 1,
   );
   const nativeProfilePresentation = await page.evaluate(
     () => window.__nativeViewportTransient(),
   );
   assert.ok(
-    nativeProfilePresentation.lines.some((layer) => layer.segments.length >= 6),
-    'Bevy receives the selected profile outline used by Extrude and other profile commands',
+    await page.evaluate(
+      () => window.__finishedSketchVisualState().lineDepthTests.length > 0,
+    ),
+    'the source sketch remains in its retained sketch layer during Extrude',
   );
+  const previewLineSegments = nativeProfilePresentation.lines.flatMap(
+    (layer) => layer.segments,
+  );
+  for (let index = 0; index + 5 < previewLineSegments.length; index += 6) {
+    assert.ok(
+      Math.abs(previewLineSegments[index + 2]) < 0.5
+        && Math.abs(previewLineSegments[index + 5]) < 0.5,
+      'Extrude must not add a wireframe cage above the source-sketch plane',
+    );
+  }
   assert.ok(
     nativeProfilePresentation.triangles.some(
       (layer) => layer.xray && layer.positions.length >= 18 && layer.color[3] > 0.25,
     ),
     'the selected closed region is a translucent filled surface, not only a wire',
+  );
+  const directionHandle = page.getByTestId('extrude-direction-handle');
+  assert.equal(
+    await directionHandle.evaluate((element) => getComputedStyle(element).opacity),
+    '0',
+    'the accessible drag proxy must not cover Bevy’s native arrowhead',
+  );
+  assert.equal(
+    await directionHandle.evaluate(
+      (element) => element.hasAttribute('data-native-viewport-overlay'),
+    ),
+    false,
+    'the invisible drag proxy must not punch a moving native-view mask island',
   );
   assert.equal(
     await page.getByTestId('extrude-profile-selection-state').isVisible(),

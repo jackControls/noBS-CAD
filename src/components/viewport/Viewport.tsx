@@ -967,6 +967,15 @@ export function Viewport() {
       profileRegionCache.set(outer, { holes, region });
       return region;
     };
+    type ViewportState = ReturnType<typeof useAppStore.getState>;
+    let cachedPicker: ViewportState['profilePicker'] | undefined;
+    let cachedPickerHidden: ViewportState['hidden'] | undefined;
+    let cachedPickerDocument: ViewportState['document'] | undefined;
+    let cachedPickerTriangles: NativeViewportTransient['triangles'] = [];
+    let cachedSolidPreview: ViewportState['solidCommandPreview'] | undefined;
+    let cachedSolidScene: ViewportState['solidScene'] | undefined;
+    let cachedSolidTriangles: NativeViewportTransient['triangles'] = [];
+    let cachedSolidArrows: NativeViewportTransient['arrows'] = [];
 
     /**
      * Convert the CPU interaction scene into a small semantic payload for
@@ -983,6 +992,7 @@ export function Viewport() {
       const triangles: NativeViewportTransient['triangles'] = [];
       const arrows: NativeViewportTransient['arrows'] = [];
       const annotations: NativeViewportTransient['annotations'] = [];
+      const transientState = store.getState();
 
       const rgbaFor = (
         material: CAD.Material | null,
@@ -1046,23 +1056,6 @@ export function Viewport() {
         basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y
           + basis.normal[2] * offset,
       ];
-      const appendBasisSegment = (
-        color: Rgba,
-        width: number,
-        basis: PlaneBasis,
-        a: Vec2,
-        b: Vec2,
-        offset: number,
-      ) => {
-        const start = pointOnBasis(basis, a, offset);
-        const end = pointOnBasis(basis, b, offset);
-        appendSegment(
-          color,
-          width,
-          transientStart.set(...start),
-          transientEnd.set(...end),
-        );
-      };
       const appendAnnotation = (object: CAD.Object3D) => {
         const text = object.userData.nativeAnnotationText;
         if (typeof text !== 'string' || text.length === 0) return;
@@ -1232,302 +1225,291 @@ export function Viewport() {
       // from the CPU pick proxy's transform matrix. That makes the pixels and
       // the eventual OCCT operation share one orientation contract on XY,
       // vertical, offset, and mid-planes.
-      const picker = store.getState().profilePicker;
-      if (picker) {
-        const hidden = hiddenSketchNames();
-        for (const catalog of picker.catalog) {
-          if (hidden.has(catalog.sketch_name)) continue;
-          for (const outer of catalog.profiles.filter(
-            (profile) => profile.nesting_depth % 2 === 0,
-          )) {
-            const holes = catalog.profiles.filter(
+      const picker = transientState.profilePicker;
+      if (
+        picker === cachedPicker
+        && transientState.hidden === cachedPickerHidden
+        && transientState.document === cachedPickerDocument
+      ) {
+        triangles.push(...cachedPickerTriangles);
+      } else {
+        const triangleStart = triangles.length;
+        if (picker) {
+          const hidden = hiddenSketchNames();
+          for (const catalog of picker.catalog) {
+            if (hidden.has(catalog.sketch_name)) continue;
+            for (const outer of catalog.profiles.filter(
+              (profile) => profile.nesting_depth % 2 === 0,
+            )) {
+              const holes = catalog.profiles.filter(
+                (profile) =>
+                  profile.nesting_depth % 2 === 1
+                  && profile.parent_index === outer.index,
+              );
+              const region = cachedProfileRegion(outer, holes);
+              if (!region) continue;
+              const profileRef: ProfileRefDto = {
+                sketch_name: catalog.sketch_name,
+                profile_index: outer.index,
+              };
+              const selected = picker.selected.some((candidate) =>
+                sameProfile(candidate, profileRef),
+              );
+              const hovered = sameProfile(picker.hovered, profileRef);
+              // Bevy already draws lightweight candidate outlines. Upload a
+              // translucent x-ray surface only for the profile the user is
+              // actually hovering or has selected; filling every candidate can
+              // create severe overdraw on sketch-heavy models.
+              if (!selected && !hovered) continue;
+              const fill = rgbaFromHex(
+                selected
+                  ? COLOR_EDGE_SELECTED
+                  : hovered
+                    ? COLOR_EDGE_HOVER
+                    : COLOR_FINISHED,
+                selected ? 0.32 : 0.24,
+              );
+              const positions: number[] = [];
+              for (const vertexIndex of region.indices) {
+                positions.push(
+                  ...pointOnBasis(catalog.basis, region.vertices[vertexIndex]),
+                );
+              }
+              triangles.push({ color: fill, positions, xray: true });
+            }
+          }
+        }
+        cachedPicker = picker;
+        cachedPickerHidden = transientState.hidden;
+        cachedPickerDocument = transientState.document;
+        cachedPickerTriangles = triangles.slice(triangleStart);
+      }
+
+      // Debounced Extrude tool volume. This is presentation-only, but it is
+      // generated from the same basis and signed offsets submitted to OCCT.
+      const solidPreview = transientState.solidCommandPreview;
+      const solidPreviewCached =
+        solidPreview === cachedSolidPreview
+        && (!solidPreview?.sourceFace || transientState.solidScene === cachedSolidScene);
+      if (solidPreviewCached) {
+        triangles.push(...cachedSolidTriangles);
+        arrows.push(...cachedSolidArrows);
+      } else {
+        const triangleStart = triangles.length;
+        const arrowStart = arrows.length;
+        if (solidPreview?.kind === 'extrude') {
+          const operationColor =
+            solidPreview.operation === 'cut'
+              ? 0xff6b5f
+              : solidPreview.operation === 'join'
+                ? 0x50c98b
+                : solidPreview.operation === 'intersect'
+                  ? 0xb18cff
+                  : COLOR_PREVIEW;
+          const surfaceColor = rgbaFromHex(operationColor, 0.20);
+          const toolPositions: number[] = [];
+          let faceSourceAnchor: [number, number, number] | null = null;
+          if (solidPreview.sourceFace) {
+            const body = transientState.solidScene.bodies.find(
+              (candidate) => candidate.id === solidPreview.sourceFace?.body_id,
+            );
+            const face = body?.faces.find(
+              (candidate) => candidate.id === solidPreview.sourceFace?.face_id,
+            );
+            if (body && face) {
+              const positionAt = (index: number): [number, number, number] => [
+                body.mesh.positions[index * 3],
+                body.mesh.positions[index * 3 + 1],
+                body.mesh.positions[index * 3 + 2],
+              ];
+              const offsetPoint = (
+                point: [number, number, number],
+                offset: number,
+              ): [number, number, number] => [
+                point[0] + solidPreview.basis.normal[0] * offset,
+                point[1] + solidPreview.basis.normal[1] * offset,
+                point[2] + solidPreview.basis.normal[2] * offset,
+              ];
+              const pointKey = (point: [number, number, number]) =>
+                point.map((value) => Math.round(value * 1e7)).join(':');
+              const boundary = new Map<
+                string,
+                {
+                  a: [number, number, number];
+                  b: [number, number, number];
+                  count: number;
+                }
+              >();
+              const anchor = [0, 0, 0] as [number, number, number];
+              let anchorCount = 0;
+              const faceIndices = body.mesh.indices.slice(
+                face.first_index,
+                face.first_index + face.index_count,
+              );
+              for (let index = 0; index + 2 < faceIndices.length; index += 3) {
+                const points = [
+                  positionAt(faceIndices[index]),
+                  positionAt(faceIndices[index + 1]),
+                  positionAt(faceIndices[index + 2]),
+                ] as const;
+                for (const point of points) {
+                  anchor[0] += point[0];
+                  anchor[1] += point[1];
+                  anchor[2] += point[2];
+                  anchorCount += 1;
+                }
+                const start = points.map((point) =>
+                  offsetPoint(point, solidPreview.startOffset));
+                const end = points.map((point) =>
+                  offsetPoint(point, solidPreview.endOffset));
+                toolPositions.push(
+                  ...start[0], ...start[1], ...start[2],
+                  ...end[2], ...end[1], ...end[0],
+                );
+                for (const [a, b] of [
+                  [points[0], points[1]],
+                  [points[1], points[2]],
+                  [points[2], points[0]],
+                ] as const) {
+                  const aKey = pointKey(a);
+                  const bKey = pointKey(b);
+                  const key = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
+                  const existing = boundary.get(key);
+                  if (existing) existing.count += 1;
+                  else boundary.set(key, { a: [...a], b: [...b], count: 1 });
+                }
+              }
+              for (const edge of boundary.values()) {
+                if (edge.count !== 1) continue;
+                const aStart = offsetPoint(edge.a, solidPreview.startOffset);
+                const bStart = offsetPoint(edge.b, solidPreview.startOffset);
+                const aEnd = offsetPoint(edge.a, solidPreview.endOffset);
+                const bEnd = offsetPoint(edge.b, solidPreview.endOffset);
+                toolPositions.push(
+                  ...aStart, ...bStart, ...bEnd,
+                  ...aStart, ...bEnd, ...aEnd,
+                );
+              }
+              if (anchorCount > 0) {
+                faceSourceAnchor = [
+                  anchor[0] / anchorCount,
+                  anchor[1] / anchorCount,
+                  anchor[2] / anchorCount,
+                ];
+              }
+            }
+          }
+          const selectedOuters = solidPreview.profiles.filter(
+            (profile) =>
+              profile.nesting_depth % 2 === 0
+              && solidPreview.selectedProfileIndices.includes(profile.index),
+          );
+          for (const outer of selectedOuters) {
+            const holes = solidPreview.profiles.filter(
               (profile) =>
                 profile.nesting_depth % 2 === 1
                 && profile.parent_index === outer.index,
             );
             const region = cachedProfileRegion(outer, holes);
             if (!region) continue;
-            const profileRef: ProfileRefDto = {
-              sketch_name: catalog.sketch_name,
-              profile_index: outer.index,
-            };
-            const selected = picker.selected.some((candidate) =>
-              sameProfile(candidate, profileRef),
-            );
-            const hovered = sameProfile(picker.hovered, profileRef);
-            // Bevy already draws lightweight candidate outlines. Upload a
-            // translucent x-ray surface only for the profile the user is
-            // actually hovering or has selected; filling every candidate can
-            // create severe overdraw on sketch-heavy models.
-            if (!selected && !hovered) continue;
-            const fill = rgbaFromHex(
-              selected
-                ? COLOR_EDGE_SELECTED
-                : hovered
-                  ? COLOR_EDGE_HOVER
-                  : COLOR_FINISHED,
-              selected ? 0.32 : 0.24,
-            );
-            const positions: number[] = [];
-            for (const vertexIndex of region.indices) {
-              positions.push(...pointOnBasis(catalog.basis, region.vertices[vertexIndex]));
-            }
-            triangles.push({ color: fill, positions, xray: true });
-          }
-        }
-      }
 
-      // Debounced Extrude tool volume. This is presentation-only, but it is
-      // generated from the same basis and signed offsets submitted to OCCT.
-      const solidPreview = store.getState().solidCommandPreview;
-      if (solidPreview?.kind === 'extrude') {
-        const operationColor =
-          solidPreview.operation === 'cut'
-            ? 0xff6b5f
-            : solidPreview.operation === 'join'
-              ? 0x50c98b
-              : solidPreview.operation === 'intersect'
-                ? 0xb18cff
-                : COLOR_PREVIEW;
-        const surfaceColor = rgbaFromHex(operationColor, 0.20);
-        const outlineColor = rgbaFromHex(operationColor, 0.96);
-        const toolPositions: number[] = [];
-        let faceSourceAnchor: [number, number, number] | null = null;
-        if (solidPreview.sourceFace) {
-          const body = store.getState().solidScene.bodies.find(
-            (candidate) => candidate.id === solidPreview.sourceFace?.body_id,
-          );
-          const face = body?.faces.find(
-            (candidate) => candidate.id === solidPreview.sourceFace?.face_id,
-          );
-          if (body && face) {
-            const positionAt = (index: number): [number, number, number] => [
-              body.mesh.positions[index * 3],
-              body.mesh.positions[index * 3 + 1],
-              body.mesh.positions[index * 3 + 2],
-            ];
-            const offsetPoint = (
-              point: [number, number, number],
-              offset: number,
-            ): [number, number, number] => [
-              point[0] + solidPreview.basis.normal[0] * offset,
-              point[1] + solidPreview.basis.normal[1] * offset,
-              point[2] + solidPreview.basis.normal[2] * offset,
-            ];
-            const pointKey = (point: [number, number, number]) =>
-              point.map((value) => Math.round(value * 1e7)).join(':');
-            const boundary = new Map<
-              string,
-              { a: [number, number, number]; b: [number, number, number]; count: number }
-            >();
-            const anchor = [0, 0, 0] as [number, number, number];
-            let anchorCount = 0;
-            const faceIndices = body.mesh.indices.slice(
-              face.first_index,
-              face.first_index + face.index_count,
-            );
-            for (let index = 0; index + 2 < faceIndices.length; index += 3) {
-              const points = [
-                positionAt(faceIndices[index]),
-                positionAt(faceIndices[index + 1]),
-                positionAt(faceIndices[index + 2]),
-              ] as const;
-              for (const point of points) {
-                anchor[0] += point[0];
-                anchor[1] += point[1];
-                anchor[2] += point[2];
-                anchorCount += 1;
-              }
-              const start = points.map((point) =>
-                offsetPoint(point, solidPreview.startOffset));
-              const end = points.map((point) =>
-                offsetPoint(point, solidPreview.endOffset));
+            for (let index = 0; index + 2 < region.indices.length; index += 3) {
+              const a = region.vertices[region.indices[index]];
+              const b = region.vertices[region.indices[index + 1]];
+              const c = region.vertices[region.indices[index + 2]];
               toolPositions.push(
-                ...start[0], ...start[1], ...start[2],
-                ...end[2], ...end[1], ...end[0],
+                ...pointOnBasis(solidPreview.basis, a, solidPreview.startOffset),
+                ...pointOnBasis(solidPreview.basis, b, solidPreview.startOffset),
+                ...pointOnBasis(solidPreview.basis, c, solidPreview.startOffset),
+                ...pointOnBasis(solidPreview.basis, c, solidPreview.endOffset),
+                ...pointOnBasis(solidPreview.basis, b, solidPreview.endOffset),
+                ...pointOnBasis(solidPreview.basis, a, solidPreview.endOffset),
               );
-              for (const [a, b] of [[points[0], points[1]], [points[1], points[2]], [points[2], points[0]]] as const) {
-                const aKey = pointKey(a);
-                const bKey = pointKey(b);
-                const key = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
-                const existing = boundary.get(key);
-                if (existing) existing.count += 1;
-                else boundary.set(key, { a: [...a], b: [...b], count: 1 });
+            }
+
+            for (const loop of region.loops) {
+              for (let index = 0; index < loop.length; index += 1) {
+                const a = loop[index];
+                const b = loop[(index + 1) % loop.length];
+                const aStart = pointOnBasis(
+                  solidPreview.basis,
+                  a,
+                  solidPreview.startOffset,
+                );
+                const bStart = pointOnBasis(
+                  solidPreview.basis,
+                  b,
+                  solidPreview.startOffset,
+                );
+                const aEnd = pointOnBasis(
+                  solidPreview.basis,
+                  a,
+                  solidPreview.endOffset,
+                );
+                const bEnd = pointOnBasis(
+                  solidPreview.basis,
+                  b,
+                  solidPreview.endOffset,
+                );
+                toolPositions.push(
+                  ...aStart,
+                  ...bStart,
+                  ...bEnd,
+                  ...aStart,
+                  ...bEnd,
+                  ...aEnd,
+                );
               }
             }
-            for (const edge of boundary.values()) {
-              if (edge.count !== 1) continue;
-              const aStart = offsetPoint(edge.a, solidPreview.startOffset);
-              const bStart = offsetPoint(edge.b, solidPreview.startOffset);
-              const aEnd = offsetPoint(edge.a, solidPreview.endOffset);
-              const bEnd = offsetPoint(edge.b, solidPreview.endOffset);
-              toolPositions.push(
-                ...aStart, ...bStart, ...bEnd,
-                ...aStart, ...bEnd, ...aEnd,
-              );
-              appendSegment(
-                outlineColor,
-                1.5,
-                transientStart.set(...aStart),
-                transientEnd.set(...bStart),
-              );
-              appendSegment(
-                outlineColor,
-                1.5,
-                transientStart.set(...aEnd),
-                transientEnd.set(...bEnd),
-              );
-            }
-            if (anchorCount > 0) {
-              faceSourceAnchor = [
-                anchor[0] / anchorCount,
-                anchor[1] / anchorCount,
-                anchor[2] / anchorCount,
-              ];
-            }
           }
-        }
-        const selectedOuters = solidPreview.profiles.filter(
-          (profile) =>
-            profile.nesting_depth % 2 === 0
-            && solidPreview.selectedProfileIndices.includes(profile.index),
-        );
-        for (const outer of selectedOuters) {
-          const holes = solidPreview.profiles.filter(
-            (profile) =>
-              profile.nesting_depth % 2 === 1
-              && profile.parent_index === outer.index,
-          );
-          const region = cachedProfileRegion(outer, holes);
-          if (!region) continue;
-
-          for (let index = 0; index + 2 < region.indices.length; index += 3) {
-            const a = region.vertices[region.indices[index]];
-            const b = region.vertices[region.indices[index + 1]];
-            const c = region.vertices[region.indices[index + 2]];
-            toolPositions.push(
-              ...pointOnBasis(solidPreview.basis, a, solidPreview.startOffset),
-              ...pointOnBasis(solidPreview.basis, b, solidPreview.startOffset),
-              ...pointOnBasis(solidPreview.basis, c, solidPreview.startOffset),
-              ...pointOnBasis(solidPreview.basis, c, solidPreview.endOffset),
-              ...pointOnBasis(solidPreview.basis, b, solidPreview.endOffset),
-              ...pointOnBasis(solidPreview.basis, a, solidPreview.endOffset),
-            );
+          if (toolPositions.length >= 9) {
+            triangles.push({
+              color: surfaceColor,
+              positions: toolPositions,
+              xray: true,
+            });
           }
 
-          for (const loop of region.loops) {
-            for (let index = 0; index < loop.length; index += 1) {
-              const a = loop[index];
-              const b = loop[(index + 1) % loop.length];
-              const aStart = pointOnBasis(
-                solidPreview.basis,
-                a,
-                solidPreview.startOffset,
-              );
-              const bStart = pointOnBasis(
-                solidPreview.basis,
-                b,
-                solidPreview.startOffset,
-              );
-              const aEnd = pointOnBasis(
-                solidPreview.basis,
-                a,
-                solidPreview.endOffset,
-              );
-              const bEnd = pointOnBasis(
-                solidPreview.basis,
-                b,
-                solidPreview.endOffset,
-              );
-              toolPositions.push(
-                ...aStart,
-                ...bStart,
-                ...bEnd,
-                ...aStart,
-                ...bEnd,
-                ...aEnd,
-              );
-              appendBasisSegment(
-                outlineColor,
-                1.5,
-                solidPreview.basis,
-                a,
-                b,
-                solidPreview.startOffset,
-              );
-              appendBasisSegment(
-                outlineColor,
-                1.5,
-                solidPreview.basis,
-                a,
-                b,
-                solidPreview.endOffset,
-              );
-            }
-          }
-          const verticalStride = Math.max(1, Math.ceil(outer.points.length / 8));
-          for (let index = 0; index < outer.points.length; index += verticalStride) {
-            const start = pointOnBasis(
-              solidPreview.basis,
-              outer.points[index],
-              solidPreview.startOffset,
+          const anchorPoints = selectedOuters.flatMap((profile) => profile.points);
+          if (faceSourceAnchor) {
+            arrows.push({
+              start: faceSourceAnchor,
+              end: [
+                faceSourceAnchor[0]
+                  + solidPreview.basis.normal[0] * solidPreview.directionOffset,
+                faceSourceAnchor[1]
+                  + solidPreview.basis.normal[1] * solidPreview.directionOffset,
+                faceSourceAnchor[2]
+                  + solidPreview.basis.normal[2] * solidPreview.directionOffset,
+              ],
+              color: rgbaFromHex(COLOR_PREVIEW, 1),
+              width: 2,
+              xray: true,
+            });
+          } else if (anchorPoints.length > 0) {
+            const anchor2d = anchorPoints.reduce(
+              (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+              { x: 0, y: 0 },
             );
-            const end = pointOnBasis(
-              solidPreview.basis,
-              outer.points[index],
-              solidPreview.endOffset,
-            );
-            appendSegment(
-              outlineColor,
-              1.25,
-              transientStart.set(...start),
-              transientEnd.set(...end),
-            );
+            anchor2d.x /= anchorPoints.length;
+            anchor2d.y /= anchorPoints.length;
+            arrows.push({
+              start: pointOnBasis(solidPreview.basis, anchor2d),
+              end: pointOnBasis(
+                solidPreview.basis,
+                anchor2d,
+                solidPreview.directionOffset,
+              ),
+              color: rgbaFromHex(COLOR_PREVIEW, 1),
+              width: 2,
+              xray: true,
+            });
           }
         }
-        if (toolPositions.length >= 9) {
-          triangles.push({
-            color: surfaceColor,
-            positions: toolPositions,
-            xray: true,
-          });
-        }
-
-        const anchorPoints = selectedOuters.flatMap((profile) => profile.points);
-        if (faceSourceAnchor) {
-          arrows.push({
-            start: faceSourceAnchor,
-            end: [
-              faceSourceAnchor[0]
-                + solidPreview.basis.normal[0] * solidPreview.directionOffset,
-              faceSourceAnchor[1]
-                + solidPreview.basis.normal[1] * solidPreview.directionOffset,
-              faceSourceAnchor[2]
-                + solidPreview.basis.normal[2] * solidPreview.directionOffset,
-            ],
-            color: rgbaFromHex(COLOR_PREVIEW, 1),
-            width: 2,
-            xray: true,
-          });
-        } else if (anchorPoints.length > 0) {
-          const anchor2d = anchorPoints.reduce(
-            (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
-            { x: 0, y: 0 },
-          );
-          anchor2d.x /= anchorPoints.length;
-          anchor2d.y /= anchorPoints.length;
-          arrows.push({
-            start: pointOnBasis(solidPreview.basis, anchor2d),
-            end: pointOnBasis(
-              solidPreview.basis,
-              anchor2d,
-              solidPreview.directionOffset,
-            ),
-            color: rgbaFromHex(COLOR_PREVIEW, 1),
-            width: 2,
-            xray: true,
-          });
-        }
+        cachedSolidPreview = solidPreview;
+        cachedSolidScene = transientState.solidScene;
+        cachedSolidTriangles = triangles.slice(triangleStart);
+        cachedSolidArrows = arrows.slice(arrowStart);
       }
 
       let marker: NativeViewportTransient['marker'] = null;
@@ -7319,6 +7301,7 @@ export function Viewport() {
 
     // --- Store subscription: mode transitions, snapshots, hover sync ---
     const store = useAppStore;
+    let nativeTransientDirty = true;
     let prevMode = store.getState().mode;
     let lastReferencePickerVisible = referencePickerVisible(store.getState());
     let lastSketch: SketchDto | null = null;
@@ -7404,6 +7387,7 @@ export function Viewport() {
     };
 
     const unsub = store.subscribe((s) => {
+      nativeTransientDirty = true;
       wakeControllerFrame();
       const referencesVisible = referencePickerVisible(s);
       if (referencesVisible !== lastReferencePickerVisible) {
@@ -7710,8 +7694,14 @@ export function Viewport() {
 
       const native = nativeViewportIsActive();
       scene.updateMatrixWorld(true);
-      if (native) {
+      // Solid-command fills and arrows are world-space retained Bevy assets.
+      // Camera motion updates their native transforms directly; rebuilding and
+      // hashing their JS payload on every orbit frame defeats that contract.
+      // Active-sketch annotations are the only camera-projected transient data
+      // and therefore keep the camera-frequency collection path.
+      if (native && (nativeTransientDirty || sketchGroup.visible)) {
         syncNativeViewportPreview(collectNativeViewportTransient());
+        nativeTransientDirty = false;
       }
       if (
         !native ||
