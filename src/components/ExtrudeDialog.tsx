@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Box, LoaderCircle, X } from 'lucide-react';
+import { Box, LoaderCircle, MousePointerClick, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import { submitExtrude } from '../engine/controller';
 import type {
@@ -42,6 +42,7 @@ export function ExtrudeDialog() {
   const configureProfilePicker = useAppStore((s) => s.configureProfilePicker);
   const replaceProfilePicks = useAppStore((s) => s.replaceProfilePicks);
   const toggleProfilePick = useAppStore((s) => s.toggleProfilePick);
+  const setSolidCommandPreview = useAppStore((s) => s.setSolidCommandPreview);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -287,6 +288,150 @@ export function ExtrudeDialog() {
   const editFeatureId =
     openFeature !== null && openFeature > 0 ? openFeature : undefined;
 
+  const previewOffsets = useMemo(() => {
+    if (!selectedCatalog || selectedProfiles.length === 0 || !extentValid) return null;
+    let startOffset = 0;
+    let endOffset = 0;
+    let directionOffset = 0;
+
+    if (extentType === 'distance') {
+      const magnitude = Math.abs(distanceNumber);
+      const effectiveFlip = distanceNumber < 0 ? !flip : flip;
+      startOffset = 0;
+      endOffset = magnitude;
+      if (effectiveFlip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = effectiveFlip ? -magnitude : magnitude;
+    } else if (extentType === 'two_sides') {
+      startOffset = -secondDistanceNumber;
+      endOffset = distanceNumber;
+      if (flip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = flip ? -secondDistanceNumber : distanceNumber;
+    } else if (extentType === 'symmetric') {
+      const half = distanceNumber * 0.5;
+      startOffset = -half;
+      endOffset = half;
+      directionOffset = flip ? -half : half;
+    } else if (extentType === 'to_face') {
+      const faceBasis = scene.bodies
+        .flatMap((body) => body.faces)
+        .find((face) => face.id === toFace)?.plane;
+      if (!faceBasis) return null;
+      const delta = faceBasis.origin.map(
+        (coordinate, index) => coordinate - selectedCatalog.basis.origin[index],
+      );
+      const distanceToFace = delta.reduce(
+        (sum, coordinate, index) =>
+          sum + coordinate * selectedCatalog.basis.normal[index],
+        0,
+      );
+      if (!Number.isFinite(distanceToFace) || Math.abs(distanceToFace) <= 0.000001) {
+        return null;
+      }
+      startOffset = 0;
+      endOffset = distanceToFace;
+      if (flip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = flip ? -distanceToFace : distanceToFace;
+    } else {
+      // Through All is infinite in the kernel. Bound its presentation to the
+      // active target geometry so the preview stays useful and numerically
+      // compact in the native viewport.
+      const eligibleIds = new Set(
+        targetBodies.length > 0
+          ? targetBodies
+          : scene.bodies.map((body) => body.id),
+      );
+      let minimum = Number.POSITIVE_INFINITY;
+      let maximum = Number.NEGATIVE_INFINITY;
+      for (const body of scene.bodies) {
+        if (!eligibleIds.has(body.id)) continue;
+        for (let index = 0; index + 2 < body.mesh.positions.length; index += 3) {
+          const projection =
+            (body.mesh.positions[index] - selectedCatalog.basis.origin[0])
+              * selectedCatalog.basis.normal[0]
+            + (body.mesh.positions[index + 1] - selectedCatalog.basis.origin[1])
+              * selectedCatalog.basis.normal[1]
+            + (body.mesh.positions[index + 2] - selectedCatalog.basis.origin[2])
+              * selectedCatalog.basis.normal[2];
+          minimum = Math.min(minimum, projection);
+          maximum = Math.max(maximum, projection);
+        }
+      }
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+        minimum = -50;
+        maximum = 50;
+      }
+      const padding = Math.max(2, Math.abs(maximum - minimum) * 0.08);
+      startOffset = minimum - padding;
+      endOffset = maximum + padding;
+      directionOffset = flip ? startOffset : endOffset;
+    }
+
+    return { startOffset, endOffset, directionOffset };
+  }, [
+    distanceNumber,
+    extentType,
+    extentValid,
+    flip,
+    scene.bodies,
+    secondDistanceNumber,
+    selectedCatalog,
+    selectedProfiles.length,
+    targetBodies,
+    toFace,
+  ]);
+
+  // OCCT-scale previews should not run for every intermediate keystroke. Keep
+  // the previous valid tool volume while typing, then publish one coherent
+  // update after a short pause.
+  useEffect(() => {
+    if (
+      openFeature === null ||
+      loading ||
+      loadError ||
+      !selectedCatalog ||
+      profileIndices.length === 0
+    ) {
+      setSolidCommandPreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (
+        !previewOffsets
+        || !Number.isFinite(taperNumber)
+        || Math.abs(taperNumber) >= 89
+      ) {
+        setSolidCommandPreview(null);
+        return;
+      }
+      setSolidCommandPreview({
+        kind: 'extrude',
+        basis: selectedCatalog.basis,
+        profiles: selectedCatalog.profiles,
+        selectedProfileIndices: [...profileIndices],
+        startOffset: previewOffsets.startOffset,
+        endOffset: previewOffsets.endOffset,
+        directionOffset: previewOffsets.directionOffset,
+        operation,
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [
+    loadError,
+    loading,
+    openFeature,
+    operation,
+    previewOffsets,
+    profileSelectionKey,
+    selectedCatalog,
+    setSolidCommandPreview,
+    taperNumber,
+  ]);
+
+  useEffect(
+    () => () => setSolidCommandPreview(null),
+    [setSolidCommandPreview],
+  );
+
   const changeDistance = (value: string) => {
     setDistance(value);
   };
@@ -516,9 +661,33 @@ export function ExtrudeDialog() {
 
               <fieldset>
                 <legend className={LABEL_CLASS}>{t('extrude.profiles')}</legend>
-                <p className="mb-1.5 text-[10px] leading-4 text-mute">
-                  {t('solidProfile.pickHint')}
-                </p>
+                <div
+                  data-testid="extrude-profile-selection-state"
+                  className="mb-2 rounded border border-accent/70 bg-accent/10 p-2"
+                >
+                  <div className="flex items-center gap-2 text-xs font-semibold text-ink">
+                    <MousePointerClick size={14} className="shrink-0 text-accent" />
+                    <span className="flex-1">{t('extrude.selectingProfiles')}</span>
+                    <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent">
+                      {t('extrude.selectedProfileCount').replace(
+                        '{count}',
+                        String(profileIndices.length),
+                      )}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-4 text-mute">
+                    {t('extrude.selectingProfilesHint')}
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="extrude-clear-profiles"
+                    disabled={profileIndices.length === 0}
+                    onClick={() => replaceProfilePicks('extrude', [], sketchName)}
+                    className="mt-1.5 h-6 rounded border border-edge bg-header px-2 text-[10px] text-ink hover:border-accent/70 hover:bg-edge disabled:opacity-40"
+                  >
+                    {t('extrude.clearAndReselect')}
+                  </button>
+                </div>
                 <div className="space-y-1 rounded border border-edge bg-header p-2">
                   {selectedCatalog?.profiles.filter((profile) => profile.nesting_depth % 2 === 0).map((profile) => (
                     <label
@@ -540,6 +709,9 @@ export function ExtrudeDialog() {
                     </label>
                   ))}
                 </div>
+                <p className="mt-1.5 text-[10px] leading-4 text-mute">
+                  {t('extrude.livePreview')}
+                </p>
               </fieldset>
 
               <fieldset>

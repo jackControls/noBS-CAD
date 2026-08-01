@@ -1,5 +1,7 @@
 use bevy::{
     asset::RenderAssetUsages,
+    camera::{visibility::RenderLayers, ClearColorConfig},
+    light::{NotShadowCaster, NotShadowReceiver},
     mesh::Indices,
     prelude::*,
     render::render_resource::PrimitiveTopology,
@@ -11,8 +13,7 @@ use bevy::{
 use nbcad_core::PlaneBasis;
 use nbcad_sketch::{EntityDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{
-    BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto,
-    SolidSceneDto,
+    BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto, SolidSceneDto,
 };
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
@@ -358,6 +359,8 @@ impl PlatformNativeViewport {
     pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
         const MAX_LINE_FLOATS: usize = 6 * 65_536;
         const MAX_POINT_FLOATS: usize = 3 * 32_768;
+        const MAX_TRIANGLE_FLOATS: usize = 9 * 65_536;
+        const MAX_ARROWS: usize = 256;
         const MAX_ANNOTATIONS: usize = 2_048;
         let line_floats = preview
             .lines
@@ -369,10 +372,18 @@ impl PlatformNativeViewport {
             .iter()
             .map(|layer| layer.positions.len())
             .sum::<usize>();
+        let triangle_floats = preview
+            .triangles
+            .iter()
+            .map(|layer| layer.positions.len())
+            .sum::<usize>();
         if preview.lines.len() > 128
             || preview.points.len() > 128
+            || preview.triangles.len() > 128
+            || preview.arrows.len() > MAX_ARROWS
             || line_floats > MAX_LINE_FLOATS
             || point_floats > MAX_POINT_FLOATS
+            || triangle_floats > MAX_TRIANGLE_FLOATS
             || preview.annotations.len() > MAX_ANNOTATIONS
             || preview
                 .annotations
@@ -990,6 +1001,8 @@ struct RenderedRevisions {
     camera: u64,
     hud: u64,
     annotations: u64,
+    preview_meshes: u64,
+    preview_mesh_camera: u64,
 }
 
 #[derive(Component)]
@@ -1010,6 +1023,17 @@ struct NativeModelGeometry {
 
 #[derive(Component)]
 struct NativeCadCamera;
+
+/// Common marker for the model camera and the depth-independent transient
+/// overlay camera. Both always receive exactly the same projection.
+#[derive(Component)]
+struct NativeViewportCamera;
+
+#[derive(Component)]
+struct NativeOverlayCamera;
+
+#[derive(Component)]
+struct NativePreviewMesh;
 
 #[derive(Component)]
 struct CadKeyLight;
@@ -1109,6 +1133,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
                 apply_camera,
                 resize_reference_planes,
                 apply_native_presentation_styles,
+                rebuild_native_preview_meshes,
                 rebuild_native_annotations,
                 rebuild_native_hud,
                 update_native_hud_orientation,
@@ -1148,6 +1173,7 @@ fn setup_scene(
     let (key_transform, fill_transform) = camera_relative_light_transforms(camera);
     commands.spawn((
         Name::new("React-synchronized CAD camera"),
+        NativeViewportCamera,
         NativeCadCamera,
         Camera3d::default(),
         BoxShadowSamples(6),
@@ -1158,6 +1184,26 @@ fn setup_scene(
             ..default()
         }),
         camera_transform(camera),
+    ));
+
+    commands.spawn((
+        Name::new("CAD transient overlay camera"),
+        NativeViewportCamera,
+        NativeOverlayCamera,
+        Camera3d::default(),
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        Projection::Perspective(PerspectiveProjection {
+            fov: camera.vertical_fov_degrees.to_radians(),
+            near: 0.1,
+            far: 20_000.0,
+            ..default()
+        }),
+        camera_transform(camera),
+        RenderLayers::layer(1),
     ));
 
     commands.spawn((
@@ -1297,14 +1343,22 @@ fn rebuild_occt_meshes(
 fn apply_camera(
     camera: Res<CameraResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    mut query: Query<(&mut Transform, &mut Projection), With<NativeCadCamera>>,
+    mut query: Query<(&mut Transform, &mut Projection), With<NativeViewportCamera>>,
     mut key_lights: Query<
         &mut Transform,
-        (With<CadKeyLight>, Without<CadFillLight>, Without<NativeCadCamera>),
+        (
+            With<CadKeyLight>,
+            Without<CadFillLight>,
+            Without<NativeViewportCamera>,
+        ),
     >,
     mut fill_lights: Query<
         &mut Transform,
-        (With<CadFillLight>, Without<CadKeyLight>, Without<NativeCadCamera>),
+        (
+            With<CadFillLight>,
+            Without<CadKeyLight>,
+            Without<NativeViewportCamera>,
+        ),
     >,
 ) {
     if revisions.camera == camera.revision {
@@ -1337,7 +1391,11 @@ fn camera_relative_light_transforms(camera: ViewportCamera) -> (Transform, Trans
     let target = Vec3::from_array(camera.target);
     let eye = Vec3::from_array(camera.position);
     let view = (eye - target).normalize_or_zero();
-    let view = if view.length_squared() < 1.0e-8 { Vec3::Y } else { view };
+    let view = if view.length_squared() < 1.0e-8 {
+        Vec3::Y
+    } else {
+        view
+    };
     let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
     let up_hint = if up_hint.length_squared() < 1.0e-8 {
         Vec3::Z
@@ -1524,6 +1582,160 @@ fn apply_native_presentation_styles(
             let hovered = state.hovered_origin_plane == Some(plane.plane);
             material.base_color =
                 origin_plane_color(plane.plane, if hovered { 0.28 } else { 0.10 });
+        }
+    }
+}
+
+/// Rebuilds only command-owned transient fills and manipulators. These meshes
+/// are intentionally separate from OCCT scene geometry: they may be
+/// translucent, depth-independent, and replaced on every debounced edit.
+fn rebuild_native_preview_meshes(
+    mut commands: Commands,
+    preview: Res<PreviewResource>,
+    camera: Res<CameraResource>,
+    viewport: Res<ViewportSizeResource>,
+    mut revisions: ResMut<RenderedRevisions>,
+    existing: Query<Entity, With<NativePreviewMesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if revisions.preview_meshes == preview.revision
+        && revisions.preview_mesh_camera == camera.revision
+    {
+        return;
+    }
+    revisions.preview_meshes = preview.revision;
+    revisions.preview_mesh_camera = camera.revision;
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+
+    for layer in &preview.value.triangles {
+        let positions = layer
+            .positions
+            .chunks_exact(3)
+            .filter_map(|point| {
+                point
+                    .iter()
+                    .all(|value| value.is_finite())
+                    .then_some([point[0], point[1], point[2]])
+            })
+            .collect::<Vec<_>>();
+        if positions.len() < 3 || positions.len() % 3 != 0 {
+            continue;
+        }
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.compute_flat_normals();
+        let color = Color::srgba(
+            layer.color[0].clamp(0.0, 1.0),
+            layer.color[1].clamp(0.0, 1.0),
+            layer.color[2].clamp(0.0, 1.0),
+            layer.color[3].clamp(0.0, 1.0),
+        );
+        let mut entity = commands.spawn((
+            Name::new("Native command profile/tool fill"),
+            NativePreviewMesh,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color,
+                alpha_mode: AlphaMode::Blend,
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                depth_bias: 2.0,
+                ..default()
+            })),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+        if layer.xray {
+            entity.insert(RenderLayers::layer(1));
+        }
+    }
+
+    for arrow in &preview.value.arrows {
+        let start = Vec3::from_array(arrow.start);
+        let end = Vec3::from_array(arrow.end);
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        let delta = end - start;
+        let length = delta.length();
+        if !length.is_finite() || length <= 1.0e-5 {
+            continue;
+        }
+        let direction = delta / length;
+        let center = start + delta * 0.5;
+        let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
+        let width = arrow.width.clamp(1.0, 4.0);
+        let shaft_radius = (world_per_pixel * width * 0.46).max(length * 0.003);
+        let head_length = (world_per_pixel * 11.0)
+            .max(length * 0.10)
+            .min(length * 0.42);
+        let shaft_length = (length - head_length).max(length * 0.05);
+        let head_radius = (world_per_pixel * width * 2.2).max(shaft_radius * 2.5);
+        let rotation = Quat::from_rotation_arc(Vec3::Y, direction);
+        let color = Color::srgba(
+            arrow.color[0].clamp(0.0, 1.0),
+            arrow.color[1].clamp(0.0, 1.0),
+            arrow.color[2].clamp(0.0, 1.0),
+            arrow.color[3].clamp(0.0, 1.0),
+        );
+        let material = materials.add(StandardMaterial {
+            base_color: color,
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            double_sided: true,
+            cull_mode: None,
+            depth_bias: 4.0,
+            ..default()
+        });
+        let render_layer = arrow.xray.then(|| RenderLayers::layer(1));
+
+        let shaft_center = start + direction * (shaft_length * 0.5);
+        let mut shaft = commands.spawn((
+            Name::new("Native Extrude direction shaft"),
+            NativePreviewMesh,
+            Mesh3d(meshes.add(Cylinder::new(shaft_radius, shaft_length))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(shaft_center).with_rotation(rotation),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+        if let Some(layer) = render_layer.clone() {
+            shaft.insert(layer);
+        }
+
+        let head_center = start + direction * (shaft_length + head_length * 0.5);
+        let mut head = commands.spawn((
+            Name::new("Native Extrude direction head"),
+            NativePreviewMesh,
+            Mesh3d(meshes.add(Cone::new(head_radius, head_length))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(head_center).with_rotation(rotation),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+        if let Some(layer) = render_layer.clone() {
+            head.insert(layer);
+        }
+
+        let mut base = commands.spawn((
+            Name::new("Native Extrude direction origin"),
+            NativePreviewMesh,
+            Mesh3d(meshes.add(Sphere::new(head_radius * 0.54))),
+            MeshMaterial3d(material),
+            Transform::from_translation(start),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+        if let Some(layer) = render_layer {
+            base.insert(layer);
         }
     }
 }
@@ -1973,22 +2185,12 @@ fn draw_cad_gizmos(
                         && candidate.profile_index == profile.index
                 });
                 let candidate_color = rgba(palette.0.finished_sketch, 0.94);
-                draw_profile_loop(
-                    &mut sketch_gizmos,
-                    &catalog.basis,
-                    profile,
-                    candidate_color,
-                );
+                draw_profile_loop(&mut sketch_gizmos, &catalog.basis, profile, candidate_color);
                 for hole in catalog.profiles.iter().filter(|candidate| {
                     candidate.nesting_depth % 2 == 1
                         && candidate.parent_index == Some(profile.index)
                 }) {
-                    draw_profile_loop(
-                        &mut sketch_gizmos,
-                        &catalog.basis,
-                        hole,
-                        candidate_color,
-                    );
+                    draw_profile_loop(&mut sketch_gizmos, &catalog.basis, hole, candidate_color);
                 }
                 if selected || hovered {
                     let color = rgb(if selected {
@@ -3056,10 +3258,9 @@ mod tests {
     #[test]
     fn native_model_carries_closed_profiles_from_an_internal_midplane_sketch() {
         let state = crate::state::AppState::new();
-        assert_engine_ok(state.engine_call(
-            "begin_sketch",
-            r#"{"type":"origin_plane","plane":"xy"}"#,
-        ));
+        assert_engine_ok(
+            state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#),
+        );
         assert_engine_ok(state.engine_call(
             "add_rectangle",
             r#"{
@@ -3101,10 +3302,9 @@ mod tests {
                 }
             }"#,
         ));
-        assert_engine_ok(state.engine_call(
-            "begin_sketch",
-            r#"{"type":"datum_plane","datum_id":2}"#,
-        ));
+        assert_engine_ok(
+            state.engine_call("begin_sketch", r#"{"type":"datum_plane","datum_id":2}"#),
+        );
         assert_engine_ok(state.engine_call(
             "add_rectangle",
             r#"{
@@ -3159,6 +3359,18 @@ mod tests {
             r#"{
                 "lines": [],
                 "points": [],
+                "triangles": [{
+                    "color": [1.0, 0.4, 0.2, 0.25],
+                    "positions": [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 5.0, 0.0],
+                    "xray": true
+                }],
+                "arrows": [{
+                    "start": [0.0, 0.0, 0.0],
+                    "end": [0.0, 0.0, 10.0],
+                    "color": [0.2, 0.7, 1.0, 1.0],
+                    "width": 2.0,
+                    "xray": true
+                }],
                 "annotations": [],
                 "marker": {
                     "position": [12.0, -4.0, 0.18],
@@ -3171,6 +3383,10 @@ mod tests {
         let marker = preview.marker.expect("endpoint marker should be retained");
         assert_eq!(marker.kind, ViewportSnapKind::Point);
         assert_eq!(marker.position, [12.0, -4.0, 0.18]);
+        assert!(preview.triangles[0].xray);
+        assert_eq!(preview.triangles[0].positions.len(), 9);
+        assert_eq!(preview.arrows[0].end, [0.0, 0.0, 10.0]);
+        assert_eq!(preview.arrows[0].width, 2.0);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
         assert!(SNAP_MARKER_HALF_SIZE_PX >= 5.0);
     }

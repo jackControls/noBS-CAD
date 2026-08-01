@@ -162,6 +162,30 @@ async function deleteFeature(name) {
   );
 }
 
+async function deleteFeatureFromBrowser(name) {
+  await page.evaluate(() => {
+    const state = window.__appStore.getState();
+    const folder = state.document.browser.find((node) => node.kind === 'sketches_folder');
+    if (folder && !state.expanded[folder.id]) state.toggleExpanded(folder.id);
+  });
+  const row = page.locator('[role="treeitem"]').filter({ hasText: name }).first();
+  await row.click({ button: 'right' });
+  const item = page.locator('[data-context-menu-item="delete-feature"]');
+  await item.waitFor({ state: 'visible' });
+  assert.match(await item.innerText(), new RegExp(name));
+  await item.click();
+  await page.getByTestId('delete-feature-confirm').click();
+  await page.waitForFunction(
+    (featureName) =>
+      !window.__appStore
+        .getState()
+        .document.features.some((feature) => feature.name === featureName)
+      && !window.__appStore.getState().solidBusy,
+    name,
+    { timeout: 60_000 },
+  );
+}
+
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForFunction(
@@ -197,6 +221,15 @@ try {
       ),
     ),
     originalIds,
+  );
+
+  console.log('0b. Right-click a browser sketch to delete its history feature');
+  await deleteFeatureFromBrowser('Sketch1');
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.__appStore.getState().document.features.map((feature) => feature.name),
+    ),
+    ['Sketch2'],
   );
 
   await buildHistory();

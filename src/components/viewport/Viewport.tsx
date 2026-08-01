@@ -91,6 +91,7 @@ import {
   type NativeViewportSnapKind,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
+import { triangulateProfileRegion } from './profileTriangulation';
 
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
 const HOME_TARGET = new CAD.Vector3(0, 0, 0);
@@ -952,6 +953,8 @@ export function Viewport() {
       type PointLayer = NativeViewportTransient['points'][number];
       const lineLayers = new Map<string, LineLayer>();
       const pointLayers = new Map<string, PointLayer>();
+      const triangles: NativeViewportTransient['triangles'] = [];
+      const arrows: NativeViewportTransient['arrows'] = [];
       const annotations: NativeViewportTransient['annotations'] = [];
 
       const rgbaFor = (
@@ -999,6 +1002,39 @@ export function Viewport() {
           pointLayers.set(key, layer);
         }
         layer.positions.push(point.x, point.y, point.z);
+      };
+      const rgbaFromHex = (value: number, alpha: number): Rgba => {
+        const color = new CAD.Color(value);
+        return [color.r, color.g, color.b, alpha];
+      };
+      const pointOnBasis = (
+        basis: PlaneBasis,
+        point: Vec2,
+        offset = 0,
+      ): [number, number, number] => [
+        basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y
+          + basis.normal[0] * offset,
+        basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y
+          + basis.normal[1] * offset,
+        basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y
+          + basis.normal[2] * offset,
+      ];
+      const appendBasisSegment = (
+        color: Rgba,
+        width: number,
+        basis: PlaneBasis,
+        a: Vec2,
+        b: Vec2,
+        offset: number,
+      ) => {
+        const start = pointOnBasis(basis, a, offset);
+        const end = pointOnBasis(basis, b, offset);
+        appendSegment(
+          color,
+          width,
+          transientStart.set(...start),
+          transientEnd.set(...end),
+        );
       };
       const appendAnnotation = (object: CAD.Object3D) => {
         const text = object.userData.nativeAnnotationText;
@@ -1164,10 +1200,199 @@ export function Viewport() {
         points: true,
         include: (object) => object.userData.finishedSketchEmphasis === true,
       });
-      collectRoot(profileGroup, {
-        lines: true,
-        include: (object) => object.userData.profileHighlightKind !== undefined,
-      });
+
+      // Profile fills are rebuilt from the exact serialized sketch basis, not
+      // from the CPU pick proxy's transform matrix. That makes the pixels and
+      // the eventual OCCT operation share one orientation contract on XY,
+      // vertical, offset, and mid-planes.
+      const picker = store.getState().profilePicker;
+      if (picker) {
+        const hidden = hiddenSketchNames();
+        for (const catalog of picker.catalog) {
+          if (hidden.has(catalog.sketch_name)) continue;
+          for (const outer of catalog.profiles.filter(
+            (profile) => profile.nesting_depth % 2 === 0,
+          )) {
+            const holes = catalog.profiles.filter(
+              (profile) =>
+                profile.nesting_depth % 2 === 1
+                && profile.parent_index === outer.index,
+            );
+            const region = triangulateProfileRegion(
+              outer.points,
+              holes.map((hole) => hole.points),
+            );
+            if (!region) continue;
+            const profileRef: ProfileRefDto = {
+              sketch_name: catalog.sketch_name,
+              profile_index: outer.index,
+            };
+            const selected = picker.selected.some((candidate) =>
+              sameProfile(candidate, profileRef),
+            );
+            const hovered = sameProfile(picker.hovered, profileRef);
+            const fill = rgbaFromHex(
+              selected
+                ? COLOR_EDGE_SELECTED
+                : hovered
+                  ? COLOR_EDGE_HOVER
+                  : COLOR_FINISHED,
+              selected ? 0.32 : hovered ? 0.24 : 0.11,
+            );
+            const positions: number[] = [];
+            for (const vertexIndex of region.indices) {
+              positions.push(...pointOnBasis(catalog.basis, region.vertices[vertexIndex]));
+            }
+            triangles.push({ color: fill, positions, xray: true });
+          }
+        }
+      }
+
+      // Debounced Extrude tool volume. This is presentation-only, but it is
+      // generated from the same basis and signed offsets submitted to OCCT.
+      const solidPreview = store.getState().solidCommandPreview;
+      if (solidPreview?.kind === 'extrude') {
+        const operationColor =
+          solidPreview.operation === 'cut'
+            ? 0xff6b5f
+            : solidPreview.operation === 'join'
+              ? 0x50c98b
+              : solidPreview.operation === 'intersect'
+                ? 0xb18cff
+                : COLOR_PREVIEW;
+        const surfaceColor = rgbaFromHex(operationColor, 0.20);
+        const outlineColor = rgbaFromHex(operationColor, 0.96);
+        const toolPositions: number[] = [];
+        const selectedOuters = solidPreview.profiles.filter(
+          (profile) =>
+            profile.nesting_depth % 2 === 0
+            && solidPreview.selectedProfileIndices.includes(profile.index),
+        );
+        for (const outer of selectedOuters) {
+          const holes = solidPreview.profiles.filter(
+            (profile) =>
+              profile.nesting_depth % 2 === 1
+              && profile.parent_index === outer.index,
+          );
+          const region = triangulateProfileRegion(
+            outer.points,
+            holes.map((hole) => hole.points),
+          );
+          if (!region) continue;
+
+          for (let index = 0; index + 2 < region.indices.length; index += 3) {
+            const a = region.vertices[region.indices[index]];
+            const b = region.vertices[region.indices[index + 1]];
+            const c = region.vertices[region.indices[index + 2]];
+            toolPositions.push(
+              ...pointOnBasis(solidPreview.basis, a, solidPreview.startOffset),
+              ...pointOnBasis(solidPreview.basis, b, solidPreview.startOffset),
+              ...pointOnBasis(solidPreview.basis, c, solidPreview.startOffset),
+              ...pointOnBasis(solidPreview.basis, c, solidPreview.endOffset),
+              ...pointOnBasis(solidPreview.basis, b, solidPreview.endOffset),
+              ...pointOnBasis(solidPreview.basis, a, solidPreview.endOffset),
+            );
+          }
+
+          for (const loop of region.loops) {
+            for (let index = 0; index < loop.length; index += 1) {
+              const a = loop[index];
+              const b = loop[(index + 1) % loop.length];
+              const aStart = pointOnBasis(
+                solidPreview.basis,
+                a,
+                solidPreview.startOffset,
+              );
+              const bStart = pointOnBasis(
+                solidPreview.basis,
+                b,
+                solidPreview.startOffset,
+              );
+              const aEnd = pointOnBasis(
+                solidPreview.basis,
+                a,
+                solidPreview.endOffset,
+              );
+              const bEnd = pointOnBasis(
+                solidPreview.basis,
+                b,
+                solidPreview.endOffset,
+              );
+              toolPositions.push(
+                ...aStart,
+                ...bStart,
+                ...bEnd,
+                ...aStart,
+                ...bEnd,
+                ...aEnd,
+              );
+              appendBasisSegment(
+                outlineColor,
+                1.5,
+                solidPreview.basis,
+                a,
+                b,
+                solidPreview.startOffset,
+              );
+              appendBasisSegment(
+                outlineColor,
+                1.5,
+                solidPreview.basis,
+                a,
+                b,
+                solidPreview.endOffset,
+              );
+            }
+          }
+          const verticalStride = Math.max(1, Math.ceil(outer.points.length / 8));
+          for (let index = 0; index < outer.points.length; index += verticalStride) {
+            const start = pointOnBasis(
+              solidPreview.basis,
+              outer.points[index],
+              solidPreview.startOffset,
+            );
+            const end = pointOnBasis(
+              solidPreview.basis,
+              outer.points[index],
+              solidPreview.endOffset,
+            );
+            appendSegment(
+              outlineColor,
+              1.25,
+              transientStart.set(...start),
+              transientEnd.set(...end),
+            );
+          }
+        }
+        if (toolPositions.length >= 9) {
+          triangles.push({
+            color: surfaceColor,
+            positions: toolPositions,
+            xray: true,
+          });
+        }
+
+        const anchorPoints = selectedOuters.flatMap((profile) => profile.points);
+        if (anchorPoints.length > 0) {
+          const anchor2d = anchorPoints.reduce(
+            (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+            { x: 0, y: 0 },
+          );
+          anchor2d.x /= anchorPoints.length;
+          anchor2d.y /= anchorPoints.length;
+          arrows.push({
+            start: pointOnBasis(solidPreview.basis, anchor2d),
+            end: pointOnBasis(
+              solidPreview.basis,
+              anchor2d,
+              solidPreview.directionOffset,
+            ),
+            color: rgbaFromHex(COLOR_PREVIEW, 1),
+            width: 2,
+            xray: true,
+          });
+        }
+      }
 
       let marker: NativeViewportTransient['marker'] = null;
       if (sketchGroup.visible && snapMarker.visible) {
@@ -1180,6 +1405,8 @@ export function Viewport() {
       return {
         lines: [...lineLayers.values()],
         points: [...pointLayers.values()],
+        triangles,
+        arrows,
         annotations,
         marker,
       };

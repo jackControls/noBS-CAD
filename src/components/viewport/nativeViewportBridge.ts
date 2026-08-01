@@ -129,6 +129,25 @@ export interface NativeViewportPointLayer {
   positions: number[];
 }
 
+/** Triangle-list presentation geometry rendered by Bevy, never the kernel. */
+export interface NativeViewportTriangleLayer {
+  color: [number, number, number, number];
+  /** World-space triangle vertices, packed as x, y, z. */
+  positions: number[];
+  /** Render after model depth so an internal selected profile remains visible. */
+  xray: boolean;
+}
+
+/** Semantic CAD direction arrow. Bevy owns its shaft and arrowhead pixels. */
+export interface NativeViewportArrow {
+  start: [number, number, number];
+  end: [number, number, number];
+  color: [number, number, number, number];
+  /** Approximate screen-space width in logical pixels. */
+  width: number;
+  xray: boolean;
+}
+
 export interface NativeViewportAnnotation {
   screen: [number, number];
   color: [number, number, number, number];
@@ -152,6 +171,8 @@ export interface NativeViewportSnapMarker {
 export interface NativeViewportTransient {
   lines: NativeViewportLineLayer[];
   points: NativeViewportPointLayer[];
+  triangles: NativeViewportTriangleLayer[];
+  arrows: NativeViewportArrow[];
   annotations: NativeViewportAnnotation[];
   marker: NativeViewportSnapMarker | null;
 }
@@ -914,6 +935,18 @@ function previewKey(preview: NativeViewportTransient): string {
     addNumber(layer.radius);
     layer.positions.forEach(addNumber);
   }
+  for (const layer of preview.triangles) {
+    layer.color.forEach(addNumber);
+    layer.positions.forEach(addNumber);
+    addNumber(layer.xray ? 1 : 0);
+  }
+  for (const arrow of preview.arrows) {
+    arrow.start.forEach(addNumber);
+    arrow.end.forEach(addNumber);
+    arrow.color.forEach(addNumber);
+    addNumber(arrow.width);
+    addNumber(arrow.xray ? 1 : 0);
+  }
   for (const annotation of preview.annotations) {
     annotation.screen.forEach(addNumber);
     annotation.color.forEach(addNumber);
@@ -925,6 +958,8 @@ function previewKey(preview: NativeViewportTransient): string {
   return [
     preview.lines.length,
     preview.points.length,
+    preview.triangles.length,
+    preview.arrows.length,
     preview.annotations.length,
     numericCount,
     preview.marker ? 1 : 0,

@@ -104,7 +104,9 @@ try {
   assert.equal(await profileCheckbox.isChecked(), true);
   await page.waitForFunction(
     () =>
-      window
+      window.__nativeViewportTransient().triangles.length >= 2
+      && window.__nativeViewportTransient().arrows.length === 1
+      && window
         .__nativeViewportTransient()
         .lines.some((layer) => layer.segments.length >= 6),
   );
@@ -114,6 +116,33 @@ try {
   assert.ok(
     nativeProfilePresentation.lines.some((layer) => layer.segments.length >= 6),
     'Bevy receives the selected profile outline used by Extrude and other profile commands',
+  );
+  assert.ok(
+    nativeProfilePresentation.triangles.some(
+      (layer) => layer.xray && layer.positions.length >= 18 && layer.color[3] > 0.25,
+    ),
+    'the selected closed region is a translucent filled surface, not only a wire',
+  );
+  assert.equal(
+    await page.getByTestId('extrude-profile-selection-state').isVisible(),
+    true,
+    'the dialog explicitly tells the user that viewport profile selection is active',
+  );
+
+  await distance.fill('25');
+  await page.waitForFunction(() => {
+    const arrow = window.__nativeViewportTransient().arrows[0];
+    if (!arrow) return false;
+    return Math.abs(Math.hypot(
+      arrow.end[0] - arrow.start[0],
+      arrow.end[1] - arrow.start[1],
+      arrow.end[2] - arrow.start[2],
+    ) - 25) < 0.001;
+  });
+  assert.equal(
+    await page.evaluate(() => window.__nativeViewportTransient().arrows[0].width),
+    2,
+    'Bevy owns a semantic 3D direction arrow that tracks debounced distance edits',
   );
 
   console.log('3. Invalid Enter submission explains why it cannot run');

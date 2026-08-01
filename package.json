@@ -59,6 +59,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "earcut": "^3.0.2",
     "fflate": "0.8.2",
     "lucide-react": "^0.474.0",
     "opencascade.js": "2.0.0-beta.b5ff984",

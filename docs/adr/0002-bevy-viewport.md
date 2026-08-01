@@ -49,6 +49,17 @@ The bridge sends explicit palette, HUD, interaction, camera, and presentation
 state. It does not send screenshots or serialized OCCT geometry through
 JavaScript.
 
+Solid command forms publish a small, debounced semantic preview rather than
+DOM/SVG viewport pixels. For Extrude this contract contains the authoritative
+sketch `PlaneBasis`, selected profile loops, signed extent offsets, Boolean
+role, and direction arrow. The profile is triangulated with its holes and Bevy
+renders the translucent region, tool volume, and 3D manipulator. Both the
+preview and the OCCT request therefore use the same basis; vertical and
+internal datum-plane profiles cannot acquire an independent display rotation.
+React retains only the accessible dimension input and drag hit target. Browser
+regressions inspect this semantic payload without maintaining a second 3D
+renderer.
+
 ## Document tabs and memory retention
 
 Each open desktop tab normally retains three coordinated layers: its Rust

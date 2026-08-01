@@ -227,7 +227,9 @@
     "createSketch": "Create sketch",
     "toggleVisibility": "Toggle visibility",
     "fullyDefined": "Fully defined",
-    "editSketch": "Edit sketch"
+    "editSketch": "Edit sketch",
+    "deleteItem": "Delete {name}…",
+    "deleteOwningFeature": "Delete owning feature {name}…"
   },
   "palette": {
     "title": "SKETCH PALETTE",
@@ -299,6 +301,11 @@
     "sketch": "Sketch",
     "profiles": "Profiles",
     "profile": "Profile",
+    "selectingProfiles": "Selecting profiles",
+    "selectingProfilesHint": "Click any closed region in the viewport to add it, remove it, or switch to another sketch.",
+    "selectedProfileCount": "{count} profile(s) selected",
+    "clearAndReselect": "Clear & reselect",
+    "livePreview": "Live preview updates shortly after you finish typing.",
     "operation": "Operation",
     "newBody": "Create Body",
     "join": "Add",

@@ -13,10 +13,13 @@ import type {
   BodyAppearance,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
+  ExtrudeOperation,
   OriginPlane,
+  PlaneBasis,
   PlaneRef,
   Point3Dto,
   ProfileCatalogItemDto,
+  ProfileLoopDto,
   ProfileRefDto,
   SketchDto,
   SketchPointRefDto,
@@ -224,6 +227,25 @@ export interface SolidCurvePicker {
   sketchName: string;
 }
 
+/**
+ * Debounced, presentation-only solid command geometry. The profile basis and
+ * offsets are the same values used to build the kernel request, so native
+ * previews cannot silently rotate away from the eventual OCCT operation.
+ */
+export interface ExtrudeCommandPreview {
+  kind: 'extrude';
+  basis: PlaneBasis;
+  profiles: ProfileLoopDto[];
+  selectedProfileIndices: number[];
+  startOffset: number;
+  endOffset: number;
+  /** Signed arrow-tip offset measured from the sketch plane. */
+  directionOffset: number;
+  operation: ExtrudeOperation;
+}
+
+export type SolidCommandPreview = ExtrudeCommandPreview;
+
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
 export type ConstructionPlanePickTarget =
   | 'first_reference'
@@ -338,6 +360,8 @@ interface AppState {
   profilePicker: SolidProfilePicker | null;
   /** Modeless finished-curve selector shared by path-driven solid dialogs. */
   curvePicker: SolidCurvePicker | null;
+  /** Native translucent tool-volume preview owned by the open solid command. */
+  solidCommandPreview: SolidCommandPreview | null;
   /** null = closed; 0 = new Extrude; positive = edit feature id. */
   extrudeDialogFeature: number | null;
   /** null = closed; 0 = new Revolve; positive = edit feature id. */
@@ -463,6 +487,7 @@ interface AppState {
   ) => void;
   setHoveredCurvePick: (curve: FinishedSketchCurveRef | null) => void;
   clearCurvePicker: (owner?: SolidCurvePickOwner) => void;
+  setSolidCommandPreview: (preview: SolidCommandPreview | null) => void;
   openExtrudeDialog: (featureId?: number) => void;
   closeExtrudeDialog: () => void;
   openRevolveDialog: (featureId?: number) => void;
@@ -542,6 +567,7 @@ function resetDocumentUiState(): Partial<AppState> {
     hoveredEdge: null,
     profilePicker: null,
     curvePicker: null,
+    solidCommandPreview: null,
     extrudeDialogFeature: null,
     revolveDialogFeature: null,
     revolveAxisSelection: null,
@@ -608,6 +634,7 @@ export const useAppStore = create<AppState>()((set) => ({
   hoveredEdge: null,
   profilePicker: null,
   curvePicker: null,
+  solidCommandPreview: null,
   extrudeDialogFeature: null,
   revolveDialogFeature: null,
   revolveAxisSelection: null,
@@ -1201,6 +1228,8 @@ export const useAppStore = create<AppState>()((set) => ({
         : { curvePicker: null },
     ),
 
+  setSolidCommandPreview: (solidCommandPreview) => set({ solidCommandPreview }),
+
   openExtrudeDialog: (featureId = 0) =>
     set((state) =>
       state.extrudeDialogFeature === featureId
@@ -1225,6 +1254,7 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) => ({
       extrudeDialogFeature: null,
       profilePicker: state.profilePicker?.owner === 'extrude' ? null : state.profilePicker,
+      solidCommandPreview: null,
     })),
 
   openRevolveDialog: (featureId = 0) =>

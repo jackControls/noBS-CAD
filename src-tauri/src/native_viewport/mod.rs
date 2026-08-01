@@ -21,9 +21,7 @@ pub mod ui;
 pub mod ui_lab;
 
 use nbcad_sketch::SketchDto;
-use nbcad_solid::{
-    DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto,
-};
+use nbcad_solid::{DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
 
@@ -284,6 +282,35 @@ pub struct ViewportPointLayer {
     pub positions: Vec<f32>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportTriangleLayer {
+    /// sRGBA fill color. Positions are an already-triangulated world-space
+    /// triangle list because profile topology is owned by the command layer.
+    #[serde(default)]
+    pub color: [f32; 4],
+    #[serde(default)]
+    pub positions: Vec<f32>,
+    /// Draw after model depth for internal datum/profile selection.
+    #[serde(default)]
+    pub xray: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportArrow {
+    #[serde(default)]
+    pub start: [f32; 3],
+    #[serde(default)]
+    pub end: [f32; 3],
+    #[serde(default)]
+    pub color: [f32; 4],
+    #[serde(default = "default_line_width")]
+    pub width: f32,
+    #[serde(default)]
+    pub xray: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewportAnnotationKind {
@@ -337,6 +364,10 @@ pub struct ViewportPreview {
     pub lines: Vec<ViewportLineLayer>,
     #[serde(default)]
     pub points: Vec<ViewportPointLayer>,
+    #[serde(default)]
+    pub triangles: Vec<ViewportTriangleLayer>,
+    #[serde(default)]
+    pub arrows: Vec<ViewportArrow>,
     #[serde(default)]
     pub annotations: Vec<ViewportAnnotation>,
     /// Optional semantic, world-space sketch snap marker. Keeping the kind

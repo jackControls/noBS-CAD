@@ -7,6 +7,8 @@
  * visible viewport pixel; this file never creates a WebGL context.
  */
 
+import { triangulateProfileRegion } from './profileTriangulation';
+
 export const DoubleSide = 2;
 
 export enum MOUSE {
@@ -1386,7 +1388,16 @@ export class ShapeGeometry extends BufferGeometry {
   constructor(public shape: Shape) {
     super();
     const positions: number[] = [];
-    for (const point of shape.points) positions.push(point.x, point.y, 0);
+    const triangulation = triangulateProfileRegion(
+      shape.points,
+      shape.holes.map((hole) => hole.points),
+    );
+    if (triangulation) {
+      for (const index of triangulation.indices) {
+        const point = triangulation.vertices[index];
+        positions.push(point.x, point.y, 0);
+      }
+    }
     this.setAttribute('position', new Float32BufferAttribute(positions, 3));
   }
 }

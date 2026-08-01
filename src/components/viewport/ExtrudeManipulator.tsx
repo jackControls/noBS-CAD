@@ -79,9 +79,9 @@ function dragValue(value: number) {
 }
 
 /**
- * Viewport-native one-sided Extrude control. The projected arrow follows the
- * selected profile while the camera moves. Dragging its handle edits signed
- * distance; crossing the sketch plane reverses direction.
+ * React owns only the projected input/drag hit target. Bevy renders the actual
+ * 3D shaft, head, and origin marker so native viewport clipping cannot split
+ * the manipulator into mismatched DOM and native pieces.
  */
 export function ExtrudeManipulator({
   basis,
@@ -93,8 +93,6 @@ export function ExtrudeManipulator({
   onCommit,
 }: Props) {
   const { t } = useTranslation();
-  const lineRef = useRef<SVGLineElement>(null);
-  const baseRef = useRef<SVGCircleElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
   const fieldRef = useRef<HTMLLabelElement>(null);
   const projectionRef = useRef<Projection | null>(null);
@@ -118,11 +116,9 @@ export function ExtrudeManipulator({
           __cameraApi?: ViewportCameraApi;
         }
       ).__cameraApi;
-      const line = lineRef.current;
-      const baseMarker = baseRef.current;
       const handle = handleRef.current;
       const field = fieldRef.current;
-      if (!api || !line || !baseMarker || !handle || !field) return;
+      if (!api || !handle || !field) return;
 
       const normal = basis.normal;
       const base = api.worldToScreen(anchor);
@@ -132,8 +128,6 @@ export function ExtrudeManipulator({
         anchor[2] + normal[2],
       ]);
       if (!base || !unitTip) {
-        line.style.display = 'none';
-        baseMarker.style.display = 'none';
         handle.style.display = 'none';
         field.style.display = 'none';
         projectionRef.current = null;
@@ -162,14 +156,6 @@ export function ExtrudeManipulator({
         effectiveDistance,
       };
 
-      line.style.display = '';
-      line.setAttribute('x1', base.x.toFixed(2));
-      line.setAttribute('y1', base.y.toFixed(2));
-      line.setAttribute('x2', tip.x.toFixed(2));
-      line.setAttribute('y2', tip.y.toFixed(2));
-      baseMarker.style.display = '';
-      baseMarker.setAttribute('cx', base.x.toFixed(2));
-      baseMarker.setAttribute('cy', base.y.toFixed(2));
       handle.style.display = '';
       handle.style.left = `${tip.x}px`;
       handle.style.top = `${tip.y}px`;
@@ -228,41 +214,6 @@ export function ExtrudeManipulator({
 
   return (
     <>
-      <svg
-        data-testid="extrude-direction-arrow"
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-[71] h-full w-full overflow-visible"
-      >
-        <defs>
-          <marker
-            id="extrude-direction-arrowhead"
-            markerWidth="8"
-            markerHeight="8"
-            refX="6"
-            refY="4"
-            orient="auto"
-            markerUnits="strokeWidth"
-          >
-            <path d="M 0 0 L 8 4 L 0 8 z" fill="rgb(14 165 233)" />
-          </marker>
-        </defs>
-        <line
-          ref={lineRef}
-          stroke="rgb(14 165 233)"
-          strokeWidth="3"
-          strokeLinecap="round"
-          markerEnd="url(#extrude-direction-arrowhead)"
-          className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
-        />
-        <circle
-          ref={baseRef}
-          r="4"
-          fill="rgb(15 23 42)"
-          stroke="rgb(125 211 252)"
-          strokeWidth="2"
-        />
-      </svg>
-
       <button
         ref={handleRef}
         type="button"
