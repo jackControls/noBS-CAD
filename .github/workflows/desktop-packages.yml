@@ -120,6 +120,7 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
       VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
       VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+      VCPKG_INSTALL_ROOT: ${{ github.workspace }}\vcpkg_installed
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
 
     steps:
@@ -157,8 +158,19 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$toolset"
           Write-Host "MSVC toolset: $toolset"
 
+      # The completed manifest tree is substantially faster to restore than
+      # asking vcpkg to reconstruct it from individual binary archives. Keep
+      # the archive cache below as the fallback that seeds this cache.
+      - name: Restore installed OpenCASCADE tree
+        id: vcpkg-installed-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.VCPKG_INSTALL_ROOT }}
+          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+
       - name: Restore vcpkg binary cache
-        id: vcpkg-cache
+        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
+        id: vcpkg-binary-cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE }}
@@ -203,7 +215,7 @@ jobs:
           & .\.vcpkg\vcpkg.exe install `
             --triplet x64-windows `
             --x-manifest-root="$env:GITHUB_WORKSPACE" `
-            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed"
+            --x-install-root="$env:VCPKG_INSTALL_ROOT"
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg install failed with exit code $LASTEXITCODE"
           }
@@ -211,16 +223,23 @@ jobs:
       # Save immediately: a cold OCCT build can consume most of the job budget,
       # so waiting for post-job cleanup risks losing the compiled package cache.
       - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE }}
           key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
+      - name: Save installed OpenCASCADE tree
+        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_INSTALL_ROOT }}
+          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+
       - name: Build portable ZIP
         shell: pwsh
         env:
-          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+          OCCT_ROOT: ${{ env.VCPKG_INSTALL_ROOT }}\x64-windows
         run: npm run bundle:windows:portable
 
       - name: Verify packaged native viewport
