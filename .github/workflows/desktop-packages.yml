@@ -176,6 +176,19 @@ jobs:
           path: ${{ env.VCPKG_BINARY_CACHE }}
           key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
+      - name: Report OpenCASCADE cache source
+        shell: pwsh
+        run: |
+          $installedTreeHit = "${{ steps.vcpkg-installed-cache.outputs.cache-hit }}" -eq "true"
+          $source = if ($installedTreeHit) {
+            "complete installed-tree cache"
+          } else {
+            "binary archive fallback; this run will seed the installed-tree cache"
+          }
+          Write-Host "OpenCASCADE dependency source: $source"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows dependency cache"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "OpenCASCADE source: **$source**."
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
