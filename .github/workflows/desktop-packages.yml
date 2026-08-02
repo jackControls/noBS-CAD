@@ -113,11 +113,12 @@ jobs:
     needs: classify_changes
     if: needs.classify_changes.outputs.windows_should_build == 'true'
     runs-on: windows-2025
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       # Pull-request/manual packages retain symbols for diagnostics. A v* tag
       # is the production boundary and must ship a stripped Rust executable.
       CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
+      VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
       VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
 
@@ -129,7 +130,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: microsoft/vcpkg
-          ref: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
+          ref: ${{ env.VCPKG_COMMIT }}
           path: .vcpkg
           fetch-depth: 0
 
@@ -157,10 +158,11 @@ jobs:
           Write-Host "MSVC toolset: $toolset"
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -205,6 +207,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg install failed with exit code $LASTEXITCODE"
           }
+
+      # Save immediately: a cold OCCT build can consume most of the job budget,
+      # so waiting for post-job cleanup risks losing the compiled package cache.
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE }}
+          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Build portable ZIP
         shell: pwsh
