@@ -14,6 +14,7 @@ export interface NativeCameraState {
 interface NativeViewportMetrics {
   available: boolean;
   ready: boolean;
+  startupError: string | null;
   backend: string;
   logicalWidth: number;
   logicalHeight: number;
@@ -644,8 +645,31 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   let layoutInFlight = false;
   let layoutRequested = false;
   let probeTimer = 0;
+  let startupStatusTimer = 0;
+  let startupStatus: HTMLDivElement | null = null;
   let settleTimers: number[] = [];
   let nativeWindowUnlisteners: Array<() => void> = [];
+
+  const clearStartupStatus = () => {
+    if (startupStatusTimer !== 0) {
+      window.clearTimeout(startupStatusTimer);
+      startupStatusTimer = 0;
+    }
+    startupStatus?.remove();
+    startupStatus = null;
+  };
+  const showStartupStatus = (message: string, failed = false) => {
+    if (disposed) return;
+    if (!startupStatus) {
+      startupStatus = document.createElement('div');
+      startupStatus.dataset.nativeViewportStartup = failed ? 'error' : 'waiting';
+      startupStatus.className =
+        'pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-viewport px-8 text-center text-sm text-mute';
+      container.append(startupStatus);
+    }
+    startupStatus.dataset.nativeViewportStartup = failed ? 'error' : 'waiting';
+    startupStatus.textContent = message;
+  };
 
   const flushLayout = async () => {
     if (disposed) return;
@@ -854,6 +878,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     if (disposed || !isTauriRuntime()) return;
     if (await probe()) {
       if (disposed) return;
+      clearStartupStatus();
       container.dataset.nativeViewport = 'bevy';
       document.documentElement.dataset.nativeViewport = 'bevy';
       lastPreviewKey = '';
@@ -872,17 +897,33 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       void document.fonts?.ready.then(scheduleLayout);
       return;
     }
-    probeAttempt += 1;
-    if (probeAttempt < 100) {
-      probeTimer = window.setTimeout(() => void activate(), 100);
+    if (latestMetrics?.startupError) {
+      showStartupStatus(
+        `Native viewport failed to start. ${latestMetrics.startupError}`,
+        true,
+      );
+      return;
     }
+    probeAttempt += 1;
+    // GPU/driver initialization on first launch can exceed ten seconds on
+    // Windows. Keep probing for the lifetime of the mounted viewport instead
+    // of permanently abandoning a renderer that becomes ready later.
+    const retryDelay = probeAttempt < 100 ? 100 : 1_000;
+    probeTimer = window.setTimeout(() => void activate(), retryDelay);
   };
-  void activate();
+  if (isTauriRuntime()) {
+    startupStatusTimer = window.setTimeout(
+      () => showStartupStatus('Starting native viewport…'),
+      1_500,
+    );
+    void activate();
+  }
 
   return () => {
     disposed = true;
     if (layoutFrame !== 0) cancelAnimationFrame(layoutFrame);
     if (probeTimer !== 0) window.clearTimeout(probeTimer);
+    clearStartupStatus();
     for (const timer of settleTimers) window.clearTimeout(timer);
     viewportResize.disconnect();
     overlayResize.disconnect();

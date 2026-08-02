@@ -82,7 +82,7 @@ jobs:
 
             const windowsMatches = platformMatches([
               {
-                pattern: /^scripts\/bundle-windows-portable\.ps1$/,
+                pattern: /^scripts\/(?:bundle-windows-portable|verify-windows-viewport)\.ps1$/,
                 reason: "Windows packaging script",
               },
             ]);
@@ -223,7 +223,7 @@ jobs:
           OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
         run: npm run bundle:windows:portable
 
-      - name: Smoke-test packaged executable
+      - name: Verify packaged native viewport
         shell: pwsh
         run: |
           $package = Get-ChildItem `
@@ -233,15 +233,18 @@ jobs:
           if (-not $package) {
             throw "Portable package directory was not created"
           }
-          $process = Start-Process `
-            -FilePath (Join-Path $package.FullName "noBS-CAD.exe") `
-            -WorkingDirectory $package.FullName `
-            -PassThru
-          Start-Sleep -Seconds 15
-          if ($process.HasExited) {
-            throw "Portable application exited during launch smoke test (code $($process.ExitCode))"
-          }
-          Stop-Process -Id $process.Id -Force
+          & .\scripts\verify-windows-viewport.ps1 `
+            -PackageDirectory $package.FullName `
+            -DiagnosticsDirectory "$env:RUNNER_TEMP\nbcad-viewport-diagnostics"
+
+      - name: Upload Windows viewport diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-windows-viewport-diagnostics
+          path: ${{ runner.temp }}\nbcad-viewport-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload portable release
         uses: actions/upload-artifact@v4

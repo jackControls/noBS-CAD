@@ -35,9 +35,11 @@ use raw_window_handle::{
 #[cfg(target_os = "macos")]
 use std::ptr::NonNull;
 use std::{
+    any::Any,
     collections::HashMap,
     ffi::c_void,
     num::NonZeroU32,
+    panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -101,6 +103,8 @@ struct NativePointers {
 #[derive(Default)]
 struct MetricsState {
     ready: bool,
+    startup_error: Option<String>,
+    ci_probe_written: bool,
     probe_count: u64,
     logical_width: f64,
     logical_height: f64,
@@ -232,35 +236,59 @@ impl PlatformNativeViewport {
                 let (view_pointer, scale_factor) = match result {
                     Ok(value) => value,
                     Err(error) => {
-                        eprintln!("native viewport installation failed: {error}");
+                        record_startup_failure(
+                            &install_metrics,
+                            format!("native viewport installation failed: {error}"),
+                        );
                         return;
                     }
                 };
 
-                let bevy_app = match build_bevy_app(view_pointer, scale_factor as f32) {
-                    Ok(app) => app,
-                    Err(error) => {
-                        eprintln!("native Bevy viewport failed to initialize: {error}");
+                // Renderer initialization can panic inside a platform backend before
+                // Tauri has a chance to surface an IPC error. Keep the React shell
+                // alive and expose the real cause through metrics/CI instead of
+                // silently leaving an empty viewport.
+                let initialized = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    let bevy_app = build_bevy_app(view_pointer, scale_factor as f32)?;
+                    let mut render_runtime = Box::new(MainThreadRenderRuntime {
+                        app: bevy_app,
+                        model: ViewportModel {
+                            session_id: BOOTSTRAP_SESSION_ID.to_string(),
+                            geometry_revision: 0,
+                            scene: SolidSceneDto::default(),
+                            active_sketch: None,
+                            finished_sketches: Vec::new(),
+                            datum_planes: Vec::new(),
+                            profile_catalog: Vec::new(),
+                        },
+                        camera: ViewportCamera::default(),
+                        logical_size: (1.0, 1.0),
+                        scale_factor: scale_factor as f32,
+                        session_aliases: HashMap::new(),
+                    });
+                    render_frames(&mut render_runtime.app, 2, &install_metrics);
+                    Ok::<_, String>(render_runtime)
+                }));
+                let render_runtime = match initialized {
+                    Ok(Ok(runtime)) => runtime,
+                    Ok(Err(error)) => {
+                        record_startup_failure(
+                            &install_metrics,
+                            format!("native Bevy viewport failed to initialize: {error}"),
+                        );
+                        return;
+                    }
+                    Err(payload) => {
+                        record_startup_failure(
+                            &install_metrics,
+                            format!(
+                                "native Bevy viewport panicked during initialization: {}",
+                                panic_message(payload)
+                            ),
+                        );
                         return;
                     }
                 };
-                let mut render_runtime = Box::new(MainThreadRenderRuntime {
-                    app: bevy_app,
-                    model: ViewportModel {
-                        session_id: BOOTSTRAP_SESSION_ID.to_string(),
-                        geometry_revision: 0,
-                        scene: SolidSceneDto::default(),
-                        active_sketch: None,
-                        finished_sketches: Vec::new(),
-                        datum_planes: Vec::new(),
-                        profile_catalog: Vec::new(),
-                    },
-                    camera: ViewportCamera::default(),
-                    logical_size: (1.0, 1.0),
-                    scale_factor: scale_factor as f32,
-                    session_aliases: HashMap::new(),
-                });
-                render_frames(&mut render_runtime.app, 2, &install_metrics);
 
                 // The Bevy App and its native surface stay on the native UI
                 // thread. The allocation lives for the process and is
@@ -455,6 +483,7 @@ impl PlatformNativeViewport {
         NativeViewportMetrics {
             available: true,
             ready: metrics.ready,
+            startup_error: metrics.startup_error.clone(),
             backend: NATIVE_BACKEND.to_string(),
             logical_width: metrics.logical_width,
             logical_height: metrics.logical_height,
@@ -472,6 +501,72 @@ impl PlatformNativeViewport {
             body_count: metrics.body_count,
             triangle_count: metrics.triangle_count,
         }
+    }
+}
+
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown renderer panic".to_string()
+    }
+}
+
+/// Writes only when explicitly requested by a development/CI environment.
+/// This contains renderer readiness metadata, never pointer or model data.
+fn write_ci_probe(metrics: &MetricsState, status: &str) -> Result<(), String> {
+    let Some(path) = std::env::var_os("NBCAD_VIEWPORT_PROBE_FILE") else {
+        return Ok(());
+    };
+    let payload = serde_json::json!({
+        "status": status,
+        "backend": NATIVE_BACKEND,
+        "error": metrics.startup_error,
+        "logicalWidth": metrics.logical_width,
+        "logicalHeight": metrics.logical_height,
+        "scaleFactor": metrics.scale_factor,
+        "physicalWidth": metrics.physical_width,
+        "physicalHeight": metrics.physical_height,
+        "renderedFrames": metrics.rendered_frames,
+    });
+    let bytes = serde_json::to_vec_pretty(&payload)
+        .map_err(|error| format!("could not encode native viewport probe: {error}"))?;
+    std::fs::write(path, bytes)
+        .map_err(|error| format!("could not write native viewport probe: {error}"))
+}
+
+fn record_startup_failure(metrics: &Arc<Mutex<MetricsState>>, error: String) {
+    eprintln!("{error}");
+    if let Ok(mut current) = metrics.lock() {
+        current.startup_error = Some(error);
+        current.ready = false;
+        if !current.ci_probe_written {
+            match write_ci_probe(&current, "error") {
+                Ok(()) => current.ci_probe_written = true,
+                Err(probe_error) => eprintln!("{probe_error}"),
+            }
+        }
+    }
+}
+
+fn maybe_write_ready_probe(metrics: &Arc<Mutex<MetricsState>>) {
+    let Ok(mut current) = metrics.lock() else {
+        return;
+    };
+    if current.ci_probe_written
+        || !current.ready
+        || current.startup_error.is_some()
+        || current.physical_width < 2
+        || current.physical_height < 2
+        || current.rendered_frames < 2
+    {
+        return;
+    }
+    match write_ci_probe(&current, "ready") {
+        Ok(()) => current.ci_probe_written = true,
+        Err(error) => eprintln!("{error}"),
     }
 }
 
@@ -904,7 +999,13 @@ impl HasWindowHandle for NativeViewHandle {
         #[cfg(target_os = "windows")]
         {
             let pointer = NonZeroIsize::new(self.0 as isize).expect("viewport HWND cannot be null");
-            let raw = RawWindowHandle::Win32(Win32WindowHandle::new(pointer));
+            let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+            let mut handle = Win32WindowHandle::new(pointer);
+            // Vulkan requires this field. Without it wgpu can create only a
+            // DX12 surface, so Windows systems whose best compatible adapter
+            // is exposed through Vulkan end up with no usable viewport.
+            handle.hinstance = NonZeroIsize::new(module as isize);
+            let raw = RawWindowHandle::Win32(handle);
             Ok(unsafe { WindowHandle::borrow_raw(raw) })
         }
     }
@@ -2923,6 +3024,7 @@ fn drain_render_commands(
             // Two updates account for Bevy's extracted/pipelined render world.
             // With no queued changes there is no timer and no idle render loop.
             render_frames(&mut runtime.app, 2, metrics);
+            maybe_write_ready_probe(metrics);
         }
     }
 }

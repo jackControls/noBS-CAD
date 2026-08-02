@@ -401,6 +401,7 @@ pub struct NativePick {
 pub struct NativeViewportMetrics {
     pub available: bool,
     pub ready: bool,
+    pub startup_error: Option<String>,
     pub backend: String,
     pub logical_width: f64,
     pub logical_height: f64,
