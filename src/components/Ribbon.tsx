@@ -48,15 +48,18 @@ export function Ribbon() {
   const dispatch = (action?: RibbonAction, payload?: string) => dispatchRibbonAction(action, payload);
 
   return (
-    <div ref={rootRef} className="relative flex h-[92px] shrink-0 flex-col">
+    <div
+      ref={rootRef}
+      className="relative flex h-[92px] w-full min-w-0 shrink-0 flex-col overflow-hidden"
+    >
       <div
         data-testid="ribbon-tools"
-        className="flex h-[92px] shrink-0 items-stretch border-b border-edge bg-header"
+        className="flex h-[92px] min-w-0 shrink-0 items-stretch border-b border-edge bg-header"
       >
         <AppMenuControls />
         <div
           data-testid="ribbon-command-scroll"
-          className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+          className="flex min-w-0 flex-1 items-stretch overflow-x-auto overscroll-x-contain"
         >
           {tab.panels.map((panel) => (
             <Panel
@@ -72,11 +75,11 @@ export function Ribbon() {
         </div>
 
         {mode === 'sketch' && (
-          <div className="flex shrink-0 items-center border-l border-edge px-3">
+          <div className="flex shrink-0 items-center border-l border-edge px-3 max-[1400px]:px-2">
             <button
               type="button"
               onClick={() => dispatchRibbonAction('exitSketch')}
-              className="flex h-8 items-center gap-1.5 rounded bg-finish px-3 text-[11px] font-semibold tracking-wide text-white hover:brightness-110"
+              className="flex h-8 items-center gap-1.5 rounded bg-finish px-3 text-[11px] font-semibold tracking-wide text-white hover:brightness-110 max-[1400px]:px-2"
             >
               <Check size={14} strokeWidth={2.5} />
               {t('ribbon.finishSketch')}
@@ -118,7 +121,10 @@ function Panel({
   };
 
   return (
-    <div ref={panelRef} className="relative flex shrink-0 flex-col border-r border-edge px-1.5">
+    <div
+      ref={panelRef}
+      className="relative flex shrink-0 flex-col border-r border-edge px-1.5 max-[1400px]:px-1"
+    >
       <div className="flex h-[62px] items-start gap-0.5 pt-1.5">
         {panel.buttons.map((button) => (
           <Button
@@ -182,10 +188,10 @@ function Button({
   );
   const widthClass =
     button.id === 'patternRectangular' || button.id === 'perpendicular'
-      ? 'w-14'
+      ? 'w-14 max-[1400px]:w-10'
       : button.id === 'sketchDimension' || button.id === 'horizontalVertical'
-        ? 'w-12'
-        : 'w-11';
+        ? 'w-12 max-[1400px]:w-10'
+        : 'w-11 max-[1400px]:w-9';
 
   return (
     <button

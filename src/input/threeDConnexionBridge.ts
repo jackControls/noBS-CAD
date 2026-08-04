@@ -59,6 +59,7 @@ type DriverWindow = Window & {
 };
 
 export interface DriverBridgeConnection {
+  activate(): void;
   disconnect(): void;
 }
 
@@ -66,6 +67,7 @@ const DEFAULT_DRIVER_SCRIPT_URL =
   'https://3dconnexion.com/technical_support/3dconnexion.min.js';
 const SCRIPT_LOAD_TIMEOUT_MS = 4_000;
 const DRIVER_CONNECT_TIMEOUT_MS = 3_500;
+const DEVICE_FRAME_TIMING_SOURCE = 0;
 const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 let driverLibraryPromise: Promise<DriverConstructor> | null = null;
@@ -164,25 +166,18 @@ export async function openThreeDConnexionBridge(
   let connected = false;
   let connectionLost = false;
   let disposed = false;
+  let inputEnabled = false;
+  let driverMoving = false;
   let moving = false;
-  let frame = 0;
   let lookFrom: [number, number, number] = [0, 0, 0];
   let lookDirection: [number, number, number] = [0, 0, -1];
   let lookAperture = 0;
   let selectionOnly = false;
 
-  const stopFrames = () => {
+  const stopMotion = () => {
     const wasMoving = moving;
     moving = false;
-    if (frame) cancelAnimationFrame(frame);
-    frame = 0;
     if (wasMoving) view.endMotion?.();
-  };
-  const sendFrame = (time: number) => {
-    frame = 0;
-    if (!moving || disposed || !created) return;
-    driver.update3dcontroller({ frame: { time } });
-    frame = requestAnimationFrame(sendFrame);
   };
 
   let resolveCreated!: () => void;
@@ -213,20 +208,34 @@ export async function openThreeDConnexionBridge(
     getSelectionAffine: () => IDENTITY_MATRIX,
     getSelectionEmpty: () => true,
     getSelectionExtents: () => view.getModelExtents(),
-    getFrameTimingSource: () => 1,
+    // Let the device initiate fresh frames. Application-timed frames add a
+    // browser rAF and local-server round trip before every camera update.
+    getFrameTimingSource: () => DEVICE_FRAME_TIMING_SOURCE,
     getFrameTime: () => performance.now(),
 
     setMoving: () => undefined,
     setTransaction: () => undefined,
-    setViewMatrix: (matrix: number[]) => view.setViewMatrix(matrix),
-    setViewExtents: () => undefined,
-    setFov: (radians: number) => view.setFov(radians),
-    setTarget: (target: [number, number, number]) => view.setViewTarget(target),
-    setActiveCommand: (command: string | number | null) => {
-      if (command === 31 || command === 'V3DK_FIT' || command === 'Fit') view.fit();
+    setViewMatrix: (matrix: number[]) => {
+      if (inputEnabled) view.setViewMatrix(matrix);
     },
-    setPivotPosition: (position: [number, number, number]) =>
-      view.setPivotPosition(position),
+    setViewExtents: () => undefined,
+    setFov: (radians: number) => {
+      if (inputEnabled) view.setFov(radians);
+    },
+    setTarget: (target: [number, number, number]) => {
+      if (inputEnabled) view.setViewTarget(target);
+    },
+    setActiveCommand: (command: string | number | null) => {
+      if (
+        inputEnabled &&
+        (command === 31 || command === 'V3DK_FIT' || command === 'Fit')
+      ) {
+        view.fit();
+      }
+    },
+    setPivotPosition: (position: [number, number, number]) => {
+      if (inputEnabled) view.setPivotPosition(position);
+    },
     setPivotVisible: () => undefined,
     setLookFrom: (position: [number, number, number]) => {
       lookFrom = position;
@@ -241,16 +250,22 @@ export async function openThreeDConnexionBridge(
       selectionOnly = value;
     },
     setSelectionAffine: () => undefined,
-    setKeyPress: (button: number) => onButton?.(button),
+    setKeyPress: (button: number) => {
+      if (inputEnabled) onButton?.(button);
+    },
     setKeyRelease: () => undefined,
     setSettingsChanged: () => undefined,
 
     onStartMotion: () => {
+      driverMoving = true;
+      if (!inputEnabled) return;
       if (!moving) view.beginMotion?.();
       moving = true;
-      if (!frame) frame = requestAnimationFrame(sendFrame);
     },
-    onStopMotion: stopFrames,
+    onStopMotion: () => {
+      driverMoving = false;
+      stopMotion();
+    },
     onConnect: () => {
       if (disposed || signal.aborted) return;
       connected = true;
@@ -263,12 +278,14 @@ export async function openThreeDConnexionBridge(
     on3dmouseCreated: () => {
       if (disposed || signal.aborted) return;
       created = true;
-      driver.update3dcontroller({ frame: { timingSource: 1 } });
+      driver.update3dcontroller({
+        frame: { timingSource: DEVICE_FRAME_TIMING_SOURCE },
+      });
       element.focus({ preventScroll: true });
       resolveCreated();
     },
     onDisconnect: (reason: unknown) => {
-      stopFrames();
+      stopMotion();
       if (!created) {
         rejectCreated(new Error(`3D mouse driver connection failed (${String(reason)}).`));
       } else if (!disposed) {
@@ -304,7 +321,7 @@ export async function openThreeDConnexionBridge(
     if (connectionLost) throw new Error('The 3D mouse driver connection was lost.');
   } catch (error) {
     disposed = true;
-    stopFrames();
+    stopMotion();
     if (connected) driver.session?.close?.();
     throw error;
   } finally {
@@ -313,10 +330,19 @@ export async function openThreeDConnexionBridge(
   }
 
   return {
+    activate() {
+      if (disposed || inputEnabled) return;
+      inputEnabled = true;
+      if (driverMoving && !moving) {
+        view.beginMotion?.();
+        moving = true;
+      }
+    },
     disconnect() {
       if (disposed) return;
       disposed = true;
-      stopFrames();
+      inputEnabled = false;
+      stopMotion();
       try {
         if (created && driver.connexion != null) driver.delete3dmouse();
       } catch {

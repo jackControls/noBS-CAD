@@ -270,6 +270,9 @@ export function Viewport() {
     const container = containerRef.current;
     if (!container) return;
     const detachNativeViewport = attachNativeViewport(container);
+    // Keep Windows device workarounds out of the known-good macOS gesture and
+    // SpaceMouse paths. WebView2 and Chromium retain "Windows" in their UA.
+    const isWindowsPlatform = /Windows/i.test(navigator.userAgent);
 
     // DOM and Bevy consume the same theme tokens. Viewport is keyed by the
     // resolved theme in App, so switching theme reconstructs the interaction
@@ -394,20 +397,36 @@ export function Viewport() {
     // Bevy is event-driven, so the interaction controller should wake only
     // for input/state changes or an animation that is still settling.
     let wakeControllerFrame: () => void = () => undefined;
+    const activeCameraPointerButtons = new Set<number>();
     const onNavPointerDown = (e: PointerEvent) => {
-      if (e.button === 1 && e.shiftKey && controlsRef) {
-        controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.ROTATE;
+      if (e.button === 1 || e.button === 2) {
+        activeCameraPointerButtons.add(e.button);
+      }
+      if (e.button === 1 && controlsRef) {
+        // Assign on every press so a lost Shift-middle release can never leave
+        // the next ordinary middle drag stuck in orbit mode.
+        controlsRef.mouseButtons.MIDDLE = e.shiftKey
+          ? CAD.MOUSE.ROTATE
+          : CAD.MOUSE.PAN;
       }
       cancelCameraAnimation();
       wakeControllerFrame();
     };
     const onNavPointerUp = (e: PointerEvent) => {
+      activeCameraPointerButtons.delete(e.button);
       if (e.button === 1 && controlsRef) {
         controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.PAN;
       }
     };
+    const cancelCapturedNavigation = () => {
+      activeCameraPointerButtons.clear();
+      controlsRef?.cancelInteraction();
+      if (controlsRef) controlsRef.mouseButtons.MIDDLE = CAD.MOUSE.PAN;
+    };
     surface.domElement.addEventListener('pointerdown', onNavPointerDown);
     window.addEventListener('pointerup', onNavPointerUp);
+    window.addEventListener('pointercancel', cancelCapturedNavigation);
+    window.addEventListener('blur', cancelCapturedNavigation);
 
     const controls = new CadOrbitControls(camera, surface.domElement);
     controlsRef = controls;
@@ -446,6 +465,14 @@ export function Viewport() {
     let wheelGesture: WheelGesture = null;
     let wheelLastT = 0;
     let wheelCount = 0;
+    const MAX_WHEEL_STEP_PX = 240;
+
+    const isDiscreteHorizontalWheel = (e: WheelEvent) =>
+      e.deltaY === 0 &&
+      e.deltaX !== 0 &&
+      !e.ctrlKey &&
+      (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+        (Number.isInteger(e.deltaX) && Math.abs(e.deltaX) >= 50));
 
     const classifyWheel = (e: WheelEvent): 'pan' | 'zoom' => {
       const now = performance.now();
@@ -488,16 +515,26 @@ export function Viewport() {
     const onWheelNav = (e: WheelEvent) => {
       e.preventDefault();
       e.stopImmediatePropagation(); // CadOrbitControls never handles wheel
+      // Logitech wheel-tilt is a discrete horizontal notch, not a CAD
+      // navigation gesture. It must not interrupt a camera restore animation.
+      if (isWindowsPlatform && isDiscreteHorizontalWheel(e)) return;
+      const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+      const boundedWheel = (value: number) =>
+        Number.isFinite(value)
+          ? CAD.MathUtils.clamp(value * unit, -MAX_WHEEL_STEP_PX, MAX_WHEEL_STEP_PX)
+          : 0;
+      const deltaX = boundedWheel(e.deltaX);
+      const deltaY = boundedWheel(e.deltaY);
+      if (deltaX === 0 && deltaY === 0) return;
       cancelCameraAnimation();
       wakeControllerFrame();
-      const unit = e.deltaMode === 1 ? 16 : 1; // lines → px
       if (e.shiftKey) {
         // Shift+swipe = orbit. Same macOS natural-scrolling inversion as
         // pan (owner 2026-07-19): wheel deltas run opposite to pointer
         // drags — negate so the scene rotates WITH the fingers. The modal
         // Orbit tools use raw pointer deltas (grab feel,
         // already correct).
-        api.orbitBy(-e.deltaX * unit * 0.6, -e.deltaY * unit * 0.6); // damped
+        api.orbitBy(-deltaX * 0.6, -deltaY * 0.6); // damped
         return;
       }
       if (e.ctrlKey) {
@@ -505,18 +542,18 @@ export function Viewport() {
         // intentionally twice as responsive as zoom-out (owner 2026-07-26).
         const sensitivity =
           TRACKPAD_PINCH_SENSITIVITY *
-          (e.deltaY < 0 ? TRACKPAD_PINCH_ZOOM_IN_MULTIPLIER : 1);
-        dollyBy(Math.exp(e.deltaY * sensitivity));
+          (deltaY < 0 ? TRACKPAD_PINCH_ZOOM_IN_MULTIPLIER : 1);
+        dollyBy(Math.exp(deltaY * sensitivity));
         return;
       }
       if (classifyWheel(e) === 'zoom') {
-        dollyBy(Math.exp(e.deltaY * 0.002)); // notch down = zoom out
+        dollyBy(Math.exp(deltaY * 0.002)); // notch down = zoom out
       } else {
         // macOS natural scrolling: wheel deltas run OPPOSITE to pointer
         // drags, so negate — content tracks the fingers like every other
         // Mac app (owner report 2026-07-19). The modal Pan tool calls
         // panBy with raw pointer deltas and keeps the grab feel as-is.
-        panBy(-e.deltaX * unit, -e.deltaY * unit);
+        panBy(-deltaX, -deltaY);
       }
     };
     surface.domElement.addEventListener('wheel', onWheelNav, {
@@ -2808,6 +2845,14 @@ export function Viewport() {
 
     // --- Modal nav-tool drag helpers (camera never locked, D7) ---
     const panBy = (dxPx: number, dyPx: number) => {
+      const bounded = CAD.boundedPointerDelta(
+        dxPx,
+        dyPx,
+        surface.domElement.clientWidth,
+        surface.domElement.clientHeight,
+      );
+      if (!bounded) return;
+      [dxPx, dyPx] = bounded;
       cancelCameraAnimation();
       const wpp = worldPerPixel();
       const right = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -2819,6 +2864,8 @@ export function Viewport() {
     };
 
     const dollyBy = (factor: number) => {
+      if (!Number.isFinite(factor) || factor <= 0) return;
+      factor = CAD.MathUtils.clamp(factor, 0.2, 5);
       cancelCameraAnimation();
       const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
       offset.setLength(Math.min(5000, Math.max(2, offset.length())));
@@ -5716,11 +5763,21 @@ export function Viewport() {
 
       // Modal nav-tool drag takes over the left button when active.
       if (navDrag) {
-        const dx = e.clientX - navDrag.x;
-        const dy = e.clientY - navDrag.y;
+        const rawDx = e.clientX - navDrag.x;
+        const rawDy = e.clientY - navDrag.y;
         if (Math.hypot(e.clientX - navDrag.startX, e.clientY - navDrag.startY) > 3) {
           navDrag.moved = true;
         }
+        navDrag.x = e.clientX;
+        navDrag.y = e.clientY;
+        const bounded = CAD.boundedPointerDelta(
+          rawDx,
+          rawDy,
+          surface.domElement.clientWidth,
+          surface.domElement.clientHeight,
+        );
+        if (!bounded) return;
+        const [dx, dy] = bounded;
         switch (navDrag.tool) {
           case 'orbit':
             api.orbitBy(dx, dy);
@@ -5735,8 +5792,6 @@ export function Viewport() {
             updateZoomRect(navDrag.startX, navDrag.startY, e.clientX, e.clientY);
             break;
         }
-        navDrag.x = e.clientX;
-        navDrag.y = e.clientY;
         return;
       }
 
@@ -6644,6 +6699,13 @@ export function Viewport() {
     surface.domElement.addEventListener('click', onCanvasClick);
     surface.domElement.addEventListener('dblclick', onDoubleClick);
     window.addEventListener('pointerup', onPointerUp);
+    const cancelModalNavigation = () => {
+      if (navDrag?.tool === 'zoomWindow') hideZoomRect();
+      navDrag = null;
+      downInfo = null;
+    };
+    window.addEventListener('pointercancel', cancelModalNavigation);
+    window.addEventListener('blur', cancelModalNavigation);
     window.addEventListener('keydown', onKeyDown, true);
 
     // --- Overlay camera API (Orientation Dial / navigation bar / Look At) ---
@@ -6803,6 +6865,7 @@ export function Viewport() {
         controls.enabled = sixDofDriverControlsWereEnabled;
         if (controls.enabled) controls.update();
         sixDofDriverPivot.copy(controls.target);
+        syncNativeViewportCamera(camera, controls.target);
         wakeControllerFrame();
       },
       getViewMatrix: () => {
@@ -6825,6 +6888,7 @@ export function Viewport() {
         // both setTarget and the independently changing rotation pivot.
         if (!sixDofDriverMotion) alignSixDofTargetToCamera(focusDistance);
         camera.updateMatrixWorld(true);
+        syncNativeViewportCamera(camera, controls.target);
         wakeControllerFrame();
       },
       getViewTarget: () =>
@@ -6834,6 +6898,7 @@ export function Viewport() {
         cancelCameraAnimation();
         controls.target.set(...target);
         if (sixDofDriverMotion) sixDofDriverTargetUpdated = true;
+        syncNativeViewportCamera(camera, controls.target);
         wakeControllerFrame();
       },
       getViewFrustum: () => {
@@ -6870,6 +6935,7 @@ export function Viewport() {
           150,
         );
         camera.updateProjectionMatrix();
+        syncNativeViewportCamera(camera, controls.target);
         wakeControllerFrame();
       },
       getModelExtents: () => {
@@ -6945,6 +7011,14 @@ export function Viewport() {
       },
       fit: fitVisibleGeometry,
       orbitBy: (dx, dy) => {
+        const bounded = CAD.boundedPointerDelta(
+          dx,
+          dy,
+          surface.domElement.clientWidth,
+          surface.domElement.clientHeight,
+        );
+        if (!bounded) return;
+        [dx, dy] = bounded;
         cancelCameraAnimation();
         // Replicate CadOrbitControls' rotate handling exactly (spherical in the
         // up-mapped frame, deltas scaled by element height), but derive a rigid
@@ -6985,6 +7059,23 @@ export function Viewport() {
         wakeControllerFrame();
       },
       navigateSixDof: ({ translation, rotation, deltaSeconds }) => {
+        // Never combine an asynchronous 3D-mouse packet with an active mouse
+        // navigation gesture. Competing camera writers are perceived as a
+        // sudden jump even when each individual delta is valid.
+        if (activeCameraPointerButtons.size > 0 || navDrag !== null) return;
+        if (
+          !Number.isFinite(deltaSeconds) ||
+          !translation.every(Number.isFinite) ||
+          !rotation.every(Number.isFinite)
+        ) {
+          return;
+        }
+        translation = translation.map((value) =>
+          CAD.MathUtils.clamp(value, -1, 1),
+        ) as [number, number, number];
+        rotation = rotation.map((value) =>
+          CAD.MathUtils.clamp(value, -1, 1),
+        ) as [number, number, number];
         cancelCameraAnimation();
         const dt = Math.min(0.05, Math.max(0.001, deltaSeconds));
         const speedMultiplier = store.getState().sixDofSpeed;
@@ -6994,17 +7085,32 @@ export function Viewport() {
         const up = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
         const forward = new CAD.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
 
-        // Object-mode mapping: model motion follows the physical cap, so the
-        // camera translates/rotates in the opposite direction. Translation
-        // speed scales with view distance to stay useful from detail to
-        // assembly scale.
+        // Object-mode mapping: lateral cap motion pans the rig oppositely so
+        // the part follows the cap. Windows depth motion is a bounded dolly;
+        // translating its whole rig through a fixed model caused blank views.
         const translationSpeed = distance * 0.9 * dt * speedMultiplier;
         const delta = new CAD.Vector3()
           .addScaledVector(right, -translation[0] * translationSpeed)
-          .addScaledVector(forward, -translation[1] * translationSpeed)
           .addScaledVector(up, -translation[2] * translationSpeed);
+        if (!isWindowsPlatform) {
+          // Preserve the established macOS object-mode behavior: depth input
+          // translates the camera rig rather than changing focus distance.
+          delta.addScaledVector(forward, -translation[1] * translationSpeed);
+        }
         camera.position.add(delta);
         controls.target.add(delta);
+
+        if (isWindowsPlatform && translation[1] !== 0) {
+          const offset = camera.position.clone().sub(controls.target);
+          if (offset.lengthSq() > 1e-12) {
+            const nextDistance = CAD.MathUtils.clamp(
+              offset.length() * Math.exp(translation[1] * 0.9 * dt * speedMultiplier),
+              2,
+              5_000,
+            );
+            camera.position.copy(controls.target).add(offset.setLength(nextDistance));
+          }
+        }
 
         const angle = 1.65 * dt * speedMultiplier;
         const pitch = new CAD.Quaternion().setFromAxisAngle(right, -rotation[0] * angle);
@@ -7012,6 +7118,7 @@ export function Viewport() {
         const yaw = new CAD.Quaternion().setFromAxisAngle(up, -rotation[2] * angle);
         const turn = yaw.multiply(pitch).multiply(roll);
         applyCameraRigTurn(turn, pivot);
+        syncNativeViewportCamera(camera, controls.target);
         wakeControllerFrame();
       },
       getSixDofDriverView: () => sixDofDriverView,
@@ -7732,7 +7839,11 @@ export function Viewport() {
       surface.domElement.removeEventListener('wheel', cancelCameraAnimation);
       surface.domElement.removeEventListener('wheel', onWheelNav, { capture: true });
       window.removeEventListener('pointerup', onNavPointerUp);
+      window.removeEventListener('pointercancel', cancelCapturedNavigation);
+      window.removeEventListener('blur', cancelCapturedNavigation);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', cancelModalNavigation);
+      window.removeEventListener('blur', cancelModalNavigation);
       window.removeEventListener('keydown', onKeyDown, true);
       controls.removeEventListener('change', onControlsChange);
       wakeControllerFrame = () => undefined;

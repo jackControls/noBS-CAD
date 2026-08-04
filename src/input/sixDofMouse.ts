@@ -79,7 +79,9 @@ const VENDOR_IDS = new Set([0x256f, 0x046d]);
 const GENERIC_DESKTOP_USAGE_PAGE = 0x01;
 const MULTI_AXIS_CONTROLLER_USAGE = 0x08;
 const RAW_FULL_SCALE = 350;
-const MOTION_TIMEOUT_MS = 90;
+// A released cap should stop within roughly three display frames. The old
+// 90-ms hold made raw-HID motion feel visibly behind the user's hand.
+const MOTION_TIMEOUT_MS = 45;
 const HID_OPEN_TIMEOUT_MS = 4_000;
 const DEVICE_PICKER_TIMEOUT_MS = 15_000;
 
@@ -111,6 +113,7 @@ function isSixDofDevice(device: HidDeviceLike): boolean {
 }
 
 function normalizeAxis(raw: number): number {
+  if (!Number.isFinite(raw)) return 0;
   const normalized = Math.max(-1, Math.min(1, raw / RAW_FULL_SCALE));
   return Math.abs(normalized) < 0.025 ? 0 : normalized;
 }
@@ -393,6 +396,16 @@ export function createSixDofMouseController(
     }
   };
 
+  const detachNative = async () => {
+    nativeUnlisten.forEach((unlisten) => unlisten());
+    nativeUnlisten = [];
+    accumulator.stop();
+    if (isTauriRuntime()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('six_dof_mouse_disconnect').catch(() => undefined);
+    }
+  };
+
   const detachDriver = () => {
     driverAbort?.abort();
     driverAbort = null;
@@ -430,6 +443,16 @@ export function createSixDofMouseController(
       state: 'connected',
       message: '3D mouse connected through the installed driver.',
     });
+    // Paint the green connected indicator before allowing any driver callback
+    // to mutate the camera. A displaced cap during the handshake stays inert.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => window.setTimeout(resolve, 0));
+    });
+    if (disposed || attempt !== connectionAttempt) {
+      connection.disconnect();
+      return false;
+    }
+    connection.activate();
     return true;
   };
 
@@ -453,6 +476,33 @@ export function createSixDofMouseController(
       onStatus({ state: 'connecting', message: 'Connecting 3D mouse…' });
       try {
         if (isTauriRuntime()) {
+          // A deliberate Connect click on Windows opts into 3DxWare's local
+          // Navigation Library. That path honors the driver's calibrated axis
+          // mapping and per-application settings; raw HID remains an explicit
+          // offline fallback when the driver is unavailable.
+          const driverView = getDriverView?.() ?? null;
+          const windowsDesktop = /Windows/i.test(navigator.userAgent);
+          // Do not silently attach a raw Windows/Bluetooth HID device during
+          // startup. A deliberate click prefers 3DxWare's calibrated mapping
+          // and may still fall back to raw HID if the driver is unavailable.
+          if (windowsDesktop && !allowDriverBridge && !requestPermission) {
+            await detachNative();
+            onStatus({
+              state: 'disconnected',
+              message: 'Click to connect the 3D mouse through 3DxWare.',
+            });
+            return;
+          }
+          if (allowDriverBridge && windowsDesktop && driverView) {
+            await detachNative();
+            try {
+              if (await connectDriver(driverView, attempt)) return;
+            } catch {
+              driverProbeFailed = true;
+              detachDriver();
+            }
+            if (disposed || attempt !== connectionAttempt) return;
+          }
           await connectNative();
           return;
         }
@@ -476,6 +526,7 @@ export function createSixDofMouseController(
           } catch (error) {
             driverError = error;
             driverProbeFailed = true;
+            detachDriver();
           }
         }
         if (disposed || attempt !== connectionAttempt) return;
@@ -552,12 +603,7 @@ export function createSixDofMouseController(
       autoReconnect = false;
       detachDriver();
       await detachWebDevice(true);
-      nativeUnlisten.forEach((unlisten) => unlisten());
-      nativeUnlisten = [];
-      if (isTauriRuntime()) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('six_dof_mouse_disconnect').catch(() => undefined);
-      }
+      await detachNative();
       onStatus({ state: 'disconnected', message: '3D mouse disconnected.' });
     },
     async dispose() {
@@ -570,12 +616,7 @@ export function createSixDofMouseController(
         hid.removeEventListener('disconnect', webDisconnect);
       }
       await detachWebDevice(true);
-      nativeUnlisten.forEach((unlisten) => unlisten());
-      nativeUnlisten = [];
-      if (isTauriRuntime()) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('six_dof_mouse_disconnect').catch(() => undefined);
-      }
+      await detachNative();
     },
   };
 }

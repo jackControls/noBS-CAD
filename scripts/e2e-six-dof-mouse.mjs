@@ -22,8 +22,12 @@ const newPage = async () => {
 };
 
 const waitForReady = async (page) => {
-  await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => window.__appStore.getState().document !== null);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+  await page.waitForFunction(
+    () => window.__appStore.getState().document !== null,
+    undefined,
+    { timeout: 90_000 },
+  );
   const connect = page.getByTestId('six-dof-mouse-connect');
   await connect.waitFor({ state: 'visible' });
   return connect;
@@ -61,6 +65,17 @@ try {
 
         create3dmouse(element) {
           window.__driverMock.focusElement = element;
+          // A cap can already be displaced while the local driver handshake is
+          // still gray/amber. These callbacks must be ignored until the UI has
+          // painted the connected state.
+          const matrix = this.client.getViewMatrix();
+          const target = this.client.getViewTarget();
+          this.client.onStartMotion();
+          matrix[12] += 75;
+          this.client.setViewMatrix(matrix);
+          this.client.setTarget([target[0] + 75, target[1], target[2]]);
+          this.client.onStopMotion();
+          window.__driverMock.preReadyMutationAttempted = true;
           queueMicrotask(() => this.client.on3dmouseCreated());
         }
 
@@ -78,6 +93,7 @@ try {
         closed: false,
         deleted: false,
         focusElement: null,
+        preReadyMutationAttempted: false,
         updates: [],
       };
       window._3Dconnexion = MockDriver;
@@ -132,6 +148,7 @@ try {
       0,
       'browser startup does not inject a hosted bridge script',
     );
+    const beforeConnect = await page.evaluate(() => window.__cameraApi.getSnapshot());
     await connect.click();
     await page.waitForFunction(
       () =>
@@ -139,6 +156,16 @@ try {
           .querySelector('[data-testid="six-dof-mouse-connect"]')
           ?.getAttribute('title') ===
         '3D mouse connected through the installed driver.',
+    );
+    const afterConnect = await page.evaluate(() => window.__cameraApi.getSnapshot());
+    assert.equal(
+      await page.evaluate(() => window.__driverMock.preReadyMutationAttempted),
+      true,
+    );
+    assert.deepEqual(
+      afterConnect,
+      beforeConnect,
+      'driver motion must remain gated until the connected state is visible',
     );
     assert.equal(
       await page.evaluate(
@@ -209,10 +236,10 @@ try {
       postStopDrift < 1e-8,
       `the camera does not jump after motion stops (drift ${postStopDrift})`,
     );
-    assert.equal(
-      await page.evaluate(() => window.__driverMock.updates.length > 0),
-      true,
-      'driver receives initial frame timing configuration',
+    assert.deepEqual(
+      await page.evaluate(() => window.__driverMock.updates[0]),
+      { frame: { timingSource: 0 } },
+      'the driver uses device-timed frames without an application rAF round trip',
     );
 
     await workflowCancel.click();
@@ -471,6 +498,52 @@ try {
     await page.waitForFunction(() => window.__pickerRequests === 2);
     assert.deepEqual(errors, []);
     console.log('  [ok] A stalled device chooser times out and can be retried');
+  }
+
+  if (process.platform === 'win32') {
+    const { page, errors } = await newPage();
+    await waitForReady(page);
+    const nativeStartup = await page.evaluate(async () => {
+      const calls = [];
+      let callbackId = 0;
+      window.__TAURI_INTERNALS__ = {
+        invoke: async (command) => {
+          calls.push(command);
+          return null;
+        },
+        transformCallback: () => {
+          callbackId += 1;
+          return callbackId;
+        },
+        unregisterCallback: () => undefined,
+      };
+      const statuses = [];
+      const { createSixDofMouseController } = await import(
+        '/src/input/sixDofMouse.ts?native-startup-regression'
+      );
+      const controller = createSixDofMouseController(
+        () => undefined,
+        (status) => statuses.push(status),
+      );
+      await controller.connect();
+      const startupCalls = [...calls];
+      await controller.dispose();
+      delete window.__TAURI_INTERNALS__;
+      return { startupCalls, statuses };
+    });
+    assert.equal(
+      nativeStartup.startupCalls.includes('six_dof_mouse_connect'),
+      false,
+      'Windows startup must not silently attach the raw Bluetooth HID path',
+    );
+    assert.equal(
+      nativeStartup.statuses.at(-1)?.message,
+      'Click to connect the 3D mouse through 3DxWare.',
+    );
+    assert.deepEqual(errors, []);
+    console.log('  [ok] Windows startup leaves raw Bluetooth HID disconnected');
+  } else {
+    console.log('  [skip] Windows native startup policy on non-Windows host');
   }
 } finally {
   await browser.close();

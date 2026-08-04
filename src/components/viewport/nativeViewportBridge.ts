@@ -193,15 +193,9 @@ const overlaySelector = [
 let probeInFlight: Promise<boolean> | null = null;
 let active = false;
 let latestMetrics: NativeViewportMetrics | null = null;
-let pendingCameraFrame = 0;
-let pendingCamera:
-  | {
-      position: [number, number, number];
-      target: [number, number, number];
-      up: [number, number, number];
-      verticalFovDegrees: number;
-    }
-  | null = null;
+let pendingCamera: NativeCameraState | null = null;
+let cameraPumpQueued = false;
+let cameraInFlight = false;
 let lastCameraKey = '';
 let lastPreviewKey = '';
 let pendingPreview: NativeViewportTransient | null = null;
@@ -213,6 +207,27 @@ let presentationInFlight = false;
 let lastPresentationKey = '';
 let hoveredHudControl = '';
 let pressedHudControl = '';
+
+function pumpCamera(): void {
+  if (cameraPumpQueued || cameraInFlight || !pendingCamera) return;
+  cameraPumpQueued = true;
+  // Combine matrix + target callbacks from one device sample without waiting
+  // for a full browser animation frame.
+  queueMicrotask(() => {
+    cameraPumpQueued = false;
+    if (cameraInFlight) return;
+    const camera = pendingCamera;
+    pendingCamera = null;
+    if (!camera) return;
+    cameraInFlight = true;
+    void invoke('native_viewport_set_camera', { camera })
+      .catch(() => undefined)
+      .finally(() => {
+        cameraInFlight = false;
+        pumpCamera();
+      });
+  });
+}
 
 function isTauriRuntime(): boolean {
   return '__TAURI_INTERNALS__' in window;
@@ -366,8 +381,33 @@ export function disjointOverlayRects(rects: NativeRect[]): NativeRect[] {
   return disjoint;
 }
 
+function overlayStackingPriority(element: Element): number {
+  let priority = 0;
+  let current: Element | null = element;
+  while (current) {
+    const zIndex = Number.parseInt(getComputedStyle(current).zIndex, 10);
+    if (Number.isFinite(zIndex)) priority = Math.max(priority, zIndex);
+    current = current.parentElement;
+  }
+  return priority;
+}
+
 export function collectNativeViewportOverlayRects(): NativeRect[] {
-  const elements = [...document.querySelectorAll(overlaySelector)];
+  // Subtract lower islands from the visibly topmost element, not vice versa.
+  // This preserves a modal's rounded outline when it overlaps the project tab
+  // or another lower shell island in a compact window.
+  const elements = [...document.querySelectorAll(overlaySelector)]
+    .map((element, documentOrder) => ({
+      element,
+      documentOrder,
+      stackingPriority: overlayStackingPriority(element),
+    }))
+    .sort(
+      (a, b) =>
+        b.stackingPriority - a.stackingPriority ||
+        b.documentOrder - a.documentOrder,
+    )
+    .map(({ element }) => element);
   return disjointOverlayRects(
     elements
       .map(rectFor)
@@ -633,6 +673,387 @@ async function syncModel(): Promise<void> {
   await invoke('native_viewport_sync_model');
 }
 
+const WINDOWS_NATIVE_INPUT_PREFIX = '__nbcad_native_input__|';
+
+type WindowsWebViewMessageHost = {
+  addEventListener: (
+    type: 'message',
+    listener: (event: MessageEvent<unknown>) => void,
+  ) => void;
+  removeEventListener: (
+    type: 'message',
+    listener: (event: MessageEvent<unknown>) => void,
+  ) => void;
+};
+
+/**
+ * The opaque Bevy HWND sits above WebView2 on Windows. WebView2's renderer is
+ * owned by another UI thread, so Win32's HTTRANSPARENT hand-off stops before
+ * it reaches the DOM. Rust forwards compact mouse records through WebView2's
+ * message channel and this adapter dispatches them onto the unchanged DOM
+ * interaction surface and HUD proxies.
+ */
+function attachWindowsNativeInput(container: HTMLElement): () => void {
+  const webview = (
+    window as Window & {
+      chrome?: { webview?: WindowsWebViewMessageHost };
+    }
+  ).chrome?.webview;
+  if (!webview) return () => undefined;
+
+  let hoveredTarget: Element | null = null;
+  let pressedTarget: Element | null = null;
+  let pressedButton = -1;
+  let doublePress = false;
+  let moveFrame = 0;
+  let pendingMove:
+    | {
+        clientX: number;
+        clientY: number;
+        buttons: number;
+        modifiers: number;
+        hitTarget: Element | null;
+      }
+    | null = null;
+
+  const pointerEvent = (
+    type: string,
+    target: Element,
+    clientX: number,
+    clientY: number,
+    button: number,
+    buttons: number,
+    modifiers: number,
+    relatedTarget: EventTarget | null = null,
+    detail = 0,
+  ) =>
+    target.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: type !== 'pointerenter' && type !== 'pointerleave',
+        cancelable: true,
+        composed: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        width: 1,
+        height: 1,
+        pressure: buttons === 0 ? 0 : 0.5,
+        clientX,
+        clientY,
+        screenX: window.screenX + clientX,
+        screenY: window.screenY + clientY,
+        button,
+        buttons,
+        detail,
+        shiftKey: (modifiers & 1) !== 0,
+        ctrlKey: (modifiers & 2) !== 0,
+        altKey: (modifiers & 4) !== 0,
+        metaKey: (modifiers & 8) !== 0,
+        relatedTarget,
+      }),
+    );
+
+  const mouseEvent = (
+    type: string,
+    target: Element,
+    clientX: number,
+    clientY: number,
+    button: number,
+    buttons: number,
+    modifiers: number,
+    detail: number,
+  ) =>
+    target.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX,
+        clientY,
+        screenX: window.screenX + clientX,
+        screenY: window.screenY + clientY,
+        button,
+        buttons,
+        detail,
+        shiftKey: (modifiers & 1) !== 0,
+        ctrlKey: (modifiers & 2) !== 0,
+        altKey: (modifiers & 4) !== 0,
+        metaKey: (modifiers & 8) !== 0,
+      }),
+    );
+
+  const updateHoveredTarget = (
+    target: Element | null,
+    clientX: number,
+    clientY: number,
+    buttons: number,
+    modifiers: number,
+  ) => {
+    if (target === hoveredTarget) return;
+    const previous = hoveredTarget;
+    hoveredTarget = target;
+    if (previous) {
+      pointerEvent(
+        'pointerout',
+        previous,
+        clientX,
+        clientY,
+        -1,
+        buttons,
+        modifiers,
+        target,
+      );
+      pointerEvent(
+        'pointerleave',
+        previous,
+        clientX,
+        clientY,
+        -1,
+        buttons,
+        modifiers,
+        target,
+      );
+    }
+    if (target) {
+      pointerEvent(
+        'pointerover',
+        target,
+        clientX,
+        clientY,
+        -1,
+        buttons,
+        modifiers,
+        previous,
+      );
+      pointerEvent(
+        'pointerenter',
+        target,
+        clientX,
+        clientY,
+        -1,
+        buttons,
+        modifiers,
+        previous,
+      );
+    }
+  };
+
+  const dispatchPendingMove = () => {
+    moveFrame = 0;
+    const move = pendingMove;
+    pendingMove = null;
+    if (!move) return;
+    const target =
+      move.buttons !== 0 && pressedTarget ? pressedTarget : move.hitTarget;
+    updateHoveredTarget(
+      target,
+      move.clientX,
+      move.clientY,
+      move.buttons,
+      move.modifiers,
+    );
+    if (target) {
+      pointerEvent(
+        'pointermove',
+        target,
+        move.clientX,
+        move.clientY,
+        -1,
+        move.buttons,
+        move.modifiers,
+      );
+    }
+  };
+
+  const flushPendingMove = () => {
+    if (moveFrame !== 0) cancelAnimationFrame(moveFrame);
+    dispatchPendingMove();
+  };
+
+  const onMessage = (event: MessageEvent<unknown>) => {
+    if (
+      typeof event.data !== 'string' ||
+      !event.data.startsWith(WINDOWS_NATIVE_INPUT_PREFIX)
+    ) {
+      return;
+    }
+    const fields = event.data
+      .slice(WINDOWS_NATIVE_INPUT_PREFIX.length)
+      .split('|');
+    if (fields.length !== 9) return;
+    const kind = fields[0];
+    const values = fields.slice(1).map(Number);
+    if (values.some((value) => !Number.isFinite(value))) return;
+    const [x, y, physicalWidth, physicalHeight, button, buttons, modifiers, delta] =
+      values;
+    if (physicalWidth < 1 || physicalHeight < 1) return;
+
+    const rect = container.getBoundingClientRect();
+    const clientX = rect.left + (x / physicalWidth) * rect.width;
+    const clientY = rect.top + (y / physicalHeight) * rect.height;
+    const hit = document.elementFromPoint(clientX, clientY);
+    const hitTarget = hit && container.contains(hit) ? hit : null;
+
+    // Mouse-move records can arrive much faster than the native renderer can
+    // present on an integrated GPU. Keep the newest absolute coordinate and
+    // dispatch at display cadence; no distance is lost and no stale queue can
+    // continue moving the camera after the physical mouse stops.
+    if (kind === 'm') {
+      pendingMove = { clientX, clientY, buttons, modifiers, hitTarget };
+      if (moveFrame === 0) moveFrame = requestAnimationFrame(dispatchPendingMove);
+      return;
+    }
+
+    // A Logitech wheel's left/right tilt is deliberately not a viewport
+    // gesture. Keep this defensive branch for older native hosts that still
+    // send the legacy horizontal-wheel record.
+    if (kind === 'h') return;
+
+    // Preserve event order at button/wheel/capture boundaries.
+    flushPendingMove();
+    const target = buttons !== 0 && pressedTarget ? pressedTarget : hitTarget;
+
+    if (kind === 'l') {
+      updateHoveredTarget(null, clientX, clientY, 0, modifiers);
+      return;
+    }
+    if (kind === 'v') {
+      const wheelTarget = hitTarget ?? hoveredTarget ?? container;
+      wheelTarget.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          view: window,
+          clientX,
+          clientY,
+          screenX: window.screenX + clientX,
+          screenY: window.screenY + clientY,
+          buttons,
+          deltaX: 0,
+          deltaY: -delta,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          shiftKey: (modifiers & 1) !== 0,
+          ctrlKey: (modifiers & 2) !== 0,
+          altKey: (modifiers & 4) !== 0,
+          metaKey: (modifiers & 8) !== 0,
+        }),
+      );
+      return;
+    }
+
+    if (kind === 'c') {
+      const cancelTarget = pressedTarget ?? hoveredTarget ?? container;
+      if (pressedTarget || pressedButton >= 0) {
+        pointerEvent(
+          'pointercancel',
+          cancelTarget,
+          clientX,
+          clientY,
+          pressedButton,
+          0,
+          modifiers,
+        );
+      }
+      pressedTarget = null;
+      pressedButton = -1;
+      doublePress = false;
+      updateHoveredTarget(hitTarget, clientX, clientY, 0, modifiers);
+      return;
+    }
+
+    if (kind === 'd' || kind === 'b') {
+      const downTarget = hitTarget ?? container;
+      updateHoveredTarget(downTarget, clientX, clientY, buttons, modifiers);
+      pressedTarget = downTarget;
+      pressedButton = button;
+      doublePress = kind === 'b';
+      pointerEvent(
+        'pointerdown',
+        downTarget,
+        clientX,
+        clientY,
+        button,
+        buttons,
+        modifiers,
+        null,
+        doublePress ? 2 : 1,
+      );
+      return;
+    }
+
+    if (kind !== 'u') return;
+    const upTarget = pressedTarget ?? hitTarget ?? container;
+    pointerEvent(
+      'pointerup',
+      upTarget,
+      clientX,
+      clientY,
+      button,
+      buttons,
+      modifiers,
+      null,
+      doublePress ? 2 : 1,
+    );
+    const sameTarget =
+      hitTarget !== null &&
+      (hitTarget === pressedTarget ||
+        pressedTarget?.contains(hitTarget) === true ||
+        hitTarget.contains(pressedTarget));
+    if (button === 0 && button === pressedButton && sameTarget) {
+      const detail = doublePress ? 2 : 1;
+      mouseEvent(
+        'click',
+        upTarget,
+        clientX,
+        clientY,
+        button,
+        buttons,
+        modifiers,
+        detail,
+      );
+      if (doublePress) {
+        mouseEvent(
+          'dblclick',
+          upTarget,
+          clientX,
+          clientY,
+          button,
+          buttons,
+          modifiers,
+          2,
+        );
+      }
+    } else if (button === 2) {
+      mouseEvent(
+        'contextmenu',
+        upTarget,
+        clientX,
+        clientY,
+        button,
+        buttons,
+        modifiers,
+        1,
+      );
+    }
+    pressedTarget = null;
+    pressedButton = -1;
+    doublePress = false;
+    updateHoveredTarget(hitTarget, clientX, clientY, buttons, modifiers);
+  };
+
+  webview.addEventListener('message', onMessage);
+  return () => {
+    webview.removeEventListener('message', onMessage);
+    if (moveFrame !== 0) cancelAnimationFrame(moveFrame);
+    moveFrame = 0;
+    pendingMove = null;
+    hoveredTarget = null;
+    pressedTarget = null;
+  };
+}
+
 /**
  * Binds native layout/model synchronization to the existing viewport. The
  * mutation observer watches only layout-bearing attributes; the orientation
@@ -649,6 +1070,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   let startupStatus: HTMLDivElement | null = null;
   let settleTimers: number[] = [];
   let nativeWindowUnlisteners: Array<() => void> = [];
+  const detachWindowsNativeInput = attachWindowsNativeInput(container);
 
   const clearStartupStatus = () => {
     if (startupStatusTimer !== 0) {
@@ -940,6 +1362,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     window.removeEventListener('pointerup', clearHudPointerPress, true);
     window.removeEventListener('pointercancel', clearHudPointerPress, true);
     window.removeEventListener('focus', settleLayout);
+    detachWindowsNativeInput();
     for (const unlisten of nativeWindowUnlisteners) unlisten();
     nativeWindowUnlisteners = [];
     unsubscribe();
@@ -1062,14 +1485,7 @@ export function syncNativeViewportCamera(
   lastCameraKey = key;
   window.dispatchEvent(new CustomEvent('nbcad:camera-change'));
   pendingCamera = next;
-  if (pendingCameraFrame !== 0) return;
-  pendingCameraFrame = requestAnimationFrame(() => {
-    pendingCameraFrame = 0;
-    const cameraState = pendingCamera;
-    pendingCamera = null;
-    if (!cameraState) return;
-    void invoke('native_viewport_set_camera', { camera: cameraState }).catch(() => undefined);
-  });
+  pumpCamera();
 }
 
 export async function pickNativeViewport(

@@ -4,7 +4,7 @@ use bevy::{
     light::{NotShadowCaster, NotShadowReceiver},
     mesh::Indices,
     prelude::*,
-    render::render_resource::PrimitiveTopology,
+    render::{render_resource::PrimitiveTopology, RenderPlugin},
     window::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
         WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
@@ -50,18 +50,33 @@ use std::{
 use std::{num::NonZeroIsize, sync::OnceLock};
 use tauri::Manager;
 #[cfg(target_os = "windows")]
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
+#[cfg(target_os = "windows")]
+use windows_core_webview2::PCWSTR;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::{
-    Foundation::{GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{
+        GetLastError, ERROR_CLASS_ALREADY_EXISTS, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    },
     Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, ScreenToClient, SetWindowRgn,
+        RGN_DIFF,
     },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         HiDpi::GetDpiForWindow,
+        Input::KeyboardAndMouse::{
+            GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+            VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        },
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, GetParent, RegisterClassW, SetWindowPos, ShowWindow,
-            CS_OWNDC, HTTRANSPARENT, HWND_TOP, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
-            SW_HIDE, SW_SHOWNA, WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
+            CreateWindowExW, DefWindowProcW, GetClientRect, GetParent, GetWindowLongPtrW,
+            RegisterClassW, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_DBLCLKS, CS_OWNDC,
+            GWLP_USERDATA, HTCLIENT, HWND_TOP, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_SHOWWINDOW,
+            SW_HIDE, SW_SHOWNA, WM_CANCELMODE, WM_CAPTURECHANGED, WM_ERASEBKGND, WM_LBUTTONDBLCLK,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
+            WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCHITTEST,
+            WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
             WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_NOPARENTNOTIFY,
         },
     },
@@ -222,14 +237,22 @@ impl PlatformNativeViewport {
                 #[cfg(target_os = "windows")]
                 let result = unsafe {
                     let controller = platform.controller();
+                    let core_webview = controller.CoreWebView2().map_err(|error| {
+                        format!("WebView2 did not expose its page interface: {error}")
+                    });
                     let mut webview_hwnd = Default::default();
                     controller
                         .ParentWindow(&mut webview_hwnd)
                         .map_err(|error| {
                             format!("WebView2 did not expose its container HWND: {error}")
                         })
-                        .and_then(|_| {
-                            install_native_views(webview_hwnd.0, install_pointers.clone())
+                        .and_then(|_| core_webview)
+                        .and_then(|core_webview| {
+                            install_native_views(
+                                webview_hwnd.0,
+                                install_pointers.clone(),
+                                core_webview,
+                            )
                         })
                 };
 
@@ -737,6 +760,147 @@ fn dom_rect_to_content_rect(
 static WINDOWS_VIEWPORT_CLASS: OnceLock<Result<(), u32>> = OnceLock::new();
 
 #[cfg(target_os = "windows")]
+const WINDOWS_WM_MOUSELEAVE: u32 = 0x02A3;
+#[cfg(target_os = "windows")]
+const WINDOWS_INPUT_PREFIX: &str = "__nbcad_native_input__|";
+
+#[cfg(target_os = "windows")]
+struct WindowsInputBridge {
+    webview: ICoreWebView2,
+    tracking_mouse_leave: bool,
+    last_x: i32,
+    last_y: i32,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsInputBridge {
+    fn post(
+        &self,
+        kind: char,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        button: i32,
+        buttons: u32,
+        delta: i32,
+    ) {
+        let payload = format!(
+            "{WINDOWS_INPUT_PREFIX}{kind}|{x}|{y}|{width}|{height}|{button}|{buttons}|{}|{delta}",
+            windows_input_modifiers()
+        );
+        let wide = payload
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        if let Err(error) = unsafe { self.webview.PostWebMessageAsString(PCWSTR(wide.as_ptr())) } {
+            if std::env::var_os("NBCAD_NATIVE_INPUT_DEBUG").is_some() {
+                eprintln!("native viewport input bridge failed: {error}");
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_input_modifiers() -> u32 {
+    let pressed = |key: u16| unsafe { GetKeyState(key as i32) } < 0;
+    u32::from(pressed(VK_SHIFT))
+        | (u32::from(pressed(VK_CONTROL)) << 1)
+        | (u32::from(pressed(VK_MENU)) << 2)
+        | (u32::from(pressed(VK_LWIN) || pressed(VK_RWIN)) << 3)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_dom_buttons(wparam: WPARAM) -> u32 {
+    let keys = wparam as u32;
+    u32::from(keys & 0x0001 != 0)
+        | (u32::from(keys & 0x0002 != 0) << 1)
+        | (u32::from(keys & 0x0010 != 0) << 2)
+        | (u32::from(keys & 0x0020 != 0) << 3)
+        | (u32::from(keys & 0x0040 != 0) << 4)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_lparam_point(lparam: LPARAM) -> POINT {
+    let packed = lparam as u32;
+    POINT {
+        x: packed as u16 as i16 as i32,
+        y: (packed >> 16) as u16 as i16 as i32,
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn post_windows_input(
+    hwnd: HWND,
+    kind: char,
+    point: POINT,
+    button: i32,
+    buttons: u32,
+    delta: i32,
+) {
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowsInputBridge;
+    if pointer.is_null() {
+        return;
+    }
+    let mut bounds = RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut bounds) } == 0 {
+        return;
+    }
+    let bridge = unsafe { &mut *pointer };
+    bridge.last_x = point.x;
+    bridge.last_y = point.y;
+    bridge.post(
+        kind,
+        point.x,
+        point.y,
+        (bounds.right - bounds.left).max(1),
+        (bounds.bottom - bounds.top).max(1),
+        button,
+        buttons,
+        delta,
+    );
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn post_windows_cancel(hwnd: HWND) {
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowsInputBridge;
+    if pointer.is_null() {
+        return;
+    }
+    let bridge = unsafe { &*pointer };
+    unsafe {
+        post_windows_input(
+            hwnd,
+            'c',
+            POINT {
+                x: bridge.last_x,
+                y: bridge.last_y,
+            },
+            -1,
+            0,
+            0,
+        )
+    };
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn begin_windows_mouse_leave_tracking(hwnd: HWND) {
+    let pointer = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowsInputBridge;
+    if pointer.is_null() || unsafe { &*pointer }.tracking_mouse_leave {
+        return;
+    }
+    let mut tracking = TRACKMOUSEEVENT {
+        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    if unsafe { TrackMouseEvent(&mut tracking) } != 0 {
+        unsafe { &mut *pointer }.tracking_mouse_leave = true;
+    }
+}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn windows_viewport_proc(
     hwnd: HWND,
     message: u32,
@@ -744,13 +908,120 @@ unsafe extern "system" fn windows_viewport_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        // Pointer input remains owned by the real DOM viewport behind this
-        // opaque render sibling. That preserves the React interaction kernel
-        // and accessibility tree without a transparent WebView2 surface.
-        WM_NCHITTEST => HTTRANSPARENT as LRESULT,
+        // WebView2's actual renderer HWND lives on another UI thread, so
+        // HTTRANSPARENT cannot walk from this sibling all the way to the DOM.
+        // Own the hit and relay it through CoreWebView2; the page dispatches it
+        // onto the existing transparent interaction surface.
+        WM_NCHITTEST => HTCLIENT as LRESULT,
+        WM_MOUSEMOVE => {
+            unsafe { begin_windows_mouse_leave_tracking(hwnd) };
+            unsafe {
+                post_windows_input(
+                    hwnd,
+                    'm',
+                    windows_lparam_point(lparam),
+                    -1,
+                    windows_dom_buttons(wparam),
+                    0,
+                )
+            };
+            0
+        }
+        WM_LBUTTONDOWN | WM_MBUTTONDOWN | WM_RBUTTONDOWN | WM_LBUTTONDBLCLK | WM_MBUTTONDBLCLK
+        | WM_RBUTTONDBLCLK => {
+            unsafe {
+                SetCapture(hwnd);
+            }
+            let button = match message {
+                WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => 0,
+                WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => 1,
+                _ => 2,
+            };
+            let kind = if matches!(
+                message,
+                WM_LBUTTONDBLCLK | WM_MBUTTONDBLCLK | WM_RBUTTONDBLCLK
+            ) {
+                'b'
+            } else {
+                'd'
+            };
+            unsafe {
+                post_windows_input(
+                    hwnd,
+                    kind,
+                    windows_lparam_point(lparam),
+                    button,
+                    windows_dom_buttons(wparam),
+                    0,
+                )
+            };
+            0
+        }
+        WM_LBUTTONUP | WM_MBUTTONUP | WM_RBUTTONUP => {
+            let button = match message {
+                WM_LBUTTONUP => 0,
+                WM_MBUTTONUP => 1,
+                _ => 2,
+            };
+            let buttons = windows_dom_buttons(wparam);
+            unsafe {
+                post_windows_input(hwnd, 'u', windows_lparam_point(lparam), button, buttons, 0)
+            };
+            if buttons == 0 {
+                unsafe {
+                    ReleaseCapture();
+                }
+            }
+            0
+        }
+        WM_MOUSEWHEEL => {
+            let mut point = windows_lparam_point(lparam);
+            unsafe {
+                ScreenToClient(hwnd, &mut point);
+            }
+            let delta = ((wparam >> 16) as u16 as i16) as i32;
+            unsafe {
+                post_windows_input(
+                    hwnd,
+                    'v',
+                    point,
+                    -1,
+                    windows_dom_buttons(wparam & 0xffff),
+                    delta,
+                )
+            };
+            0
+        }
+        // Wheel tilt is intentionally consumed. Only the center-wheel press
+        // participates in CAD navigation on Windows.
+        WM_MOUSEHWHEEL => 0,
+        WM_CANCELMODE | WM_CAPTURECHANGED => {
+            unsafe { post_windows_cancel(hwnd) };
+            0
+        }
+        WINDOWS_WM_MOUSELEAVE => {
+            let pointer =
+                unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowsInputBridge;
+            if !pointer.is_null() {
+                unsafe { &mut *pointer }.tracking_mouse_leave = false;
+            }
+            unsafe { post_windows_input(hwnd, 'l', POINT::default(), -1, 0, 0) };
+            0
+        }
         // The swapchain owns every visible pixel; suppress background erases
         // that would otherwise flash while resizing.
         WM_ERASEBKGND => 1,
+        WM_NCDESTROY => {
+            let pointer =
+                unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WindowsInputBridge;
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            if !pointer.is_null() {
+                drop(unsafe { Box::from_raw(pointer) });
+            }
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
 }
@@ -763,7 +1034,7 @@ fn register_windows_viewport_class() -> Result<(), String> {
             return Err(GetLastError());
         }
         let class = WNDCLASSW {
-            style: CS_OWNDC,
+            style: CS_OWNDC | CS_DBLCLKS,
             lpfnWndProc: Some(windows_viewport_proc),
             hInstance: module,
             lpszClassName: windows_sys::w!("noBS.CAD.BevyViewport"),
@@ -786,13 +1057,14 @@ fn register_windows_viewport_class() -> Result<(), String> {
 }
 
 /// Installs an opaque Win32 child above Wry's WebView2 container. Its window
-/// region is cut around DOM overlay islands, and `WM_NCHITTEST` passes pointer
-/// input through to WebView2. This avoids both transparent top-level windows
-/// and a transparent WebView2 compositor.
+/// region is cut around visible DOM overlay islands, while viewport input is
+/// relayed to the page through CoreWebView2. This avoids both transparent
+/// top-level windows and a transparent WebView2 compositor.
 #[cfg(target_os = "windows")]
 unsafe fn install_native_views(
     webview_pointer: *mut c_void,
     pointers: Arc<NativePointers>,
+    core_webview: ICoreWebView2,
 ) -> Result<(usize, f64), String> {
     if webview_pointer.is_null() {
         return Err("WebView2 returned a null container HWND".to_string());
@@ -832,6 +1104,19 @@ unsafe fn install_native_views(
             "could not create the native viewport HWND (Win32 error {})",
             unsafe { GetLastError() }
         ));
+    }
+    let input_bridge = Box::new(WindowsInputBridge {
+        webview: core_webview,
+        tracking_mouse_leave: false,
+        last_x: 0,
+        last_y: 0,
+    });
+    unsafe {
+        SetWindowLongPtrW(
+            viewport,
+            GWLP_USERDATA,
+            Box::into_raw(input_bridge) as isize,
+        );
     }
 
     pointers.webview.store(webview as usize, Ordering::Release);
@@ -1189,20 +1474,32 @@ struct CadSketchPointGizmos;
 
 fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
-    let plugins = DefaultPlugins.build().set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "noBS CAD embedded viewport".to_string(),
-            resolution: WindowResolution::new(INITIAL_PHYSICAL_SIZE, INITIAL_PHYSICAL_SIZE)
-                .with_scale_factor_override(scale_factor.max(1.0)),
-            visible: true,
-            present_mode: PresentMode::AutoNoVsync,
-            desired_maximum_frame_latency: NonZeroU32::new(2),
+    let plugins = DefaultPlugins
+        .build()
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "noBS CAD embedded viewport".to_string(),
+                resolution: WindowResolution::new(INITIAL_PHYSICAL_SIZE, INITIAL_PHYSICAL_SIZE)
+                    .with_scale_factor_override(scale_factor.max(1.0)),
+                visible: true,
+                present_mode: PresentMode::AutoNoVsync,
+                desired_maximum_frame_latency: NonZeroU32::new(2),
+                ..default()
+            }),
+            primary_cursor_options: None,
+            exit_condition: ExitCondition::DontExit,
+            close_when_requested: false,
+        })
+        .set(RenderPlugin {
+            // This renderer advances only in response to bridge commands. On
+            // Windows, asynchronously compiled PBR/UI pipelines can otherwise
+            // finish after the two-frame render burst and remain invisible
+            // until unrelated input happens to wake Bevy again. Blocking the
+            // pipeline queue keeps origin-plane fills and native HUD chrome
+            // deterministic. Bevy ignores this setting on macOS.
+            synchronous_pipeline_compilation: true,
             ..default()
-        }),
-        primary_cursor_options: None,
-        exit_condition: ExitCondition::DontExit,
-        close_when_requested: false,
-    });
+        });
     app.add_plugins(plugins)
         .init_gizmo_group::<CadHighlightGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
@@ -1312,6 +1609,7 @@ fn setup_scene(
         Name::new("CAD transient overlay camera"),
         NativeViewportCamera,
         NativeOverlayCamera,
+        IsDefaultUiCamera,
         Camera3d::default(),
         Camera {
             order: 1,
@@ -1534,8 +1832,10 @@ fn camera_relative_light_transforms(camera: ViewportCamera) -> (Transform, Trans
     let key_position = target + (view + right * 0.28).normalize() * rig_distance;
     let fill_position = target + (view - right * 0.28).normalize() * rig_distance;
     (
-        Transform::from_translation(key_position).looking_at(target, up_hint),
-        Transform::from_translation(fill_position).looking_at(target, up_hint),
+        Transform::from_translation(key_position)
+            .looking_at(target, stable_view_up(target - key_position, up_hint)),
+        Transform::from_translation(fill_position)
+            .looking_at(target, stable_view_up(target - fill_position, up_hint)),
     )
 }
 
@@ -1715,10 +2015,7 @@ fn rebuild_native_preview_meshes(
     mut commands: Commands,
     preview: Res<PreviewResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    existing: Query<
-        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
-        With<NativePreviewMesh>,
-    >,
+    existing: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<NativePreviewMesh>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -1917,7 +2214,7 @@ fn rebuild_native_annotations(
     palette: Res<PaletteResource>,
     mut revisions: ResMut<RenderedRevisions>,
     existing: Query<Entity, With<NativeAnnotationRoot>>,
-    cameras: Query<Entity, With<NativeCadCamera>>,
+    cameras: Query<Entity, With<NativeOverlayCamera>>,
 ) {
     if revisions.annotations == preview.revision {
         return;
@@ -1992,7 +2289,7 @@ fn rebuild_native_hud(
     assets: Res<ViewportUiAssets>,
     mut revisions: ResMut<RenderedRevisions>,
     existing: Query<Entity, With<NativeHudRoot>>,
-    cameras: Query<Entity, With<NativeCadCamera>>,
+    cameras: Query<Entity, With<NativeOverlayCamera>>,
 ) {
     if revisions.hud == hud.revision {
         return;
@@ -2016,14 +2313,33 @@ fn update_native_hud_orientation(
 ) {
     ui::update_orientation_nodes(camera.camera, &mut marks, &mut labels);
 }
+
+fn stable_view_up(direction: Vec3, up_hint: Vec3) -> Vec3 {
+    let forward = direction.normalize_or_zero();
+    if !forward.is_finite() || forward.length_squared() < 1.0e-8 {
+        return Vec3::Z;
+    }
+
+    // Gram-Schmidt removes any component parallel to the view direction.
+    // This remains valid at the exact top/bottom angles where a fixed Z-up
+    // fallback would still be parallel and produce a degenerate transform.
+    let mut up = up_hint.normalize_or_zero();
+    up -= forward * up.dot(forward);
+    if !up.is_finite() || up.length_squared() < 1.0e-8 {
+        forward.any_orthonormal_vector()
+    } else {
+        up.normalize()
+    }
+}
+
 fn camera_transform(camera: ViewportCamera) -> Transform {
     let position = Vec3::from_array(camera.position);
-    let target = Vec3::from_array(camera.target);
-    let mut up = Vec3::from_array(camera.up).normalize_or_zero();
-    let forward = (target - position).normalize_or_zero();
-    if up == Vec3::ZERO || forward.cross(up).length_squared() < 1.0e-6 {
-        up = Vec3::Z;
+    let mut target = Vec3::from_array(camera.target);
+    let direction = target - position;
+    if !direction.is_finite() || direction.length_squared() < 1.0e-8 {
+        target = position + Vec3::NEG_Z;
     }
+    let up = stable_view_up(target - position, Vec3::from_array(camera.up));
     Transform::from_translation(position).looking_at(target, up)
 }
 
@@ -2963,6 +3279,12 @@ fn drain_render_commands(
                 pending.presentation.take(),
             )
         };
+        let requires_pipeline_settle = cfg!(target_os = "macos")
+            || commands.0.is_some()
+            || commands.1.is_some()
+            || !commands.2.is_empty()
+            || !commands.3.is_empty()
+            || commands.5.is_some();
 
         if let Ok(mut current) = metrics.lock() {
             current.wakeups += 1;
@@ -3021,9 +3343,17 @@ fn drain_render_commands(
             );
         }
         if dirty {
-            // Two updates account for Bevy's extracted/pipelined render world.
-            // With no queued changes there is no timer and no idle render loop.
-            render_frames(&mut runtime.app, 2, metrics);
+            // Structural changes get a second update to settle Bevy's
+            // extracted/pipelined render world. macOS keeps the established
+            // two-update behavior because synchronous pipeline compilation is
+            // unavailable there. Camera/style updates use one frame only on
+            // Windows, where a second frame blocks WebView2's UI thread and
+            // halves interactive frame rate on integrated GPUs.
+            render_frames(
+                &mut runtime.app,
+                if requires_pipeline_settle { 2 } else { 1 },
+                metrics,
+            );
             maybe_write_ready_probe(metrics);
         }
     }
@@ -3432,6 +3762,26 @@ mod tests {
         let (rotated_key, rotated_fill) = camera_relative_light_transforms(rotated);
         assert_ne!(key.translation, rotated_key.translation);
         assert_ne!(fill.translation, rotated_fill.translation);
+    }
+
+    #[test]
+    fn camera_transform_stays_finite_at_up_axis_alignment() {
+        for position in [[0.0, 0.0, -25.0], [0.0, 0.0, 25.0]] {
+            let transform = camera_transform(ViewportCamera {
+                position,
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 0.0, 1.0],
+                ..ViewportCamera::default()
+            });
+            assert!(
+                transform
+                    .to_matrix()
+                    .to_cols_array()
+                    .iter()
+                    .all(|value| value.is_finite()),
+                "camera transform must remain finite at position {position:?}"
+            );
+        }
     }
 
     #[test]

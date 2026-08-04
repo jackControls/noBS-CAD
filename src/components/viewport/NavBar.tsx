@@ -23,6 +23,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { isTauriRuntime } from '../../engine';
 import { redoSketch, undoSketch } from '../../engine/controller';
 import {
   createSixDofMouseController,
@@ -74,12 +75,22 @@ export function NavBar({
     );
     sixDofMouseRef.current = controller;
     if (controller.supported) {
-      // Native and previously authorized raw-HID devices may reconnect here,
-      // but browser startup must never fetch the optional hosted bridge.
-      void controller.connect({
-        requestPermission: false,
-        allowDriverBridge: false,
-      });
+      const windowsDesktop =
+        isTauriRuntime() && /Windows/i.test(navigator.userAgent);
+      if (windowsDesktop) {
+        // Do not touch hardware on Windows startup. All motion paths remain
+        // inert until the user deliberately clicks the connection button.
+        setSixDofMouseStatus({
+          state: 'disconnected',
+          message: 'Click to connect the 3D mouse through 3DxWare.',
+        });
+      } else {
+        // Browsers may reconnect an already authorized raw-HID device.
+        void controller.connect({
+          requestPermission: false,
+          allowDriverBridge: false,
+        });
+      }
     }
     else {
       setSixDofMouseStatus({
@@ -181,7 +192,10 @@ export function NavBar({
         data-testid="six-dof-mouse-connect"
         title={sixDofMouseStatus.message}
         aria-label={sixDofMouseStatus.message}
-        disabled={sixDofMouseStatus.state === 'unsupported'}
+        disabled={
+          sixDofMouseStatus.state === 'unsupported' ||
+          sixDofMouseStatus.state === 'connecting'
+        }
         onClick={() => {
           const controller = sixDofMouseRef.current;
           if (!controller) return;

@@ -99,7 +99,12 @@ export function OrientationDial({
   const beginOrbit = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // The native Windows viewport owns OS capture while its WebView message
+      // adapter supplies the matching pointermove/pointerup events.
+    }
   };
 
   const orbit = (event: ReactPointerEvent<SVGSVGElement>) => {

@@ -1710,6 +1710,30 @@ type OrbitEvent = { type: 'change' };
 type OrbitListener = (event: OrbitEvent) => void;
 
 /**
+ * Bound one absolute-pointer sample before it reaches camera math. Native
+ * capture can occasionally resume with a stale screen coordinate after a
+ * focus, DPI, or window-layout change. A normal fast drag is limited to one
+ * useful viewport step; a much larger discontinuity is treated as a new
+ * anchor instead of rotating or panning the model across the scene.
+ */
+export function boundedPointerDelta(
+  dx: number,
+  dy: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): [number, number] | null {
+  if (![dx, dy, viewportWidth, viewportHeight].every(Number.isFinite)) return null;
+  const magnitude = Math.hypot(dx, dy);
+  if (magnitude === 0) return [0, 0];
+  const viewportExtent = Math.max(1, viewportWidth, viewportHeight);
+  const limit = Math.max(48, Math.min(160, viewportExtent * 0.2));
+  if (magnitude > limit * 3) return null;
+  if (magnitude <= limit) return [dx, dy];
+  const scale = limit / magnitude;
+  return [dx * scale, dy * scale];
+}
+
+/**
  * CAD orbit controller with the existing mouse mapping:
  * right/Shift-middle orbit, middle pan. Wheel handling remains in Viewport so
  * trackpad classification and product-specific zoom behavior stay unchanged.
@@ -1743,6 +1767,7 @@ export class CadOrbitControls {
     element.addEventListener('pointermove', this.onPointerMove);
     element.addEventListener('pointerup', this.onPointerUp);
     element.addEventListener('pointercancel', this.onPointerUp);
+    window.addEventListener('blur', this.onWindowBlur);
   }
 
   addEventListener(type: 'change', listener: OrbitListener): void {
@@ -1762,8 +1787,23 @@ export class CadOrbitControls {
     this.element.removeEventListener('pointermove', this.onPointerMove);
     this.element.removeEventListener('pointerup', this.onPointerUp);
     this.element.removeEventListener('pointercancel', this.onPointerUp);
+    window.removeEventListener('blur', this.onWindowBlur);
     this.listeners.clear();
+    this.cancelInteraction();
+  }
+
+  /** End a captured gesture without applying any final camera movement. */
+  cancelInteraction(): void {
+    const pointerId = this.drag?.pointerId;
     this.drag = null;
+    if (pointerId !== undefined && this.element.hasPointerCapture?.(pointerId)) {
+      try {
+        this.element.releasePointerCapture?.(pointerId);
+      } catch {
+        // Win32 capture may already have been released before WebView2 relays
+        // the cancellation into the DOM.
+      }
+    }
   }
 
   private emitChange(): void {
@@ -1788,17 +1828,31 @@ export class CadOrbitControls {
       x: event.clientX,
       y: event.clientY,
     };
-    this.element.setPointerCapture?.(event.pointerId);
+    try {
+      this.element.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Synthetic pointer input from the native Windows viewport already has
+      // Win32 capture and continues targeting this interaction surface.
+    }
     event.preventDefault();
   };
 
   private onPointerMove = (event: PointerEvent): void => {
     const drag = this.drag;
     if (!this.enabled || !drag || drag.pointerId !== event.pointerId) return;
-    const dx = event.clientX - drag.x;
-    const dy = event.clientY - drag.y;
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
+    const rawDx = event.clientX - drag.x;
+    const rawDy = event.clientY - drag.y;
     drag.x = event.clientX;
     drag.y = event.clientY;
+    const bounded = boundedPointerDelta(
+      rawDx,
+      rawDy,
+      this.element.clientWidth,
+      this.element.clientHeight,
+    );
+    if (!bounded) return;
+    const [dx, dy] = bounded;
     if (dx === 0 && dy === 0) return;
     if (drag.action === MOUSE.ROTATE) {
       orbitCamera(
@@ -1830,11 +1884,10 @@ export class CadOrbitControls {
 
   private onPointerUp = (event: PointerEvent): void => {
     if (!this.drag || this.drag.pointerId !== event.pointerId) return;
-    this.drag = null;
-    if (this.element.hasPointerCapture?.(event.pointerId)) {
-      this.element.releasePointerCapture?.(event.pointerId);
-    }
+    this.cancelInteraction();
   };
+
+  private onWindowBlur = (): void => this.cancelInteraction();
 }
 
 export function orbitCamera(

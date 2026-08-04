@@ -13,8 +13,13 @@ const pageErrors = [];
 page.on('pageerror', (error) => pageErrors.push(String(error)));
 
 try {
-  await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => !!window.__cameraApi);
+  await page.goto(BASE, {
+    waitUntil: 'domcontentloaded',
+    timeout: 90_000,
+  });
+  await page.waitForFunction(() => !!window.__cameraApi, undefined, {
+    timeout: 90_000,
+  });
 
   const result = await page.evaluate(async () => {
     const cad = await import('/src/components/viewport/cadInteraction.ts');
@@ -193,6 +198,11 @@ try {
         radiusBefore,
         1e-5,
       ) && orbitCamera.position.distanceTo(positionBefore) > 0.1;
+    const boundedFastDrag = cad.boundedPointerDelta(300, 0, 1280, 800);
+    const pointerJumpGuard =
+      boundedFastDrag !== null &&
+      approximately(Math.hypot(...boundedFastDrag), 160) &&
+      cad.boundedPointerDelta(2_000, -2_000, 1280, 800) === null;
 
     // Canonical camera-API axes use the documented object-mode convention:
     // +X right, +Y forward, +Z up. The camera moves oppositely so the part
@@ -240,6 +250,45 @@ try {
       translationZ.dot(baseUp) < 0 &&
       Math.abs(translationZ.dot(baseRight)) < 1e-5 &&
       Math.abs(translationZ.dot(baseForward)) < 1e-5;
+
+    // Windows depth input must dolly around a fixed target and remain on the
+    // safe side of it even under a long stream of maximum raw-HID packets.
+    // macOS intentionally retains its established translating-rig behavior.
+    let sixDofDepthGuard = true;
+    if (/Windows/i.test(navigator.userAgent)) {
+      resetLiveCamera();
+      for (let index = 0; index < 400; index += 1) {
+        liveCamera.navigateSixDof({
+          translation: [0, -1, 0],
+          rotation: [0, 0, 0],
+          deltaSeconds: 0.05,
+        });
+      }
+      const nearDepthSnapshot = liveCamera.getSnapshot();
+      const nearDepthDistance = new cad.Vector3(
+        ...nearDepthSnapshot.position,
+      ).distanceTo(new cad.Vector3(...nearDepthSnapshot.target));
+      for (let index = 0; index < 400; index += 1) {
+        liveCamera.navigateSixDof({
+          translation: [0, 1, 0],
+          rotation: [0, 0, 0],
+          deltaSeconds: 0.05,
+        });
+      }
+      const farDepthSnapshot = liveCamera.getSnapshot();
+      const farDepthDistance = new cad.Vector3(
+        ...farDepthSnapshot.position,
+      ).distanceTo(new cad.Vector3(...farDepthSnapshot.target));
+      sixDofDepthGuard =
+        nearDepthSnapshot.target.every((value, index) =>
+          approximately(value, baseTarget[index]),
+        ) &&
+        farDepthSnapshot.target.every((value, index) =>
+          approximately(value, baseTarget[index]),
+        ) &&
+        nearDepthDistance >= 2 - 1e-5 &&
+        farDepthDistance <= 5_000 + 1e-5;
+    }
     resetLiveCamera();
 
     // Transient preview geometry is transformed into Bevy's world coordinates.
@@ -375,12 +424,12 @@ try {
       '[data-testid="appearance-dialog"]',
     );
     const dialogBounds = dialog?.getBoundingClientRect();
+    const modalOverlayRects = nativeBridge.collectNativeViewportOverlayRects();
     const roundedModalCompositing =
       dialogBounds !== undefined &&
       dialogBounds !== null &&
       approximately(nativeBridge.collectNativeViewportDimOpacity(), 0.3) &&
-      nativeBridge
-        .collectNativeViewportOverlayRects()
+      modalOverlayRects
         .some(
           (rect) =>
             approximately(rect.x, dialogBounds.x) &&
@@ -402,7 +451,9 @@ try {
       sketchPlane,
       profileRay,
       orbit,
+      pointerJumpGuard,
       sixDofDirections,
+      sixDofDepthGuard,
       transientPreview,
       inputSurface,
       nativeHudProxies,
@@ -415,9 +466,7 @@ try {
     };
   });
 
-  assert.deepEqual(
-    result,
-    {
+  const expectedKernelResult = {
       projection: true,
       faceRay: true,
       edgeRay: true,
@@ -428,7 +477,9 @@ try {
       sketchPlane: true,
       profileRay: true,
       orbit: true,
+      pointerJumpGuard: true,
       sixDofDirections: true,
+      sixDofDepthGuard: true,
       transientPreview: true,
       inputSurface: true,
       nativeHudProxies: true,
@@ -438,9 +489,7 @@ try {
       nativeHudExcludedFromCompositor: true,
       roundedModalCompositing: true,
       escapeOwned: true,
-    },
-    `Three-free interaction proof failed: ${JSON.stringify(result)}`,
-  );
+  };
 
   await page.waitForFunction(
     () => window.__appStore?.getState().document !== null,
@@ -531,6 +580,9 @@ try {
   );
   await page.getByRole('button', { name: 'BUILD' }).click();
 
+  const preSketchCamera = await page.evaluate(() =>
+    window.__cameraApi.getSnapshot(),
+  );
   await page.locator('button[title="Create Sketch"]').click();
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'pickPlane',
@@ -613,6 +665,35 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'sketch',
   );
+  const compactRibbon = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="ribbon-tools"]');
+    const commands = document.querySelector(
+      '[data-testid="ribbon-command-scroll"]',
+    );
+    const fix = document.querySelector('[data-ribbon-button="fixUnfix"]');
+    const finish = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim().toLowerCase() === 'finish sketch',
+    );
+    if (!root || !commands || !fix || !finish) return null;
+    const rootRect = root.getBoundingClientRect();
+    const commandsRect = commands.getBoundingClientRect();
+    const fixRect = fix.getBoundingClientRect();
+    const finishRect = finish.getBoundingClientRect();
+    return {
+      overflow: commands.scrollWidth - commands.clientWidth,
+      fixFullyVisible:
+        fixRect.left >= commandsRect.left - 0.5 &&
+        fixRect.right <= commandsRect.right + 0.5,
+      finishFullyVisible:
+        finishRect.left >= rootRect.left - 0.5 &&
+        finishRect.right <= rootRect.right + 0.5,
+    };
+  });
+  assert.deepEqual(
+    compactRibbon,
+    { overflow: 0, fixFullyVisible: true, finishFullyVisible: true },
+    'the complete sketch ribbon must fit without clipping at 1280 px',
+  );
   await page.locator('button[title="Line"]').click();
   const sketchPaletteMask = await page.evaluate(async () => {
     const bridge = await import(
@@ -666,6 +747,49 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'solid',
   );
+  const windowsPlatform = await page.evaluate(() =>
+    /Windows/i.test(navigator.userAgent),
+  );
+  if (windowsPlatform) {
+    await page.evaluate(() => {
+      const surface = document.querySelector(
+        'canvas[data-cad-interaction-surface="true"]',
+      );
+      surface.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaX: 120,
+          deltaY: 0,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        }),
+      );
+      surface.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaX: 3,
+          deltaY: 0,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+        }),
+      );
+    });
+  }
+  await page.waitForTimeout(500);
+  const restoredCamera = await page.evaluate(() =>
+    window.__cameraApi.getSnapshot(),
+  );
+  const restoreError = Math.max(
+    ...['position', 'target', 'up'].flatMap((key) =>
+      restoredCamera[key].map((value, index) =>
+        Math.abs(value - preSketchCamera[key][index]),
+      ),
+    ),
+  );
+  assert.ok(
+    restoreError < 1e-5,
+    `wheel tilt interrupted the sketch-exit camera restore (${restoreError})`,
+  );
   const finishedSketch = await page.evaluate(() => {
     const visit = (nodes) => {
       for (const node of nodes) {
@@ -701,6 +825,11 @@ try {
     'the browser eye toggle must hide the same finished sketch in Bevy',
   );
 
+  assert.deepEqual(
+    result,
+    expectedKernelResult,
+    `Three-free interaction proof failed: ${JSON.stringify(result)}`,
+  );
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   console.log(
     '  [ok] projection, viewport-relative planes, forgiving hover, rounded DOM islands, synchronized modal dimming, complete menus and palette, Bevy sketch visibility, Escape ownership, orbit, sketch mapping, and Bevy preview transport',

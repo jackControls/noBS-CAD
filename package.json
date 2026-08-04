@@ -14,6 +14,7 @@
   },
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "dev": "vite",
     "dev:bevy-ui:capture": "node scripts/capture-bevy-ui.mjs",
     "build": "tsc && vite build",

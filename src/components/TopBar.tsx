@@ -89,7 +89,7 @@ export function AppMenuControls() {
             aria-expanded={menuOpen}
             disabled={interactionBusy}
             onClick={() => setMenuOpen((open) => !open)}
-            className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-50"
+            className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-50 max-[1400px]:w-10"
           >
             <div
               data-testid="product-mark"
@@ -200,7 +200,7 @@ export function AppMenuControls() {
           aria-label={t('topbar.newDesign')}
           disabled={interactionBusy}
           onClick={() => run(newProject)}
-          className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50"
+          className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50 max-[1400px]:w-10"
         >
           <Plus size={22} />
           <span className="text-[9px] leading-tight">{t('file.new')}</span>

@@ -8,6 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -16,6 +17,8 @@ const CURRENT_VENDOR_ID: u16 = 0x256f;
 const LEGACY_VENDOR_ID: u16 = 0x046d;
 const GENERIC_DESKTOP_USAGE_PAGE: u16 = 0x01;
 const MULTI_AXIS_CONTROLLER_USAGE: u16 = 0x08;
+const RAW_HID_EMIT_INTERVAL: Duration = Duration::from_millis(16);
+const RAW_HID_READ_TIMEOUT_MS: i32 = 8;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SixDofMouseInfo {
@@ -180,55 +183,67 @@ pub async fn six_dof_mouse_connect(
         .spawn(move || {
             let mut buffer = [0_u8; 64];
             let mut previous_buttons = 0_u32;
+            let mut pending_translation = None;
+            let mut pending_rotation = None;
+            let mut last_motion_emit = Instant::now()
+                .checked_sub(RAW_HID_EMIT_INTERVAL)
+                .unwrap_or_else(Instant::now);
             while !worker_stop.load(Ordering::Relaxed) {
-                let length = match device.read_timeout(&mut buffer, 25) {
+                let length = match device.read_timeout(&mut buffer, RAW_HID_READ_TIMEOUT_MS) {
                     Ok(length) => length,
                     Err(error) => {
                         let _ = app.emit("six-dof-mouse-error", error.to_string());
                         break;
                     }
                 };
-                if length < 2 {
-                    continue;
-                }
-                let report_id = buffer[0];
-                let data = &buffer[1..length];
-                match report_id {
-                    1 => {
-                        let _ = app.emit(
-                            "six-dof-mouse-motion",
-                            MotionPacket {
-                                translation: vector(data, 0),
-                                rotation: vector(data, 6),
-                            },
-                        );
-                    }
-                    2 => {
-                        let _ = app.emit(
-                            "six-dof-mouse-motion",
-                            MotionPacket {
-                                translation: None,
-                                rotation: vector(data, 0),
-                            },
-                        );
-                    }
-                    3 => {
-                        let mut bytes = [0_u8; 4];
-                        let count = data.len().min(bytes.len());
-                        bytes[..count].copy_from_slice(&data[..count]);
-                        let buttons = u32::from_le_bytes(bytes);
-                        let newly_pressed = buttons & !previous_buttons;
-                        previous_buttons = buttons;
-                        for index in 0..32 {
-                            if newly_pressed & (1 << index) != 0 {
-                                let _ = app.emit(
-                                    "six-dof-mouse-button",
-                                    ButtonPacket { button: index + 1 },
-                                );
+                if length >= 2 {
+                    let report_id = buffer[0];
+                    let data = &buffer[1..length];
+                    match report_id {
+                        1 => {
+                            if let Some(translation) = vector(data, 0) {
+                                pending_translation = Some(translation);
+                            }
+                            if let Some(rotation) = vector(data, 6) {
+                                pending_rotation = Some(rotation);
                             }
                         }
+                        2 => {
+                            if let Some(rotation) = vector(data, 0) {
+                                pending_rotation = Some(rotation);
+                            }
+                        }
+                        3 => {
+                            let mut bytes = [0_u8; 4];
+                            let count = data.len().min(bytes.len());
+                            bytes[..count].copy_from_slice(&data[..count]);
+                            let buttons = u32::from_le_bytes(bytes);
+                            let newly_pressed = buttons & !previous_buttons;
+                            previous_buttons = buttons;
+                            for index in 0..32 {
+                                if newly_pressed & (1 << index) != 0 {
+                                    let _ = app.emit(
+                                        "six-dof-mouse-button",
+                                        ButtonPacket { button: index + 1 },
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                }
+
+                if (pending_translation.is_some() || pending_rotation.is_some())
+                    && last_motion_emit.elapsed() >= RAW_HID_EMIT_INTERVAL
+                {
+                    let _ = app.emit(
+                        "six-dof-mouse-motion",
+                        MotionPacket {
+                            translation: pending_translation.take(),
+                            rotation: pending_rotation.take(),
+                        },
+                    );
+                    last_motion_emit = Instant::now();
                 }
             }
         })
