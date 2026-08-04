@@ -37,6 +37,7 @@
 |-----|-------|
 | [OCCT_PACKAGING.md](OCCT_PACKAGING.md) | Native OCCT |
 | [WINDOWS_PACKAGING.md](WINDOWS_PACKAGING.md) | Portable ZIP |
+| [WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md](WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md) | Windows Bevy/WebView2 field-debugging runbook |
 | [ICON_PROVENANCE.md](ICON_PROVENANCE.md) | Icons |
 
 > Editor-specific files (`AGENTS.md`, `.cursor/`) stay **gitignored** per project policy.

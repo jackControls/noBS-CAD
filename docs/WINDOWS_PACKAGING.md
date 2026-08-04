@@ -32,10 +32,13 @@ tree.
 Wry hosts WebView2 in one child HWND and noBS CAD creates the Bevy viewport as
 an adjacent child HWND. The Bevy window is placed above the viewport portion of
 WebView2, then its Win32 window region is cut around every live DOM overlay.
-`WM_NCHITTEST` passes viewport pointer input through to WebView2, so orbit,
-sketch, datum, edge, and transient-preview interactions use the same DOM event
-path as macOS without requiring a transparent Tauri window or transparent
-WebView2 compositor.
+The Bevy child owns viewport hits. `HTTRANSPARENT` cannot reliably pass input to
+WebView2's renderer because it can live on another UI thread. The child relays
+Win32 pointer and wheel messages through `ICoreWebView2::PostWebMessageAsString`,
+and the page reconstructs them on the existing DOM interaction surface. Orbit,
+sketch, datum, edge, and transient-preview interactions therefore retain the
+same frontend kernel as macOS without requiring a transparent Tauri window or
+transparent WebView2 compositor.
 
 DOM rectangles stay in logical CSS pixels. Each native layout update reads the
 current per-monitor Win32 DPI, positions the child window in physical pixels,
