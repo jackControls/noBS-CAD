@@ -10,7 +10,7 @@ use bevy::{
         WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
     },
 };
-use nbcad_core::PlaneBasis;
+use nbcad_core::{BodyAppearance, PlaneBasis};
 use nbcad_sketch::{EntityDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{
     BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto, SolidSceneDto,
@@ -283,6 +283,7 @@ impl PlatformNativeViewport {
                             finished_sketches: Vec::new(),
                             datum_planes: Vec::new(),
                             profile_catalog: Vec::new(),
+                            body_appearances: Vec::new(),
                         },
                         camera: ViewportCamera::default(),
                         logical_size: (1.0, 1.0),
@@ -453,7 +454,13 @@ impl PlatformNativeViewport {
         self.enqueue(RenderCommand::Presentation(presentation))
     }
 
-    pub fn pick(&self, x: f32, y: f32) -> Result<Option<NativePick>, String> {
+    pub fn pick(
+        &self,
+        x: f32,
+        y: f32,
+        camera: Option<ViewportCamera>,
+        logical_size: Option<(f32, f32)>,
+    ) -> Result<Option<NativePick>, String> {
         let started = Instant::now();
         let result = {
             let state = self
@@ -462,8 +469,8 @@ impl PlatformNativeViewport {
                 .map_err(|_| "native viewport pick state lock poisoned".to_string())?;
             pick_occt_scene(
                 &state.scene,
-                state.camera,
-                state.logical_size,
+                camera.unwrap_or(state.camera),
+                logical_size.unwrap_or(state.logical_size),
                 x,
                 y,
                 &state.hidden_body_ids,
@@ -1318,6 +1325,7 @@ struct ModelResource {
     finished_sketches: Vec<SketchDto>,
     datum_planes: Vec<DatumPlaneDefinitionDto>,
     profile_catalog: Vec<ProfileCatalogItemDto>,
+    body_appearances: Vec<BodyAppearance>,
     revision: u64,
 }
 
@@ -1395,7 +1403,9 @@ struct RenderedRevisions {
 }
 
 #[derive(Component)]
-struct NativeCadBody;
+struct NativeCadBody {
+    body_id: u64,
+}
 
 #[derive(Component)]
 struct NativeCadFace {
@@ -1403,6 +1413,9 @@ struct NativeCadFace {
     face_id: u64,
     boundary: Vec<(Vec3, Vec3)>,
 }
+
+#[derive(Component)]
+struct NativeCadFaceOverlay;
 
 #[derive(Component)]
 struct NativeModelGeometry {
@@ -1551,6 +1564,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
                 apply_camera,
                 resize_reference_planes,
                 apply_native_presentation_styles,
+                rebuild_native_face_overlays,
                 rebuild_native_preview_meshes,
                 update_native_preview_arrows,
                 rebuild_native_annotations,
@@ -1676,7 +1690,13 @@ fn rebuild_occt_meshes(
     model: Res<ModelResource>,
     mut revisions: ResMut<RenderedRevisions>,
     mut cache: ResMut<ModelGeometryCache>,
-    mut existing: Query<(Entity, &NativeModelGeometry, &mut Visibility)>,
+    mut existing: Query<(
+        Entity,
+        &NativeModelGeometry,
+        &mut Visibility,
+        Option<&Mesh3d>,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+    )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     palette: Res<PaletteResource>,
@@ -1686,9 +1706,15 @@ fn rebuild_occt_meshes(
     }
     revisions.model = model.revision;
 
-    for (entity, geometry, mut visibility) in &mut existing {
+    for (entity, geometry, mut visibility, mesh, material) in &mut existing {
         if geometry.session_id == model.session_id {
             if geometry.geometry_revision != model.geometry_revision {
+                if let Some(mesh) = mesh {
+                    meshes.remove(&mesh.0);
+                }
+                if let Some(material) = material {
+                    materials.remove(&material.0);
+                }
                 commands.entity(entity).despawn();
             }
         } else {
@@ -1704,16 +1730,30 @@ fn rebuild_occt_meshes(
         .insert(model.session_id.clone(), model.geometry_revision);
 
     for body in &model.scene.bodies {
+        if let Some(mesh) = body_mesh(body) {
+            commands.spawn((
+                Name::new(format!("OCCT body {} ({})", body.id.0, body.name)),
+                NativeCadBody { body_id: body.id.0 },
+                NativeModelGeometry {
+                    session_id: model.session_id.clone(),
+                    geometry_revision: model.geometry_revision,
+                },
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: body_appearance_color(&model, body.id.0, palette.0.body),
+                    metallic: 0.0,
+                    perceptual_roughness: 0.86,
+                    cull_mode: None,
+                    ..default()
+                })),
+            ));
+        }
         for face in &body.faces {
-            let Some(mesh) = face_mesh(body, face) else {
-                continue;
-            };
             commands.spawn((
                 Name::new(format!(
-                    "OCCT face {} on {} ({})",
+                    "OCCT face metadata {} on {} ({})",
                     face.id.0, body.id.0, body.name
                 )),
-                NativeCadBody,
                 NativeCadFace {
                     body_id: body.id.0,
                     face_id: face.id.0,
@@ -1723,14 +1763,7 @@ fn rebuild_occt_meshes(
                     session_id: model.session_id.clone(),
                     geometry_revision: model.geometry_revision,
                 },
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: rgb(palette.0.body),
-                    metallic: 0.0,
-                    perceptual_roughness: 0.86,
-                    cull_mode: None,
-                    ..default()
-                })),
+                Visibility::Inherited,
             ));
         }
     }
@@ -1900,14 +1933,19 @@ fn apply_native_presentation_styles(
     presentation: Res<PresentationResource>,
     palette: Res<PaletteResource>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut faces: Query<
+    mut bodies: Query<
         (
-            &NativeCadFace,
+            &NativeCadBody,
             &NativeModelGeometry,
             &MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
-        (Without<NativeDatumPlane>, Without<NativeOriginPlane>),
+        (
+            Without<NativeCadFace>,
+            Without<NativeCadFaceOverlay>,
+            Without<NativeDatumPlane>,
+            Without<NativeOriginPlane>,
+        ),
     >,
     mut datum_planes: Query<
         (
@@ -1928,12 +1966,12 @@ fn apply_native_presentation_styles(
     >,
 ) {
     let state = &presentation.0;
-    for (face, geometry, handle, mut visibility) in &mut faces {
+    for (body, geometry, handle, mut visibility) in &mut bodies {
         if geometry.session_id != model.session_id {
             *visibility = Visibility::Hidden;
             continue;
         }
-        *visibility = if state.hidden_body_ids.contains(&face.body_id) {
+        *visibility = if state.hidden_body_ids.contains(&body.body_id) {
             Visibility::Hidden
         } else {
             Visibility::Inherited
@@ -1941,28 +1979,22 @@ fn apply_native_presentation_styles(
         let Some(mut material) = materials.get_mut(&handle.0) else {
             continue;
         };
-        let selected_face = state.selected_face_ids.contains(&face.face_id);
-        let hovered_face = state.hovered_face_id == Some(face.face_id);
         let selected_body_index = state
             .selected_body_ids
             .iter()
-            .position(|body_id| *body_id == face.body_id);
-        let color = if selected_face {
-            palette.0.face_selected
-        } else if hovered_face {
-            palette.0.face_hover
-        } else if selected_body_index == Some(0) {
-            palette.0.body_selected
+            .position(|body_id| *body_id == body.body_id);
+        let color = if selected_body_index == Some(0) {
+            rgb(palette.0.body_selected)
         } else if selected_body_index.is_some() {
-            palette.0.body_tool
+            rgb(palette.0.body_tool)
         } else {
-            palette.0.body
+            body_appearance_color(&model, body.body_id, palette.0.body)
         };
-        material.base_color = rgb(color);
-        material.emissive = if selected_face || hovered_face {
-            rgb(color).to_linear() * 0.32
+        material.base_color = color;
+        material.emissive = if selected_body_index.is_some() {
+            color.to_linear() * 0.08
         } else {
-            rgb(color).to_linear() * 0.08
+            LinearRgba::BLACK
         };
     }
 
@@ -2005,6 +2037,87 @@ fn apply_native_presentation_styles(
             material.base_color =
                 origin_plane_color(plane.plane, if hovered { 0.28 } else { 0.10 });
         }
+    }
+}
+
+fn rebuild_native_face_overlays(
+    mut commands: Commands,
+    model: Res<ModelResource>,
+    presentation: Res<PresentationResource>,
+    palette: Res<PaletteResource>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    existing: Query<
+        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<NativeCadFaceOverlay>,
+    >,
+    mut last: Local<Option<(u64, ViewportPresentation, ViewportPalette)>>,
+) {
+    let next = (model.revision, presentation.0.clone(), palette.0);
+    if last.as_ref() == Some(&next) {
+        return;
+    }
+    *last = Some(next);
+
+    for (entity, mesh, material) in &existing {
+        meshes.remove(&mesh.0);
+        materials.remove(&material.0);
+        commands.entity(entity).despawn();
+    }
+
+    let state = &presentation.0;
+    let mut requested = state
+        .selected_face_ids
+        .iter()
+        .copied()
+        .map(|face_id| (face_id, true))
+        .collect::<Vec<_>>();
+    if let Some(face_id) = state.hovered_face_id {
+        if !state.selected_face_ids.contains(&face_id) {
+            requested.push((face_id, false));
+        }
+    }
+
+    for (face_id, selected) in requested {
+        let Some((body, face)) = model.scene.bodies.iter().find_map(|body| {
+            body.faces
+                .iter()
+                .find(|face| face.id.0 == face_id)
+                .map(|face| (body, face))
+        }) else {
+            continue;
+        };
+        if state.hidden_body_ids.contains(&body.id.0) {
+            continue;
+        }
+        let Some(mesh) = face_mesh(body, face) else {
+            continue;
+        };
+        let color = rgb(if selected {
+            palette.0.face_selected
+        } else {
+            palette.0.face_hover
+        });
+        commands.spawn((
+            Name::new(format!("OCCT face highlight {face_id}")),
+            NativeCadFaceOverlay,
+            NativeModelGeometry {
+                session_id: model.session_id.clone(),
+                geometry_revision: model.geometry_revision,
+            },
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color,
+                emissive: color.to_linear() * 0.32,
+                metallic: 0.0,
+                perceptual_roughness: 0.86,
+                cull_mode: None,
+                depth_bias: 1.0,
+                ..default()
+            })),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
     }
 }
 
@@ -2411,6 +2524,55 @@ fn reference_plane_mesh(basis: &PlaneBasis, half_size: f32) -> Mesh {
     );
     mesh.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     mesh
+}
+
+fn body_mesh(body: &BodyDto) -> Option<Mesh> {
+    if body.mesh.positions.len() < 9
+        || body.mesh.positions.len() % 3 != 0
+        || body.mesh.normals.len() != body.mesh.positions.len()
+        || body
+            .mesh
+            .indices
+            .iter()
+            .any(|index| (*index as usize) * 3 + 2 >= body.mesh.positions.len())
+    {
+        return None;
+    }
+    let positions = body
+        .mesh
+        .positions
+        .chunks_exact(3)
+        .map(|value| [value[0], value[1], value[2]])
+        .collect::<Vec<_>>();
+    let normals = body
+        .mesh
+        .normals
+        .chunks_exact(3)
+        .map(|value| [value[0], value[1], value[2]])
+        .collect::<Vec<_>>();
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(Indices::U32(body.mesh.indices.clone()));
+    Some(mesh)
+}
+
+fn body_appearance_color(model: &ModelResource, body_id: u64, fallback: [f32; 3]) -> Color {
+    let Some(appearance) = model
+        .body_appearances
+        .iter()
+        .find(|appearance| appearance.body_id.0 == body_id)
+    else {
+        return rgb(fallback);
+    };
+    Color::srgb(
+        f32::from(appearance.color.r) / 255.0,
+        f32::from(appearance.color.g) / 255.0,
+        f32::from(appearance.color.b) / 255.0,
+    )
 }
 
 fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
@@ -3440,6 +3602,7 @@ fn apply_render_command(
             resource.finished_sketches = runtime.model.finished_sketches.clone();
             resource.datum_planes = runtime.model.datum_planes.clone();
             resource.profile_catalog = runtime.model.profile_catalog.clone();
+            resource.body_appearances = runtime.model.body_appearances.clone();
             resource.revision = resource.revision.wrapping_add(1);
             if let Ok(mut current) = metrics.lock() {
                 current.body_count = runtime.model.scene.bodies.len();
@@ -3842,7 +4005,7 @@ mod tests {
         ));
         assert_engine_ok(state.engine_call("end_sketch", ""));
 
-        let (_, _, scene, _, _, datum_planes, profile_catalog) = state.viewport_snapshot();
+        let (_, _, scene, _, _, datum_planes, profile_catalog, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(datum_planes.len(), 2);
         assert!((datum_planes[1].basis.origin[2] - 10.0).abs() < 1.0e-9);
@@ -4202,7 +4365,7 @@ mod tests {
             }"#,
         );
 
-        let (_, _, scene, _, _, _, _) = state.viewport_snapshot();
+        let (_, _, scene, _, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(scene.bodies[0].mesh.indices.len(), 36);
         let hit = pick_occt_scene(
@@ -4238,15 +4401,60 @@ mod tests {
             .is_none(),
             "browser-hidden bodies must not remain pickable"
         );
-        for face in &scene.bodies[0].faces {
-            let mesh = face_mesh(&scene.bodies[0], face)
-                .expect("every OCCT face should become an independent Bevy mesh");
-            assert_eq!(
-                mesh.count_vertices(),
-                face.index_count as usize,
-                "per-face meshes preserve the OCCT tessellation range"
-            );
+        let mesh = body_mesh(&scene.bodies[0])
+            .expect("committed OCCT geometry should become one indexed Bevy mesh per body");
+        assert_eq!(
+            mesh.count_vertices(),
+            scene.bodies[0].mesh.positions.len() / 3
+        );
+        assert_eq!(
+            mesh.indices().expect("body mesh should stay indexed").len(),
+            scene.bodies[0].mesh.indices.len(),
+            "body batching must preserve the complete OCCT tessellation"
+        );
+        let overlay = face_mesh(&scene.bodies[0], &scene.bodies[0].faces[0])
+            .expect("a hovered or selected face can still create a transient overlay");
+        assert_eq!(
+            overlay.count_vertices(),
+            scene.bodies[0].faces[0].index_count as usize
+        );
+
+        let expected_face_count = scene.bodies[0].faces.len();
+        let mut render_app = App::new();
+        render_app
+            .init_resource::<ModelResource>()
+            .init_resource::<ModelGeometryCache>()
+            .init_resource::<RenderedRevisions>()
+            .init_resource::<PaletteResource>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, rebuild_occt_meshes);
+        {
+            let mut model = render_app.world_mut().resource_mut::<ModelResource>();
+            model.session_id = "batched-body-test".to_string();
+            model.geometry_revision = 1;
+            model.scene = scene.clone();
+            model.revision = 1;
         }
+        render_app.update();
+        let body_draws = {
+            let world = render_app.world_mut();
+            let mut query = world.query::<(&NativeCadBody, &Mesh3d)>();
+            query.iter(world).count()
+        };
+        let face_metadata = {
+            let world = render_app.world_mut();
+            let mut query = world.query::<(&NativeCadFace, Option<&Mesh3d>)>();
+            query
+                .iter(world)
+                .inspect(|(_, mesh)| assert!(mesh.is_none()))
+                .count()
+        };
+        assert_eq!(
+            body_draws, 1,
+            "one solid body should use one committed draw mesh"
+        );
+        assert_eq!(face_metadata, expected_face_count);
 
         let started = Instant::now();
         for _ in 0..10_000 {
@@ -4270,6 +4478,22 @@ mod tests {
             average_micros < 5_000.0,
             "native picking exceeded the demo's 5 ms CPU budget"
         );
+    }
+
+    #[test]
+    fn native_body_material_uses_the_document_appearance() {
+        let body_id = 73;
+        let mut appearance = BodyAppearance::default_for(nbcad_core::BodyId(body_id));
+        appearance.color = nbcad_core::Rgba8::opaque(12, 123, 240);
+        let model = ModelResource {
+            body_appearances: vec![appearance],
+            ..default()
+        };
+
+        let color = body_appearance_color(&model, body_id, [0.1, 0.2, 0.3]).to_srgba();
+        assert!((color.red - 12.0 / 255.0).abs() < 1.0e-6);
+        assert!((color.green - 123.0 / 255.0).abs() < 1.0e-6);
+        assert!((color.blue - 240.0 / 255.0).abs() < 1.0e-6);
     }
 
     #[test]
@@ -4306,6 +4530,7 @@ mod tests {
             finished_sketches,
             datum_planes,
             profile_catalog,
+            body_appearances,
         ) = state.viewport_snapshot();
         assert_eq!(session_id, BOOTSTRAP_SESSION_ID);
         let face_count = scene
@@ -4326,6 +4551,7 @@ mod tests {
             finished_sketches,
             datum_planes,
             profile_catalog,
+            body_appearances,
         };
         let mut app = App::new();
         app.init_resource::<ModelResource>()

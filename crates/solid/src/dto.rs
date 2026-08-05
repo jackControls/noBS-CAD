@@ -631,11 +631,18 @@ pub struct ExtrudeDefinitionDto {
     #[serde(default)]
     pub source_face: Option<PlanarFaceSourceDto>,
     /// Body-local OCCT topology label captured before this feature mutates
-    /// its target. It resolves the original exact TopoDS_Face on every replay.
+    /// its target. This ordinal is retained for diagnostics only; replay must
+    /// validate `source_face_signature` rather than trusting it.
     #[serde(default)]
     pub source_face_key: Option<String>,
+    /// Exact geometric/topological fingerprint captured with the face key.
+    /// OCCT face-map ordinals are only an acceleration hint: every replay
+    /// validates this signature and searches the body when the ordinal moved.
+    #[serde(default)]
+    pub source_face_signature: Option<PlanarFaceSignatureDto>,
     /// Creation-time plane cache bootstraps project reload before a fresh
-    /// kernel scene is available. The face key remains the modeling truth.
+    /// kernel scene is available. The validated signature remains the
+    /// modeling truth.
     #[serde(default)]
     pub source_face_basis: Option<PlaneBasis>,
     pub sketch_name: String,
@@ -1080,7 +1087,7 @@ pub struct KernelExtrudeJobDto {
     pub feature_id: FeatureId,
     pub operation: ExtrudeOperation,
     /// Exact B-rep face source. When set, `profiles` is empty and the OCCT
-    /// adapter resolves the original TopoDS_Face by body + topology key.
+    /// adapter resolves the unique face matching the validated signature.
     #[serde(default)]
     pub source_face: Option<KernelPlanarFaceSourceDto>,
     pub profiles: Vec<KernelProfileDto>,
@@ -1097,6 +1104,22 @@ pub struct KernelPlanarFaceSourceDto {
     pub body_id: BodyId,
     pub face_id: FaceId,
     pub face_key: String,
+    pub signature: PlanarFaceSignatureDto,
+}
+
+/// Cross-host fingerprint for an exact planar B-rep face. Values come from
+/// OCCT properties rather than display tessellation, so native and browser
+/// replay can validate the same project. This is deliberately conservative:
+/// an ambiguous or changed match is a broken reference, never an ordinal
+/// retarget to a different face.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PlanarFaceSignatureDto {
+    pub centroid: Point3Dto,
+    pub normal: Point3Dto,
+    pub area: f64,
+    pub perimeter: f64,
+    pub wire_count: u32,
+    pub edge_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1303,11 +1326,13 @@ pub struct RecomputePlanDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KernelFaceDto {
-    /// Backend-stable topology label (`face:0`, generated history key, ...).
+    /// Backend-local topology label used as a fast lookup hint.
     pub key: String,
     pub first_index: u32,
     pub index_count: u32,
     pub plane: Option<PlaneBasis>,
+    #[serde(default)]
+    pub signature: Option<PlanarFaceSignatureDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1363,6 +1388,8 @@ pub struct FaceDto {
     pub first_index: u32,
     pub index_count: u32,
     pub plane: Option<PlaneBasis>,
+    #[serde(default)]
+    pub signature: Option<PlanarFaceSignatureDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

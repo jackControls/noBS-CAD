@@ -39,6 +39,7 @@ import type {
   RecomputePlanDto,
   StepExportRequest,
   MeshExportRequest,
+  PlanarFaceSignatureDto,
 } from './types';
 import { translate } from '../i18n';
 
@@ -1361,6 +1362,75 @@ function selectedFaces(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
   }
 }
 
+function signatureScalarMatches(actual: number, expected: number): boolean {
+  const scale = Math.max(1, Math.abs(actual), Math.abs(expected));
+  return Math.abs(actual - expected) <= scale * 1e-6;
+}
+
+function planarFaceSignatureMatches(
+  actual: PlanarFaceSignatureDto | null,
+  expected: PlanarFaceSignatureDto,
+): boolean {
+  if (!actual) return false;
+  const centroidDistance = Math.hypot(
+    actual.centroid.x - expected.centroid.x,
+    actual.centroid.y - expected.centroid.y,
+    actual.centroid.z - expected.centroid.z,
+  );
+  const lengthScale = Math.max(1, Math.sqrt(Math.max(actual.area, 0)), actual.perimeter);
+  const expectedNormalLength = Math.hypot(
+    expected.normal.x,
+    expected.normal.y,
+    expected.normal.z,
+  );
+  if (expectedNormalLength <= 1e-12 || centroidDistance > lengthScale * 1e-6) {
+    return false;
+  }
+  const normalDot =
+    (actual.normal.x * expected.normal.x
+      + actual.normal.y * expected.normal.y
+      + actual.normal.z * expected.normal.z) / expectedNormalLength;
+  return normalDot >= 1 - 1e-7
+    && signatureScalarMatches(actual.area, expected.area)
+    && signatureScalarMatches(actual.perimeter, expected.perimeter)
+    && actual.wire_count === expected.wire_count
+    && actual.edge_count === expected.edge_count;
+}
+
+function resolvePlanarFaceReference(
+  oc: Oc,
+  shape: TopoDS_Shape,
+  expected: PlanarFaceSignatureDto,
+): TopoDS_Face {
+  const map = new oc.TopTools_IndexedMapOfShape_1();
+  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE as never, map);
+  const matches: TopoDS_Face[] = [];
+  try {
+    for (let index = 1; index <= map.Size(); index += 1) {
+      const raw = map.FindKey(index);
+      const face = oc.TopoDS.Face_1(raw);
+      raw.delete();
+      const plane = facePlane(oc, face);
+      const signature = planarFaceSignature(oc, face, plane);
+      if (planarFaceSignatureMatches(signature, expected)) {
+        matches.push(face);
+      } else {
+        face.delete();
+      }
+    }
+  } finally {
+    map.delete();
+  }
+  if (matches.length !== 1) {
+    matches.forEach((face) => face.delete());
+    if (matches.length === 0) {
+      throw new Error('Referenced Extrude source face changed or no longer exists');
+    }
+    throw new Error('Referenced Extrude source face is ambiguous after topology change');
+  }
+  return matches[0];
+}
+
 function applyShell(oc: Oc, target: TopoDS_Shape, job: KernelShellJobDto): TopoDS_Shape {
   if (job.face_keys.length === 0 || job.thickness <= 0) {
     throw new Error('Shell needs removable faces and a positive thickness');
@@ -1584,6 +1654,46 @@ function facePlane(oc: Oc, face: ReturnType<Oc['TopoDS']['Face_1']>): PlaneBasis
   }
 }
 
+function planarFaceSignature(
+  oc: Oc,
+  face: TopoDS_Face,
+  plane: PlaneBasis | null,
+): PlanarFaceSignatureDto | null {
+  if (!plane) return null;
+  const surface = new oc.GProp_GProps_1();
+  const boundary = new oc.GProp_GProps_1();
+  const wires = new oc.TopTools_IndexedMapOfShape_1();
+  const edges = new oc.TopTools_IndexedMapOfShape_1();
+  try {
+    oc.BRepGProp.SurfaceProperties_1(face, surface, false, false);
+    oc.BRepGProp.LinearProperties(face, boundary, false, false);
+    oc.TopExp.MapShapes_1(face, oc.TopAbs_ShapeEnum.TopAbs_WIRE as never, wires);
+    oc.TopExp.MapShapes_1(face, oc.TopAbs_ShapeEnum.TopAbs_EDGE as never, edges);
+    const center = surface.CentreOfMass();
+    try {
+      return {
+        centroid: readPoint(center),
+        normal: {
+          x: plane.normal[0],
+          y: plane.normal[1],
+          z: plane.normal[2],
+        },
+        area: Math.abs(surface.Mass()),
+        perimeter: Math.abs(boundary.Mass()),
+        wire_count: wires.Size(),
+        edge_count: edges.Size(),
+      };
+    } finally {
+      center.delete();
+    }
+  } finally {
+    edges.delete();
+    wires.delete();
+    boundary.delete();
+    surface.delete();
+  }
+}
+
 function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
   const mesher = new oc.BRepMesh_IncrementalMesh_2(shape, 0.15, false, 0.35, true);
   mesher.delete();
@@ -1639,11 +1749,13 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
     }
     handle.delete();
     location.delete();
+    const plane = facePlane(oc, face);
     faces.push({
       key: `face:${faceIndex - 1}`,
       first_index: firstIndex,
       index_count: indices.length - firstIndex,
-      plane: facePlane(oc, face),
+      plane,
+      signature: planarFaceSignature(oc, face, plane),
     });
     face.delete();
   }
@@ -1897,7 +2009,11 @@ export class BrowserOcctKernel {
             if (source) {
               const sourceBody = this.bodies.get(source.body_id);
               if (!sourceBody) throw new Error('Extrude source body is missing');
-              const [face] = selectedFaces(this.oc, sourceBody, [source.face_key]);
+              const face = resolvePlanarFaceReference(
+                this.oc,
+                sourceBody,
+                source.signature,
+              );
               try {
                 tools = [makeExactFaceTool(this.oc, operation.job, face)];
               } finally {

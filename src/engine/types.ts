@@ -369,6 +369,7 @@ export interface ExtrudeDefinitionDto extends ExtrudeRequest {
   feature_id: number;
   name: string;
   source_face_key?: string | null;
+  source_face_signature?: PlanarFaceSignatureDto | null;
   source_face_basis?: PlaneBasis | null;
   to_face_basis?: PlaneBasis | null;
   new_body_ids: number[];
@@ -732,6 +733,7 @@ export interface KernelExtrudeJobDto {
     body_id: number;
     face_id: number;
     face_key: string;
+    signature: PlanarFaceSignatureDto;
   } | null;
   profiles: KernelProfileDto[];
   normal: Point3Dto;
@@ -890,6 +892,16 @@ export interface KernelFaceDto {
   first_index: number;
   index_count: number;
   plane: PlaneBasis | null;
+  signature?: PlanarFaceSignatureDto | null;
+}
+
+export interface PlanarFaceSignatureDto {
+  centroid: Point3Dto;
+  normal: Point3Dto;
+  area: number;
+  perimeter: number;
+  wire_count: number;
+  edge_count: number;
 }
 
 export interface KernelEdgeDto {

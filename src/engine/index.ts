@@ -224,9 +224,16 @@ let enginePromise: Promise<Engine> | null = null;
 /** Lazily create the singleton engine for this runtime. */
 export function getEngine(): Promise<Engine> {
   if (!enginePromise) {
-    enginePromise = isTauriRuntime()
-      ? import('./tauri').then((m) => new m.TauriEngine())
-      : import('./wasm').then((m) => m.WasmEngine.create());
+    // Vite replaces MODE at build time. Keeping the desktop branch explicit
+    // lets Rollup remove the browser OCCT/Rust WASM graph from Tauri packages,
+    // while ordinary browser builds retain the convenient development host.
+    if (import.meta.env.MODE === 'desktop') {
+      enginePromise = import('./tauri').then((m) => new m.TauriEngine());
+    } else {
+      enginePromise = isTauriRuntime()
+        ? import('./tauri').then((m) => new m.TauriEngine())
+        : import('./wasm').then((m) => m.WasmEngine.create());
+    }
   }
   return enginePromise;
 }

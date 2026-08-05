@@ -20,6 +20,7 @@ pub mod ui;
 ))]
 pub mod ui_lab;
 
+use nbcad_core::BodyAppearance;
 use nbcad_sketch::SketchDto;
 use nbcad_solid::{DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
@@ -425,6 +426,7 @@ pub(crate) struct ViewportModel {
     pub finished_sketches: Vec<SketchDto>,
     pub datum_planes: Vec<DatumPlaneDefinitionDto>,
     pub profile_catalog: Vec<ProfileCatalogItemDto>,
+    pub body_appearances: Vec<BodyAppearance>,
 }
 
 pub struct NativeViewport {
@@ -537,15 +539,21 @@ impl NativeViewport {
         }
     }
 
-    pub fn pick(&self, x: f32, y: f32) -> Result<Option<NativePick>, String> {
+    pub fn pick(
+        &self,
+        x: f32,
+        y: f32,
+        camera: Option<ViewportCamera>,
+        logical_size: Option<(f32, f32)>,
+    ) -> Result<Option<NativePick>, String> {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            self.inner.pick(x, y)
+            self.inner.pick(x, y, camera, logical_size)
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            let _ = (x, y);
+            let _ = (x, y, camera, logical_size);
             Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }

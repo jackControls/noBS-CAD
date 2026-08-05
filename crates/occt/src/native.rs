@@ -23,6 +23,8 @@ mod ffi {
         /// Exact planar-face source. Zero / u32::MAX means sketch profiles.
         source_body_id: u64,
         source_face_index: u32,
+        /// centroid xyz, oriented normal xyz, area, perimeter, wires, edges.
+        source_face_signature: Vec<f64>,
         /// Prefix offsets into profile wires. Each region starts with its outer
         /// wire followed by zero or more inner (hole) wires.
         region_offsets: Vec<u32>,
@@ -88,6 +90,8 @@ mod ffi {
         face_index_counts: Vec<u32>,
         /// Per face: valid flag then origin/u/v/normal (13 f64 values).
         face_plane_data: Vec<f64>,
+        /// Per face: valid, centroid xyz, area, perimeter, wire count, edge count.
+        face_signature_data: Vec<f64>,
         /// Prefix offsets into `edge_points`, measured in 3D points.
         edge_point_offsets: Vec<u32>,
         /// Flat xyz edge polyline coordinates.
@@ -405,6 +409,7 @@ fn empty_ffi_job(feature_id: u64, kind: u8) -> ffi::FfiJob {
         profile_offsets: vec![0],
         source_body_id: 0,
         source_face_index: u32::MAX,
+        source_face_signature: Vec::new(),
         region_offsets: vec![0],
         curve_kinds: Vec::new(),
         curve_profile_offsets: vec![0],
@@ -502,6 +507,18 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                             face.face_key
                         ))
                     })?;
+                job.source_face_signature = vec![
+                    face.signature.centroid.x,
+                    face.signature.centroid.y,
+                    face.signature.centroid.z,
+                    face.signature.normal.x,
+                    face.signature.normal.y,
+                    face.signature.normal.z,
+                    face.signature.area,
+                    face.signature.perimeter,
+                    f64::from(face.signature.wire_count),
+                    f64::from(face.signature.edge_count),
+                ];
             }
             job.normal_x = source.normal.x;
             job.normal_y = source.normal.y;
@@ -816,6 +833,7 @@ fn combine_operation_code(operation: CombineOperation) -> u8 {
 fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
     if raw.face_first_indices.len() != raw.face_index_counts.len()
         || raw.face_plane_data.len() != raw.face_first_indices.len() * 13
+        || raw.face_signature_data.len() != raw.face_first_indices.len() * 8
     {
         return Err(OcctError(
             "OCCT bridge returned malformed face metadata".to_string(),
@@ -828,16 +846,31 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
         .enumerate()
         .map(|(index, (first_index, index_count))| {
             let data = &raw.face_plane_data[index * 13..(index + 1) * 13];
+            let signature = &raw.face_signature_data[index * 8..(index + 1) * 8];
             let point = |offset: usize| [data[offset], data[offset + 1], data[offset + 2]];
+            let signature_point = |offset: usize| Point3Dto {
+                x: signature[offset],
+                y: signature[offset + 1],
+                z: signature[offset + 2],
+            };
+            let plane = (data[0] != 0.0).then(|| nbcad_core::PlaneBasis {
+                origin: point(1),
+                u: point(4),
+                v: point(7),
+                normal: point(10),
+            });
             KernelFaceDto {
                 key: format!("face:{index}"),
                 first_index: *first_index,
                 index_count: *index_count,
-                plane: (data[0] != 0.0).then(|| nbcad_core::PlaneBasis {
-                    origin: point(1),
-                    u: point(4),
-                    v: point(7),
-                    normal: point(10),
+                plane,
+                signature: (signature[0] != 0.0).then(|| nbcad_solid::PlanarFaceSignatureDto {
+                    centroid: signature_point(1),
+                    normal: Point3Dto::from(plane.expect("signature requires plane").normal),
+                    area: signature[4],
+                    perimeter: signature[5],
+                    wire_count: signature[6].round().max(0.0) as u32,
+                    edge_count: signature[7].round().max(0.0) as u32,
                 }),
             }
         })
@@ -1452,19 +1485,24 @@ mod tests {
             })
             .expect("hollow body should expose a planar top face");
         let basis = source.plane.unwrap();
+        let signature = source.signature.expect("planar face signature");
         let scene = kernel
             .recompute(&RecomputePlanDto {
                 transaction_id: 2,
                 errors: Vec::new(),
                 jobs: vec![
-                    base_job,
+                    base_job.clone(),
                     KernelJobDto::Extrude(KernelExtrudeJobDto {
                         feature_id: FeatureId(3),
                         operation: ExtrudeOperation::NewBody,
                         source_face: Some(KernelPlanarFaceSourceDto {
                             body_id: BodyId(1),
                             face_id: FaceId(42),
-                            face_key: source.key.clone(),
+                            // The ordinal is deliberately wrong. It is only a
+                            // diagnostic hint; the exact BRep signature must
+                            // resolve the intended face after face reordering.
+                            face_key: "face:999".to_string(),
+                            signature,
                         }),
                         profiles: Vec::new(),
                         normal: basis.normal.into(),
@@ -1504,6 +1542,44 @@ mod tests {
                 );
             }
         }
+
+        let mut changed_signature = signature;
+        changed_signature.centroid.x += 1.0;
+        let broken_reference = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 3,
+                errors: Vec::new(),
+                jobs: vec![
+                    base_job,
+                    KernelJobDto::Extrude(KernelExtrudeJobDto {
+                        feature_id: FeatureId(3),
+                        operation: ExtrudeOperation::NewBody,
+                        source_face: Some(KernelPlanarFaceSourceDto {
+                            body_id: BodyId(1),
+                            face_id: FaceId(42),
+                            face_key: source.key.clone(),
+                            signature: changed_signature,
+                        }),
+                        profiles: Vec::new(),
+                        normal: basis.normal.into(),
+                        start_offset: 0.0,
+                        end_offset: 5.0,
+                        taper_angle_deg: 0.0,
+                        target_body_ids: Vec::new(),
+                        result_body_ids: vec![BodyId(2)],
+                    }),
+                ],
+            })
+            .unwrap();
+        assert_eq!(broken_reference.errors.len(), 1);
+        assert_eq!(broken_reference.errors[0].feature_id, FeatureId(3));
+        assert!(
+            broken_reference.errors[0]
+                .message
+                .contains("source face changed or no longer exists"),
+            "unexpected broken-reference diagnostic: {:?}",
+            broken_reference.errors
+        );
     }
 
     #[test]

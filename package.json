@@ -18,6 +18,7 @@
     "dev": "vite",
     "dev:bevy-ui:capture": "node scripts/capture-bevy-ui.mjs",
     "build": "tsc && vite build",
+    "build:desktop": "tsc && vite build --mode desktop && node scripts/verify-desktop-assets.mjs",
     "preview": "vite preview",
     "stage:occt": "node scripts/stage-occt-macos.mjs",
     "bundle:macos": "node scripts/bundle-macos.mjs",

@@ -94,6 +94,7 @@ async fn native_viewport_sync_model(
         finished_sketches,
         datum_planes,
         profile_catalog,
+        body_appearances,
     ) = engine.viewport_snapshot();
     viewport.sync_model(ViewportModel {
         session_id,
@@ -103,6 +104,7 @@ async fn native_viewport_sync_model(
         finished_sketches,
         datum_planes,
         profile_catalog,
+        body_appearances,
     })
 }
 
@@ -135,8 +137,12 @@ async fn native_viewport_pick(
     viewport: tauri::State<'_, NativeViewport>,
     x: f32,
     y: f32,
+    camera: Option<ViewportCamera>,
+    logical_width: Option<f32>,
+    logical_height: Option<f32>,
 ) -> Result<Option<NativePick>, String> {
-    viewport.pick(x, y)
+    let logical_size = logical_width.zip(logical_height);
+    viewport.pick(x, y, camera, logical_size)
 }
 
 #[tauri::command]
@@ -510,6 +516,7 @@ pub fn run() {
                 finished_sketches,
                 datum_planes,
                 profile_catalog,
+                body_appearances,
             ) = app.state::<AppState>().viewport_snapshot();
             let _ = viewport.sync_model(ViewportModel {
                 session_id,
@@ -519,6 +526,7 @@ pub fn run() {
                 finished_sketches,
                 datum_planes,
                 profile_catalog,
+                body_appearances,
             });
             app.manage(viewport);
             Ok(())

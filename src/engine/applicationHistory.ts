@@ -131,6 +131,14 @@ export function returnSolidRedoSnapshot(
   stack(projectKey).push(snapshot);
 }
 
+/** Permanently release one closed project's application-level history. Tab
+ * eviction intentionally does not call this because the project remains open. */
+export function dropApplicationHistory(projectKey: string): void {
+  const removedRedo = solidRedoByProject.delete(projectKey);
+  const removedGeneration = solidGenerationByProject.delete(projectKey);
+  if (removedRedo || removedGeneration) notify();
+}
+
 /** After one Redo, the next older snapshot is now valid against the restored
  * model even though that model has a fresh store generation. */
 export function authorizeNextSolidRedo(projectKey: string): void {

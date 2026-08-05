@@ -75,6 +75,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -1091,6 +1092,122 @@ void append_plane(rust::Vec<double>& output, const TopoDS_Face& face) {
   output.push_back(normal.Z());
 }
 
+struct PlanarFaceSignature {
+  bool valid = false;
+  gp_Pnt centroid;
+  gp_Dir normal;
+  double area = 0.0;
+  double perimeter = 0.0;
+  std::uint32_t wire_count = 0;
+  std::uint32_t edge_count = 0;
+};
+
+PlanarFaceSignature planar_face_signature(const TopoDS_Face& face) {
+  PlanarFaceSignature signature;
+  BRepAdaptor_Surface surface(face, true);
+  if (surface.GetType() != GeomAbs_Plane) {
+    return signature;
+  }
+
+  GProp_GProps surface_properties;
+  BRepGProp::SurfaceProperties(face, surface_properties, false, false);
+  GProp_GProps edge_properties;
+  BRepGProp::LinearProperties(face, edge_properties, false, false);
+  TopTools_IndexedMapOfShape wires;
+  TopTools_IndexedMapOfShape edges;
+  TopExp::MapShapes(face, TopAbs_WIRE, wires);
+  TopExp::MapShapes(face, TopAbs_EDGE, edges);
+
+  gp_Dir normal = surface.Plane().Position().Direction();
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  signature.valid = true;
+  signature.centroid = surface_properties.CentreOfMass();
+  signature.normal = normal;
+  signature.area = std::abs(surface_properties.Mass());
+  signature.perimeter = std::abs(edge_properties.Mass());
+  signature.wire_count = static_cast<std::uint32_t>(wires.Extent());
+  signature.edge_count = static_cast<std::uint32_t>(edges.Extent());
+  return signature;
+}
+
+void append_face_signature(rust::Vec<double>& output, const TopoDS_Face& face) {
+  const PlanarFaceSignature signature = planar_face_signature(face);
+  if (!signature.valid) {
+    for (int index = 0; index < 8; ++index) {
+      output.push_back(0.0);
+    }
+    return;
+  }
+  output.push_back(1.0);
+  append_point(output, signature.centroid);
+  output.push_back(signature.area);
+  output.push_back(signature.perimeter);
+  output.push_back(static_cast<double>(signature.wire_count));
+  output.push_back(static_cast<double>(signature.edge_count));
+}
+
+bool signature_scalar_matches(double actual, double expected) {
+  const double scale = std::max({1.0, std::abs(actual), std::abs(expected)});
+  return std::abs(actual - expected) <= scale * 1.0e-6;
+}
+
+bool planar_face_signature_matches(
+    const PlanarFaceSignature& actual,
+    const rust::Vec<double>& expected) {
+  if (!actual.valid || expected.size() != 10) {
+    return false;
+  }
+  const gp_Pnt expected_centroid(expected[0], expected[1], expected[2]);
+  const gp_Vec expected_normal(expected[3], expected[4], expected[5]);
+  if (expected_normal.SquareMagnitude() <= 1.0e-18) {
+    return false;
+  }
+  const double length_scale = std::max(
+      {1.0, std::sqrt(std::max(actual.area, 0.0)), actual.perimeter});
+  if (actual.centroid.Distance(expected_centroid) > length_scale * 1.0e-6) {
+    return false;
+  }
+  gp_Vec normalized_expected = expected_normal;
+  normalized_expected.Normalize();
+  if (gp_Vec(actual.normal).Dot(normalized_expected) < 1.0 - 1.0e-7) {
+    return false;
+  }
+  return signature_scalar_matches(actual.area, expected[6]) &&
+         signature_scalar_matches(actual.perimeter, expected[7]) &&
+         actual.wire_count == static_cast<std::uint32_t>(std::llround(expected[8])) &&
+         actual.edge_count == static_cast<std::uint32_t>(std::llround(expected[9]));
+}
+
+TopoDS_Face resolve_planar_face_reference(
+    const TopoDS_Shape& body,
+    const FfiJob& job) {
+  if (job.source_face_signature.size() != 10) {
+    throw std::runtime_error(
+        "Extrude source face has no validated topology signature; reselect it");
+  }
+  TopTools_IndexedMapOfShape faces;
+  TopExp::MapShapes(body, TopAbs_FACE, faces);
+  std::vector<TopoDS_Face> matches;
+  for (int index = 1; index <= faces.Extent(); ++index) {
+    const TopoDS_Face face = TopoDS::Face(faces.FindKey(index));
+    if (planar_face_signature_matches(
+            planar_face_signature(face), job.source_face_signature)) {
+      matches.push_back(face);
+    }
+  }
+  if (matches.empty()) {
+    throw std::runtime_error(
+        "referenced Extrude source face changed or no longer exists");
+  }
+  if (matches.size() != 1) {
+    throw std::runtime_error(
+        "referenced Extrude source face is ambiguous after topology change");
+  }
+  return matches.front();
+}
+
 }  // namespace
 
 class Kernel::Impl {
@@ -1485,13 +1602,11 @@ void Kernel::apply_job(const FfiJob& job) {
     if (source_body == impl_->bodies.end()) {
       throw std::runtime_error("Extrude source body is missing");
     }
-    TopTools_IndexedMapOfShape faces;
-    TopExp::MapShapes(source_body->second, TopAbs_FACE, faces);
-    if (job.source_face_index >= static_cast<std::uint32_t>(faces.Extent())) {
-      throw std::runtime_error("referenced Extrude source face no longer exists");
-    }
+    // `source_face_index` is only a legacy/debug hint. OCCT map ordering can
+    // change after an upstream edit, so resolve the unique exact signature and
+    // fail safely when the reference changed or became ambiguous.
     tools.push_back(make_exact_face_tool(
-        job, TopoDS::Face(faces.FindKey(job.source_face_index + 1))));
+        job, resolve_planar_face_reference(source_body->second, job)));
   } else {
     if (job.profile_offsets.size() < 2 ||
         job.profile_offsets[job.profile_offsets.size() - 1] * 3 !=
@@ -1652,6 +1767,7 @@ FfiMesh Kernel::mesh_with_deflection(
         static_cast<std::uint32_t>(output.indices.size()) -
         output.face_first_indices.back());
     append_plane(output.face_plane_data, face);
+    append_face_signature(output.face_signature_data, face);
   }
 
   output.edge_point_offsets.push_back(0);

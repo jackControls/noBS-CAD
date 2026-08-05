@@ -157,6 +157,13 @@ try {
           ?.getAttribute('title') ===
         '3D mouse connected through the installed driver.',
     );
+    // Production deliberately paints the green connected state one frame
+    // before enabling driver callbacks, so a cap displaced during the local
+    // handshake cannot jump the camera. Wait through that paint boundary
+    // before asserting post-connection motion.
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
     const afterConnect = await page.evaluate(() => window.__cameraApi.getSnapshot());
     assert.equal(
       await page.evaluate(() => window.__driverMock.preReadyMutationAttempted),

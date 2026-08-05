@@ -14,6 +14,7 @@ import type {
   SolidUpdateDto,
 } from '../engine/types';
 import { translate } from '../i18n';
+import { dropApplicationHistory } from '../engine/applicationHistory';
 import {
   useAppStore,
   type ProjectTabSummary,
@@ -342,6 +343,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
         await (await getEngine()).dropProjectSession(id);
       }
       runtimes.delete(id);
+      dropApplicationHistory(id);
       useAppStore.setState({
         projectTabs: state.projectTabs.filter((candidate) => candidate.id !== id),
       });
@@ -357,6 +359,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
         await (await getEngine()).dropProjectSession(id);
       }
       runtimes.delete(id);
+      dropApplicationHistory(id);
       useAppStore.setState((current) => ({
         projectTabs: current.projectTabs.filter(
           (candidate) => candidate.id !== id,
@@ -368,6 +371,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
     const engine = await getEngine();
     const update = await engine.newProject();
     const modelJson = await engine.exportProjectModel();
+    dropApplicationHistory(id);
     currentProjectTarget = null;
     runtimes.set(id, {
       modelJson,

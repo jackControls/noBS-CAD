@@ -194,6 +194,9 @@ let probeInFlight: Promise<boolean> | null = null;
 let active = false;
 let latestMetrics: NativeViewportMetrics | null = null;
 let pendingCamera: NativeCameraState | null = null;
+// Updated synchronously with the visible Three-compatible camera. Picks carry
+// this snapshot directly so they cannot race the coalesced render-camera IPC.
+let latestCamera: NativeCameraState | null = null;
 let cameraPumpQueued = false;
 let cameraInFlight = false;
 let lastCameraKey = '';
@@ -1273,7 +1276,8 @@ export function attachNativeViewport(container: HTMLElement): () => void {
       next.activeSketch !== previous.activeSketch ||
       next.finishedSketches !== previous.finishedSketches ||
       next.solidScene !== previous.solidScene ||
-      next.datumPlanes !== previous.datumPlanes
+      next.datumPlanes !== previous.datumPlanes ||
+      next.bodyAppearances !== previous.bodyAppearances
     ) {
       void syncModel().catch(() => undefined);
     }
@@ -1473,6 +1477,7 @@ export function syncNativeViewportCamera(
     up: camera.up.toArray() as [number, number, number],
     verticalFovDegrees: camera.fov,
   };
+  latestCamera = next;
   const key = [
     ...next.position,
     ...next.target,
@@ -1497,5 +1502,8 @@ export async function pickNativeViewport(
   return invoke<NativeViewportPick | null>('native_viewport_pick', {
     x: event.clientX - rect.left,
     y: event.clientY - rect.top,
+    camera: latestCamera,
+    logicalWidth: rect.width,
+    logicalHeight: rect.height,
   });
 }

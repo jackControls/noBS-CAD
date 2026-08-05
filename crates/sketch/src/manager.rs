@@ -3055,7 +3055,8 @@ mod project_tests {
     use nbcad_solid::{
         ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
         KernelCurveDto, KernelEdgeDto, KernelFaceDto, KernelJobDto, KernelSceneDto, LoftRequest,
-        Point3Dto, ProfileRefDto, ReorderFeatureRequest, RibRequest, SweepRequest,
+        PlanarFaceSignatureDto, Point3Dto, ProfileRefDto, ReorderFeatureRequest, RibRequest,
+        SweepRequest,
     };
 
     fn raw_body(body_id: BodyId, basis: nbcad_core::PlaneBasis) -> KernelBodyDto {
@@ -3069,6 +3070,18 @@ mod project_tests {
                 first_index: 0,
                 index_count: 3,
                 plane: Some(basis),
+                signature: Some(PlanarFaceSignatureDto {
+                    centroid: Point3Dto {
+                        x: 20.0 / 3.0,
+                        y: 10.0 / 3.0,
+                        z: 0.0,
+                    },
+                    normal: Point3Dto::from(basis.normal),
+                    area: 100.0,
+                    perimeter: 30.0 + 500.0_f64.sqrt(),
+                    wire_count: 1,
+                    edge_count: 3,
+                }),
             }],
             edges: vec![
                 KernelEdgeDto {

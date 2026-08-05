@@ -492,12 +492,13 @@ impl SolidDocument {
                 "Extrude cannot mix a planar face with sketch profiles".to_string(),
             ));
         }
-        let (source_face_key, source_face_basis) = match request.source_face {
+        let (source_face_key, source_face_basis, source_face_signature) = match request.source_face
+        {
             Some(source) => {
-                let (key, basis) = resolve_planar_face_source(&self.scene, source)?;
-                (Some(key), Some(basis))
+                let (key, basis, signature) = resolve_planar_face_source(&self.scene, source)?;
+                (Some(key), Some(basis), Some(signature))
             }
-            None => (None, None),
+            None => (None, None, None),
         };
         let count = if request.source_face.is_some() {
             1
@@ -516,6 +517,7 @@ impl SolidDocument {
             name: name.into(),
             source_face: request.source_face,
             source_face_key,
+            source_face_signature,
             source_face_basis,
             sketch_name: if request.source_face.is_some() {
                 String::new()
@@ -568,7 +570,8 @@ impl SolidDocument {
             .iter()
             .find(|definition| definition.feature_id == feature_id)
             .ok_or(SolidError::FeatureNotFound(feature_id))?;
-        let (source_face_key, source_face_basis) = match request.source_face {
+        let (source_face_key, source_face_basis, source_face_signature) = match request.source_face
+        {
             Some(source) if existing.source_face == Some(source) => (
                 existing.source_face_key.clone().or_else(|| {
                     resolve_planar_face_source(&self.scene, source)
@@ -580,12 +583,17 @@ impl SolidDocument {
                         .ok()
                         .map(|resolved| resolved.1)
                 }),
+                existing.source_face_signature.or_else(|| {
+                    resolve_planar_face_source(&self.scene, source)
+                        .ok()
+                        .map(|resolved| resolved.2)
+                }),
             ),
             Some(source) => {
-                let (key, basis) = resolve_planar_face_source(&self.scene, source)?;
-                (Some(key), Some(basis))
+                let (key, basis, signature) = resolve_planar_face_source(&self.scene, source)?;
+                (Some(key), Some(basis), Some(signature))
             }
-            None => (None, None),
+            None => (None, None, None),
         };
         let source_count = if request.source_face.is_some() {
             1
@@ -605,6 +613,7 @@ impl SolidDocument {
         definition.source_face = request.source_face;
         definition.source_face_key = source_face_key;
         definition.source_face_basis = source_face_basis;
+        definition.source_face_signature = source_face_signature;
         definition.sketch_name = if request.source_face.is_some() {
             String::new()
         } else {
@@ -1566,6 +1575,7 @@ impl SolidDocument {
                     first_index: face.first_index,
                     index_count: face.index_count,
                     plane: face.plane,
+                    signature: face.signature,
                 })
                 .collect();
             let edges = raw
@@ -1662,7 +1672,7 @@ impl SolidDocument {
         mut ribs: Vec<RibDefinitionDto>,
         mut fillets: Vec<SolidFilletDefinitionDto>,
         mut chamfers: Vec<SolidChamferDefinitionDto>,
-        mut holes: Vec<HoleDefinitionDto>,
+        holes: Vec<HoleDefinitionDto>,
         mut body_features: Vec<BodyFeatureDefinitionDto>,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
@@ -1671,7 +1681,7 @@ impl SolidDocument {
         self.next_transaction_id += 1;
         refresh_extent_references(&mut extrudes, &self.scene);
         refresh_rib_extent_references(&mut ribs, &self.scene);
-        refresh_refinement_references(&mut fillets, &mut chamfers, &mut holes, &self.scene);
+        refresh_refinement_references(&mut fillets, &mut chamfers, &self.scene);
         refresh_body_feature_references(&mut body_features, &self.scene);
 
         let mut solid_feature_ids = extrudes
@@ -1765,7 +1775,7 @@ impl SolidDocument {
         mut ribs: Vec<RibDefinitionDto>,
         mut fillets: Vec<SolidFilletDefinitionDto>,
         mut chamfers: Vec<SolidChamferDefinitionDto>,
-        mut holes: Vec<HoleDefinitionDto>,
+        holes: Vec<HoleDefinitionDto>,
         mut body_features: Vec<BodyFeatureDefinitionDto>,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
@@ -1774,7 +1784,7 @@ impl SolidDocument {
         self.next_transaction_id += 1;
         refresh_extent_references(&mut extrudes, &self.scene);
         refresh_rib_extent_references(&mut ribs, &self.scene);
-        refresh_refinement_references(&mut fillets, &mut chamfers, &mut holes, &self.scene);
+        refresh_refinement_references(&mut fillets, &mut chamfers, &self.scene);
         refresh_body_feature_references(&mut body_features, &self.scene);
         let jobs = make_jobs(
             &extrudes,
@@ -2084,6 +2094,12 @@ fn make_jobs(
                             definition.name
                         ))
                     })?;
+                    let signature = definition.source_face_signature.ok_or_else(|| {
+                        SolidError::InvalidHistory(format!(
+                            "{} has an unvalidated legacy face reference; reselect its Extrude source",
+                            definition.name
+                        ))
+                    })?;
                     let basis = definition
                         .source_face_basis
                         .or_else(|| {
@@ -2096,6 +2112,7 @@ fn make_jobs(
                             body_id: source.body_id,
                             face_id: source.face_id,
                             face_key,
+                            signature,
                         }),
                         basis,
                     )
@@ -3683,7 +3700,7 @@ fn face_keys_for(
 fn resolve_planar_face_source(
     scene: &SolidSceneDto,
     source: PlanarFaceSourceDto,
-) -> Result<(String, PlaneBasis), SolidError> {
+) -> Result<(String, PlaneBasis, PlanarFaceSignatureDto), SolidError> {
     let body = scene
         .bodies
         .iter()
@@ -3697,7 +3714,10 @@ fn resolve_planar_face_source(
     let basis = face.plane.ok_or_else(|| {
         SolidError::InvalidExtent("Extrude source face must be planar".to_string())
     })?;
-    Ok((face.key.clone(), basis))
+    let signature = face.signature.ok_or_else(|| {
+        SolidError::KernelContract("planar face is missing its OCCT signature".to_string())
+    })?;
+    Ok((face.key.clone(), basis, signature))
 }
 
 fn support_face_basis(
@@ -4007,7 +4027,6 @@ fn sketch_point_label(point: &SketchPointKindDto) -> String {
 fn refresh_refinement_references(
     fillets: &mut [SolidFilletDefinitionDto],
     chamfers: &mut [SolidChamferDefinitionDto],
-    holes: &mut [HoleDefinitionDto],
     scene: &SolidSceneDto,
 ) {
     for definition in fillets {
@@ -4020,17 +4039,10 @@ fn refresh_refinement_references(
             definition.edge_keys = keys;
         }
     }
-    for definition in holes {
-        // Associative positions are governed by their sketch reference. Do
-        // not replace their creation-time support plane from the result of
-        // the hole boolean, where transient face ordering may have changed.
-        if definition.position_reference.is_some() {
-            continue;
-        }
-        if let Ok(basis) = support_face_basis(scene, definition.body_id, definition.face_id) {
-            definition.face_basis = Some(basis);
-        }
-    }
+    // Hole support planes are intentionally not refreshed from the current
+    // result scene. Their selected face has already been consumed by the hole
+    // boolean, and its stable-id slot may now describe an unrelated face.
+    // Creation and explicit edit capture the authoritative support basis.
 }
 
 fn refresh_body_feature_references(
@@ -4497,6 +4509,103 @@ mod tests {
         assert_eq!(hole_job.direction, Point3Dto::from([0.0, 0.0, -1.0]));
     }
 
+    #[test]
+    fn direct_hole_keeps_its_creation_plane_when_the_result_reuses_the_face_id() {
+        let mut document = SolidDocument::new();
+        let extrude = document
+            .prepare_add(
+                FeatureId(2),
+                "Extrude1",
+                request(vec![0]),
+                &catalog(),
+                &active(&[1, 2]),
+            )
+            .unwrap();
+        let body_id = extrude_job(&extrude.jobs[0]).result_body_ids[0];
+        document
+            .commit(
+                extrude.transaction_id,
+                KernelSceneDto {
+                    bodies: vec![raw_body(body_id)],
+                    errors: Vec::new(),
+                },
+            )
+            .unwrap();
+        let face_id = document.scene().bodies[0].faces[0].id;
+        let creation_basis = document.scene().bodies[0].faces[0].plane.unwrap();
+        let hole = document
+            .prepare_add_hole(
+                FeatureId(3),
+                "Hole1",
+                HoleRequest {
+                    body_id,
+                    face_id,
+                    position: Point2Dto::new(2.0, 3.0),
+                    position_reference: None,
+                    positions: Vec::new(),
+                    diameter: 2.0,
+                    extent: HoleExtent::ThroughAll,
+                    style: HoleStyle::Simple,
+                    counterbore_diameter: 0.0,
+                    counterbore_depth: 0.0,
+                    countersink_diameter: 0.0,
+                    countersink_angle_deg: 90.0,
+                    bottom_style: HoleBottomStyle::Flat,
+                    drill_point_angle_deg: 118.0,
+                    thread: None,
+                    flip: false,
+                },
+                &catalog(),
+                &active(&[1, 2, 3]),
+            )
+            .unwrap();
+
+        let reused_face_basis = nbcad_core::PlaneRef::OriginPlane {
+            plane: OriginPlane::Xz,
+        }
+        .origin_basis()
+        .unwrap();
+        let mut post_boolean_body = raw_body(body_id);
+        post_boolean_body.faces[0].plane = Some(reused_face_basis);
+        document
+            .commit(
+                hole.transaction_id,
+                KernelSceneDto {
+                    bodies: vec![post_boolean_body],
+                    errors: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        let replay = document
+            .prepare_recompute(&catalog(), &active(&[1, 2, 3]))
+            .unwrap();
+        let hole_job = replay
+            .jobs
+            .iter()
+            .find_map(|job| match job {
+                KernelJobDto::Hole(job) => Some(job),
+                _ => None,
+            })
+            .expect("direct hole should remain plannable");
+        assert_eq!(
+            document.pending.as_ref().unwrap().holes[0].face_basis,
+            Some(creation_basis)
+        );
+        assert_eq!(
+            hole_job.center,
+            Point3Dto::from(creation_basis.to_3d([2.0, 3.0]))
+        );
+        assert_eq!(
+            hole_job.direction,
+            Point3Dto::from([
+                -creation_basis.normal[0],
+                -creation_basis.normal[1],
+                -creation_basis.normal[2],
+            ])
+        );
+    }
+
     fn request(indices: Vec<u32>) -> ExtrudeRequest {
         ExtrudeRequest {
             source_face: None,
@@ -4542,6 +4651,22 @@ mod tests {
                 first_index: 0,
                 index_count: 3,
                 plane: Some(catalog()[0].basis),
+                signature: Some(PlanarFaceSignatureDto {
+                    centroid: Point3Dto {
+                        x: 1.0 / 3.0,
+                        y: 1.0 / 3.0,
+                        z: 0.0,
+                    },
+                    normal: Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                    area: 0.5,
+                    perimeter: 2.0 + 2.0_f64.sqrt(),
+                    wire_count: 1,
+                    edge_count: 3,
+                }),
             }],
             edges: vec![],
         }
@@ -4604,7 +4729,7 @@ mod tests {
     }
 
     #[test]
-    fn planar_face_extrude_saves_stable_id_and_exact_occt_topology_key() {
+    fn planar_face_extrude_saves_stable_id_and_validated_occt_signature() {
         let mut doc = SolidDocument::new();
         let base = doc
             .prepare_add(
@@ -4625,6 +4750,7 @@ mod tests {
         )
         .unwrap();
         let source_face_id = doc.scene().bodies[0].faces[0].id;
+        let source_signature = doc.scene().bodies[0].faces[0].signature.unwrap();
         let face_request = ExtrudeRequest {
             source_face: Some(PlanarFaceSourceDto {
                 body_id: source_body_id,
@@ -4656,6 +4782,7 @@ mod tests {
                 body_id: source_body_id,
                 face_id: source_face_id,
                 face_key: "face:0".to_string(),
+                signature: source_signature,
             })
         );
         let definition = doc
@@ -4668,6 +4795,7 @@ mod tests {
             .unwrap();
         assert_eq!(definition.source_face.unwrap().face_id, source_face_id);
         assert_eq!(definition.source_face_key.as_deref(), Some("face:0"));
+        assert_eq!(definition.source_face_signature, Some(source_signature));
         assert_eq!(definition.source_face_basis, Some(catalog()[0].basis));
 
         let saved = serde_json::to_string(&doc.pending.as_ref().unwrap().extrudes).unwrap();
@@ -4679,6 +4807,7 @@ mod tests {
         let replay_face = extrude_job(&replay.jobs[1]).source_face.as_ref().unwrap();
         assert_eq!(replay_face.face_id, source_face_id);
         assert_eq!(replay_face.face_key, "face:0");
+        assert_eq!(replay_face.signature, source_signature);
     }
 
     #[test]
