@@ -137,6 +137,9 @@ Required invariant:
 - dolly distance remains bounded (currently 2 to 5000 model units);
 - the target must not cross behind the camera.
 
+This camera invariant is shared with macOS. Only the Windows transport and
+WebView2 input-delivery workarounds are platform-specific.
+
 For a model center `m`, camera position `p`, and target `t`, this quick check
 detects the blank-state geometry:
 

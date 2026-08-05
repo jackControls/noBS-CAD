@@ -270,8 +270,8 @@ export function Viewport() {
     const container = containerRef.current;
     if (!container) return;
     const detachNativeViewport = attachNativeViewport(container);
-    // Keep Windows device workarounds out of the known-good macOS gesture and
-    // SpaceMouse paths. WebView2 and Chromium retain "Windows" in their UA.
+    // Keep WebView2-specific wheel workarounds out of the macOS gesture path.
+    // WebView2 and Chromium retain "Windows" in their UA.
     const isWindowsPlatform = /Windows/i.test(navigator.userAgent);
 
     // DOM and Bevy consume the same theme tokens. Viewport is keyed by the
@@ -7086,21 +7086,18 @@ export function Viewport() {
         const forward = new CAD.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
 
         // Object-mode mapping: lateral cap motion pans the rig oppositely so
-        // the part follows the cap. Windows depth motion is a bounded dolly;
-        // translating its whole rig through a fixed model caused blank views.
+        // the part follows the cap. Depth motion dollies around the fixed
+        // target on every desktop platform; translating the entire rig through
+        // a stationary model makes the target drift and can carry the part
+        // behind the camera.
         const translationSpeed = distance * 0.9 * dt * speedMultiplier;
         const delta = new CAD.Vector3()
           .addScaledVector(right, -translation[0] * translationSpeed)
           .addScaledVector(up, -translation[2] * translationSpeed);
-        if (!isWindowsPlatform) {
-          // Preserve the established macOS object-mode behavior: depth input
-          // translates the camera rig rather than changing focus distance.
-          delta.addScaledVector(forward, -translation[1] * translationSpeed);
-        }
         camera.position.add(delta);
         controls.target.add(delta);
 
-        if (isWindowsPlatform && translation[1] !== 0) {
+        if (translation[1] !== 0) {
           const offset = camera.position.clone().sub(controls.target);
           if (offset.lengthSq() > 1e-12) {
             const nextDistance = CAD.MathUtils.clamp(

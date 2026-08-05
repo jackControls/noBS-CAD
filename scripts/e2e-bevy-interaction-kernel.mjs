@@ -251,44 +251,40 @@ try {
       Math.abs(translationZ.dot(baseRight)) < 1e-5 &&
       Math.abs(translationZ.dot(baseForward)) < 1e-5;
 
-    // Windows depth input must dolly around a fixed target and remain on the
-    // safe side of it even under a long stream of maximum raw-HID packets.
-    // macOS intentionally retains its established translating-rig behavior.
-    let sixDofDepthGuard = true;
-    if (/Windows/i.test(navigator.userAgent)) {
-      resetLiveCamera();
-      for (let index = 0; index < 400; index += 1) {
-        liveCamera.navigateSixDof({
-          translation: [0, -1, 0],
-          rotation: [0, 0, 0],
-          deltaSeconds: 0.05,
-        });
-      }
-      const nearDepthSnapshot = liveCamera.getSnapshot();
-      const nearDepthDistance = new cad.Vector3(
-        ...nearDepthSnapshot.position,
-      ).distanceTo(new cad.Vector3(...nearDepthSnapshot.target));
-      for (let index = 0; index < 400; index += 1) {
-        liveCamera.navigateSixDof({
-          translation: [0, 1, 0],
-          rotation: [0, 0, 0],
-          deltaSeconds: 0.05,
-        });
-      }
-      const farDepthSnapshot = liveCamera.getSnapshot();
-      const farDepthDistance = new cad.Vector3(
-        ...farDepthSnapshot.position,
-      ).distanceTo(new cad.Vector3(...farDepthSnapshot.target));
-      sixDofDepthGuard =
-        nearDepthSnapshot.target.every((value, index) =>
-          approximately(value, baseTarget[index]),
-        ) &&
-        farDepthSnapshot.target.every((value, index) =>
-          approximately(value, baseTarget[index]),
-        ) &&
-        nearDepthDistance >= 2 - 1e-5 &&
-        farDepthDistance <= 5_000 + 1e-5;
+    // Every desktop uses fixed-target depth dolly. It must remain on the safe
+    // side of the target even under a long stream of maximum raw-HID packets.
+    resetLiveCamera();
+    for (let index = 0; index < 400; index += 1) {
+      liveCamera.navigateSixDof({
+        translation: [0, -1, 0],
+        rotation: [0, 0, 0],
+        deltaSeconds: 0.05,
+      });
     }
+    const nearDepthSnapshot = liveCamera.getSnapshot();
+    const nearDepthDistance = new cad.Vector3(
+      ...nearDepthSnapshot.position,
+    ).distanceTo(new cad.Vector3(...nearDepthSnapshot.target));
+    for (let index = 0; index < 400; index += 1) {
+      liveCamera.navigateSixDof({
+        translation: [0, 1, 0],
+        rotation: [0, 0, 0],
+        deltaSeconds: 0.05,
+      });
+    }
+    const farDepthSnapshot = liveCamera.getSnapshot();
+    const farDepthDistance = new cad.Vector3(
+      ...farDepthSnapshot.position,
+    ).distanceTo(new cad.Vector3(...farDepthSnapshot.target));
+    const sixDofDepthGuard =
+      nearDepthSnapshot.target.every((value, index) =>
+        approximately(value, baseTarget[index]),
+      ) &&
+      farDepthSnapshot.target.every((value, index) =>
+        approximately(value, baseTarget[index]),
+      ) &&
+      nearDepthDistance >= 2 - 1e-5 &&
+      farDepthDistance <= 5_000 + 1e-5;
     resetLiveCamera();
 
     // Transient preview geometry is transformed into Bevy's world coordinates.

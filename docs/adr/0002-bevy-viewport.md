@@ -67,6 +67,12 @@ when the camera, annotations, or screen-size arrow transform changes. Camera
 motion updates retained manipulator transforms in place. This keeps navigation
 allocation-free even while a solid command is open.
 
+The embedded renderer is event-driven. Model, viewport-size, session-binding,
+and transient-mesh changes receive a second Bevy update to settle the extracted
+render world. Camera and presentation-only changes render exactly once on both
+macOS and Windows; duplicating those updates adds pointer latency without
+creating a new GPU pipeline.
+
 The Extrude tool volume is a translucent fill without a duplicate edge cage;
 the source sketch remains visible in its normal retained sketch layer. Its DOM
 drag proxy is hit-test-only and never becomes a webview mask island. Projected
@@ -162,6 +168,12 @@ Raw/native 6DoF translation and rotation share one persisted speed multiplier.
 The default is `1.5` (150% of the calibrated base rate), adjustable from 25%
 through 300% in Settings. The multiplier is applied after axis canonicalization
 so it cannot change the direction contract above.
+
+Lateral translation pans the camera rig so the part follows the cap. Depth
+translation is a bounded dolly around the fixed look target on both macOS and
+Windows. It must not translate the target through the stationary model: that
+drifts the later orbit center and can eventually carry the part behind the
+camera. The supported focus-distance range is 2 through 5000 model units.
 
 Navigation input is transient. Production builds do not expose an input
 recorder, persist raw 6DoF/touchpad packets or camera traces, or periodically

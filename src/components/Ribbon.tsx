@@ -123,7 +123,7 @@ function Panel({
   return (
     <div
       ref={panelRef}
-      className="relative flex shrink-0 flex-col border-r border-edge px-1.5 max-[1400px]:px-1"
+      className="relative flex shrink-0 flex-col border-r border-edge px-1.5 max-[1400px]:px-0.5"
     >
       <div className="flex h-[62px] items-start gap-0.5 pt-1.5">
         {panel.buttons.map((button) => (

@@ -3279,8 +3279,7 @@ fn drain_render_commands(
                 pending.presentation.take(),
             )
         };
-        let requires_pipeline_settle = cfg!(target_os = "macos")
-            || commands.0.is_some()
+        let requires_pipeline_settle = commands.0.is_some()
             || commands.1.is_some()
             || !commands.2.is_empty()
             || !commands.3.is_empty()
@@ -3344,11 +3343,9 @@ fn drain_render_commands(
         }
         if dirty {
             // Structural changes get a second update to settle Bevy's
-            // extracted/pipelined render world. macOS keeps the established
-            // two-update behavior because synchronous pipeline compilation is
-            // unavailable there. Camera/style updates use one frame only on
-            // Windows, where a second frame blocks WebView2's UI thread and
-            // halves interactive frame rate on integrated GPUs.
+            // extracted/pipelined render world. Camera and presentation-only
+            // changes use one frame on every platform; rendering them twice
+            // adds pointer latency without creating any new GPU pipelines.
             render_frames(
                 &mut runtime.app,
                 if requires_pipeline_settle { 2 } else { 1 },
