@@ -13,6 +13,7 @@ import type {
   BodyAppearance,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
+  DrawingDocumentDto,
   ExtrudeOperation,
   OriginPlane,
   PlanarFaceSourceDto,
@@ -54,6 +55,15 @@ function scrubAppearances(
   return appearances
     .filter((entry) => live.has(entry.body_id))
     .sort((a, b) => a.body_id - b.body_id);
+}
+
+function emptyDrawingDocument(): DrawingDocumentDto {
+  return {
+    sheets: [],
+    active_sheet_id: null,
+    next_sheet_id: 1,
+    next_view_id: 1,
+  };
 }
 
 function appearanceFor(
@@ -358,6 +368,9 @@ interface AppState {
   selectedBodies: number[];
   /** Per-body color/material from the project model. */
   bodyAppearances: BodyAppearance[];
+  /** Persistent technical drawing sheets and projected-view definitions. */
+  drawingDocument: DrawingDocumentDto;
+  selectedDrawingViewId: number | null;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -412,12 +425,15 @@ interface AppState {
   applyDatumPlaneUpdate: (update: DatumPlaneUpdateDto) => void;
   setBodyAppearances: (appearances: BodyAppearance[]) => void;
   setBodyAppearance: (appearance: BodyAppearance) => Promise<void>;
+  setDrawingDocument: (drawing: DrawingDocumentDto) => Promise<void>;
+  setSelectedDrawingViewId: (viewId: number | null) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
     datumPlanes: DatumPlaneDefinitionDto[],
     fileName: string | null,
     bodyAppearances?: BodyAppearance[],
+    drawingDocument?: DrawingDocumentDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -570,6 +586,8 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedBody: null,
     selectedBodies: [],
     bodyAppearances: [],
+    drawingDocument: emptyDrawingDocument(),
+    selectedDrawingViewId: null,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -638,6 +656,8 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedBody: null,
   selectedBodies: [],
   bodyAppearances: [],
+  drawingDocument: emptyDrawingDocument(),
+  selectedDrawingViewId: null,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -682,11 +702,12 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
+      engine.drawingDocument(),
     ]);
     set({
       document: doc,
@@ -695,6 +716,7 @@ export const useAppStore = create<AppState>()((set) => ({
       solidScene,
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
+      drawingDocument,
       dirty: false,
     });
   },
@@ -753,7 +775,22 @@ export const useAppStore = create<AppState>()((set) => ({
     set({ bodyAppearances, dirty: true });
   },
 
-  loadProjectState: (update, finishedSketches, datumPlanes, fileName, bodyAppearances = []) =>
+  setDrawingDocument: async (drawing) => {
+    const engine = await getEngine();
+    const drawingDocument = await engine.setDrawingDocument(drawing);
+    set({ drawingDocument, dirty: true });
+  },
+
+  setSelectedDrawingViewId: (selectedDrawingViewId) => set({ selectedDrawingViewId }),
+
+  loadProjectState: (
+    update,
+    finishedSketches,
+    datumPlanes,
+    fileName,
+    bodyAppearances = [],
+    drawingDocument = emptyDrawingDocument(),
+  ) =>
     set({
       ...resetDocumentUiState(),
       document: update.document,
@@ -761,6 +798,7 @@ export const useAppStore = create<AppState>()((set) => ({
       solidScene: update.scene,
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
+      drawingDocument,
       dirty: false,
       projectFileName: fileName,
     }),

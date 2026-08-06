@@ -961,6 +961,77 @@ export interface SolidUpdateDto {
   scene: SolidSceneDto;
 }
 
+export type DrawingSheetFormat = 'a4' | 'a3' | 'letter';
+export type DrawingSheetOrientation = 'landscape' | 'portrait';
+export type DrawingViewKind =
+  | 'front'
+  | 'rear'
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'bottom'
+  | 'isometric'
+  | 'custom';
+
+export interface DrawingTitleBlockDto {
+  title: string;
+  drawing_number: string;
+  revision: string;
+  author: string;
+}
+
+export interface DrawingViewDto {
+  id: number;
+  name: string;
+  kind: DrawingViewKind;
+  /** Direction from the model toward the viewer. */
+  direction: [number, number, number];
+  up: [number, number, number];
+  /** Paper-space millimetres from the upper-left sheet corner. */
+  position: [number, number];
+  /** Paper millimetres per model millimetre. */
+  scale: number;
+  body_ids: number[];
+  show_hidden_lines: boolean;
+  show_tangent_edges: boolean;
+}
+
+export interface DrawingSheetDto {
+  id: number;
+  name: string;
+  format: DrawingSheetFormat;
+  orientation: DrawingSheetOrientation;
+  title_block: DrawingTitleBlockDto;
+  views: DrawingViewDto[];
+}
+
+export interface DrawingDocumentDto {
+  sheets: DrawingSheetDto[];
+  active_sheet_id: number | null;
+  next_sheet_id: number;
+  next_view_id: number;
+}
+
+export interface DrawingProjectionRequest {
+  body_ids: number[];
+  direction: [number, number, number];
+  up: [number, number, number];
+  include_hidden: boolean;
+  include_tangent_edges: boolean;
+  deflection: number;
+}
+
+export interface DrawingPolylineDto {
+  points: Array<[number, number]>;
+}
+
+export interface DrawingProjectionDto {
+  visible: DrawingPolylineDto[];
+  hidden: DrawingPolylineDto[];
+  /** min x, min y, max x, max y in model millimetres. */
+  bounds: [number, number, number, number];
+}
+
 export interface StepThreadMetadataDto {
   body_id: number;
   feature_id: number;

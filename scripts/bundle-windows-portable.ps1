@@ -98,7 +98,7 @@ try {
     foreach ($dll in $runtimeDlls) {
         Copy-Item $dll.FullName (Join-Path $packageDir $dll.Name)
     }
-    foreach ($required in @("TKernel.dll", "TKDESTEP.dll", "TKFillet.dll")) {
+    foreach ($required in @("TKernel.dll", "TKDESTEP.dll", "TKFillet.dll", "TKHLR.dll")) {
         if (-not (Test-Path (Join-Path $packageDir $required) -PathType Leaf)) {
             throw "Required OCCT runtime library is missing: $required"
         }

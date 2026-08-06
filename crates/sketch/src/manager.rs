@@ -25,6 +25,7 @@ use nbcad_solid::{
 };
 
 use crate::constraint::{Constraint, ConstraintId};
+use crate::drawing::DrawingDocumentDto;
 use crate::dto::{
     AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest, BeginSketchRequest,
     BreakRequest, ChamferRequest, CircleRequest, CircularPatternRequest, ConstraintBatchRequest,
@@ -83,6 +84,8 @@ pub struct SketchManager {
     grid_step: f64,
     /// Per-body color/material for viewport and manufacturing export.
     body_appearances: Vec<BodyAppearance>,
+    /// Persistent technical-drawing sheets and view definitions.
+    drawings: DrawingDocumentDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
@@ -116,6 +119,7 @@ impl SketchManager {
             grid_snap: true,
             grid_step: GRID_STEP_MM,
             body_appearances: Vec::new(),
+            drawings: DrawingDocumentDto::default(),
             pending_project: None,
         }
     }
@@ -171,6 +175,7 @@ impl SketchManager {
             datum_planes: self.datum_planes.clone(),
             body_features: self.solids.body_feature_definitions().to_vec(),
             body_appearances: self.scrubbed_body_appearances(),
+            drawings: self.drawings.clone(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
                 extrude: self.extrude_count,
@@ -281,6 +286,7 @@ impl SketchManager {
             grid_snap: model.preferences.grid_snap,
             grid_step: GRID_STEP_MM,
             body_appearances: model.body_appearances,
+            drawings: model.drawings,
             pending_project: None,
         };
         candidate.sketch_count = candidate
@@ -489,6 +495,19 @@ impl SketchManager {
 
     pub fn body_appearances(&self) -> Vec<BodyAppearance> {
         self.body_appearances.clone()
+    }
+
+    pub fn drawing_document(&self) -> DrawingDocumentDto {
+        self.drawings.clone()
+    }
+
+    pub fn set_drawing_document(
+        &mut self,
+        drawing: DrawingDocumentDto,
+    ) -> Result<DrawingDocumentDto, SessionError> {
+        drawing.validate().map_err(SessionError::Solid)?;
+        self.drawings = drawing;
+        Ok(self.drawings.clone())
     }
 
     pub fn set_body_appearance(
@@ -3051,6 +3070,10 @@ fn ordered_profile_curves(
 #[cfg(test)]
 mod project_tests {
     use super::*;
+    use crate::{
+        DrawingDocumentDto, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
+        DrawingTitleBlockDto, DrawingViewDto, DrawingViewKind,
+    };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
         ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
@@ -3483,6 +3506,57 @@ mod project_tests {
         assert!(update.document.features.is_empty());
         assert!(update.scene.bodies.is_empty());
         assert!(manager.finished_sketches().is_empty());
+    }
+
+    #[test]
+    fn project_roundtrip_preserves_technical_drawing_intent() {
+        let drawing = DrawingDocumentDto {
+            sheets: vec![DrawingSheetDto {
+                id: 4,
+                name: "Assembly overview".to_string(),
+                format: DrawingSheetFormat::A3,
+                orientation: DrawingSheetOrientation::Landscape,
+                title_block: DrawingTitleBlockDto {
+                    title: "Clamp".to_string(),
+                    drawing_number: "NBC-042".to_string(),
+                    revision: "B".to_string(),
+                    author: "QA".to_string(),
+                },
+                views: vec![DrawingViewDto {
+                    id: 9,
+                    name: "Front".to_string(),
+                    kind: DrawingViewKind::Front,
+                    direction: [0.0, -1.0, 0.0],
+                    up: [0.0, 0.0, 1.0],
+                    position: [120.0, 80.0],
+                    scale: 0.5,
+                    body_ids: vec![],
+                    show_hidden_lines: true,
+                    show_tangent_edges: false,
+                }],
+            }],
+            active_sheet_id: Some(4),
+            next_sheet_id: 5,
+            next_view_id: 10,
+        };
+        let mut manager = SketchManager::new();
+        manager.set_drawing_document(drawing.clone()).unwrap();
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: Vec::new(),
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.drawing_document(), drawing);
     }
 
     #[test]

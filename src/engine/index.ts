@@ -28,6 +28,9 @@ import type {
   DatumPlaneRequest,
   DatumPlaneUpdateDto,
   DocumentDto,
+  DrawingDocumentDto,
+  DrawingProjectionDto,
+  DrawingProjectionRequest,
   EditDimensionRequest,
   EndSketchResult,
   ExtrudeDefinitionDto,
@@ -97,6 +100,9 @@ export interface Engine {
   profileCatalog(): Promise<ProfileCatalogItemDto[]>;
   solidScene(): Promise<SolidSceneDto>;
   bodyAppearances(): Promise<BodyAppearance[]>;
+  drawingDocument(): Promise<DrawingDocumentDto>;
+  setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
+  drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;
   revolveDefinitions(): Promise<RevolveDefinitionDto[]>;

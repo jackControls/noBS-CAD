@@ -31,6 +31,7 @@
     "exportStlSelected": "Export Selected Body as STL…",
     "export3mfAll": "Export All Bodies as 3MF…",
     "export3mfSelected": "Export Selected Body as 3MF…",
+    "exportDrawingSvg": "Export Active Drawing as SVG…",
     "stlDropsAppearance": "STL has no materials or colors — appearance will be omitted.",
     "zipHint": ".nbcad is a versioned ZIP archive containing manifest.json and model.json.",
     "unsaved": "Unsaved changes",
@@ -98,7 +99,8 @@
   "ribbon": {
     "tabs": {
       "model": "MODEL",
-      "sketch": "SKETCH"
+      "sketch": "SKETCH",
+      "drawing": "DRAWING"
     },
     "panels": {
       "profile": "PROFILE",
@@ -112,7 +114,11 @@
       "draw": "DRAW",
       "edit": "EDIT",
       "dimension": "DIMENSION",
-      "constrain": "CONSTRAIN"
+      "constrain": "CONSTRAIN",
+      "drawing": "DRAWING",
+      "workspace": "WORKSPACE",
+      "views": "VIEWS",
+      "output": "OUTPUT"
     },
     "finishSketch": "FINISH SKETCH",
     "solid": {
@@ -143,6 +149,17 @@
       "sectionAnalysis": "Section Analysis",
       "interference": "Interference",
       "select": "Select"
+    },
+    "drawing": {
+      "open": "Drawing",
+      "model": "3D Model",
+      "newSheet": "New Sheet",
+      "front": "Front View",
+      "top": "Top View",
+      "right": "Right View",
+      "isometric": "Isometric",
+      "exportSvg": "Export SVG",
+      "print": "Print / PDF"
     },
     "sketch": {
       "line": "Line",

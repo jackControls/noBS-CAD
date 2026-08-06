@@ -9,6 +9,7 @@ namespace nbcad_occt {
 
 struct FfiJob;
 struct FfiMesh;
+struct FfiDrawingProjection;
 
 class Kernel {
  public:
@@ -26,6 +27,17 @@ class Kernel {
   rust::Vec<std::uint8_t> export_step(
       const rust::Vec<std::uint64_t>& body_ids,
       rust::Str thread_metadata_hex) const;
+  FfiDrawingProjection drawing_projection(
+      const rust::Vec<std::uint64_t>& body_ids,
+      double direction_x,
+      double direction_y,
+      double direction_z,
+      double up_x,
+      double up_y,
+      double up_z,
+      bool include_hidden,
+      bool include_tangent_edges,
+      double deflection) const;
 
  private:
   class Impl;

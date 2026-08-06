@@ -26,6 +26,7 @@ const ENTRY_LIBRARIES = [
   'TKXSBase',
   'TKDE',
   'TKFillet',
+  'TKHLR',
   'TKOffset',
   'TKBO',
   'TKPrim',

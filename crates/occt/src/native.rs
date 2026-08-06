@@ -11,6 +11,7 @@ use nbcad_solid::{
 use std::fmt::Write as _;
 
 use crate::OcctError;
+use crate::{DrawingPolylineDto, DrawingProjectionDto, DrawingProjectionRequest};
 
 #[cxx::bridge(namespace = "nbcad_occt")]
 mod ffi {
@@ -100,6 +101,13 @@ mod ffi {
         edge_refinable: Vec<u8>,
     }
 
+    struct FfiDrawingProjection {
+        visible_offsets: Vec<u32>,
+        visible_points: Vec<f64>,
+        hidden_offsets: Vec<u32>,
+        hidden_points: Vec<f64>,
+    }
+
     unsafe extern "C++" {
         include!("shim.hpp");
 
@@ -120,6 +128,19 @@ mod ffi {
             body_ids: &Vec<u64>,
             thread_metadata_hex: &str,
         ) -> Result<Vec<u8>>;
+        fn drawing_projection(
+            self: &Kernel,
+            body_ids: &Vec<u64>,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            up_x: f64,
+            up_y: f64,
+            up_z: f64,
+            include_hidden: bool,
+            include_tangent_edges: bool,
+            deflection: f64,
+        ) -> Result<FfiDrawingProjection>;
     }
 }
 
@@ -210,6 +231,34 @@ impl OcctKernel {
             .map_err(|error| OcctError(error.to_string()))
     }
 
+    /// Generate exact OCCT hidden-line projection curves from the active
+    /// B-reps. This deliberately bypasses viewport tessellation.
+    pub fn drawing_projection(
+        &self,
+        request: &DrawingProjectionRequest,
+    ) -> Result<DrawingProjectionDto, OcctError> {
+        validate_projection_basis(request.direction, request.up)?;
+        let body_ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let raw = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
+            .drawing_projection(
+                &body_ids,
+                request.direction[0],
+                request.direction[1],
+                request.direction[2],
+                request.up[0],
+                request.up[1],
+                request.up[2],
+                request.include_hidden,
+                request.include_tangent_edges,
+                request.deflection.clamp(1.0e-4, 10.0),
+            )
+            .map_err(|error| OcctError(error.to_string()))?;
+        projection_from_ffi(raw)
+    }
+
     /// Tessellate selected (or all) live bodies with configurable deflection.
     pub fn tessellate_bodies(
         &self,
@@ -270,6 +319,97 @@ impl OcctKernel {
         nbcad_export::ExportFacade::export_3mf(&meshes, appearances, request)
             .map_err(|error| OcctError(error.to_string()))
     }
+}
+
+fn validate_projection_basis(direction: [f64; 3], up: [f64; 3]) -> Result<(), OcctError> {
+    if direction
+        .iter()
+        .chain(up.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(OcctError(
+            "drawing projection basis contains non-finite values".to_string(),
+        ));
+    }
+    let length_sq = |value: [f64; 3]| {
+        value
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+    };
+    let cross = [
+        up[1] * direction[2] - up[2] * direction[1],
+        up[2] * direction[0] - up[0] * direction[2],
+        up[0] * direction[1] - up[1] * direction[0],
+    ];
+    if length_sq(direction) < 1.0e-12
+        || length_sq(up) < 1.0e-12
+        || length_sq(cross) < length_sq(direction) * length_sq(up) * 1.0e-12
+    {
+        return Err(OcctError(
+            "drawing projection direction and up vectors are degenerate".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjectionDto, OcctError> {
+    let visible = projection_polylines(&raw.visible_offsets, &raw.visible_points)?;
+    let hidden = projection_polylines(&raw.hidden_offsets, &raw.hidden_points)?;
+    let mut bounds = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for point in visible
+        .iter()
+        .chain(hidden.iter())
+        .flat_map(|polyline| polyline.points.iter())
+    {
+        bounds[0] = bounds[0].min(point[0]);
+        bounds[1] = bounds[1].min(point[1]);
+        bounds[2] = bounds[2].max(point[0]);
+        bounds[3] = bounds[3].max(point[1]);
+    }
+    if !bounds.iter().all(|value| value.is_finite()) {
+        bounds = [0.0; 4];
+    }
+    Ok(DrawingProjectionDto {
+        visible,
+        hidden,
+        bounds,
+    })
+}
+
+fn projection_polylines(
+    offsets: &[u32],
+    points: &[f64],
+) -> Result<Vec<DrawingPolylineDto>, OcctError> {
+    if offsets.is_empty()
+        || offsets[0] != 0
+        || offsets.last().copied().unwrap_or(0) as usize * 2 != points.len()
+    {
+        return Err(OcctError(
+            "OCCT returned malformed drawing projection buffers".to_string(),
+        ));
+    }
+    let mut result = Vec::with_capacity(offsets.len().saturating_sub(1));
+    for window in offsets.windows(2) {
+        let begin = window[0] as usize;
+        let end = window[1] as usize;
+        if end < begin || end * 2 > points.len() || end - begin < 2 {
+            return Err(OcctError(
+                "OCCT returned a malformed drawing polyline".to_string(),
+            ));
+        }
+        result.push(DrawingPolylineDto {
+            points: (begin..end)
+                .map(|index| [points[index * 2], points[index * 2 + 1]])
+                .collect(),
+        });
+    }
+    Ok(result)
 }
 
 struct ProfileBuffers {
@@ -1163,6 +1303,33 @@ mod tests {
             .unwrap();
         assert!(roundtrip.errors.is_empty());
         assert_eq!(roundtrip.bodies.len(), 1);
+    }
+
+    #[test]
+    fn exact_hlr_projects_a_box_to_vector_edges() {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![box_job(1, 1)],
+            })
+            .unwrap();
+        let projection = kernel
+            .drawing_projection(&DrawingProjectionRequest {
+                body_ids: vec![BodyId(1)],
+                direction: [0.0, 0.0, 1.0],
+                up: [0.0, 1.0, 0.0],
+                include_hidden: true,
+                include_tangent_edges: false,
+                deflection: 0.05,
+            })
+            .unwrap();
+        assert!(projection.visible.len() >= 4);
+        assert!((projection.bounds[0] + 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[1] + 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[2] - 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[3] - 10.0).abs() < 1.0e-6);
     }
 
     #[test]

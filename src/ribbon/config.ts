@@ -28,7 +28,13 @@ export type RibbonAction =
   | 'sketchPattern'
   | 'selectTool'
   | 'sketchTool'
-  | 'applyConstraint';
+  | 'applyConstraint'
+  | 'drawingWorkspace'
+  | 'modelWorkspace'
+  | 'drawingNewSheet'
+  | 'drawingAddView'
+  | 'drawingExportSvg'
+  | 'drawingPrint';
 
 export type MenuEntry =
   | {
@@ -522,6 +528,13 @@ export const SOLID_TAB: RibbonTab = {
       labelKey: 'ribbon.panels.selection',
       buttons: [{ id: 'select', labelKey: 'ribbon.solid.select', icon: 'select', enabled: true }],
     },
+    {
+      id: 'drawing',
+      labelKey: 'ribbon.panels.drawing',
+      buttons: [
+        { id: 'openDrawing', labelKey: 'ribbon.drawing.open', icon: 'section', enabled: true, action: 'drawingWorkspace' },
+      ],
+    },
   ],
 };
 
@@ -598,11 +611,45 @@ export const SKETCH_TAB: RibbonTab = {
   ],
 };
 
+export const DRAWING_TAB: RibbonTab = {
+  id: 'drawing',
+  labelKey: 'ribbon.tabs.drawing',
+  enabled: true,
+  panels: [
+    {
+      id: 'workspace',
+      labelKey: 'ribbon.panels.workspace',
+      buttons: [
+        { id: 'returnModel', labelKey: 'ribbon.drawing.model', icon: 'select', enabled: true, action: 'modelWorkspace' },
+        { id: 'newSheet', labelKey: 'ribbon.drawing.newSheet', icon: 'rect', enabled: true, action: 'drawingNewSheet' },
+      ],
+    },
+    {
+      id: 'views',
+      labelKey: 'ribbon.panels.views',
+      buttons: [
+        { id: 'frontView', labelKey: 'ribbon.drawing.front', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'front' },
+        { id: 'topView', labelKey: 'ribbon.drawing.top', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'top' },
+        { id: 'rightView', labelKey: 'ribbon.drawing.right', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'right' },
+        { id: 'isometricView', labelKey: 'ribbon.drawing.isometric', icon: 'section', enabled: true, action: 'drawingAddView', payload: 'isometric' },
+      ],
+    },
+    {
+      id: 'output',
+      labelKey: 'ribbon.panels.output',
+      buttons: [
+        { id: 'exportDrawingSvg', labelKey: 'ribbon.drawing.exportSvg', icon: 'measure', enabled: true, action: 'drawingExportSvg' },
+        { id: 'printDrawing', labelKey: 'ribbon.drawing.print', icon: 'section', enabled: true, action: 'drawingPrint' },
+      ],
+    },
+  ],
+};
+
 /** Only real workspaces are shown; planned work lives in the roadmap, not disabled tabs. */
 export const SOLID_WORKSPACE_TABS: Array<{ id: string; labelKey: string; enabled: boolean }> = [
   { id: 'solid', labelKey: 'ribbon.tabs.model', enabled: true },
 ];
 
 export function ribbonTabById(id: string): RibbonTab {
-  return id === 'sketch' ? SKETCH_TAB : SOLID_TAB;
+  return id === 'sketch' ? SKETCH_TAB : id === 'drawing' ? DRAWING_TAB : SOLID_TAB;
 }

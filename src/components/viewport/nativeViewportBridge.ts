@@ -1347,6 +1347,20 @@ export function attachNativeViewport(container: HTMLElement): () => void {
 
   return () => {
     disposed = true;
+    // The Bevy child view is a native sibling of the webview, so unmounting
+    // the DOM viewport cannot hide it by itself. Collapse the native layout
+    // before a drawing sheet (or any future non-3D workspace) takes its place.
+    if (active && isTauriRuntime()) {
+      const layout = {
+        revision: ++layoutRevision,
+        viewport: { x: 0, y: 0, width: 0, height: 0 },
+        overlays: [],
+        palette: collectPalette(),
+        hud: collectHud(),
+      };
+      void invoke('native_viewport_set_layout', { layout }).catch(() => undefined);
+      lastLayoutKey = '';
+    }
     if (layoutFrame !== 0) cancelAnimationFrame(layoutFrame);
     if (probeTimer !== 0) window.clearTimeout(probeTimer);
     clearStartupStatus();

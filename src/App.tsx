@@ -20,6 +20,8 @@ import {
 } from './engine/controller';
 import { Ribbon } from './components/Ribbon';
 import { BrowserTree } from './components/BrowserTree';
+import { DrawingBrowser } from './components/drawing/DrawingBrowser';
+import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { SketchPalette } from './components/SketchPalette';
@@ -60,6 +62,8 @@ import {
 export default function App() {
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
+  const activeTab = useAppStore((s) => s.activeTab);
+  const drawingWorkspace = activeTab === 'drawing';
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
   const syncResolvedTheme = useAppStore((s) => s.syncResolvedTheme);
@@ -252,18 +256,24 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
       <Ribbon />
       <div className="flex min-h-0 flex-1">
-        <BrowserTree />
+        {drawingWorkspace ? <DrawingBrowser /> : <BrowserTree />}
         <div className="flex min-w-0 flex-1 flex-col">
           <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
-            <Viewport key={resolvedTheme} />
-            <BodyAppearancePanel />
-            {mode === 'sketch' && <SketchPalette />}
-            <CommentsPanel />
+            {drawingWorkspace ? (
+              <DrawingWorkspace />
+            ) : (
+              <>
+                <Viewport key={resolvedTheme} />
+                <BodyAppearancePanel />
+                {mode === 'sketch' && <SketchPalette />}
+                <CommentsPanel />
+              </>
+            )}
           </main>
         </div>
       </div>
-      <Timeline />
+      {!drawingWorkspace && <Timeline />}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

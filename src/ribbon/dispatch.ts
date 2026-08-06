@@ -27,6 +27,23 @@ import {
   type SketchTool,
 } from '../store/appStore';
 import type { RibbonAction } from './config';
+import {
+  addDrawingSheet,
+  addDrawingView,
+  enterDrawingWorkspace,
+  leaveDrawingWorkspace,
+} from '../drawing/document';
+import { exportActiveDrawingSvg, printActiveDrawing } from '../drawing/export';
+import type { DrawingViewKind } from '../engine/types';
+
+function runDrawingAction(action: () => Promise<unknown>): void {
+  void action().catch((error) => {
+    useAppStore.getState().setConstraintDialog({
+      titleKey: 'file.errorTitle',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
 
 export function dispatchRibbonAction(action?: RibbonAction, payload?: string): void {
   if (!action) return;
@@ -120,6 +137,24 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
     }
     case 'applyConstraint':
       void applyConstraintById(payload);
+      break;
+    case 'drawingWorkspace':
+      runDrawingAction(enterDrawingWorkspace);
+      break;
+    case 'modelWorkspace':
+      leaveDrawingWorkspace();
+      break;
+    case 'drawingNewSheet':
+      runDrawingAction(addDrawingSheet);
+      break;
+    case 'drawingAddView':
+      runDrawingAction(() => addDrawingView((payload ?? 'isometric') as DrawingViewKind));
+      break;
+    case 'drawingExportSvg':
+      runDrawingAction(exportActiveDrawingSvg);
+      break;
+    case 'drawingPrint':
+      printActiveDrawing();
       break;
   }
 }

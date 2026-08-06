@@ -174,10 +174,11 @@ export async function openProject(): Promise<boolean> {
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
+    engine.drawingDocument(),
   ]);
   // A legacy project is readable, but the next Save must choose a new
   // `.nbcad` destination instead of silently overwriting the old container.
@@ -186,7 +187,14 @@ export async function openProject(): Promise<boolean> {
     : null;
   useAppStore
     .getState()
-    .loadProjectState(update, finishedSketches, datumPlanes, opened.name, bodyAppearances);
+    .loadProjectState(
+      update,
+      finishedSketches,
+      datumPlanes,
+      opened.name,
+      bodyAppearances,
+      drawingDocument,
+    );
   await recordActiveProjectOpen(modelJson, reusableTarget);
   if (!hasUnsavedProjects()) clearProjectRecovery();
   return true;

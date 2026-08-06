@@ -28,6 +28,9 @@ import type {
   DatumPlaneRequest,
   DatumPlaneUpdateDto,
   DocumentDto,
+  DrawingDocumentDto,
+  DrawingProjectionDto,
+  DrawingProjectionRequest,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -132,6 +135,18 @@ export class TauriEngine implements Engine {
 
   async bodyAppearances(): Promise<BodyAppearance[]> {
     return this.call('engine_body_appearances');
+  }
+
+  async drawingDocument(): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_document');
+  }
+
+  async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_set_document', document);
+  }
+
+  async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
+    return this.call('engine_drawing_projection', request);
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

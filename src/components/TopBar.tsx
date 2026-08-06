@@ -27,12 +27,14 @@ import {
 } from '../files/projectFiles';
 import { useAppStore } from '../store/appStore';
 import { switchProjectTab } from '../files/projectTabs';
+import { exportActiveDrawingSvg } from '../drawing/export';
 
 export function AppMenuControls() {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
   const selectedBody = useAppStore((s) => s.selectedBody);
   const bodyCount = useAppStore((s) => s.solidScene.bodies.length);
+  const drawingWorkspace = useAppStore((s) => s.activeTab === 'drawing');
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
   const setProjectBusy = useAppStore((s) => s.setProjectBusy);
@@ -181,6 +183,13 @@ export function AppMenuControls() {
                 disabled={selectedBody === null}
                 onClick={() => run(() => exportStl(true))}
               />
+              {drawingWorkspace && (
+                <FileMenuItem
+                  icon={<FileDown size={14} />}
+                  label={t('file.exportDrawingSvg')}
+                  onClick={() => run(exportActiveDrawingSvg)}
+                />
+              )}
               <div className="my-1 border-t border-edge" />
               <FileMenuItem
                 icon={<SlidersHorizontal size={14} />}

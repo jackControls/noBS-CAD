@@ -15,6 +15,7 @@
 //! This crate never touches OCCT — the sketch solver is pure Rust.
 
 mod constraint;
+mod drawing;
 mod dto;
 mod entity;
 mod expr;
@@ -31,6 +32,10 @@ mod solver;
 pub mod host;
 
 pub use constraint::{Constraint, ConstraintId, ConstraintKind};
+pub use drawing::{
+    DrawingDocumentDto, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
+    DrawingTitleBlockDto, DrawingViewDto, DrawingViewKind,
+};
 pub use dto::{
     err_json, ok_json, AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest,
     BeginSketchRequest, BreakRequest, ChamferRequest, CircleMode, CircleRequest,

@@ -128,6 +128,7 @@ fn main() {
         "TKXSBase",
         "TKDE",
         "TKFillet",
+        "TKHLR",
         "TKOffset",
         "TKBO",
         "TKPrim",
