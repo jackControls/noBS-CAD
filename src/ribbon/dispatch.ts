@@ -150,6 +150,14 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
     case 'drawingAddView':
       runDrawingAction(() => addDrawingView((payload ?? 'isometric') as DrawingViewKind));
       break;
+    case 'drawingTool': {
+      const state = useAppStore.getState();
+      const tool = payload === 'note' ? 'note' : 'dimension';
+      state.setDrawingTool(state.drawingTool === tool ? null : tool);
+      state.setSelectedDrawingViewId(null);
+      state.setSelectedDrawingAnnotationId(null);
+      break;
+    }
     case 'drawingExportSvg':
       runDrawingAction(exportActiveDrawingSvg);
       break;

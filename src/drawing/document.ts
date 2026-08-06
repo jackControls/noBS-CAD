@@ -1,6 +1,9 @@
 import type {
+  DrawingAnnotationDto,
   DrawingDocumentDto,
+  DrawingLinearDimensionMode,
   DrawingSheetDto,
+  DrawingTopologyAnchorRefDto,
   DrawingViewDto,
   DrawingViewKind,
   SolidSceneDto,
@@ -22,8 +25,11 @@ export function enterDrawingWorkspace(): Promise<void> {
 }
 
 export function leaveDrawingWorkspace(): void {
-  useAppStore.getState().setSelectedDrawingViewId(null);
-  useAppStore.getState().setActiveTab('solid');
+  const state = useAppStore.getState();
+  state.setSelectedDrawingViewId(null);
+  state.setSelectedDrawingAnnotationId(null);
+  state.setDrawingTool(null);
+  state.setActiveTab('solid');
 }
 
 export function addDrawingSheet(): Promise<void> {
@@ -40,7 +46,7 @@ export function addDrawingSheet(): Promise<void> {
     next.active_sheet_id = sheet.id;
     next.next_sheet_id += 1;
     next.next_view_id += sheet.views.length;
-    queueMicrotask(() => useAppStore.getState().setSelectedDrawingViewId(null));
+    queueMicrotask(clearDrawingSelection);
     return next;
   });
 }
@@ -50,7 +56,7 @@ export function setActiveDrawingSheet(sheetId: number): Promise<void> {
     if (!drawing.sheets.some((sheet) => sheet.id === sheetId)) return drawing;
     const next = cloneDrawing(drawing);
     next.active_sheet_id = sheetId;
-    queueMicrotask(() => useAppStore.getState().setSelectedDrawingViewId(null));
+    queueMicrotask(clearDrawingSelection);
     return next;
   });
 }
@@ -63,7 +69,7 @@ export function deleteDrawingSheet(sheetId: number): Promise<void> {
     const next = cloneDrawing(drawing);
     next.sheets = next.sheets.filter((sheet) => sheet.id !== sheetId);
     if (next.active_sheet_id === sheetId) next.active_sheet_id = next.sheets[0]?.id ?? null;
-    queueMicrotask(() => useAppStore.getState().setSelectedDrawingViewId(null));
+    queueMicrotask(clearDrawingSelection);
     return next;
   });
 }
@@ -88,7 +94,11 @@ export function addDrawingView(kind: DrawingViewKind = 'isometric'): Promise<voi
       show_tangent_edges: false,
     });
     next.next_view_id += 1;
-    queueMicrotask(() => useAppStore.getState().setSelectedDrawingViewId(id));
+    queueMicrotask(() => {
+      const store = useAppStore.getState();
+      store.setSelectedDrawingAnnotationId(null);
+      store.setSelectedDrawingViewId(id);
+    });
     return next;
   });
 }
@@ -111,8 +121,104 @@ export function deleteDrawingView(viewId: number): Promise<void> {
     const next = cloneDrawing(drawing);
     for (const sheet of next.sheets) {
       sheet.views = sheet.views.filter((view) => view.id !== viewId);
+      sheet.annotations = sheet.annotations.filter((annotation) =>
+        annotation.kind !== 'linear_dimension' || annotation.view_id !== viewId,
+      );
     }
-    queueMicrotask(() => useAppStore.getState().setSelectedDrawingViewId(null));
+    queueMicrotask(clearDrawingSelection);
+    return next;
+  });
+}
+
+export function addDrawingLinearDimension(
+  viewId: number,
+  first: DrawingTopologyAnchorRefDto,
+  second: DrawingTopologyAnchorRefDto,
+  mode: DrawingLinearDimensionMode = 'aligned',
+  offset = 12,
+): Promise<void> {
+  return enqueueDrawingUpdate((drawing) => {
+    const next = cloneDrawing(drawing);
+    const sheet = activeSheet(next);
+    if (!sheet?.views.some((view) => view.id === viewId)) {
+      throw new Error('The projected view for this dimension no longer exists.');
+    }
+    const id = next.next_annotation_id;
+    sheet.annotations.push({
+      kind: 'linear_dimension',
+      id,
+      view_id: viewId,
+      first,
+      second,
+      mode,
+      offset,
+      prefix: '',
+      suffix: '',
+      precision: 2,
+    });
+    next.next_annotation_id += 1;
+    queueMicrotask(() => {
+      const store = useAppStore.getState();
+      store.setSelectedDrawingViewId(null);
+      store.setSelectedDrawingAnnotationId(id);
+    });
+    return next;
+  });
+}
+
+export function addDrawingNote(
+  position: [number, number],
+  text = 'NOTE',
+): Promise<void> {
+  return enqueueDrawingUpdate((drawing) => {
+    const next = cloneDrawing(drawing);
+    const sheet = activeSheet(next);
+    if (!sheet) throw new Error('Create a drawing sheet first.');
+    const id = next.next_annotation_id;
+    sheet.annotations.push({ kind: 'note', id, text, position });
+    next.next_annotation_id += 1;
+    queueMicrotask(() => {
+      const store = useAppStore.getState();
+      store.setSelectedDrawingViewId(null);
+      store.setSelectedDrawingAnnotationId(id);
+      store.setDrawingTool(null);
+    });
+    return next;
+  });
+}
+
+export type DrawingAnnotationUpdate = Partial<{
+  text: string;
+  position: [number, number];
+  mode: DrawingLinearDimensionMode;
+  offset: number;
+  prefix: string;
+  suffix: string;
+  precision: number;
+}>;
+
+export function updateDrawingAnnotation(
+  annotationId: number,
+  update: DrawingAnnotationUpdate,
+): Promise<void> {
+  return enqueueDrawingUpdate((drawing) => {
+    const next = cloneDrawing(drawing);
+    const annotation = next.sheets
+      .flatMap((sheet) => sheet.annotations)
+      .find((candidate) => candidate.id === annotationId);
+    if (!annotation) return drawing;
+    applyAnnotationUpdate(annotation, update);
+    return next;
+  });
+}
+
+export function deleteDrawingAnnotation(annotationId: number): Promise<void> {
+  return enqueueDrawingUpdate((drawing) => {
+    const next = cloneDrawing(drawing);
+    for (const sheet of next.sheets) {
+      sheet.annotations = sheet.annotations.filter((annotation) => annotation.id !== annotationId);
+    }
+    queueMicrotask(() => useAppStore.getState().setSelectedDrawingAnnotationId(null));
     return next;
   });
 }
@@ -207,6 +313,7 @@ function standardSheet(
       view(2, 'right', [150, 70]),
       view(3, 'isometric', [220, 115]),
     ],
+    annotations: [],
   };
 }
 
@@ -257,4 +364,26 @@ function activeSheet(drawing: DrawingDocumentDto): DrawingSheetDto | null {
 
 function cloneDrawing(drawing: DrawingDocumentDto): DrawingDocumentDto {
   return structuredClone(drawing);
+}
+
+function applyAnnotationUpdate(
+  annotation: DrawingAnnotationDto,
+  update: DrawingAnnotationUpdate,
+): void {
+  if (annotation.kind === 'note') {
+    if (update.text !== undefined) annotation.text = update.text;
+    if (update.position !== undefined) annotation.position = update.position;
+    return;
+  }
+  if (update.mode !== undefined) annotation.mode = update.mode;
+  if (update.offset !== undefined) annotation.offset = update.offset;
+  if (update.prefix !== undefined) annotation.prefix = update.prefix;
+  if (update.suffix !== undefined) annotation.suffix = update.suffix;
+  if (update.precision !== undefined) annotation.precision = update.precision;
+}
+
+function clearDrawingSelection(): void {
+  const store = useAppStore.getState();
+  store.setSelectedDrawingViewId(null);
+  store.setSelectedDrawingAnnotationId(null);
 }

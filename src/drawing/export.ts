@@ -1,5 +1,6 @@
 import { getEngine } from '../engine';
 import type {
+  DrawingAnnotationDto,
   DrawingPolylineDto,
   DrawingProjectionDto,
   DrawingSheetDto,
@@ -7,7 +8,14 @@ import type {
 } from '../engine/types';
 import { chooseSaveTarget, writeSaveTarget, type SaveType } from '../files/fileIO';
 import { useAppStore } from '../store/appStore';
+import type { UnitSystem } from '../types/document';
 import { drawingSheetSize, drawingViewTransform } from './sheet';
+import {
+  arrowPolygon,
+  drawingDimensionText,
+  linearDimensionGeometry,
+  resolveDrawingAnchor,
+} from './annotations';
 
 const SVG_TYPE: SaveType = {
   description: 'Scalable Vector Drawing',
@@ -21,7 +29,7 @@ export async function exportActiveDrawingSvg(): Promise<boolean> {
     (candidate) => candidate.id === state.drawingDocument.active_sheet_id,
   );
   if (!sheet) throw new Error('There is no active drawing sheet to export.');
-  const svg = await drawingSheetSvg(sheet);
+  const svg = await drawingSheetSvg(sheet, state.document?.settings.units ?? 'mm');
   const project = safeFilePart(state.document?.name ?? 'Untitled');
   const sheetName = safeFilePart(sheet.name);
   const target = await chooseSaveTarget(`${project}-${sheetName}.svg`, SVG_TYPE);
@@ -34,7 +42,10 @@ export function printActiveDrawing(): void {
   window.print();
 }
 
-export async function drawingSheetSvg(sheet: DrawingSheetDto): Promise<string> {
+export async function drawingSheetSvg(
+  sheet: DrawingSheetDto,
+  units: UnitSystem = 'mm',
+): Promise<string> {
   const engine = await getEngine();
   const projections = await Promise.all(
     sheet.views.map((view) =>
@@ -52,12 +63,67 @@ export async function drawingSheetSvg(sheet: DrawingSheetDto): Promise<string> {
   const views = sheet.views
     .map((view, index) => viewSvg(view, projections[index]))
     .join('\n');
+  const projectionsByView = new Map(
+    sheet.views.map((view, index) => [view.id, projections[index]] as const),
+  );
+  const annotations = sheet.annotations
+    .map((annotation) => annotationSvg(annotation, sheet, projectionsByView, units))
+    .join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}">
   <rect width="${width}" height="${height}" fill="white"/>
   <g fill="none" stroke="#17191c" stroke-linecap="round" stroke-linejoin="round">${views}</g>
+  ${annotations}
   ${borderAndTitleBlock(sheet, width, height)}
 </svg>`;
+}
+
+function annotationSvg(
+  annotation: DrawingAnnotationDto,
+  sheet: DrawingSheetDto,
+  projections: Map<number, DrawingProjectionDto>,
+  units: UnitSystem,
+): string {
+  if (annotation.kind === 'note') {
+    return noteSvg(annotation);
+  }
+  const view = sheet.views.find((candidate) => candidate.id === annotation.view_id);
+  const projection = projections.get(annotation.view_id);
+  if (!view || !projection) return '';
+  const first = resolveDrawingAnchor(annotation.first, view, projection);
+  const second = resolveDrawingAnchor(annotation.second, view, projection);
+  const geometry = first && second
+    ? linearDimensionGeometry(first, second, annotation.mode, annotation.offset, view.scale)
+    : null;
+  if (!geometry) {
+    return `<g><circle cx="${view.position[0]}" cy="${view.position[1] - 8}" r="3.1" fill="#fff3f0" stroke="#b54432" stroke-width="0.45"/><text x="${view.position[0]}" y="${view.position[1] - 6.8}" fill="#b54432" font-size="3.5" font-weight="700" text-anchor="middle">!</text></g>`;
+  }
+  const path = [
+    `M${point(geometry.firstExtension[0])}L${point(geometry.firstExtension[1])}`,
+    `M${point(geometry.secondExtension[0])}L${point(geometry.secondExtension[1])}`,
+    `M${point(geometry.dimensionStart)}L${point(geometry.dimensionEnd)}`,
+  ].join(' ');
+  const text = drawingDimensionText(
+    geometry.value,
+    annotation.precision,
+    annotation.prefix,
+    annotation.suffix,
+    units,
+  );
+  return `<g fill="#23272d" stroke="#23272d">
+    <path d="${path}" fill="none" stroke-width="0.34"/>
+    <polygon points="${arrowPolygon(geometry.dimensionStart, geometry.dimensionEnd, geometry.arrowSize)}"/>
+    <polygon points="${arrowPolygon(geometry.dimensionEnd, geometry.dimensionStart, geometry.arrowSize)}"/>
+    <text x="${round(geometry.textPosition[0])}" y="${round(geometry.textPosition[1] - 0.8)}" transform="rotate(${round(geometry.textAngle)} ${round(geometry.textPosition[0])} ${round(geometry.textPosition[1])})" fill="#23272d" stroke="white" stroke-width="1.6" paint-order="stroke" font-family="system-ui, sans-serif" font-size="3.25" text-anchor="middle">${escapeXml(text)}</text>
+  </g>`;
+}
+
+function noteSvg(note: Extract<DrawingAnnotationDto, { kind: 'note' }>): string {
+  const lines = note.text.split('\n');
+  const spans = lines.map((line, index) =>
+    `<tspan x="${round(note.position[0])}" dy="${index === 0 ? 0 : 4}">${escapeXml(line)}</tspan>`,
+  ).join('');
+  return `<text x="${round(note.position[0])}" y="${round(note.position[1])}" fill="#23272d" font-family="system-ui, sans-serif" font-size="3.4">${spans}</text>`;
 }
 
 function viewSvg(view: DrawingViewDto, projection: DrawingProjectionDto): string {
@@ -110,6 +176,10 @@ function scaleLabel(scale: number): string {
 
 function round(value: number): string {
   return Number(value.toFixed(5)).toString();
+}
+
+function point(value: [number, number]): string {
+  return `${round(value[0])} ${round(value[1])}`;
 }
 
 function escapeXml(value: string): string {

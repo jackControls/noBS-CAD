@@ -7,11 +7,13 @@
 
 use std::collections::HashSet;
 
-use nbcad_core::BodyId;
+use nbcad_core::{BodyId, EdgeId};
 use serde::{Deserialize, Serialize};
 
 const MAX_SHEETS: usize = 64;
 const MAX_VIEWS_PER_SHEET: usize = 256;
+const MAX_ANNOTATIONS_PER_SHEET: usize = 2_048;
+const MAX_NOTE_LENGTH: usize = 4_096;
 
 fn first_id() -> u64 {
     1
@@ -27,6 +29,8 @@ pub struct DrawingDocumentDto {
     pub next_sheet_id: u64,
     #[serde(default = "first_id")]
     pub next_view_id: u64,
+    #[serde(default = "first_id")]
+    pub next_annotation_id: u64,
 }
 
 impl Default for DrawingDocumentDto {
@@ -36,6 +40,7 @@ impl Default for DrawingDocumentDto {
             active_sheet_id: None,
             next_sheet_id: 1,
             next_view_id: 1,
+            next_annotation_id: 1,
         }
     }
 }
@@ -50,6 +55,8 @@ pub struct DrawingSheetDto {
     pub title_block: DrawingTitleBlockDto,
     #[serde(default)]
     pub views: Vec<DrawingViewDto>,
+    #[serde(default)]
+    pub annotations: Vec<DrawingAnnotationDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +120,71 @@ pub enum DrawingViewKind {
     Custom,
 }
 
+/// Stable model reference used by associative drawing annotations. The edge
+/// id/key pair is authoritative when topology survives a recompute; the
+/// fallback point is retained for diagnostics and future topology healing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrawingTopologyAnchorRefDto {
+    pub body_id: BodyId,
+    pub edge_id: EdgeId,
+    pub edge_key: String,
+    pub endpoint: DrawingEdgeEndpoint,
+    pub fallback_point: [f64; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawingEdgeEndpoint {
+    Start,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawingLinearDimensionMode {
+    Aligned,
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DrawingAnnotationDto {
+    LinearDimension {
+        id: u64,
+        view_id: u64,
+        first: DrawingTopologyAnchorRefDto,
+        second: DrawingTopologyAnchorRefDto,
+        mode: DrawingLinearDimensionMode,
+        /// Signed paper-space offset in millimetres from the measured span.
+        offset: f64,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        suffix: String,
+        #[serde(default = "default_dimension_precision")]
+        precision: u8,
+    },
+    Note {
+        id: u64,
+        text: String,
+        /// Paper-space millimetres from the upper-left sheet corner.
+        position: [f64; 2],
+    },
+}
+
+impl DrawingAnnotationDto {
+    pub fn id(&self) -> u64 {
+        match self {
+            Self::LinearDimension { id, .. } | Self::Note { id, .. } => *id,
+        }
+    }
+}
+
+fn default_dimension_precision() -> u8 {
+    2
+}
+
 impl DrawingDocumentDto {
     pub fn validate(&self) -> Result<(), String> {
         if self.sheets.len() > MAX_SHEETS {
@@ -120,14 +192,16 @@ impl DrawingDocumentDto {
                 "a project can contain at most {MAX_SHEETS} drawing sheets"
             ));
         }
-        if self.next_sheet_id == 0 || self.next_view_id == 0 {
+        if self.next_sheet_id == 0 || self.next_view_id == 0 || self.next_annotation_id == 0 {
             return Err("drawing id counters must be non-zero".to_string());
         }
 
         let mut sheet_ids = HashSet::new();
         let mut view_ids = HashSet::new();
+        let mut annotation_ids = HashSet::new();
         let mut max_sheet_id = 0;
         let mut max_view_id = 0;
+        let mut max_annotation_id = 0;
         for sheet in &self.sheets {
             if sheet.id == 0 || !sheet_ids.insert(sheet.id) {
                 return Err(format!("duplicate or zero drawing sheet id {}", sheet.id));
@@ -139,6 +213,12 @@ impl DrawingDocumentDto {
             if sheet.views.len() > MAX_VIEWS_PER_SHEET {
                 return Err(format!(
                     "drawing sheet '{}' can contain at most {MAX_VIEWS_PER_SHEET} views",
+                    sheet.name
+                ));
+            }
+            if sheet.annotations.len() > MAX_ANNOTATIONS_PER_SHEET {
+                return Err(format!(
+                    "drawing sheet '{}' can contain at most {MAX_ANNOTATIONS_PER_SHEET} annotations",
                     sheet.name
                 ));
             }
@@ -188,6 +268,66 @@ impl DrawingDocumentDto {
                     }
                 }
             }
+
+            let sheet_view_ids = sheet
+                .views
+                .iter()
+                .map(|view| view.id)
+                .collect::<HashSet<_>>();
+            for annotation in &sheet.annotations {
+                let annotation_id = annotation.id();
+                if annotation_id == 0 || !annotation_ids.insert(annotation_id) {
+                    return Err(format!(
+                        "duplicate or zero drawing annotation id {annotation_id}"
+                    ));
+                }
+                max_annotation_id = max_annotation_id.max(annotation_id);
+                match annotation {
+                    DrawingAnnotationDto::LinearDimension {
+                        view_id,
+                        first,
+                        second,
+                        offset,
+                        precision,
+                        ..
+                    } => {
+                        if !sheet_view_ids.contains(view_id) {
+                            return Err(format!(
+                                "drawing dimension {annotation_id} references missing view {view_id}"
+                            ));
+                        }
+                        validate_anchor(first, annotation_id)?;
+                        validate_anchor(second, annotation_id)?;
+                        if first == second {
+                            return Err(format!(
+                                "drawing dimension {annotation_id} needs two distinct anchors"
+                            ));
+                        }
+                        if !offset.is_finite() || offset.abs() > 1.0e6 {
+                            return Err(format!(
+                                "drawing dimension {annotation_id} has an invalid offset"
+                            ));
+                        }
+                        if *precision > 6 {
+                            return Err(format!(
+                                "drawing dimension {annotation_id} precision exceeds 6 decimals"
+                            ));
+                        }
+                    }
+                    DrawingAnnotationDto::Note { text, position, .. } => {
+                        if text.trim().is_empty() || text.chars().count() > MAX_NOTE_LENGTH {
+                            return Err(format!(
+                                "drawing note {annotation_id} must contain 1 to {MAX_NOTE_LENGTH} characters"
+                            ));
+                        }
+                        if position.iter().any(|value| !value.is_finite()) {
+                            return Err(format!(
+                                "drawing note {annotation_id} has a non-finite position"
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         match (self.sheets.is_empty(), self.active_sheet_id) {
@@ -200,11 +340,28 @@ impl DrawingDocumentDto {
             }
             _ => {}
         }
-        if self.next_sheet_id <= max_sheet_id || self.next_view_id <= max_view_id {
+        if self.next_sheet_id <= max_sheet_id
+            || self.next_view_id <= max_view_id
+            || self.next_annotation_id <= max_annotation_id
+        {
             return Err("drawing id counters must be greater than existing ids".to_string());
         }
         Ok(())
     }
+}
+
+fn validate_anchor(anchor: &DrawingTopologyAnchorRefDto, annotation_id: u64) -> Result<(), String> {
+    if anchor.body_id.0 == 0 || anchor.edge_id.0 == 0 || anchor.edge_key.trim().is_empty() {
+        return Err(format!(
+            "drawing dimension {annotation_id} contains an invalid topology anchor"
+        ));
+    }
+    if anchor.fallback_point.iter().any(|value| !value.is_finite()) {
+        return Err(format!(
+            "drawing dimension {annotation_id} contains a non-finite fallback point"
+        ));
+    }
+    Ok(())
 }
 
 fn squared_length(vector: [f64; 3]) -> f64 {
@@ -249,10 +406,12 @@ mod tests {
                     show_hidden_lines: false,
                     show_tangent_edges: false,
                 }],
+                annotations: vec![],
             }],
             active_sheet_id: Some(1),
             next_sheet_id: 2,
             next_view_id: 2,
+            next_annotation_id: 1,
         };
         assert!(drawing.validate().is_err());
     }

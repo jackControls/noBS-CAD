@@ -67,6 +67,7 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     active_sheet_id: null,
     next_sheet_id: 1,
     next_view_id: 1,
+    next_annotation_id: 1,
   };
 }
 

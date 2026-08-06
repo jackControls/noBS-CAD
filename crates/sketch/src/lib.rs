@@ -33,8 +33,9 @@ pub mod host;
 
 pub use constraint::{Constraint, ConstraintId, ConstraintKind};
 pub use drawing::{
-    DrawingDocumentDto, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
-    DrawingTitleBlockDto, DrawingViewDto, DrawingViewKind,
+    DrawingAnnotationDto, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLinearDimensionMode,
+    DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation, DrawingTitleBlockDto,
+    DrawingTopologyAnchorRefDto, DrawingViewDto, DrawingViewKind,
 };
 pub use dto::{
     err_json, ok_json, AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest,

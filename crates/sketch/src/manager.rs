@@ -3071,8 +3071,9 @@ fn ordered_profile_curves(
 mod project_tests {
     use super::*;
     use crate::{
-        DrawingDocumentDto, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
-        DrawingTitleBlockDto, DrawingViewDto, DrawingViewKind,
+        DrawingAnnotationDto, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLinearDimensionMode,
+        DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation, DrawingTitleBlockDto,
+        DrawingTopologyAnchorRefDto, DrawingViewDto, DrawingViewKind,
     };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
@@ -3534,10 +3535,34 @@ mod project_tests {
                     show_hidden_lines: true,
                     show_tangent_edges: false,
                 }],
+                annotations: vec![DrawingAnnotationDto::LinearDimension {
+                    id: 12,
+                    view_id: 9,
+                    first: DrawingTopologyAnchorRefDto {
+                        body_id: BodyId(1),
+                        edge_id: nbcad_core::EdgeId(101),
+                        edge_key: "edge:0".to_string(),
+                        endpoint: DrawingEdgeEndpoint::Start,
+                        fallback_point: [0.0, 0.0, 0.0],
+                    },
+                    second: DrawingTopologyAnchorRefDto {
+                        body_id: BodyId(1),
+                        edge_id: nbcad_core::EdgeId(102),
+                        edge_key: "edge:1".to_string(),
+                        endpoint: DrawingEdgeEndpoint::End,
+                        fallback_point: [20.0, 0.0, 0.0],
+                    },
+                    mode: DrawingLinearDimensionMode::Horizontal,
+                    offset: -12.0,
+                    prefix: String::new(),
+                    suffix: " TYP".to_string(),
+                    precision: 2,
+                }],
             }],
             active_sheet_id: Some(4),
             next_sheet_id: 5,
             next_view_id: 10,
+            next_annotation_id: 13,
         };
         let mut manager = SketchManager::new();
         manager.set_drawing_document(drawing.clone()).unwrap();

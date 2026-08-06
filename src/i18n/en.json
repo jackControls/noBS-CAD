@@ -118,6 +118,7 @@
       "drawing": "DRAWING",
       "workspace": "WORKSPACE",
       "views": "VIEWS",
+      "annotate": "ANNOTATE",
       "output": "OUTPUT"
     },
     "finishSketch": "FINISH SKETCH",
@@ -158,6 +159,8 @@
       "top": "Top View",
       "right": "Right View",
       "isometric": "Isometric",
+      "dimension": "Dimension",
+      "note": "Note",
       "exportSvg": "Export SVG",
       "print": "Print / PDF"
     },

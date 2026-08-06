@@ -54,6 +54,7 @@ import {
   installProjectTabRetention,
 } from './files/projectTabs';
 import { SYSTEM_DARK_QUERY } from './theme';
+import { deleteDrawingAnnotation } from './drawing/document';
 import {
   installNativeEditMenu,
   nativeMacMenuOwnsUndoRedo,
@@ -182,6 +183,7 @@ export default function App() {
         // as the viewport boundary. This remains reliable while the document
         // is loading or the native child view is being reparented.
         if (s.navTool !== 'select') s.setNavTool('select');
+        if (s.drawingTool !== null) s.setDrawingTool(null);
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
         if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();
@@ -199,6 +201,16 @@ export default function App() {
       }
 
       if (s.document === null) return;
+
+      if (
+        s.activeTab === 'drawing'
+        && (e.key === 'Delete' || e.key === 'Backspace')
+        && s.selectedDrawingAnnotationId !== null
+      ) {
+        e.preventDefault();
+        void deleteDrawingAnnotation(s.selectedDrawingAnnotationId);
+        return;
+      }
 
       if (s.mode === 'solid' && e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();

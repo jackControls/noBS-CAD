@@ -63,6 +63,7 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     active_sheet_id: null,
     next_sheet_id: 1,
     next_view_id: 1,
+    next_annotation_id: 1,
   };
 }
 
@@ -148,6 +149,9 @@ export type SketchTool =
  * orbit/pan/zoom apply continuously, zoomWindow frames a dragged rect.
  */
 export type NavTool = 'select' | 'orbit' | 'pan' | 'zoom' | 'zoomWindow';
+
+/** Modeless tool active in the technical drawing workspace. */
+export type DrawingTool = 'dimension' | 'note' | null;
 
 /** Sketch palette option keys (labels live in i18n under palette.*). */
 export const PALETTE_OPTION_KEYS = [
@@ -371,6 +375,8 @@ interface AppState {
   /** Persistent technical drawing sheets and projected-view definitions. */
   drawingDocument: DrawingDocumentDto;
   selectedDrawingViewId: number | null;
+  selectedDrawingAnnotationId: number | null;
+  drawingTool: DrawingTool;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -427,6 +433,8 @@ interface AppState {
   setBodyAppearance: (appearance: BodyAppearance) => Promise<void>;
   setDrawingDocument: (drawing: DrawingDocumentDto) => Promise<void>;
   setSelectedDrawingViewId: (viewId: number | null) => void;
+  setSelectedDrawingAnnotationId: (annotationId: number | null) => void;
+  setDrawingTool: (tool: DrawingTool) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -588,6 +596,8 @@ function resetDocumentUiState(): Partial<AppState> {
     bodyAppearances: [],
     drawingDocument: emptyDrawingDocument(),
     selectedDrawingViewId: null,
+    selectedDrawingAnnotationId: null,
+    drawingTool: null,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -658,6 +668,8 @@ export const useAppStore = create<AppState>()((set) => ({
   bodyAppearances: [],
   drawingDocument: emptyDrawingDocument(),
   selectedDrawingViewId: null,
+  selectedDrawingAnnotationId: null,
+  drawingTool: null,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -782,6 +794,11 @@ export const useAppStore = create<AppState>()((set) => ({
   },
 
   setSelectedDrawingViewId: (selectedDrawingViewId) => set({ selectedDrawingViewId }),
+
+  setSelectedDrawingAnnotationId: (selectedDrawingAnnotationId) =>
+    set({ selectedDrawingAnnotationId }),
+
+  setDrawingTool: (drawingTool) => set({ drawingTool }),
 
   loadProjectState: (
     update,

@@ -378,6 +378,7 @@ fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjecti
     Ok(DrawingProjectionDto {
         visible,
         hidden,
+        anchors: Vec::new(),
         bounds,
     })
 }

@@ -996,6 +996,38 @@ export interface DrawingViewDto {
   show_tangent_edges: boolean;
 }
 
+export type DrawingEdgeEndpoint = 'start' | 'end';
+export type DrawingLinearDimensionMode = 'aligned' | 'horizontal' | 'vertical';
+
+export interface DrawingTopologyAnchorRefDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  endpoint: DrawingEdgeEndpoint;
+  fallback_point: [number, number, number];
+}
+
+export type DrawingAnnotationDto =
+  | {
+      kind: 'linear_dimension';
+      id: number;
+      view_id: number;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      mode: DrawingLinearDimensionMode;
+      /** Signed paper-space offset from the measured span, in millimetres. */
+      offset: number;
+      prefix: string;
+      suffix: string;
+      precision: number;
+    }
+  | {
+      kind: 'note';
+      id: number;
+      text: string;
+      position: [number, number];
+    };
+
 export interface DrawingSheetDto {
   id: number;
   name: string;
@@ -1003,6 +1035,7 @@ export interface DrawingSheetDto {
   orientation: DrawingSheetOrientation;
   title_block: DrawingTitleBlockDto;
   views: DrawingViewDto[];
+  annotations: DrawingAnnotationDto[];
 }
 
 export interface DrawingDocumentDto {
@@ -1010,6 +1043,7 @@ export interface DrawingDocumentDto {
   active_sheet_id: number | null;
   next_sheet_id: number;
   next_view_id: number;
+  next_annotation_id: number;
 }
 
 export interface DrawingProjectionRequest {
@@ -1025,9 +1059,21 @@ export interface DrawingPolylineDto {
   points: Array<[number, number]>;
 }
 
+export interface DrawingProjectionAnchorDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  endpoint: DrawingEdgeEndpoint;
+  model_point: [number, number, number];
+  /** Projected model-millimetre coordinate, before drawing-view scale. */
+  point: [number, number];
+  hidden: boolean;
+}
+
 export interface DrawingProjectionDto {
   visible: DrawingPolylineDto[];
   hidden: DrawingPolylineDto[];
+  anchors: DrawingProjectionAnchorDto[];
   /** min x, min y, max x, max y in model millimetres. */
   bounds: [number, number, number, number];
 }

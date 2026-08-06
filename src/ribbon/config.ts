@@ -33,6 +33,7 @@ export type RibbonAction =
   | 'modelWorkspace'
   | 'drawingNewSheet'
   | 'drawingAddView'
+  | 'drawingTool'
   | 'drawingExportSvg'
   | 'drawingPrint';
 
@@ -632,6 +633,14 @@ export const DRAWING_TAB: RibbonTab = {
         { id: 'topView', labelKey: 'ribbon.drawing.top', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'top' },
         { id: 'rightView', labelKey: 'ribbon.drawing.right', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'right' },
         { id: 'isometricView', labelKey: 'ribbon.drawing.isometric', icon: 'section', enabled: true, action: 'drawingAddView', payload: 'isometric' },
+      ],
+    },
+    {
+      id: 'annotate',
+      labelKey: 'ribbon.panels.annotate',
+      buttons: [
+        { id: 'drawingDimension', labelKey: 'ribbon.drawing.dimension', icon: 'measure', enabled: true, action: 'drawingTool', payload: 'dimension' },
+        { id: 'drawingNote', labelKey: 'ribbon.drawing.note', icon: 'text', enabled: true, action: 'drawingTool', payload: 'note' },
       ],
     },
     {

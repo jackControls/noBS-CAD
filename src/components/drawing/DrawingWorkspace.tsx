@@ -1,31 +1,62 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Eye, EyeOff, Minus, Plus, Printer, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
 import { getEngine } from '../../engine';
 import type {
+  DrawingAnnotationDto,
   DrawingProjectionDto,
+  DrawingProjectionAnchorDto,
   DrawingSheetDto,
+  DrawingTopologyAnchorRefDto,
   DrawingViewDto,
 } from '../../engine/types';
 import {
+  addDrawingLinearDimension,
+  addDrawingNote,
+  deleteDrawingAnnotation,
   deleteDrawingView,
   updateActiveDrawingSheet,
+  updateDrawingAnnotation,
   updateDrawingView,
 } from '../../drawing/document';
+import {
+  arrowPolygon,
+  drawingAnchorRef,
+  drawingDimensionText,
+  drawingProjectedPointToPaper,
+  linearDimensionGeometry,
+  resolveDrawingAnchor,
+} from '../../drawing/annotations';
 import { printActiveDrawing } from '../../drawing/export';
 import {
   drawingSheetSize,
   drawingViewPaperBounds,
   drawingViewTransform,
 } from '../../drawing/sheet';
-import { useAppStore } from '../../store/appStore';
+import { useAppStore, type DrawingTool } from '../../store/appStore';
 import { showDrawingError } from './DrawingBrowser';
 
 export function DrawingWorkspace() {
   const drawing = useAppStore((state) => state.drawingDocument);
   const selectedViewId = useAppStore((state) => state.selectedDrawingViewId);
+  const selectedAnnotationId = useAppStore((state) => state.selectedDrawingAnnotationId);
+  const drawingTool = useAppStore((state) => state.drawingTool);
   const selectView = useAppStore((state) => state.setSelectedDrawingViewId);
+  const selectAnnotation = useAppStore((state) => state.setSelectedDrawingAnnotationId);
+  const setDrawingTool = useAppStore((state) => state.setDrawingTool);
   const sheet = drawing.sheets.find((candidate) => candidate.id === drawing.active_sheet_id) ?? null;
   const [zoom, setZoom] = useState(1);
+  const [dimensionDraft, setDimensionDraft] = useState<{
+    viewId: number;
+    anchor: DrawingTopologyAnchorRefDto;
+  } | null>(null);
+
+  useEffect(() => {
+    if (drawingTool !== 'dimension') setDimensionDraft(null);
+  }, [drawingTool]);
+
+  useEffect(() => {
+    setDimensionDraft(null);
+  }, [sheet?.id]);
 
   if (!sheet) {
     return (
@@ -35,6 +66,39 @@ export function DrawingWorkspace() {
     );
   }
   const [width, height] = drawingSheetSize(sheet.format, sheet.orientation);
+  const clearSelection = () => {
+    selectView(null);
+    selectAnnotation(null);
+  };
+  const selectOnlyView = (viewId: number) => {
+    selectAnnotation(null);
+    selectView(viewId);
+  };
+  const selectOnlyAnnotation = (annotationId: number) => {
+    selectView(null);
+    selectAnnotation(annotationId);
+  };
+  const pickDimensionAnchor = (
+    viewId: number,
+    projectionAnchor: DrawingProjectionAnchorDto,
+  ) => {
+    const anchor = drawingAnchorRef(projectionAnchor);
+    if (!dimensionDraft || dimensionDraft.viewId !== viewId) {
+      setDimensionDraft({ viewId, anchor });
+      return;
+    }
+    if (sameDrawingAnchor(dimensionDraft.anchor, anchor)) return;
+    void addDrawingLinearDimension(viewId, dimensionDraft.anchor, anchor)
+      .then(() => setDimensionDraft(null))
+      .catch(showDrawingError);
+  };
+  const placeNote = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (drawingTool !== 'note' || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = drawingSheetPoint(event, width, height);
+    void addDrawingNote(point).catch(showDrawingError);
+  };
 
   return (
     <div className="flex h-full min-h-0 bg-viewport" data-testid="drawing-workspace">
@@ -46,6 +110,23 @@ export function DrawingWorkspace() {
             <span>{sheet.format.toUpperCase()} {sheet.orientation}</span>
             <span>·</span>
             <span>Vector HLR</span>
+            {drawingTool && (
+              <span className="ml-2 flex items-center gap-2 rounded border border-accent/45 bg-accent/10 px-2 py-1 text-accent">
+                {drawingTool === 'dimension'
+                  ? dimensionDraft
+                    ? 'Select the second model point'
+                    : 'Select the first model point'
+                  : 'Click the sheet to place a note'}
+                <button
+                  type="button"
+                  title="Cancel drawing tool"
+                  onClick={() => setDrawingTool(null)}
+                  className="rounded hover:bg-accent/15"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1">
             <button className="drawing-mini-button" type="button" onClick={() => setZoom((value) => Math.max(0.4, value - 0.1))} title="Zoom out">
@@ -71,8 +152,9 @@ export function DrawingWorkspace() {
             viewBox={`0 0 ${width} ${height}`}
             role="img"
             aria-label={`${sheet.name} technical drawing`}
+            onPointerDownCapture={placeNote}
           >
-            <rect width={width} height={height} fill="#fff" />
+            <rect width={width} height={height} fill="#fff" onPointerDown={clearSelection} />
             <SheetFrame sheet={sheet} width={width} height={height} />
             {sheet.views.map((view) => (
               <ProjectedDrawingView
@@ -81,13 +163,40 @@ export function DrawingWorkspace() {
                 sheetWidth={width}
                 sheetHeight={height}
                 selected={selectedViewId === view.id}
-                onSelect={() => selectView(view.id)}
+                annotations={sheet.annotations.filter(
+                  (annotation): annotation is Extract<DrawingAnnotationDto, { kind: 'linear_dimension' }> =>
+                    annotation.kind === 'linear_dimension' && annotation.view_id === view.id,
+                )}
+                selectedAnnotationId={selectedAnnotationId}
+                drawingTool={drawingTool}
+                dimensionDraft={dimensionDraft}
+                onSelect={() => selectOnlyView(view.id)}
+                onSelectAnnotation={selectOnlyAnnotation}
+                onPickDimensionAnchor={pickDimensionAnchor}
               />
             ))}
+            {sheet.annotations
+              .filter((annotation): annotation is Extract<DrawingAnnotationDto, { kind: 'note' }> =>
+                annotation.kind === 'note',
+              )
+              .map((note) => (
+                <DrawingNoteGraphic
+                  key={note.id}
+                  note={note}
+                  sheetWidth={width}
+                  sheetHeight={height}
+                  selected={selectedAnnotationId === note.id}
+                  onSelect={() => selectOnlyAnnotation(note.id)}
+                />
+              ))}
           </svg>
         </div>
       </section>
-      <DrawingInspector sheet={sheet} selectedViewId={selectedViewId} />
+      <DrawingInspector
+        sheet={sheet}
+        selectedViewId={selectedViewId}
+        selectedAnnotationId={selectedAnnotationId}
+      />
     </div>
   );
 }
@@ -97,13 +206,25 @@ function ProjectedDrawingView({
   sheetWidth,
   sheetHeight,
   selected,
+  annotations,
+  selectedAnnotationId,
+  drawingTool,
+  dimensionDraft,
   onSelect,
+  onSelectAnnotation,
+  onPickDimensionAnchor,
 }: {
   view: DrawingViewDto;
   sheetWidth: number;
   sheetHeight: number;
   selected: boolean;
+  annotations: Array<Extract<DrawingAnnotationDto, { kind: 'linear_dimension' }>>;
+  selectedAnnotationId: number | null;
+  drawingTool: DrawingTool;
+  dimensionDraft: { viewId: number; anchor: DrawingTopologyAnchorRefDto } | null;
   onSelect: () => void;
+  onSelectAnnotation: (annotationId: number) => void;
+  onPickDimensionAnchor: (viewId: number, anchor: DrawingProjectionAnchorDto) => void;
 }) {
   const scene = useAppStore((state) => state.solidScene);
   const [projection, setProjection] = useState<DrawingProjectionDto | null>(null);
@@ -156,7 +277,7 @@ function ProjectedDrawingView({
     ];
   };
   const onPointerDown = (event: ReactPointerEvent<SVGGElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || drawingTool !== null) return;
     event.stopPropagation();
     onSelect();
     const start = sheetPoint(event);
@@ -179,7 +300,14 @@ function ProjectedDrawingView({
   };
 
   return (
-    <g onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishDrag} onPointerCancel={finishDrag} className="cursor-move">
+    <g
+      data-drawing-view-id={view.id}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+      className={drawingTool ? 'cursor-crosshair' : 'cursor-move'}
+    >
       <g transform={drawingViewTransform(displayView, projection)} fill="none" stroke="#17191c" strokeLinecap="round" strokeLinejoin="round">
         {projection.visible.map((polyline, index) => (
           <polyline key={`v-${index}`} points={polyline.points.map((point) => point.join(',')).join(' ')} vectorEffect="non-scaling-stroke" strokeWidth="0.35" />
@@ -192,21 +320,68 @@ function ProjectedDrawingView({
       <text x={position[0]} y={labelY} fill={selected ? '#6654c7' : '#4b5159'} fontSize="3.1" textAnchor="middle" className="pointer-events-none">
         {view.name} · {view.scale >= 1 ? `${view.scale}:1` : `1:${Number((1 / view.scale).toFixed(2))}`}
       </text>
+      {annotations.map((annotation) => (
+        <LinearDimensionGraphic
+          key={annotation.id}
+          annotation={annotation}
+          view={displayView}
+          projection={projection}
+          selected={selectedAnnotationId === annotation.id}
+          onSelect={() => onSelectAnnotation(annotation.id)}
+        />
+      ))}
+      {drawingTool === 'dimension' && projection.anchors
+        .filter((anchor) => !anchor.hidden || view.show_hidden_lines)
+        .map((anchor) => {
+          const paper = drawingProjectedPointToPaper(displayView, projection, anchor.point);
+          const active = dimensionDraft?.viewId === view.id
+            && sameDrawingAnchor(dimensionDraft.anchor, drawingAnchorRef(anchor));
+          return (
+            <circle
+              key={`${anchor.body_id}-${anchor.edge_id}-${anchor.endpoint}`}
+              data-testid="drawing-dimension-anchor"
+              cx={paper[0]}
+              cy={paper[1]}
+              r={active ? 1.75 : 1.25}
+              fill={active ? '#6654c7' : '#fff'}
+              stroke={active ? '#6654c7' : '#1688c9'}
+              strokeWidth={active ? 0.65 : 0.5}
+              className="cursor-crosshair"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onPickDimensionAnchor(view.id, anchor);
+              }}
+            />
+          );
+        })}
     </g>
   );
 }
 
-function DrawingInspector({ sheet, selectedViewId }: { sheet: DrawingSheetDto; selectedViewId: number | null }) {
+function DrawingInspector({
+  sheet,
+  selectedViewId,
+  selectedAnnotationId,
+}: {
+  sheet: DrawingSheetDto;
+  selectedViewId: number | null;
+  selectedAnnotationId: number | null;
+}) {
   const scene = useAppStore((state) => state.solidScene);
   const view = sheet.views.find((candidate) => candidate.id === selectedViewId) ?? null;
+  const annotation = sheet.annotations.find((candidate) => candidate.id === selectedAnnotationId) ?? null;
   const run = (action: Promise<void>) => void action.catch(showDrawingError);
 
   return (
     <aside className="w-[286px] shrink-0 overflow-y-auto border-l border-edge bg-panel p-3">
       <div className="mb-3 text-[10px] font-semibold tracking-[0.16em] text-mute">
-        {view ? 'DRAWING VIEW' : 'SHEET PROPERTIES'}
+        {annotation ? 'ANNOTATION' : view ? 'DRAWING VIEW' : 'SHEET PROPERTIES'}
       </div>
-      {view ? (
+      {annotation ? (
+        <AnnotationInspector annotation={annotation} run={run} />
+      ) : view ? (
         <>
           <Field label="Name">
             <input className="drawing-input" value={view.name} onChange={(event) => run(updateDrawingView(view.id, { name: event.target.value || 'View' }))} />
@@ -280,6 +455,380 @@ function DrawingInspector({ sheet, selectedViewId }: { sheet: DrawingSheetDto; s
       )}
     </aside>
   );
+}
+
+function AnnotationInspector({
+  annotation,
+  run,
+}: {
+  annotation: DrawingAnnotationDto;
+  run: (action: Promise<void>) => void;
+}) {
+  if (annotation.kind === 'note') {
+    return <NoteAnnotationInspector note={annotation} run={run} />;
+  }
+
+  return (
+    <>
+      <div className="mb-3 rounded border border-accent/35 bg-accent/10 p-2 text-[10px] leading-relaxed text-mute">
+        <span className="font-semibold text-accent">ASSOCIATIVE</span>
+        <br />Attached to stable model edge endpoints. It updates when the view moves or the model recomputes.
+      </div>
+      <Field label="Orientation">
+        <select
+          className="drawing-input"
+          value={annotation.mode}
+          onChange={(event) => run(updateDrawingAnnotation(annotation.id, {
+            mode: event.target.value as Extract<DrawingAnnotationDto, { kind: 'linear_dimension' }>['mode'],
+          }))}
+        >
+          <option value="aligned">Aligned</option>
+          <option value="horizontal">Horizontal</option>
+          <option value="vertical">Vertical</option>
+        </select>
+      </Field>
+      <NumberField
+        label="Offset (mm)"
+        value={annotation.offset}
+        onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))}
+      />
+      <Field label="Precision">
+        <select
+          className="drawing-input"
+          value={annotation.precision}
+          onChange={(event) => run(updateDrawingAnnotation(annotation.id, {
+            precision: Number(event.target.value),
+          }))}
+        >
+          {[0, 1, 2, 3, 4, 5, 6].map((precision) => (
+            <option key={precision} value={precision}>{precision} decimal{precision === 1 ? '' : 's'}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Prefix">
+        <input
+          className="drawing-input"
+          value={annotation.prefix}
+          onChange={(event) => run(updateDrawingAnnotation(annotation.id, { prefix: event.target.value }))}
+        />
+      </Field>
+      <Field label="Suffix">
+        <input
+          className="drawing-input"
+          value={annotation.suffix}
+          onChange={(event) => run(updateDrawingAnnotation(annotation.id, { suffix: event.target.value }))}
+        />
+      </Field>
+      <DeleteAnnotationButton annotationId={annotation.id} run={run} />
+    </>
+  );
+}
+
+function NoteAnnotationInspector({
+  note,
+  run,
+}: {
+  note: Extract<DrawingAnnotationDto, { kind: 'note' }>;
+  run: (action: Promise<void>) => void;
+}) {
+  const [draft, setDraft] = useState(note.text);
+
+  useEffect(() => setDraft(note.text), [note.id, note.text]);
+  useEffect(() => {
+    if (!draft.trim() || draft === note.text) return;
+    const timer = window.setTimeout(() => {
+      run(updateDrawingAnnotation(note.id, { text: draft }));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [draft, note.id, note.text, run]);
+
+  return (
+    <>
+      <Field label="Text">
+        <textarea
+          className="drawing-input min-h-24 resize-y py-2"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (!draft.trim()) setDraft(note.text);
+          }}
+        />
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <NumberField
+          label="Paper X (mm)"
+          value={note.position[0]}
+          onChange={(value) => run(updateDrawingAnnotation(note.id, {
+            position: [value, note.position[1]],
+          }))}
+        />
+        <NumberField
+          label="Paper Y (mm)"
+          value={note.position[1]}
+          onChange={(value) => run(updateDrawingAnnotation(note.id, {
+            position: [note.position[0], value],
+          }))}
+        />
+      </div>
+      <DeleteAnnotationButton annotationId={note.id} run={run} />
+    </>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="number"
+        step="0.5"
+        className="drawing-input"
+        value={value}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isFinite(next)) onChange(next);
+        }}
+      />
+    </Field>
+  );
+}
+
+function DeleteAnnotationButton({
+  annotationId,
+  run,
+}: {
+  annotationId: number;
+  run: (action: Promise<void>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => run(deleteDrawingAnnotation(annotationId))}
+      className="mt-4 flex h-8 w-full items-center justify-center gap-2 rounded border border-warn/35 text-[11px] text-warn hover:bg-warn/10"
+    >
+      <Trash2 size={13} /> Delete annotation
+    </button>
+  );
+}
+
+function LinearDimensionGraphic({
+  annotation,
+  view,
+  projection,
+  selected,
+  onSelect,
+}: {
+  annotation: Extract<DrawingAnnotationDto, { kind: 'linear_dimension' }>;
+  view: DrawingViewDto;
+  projection: DrawingProjectionDto;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const units = useAppStore((state) => state.document?.settings.units ?? 'mm');
+  const first = resolveDrawingAnchor(annotation.first, view, projection);
+  const second = resolveDrawingAnchor(annotation.second, view, projection);
+  const geometry = first && second
+    ? linearDimensionGeometry(first, second, annotation.mode, annotation.offset, view.scale)
+    : null;
+  const color = selected ? '#6654c7' : '#23272d';
+  const select = (event: ReactPointerEvent<SVGGElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+  };
+
+  if (!geometry) {
+    return (
+      <g
+        data-testid="drawing-broken-dimension"
+        onPointerDown={select}
+        className="cursor-pointer"
+      >
+        <circle
+          cx={view.position[0]}
+          cy={view.position[1] - 8}
+          r="3.1"
+          fill="#fff3f0"
+          stroke="#b54432"
+          strokeWidth="0.45"
+        />
+        <text
+          x={view.position[0]}
+          y={view.position[1] - 6.8}
+          fill="#b54432"
+          fontSize="3.5"
+          fontWeight="700"
+          textAnchor="middle"
+        >!</text>
+        <title>Dimension reference is missing or invalid</title>
+      </g>
+    );
+  }
+
+  const text = drawingDimensionText(
+    geometry.value,
+    annotation.precision,
+    annotation.prefix,
+    annotation.suffix,
+    units,
+  );
+  const linePath = [
+    `M${geometry.firstExtension[0].join(' ')}L${geometry.firstExtension[1].join(' ')}`,
+    `M${geometry.secondExtension[0].join(' ')}L${geometry.secondExtension[1].join(' ')}`,
+    `M${geometry.dimensionStart.join(' ')}L${geometry.dimensionEnd.join(' ')}`,
+  ].join(' ');
+
+  return (
+    <g
+      data-testid="drawing-linear-dimension"
+      data-annotation-id={annotation.id}
+      onPointerDown={select}
+      className="cursor-pointer"
+    >
+      <path d={linePath} fill="none" stroke="transparent" strokeWidth="4" />
+      <path d={linePath} fill="none" stroke={color} strokeWidth={selected ? 0.48 : 0.34} />
+      <polygon
+        points={arrowPolygon(geometry.dimensionStart, geometry.dimensionEnd, geometry.arrowSize)}
+        fill={color}
+      />
+      <polygon
+        points={arrowPolygon(geometry.dimensionEnd, geometry.dimensionStart, geometry.arrowSize)}
+        fill={color}
+      />
+      <text
+        x={geometry.textPosition[0]}
+        y={geometry.textPosition[1] - 0.8}
+        transform={`rotate(${geometry.textAngle} ${geometry.textPosition[0]} ${geometry.textPosition[1]})`}
+        fill={color}
+        stroke="#fff"
+        strokeWidth="1.6"
+        paintOrder="stroke"
+        fontFamily="system-ui, sans-serif"
+        fontSize="3.25"
+        fontWeight={selected ? 650 : 500}
+        textAnchor="middle"
+      >
+        {text}
+      </text>
+    </g>
+  );
+}
+
+function DrawingNoteGraphic({
+  note,
+  sheetWidth,
+  sheetHeight,
+  selected,
+  onSelect,
+}: {
+  note: Extract<DrawingAnnotationDto, { kind: 'note' }>;
+  sheetWidth: number;
+  sheetHeight: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const drag = useRef<{
+    pointerId: number;
+    start: [number, number];
+    origin: [number, number];
+  } | null>(null);
+  const [dragPosition, setDragPosition] = useState<[number, number] | null>(null);
+  const position = dragPosition ?? note.position;
+  const lines = note.text.split('\n');
+  const width = Math.max(12, ...lines.map((line) => line.length * 1.9));
+  const height = Math.max(5, lines.length * 4);
+
+  const onPointerDown = (event: ReactPointerEvent<SVGGElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+    drag.current = {
+      pointerId: event.pointerId,
+      start: drawingSheetPoint(event, sheetWidth, sheetHeight),
+      origin: note.position,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onPointerMove = (event: ReactPointerEvent<SVGGElement>) => {
+    if (!drag.current || drag.current.pointerId !== event.pointerId) return;
+    const current = drawingSheetPoint(event, sheetWidth, sheetHeight);
+    setDragPosition([
+      Math.max(5, Math.min(sheetWidth - 5, drag.current.origin[0] + current[0] - drag.current.start[0])),
+      Math.max(5, Math.min(sheetHeight - 5, drag.current.origin[1] + current[1] - drag.current.start[1])),
+    ]);
+  };
+  const finishDrag = (event: ReactPointerEvent<SVGGElement>) => {
+    if (!drag.current || drag.current.pointerId !== event.pointerId) return;
+    drag.current = null;
+    if (dragPosition) {
+      void updateDrawingAnnotation(note.id, { position: dragPosition }).catch(showDrawingError);
+    }
+    setDragPosition(null);
+  };
+
+  return (
+    <g
+      data-testid="drawing-note"
+      data-annotation-id={note.id}
+      transform={`translate(${position[0]} ${position[1]})`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+      className="cursor-move"
+    >
+      <rect
+        x="-2"
+        y="-4"
+        width={width + 4}
+        height={height + 2}
+        rx="1"
+        fill="transparent"
+        stroke={selected ? '#6654c7' : 'transparent'}
+        strokeWidth="0.45"
+        strokeDasharray="2 1"
+      />
+      <text fill="#23272d" fontFamily="system-ui, sans-serif" fontSize="3.4">
+        {lines.map((line, index) => (
+          <tspan key={index} x="0" dy={index === 0 ? 0 : 4}>{line}</tspan>
+        ))}
+      </text>
+    </g>
+  );
+}
+
+function sameDrawingAnchor(
+  left: DrawingTopologyAnchorRefDto,
+  right: DrawingTopologyAnchorRefDto,
+): boolean {
+  return left.body_id === right.body_id
+    && left.edge_id === right.edge_id
+    && left.endpoint === right.endpoint;
+}
+
+function drawingSheetPoint(
+  event: ReactPointerEvent<SVGElement>,
+  sheetWidth: number,
+  sheetHeight: number,
+): [number, number] {
+  const svg = event.currentTarget instanceof SVGSVGElement
+    ? event.currentTarget
+    : event.currentTarget.ownerSVGElement;
+  if (!svg) return [0, 0];
+  const rect = svg.getBoundingClientRect();
+  return [
+    (event.clientX - rect.left) * sheetWidth / rect.width,
+    (event.clientY - rect.top) * sheetHeight / rect.height,
+  ];
 }
 
 function SheetFrame({ sheet, width, height }: { sheet: DrawingSheetDto; width: number; height: number }) {

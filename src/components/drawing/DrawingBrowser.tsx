@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, FilePlus2, Layers3, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FilePlus2, Hash, Layers3, Trash2, Type } from 'lucide-react';
 import {
   addDrawingSheet,
   deleteDrawingSheet,
@@ -9,7 +9,9 @@ import { useAppStore } from '../../store/appStore';
 export function DrawingBrowser() {
   const drawing = useAppStore((state) => state.drawingDocument);
   const selectedViewId = useAppStore((state) => state.selectedDrawingViewId);
+  const selectedAnnotationId = useAppStore((state) => state.selectedDrawingAnnotationId);
   const selectView = useAppStore((state) => state.setSelectedDrawingViewId);
+  const selectAnnotation = useAppStore((state) => state.setSelectedDrawingAnnotationId);
 
   const run = (action: () => Promise<void>) => {
     void action().catch(showDrawingError);
@@ -65,7 +67,10 @@ export function DrawingBrowser() {
                     <button
                       key={view.id}
                       type="button"
-                      onClick={() => selectView(view.id)}
+                      onClick={() => {
+                        selectAnnotation(null);
+                        selectView(view.id);
+                      }}
                       className={`flex h-7 w-full items-center gap-2 pl-9 pr-2 text-left text-[11px] ${
                         selectedViewId === view.id
                           ? 'bg-accent/25 text-ink'
@@ -82,6 +87,35 @@ export function DrawingBrowser() {
                   {sheet.views.length === 0 && (
                     <div className="px-9 py-2 text-[10px] italic text-mute/70">No projected views</div>
                   )}
+                  {sheet.annotations.length > 0 && (
+                    <div className="mb-1 mt-1 px-9 text-[9px] font-semibold tracking-[0.14em] text-mute/60">
+                      ANNOTATIONS
+                    </div>
+                  )}
+                  {sheet.annotations.map((annotation) => (
+                    <button
+                      key={annotation.id}
+                      type="button"
+                      onClick={() => {
+                        selectView(null);
+                        selectAnnotation(annotation.id);
+                      }}
+                      className={`flex h-7 w-full items-center gap-2 pl-9 pr-2 text-left text-[11px] ${
+                        selectedAnnotationId === annotation.id
+                          ? 'bg-accent/25 text-ink'
+                          : 'text-mute hover:bg-edge/40 hover:text-ink'
+                      }`}
+                    >
+                      {annotation.kind === 'linear_dimension'
+                        ? <Hash size={12} />
+                        : <Type size={12} />}
+                      <span className="truncate">
+                        {annotation.kind === 'linear_dimension'
+                          ? `Dimension ${annotation.id}`
+                          : annotation.text.split('\n')[0]}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               )}
             </section>

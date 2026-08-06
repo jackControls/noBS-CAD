@@ -1,6 +1,7 @@
 import type {
   BodyDto,
   DrawingPolylineDto,
+  DrawingProjectionAnchorDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
   Point3Dto,
@@ -70,8 +71,81 @@ export function projectSceneForDrawing(
   return {
     visible,
     hidden,
+    anchors: projectedAnchors(selected, basis, visible, request.deflection),
     bounds: projectionBounds([...visible, ...hidden]),
   };
+}
+
+function projectedAnchors(
+  bodies: BodyDto[],
+  basis: ProjectionBasis,
+  visible: DrawingPolylineDto[],
+  deflection: number,
+): DrawingProjectionAnchorDto[] {
+  const anchors: DrawingProjectionAnchorDto[] = [];
+  for (const body of bodies) {
+    for (const edge of body.edges) {
+      const endpoints = [
+        ['start', edge.points[0]],
+        ['end', edge.points[edge.points.length - 1]],
+      ] as const;
+      for (const [endpoint, model] of endpoints) {
+        if (!model) continue;
+        const projected = projectPoint(model, basis);
+        const point: [number, number] = [projected[0], projected[1]];
+        anchors.push({
+          body_id: body.id,
+          edge_id: edge.id,
+          edge_key: edge.key,
+          endpoint,
+          model_point: [model.x, model.y, model.z],
+          point,
+          hidden: !pointTouchesPolylines(point, visible, Math.max(1e-4, deflection) * 2.5),
+        });
+      }
+    }
+  }
+  anchors.sort((left, right) =>
+    left.body_id - right.body_id ||
+    left.edge_id - right.edge_id ||
+    endpointOrder(left.endpoint) - endpointOrder(right.endpoint),
+  );
+  const seen = new Set<string>();
+  return anchors.filter((anchor) => {
+    const key = `${anchor.body_id}|${anchor.model_point.map((value) => Math.round(value * 1e7)).join(',')}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function endpointOrder(endpoint: DrawingProjectionAnchorDto['endpoint']): number {
+  return endpoint === 'start' ? 0 : 1;
+}
+
+function pointTouchesPolylines(
+  point: [number, number],
+  polylines: DrawingPolylineDto[],
+  tolerance: number,
+): boolean {
+  return polylines.some((polyline) =>
+    polyline.points.some((end, index) =>
+      index > 0 && pointSegmentDistance(point, polyline.points[index - 1], end) <= tolerance,
+    ),
+  );
+}
+
+function pointSegmentDistance(
+  point: [number, number],
+  start: [number, number],
+  end: [number, number],
+): number {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 1e-18) return Math.hypot(point[0] - start[0], point[1] - start[1]);
+  const t = Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSq));
+  return Math.hypot(point[0] - (start[0] + dx * t), point[1] - (start[1] + dy * t));
 }
 
 function projectionBasis(direction: Vec3, desiredUp: Vec3): ProjectionBasis {

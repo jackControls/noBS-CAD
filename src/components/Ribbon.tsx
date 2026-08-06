@@ -184,12 +184,16 @@ function Button({
   const enabled = documentOpen && (button.enabled ?? false);
   // Drawing-tool buttons show the active-tool state.
   const toolActive = useAppStore(
-    (s) => button.action === 'sketchTool' && s.activeTool === button.payload,
+    (s) =>
+      (button.action === 'sketchTool' && s.activeTool === button.payload)
+      || (button.action === 'drawingTool' && s.drawingTool === button.payload),
   );
   const widthClass =
     button.id === 'patternRectangular' || button.id === 'perpendicular'
       ? 'w-14 max-[1400px]:w-10'
-      : button.id === 'sketchDimension' || button.id === 'horizontalVertical'
+      : button.id === 'sketchDimension'
+          || button.id === 'drawingDimension'
+          || button.id === 'horizontalVertical'
         ? 'w-12 max-[1400px]:w-10'
         : 'w-11 max-[1400px]:w-9';
 
