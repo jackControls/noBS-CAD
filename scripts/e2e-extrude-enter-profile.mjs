@@ -84,9 +84,25 @@ try {
   );
   const profileCheckbox = dialog.locator('input[type="checkbox"]').first();
   assert.equal(await profileCheckbox.isChecked(), true);
-  await profileCheckbox.uncheck();
+  await page.evaluate(() => {
+    window.__appStore.getState().selectSolidFeature('face', 999, 888, null, false);
+  });
+  await page.getByTestId('extrude-clear-profiles').click();
   await page.waitForFunction(
-    () => window.__appStore.getState().profilePicker?.selected.length === 0,
+    () =>
+      window.__appStore.getState().profilePicker?.selected.length === 0
+      && window.__appStore.getState().profilePicker?.sketchName === ''
+      && window.__appStore.getState().selectedFace === null,
+  );
+  assert.equal(
+    await page.getByTestId('extrude-sketch').inputValue(),
+    '',
+    'Clear & reselect removes the old sketch scope instead of trapping the picker',
+  );
+  assert.equal(
+    await page.evaluate(() => window.__nativeViewportTransient().triangles.length),
+    0,
+    'unselected candidates remain lightweight outlines instead of stacked x-ray fills',
   );
 
   // A repeated command invocation must not erase the initialized picker.
@@ -101,7 +117,79 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().profilePicker?.selected.length === 1,
   );
-  assert.equal(await profileCheckbox.isChecked(), true);
+  assert.notEqual(
+    await page.evaluate(() => window.__appStore.getState().profilePicker?.sketchName),
+    '',
+    'clicking any candidate region adopts its owning sketch',
+  );
+  assert.equal(
+    await dialog.locator('input[type="checkbox"]:checked').count(),
+    1,
+  );
+  await page.waitForFunction(
+    () =>
+      window.__nativeViewportTransient().triangles.length >= 2
+      && window.__nativeViewportTransient().arrows.length === 1,
+  );
+  const nativeProfilePresentation = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  assert.ok(
+    await page.evaluate(
+      () => window.__finishedSketchVisualState().lineDepthTests.length > 0,
+    ),
+    'the source sketch remains in its retained sketch layer during Extrude',
+  );
+  const previewLineSegments = nativeProfilePresentation.lines.flatMap(
+    (layer) => layer.segments,
+  );
+  for (let index = 0; index + 5 < previewLineSegments.length; index += 6) {
+    assert.ok(
+      Math.abs(previewLineSegments[index + 2]) < 0.5
+        && Math.abs(previewLineSegments[index + 5]) < 0.5,
+      'Extrude must not add a wireframe cage above the source-sketch plane',
+    );
+  }
+  assert.ok(
+    nativeProfilePresentation.triangles.some(
+      (layer) => layer.xray && layer.positions.length >= 18 && layer.color[3] > 0.25,
+    ),
+    'the selected closed region is a translucent filled surface, not only a wire',
+  );
+  const directionHandle = page.getByTestId('extrude-direction-handle');
+  assert.equal(
+    await directionHandle.evaluate((element) => getComputedStyle(element).opacity),
+    '0',
+    'the accessible drag proxy must not cover Bevy’s native arrowhead',
+  );
+  assert.equal(
+    await directionHandle.evaluate(
+      (element) => element.hasAttribute('data-native-viewport-overlay'),
+    ),
+    false,
+    'the invisible drag proxy must not punch a moving native-view mask island',
+  );
+  assert.equal(
+    await page.getByTestId('extrude-profile-selection-state').isVisible(),
+    true,
+    'the dialog explicitly tells the user that viewport profile selection is active',
+  );
+
+  await distance.fill('25');
+  await page.waitForFunction(() => {
+    const arrow = window.__nativeViewportTransient().arrows[0];
+    if (!arrow) return false;
+    return Math.abs(Math.hypot(
+      arrow.end[0] - arrow.start[0],
+      arrow.end[1] - arrow.start[1],
+      arrow.end[2] - arrow.start[2],
+    ) - 25) < 0.001;
+  });
+  assert.equal(
+    await page.evaluate(() => window.__nativeViewportTransient().arrows[0].width),
+    2,
+    'Bevy owns a semantic 3D direction arrow that tracks debounced distance edits',
+  );
 
   console.log('3. Invalid Enter submission explains why it cannot run');
   await distance.fill('0');

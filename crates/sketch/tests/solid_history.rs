@@ -5,7 +5,7 @@ use nbcad_sketch::{
 };
 use nbcad_solid::{
     CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest, KernelBodyDto,
-    KernelFaceDto, KernelJobDto, KernelSceneDto,
+    KernelFaceDto, KernelJobDto, KernelSceneDto, Point3Dto,
 };
 
 const XY: PlaneRef = PlaneRef::OriginPlane {
@@ -25,6 +25,7 @@ fn rectangle(manager: &mut SketchManager, p1: Vec2, p2: Vec2) {
 
 fn extrusion(sketch_name: &str) -> ExtrudeRequest {
     ExtrudeRequest {
+        source_face: None,
         sketch_name: sketch_name.to_string(),
         profile_indices: vec![0],
         operation: ExtrudeOperation::NewBody,
@@ -50,6 +51,22 @@ fn planar_body(body_id: BodyId, key: &str, z: f64) -> KernelBodyDto {
                 u: [1.0, 0.0, 0.0],
                 v: [0.0, 1.0, 0.0],
                 normal: [0.0, 0.0, 1.0],
+            }),
+            signature: Some(nbcad_solid::PlanarFaceSignatureDto {
+                centroid: Point3Dto {
+                    x: 20.0 / 3.0,
+                    y: 20.0 / 3.0,
+                    z,
+                },
+                normal: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                area: 200.0,
+                perimeter: 40.0 + 800.0_f64.sqrt(),
+                wire_count: 1,
+                edge_count: 3,
             }),
         }],
         edges: Vec::new(),

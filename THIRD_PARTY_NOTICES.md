@@ -27,9 +27,10 @@ the Open CASCADE Technology software.
 | Component | Use | License |
 |---|---|---|
 | React and React DOM | User interface | MIT |
-| three.js | 3D viewport | MIT |
+| Bevy | Native viewport | MIT or Apache-2.0 |
 | Zustand | Application state | MIT |
 | fflate | Local `.nbcad` ZIP files | MIT |
+| Earcut | Transient closed-profile triangulation | ISC |
 | zip (Rust) | 3MF package writer | MIT or Apache-2.0 |
 | Lucide | General-purpose interface icons | ISC |
 | Tauri and the dialog plugin | Native application shell | MIT or Apache-2.0 |
@@ -56,13 +57,28 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
+## Earcut ISC notice
+
+Copyright (c) 2024, Mapbox
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
 ## MIT notices
 
 The following copyright notices apply to their respective MIT-licensed
 components:
 
 - React and React DOM: Copyright (c) Facebook, Inc. and its affiliates.
-- three.js: Copyright © 2010-2024 three.js authors.
 - Zustand: Copyright (c) 2019 Paul Henschel.
 - fflate: Copyright (c) 2023 Arjun Barrett.
 - Tauri: Copyright (c) 2017-present Tauri Apps Contributors.

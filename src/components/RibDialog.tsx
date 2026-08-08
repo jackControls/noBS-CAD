@@ -144,7 +144,10 @@ export function RibDialog() {
   };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim="0.15"
+      className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
+    >
       <form data-testid="rib-dialog" onSubmit={submit} className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-80 flex-col overflow-hidden border border-edge bg-panel">
         <header className="feature-dialog-header flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3"><PanelTop size={15} className="text-accent" /><span className="flex-1 text-xs font-semibold text-ink">{featureId > 0 ? t('rib.editTitle') : t('rib.title')}</span><button type="button" onClick={close} disabled={busy} className="rounded p-1 text-mute hover:bg-edge hover:text-ink"><X size={14} /></button></header>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">

@@ -4,9 +4,10 @@
  * and interaction language are intentionally native to noBS CAD.
  */
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import * as THREE from 'three';
 import { useTranslation } from '../../i18n';
 import type { ViewportCameraApi } from './cameraApi';
+import { Vector3 } from './cadInteraction';
+import { nativeViewportIsActive } from './nativeViewportBridge';
 
 type AxisPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 
@@ -20,9 +21,9 @@ const PRESET_DIRECTIONS: Record<AxisPreset, [number, number, number]> = {
 };
 
 const AXES = [
-  { key: 'x', vector: new THREE.Vector3(1, 0, 0), color: '#e15b64' },
-  { key: 'y', vector: new THREE.Vector3(0, 1, 0), color: '#58ad72' },
-  { key: 'z', vector: new THREE.Vector3(0, 0, 1), color: '#42a5e8' },
+  { key: 'x', vector: new Vector3(1, 0, 0), color: '#e15b64' },
+  { key: 'y', vector: new Vector3(0, 1, 0), color: '#58ad72' },
+  { key: 'z', vector: new Vector3(0, 0, 1), color: '#42a5e8' },
 ] as const;
 
 export function OrientationDial({
@@ -36,15 +37,14 @@ export function OrientationDial({
 
   useEffect(() => {
     let raf = 0;
-    const position = new THREE.Vector3();
-    const target = new THREE.Vector3();
-    const upHint = new THREE.Vector3();
-    const forward = new THREE.Vector3();
-    const right = new THREE.Vector3();
-    const screenUp = new THREE.Vector3();
+    const position = new Vector3();
+    const target = new Vector3();
+    const upHint = new Vector3();
+    const forward = new Vector3();
+    const right = new Vector3();
+    const screenUp = new Vector3();
 
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
+    const update = () => {
       const svg = indicatorRef.current;
       const snapshot = apiRef.current?.getSnapshot();
       if (!svg || !snapshot) return;
@@ -77,8 +77,19 @@ export function OrientationDial({
         label?.setAttribute('opacity', opacity);
       }
     };
+    const tick = () => {
+      update();
+      // Browser/dev rendering has no native bridge event source and needs to
+      // follow Orbit/6-DOF camera changes continuously. Once Bevy is active,
+      // bridge camera events own updates so the DOM dial costs no idle frame.
+      if (!nativeViewportIsActive()) raf = requestAnimationFrame(tick);
+    };
     tick();
-    return () => cancelAnimationFrame(raf);
+    window.addEventListener('nbcad:camera-change', update);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('nbcad:camera-change', update);
+    };
   }, [apiRef]);
 
   const snap = (preset: AxisPreset) => {
@@ -88,7 +99,12 @@ export function OrientationDial({
   const beginOrbit = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0) return;
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // The native Windows viewport owns OS capture while its WebView message
+      // adapter supplies the matching pointermove/pointerup events.
+    }
   };
 
   const orbit = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -120,18 +136,23 @@ export function OrientationDial({
       title={t(`orientationDial.${preset}`)}
       aria-label={t(`orientationDial.${preset}`)}
       onClick={() => snap(preset)}
-      className={`absolute z-10 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header/95 text-[9px] font-bold text-mute shadow-sm transition-colors hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
+      className={`absolute z-10 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header/95 text-[9px] font-bold text-mute shadow-sm transition-all duration-150 ease-out hover:scale-105 hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
     >
       {shortLabel}
     </button>
   );
 
   return (
-    <aside
-      className="absolute right-3 top-3 z-10 w-[132px] select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
+    <div
+      className="absolute right-3 top-3 z-10 w-[132px]"
       data-orientation-dial
-      aria-label={t('orientationDial.label')}
+      data-native-hud="orientation"
     >
+      <aside
+        data-native-viewport-overlay
+        className="select-none rounded-xl border border-edge/90 bg-panel/90 px-2 pb-2 pt-1.5 shadow-lg shadow-black/20 backdrop-blur-sm"
+        aria-label={t('orientationDial.label')}
+      >
       <div className="mb-0.5 text-center text-[8px] font-semibold tracking-[0.16em] text-mute">
         {t('orientationDial.label')}
       </div>
@@ -145,6 +166,7 @@ export function OrientationDial({
         <div className="absolute left-1/2 top-1/2 h-[76px] w-[76px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-edge bg-viewport/80 shadow-inner">
           <svg
             ref={indicatorRef}
+            data-native-hud-control="orientation:orbit"
             viewBox="0 0 76 76"
             role="img"
             aria-label={t('orientationDial.axes')}
@@ -175,7 +197,7 @@ export function OrientationDial({
           data-orientation-preset="top"
           title={t('orientationDial.top')}
           onClick={() => snap('top')}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           +Z
         </button>
@@ -185,7 +207,7 @@ export function OrientationDial({
           title={t('orientationDial.axonometric')}
           aria-label={t('orientationDial.axonometric')}
           onClick={() => apiRef.current?.home()}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-bold text-ink hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-bold text-ink transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           ISO
         </button>
@@ -194,12 +216,13 @@ export function OrientationDial({
           data-orientation-preset="bottom"
           title={t('orientationDial.bottom')}
           onClick={() => snap('bottom')}
-          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute hover:border-accent hover:text-accent"
+          className="h-5 whitespace-nowrap rounded border border-edge bg-header/90 text-[9px] font-semibold text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:border-accent hover:bg-accent/15 hover:text-accent"
         >
           −Z
         </button>
       </div>
       <div className="mt-1 text-center text-[8px] text-mute/70">{t('orientationDial.orbit')}</div>
-    </aside>
+      </aside>
+    </div>
   );
 }

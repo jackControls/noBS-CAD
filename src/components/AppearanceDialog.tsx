@@ -3,6 +3,11 @@ import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import { useAppStore } from '../store/appStore';
 import type { ThemePreference } from '../theme';
+import {
+  DEFAULT_SIX_DOF_SPEED,
+  MAX_SIX_DOF_SPEED,
+  MIN_SIX_DOF_SPEED,
+} from '../navigationPreferences';
 
 const OPTIONS: Array<{
   value: ThemePreference;
@@ -35,13 +40,16 @@ export function AppearanceDialog() {
   const open = useAppStore((s) => s.settingsOpen);
   const preference = useAppStore((s) => s.themePreference);
   const resolved = useAppStore((s) => s.resolvedTheme);
+  const sixDofSpeed = useAppStore((s) => s.sixDofSpeed);
   const setPreference = useAppStore((s) => s.setThemePreference);
+  const setSixDofSpeed = useAppStore((s) => s.setSixDofSpeed);
   const setOpen = useAppStore((s) => s.setSettingsOpen);
 
   if (!open) return null;
 
   return (
     <div
+      data-native-viewport-dim="0.30"
       className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 px-4"
       onClick={() => setOpen(false)}
     >
@@ -113,6 +121,52 @@ export function AppearanceDialog() {
               t(resolved === 'light' ? 'appearance.light' : 'appearance.dark'),
             )}
           </p>
+
+          <div className="mt-4 border-t border-edge pt-4">
+            <div className="mb-2 text-[10px] font-semibold tracking-widest text-mute">
+              {t('appearance.navigation')}
+            </div>
+            <div className="rounded-lg border border-edge bg-header/55 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor="six-dof-speed"
+                  className="text-xs font-semibold text-ink"
+                >
+                  {t('appearance.sixDofSpeed')}
+                </label>
+                <output
+                  htmlFor="six-dof-speed"
+                  data-testid="six-dof-speed-value"
+                  className="min-w-12 rounded bg-accent/15 px-2 py-1 text-center text-[10px] font-semibold text-accent"
+                >
+                  {Math.round(sixDofSpeed * 100)}%
+                </output>
+              </div>
+              <input
+                id="six-dof-speed"
+                data-testid="six-dof-speed"
+                type="range"
+                min={MIN_SIX_DOF_SPEED}
+                max={MAX_SIX_DOF_SPEED}
+                step={0.05}
+                value={sixDofSpeed}
+                onChange={(event) => setSixDofSpeed(Number(event.target.value))}
+                className="mt-3 w-full accent-accent"
+              />
+              <div className="mt-1 flex items-start justify-between gap-3">
+                <p className="text-[10px] leading-relaxed text-mute">
+                  {t('appearance.sixDofSpeedDescription')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSixDofSpeed(DEFAULT_SIX_DOF_SPEED)}
+                  className="shrink-0 rounded border border-edge px-2 py-1 text-[10px] text-ink hover:border-accent/60 hover:bg-edge"
+                >
+                  {t('appearance.reset')}
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div
             className="mt-4 border-t border-edge pt-4"

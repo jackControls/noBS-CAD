@@ -244,6 +244,74 @@ try {
     app.selectedBody === body.id && Number.isSafeInteger(body.id),
     `selected=${app.selectedBody} body=${body.id}`,
   );
+  await page.waitForTimeout(100);
+  const stableOrbitCenter = await page.evaluate(async () => {
+    const api = window.__cameraApi;
+    const positions =
+      window.__appStore.getState().solidScene.bodies[0].mesh.positions;
+    const minimum = [Infinity, Infinity, Infinity];
+    const maximum = [-Infinity, -Infinity, -Infinity];
+    for (let index = 0; index < positions.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis], positions[index + axis]);
+        maximum[axis] = Math.max(maximum[axis], positions[index + axis]);
+      }
+    }
+    const center = minimum.map(
+      (value, axis) => (value + maximum[axis]) / 2,
+    );
+    const measure = () => {
+      const snapshot = api.getSnapshot();
+      const screen = api.worldToScreen(center);
+      return {
+        radius: Math.hypot(
+          ...snapshot.position.map((value, axis) => value - center[axis]),
+        ),
+        screen,
+      };
+    };
+    const initial = measure();
+    window.__cameraApi.orbitBy(12, -8);
+    const firstTouchpad = measure();
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    window.__cameraApi.orbitBy(8, -5);
+    const secondTouchpad = measure();
+    window.__cameraApi.navigateSixDof({
+      translation: [0, 0, 0],
+      rotation: [0.35, 0, 0],
+      deltaSeconds: 1 / 60,
+    });
+    const sixDof = measure();
+    window.__cameraApi.fit();
+    const radiusDrift = (sample) => Math.abs(sample.radius - initial.radius);
+    const screenDrift = (sample) =>
+      initial.screen && sample.screen
+        ? Math.hypot(
+            sample.screen.x - initial.screen.x,
+            sample.screen.y - initial.screen.y,
+          )
+        : Infinity;
+    return {
+      center,
+      firstOrbitRadiusDrift: radiusDrift(firstTouchpad),
+      pausedOrbitRadiusDrift: radiusDrift(secondTouchpad),
+      sixDofRadiusDrift: radiusDrift(sixDof),
+      firstOrbitScreenDrift: screenDrift(firstTouchpad),
+      pausedOrbitScreenDrift: screenDrift(secondTouchpad),
+      sixDofScreenDrift: screenDrift(sixDof),
+    };
+  });
+  check(
+    'touchpad and 3D-mouse rotate around the visible body center',
+    stableOrbitCenter.firstOrbitRadiusDrift < 1e-5 &&
+      stableOrbitCenter.pausedOrbitRadiusDrift < 1e-5 &&
+      stableOrbitCenter.sixDofRadiusDrift < 1e-5 &&
+      stableOrbitCenter.firstOrbitScreenDrift < 0.05 &&
+      stableOrbitCenter.pausedOrbitScreenDrift < 0.05 &&
+      stableOrbitCenter.sixDofScreenDrift < 0.05,
+    JSON.stringify(stableOrbitCenter),
+  );
+  await page.waitForTimeout(350);
   const selectedBodyVisual = await page.evaluate(
     (bodyId) => window.__solidBodyVisualState(bodyId),
     body.id,
@@ -554,6 +622,15 @@ try {
     'one-sided Extrude exposes a viewport distance field and draggable arrow',
     await page.getByTestId('extrude-canvas-distance').isVisible() &&
       await page.getByTestId('extrude-direction-handle').isVisible(),
+  );
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-extrude-operation="join"]')
+        ?.getAttribute('aria-checked') === 'true' &&
+      document.querySelectorAll(
+        '[data-testid="extrude-dialog"] input[type="checkbox"]',
+      )[1]?.checked === true,
   );
   check(
     'an outward face Extrude initially proposes Join with its support body',

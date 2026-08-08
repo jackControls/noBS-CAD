@@ -20,12 +20,14 @@ import {
   Pencil,
   SlidersHorizontal,
   Square,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react';
 import { useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import {
+  deleteTimelineFeature,
   editSketch,
   openConstructionPlane,
   pickDatumPlane,
@@ -33,7 +35,9 @@ import {
 } from '../engine/controller';
 import { useAppStore } from '../store/appStore';
 import type { BrowserNode, BrowserNodeKind } from '../types/document';
+import type { FeatureDto } from '../types/document';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
+import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
 /** Localized label keys per node kind (nodes without an explicit name). */
 const KIND_LABEL_KEYS: Record<BrowserNodeKind, string> = {
@@ -108,8 +112,33 @@ export function BrowserTree() {
   const busy = useAppStore((s) => s.solidBusy);
   const expanded = useAppStore((s) => s.expanded);
   const hidden = useAppStore((s) => s.hidden);
+  const solidScene = useAppStore((s) => s.solidScene);
+  const datumPlanes = useAppStore((s) => s.datumPlanes);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const [contextTarget, setContextTarget] = useState<BrowserContextTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<FeatureDto | null>(null);
+
+  const featureForNode = (node: BrowserNode): FeatureDto | null => {
+    if (!document) return null;
+    if (node.kind === 'sketch' && node.name) {
+      return document.features.find(
+        (feature) => feature.kind === 'sketch' && feature.name === node.name,
+      ) ?? null;
+    }
+    if (node.kind === 'construction_plane' && node.reference_id !== null) {
+      const featureId = datumPlanes.find(
+        (plane) => plane.datum_id === node.reference_id,
+      )?.feature_id;
+      return document.features.find((feature) => feature.id === featureId) ?? null;
+    }
+    if (node.kind === 'body' && node.reference_id !== null) {
+      const featureId = solidScene.bodies.find(
+        (body) => body.id === node.reference_id,
+      )?.feature_id;
+      return document.features.find((feature) => feature.id === featureId) ?? null;
+    }
+    return null;
+  };
 
   const contextEntries = (): ContextMenuEntry[] => {
     if (!contextTarget) return [];
@@ -120,6 +149,7 @@ export function BrowserTree() {
     const plane = PLANE_BY_KIND[node.kind];
     const isActiveSketch =
       node.kind === 'sketch' && node.name !== null && node.name === activeSketchName;
+    const deleteFeature = featureForNode(node);
 
     if (plane) {
       primary.push({
@@ -204,6 +234,22 @@ export function BrowserTree() {
       icon: <MousePointer2 size={14} />,
       onSelect: () => selectBrowserNode(node),
     });
+    if (deleteFeature) {
+      entries.push({ type: 'separator', id: 'delete-separator' });
+      entries.push({
+        type: 'item',
+        id: 'delete-feature',
+        label: t(
+          node.kind === 'body'
+            ? 'browser.deleteOwningFeature'
+            : 'browser.deleteItem',
+        ).replace('{name}', deleteFeature.name),
+        icon: <Trash2 size={14} />,
+        danger: true,
+        disabled: mode !== 'solid' || busy,
+        onSelect: () => setDeleteTarget(deleteFeature),
+      });
+    }
     return entries;
   };
 
@@ -232,6 +278,18 @@ export function BrowserTree() {
           entries={contextEntries()}
           ariaLabel={`${contextTarget.label} — ${t('browser.contextMenu')}`}
           onClose={() => setContextTarget(null)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteFeatureDialog
+          feature={deleteTarget}
+          busy={busy}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const featureId = deleteTarget.id;
+            setDeleteTarget(null);
+            void deleteTimelineFeature(featureId);
+          }}
         />
       )}
     </aside>
@@ -291,7 +349,9 @@ function NodeRow({
   const toggleHidden = useAppStore((s) => s.toggleHidden);
   const mode = useAppStore((s) => s.mode);
   const hoveredPlane = useAppStore((s) => s.hoveredPlane);
+  const hoveredDatumPlane = useAppStore((s) => s.hoveredDatumPlane);
   const setHoveredPlane = useAppStore((s) => s.setHoveredPlane);
+  const setHoveredDatumPlane = useAppStore((s) => s.setHoveredDatumPlane);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const activeFullyDefined = useAppStore((s) => s.activeSketch?.dof.fully_defined ?? false);
 
@@ -308,6 +368,8 @@ function NodeRow({
     node.kind === 'construction_plane' &&
     node.reference_id !== null;
   const planeHovered = picking && hoveredPlane === plane;
+  const datumHovered =
+    pickingDatum && hoveredDatumPlane === node.reference_id;
   const isActiveSketch = node.kind === 'sketch' && node.name !== null && node.name === activeSketchName;
   // A finished sketch re-enters editing via double-click or the pencil
   // affordance (M1d).
@@ -356,6 +418,7 @@ function NodeRow({
           selected && 'bg-accent/20 hover:bg-accent/25',
           hidden && 'opacity-50',
           planeHovered && 'bg-accent/25 hover:bg-accent/30',
+          datumHovered && 'bg-accent/25 hover:bg-accent/30',
         )}
         style={{ paddingLeft: depth * 14 + 4 }}
         onClick={(event) => {
@@ -380,8 +443,20 @@ function NodeRow({
         onDoubleClick={reEdit}
         onContextMenu={openPointerContext}
         onKeyDown={onRowKeyDown}
-        onMouseEnter={picking && plane ? () => setHoveredPlane(plane) : undefined}
-        onMouseLeave={picking && plane ? () => setHoveredPlane(null) : undefined}
+        onMouseEnter={
+          picking && plane
+            ? () => setHoveredPlane(plane)
+            : pickingDatum
+              ? () => setHoveredDatumPlane(node.reference_id)
+              : undefined
+        }
+        onMouseLeave={
+          picking && plane
+            ? () => setHoveredPlane(null)
+            : pickingDatum
+              ? () => setHoveredDatumPlane(null)
+              : undefined
+        }
       >
         <button
           type="button"

@@ -7,6 +7,8 @@
 //! path the WASM host uses, so native and browser behavior are identical.
 //! All modeling logic lives in the engine crates, never here.
 
+mod native_menu;
+pub mod native_viewport;
 mod session_bridge;
 mod six_dof_mouse;
 mod state;
@@ -15,9 +17,15 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use native_viewport::{
+    NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
+    ViewportModel, ViewportPresentation, ViewportPreview,
+};
 use nbcad_core::DocumentDto;
+use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
-use state::AppState;
+use state::{AppState, BOOTSTRAP_SESSION_ID};
+use tauri::Manager;
 
 /// Health-check command used by the frontend IPC wrapper.
 #[tauri::command]
@@ -25,10 +33,121 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemMemoryStatus {
+    total_bytes: u64,
+    available_bytes: u64,
+    pressure: &'static str,
+}
+
+/// Portable physical-memory pressure estimate used by the tab retention
+/// policy. sysinfo has native macOS and Windows backends; conservative
+/// thresholds avoid evicting professional documents during normal caching.
+#[tauri::command]
+fn system_memory_status() -> SystemMemoryStatus {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total_bytes = system.total_memory();
+    let available_bytes = system.available_memory();
+    let critical_threshold = (total_bytes / 20).max(512 * 1024 * 1024);
+    let constrained_threshold = (total_bytes / 10).max(1024 * 1024 * 1024);
+    let pressure = if available_bytes <= critical_threshold {
+        "critical"
+    } else if available_bytes <= constrained_threshold {
+        "constrained"
+    } else {
+        "normal"
+    };
+    SystemMemoryStatus {
+        total_bytes,
+        available_bytes,
+        pressure,
+    }
+}
+
 /// Snapshot of the current document (name, settings, browser tree).
 #[tauri::command]
 fn get_document(state: tauri::State<'_, AppState>) -> DocumentDto {
     state.document_snapshot()
+}
+
+#[tauri::command]
+fn native_viewport_set_layout(
+    app: tauri::AppHandle,
+    viewport: tauri::State<'_, NativeViewport>,
+    layout: ViewportLayout,
+) -> Result<(), String> {
+    viewport.set_layout(&app, layout)
+}
+
+#[tauri::command]
+async fn native_viewport_sync_model(
+    engine: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+) -> Result<(), String> {
+    let (
+        session_id,
+        geometry_revision,
+        scene,
+        active_sketch,
+        finished_sketches,
+        datum_planes,
+        profile_catalog,
+        body_appearances,
+    ) = engine.viewport_snapshot();
+    viewport.sync_model(ViewportModel {
+        session_id,
+        geometry_revision,
+        scene,
+        active_sketch,
+        finished_sketches,
+        datum_planes,
+        profile_catalog,
+        body_appearances,
+    })
+}
+
+#[tauri::command]
+fn native_viewport_set_camera(
+    viewport: tauri::State<'_, NativeViewport>,
+    camera: ViewportCamera,
+) -> Result<(), String> {
+    viewport.set_camera(camera)
+}
+
+#[tauri::command]
+fn native_viewport_set_preview(
+    viewport: tauri::State<'_, NativeViewport>,
+    preview: ViewportPreview,
+) -> Result<(), String> {
+    viewport.set_preview(preview)
+}
+
+#[tauri::command]
+fn native_viewport_set_presentation(
+    viewport: tauri::State<'_, NativeViewport>,
+    presentation: ViewportPresentation,
+) -> Result<(), String> {
+    viewport.set_presentation(presentation)
+}
+
+#[tauri::command]
+async fn native_viewport_pick(
+    viewport: tauri::State<'_, NativeViewport>,
+    x: f32,
+    y: f32,
+    camera: Option<ViewportCamera>,
+    logical_width: Option<f32>,
+    logical_height: Option<f32>,
+) -> Result<Option<NativePick>, String> {
+    let logical_size = logical_width.zip(logical_height);
+    viewport.pick(x, y, camera, logical_size)
+}
+
+#[tauri::command]
+fn native_viewport_metrics(viewport: tauri::State<'_, NativeViewport>) -> NativeViewportMetrics {
+    viewport.metrics()
 }
 
 macro_rules! engine_command {
@@ -263,6 +382,57 @@ fn engine_project_new(state: tauri::State<'_, AppState>) -> String {
 }
 
 #[tauri::command]
+fn engine_project_session_bind(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    session_id: &str,
+) -> String {
+    let result = state.bind_project_session(session_id);
+    let succeeded = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    if succeeded {
+        // Recovery can hydrate the bootstrap context before its frontend tab
+        // id is known. Transfer the existing Bevy entities/cache rather than
+        // deleting the solid faces while leaving their edge overlay behind.
+        if let Err(error) =
+            viewport.rebind_model_session(BOOTSTRAP_SESSION_ID.to_string(), session_id.to_string())
+        {
+            eprintln!("could not rebind bootstrap viewport session: {error}");
+        }
+    }
+    result
+}
+
+#[tauri::command]
+fn engine_project_session_create(state: tauri::State<'_, AppState>, session_id: &str) -> String {
+    state.create_project_session(session_id)
+}
+
+#[tauri::command]
+fn engine_project_session_activate(state: tauri::State<'_, AppState>, session_id: &str) -> String {
+    state.activate_project_session(session_id)
+}
+
+#[tauri::command]
+fn engine_project_session_drop(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    session_id: &str,
+) -> String {
+    let result = state.drop_project_session(session_id);
+    let succeeded = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    if succeeded {
+        let _ = viewport.drop_model_session(session_id.to_string());
+    }
+    result
+}
+
+#[tauri::command]
 fn engine_export_step(state: tauri::State<'_, AppState>, payload: &str) -> Result<Vec<u8>, String> {
     state.export_step(payload)
 }
@@ -325,15 +495,54 @@ fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> 
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(native_menu::NativeEditMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
-        .manage(SixDofMouseState::default())
-        .setup(|_app| Ok(()))
+        .manage(SixDofMouseState::default());
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(native_menu::build)
+        .on_menu_event(native_menu::handle_event);
+    builder
+        .setup(|app| {
+            let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
+            let (
+                session_id,
+                geometry_revision,
+                scene,
+                active_sketch,
+                finished_sketches,
+                datum_planes,
+                profile_catalog,
+                body_appearances,
+            ) = app.state::<AppState>().viewport_snapshot();
+            let _ = viewport.sync_model(ViewportModel {
+                session_id,
+                geometry_revision,
+                scene,
+                active_sketch,
+                finished_sketches,
+                datum_planes,
+                profile_catalog,
+                body_appearances,
+            });
+            app.manage(viewport);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
+            system_memory_status,
             get_document,
+            native_viewport_set_layout,
+            native_viewport_sync_model,
+            native_viewport_set_camera,
+            native_viewport_set_preview,
+            native_viewport_set_presentation,
+            native_viewport_pick,
+            native_viewport_metrics,
+            native_menu::native_edit_menu_set_state,
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,
@@ -347,6 +556,10 @@ pub fn run() {
             engine_project_export_model,
             engine_project_new,
             engine_project_load,
+            engine_project_session_bind,
+            engine_project_session_create,
+            engine_project_session_activate,
+            engine_project_session_drop,
             engine_export_step,
             engine_export_stl,
             engine_export_3mf,

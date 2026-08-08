@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Layers3, LoaderCircle, X } from 'lucide-react';
+import { Crosshair, Layers3, LoaderCircle, MousePointer2, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import { submitConstructionPlane } from '../engine/controller';
 import type {
@@ -8,7 +8,10 @@ import type {
   PlaneRef,
 } from '../engine/types';
 import { isStraightSolidEdge } from '../solidEdgeEligibility';
-import { useAppStore } from '../store/appStore';
+import {
+  useAppStore,
+  type ConstructionPlanePickTarget,
+} from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
 
 const INPUT =
@@ -42,11 +45,22 @@ export function ConstructionPlaneDialog() {
   const close = useAppStore((state) => state.closeConstructionPlaneDialog);
   const busy = useAppStore((state) => state.solidBusy);
   const bodies = useAppStore((state) => state.solidScene.bodies);
-  const selectedBody = useAppStore((state) => state.selectedBody);
-  const selectedFace = useAppStore((state) => state.selectedFace);
-  const selectedFaces = useAppStore((state) => state.selectedFaces);
-  const selectedEdges = useAppStore((state) => state.selectedEdges);
   const knownPlanes = useAppStore((state) => state.datumPlanes);
+  const pickTarget = useAppStore(
+    (state) => state.constructionPlanePickTarget,
+  );
+  const pickedReference = useAppStore(
+    (state) => state.constructionPlanePickedReference,
+  );
+  const pickedEdge = useAppStore(
+    (state) => state.constructionPlanePickedEdge,
+  );
+  const setPickTarget = useAppStore(
+    (state) => state.setConstructionPlanePickTarget,
+  );
+  const clearSolidSelection = useAppStore(
+    (state) => state.clearSolidSelection,
+  );
   const [definitions, setDefinitions] = useState<DatumPlaneDefinitionDto[]>([]);
   const [first, setFirst] = useState('origin:xy');
   const [second, setSecond] = useState('origin:xz');
@@ -98,6 +112,12 @@ export function ConstructionPlaneDialog() {
 
   useEffect(() => {
     if (!dialog) return;
+    const selection = useAppStore.getState();
+    const selectedBody = selection.selectedBody;
+    const selectedFace = selection.selectedFace;
+    const selectedFaces = selection.selectedFaces;
+    const selectedEdges = selection.selectedEdges;
+    const initialBodies = selection.solidScene.bodies;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -129,7 +149,7 @@ export function ConstructionPlaneDialog() {
         } else {
           setFirst(planeValue(selectedReference));
           const selectedEdge = selectedEdges[0];
-          const edgeBody = bodies.find((body) =>
+          const edgeBody = initialBodies.find((body) =>
             body.edges.some(
               (edge) =>
                 edge.id === selectedEdge && isStraightSolidEdge(edge.points),
@@ -138,7 +158,7 @@ export function ConstructionPlaneDialog() {
           const initialBody =
             edgeBody?.id ??
             selectedBody ??
-            bodies.find((body) =>
+            initialBodies.find((body) =>
               body.edges.some((edge) => isStraightSolidEdge(edge.points)),
             )?.id ??
             0;
@@ -146,14 +166,14 @@ export function ConstructionPlaneDialog() {
           setEdgeId(
             selectedEdge && edgeBody?.id === initialBody
               ? selectedEdge
-              : bodies
+              : initialBodies
                   .find((body) => body.id === initialBody)
                   ?.edges.find((edge) => isStraightSolidEdge(edge.points))?.id ??
                 0,
           );
           if (dialog.kind === 'midplane') {
             const directFaces = selectedFaces.filter((faceId) =>
-              bodies.some((body) =>
+              initialBodies.some((body) =>
                 body.faces.some((face) => face.id === faceId && face.plane !== null),
               ),
             );
@@ -162,7 +182,7 @@ export function ConstructionPlaneDialog() {
               setSecond(`face:${directFaces[1]}`);
               return;
             }
-            const planarFaces = bodies.flatMap((candidate) =>
+            const planarFaces = initialBodies.flatMap((candidate) =>
               candidate.faces
                 .filter((face) => face.plane)
                 .map((face) => ({ face, basis: face.plane! })),
@@ -214,14 +234,31 @@ export function ConstructionPlaneDialog() {
     return () => {
       cancelled = true;
     };
-  }, [
-    bodies,
-    dialog,
-    selectedBody,
-    selectedEdges,
-    selectedFace,
-    selectedFaces,
-  ]);
+  }, [dialog?.featureId, dialog?.kind]);
+
+  useEffect(() => {
+    if (!dialog || !pickedReference) return;
+    if (pickTarget === 'first_reference') {
+      setFirst(planeValue(pickedReference));
+      setPickTarget(
+        dialog.kind === 'midplane'
+          ? 'second_reference'
+          : dialog.kind === 'at_angle'
+            ? 'axis_edge'
+            : null,
+      );
+    } else if (pickTarget === 'second_reference') {
+      setSecond(planeValue(pickedReference));
+      setPickTarget(null);
+    }
+  }, [dialog, pickTarget, pickedReference, setPickTarget]);
+
+  useEffect(() => {
+    if (!dialog || pickTarget !== 'axis_edge' || !pickedEdge) return;
+    setBodyId(pickedEdge.bodyId);
+    setEdgeId(pickedEdge.edgeId);
+    setPickTarget(null);
+  }, [dialog, pickTarget, pickedEdge, setPickTarget]);
 
   if (!dialog) return null;
   const edit = definitions.find(
@@ -253,6 +290,22 @@ export function ConstructionPlaneDialog() {
         ?.edges.find((edge) => isStraightSolidEdge(edge.points))?.id ?? 0,
     );
   };
+
+  const startPicking = (target: Exclude<ConstructionPlanePickTarget, null>) => {
+    clearSolidSelection();
+    setPickTarget(target);
+  };
+
+  const pickInstruction =
+    pickTarget === 'first_reference'
+      ? dialog.kind === 'midplane'
+        ? 'Selecting first reference — click a planar face or reference plane'
+        : 'Selecting reference plane — click a planar face or reference plane'
+      : pickTarget === 'second_reference'
+        ? 'Selecting second reference — click another parallel face or plane'
+        : pickTarget === 'axis_edge'
+          ? 'Selecting rotation axis — click a straight model edge'
+          : null;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -295,7 +348,12 @@ export function ConstructionPlaneDialog() {
         : 'Plane at Angle';
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim={pickTarget ? '0.04' : '0.15'}
+      className={`pointer-events-none fixed inset-0 z-[70] ${
+        pickTarget ? 'bg-black/[0.04]' : 'bg-black/15'
+      }`}
+    >
       <form
         data-testid="construction-plane-dialog"
         onSubmit={submit}
@@ -316,6 +374,21 @@ export function ConstructionPlaneDialog() {
           </button>
         </header>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+          {pickInstruction && (
+            <div
+              data-testid="construction-plane-selection-status"
+              className="flex items-start gap-2 rounded border border-accent bg-accent/10 p-2 text-xs text-ink"
+            >
+              <Crosshair size={15} className="mt-0.5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-accent">Viewport selection active</p>
+                <p className="mt-0.5 leading-4">{pickInstruction}</p>
+              </div>
+              <span className="rounded border border-edge px-1.5 py-0.5 text-[9px] uppercase text-mute">
+                Esc
+              </span>
+            </div>
+          )}
           {loading ? (
             <p className="flex items-center gap-2 text-xs text-mute">
               <LoaderCircle size={14} className="animate-spin" />
@@ -327,18 +400,46 @@ export function ConstructionPlaneDialog() {
             </p>
           ) : (
             <>
-              <label>
-                <span className={LABEL}>
+              <div>
+                <label className={LABEL} htmlFor="construction-plane-first-reference">
                   {dialog.kind === 'midplane' ? 'First reference' : 'Reference plane'}
-                </span>
-                <select value={first} onChange={(event) => setFirst(event.target.value)} className={INPUT}>
-                  {options.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    id="construction-plane-first-reference"
+                    value={first}
+                    onChange={(event) => {
+                      setFirst(event.target.value);
+                      setPickTarget(null);
+                    }}
+                    className={`${INPUT} ${
+                      pickTarget === 'first_reference'
+                        ? 'border-accent ring-1 ring-accent/50'
+                        : ''
+                    }`}
+                  >
+                    {options.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    data-testid="pick-construction-first-reference"
+                    onClick={() => startPicking('first_reference')}
+                    aria-pressed={pickTarget === 'first_reference'}
+                    className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs ${
+                      pickTarget === 'first_reference'
+                        ? 'border-accent bg-accent text-white'
+                        : 'border-edge bg-header text-ink hover:border-accent hover:bg-edge'
+                    }`}
+                  >
+                    <MousePointer2 size={13} />
+                    {pickTarget === 'first_reference' ? 'Selecting…' : 'Pick'}
+                  </button>
+                </div>
+              </div>
               {dialog.kind === 'offset' && (
                 <label>
                   <span className={LABEL}>Offset distance (mm)</span>
@@ -350,16 +451,49 @@ export function ConstructionPlaneDialog() {
                 </label>
               )}
               {dialog.kind === 'midplane' && (
-                <label>
-                  <span className={LABEL}>Second reference</span>
-                  <select value={second} onChange={(event) => setSecond(event.target.value)} className={INPUT}>
-                    {options.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div>
+                  <label
+                    className={LABEL}
+                    htmlFor="construction-plane-second-reference"
+                  >
+                    Second reference
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      id="construction-plane-second-reference"
+                      value={second}
+                      onChange={(event) => {
+                        setSecond(event.target.value);
+                        setPickTarget(null);
+                      }}
+                      className={`${INPUT} ${
+                        pickTarget === 'second_reference'
+                          ? 'border-accent ring-1 ring-accent/50'
+                          : ''
+                      }`}
+                    >
+                      {options.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      data-testid="pick-construction-second-reference"
+                      onClick={() => startPicking('second_reference')}
+                      aria-pressed={pickTarget === 'second_reference'}
+                      className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs ${
+                        pickTarget === 'second_reference'
+                          ? 'border-accent bg-accent text-white'
+                          : 'border-edge bg-header text-ink hover:border-accent hover:bg-edge'
+                      }`}
+                    >
+                      <MousePointer2 size={13} />
+                      {pickTarget === 'second_reference' ? 'Selecting…' : 'Pick'}
+                    </button>
+                  </div>
+                </div>
               )}
               {dialog.kind === 'at_angle' && (
                 <>
@@ -371,14 +505,47 @@ export function ConstructionPlaneDialog() {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    <span className={LABEL}>Straight axis edge</span>
-                    <select value={edgeId} onChange={(event) => setEdgeId(Number(event.target.value))} className={INPUT}>
-                      {straightBodyEdges.map((edge, index) => (
-                        <option key={edge.id} value={edge.id}>Edge {index + 1} (#{edge.id})</option>
-                      ))}
-                    </select>
-                  </label>
+                  <div>
+                    <label
+                      className={LABEL}
+                      htmlFor="construction-plane-axis-edge"
+                    >
+                      Straight axis edge
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        id="construction-plane-axis-edge"
+                        value={edgeId}
+                        onChange={(event) => {
+                          setEdgeId(Number(event.target.value));
+                          setPickTarget(null);
+                        }}
+                        className={`${INPUT} ${
+                          pickTarget === 'axis_edge'
+                            ? 'border-accent ring-1 ring-accent/50'
+                            : ''
+                        }`}
+                      >
+                        {straightBodyEdges.map((edge, index) => (
+                          <option key={edge.id} value={edge.id}>Edge {index + 1} (#{edge.id})</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        data-testid="pick-construction-axis-edge"
+                        onClick={() => startPicking('axis_edge')}
+                        aria-pressed={pickTarget === 'axis_edge'}
+                        className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs ${
+                          pickTarget === 'axis_edge'
+                            ? 'border-accent bg-accent text-white'
+                            : 'border-edge bg-header text-ink hover:border-accent hover:bg-edge'
+                        }`}
+                      >
+                        <MousePointer2 size={13} />
+                        {pickTarget === 'axis_edge' ? 'Selecting…' : 'Pick'}
+                      </button>
+                    </div>
+                  </div>
                   <label>
                     <span className={LABEL}>Angle (degrees)</span>
                     <DimensionInput

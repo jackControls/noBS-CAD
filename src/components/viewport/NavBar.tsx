@@ -23,6 +23,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { isTauriRuntime } from '../../engine';
 import { redoSketch, undoSketch } from '../../engine/controller';
 import {
   createSixDofMouseController,
@@ -74,12 +75,22 @@ export function NavBar({
     );
     sixDofMouseRef.current = controller;
     if (controller.supported) {
-      // Native and previously authorized raw-HID devices may reconnect here,
-      // but browser startup must never fetch the optional hosted bridge.
-      void controller.connect({
-        requestPermission: false,
-        allowDriverBridge: false,
-      });
+      const windowsDesktop =
+        isTauriRuntime() && /Windows/i.test(navigator.userAgent);
+      if (windowsDesktop) {
+        // Do not touch hardware on Windows startup. All motion paths remain
+        // inert until the user deliberately clicks the connection button.
+        setSixDofMouseStatus({
+          state: 'disconnected',
+          message: 'Click to connect the 3D mouse through 3DxWare.',
+        });
+      } else {
+        // Browsers may reconnect an already authorized raw-HID device.
+        void controller.connect({
+          requestPermission: false,
+          allowDriverBridge: false,
+        });
+      }
     }
     else {
       setSixDofMouseStatus({
@@ -115,34 +126,42 @@ export function NavBar({
   ];
 
   return (
-    <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded border border-edge bg-header/90 px-1.5 py-1 backdrop-blur-sm">
+    <div
+      data-native-hud="navigation"
+      data-native-six-dof-state={sixDofMouseStatus.state}
+      data-native-viewport-overlay
+      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded border border-edge bg-header/90 px-1.5 py-1 backdrop-blur-sm"
+    >
       {sketchMode && (
         <>
           <button
             type="button"
+            data-native-nav-id="undo"
             title={t('navbar.undo')}
             disabled={!canUndo}
             onClick={() => void undoSketch()}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
           >
             <Undo2 size={15} />
           </button>
           <button
             type="button"
+            data-native-nav-id="redo"
             title={t('navbar.redo')}
             disabled={!canRedo}
             onClick={() => void redoSketch()}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:opacity-40"
           >
             <Redo2 size={15} />
           </button>
           <button
             type="button"
+            data-native-nav-id="lookAtSketch"
             data-testid="look-at-sketch-nav"
             title={t('navbar.lookAtSketch')}
             aria-label={t('navbar.lookAtSketch')}
             onClick={requestLookAt}
-            className="flex h-6 w-6 items-center justify-center rounded text-mute hover:bg-edge hover:text-ink"
+            className="flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out hover:-translate-y-px hover:bg-edge hover:text-ink"
           >
             <Focus size={15} />
           </button>
@@ -153,11 +172,13 @@ export function NavBar({
         <button
           key={b.id}
           type="button"
+          data-native-nav-id={b.id}
+          data-native-nav-active={b.active ? 'true' : 'false'}
           title={b.label}
           disabled={!b.onClick}
           onClick={b.onClick}
           className={cx(
-            'flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
+            'flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
             b.active && 'bg-accent/30 text-accent hover:bg-accent/40 hover:text-accent',
           )}
         >
@@ -167,10 +188,14 @@ export function NavBar({
       <div className="mx-1 h-4 w-px bg-edge" />
       <button
         type="button"
+        data-native-nav-id="sixDof"
         data-testid="six-dof-mouse-connect"
         title={sixDofMouseStatus.message}
         aria-label={sixDofMouseStatus.message}
-        disabled={sixDofMouseStatus.state === 'unsupported'}
+        disabled={
+          sixDofMouseStatus.state === 'unsupported' ||
+          sixDofMouseStatus.state === 'connecting'
+        }
         onClick={() => {
           const controller = sixDofMouseRef.current;
           if (!controller) return;
@@ -183,7 +208,7 @@ export function NavBar({
           }
         }}
         className={cx(
-          'relative flex h-6 w-6 items-center justify-center rounded text-mute enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
+          'relative flex h-6 w-6 items-center justify-center rounded text-mute transition-all duration-150 ease-out enabled:hover:-translate-y-px enabled:hover:bg-edge enabled:hover:text-ink disabled:cursor-not-allowed disabled:opacity-35',
           sixDofMouseStatus.state === 'connected' && 'bg-accent/25 text-accent',
         )}
       >

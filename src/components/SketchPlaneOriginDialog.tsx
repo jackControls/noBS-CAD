@@ -25,7 +25,10 @@ export function SketchPlaneOriginDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35">
+    <div
+      data-native-viewport-dim="0.35"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35"
+    >
       <form
         data-testid="sketch-plane-origin-dialog"
         onSubmit={submit}

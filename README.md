@@ -152,7 +152,9 @@ earn trust one operation at a time. We would love to hear from CAM experts!
 The Windows release path targets Windows 10 version 1803 or newer and Windows
 11. It produces a portable ZIP rather than an installer, uses the WebView2
 runtime supplied by Windows, and requires Microsoft's centrally installed
-Visual C++ v14 x64 Redistributable.
+Visual C++ v14 x64 Redistributable. The desktop build uses the same native Bevy
+viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS remain
+the real menu, tab, dialog, and accessibility interface.
 
 The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
 SDK, Rust, Node.js, `wasm-pack`, and the pinned OCCT 7.9.3 vcpkg dependency.
@@ -186,6 +188,21 @@ src-tauri/target/release/bundle/macos/noBS CAD.app
 src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 ```
 
+Development packages intentionally retain Rust symbols for crash diagnosis.
+The desktop packaging workflow treats a `v*` Git tag as the production
+boundary and sets `CARGO_PROFILE_RELEASE_STRIP=symbols` for both macOS and
+Windows. To reproduce a stripped production package locally, set that variable
+before running the platform bundle command:
+
+```sh
+CARGO_PROFILE_RELEASE_STRIP=symbols npm run bundle:macos
+```
+
+```powershell
+$env:CARGO_PROFILE_RELEASE_STRIP = "symbols"
+npm run bundle:windows:portable
+```
+
 See [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md) for
 native SDK overrides, the Apple-silicon GitHub Actions build, and packaging
 details.
@@ -212,7 +229,8 @@ npm run build
 
 ## Project structure
 
-- React, TypeScript, Vite, and three.js provide the UI and viewport.
+- React, TypeScript, and Vite provide the DOM interface; Bevy renders the
+  native desktop viewport.
 - Host-neutral Rust crates own project data, sketches, feature definitions,
   history, stable references, and recompute planning.
 - Native builds use Open CASCADE Technology through a narrow C++ bridge.

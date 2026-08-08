@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Box, LoaderCircle, X } from 'lucide-react';
+import { Box, LoaderCircle, MousePointerClick, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import { submitExtrude } from '../engine/controller';
 import type {
   ExtrudeExtent,
   ExtrudeOperation,
+  PlanarFaceSourceDto,
   ProfileCatalogItemDto,
 } from '../engine/types';
 import { useTranslation } from '../i18n';
@@ -42,6 +43,10 @@ export function ExtrudeDialog() {
   const configureProfilePicker = useAppStore((s) => s.configureProfilePicker);
   const replaceProfilePicks = useAppStore((s) => s.replaceProfilePicks);
   const toggleProfilePick = useAppStore((s) => s.toggleProfilePick);
+  const clearSolidSelection = useAppStore((s) => s.clearSolidSelection);
+  const setSelectedBody = useAppStore((s) => s.setSelectedBody);
+  const setSelectedFace = useAppStore((s) => s.setSelectedFace);
+  const setSolidCommandPreview = useAppStore((s) => s.setSolidCommandPreview);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -56,6 +61,8 @@ export function ExtrudeDialog() {
   const [toFace, setToFace] = useState<number | null>(null);
   const [operationManual, setOperationManual] = useState(false);
   const [validationAttempted, setValidationAttempted] = useState(false);
+  const [savedSourceFace, setSavedSourceFace] = useState<PlanarFaceSourceDto | null>(null);
+  const [savedSourceBasis, setSavedSourceBasis] = useState<ProfileCatalogItemDto['basis'] | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const distanceInputRef = useRef<HTMLInputElement>(null);
   const commitRef = useRef<() => void>(() => {});
@@ -66,7 +73,9 @@ export function ExtrudeDialog() {
         body.faces
           .filter((face) => face.plane !== null)
           .map((face, index) => ({
+            bodyId: body.id,
             id: face.id,
+            basis: face.plane!,
             label: `${body.name} · ${t('extrude.face')} ${index + 1}`,
           })),
       ),
@@ -91,10 +100,25 @@ export function ExtrudeDialog() {
         const edit = openFeature > 0
           ? definitions.find((definition) => definition.feature_id === openFeature)
           : undefined;
+        const currentlySelectedFace = selectedFace === null
+          ? undefined
+          : planarFaces.find(
+              (face) => face.id === selectedFace
+                && (selectedBody === null || face.bodyId === selectedBody),
+            );
+        const initialSource = edit?.source_face
+          ?? (openFeature === 0 && currentlySelectedFace
+            ? {
+                body_id: currentlySelectedFace.bodyId,
+                face_id: currentlySelectedFace.id,
+              }
+            : null);
         const initialSketch =
-          edit?.sketch_name ??
-          usable[usable.length - 1]?.sketch_name ??
-          '';
+          initialSource
+            ? ''
+            : edit?.sketch_name ??
+              usable[usable.length - 1]?.sketch_name ??
+              '';
         const entry = usable.find((item) => item.sketch_name === initialSketch);
         const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
         const initialIndices = edit?.profile_indices ?? (eligible.length === 1 ? [eligible[0].index] : []);
@@ -107,13 +131,31 @@ export function ExtrudeDialog() {
           })),
           initialSketch,
         );
+        setSavedSourceFace(initialSource);
+        setSavedSourceBasis(
+          initialSource
+            ? edit?.source_face_basis
+              ?? planarFaces.find((face) =>
+                face.id === initialSource.face_id
+                && face.bodyId === initialSource.body_id)?.basis
+              ?? null
+            : null,
+        );
+        if (initialSource) {
+          setSelectedBody(initialSource.body_id);
+          setSelectedFace(initialSource.face_id);
+        } else if (openFeature > 0) {
+          setSelectedFace(null);
+        }
         setOperationManual(false);
-        setOperation(edit?.operation ?? 'new_body');
+        setOperation(edit?.operation ?? (initialSource ? 'join' : 'new_body'));
         setTaper(String(edit?.taper_angle_deg ?? 0));
         setFlip(edit?.flip ?? false);
         setTargetBodies(
           edit?.target_body_ids.length
             ? edit.target_body_ids
+            : initialSource
+              ? [initialSource.body_id]
             : selectedBody !== null
               ? [selectedBody]
               : scene.bodies[0]
@@ -150,8 +192,8 @@ export function ExtrudeDialog() {
     openFeature,
     planarFaces,
     scene.bodies,
-    selectedBody,
-    selectedFace,
+    setSelectedBody,
+    setSelectedFace,
     t,
   ]);
 
@@ -162,6 +204,31 @@ export function ExtrudeDialog() {
   const selectedCatalog = catalog.find((entry) => entry.sketch_name === sketchName);
   const selectedProfiles =
     selectedCatalog?.profiles.filter((profile) => profileIndices.includes(profile.index)) ?? [];
+  const selectedPlanarFace = selectedFace === null
+    ? undefined
+    : planarFaces.find(
+        (face) => face.id === selectedFace
+          && (selectedBody === null || face.bodyId === selectedBody),
+      );
+  const sourceFace = useMemo(
+    () => profileIndices.length === 0
+      ? selectedPlanarFace
+        ? { body_id: selectedPlanarFace.bodyId, face_id: selectedPlanarFace.id }
+        : savedSourceFace
+      : null,
+    [profileIndices.length, savedSourceFace, selectedPlanarFace],
+  );
+  const sourceBasis = selectedCatalog?.basis
+    ?? selectedPlanarFace?.basis
+    ?? (sourceFace ? savedSourceBasis : null);
+  useEffect(() => {
+    if (profileIndices.length !== 0 || !selectedPlanarFace) return;
+    setSavedSourceFace({
+      body_id: selectedPlanarFace.bodyId,
+      face_id: selectedPlanarFace.id,
+    });
+    setSavedSourceBasis(selectedPlanarFace.basis);
+  }, [profileIndices.length, selectedPlanarFace]);
   const distanceNumber = Number(distance);
   const secondDistanceNumber = Number(secondDistance);
   const taperNumber = Number(taper);
@@ -216,6 +283,12 @@ export function ExtrudeDialog() {
   }, [automaticInference, operationManual]);
 
   useEffect(() => {
+    if (openFeature !== 0 || operationManual || !sourceFace) return;
+    setOperation('join');
+    setTargetBodies([sourceFace.body_id]);
+  }, [openFeature, operationManual, sourceFace]);
+
+  useEffect(() => {
     if (
       openFeature === null ||
       loading ||
@@ -258,8 +331,7 @@ export function ExtrudeDialog() {
     !loading &&
     !busy &&
     !loadError &&
-    sketchName.length > 0 &&
-    profileIndices.length > 0 &&
+    (sourceFace !== null || (sketchName.length > 0 && profileIndices.length > 0)) &&
     extentValid &&
     Number.isFinite(taperNumber) &&
     Math.abs(taperNumber) < 89 &&
@@ -267,7 +339,7 @@ export function ExtrudeDialog() {
     (extentType !== 'to_face' || toFace !== null);
   const validationError = (() => {
     if (loading || loadError) return null;
-    if (!sketchName || profileIndices.length === 0) {
+    if (!sourceFace && (!sketchName || profileIndices.length === 0)) {
       return t('extrude.validation.selectProfile');
     }
     if (!extentValid) {
@@ -287,6 +359,158 @@ export function ExtrudeDialog() {
   const editFeatureId =
     openFeature !== null && openFeature > 0 ? openFeature : undefined;
 
+  const previewOffsets = useMemo(() => {
+    if (
+      !sourceBasis
+      || (sourceFace === null && selectedProfiles.length === 0)
+      || !extentValid
+    ) return null;
+    let startOffset = 0;
+    let endOffset = 0;
+    let directionOffset = 0;
+
+    if (extentType === 'distance') {
+      const magnitude = Math.abs(distanceNumber);
+      const effectiveFlip = distanceNumber < 0 ? !flip : flip;
+      startOffset = 0;
+      endOffset = magnitude;
+      if (effectiveFlip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = effectiveFlip ? -magnitude : magnitude;
+    } else if (extentType === 'two_sides') {
+      startOffset = -secondDistanceNumber;
+      endOffset = distanceNumber;
+      if (flip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = flip ? -secondDistanceNumber : distanceNumber;
+    } else if (extentType === 'symmetric') {
+      const half = distanceNumber * 0.5;
+      startOffset = -half;
+      endOffset = half;
+      directionOffset = flip ? -half : half;
+    } else if (extentType === 'to_face') {
+      const faceBasis = scene.bodies
+        .flatMap((body) => body.faces)
+        .find((face) => face.id === toFace)?.plane;
+      if (!faceBasis) return null;
+      const delta = faceBasis.origin.map(
+        (coordinate, index) => coordinate - sourceBasis.origin[index],
+      );
+      const distanceToFace = delta.reduce(
+        (sum, coordinate, index) =>
+          sum + coordinate * sourceBasis.normal[index],
+        0,
+      );
+      if (!Number.isFinite(distanceToFace) || Math.abs(distanceToFace) <= 0.000001) {
+        return null;
+      }
+      startOffset = 0;
+      endOffset = distanceToFace;
+      if (flip) [startOffset, endOffset] = [-endOffset, -startOffset];
+      directionOffset = flip ? -distanceToFace : distanceToFace;
+    } else {
+      // Through All is infinite in the kernel. Bound its presentation to the
+      // active target geometry so the preview stays useful and numerically
+      // compact in the native viewport.
+      const eligibleIds = new Set(
+        targetBodies.length > 0
+          ? targetBodies
+          : scene.bodies.map((body) => body.id),
+      );
+      let minimum = Number.POSITIVE_INFINITY;
+      let maximum = Number.NEGATIVE_INFINITY;
+      for (const body of scene.bodies) {
+        if (!eligibleIds.has(body.id)) continue;
+        for (let index = 0; index + 2 < body.mesh.positions.length; index += 3) {
+          const projection =
+            (body.mesh.positions[index] - sourceBasis.origin[0])
+              * sourceBasis.normal[0]
+            + (body.mesh.positions[index + 1] - sourceBasis.origin[1])
+              * sourceBasis.normal[1]
+            + (body.mesh.positions[index + 2] - sourceBasis.origin[2])
+              * sourceBasis.normal[2];
+          minimum = Math.min(minimum, projection);
+          maximum = Math.max(maximum, projection);
+        }
+      }
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+        minimum = -50;
+        maximum = 50;
+      }
+      const padding = Math.max(2, Math.abs(maximum - minimum) * 0.08);
+      startOffset = minimum - padding;
+      endOffset = maximum + padding;
+      directionOffset = flip ? startOffset : endOffset;
+    }
+
+    return { startOffset, endOffset, directionOffset };
+  }, [
+    distanceNumber,
+    extentType,
+    extentValid,
+    flip,
+    scene.bodies,
+    secondDistanceNumber,
+    selectedProfiles.length,
+    sourceBasis,
+    sourceFace,
+    targetBodies,
+    toFace,
+  ]);
+
+  // OCCT-scale previews should not run for every intermediate keystroke. Keep
+  // the previous valid tool volume while typing, then publish one coherent
+  // update after a short pause.
+  useEffect(() => {
+    if (
+      openFeature === null ||
+      loading ||
+      loadError ||
+      !sourceBasis ||
+      (sourceFace === null && profileIndices.length === 0)
+    ) {
+      setSolidCommandPreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (
+        !previewOffsets
+        || !Number.isFinite(taperNumber)
+        || Math.abs(taperNumber) >= 89
+      ) {
+        setSolidCommandPreview(null);
+        return;
+      }
+      setSolidCommandPreview({
+        kind: 'extrude',
+        basis: sourceBasis,
+        sourceFace,
+        profiles: selectedCatalog?.profiles ?? [],
+        selectedProfileIndices: [...profileIndices],
+        startOffset: previewOffsets.startOffset,
+        endOffset: previewOffsets.endOffset,
+        directionOffset: previewOffsets.directionOffset,
+        operation,
+      });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [
+    loadError,
+    loading,
+    openFeature,
+    operation,
+    previewOffsets,
+    profileSelectionKey,
+    selectedCatalog,
+    setSolidCommandPreview,
+    sourceBasis,
+    sourceFace,
+    taperNumber,
+  ]);
+
+  useEffect(
+    () => () => setSolidCommandPreview(null),
+    [setSolidCommandPreview],
+  );
+
   const changeDistance = (value: string) => {
     setDistance(value);
   };
@@ -301,6 +525,16 @@ export function ExtrudeDialog() {
   };
 
   const chooseSketch = (name: string) => {
+    if (name === '') {
+      clearSolidSelection();
+      setSavedSourceFace(null);
+      setSavedSourceBasis(null);
+      replaceProfilePicks('extrude', [], '');
+      return;
+    }
+    clearSolidSelection();
+    setSavedSourceFace(null);
+    setSavedSourceBasis(null);
     const entry = catalog.find((item) => item.sketch_name === name);
     const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
     replaceProfilePicks(
@@ -312,8 +546,11 @@ export function ExtrudeDialog() {
     );
   };
 
-  const toggleProfile = (index: number) => {
-    toggleProfilePick({ sketch_name: sketchName, profile_index: index });
+  const toggleProfile = (profileSketchName: string, index: number) => {
+    clearSolidSelection();
+    setSavedSourceFace(null);
+    setSavedSourceBasis(null);
+    toggleProfilePick({ sketch_name: profileSketchName, profile_index: index });
   };
 
   const toggleBody = (id: number) => {
@@ -360,6 +597,7 @@ export function ExtrudeDialog() {
     }
     void submitExtrude(
       {
+        source_face: sourceFace,
         sketch_name: sketchName,
         profile_indices: profileIndices,
         operation,
@@ -441,11 +679,19 @@ export function ExtrudeDialog() {
           ? `${t('extrude.autoJoinHint')} ${automaticTargetNames}`
           : t('extrude.autoNewBodyHint')
       : null;
+  const sourceFaceLabel = sourceFace
+    ? planarFaces.find(
+        (face) => face.id === sourceFace.face_id && face.bodyId === sourceFace.body_id,
+      )?.label ?? `${t('extrude.face')} #${sourceFace.face_id}`
+    : null;
 
   if (openFeature === null) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim="0.15"
+      className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
+    >
       {selectedCatalog && selectedProfiles.length > 0 && extentType === 'distance' && (
         <ExtrudeManipulator
           basis={selectedCatalog.basis}
@@ -489,7 +735,7 @@ export function ExtrudeDialog() {
             <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
               {loadError}
             </p>
-          ) : catalog.length === 0 ? (
+          ) : catalog.length === 0 && planarFaces.length === 0 ? (
             <p className="rounded border border-edge bg-header p-2 text-xs leading-5 text-mute">
               {t('extrude.noProfiles')}
             </p>
@@ -503,6 +749,7 @@ export function ExtrudeDialog() {
                   onChange={(event) => chooseSketch(event.target.value)}
                   className={INPUT_CLASS}
                 >
+                  <option value="">{t('extrude.anyVisibleSketch')}</option>
                   {catalog.map((entry) => (
                     <option key={entry.sketch_name} value={entry.sketch_name}>
                       {entry.sketch_name}
@@ -512,31 +759,99 @@ export function ExtrudeDialog() {
               </label>
 
               <fieldset>
-                <legend className={LABEL_CLASS}>{t('extrude.profiles')}</legend>
-                <p className="mb-1.5 text-[10px] leading-4 text-mute">
-                  {t('solidProfile.pickHint')}
-                </p>
+                <legend className={LABEL_CLASS}>{t('extrude.sources')}</legend>
+                <div
+                  data-testid="extrude-profile-selection-state"
+                  className="mb-2 rounded border border-accent/70 bg-accent/10 p-2"
+                >
+                  <div className="flex items-center gap-2 text-xs font-semibold text-ink">
+                    <MousePointerClick size={14} className="shrink-0 text-accent" />
+                    <span className="flex-1">{t('extrude.selectingSources')}</span>
+                    <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent">
+                      {t('extrude.selectedSourceCount').replace(
+                        '{count}',
+                        String(sourceFace ? 1 : profileIndices.length),
+                      )}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[10px] leading-4 text-mute">
+                    {t('extrude.selectingSourcesHint')}
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="extrude-clear-profiles"
+                    disabled={!sourceFace && profileIndices.length === 0 && sketchName === ''}
+                    onClick={() => {
+                      clearSolidSelection();
+                      setSavedSourceFace(null);
+                      setSavedSourceBasis(null);
+                      replaceProfilePicks('extrude', [], '');
+                    }}
+                    className="mt-1.5 h-6 rounded border border-edge bg-header px-2 text-[10px] text-ink hover:border-accent/70 hover:bg-edge disabled:opacity-40"
+                  >
+                    {t('extrude.clearAndReselect')}
+                  </button>
+                </div>
                 <div className="space-y-1 rounded border border-edge bg-header p-2">
-                  {selectedCatalog?.profiles.filter((profile) => profile.nesting_depth % 2 === 0).map((profile) => (
-                    <label
-                      key={profile.index}
-                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                    >
+                  {sourceFace && sourceFaceLabel && (
+                    <label className="flex cursor-pointer items-center gap-2 rounded bg-accent/10 px-1 py-1 text-xs text-ink">
                       <input
                         type="checkbox"
-                        checked={profileIndices.includes(profile.index)}
-                        onChange={() => toggleProfile(profile.index)}
+                        checked
+                        onChange={() => {
+                          clearSolidSelection();
+                          setSavedSourceFace(null);
+                          setSavedSourceBasis(null);
+                        }}
                         className="accent-accent"
                       />
-                      <span className="flex-1">
-                        {t('extrude.profile')} {profile.index + 1}
-                      </span>
-                      <span className="text-[10px] text-mute">
-                        {Math.abs(profile.area).toFixed(2)} mm²
+                      <span className="flex-1">{sourceFaceLabel}</span>
+                      <span className="text-[10px] text-accent">
+                        {t('extrude.exactFace')}
                       </span>
                     </label>
+                  )}
+                  {(selectedCatalog ? [selectedCatalog] : catalog).map((entry) => (
+                    <div key={entry.sketch_name}>
+                      {!selectedCatalog && (
+                        <div className="px-1 pb-1 pt-1 text-[10px] font-semibold text-mute">
+                          {entry.sketch_name}
+                        </div>
+                      )}
+                      {entry.profiles
+                        .filter((profile) => profile.nesting_depth % 2 === 0)
+                        .map((profile) => {
+                          const checked = profilePicker?.selected.some(
+                            (candidate) =>
+                              candidate.sketch_name === entry.sketch_name
+                              && candidate.profile_index === profile.index,
+                          ) ?? false;
+                          return (
+                            <label
+                              key={`${entry.sketch_name}:${profile.index}`}
+                              className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleProfile(entry.sketch_name, profile.index)}
+                                className="accent-accent"
+                              />
+                              <span className="flex-1">
+                                {t('extrude.profile')} {profile.index + 1}
+                              </span>
+                              <span className="text-[10px] text-mute">
+                                {Math.abs(profile.area).toFixed(2)} mm²
+                              </span>
+                            </label>
+                          );
+                        })}
+                    </div>
                   ))}
                 </div>
+                <p className="mt-1.5 text-[10px] leading-4 text-mute">
+                  {t('extrude.livePreview')}
+                </p>
               </fieldset>
 
               <fieldset>

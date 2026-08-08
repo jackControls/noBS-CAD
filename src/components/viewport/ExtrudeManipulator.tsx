@@ -9,6 +9,7 @@ import type { PlaneBasis, ProfileLoopDto } from '../../engine/types';
 import { useTranslation } from '../../i18n';
 import { DimensionInput } from '../DimensionInput';
 import type { ViewportCameraApi } from './cameraApi';
+import { nativeViewportIsActive } from './nativeViewportBridge';
 
 interface Props {
   basis: PlaneBasis;
@@ -79,9 +80,10 @@ function dragValue(value: number) {
 }
 
 /**
- * Viewport-native one-sided Extrude control. The projected arrow follows the
- * selected profile while the camera moves. Dragging its handle edits signed
- * distance; crossing the sketch plane reverses direction.
+ * React owns only the projected input and an invisible drag hit target. Bevy
+ * renders the actual 3D shaft, head, and origin marker. The hit target must not
+ * become a visible DOM island: doing so masks the native arrowhead and forces
+ * the webview/native-view cutout to move on every camera frame.
  */
 export function ExtrudeManipulator({
   basis,
@@ -93,8 +95,6 @@ export function ExtrudeManipulator({
   onCommit,
 }: Props) {
   const { t } = useTranslation();
-  const lineRef = useRef<SVGLineElement>(null);
-  const baseRef = useRef<SVGCircleElement>(null);
   const handleRef = useRef<HTMLButtonElement>(null);
   const fieldRef = useRef<HTMLLabelElement>(null);
   const projectionRef = useRef<Projection | null>(null);
@@ -111,18 +111,30 @@ export function ExtrudeManipulator({
 
   useEffect(() => {
     let frame = 0;
-    const tick = () => {
-      frame = requestAnimationFrame(tick);
+    let settleTimer = 0;
+
+    const setDisplay = (element: HTMLElement, value: string) => {
+      if (element.style.display !== value) element.style.display = value;
+    };
+    const setVisibility = (element: HTMLElement, value: string) => {
+      if (element.style.visibility !== value) element.style.visibility = value;
+    };
+    const setPosition = (element: HTMLElement, left: number, top: number) => {
+      const nextLeft = `${left.toFixed(2)}px`;
+      const nextTop = `${top.toFixed(2)}px`;
+      if (element.style.left !== nextLeft) element.style.left = nextLeft;
+      if (element.style.top !== nextTop) element.style.top = nextTop;
+    };
+
+    const update = () => {
       const api = (
         window as unknown as {
           __cameraApi?: ViewportCameraApi;
         }
       ).__cameraApi;
-      const line = lineRef.current;
-      const baseMarker = baseRef.current;
       const handle = handleRef.current;
       const field = fieldRef.current;
-      if (!api || !line || !baseMarker || !handle || !field) return;
+      if (!api || !handle || !field) return;
 
       const normal = basis.normal;
       const base = api.worldToScreen(anchor);
@@ -132,10 +144,8 @@ export function ExtrudeManipulator({
         anchor[2] + normal[2],
       ]);
       if (!base || !unitTip) {
-        line.style.display = 'none';
-        baseMarker.style.display = 'none';
-        handle.style.display = 'none';
-        field.style.display = 'none';
+        setDisplay(handle, 'none');
+        setDisplay(field, 'none');
         projectionRef.current = null;
         return;
       }
@@ -162,26 +172,51 @@ export function ExtrudeManipulator({
         effectiveDistance,
       };
 
-      line.style.display = '';
-      line.setAttribute('x1', base.x.toFixed(2));
-      line.setAttribute('y1', base.y.toFixed(2));
-      line.setAttribute('x2', tip.x.toFixed(2));
-      line.setAttribute('y2', tip.y.toFixed(2));
-      baseMarker.style.display = '';
-      baseMarker.setAttribute('cx', base.x.toFixed(2));
-      baseMarker.setAttribute('cy', base.y.toFixed(2));
-      handle.style.display = '';
-      handle.style.left = `${tip.x}px`;
-      handle.style.top = `${tip.y}px`;
+      setPosition(handle, tip.x, tip.y);
+      setDisplay(handle, '');
+      setVisibility(handle, '');
 
       const midpointX = (base.x + tip.x) * 0.5 - unitY * 92;
       const midpointY = (base.y + tip.y) * 0.5 + unitX * 92;
-      field.style.display = '';
-      field.style.left = `${Math.min(window.innerWidth - 390, Math.max(250, midpointX))}px`;
-      field.style.top = `${Math.min(window.innerHeight - 80, Math.max(150, midpointY))}px`;
+      setPosition(
+        field,
+        Math.min(window.innerWidth - 390, Math.max(250, midpointX)),
+        Math.min(window.innerHeight - 80, Math.max(150, midpointY)),
+      );
+      setDisplay(field, '');
+      setVisibility(field, '');
     };
+
+    const settleAfterCameraMotion = () => {
+      const handle = handleRef.current;
+      const field = fieldRef.current;
+      if (handle) setVisibility(handle, 'hidden');
+      if (field) setVisibility(field, 'hidden');
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(update, 96);
+    };
+
+    const onCameraChange = () => {
+      if (nativeViewportIsActive()) settleAfterCameraMotion();
+    };
+
+    const tick = () => {
+      update();
+      // Browser development has no native camera event source. In the desktop
+      // build, stop polling as soon as Bevy is active; camera events hide the
+      // DOM islands during motion and position them once after navigation
+      // settles.
+      if (!nativeViewportIsActive()) frame = requestAnimationFrame(tick);
+    };
+    window.addEventListener('nbcad:camera-change', onCameraChange);
+    window.addEventListener('resize', settleAfterCameraMotion);
     tick();
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('nbcad:camera-change', onCameraChange);
+      window.removeEventListener('resize', settleAfterCameraMotion);
+    };
   }, [anchor, basis.normal, effectiveDistance]);
 
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -228,57 +263,24 @@ export function ExtrudeManipulator({
 
   return (
     <>
-      <svg
-        data-testid="extrude-direction-arrow"
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-[71] h-full w-full overflow-visible"
-      >
-        <defs>
-          <marker
-            id="extrude-direction-arrowhead"
-            markerWidth="8"
-            markerHeight="8"
-            refX="6"
-            refY="4"
-            orient="auto"
-            markerUnits="strokeWidth"
-          >
-            <path d="M 0 0 L 8 4 L 0 8 z" fill="rgb(14 165 233)" />
-          </marker>
-        </defs>
-        <line
-          ref={lineRef}
-          stroke="rgb(14 165 233)"
-          strokeWidth="3"
-          strokeLinecap="round"
-          markerEnd="url(#extrude-direction-arrowhead)"
-          className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
-        />
-        <circle
-          ref={baseRef}
-          r="4"
-          fill="rgb(15 23 42)"
-          stroke="rgb(125 211 252)"
-          strokeWidth="2"
-        />
-      </svg>
-
       <button
         ref={handleRef}
         type="button"
         data-testid="extrude-direction-handle"
         aria-label={t('extrude.dragHandle')}
         title={t('extrude.dragHandle')}
+        tabIndex={-1}
         disabled={disabled}
         onPointerDown={beginDrag}
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className="pointer-events-auto fixed z-[72] h-5 w-5 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full border-2 border-white/70 bg-accent shadow-lg shadow-black/50 hover:scale-110 disabled:opacity-50"
+        className="pointer-events-auto fixed z-[72] h-8 w-8 -translate-x-1/2 -translate-y-1/2 cursor-move touch-none opacity-0"
       />
 
       <label
         ref={fieldRef}
+        data-native-viewport-overlay
         data-testid="extrude-canvas-input"
         className="pointer-events-auto fixed z-[72] flex h-8 -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-md border border-accent bg-header/95 px-2 font-mono text-[11px] text-ink shadow-lg shadow-black/50 backdrop-blur-sm"
         onPointerDown={(event) => event.stopPropagation()}

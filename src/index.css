@@ -35,9 +35,12 @@
   --viewport: #2a2d33;
   --viewport-rgb: 42 45 51;
   --cad-defined: #e8e9ec;
-  --cad-hover: #9ccaff;
+  --cad-hover: #ffd166;
+  --cad-sketch-selected: #c4b9ff;
   --cad-preview: #8fc4ff;
   --cad-finished: #4ac7ff;
+  --cad-finished-point: #ff9f43;
+  --cad-finished-point-outline: #15191f;
   --cad-body: #8b9bac;
   --cad-body-selected: #69a9d4;
   --cad-body-tool: #b58a43;
@@ -87,9 +90,12 @@
   --viewport: #dce3ea;
   --viewport-rgb: 220 227 234;
   --cad-defined: #252b32;
-  --cad-hover: #006eae;
+  --cad-hover: #9c4400;
+  --cad-sketch-selected: #5038a8;
   --cad-preview: #147fbe;
   --cad-finished: #007fb4;
+  --cad-finished-point: #6b2d00;
+  --cad-finished-point-outline: #ffffff;
   --cad-body: #9fb3c5;
   --cad-body-selected: #4f98c5;
   --cad-body-tool: #d2a04b;
@@ -127,35 +133,37 @@ body {
 }
 
 /*
- * noBS CAD feature panels use an asymmetric lower corner, an iris edge rail,
- * and a quiet directional header wash. This is the shared visual signature
- * for browser and Tauri-hosted command dialogs.
+ * Desktop production boundary: Bevy paints viewport-local chrome. These DOM
+ * nodes remain in the accessibility tree and retain the exact hit geometry,
+ * but are visually transparent and therefore are not punched back into the
+ * native surface by collectNativeViewportOverlayRects().
+ */
+:root[data-native-viewport='bevy'] [data-native-hud] {
+  opacity: 0 !important;
+}
+
+/*
+ * noBS CAD feature panels use a continuous iris perimeter and a quiet
+ * directional header wash. This is the shared visual signature for browser
+ * and Tauri-hosted command dialogs.
  */
 .feature-dialog {
   isolation: isolate;
-  border-radius: 14px 14px 14px 5px;
-  border-left-width: 2px;
-  border-left-color: rgb(var(--accent-rgb) / 0.78);
+  /* Paint the iris perimeter as a filled frame instead of a translucent
+     border stroke. It stays two physical pixels on every straight edge even
+     when a rounded dialog is composited at Retina scale. */
+  border-radius: 14px;
+  border: 2px solid transparent;
+  background:
+    linear-gradient(rgb(var(--panel-rgb)), rgb(var(--panel-rgb))) padding-box,
+    linear-gradient(
+        rgb(var(--accent-rgb) / 0.78),
+        rgb(var(--accent-rgb) / 0.78)
+      )
+      border-box;
   box-shadow:
     0 18px 48px rgb(0 0 0 / var(--dialog-shadow-alpha)),
     0 0 0 1px rgb(var(--accent-rgb) / 0.08);
-}
-
-.feature-dialog::before {
-  position: absolute;
-  z-index: 2;
-  top: 0;
-  left: 18px;
-  width: 58px;
-  height: 2px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgb(var(--accent-rgb) / 0.95),
-    rgb(var(--accent-rgb) / 0)
-  );
-  content: '';
-  pointer-events: none;
 }
 
 .feature-dialog-header {
@@ -175,4 +183,12 @@ body {
 }
 *::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Tabs stay a fixed ribbon-height control even when the document list scrolls. */
+.project-tab-scroll {
+  scrollbar-width: none;
+}
+.project-tab-scroll::-webkit-scrollbar {
+  display: none;
 }

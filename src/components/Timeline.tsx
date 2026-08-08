@@ -58,6 +58,7 @@ import { cx } from '../lib/cx';
 import { useAppStore } from '../store/appStore';
 import type { FeatureDto } from '../types/document';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
+import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
 function editTimelineFeature(feature: FeatureDto) {
   if (feature.kind === 'sketch') void editSketch(feature.name);
@@ -719,79 +720,5 @@ function HistoryCursor({
       <span className="h-full w-px rounded-full bg-accent shadow-[0_0_7px_rgb(var(--accent-rgb)/0.5)]" />
       <span className="absolute top-0 h-1.5 w-1.5 -translate-y-0.5 rotate-45 rounded-[1px] bg-accent" />
     </button>
-  );
-}
-
-function DeleteFeatureDialog({
-  feature,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  feature: FeatureDto;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { t } = useTranslation();
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    confirmRef.current?.focus({ preventScroll: true });
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && !busy) onCancel();
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [busy, onCancel]);
-
-  return (
-    <div
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-black/45"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget && !busy) onCancel();
-      }}
-    >
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="delete-feature-title"
-        aria-describedby="delete-feature-message"
-        className="w-[28rem] max-w-[calc(100vw-2rem)] rounded border border-edge bg-panel shadow-xl shadow-black/50"
-      >
-        <div
-          id="delete-feature-title"
-          className="border-b border-edge px-4 py-3 text-sm font-semibold text-ink"
-        >
-          {t('timeline.deleteTitle')}
-        </div>
-        <div
-          id="delete-feature-message"
-          className="px-4 py-4 text-xs leading-relaxed text-ink/90"
-        >
-          {t('timeline.deleteMessage').replace('{name}', feature.name)}
-        </div>
-        <div className="flex justify-end gap-2 border-t border-edge px-4 py-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCancel}
-            className="h-8 rounded border border-edge px-4 text-xs text-ink hover:bg-edge disabled:opacity-40"
-          >
-            {t('timeline.deleteCancel')}
-          </button>
-          <button
-            ref={confirmRef}
-            type="button"
-            data-testid="delete-feature-confirm"
-            disabled={busy}
-            onClick={onConfirm}
-            className="h-8 rounded bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40"
-          >
-            {t('timeline.deleteConfirm')}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

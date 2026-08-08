@@ -162,6 +162,30 @@ async function deleteFeature(name) {
   );
 }
 
+async function deleteFeatureFromBrowser(name) {
+  await page.evaluate(() => {
+    const state = window.__appStore.getState();
+    const folder = state.document.browser.find((node) => node.kind === 'sketches_folder');
+    if (folder && !state.expanded[folder.id]) state.toggleExpanded(folder.id);
+  });
+  const row = page.locator('[role="treeitem"]').filter({ hasText: name }).first();
+  await row.click({ button: 'right' });
+  const item = page.locator('[data-context-menu-item="delete-feature"]');
+  await item.waitFor({ state: 'visible' });
+  assert.match(await item.innerText(), new RegExp(name));
+  await item.click();
+  await page.getByTestId('delete-feature-confirm').click();
+  await page.waitForFunction(
+    (featureName) =>
+      !window.__appStore
+        .getState()
+        .document.features.some((feature) => feature.name === featureName)
+      && !window.__appStore.getState().solidBusy,
+    name,
+    { timeout: 60_000 },
+  );
+}
+
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForFunction(
@@ -199,6 +223,15 @@ try {
     originalIds,
   );
 
+  console.log('0b. Right-click a browser sketch to delete its history feature');
+  await deleteFeatureFromBrowser('Sketch1');
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.__appStore.getState().document.features.map((feature) => feature.name),
+    ),
+    ['Sketch2'],
+  );
+
   await buildHistory();
 
   console.log('1. Cmd/Ctrl+Z removes the latest feature from history');
@@ -218,6 +251,74 @@ try {
     await page.evaluate(async () => (await window.__engine.chamferDefinitions()).length),
     0,
     'solid Undo must remove the feature definition, not only move the build cursor',
+  );
+
+  console.log('1b. Cmd/Ctrl+Shift+Z restores the destructively undone feature');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1,Chamfer1'
+      && window.__appStore.getState().document.rollback_index === 3
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  assert.equal(
+    await page.evaluate(async () => (await window.__engine.chamferDefinitions()).length),
+    1,
+    'solid Redo must restore the exact deleted feature definition',
+  );
+
+  console.log('1c. The restored feature can be undone again');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1'
+      && window.__appStore.getState().document.rollback_index === 2
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  console.log('1d. Consecutive solid Undo/Redo commands retain their order');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1,Chamfer1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
   );
 
   // Rebuild the original dependency chain for the cursor/reorder coverage.
@@ -247,6 +348,26 @@ try {
     { timeout: 60_000 },
   );
   assert.equal(await page.getByTestId('timeline-history-cursor').getAttribute('aria-valuenow'), '1');
+
+  console.log('3b. Redo advances and Undo retreats the preserved history cursor');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document.rollback_index === 2
+      && window.__appStore.getState().solidScene.bodies.length === 1
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document.rollback_index === 1
+      && window.__appStore.getState().solidScene.bodies.length === 0
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
 
   console.log('4. Drag cursor forward to latest and rebuild');
   await dragCursorToEnd();

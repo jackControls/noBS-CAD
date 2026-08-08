@@ -1,51 +1,213 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
-use nbcad_core::DocumentDto;
+use nbcad_core::{BodyAppearance, DocumentDto};
 use nbcad_occt::OcctKernel;
-use nbcad_sketch::{err_json, host, ok_json, SketchManager};
+use nbcad_sketch::{err_json, host, ok_json, SketchDto, SketchManager};
 use nbcad_solid::{
-    BodyFeatureRequestDto, DeleteFeatureRequest, EditBodyFeatureRequest, EditExtrudeRequest,
-    EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest, EditSolidChamferRequest,
-    EditSolidFilletRequest, EditSweepRequest, ExtrudeRequest, HoleRequest, LoftRequest,
-    RecomputePlanDto, ReorderFeatureRequest, RevolveRequest, RibRequest, SetRollbackRequest,
-    SolidChamferRequest, SolidFilletRequest, StepExportRequest, SweepRequest,
+    BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
+    EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
+    EditSolidChamferRequest, EditSolidFilletRequest, EditSweepRequest, ExtrudeRequest, HoleRequest,
+    LoftRequest, ProfileCatalogItemDto, RecomputePlanDto, ReorderFeatureRequest, RevolveRequest,
+    RibRequest, SetRollbackRequest, SolidChamferRequest, SolidFilletRequest, SolidSceneDto,
+    SolidUpdateDto, StepExportRequest, SweepRequest,
 };
 use serde::de::DeserializeOwned;
+
+pub(crate) const BOOTSTRAP_SESSION_ID: &str = "__bootstrap__";
+const MAX_PROJECT_SESSIONS: usize = 128;
 
 struct NativeEngine {
     manager: SketchManager,
     kernel: OcctKernel,
+    geometry_revision: u64,
+}
+
+impl NativeEngine {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            manager: SketchManager::new(),
+            kernel: OcctKernel::new()
+                .map_err(|error| format!("native OCCT kernel failed to initialize: {error}"))?,
+            geometry_revision: 1,
+        })
+    }
+
+    fn update(&self) -> SolidUpdateDto {
+        SolidUpdateDto {
+            document: self.manager.document_dto(),
+            scene: self.manager.solid_scene(),
+        }
+    }
+}
+
+struct NativeWorkspace {
+    active_session_id: String,
+    sessions: HashMap<String, NativeEngine>,
+}
+
+impl NativeWorkspace {
+    fn new() -> Self {
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            BOOTSTRAP_SESSION_ID.to_string(),
+            NativeEngine::new().expect("native OCCT kernel failed to initialize"),
+        );
+        Self {
+            active_session_id: BOOTSTRAP_SESSION_ID.to_string(),
+            sessions,
+        }
+    }
+
+    fn active(&self) -> &NativeEngine {
+        self.sessions
+            .get(&self.active_session_id)
+            .expect("active project session missing")
+    }
+
+    fn active_mut(&mut self) -> &mut NativeEngine {
+        self.sessions
+            .get_mut(&self.active_session_id)
+            .expect("active project session missing")
+    }
 }
 
 /// Native application state: the shared Rust document/history manager plus
 /// the stateful OCCT B-rep bridge. The whole pair is locked together so a
 /// prepare → kernel replay → commit transaction cannot interleave.
 pub struct AppState {
-    inner: Mutex<NativeEngine>,
+    inner: Mutex<NativeWorkspace>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        let kernel = OcctKernel::new().expect("native OCCT kernel failed to initialize");
         Self {
-            inner: Mutex::new(NativeEngine {
-                manager: SketchManager::new(),
-                kernel,
-            }),
+            inner: Mutex::new(NativeWorkspace::new()),
         }
+    }
+
+    /// Associate the engine created during application bootstrap with the
+    /// frontend's first tab. Repeated binding of the active tab is harmless.
+    pub fn bind_project_session(&self, session_id: &str) -> String {
+        if let Err(error) = validate_session_id(session_id) {
+            return err_json(error);
+        }
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        if workspace.active_session_id == session_id {
+            return ok_json(());
+        }
+        if workspace.sessions.contains_key(session_id) {
+            workspace.active_session_id = session_id.to_string();
+            return ok_json(());
+        }
+        if workspace.active_session_id != BOOTSTRAP_SESSION_ID || workspace.sessions.len() != 1 {
+            return err_json("the bootstrap project session is already bound");
+        }
+        let engine = workspace
+            .sessions
+            .remove(BOOTSTRAP_SESSION_ID)
+            .expect("bootstrap project session missing");
+        workspace.sessions.insert(session_id.to_string(), engine);
+        workspace.active_session_id = session_id.to_string();
+        ok_json(())
+    }
+
+    /// Create and activate a blank, fully retained OCCT project context.
+    pub fn create_project_session(&self, session_id: &str) -> String {
+        if let Err(error) = validate_session_id(session_id) {
+            return err_json(error);
+        }
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        if workspace.sessions.contains_key(session_id) {
+            return err_json("project session already exists");
+        }
+        if workspace.sessions.len() >= MAX_PROJECT_SESSIONS {
+            return err_json("too many resident project sessions");
+        }
+        let engine = match NativeEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => return err_json(error),
+        };
+        let update = engine.update();
+        workspace.sessions.insert(session_id.to_string(), engine);
+        workspace.active_session_id = session_id.to_string();
+        ok_json(update)
+    }
+
+    /// Activate a retained project. A missing value means the tab was evicted
+    /// and should be recreated from its frontend-owned model snapshot.
+    pub fn activate_project_session(&self, session_id: &str) -> String {
+        if let Err(error) = validate_session_id(session_id) {
+            return err_json(error);
+        }
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        if !workspace.sessions.contains_key(session_id) {
+            return ok_json(false);
+        }
+        workspace.active_session_id = session_id.to_string();
+        ok_json(true)
+    }
+
+    /// Release an inactive tab's OCCT B-reps and tessellation. The frontend
+    /// retains the parametric snapshot required to recreate it later.
+    pub fn drop_project_session(&self, session_id: &str) -> String {
+        if let Err(error) = validate_session_id(session_id) {
+            return err_json(error);
+        }
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        if workspace.active_session_id == session_id {
+            return err_json("cannot drop the active project session");
+        }
+        workspace.sessions.remove(session_id);
+        ok_json(())
     }
 
     pub fn document_snapshot(&self) -> DocumentDto {
         self.inner
             .lock()
             .expect("engine lock poisoned")
+            .active()
             .manager
             .document_dto()
     }
 
+    /// One lock acquisition gives the native viewport a coherent model
+    /// snapshot. The OCCT triangle buffers stay in Rust and never make a
+    /// JSON/IPC round-trip through the webview.
+    pub fn viewport_snapshot(
+        &self,
+    ) -> (
+        String,
+        u64,
+        SolidSceneDto,
+        Option<SketchDto>,
+        Vec<SketchDto>,
+        Vec<DatumPlaneDefinitionDto>,
+        Vec<ProfileCatalogItemDto>,
+        Vec<BodyAppearance>,
+    ) {
+        let workspace = self.inner.lock().expect("engine lock poisoned");
+        let inner = workspace.active();
+        (
+            workspace.active_session_id.clone(),
+            inner.geometry_revision,
+            inner.manager.solid_scene(),
+            inner.manager.active_snapshot(),
+            inner.manager.finished_sketches(),
+            inner.manager.datum_plane_definitions(),
+            inner.manager.profile_catalog(),
+            inner.manager.body_appearances(),
+        )
+    }
+
     pub fn engine_call(&self, method: &str, payload: &str) -> String {
-        let mut inner = self.inner.lock().expect("engine lock poisoned");
-        host::handle(&mut inner.manager, method, payload)
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        let inner = workspace.active_mut();
+        let result = host::handle(&mut inner.manager, method, payload);
+        if matches!(method, "datum_plane_create" | "datum_plane_edit") {
+            inner.geometry_revision = inner.geometry_revision.wrapping_add(1);
+        }
+        result
     }
 
     pub fn solid_extrude(&self, payload: &str) -> String {
@@ -191,10 +353,11 @@ impl AppState {
     pub fn export_step(&self, payload: &str) -> Result<Vec<u8>, String> {
         let request: StepExportRequest = serde_json::from_str(payload)
             .map_err(|error| format!("bad request payload: {error}"))?;
-        let inner = self
+        let workspace = self
             .inner
             .lock()
             .map_err(|_| "engine lock poisoned".to_string())?;
+        let inner = workspace.active();
         if !inner.manager.solid_scene().errors.is_empty() {
             return Err("Resolve timeline errors before exporting STEP.".to_string());
         }
@@ -207,10 +370,11 @@ impl AppState {
     pub fn export_stl(&self, payload: &str) -> Result<Vec<u8>, String> {
         let request: nbcad_export::MeshExportRequest = serde_json::from_str(payload)
             .map_err(|error| format!("bad request payload: {error}"))?;
-        let inner = self
+        let workspace = self
             .inner
             .lock()
             .map_err(|_| "engine lock poisoned".to_string())?;
+        let inner = workspace.active();
         if !inner.manager.solid_scene().errors.is_empty() {
             return Err("Resolve timeline errors before exporting STL.".to_string());
         }
@@ -230,10 +394,11 @@ impl AppState {
     pub fn export_3mf(&self, payload: &str) -> Result<Vec<u8>, String> {
         let request: nbcad_export::MeshExportRequest = serde_json::from_str(payload)
             .map_err(|error| format!("bad request payload: {error}"))?;
-        let inner = self
+        let workspace = self
             .inner
             .lock()
             .map_err(|_| "engine lock poisoned".to_string())?;
+        let inner = workspace.active();
         if !inner.manager.solid_scene().errors.is_empty() {
             return Err("Resolve timeline errors before exporting 3MF.".to_string());
         }
@@ -271,7 +436,8 @@ impl AppState {
         &self,
         prepare: impl FnOnce(&mut SketchManager) -> Result<RecomputePlanDto, nbcad_sketch::SessionError>,
     ) -> String {
-        let mut inner = self.inner.lock().expect("engine lock poisoned");
+        let mut workspace = self.inner.lock().expect("engine lock poisoned");
+        let inner = workspace.active_mut();
         let plan = match prepare(&mut inner.manager) {
             Ok(plan) => plan,
             Err(error) => return err_json(error.to_string()),
@@ -290,8 +456,97 @@ impl AppState {
                 transaction_id,
                 scene: kernel_scene,
             }) {
-            Ok(update) => ok_json(update),
+            Ok(update) => {
+                inner.geometry_revision = inner.geometry_revision.wrapping_add(1);
+                ok_json(update)
+            }
             Err(error) => err_json(error.to_string()),
         }
+    }
+}
+
+fn validate_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.is_empty() || session_id.len() > 128 {
+        return Err("invalid project session id".to_string());
+    }
+    if session_id == BOOTSTRAP_SESSION_ID {
+        return Err("reserved project session id".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn value(json: String) -> serde_json::Value {
+        let envelope: serde_json::Value = serde_json::from_str(&json).expect("valid envelope");
+        assert_eq!(envelope["ok"], true, "engine error: {envelope}");
+        envelope["value"].clone()
+    }
+
+    #[test]
+    fn project_sessions_retain_and_release_independent_documents() {
+        let state = AppState::new();
+        value(state.bind_project_session("tab-a"));
+        value(state.engine_call("document_set_name", r#""Alpha""#));
+
+        value(state.create_project_session("tab-b"));
+        value(state.engine_call("document_set_name", r#""Beta""#));
+
+        assert_eq!(value(state.activate_project_session("tab-a")), true);
+        assert_eq!(state.document_snapshot().name, "Alpha");
+        assert_eq!(value(state.activate_project_session("tab-b")), true);
+        assert_eq!(state.document_snapshot().name, "Beta");
+
+        value(state.activate_project_session("tab-a"));
+        value(state.drop_project_session("tab-b"));
+        assert_eq!(value(state.activate_project_session("tab-b")), false);
+    }
+
+    #[test]
+    fn binding_recovered_bootstrap_session_preserves_the_solid_model() {
+        let state = AppState::new();
+        value(state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#));
+        value(state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-10.0,"y":-10.0},
+                "p2":{"x":10.0,"y":10.0},
+                "ctrl_held":false
+            }"#,
+        ));
+        value(state.engine_call("end_sketch", ""));
+        value(state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "operation":"new_body",
+                "extent":{"type":"distance","distance":10.0},
+                "taper_angle_deg":0.0,
+                "flip":false,
+                "target_body_ids":[]
+            }"#,
+        ));
+
+        let (before_id, before_revision, before_scene, _, _, _, _, _) = state.viewport_snapshot();
+        assert_eq!(before_id, BOOTSTRAP_SESSION_ID);
+        assert_eq!(before_scene.bodies.len(), 1);
+        assert!(!before_scene.bodies[0].faces.is_empty());
+
+        value(state.bind_project_session("recovered-tab"));
+        let (after_id, after_revision, after_scene, _, _, _, _, _) = state.viewport_snapshot();
+        assert_eq!(after_id, "recovered-tab");
+        assert_eq!(after_revision, before_revision);
+        assert_eq!(after_scene.bodies.len(), before_scene.bodies.len());
+        assert_eq!(
+            after_scene.bodies[0].mesh.indices,
+            before_scene.bodies[0].mesh.indices
+        );
+        assert_eq!(
+            after_scene.bodies[0].mesh.positions,
+            before_scene.bodies[0].mesh.positions
+        );
     }
 }

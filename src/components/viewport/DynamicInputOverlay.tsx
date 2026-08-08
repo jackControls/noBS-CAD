@@ -25,6 +25,7 @@ export function DynamicInputOverlay() {
   return (
     <div
       data-dyn-input
+      data-native-viewport-overlay
       className="pointer-events-auto absolute z-20 flex items-center gap-1"
       style={{ left: dyn.x, top: dyn.y }}
       onPointerDown={(event) => event.stopPropagation()}

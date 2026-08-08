@@ -196,8 +196,24 @@ impl Default for ExtrudeExtent {
     }
 }
 
+/// Stable application-level reference to one exact planar OCCT face.
+///
+/// The request deliberately carries the owning body as well as the FaceId:
+/// FaceId is stable for the body-local topology key, while the body id tells
+/// the kernel which live B-rep owns that topology during a full replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanarFaceSourceDto {
+    pub body_id: BodyId,
+    pub face_id: FaceId,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtrudeRequest {
+    /// When present, Extrude consumes the referenced OCCT face instead of
+    /// sketch profiles. The exact TopoDS_Face (including every inner wire) is
+    /// resolved by the kernel; tessellation is never used as modeling input.
+    #[serde(default)]
+    pub source_face: Option<PlanarFaceSourceDto>,
     pub sketch_name: String,
     pub profile_indices: Vec<u32>,
     #[serde(default)]
@@ -611,6 +627,24 @@ pub struct StepExportRequest {
 pub struct ExtrudeDefinitionDto {
     pub feature_id: FeatureId,
     pub name: String,
+    /// Stable source identity retained in parametric history.
+    #[serde(default)]
+    pub source_face: Option<PlanarFaceSourceDto>,
+    /// Body-local OCCT topology label captured before this feature mutates
+    /// its target. This ordinal is retained for diagnostics only; replay must
+    /// validate `source_face_signature` rather than trusting it.
+    #[serde(default)]
+    pub source_face_key: Option<String>,
+    /// Exact geometric/topological fingerprint captured with the face key.
+    /// OCCT face-map ordinals are only an acceleration hint: every replay
+    /// validates this signature and searches the body when the ordinal moved.
+    #[serde(default)]
+    pub source_face_signature: Option<PlanarFaceSignatureDto>,
+    /// Creation-time plane cache bootstraps project reload before a fresh
+    /// kernel scene is available. The validated signature remains the
+    /// modeling truth.
+    #[serde(default)]
+    pub source_face_basis: Option<PlaneBasis>,
     pub sketch_name: String,
     pub profile_indices: Vec<u32>,
     pub operation: ExtrudeOperation,
@@ -1052,6 +1086,10 @@ pub enum KernelCurveDto {
 pub struct KernelExtrudeJobDto {
     pub feature_id: FeatureId,
     pub operation: ExtrudeOperation,
+    /// Exact B-rep face source. When set, `profiles` is empty and the OCCT
+    /// adapter resolves the unique face matching the validated signature.
+    #[serde(default)]
+    pub source_face: Option<KernelPlanarFaceSourceDto>,
     pub profiles: Vec<KernelProfileDto>,
     pub normal: Point3Dto,
     pub start_offset: f64,
@@ -1059,6 +1097,29 @@ pub struct KernelExtrudeJobDto {
     pub taper_angle_deg: f64,
     pub target_body_ids: Vec<BodyId>,
     pub result_body_ids: Vec<BodyId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KernelPlanarFaceSourceDto {
+    pub body_id: BodyId,
+    pub face_id: FaceId,
+    pub face_key: String,
+    pub signature: PlanarFaceSignatureDto,
+}
+
+/// Cross-host fingerprint for an exact planar B-rep face. Values come from
+/// OCCT properties rather than display tessellation, so native and browser
+/// replay can validate the same project. This is deliberately conservative:
+/// an ambiguous or changed match is a broken reference, never an ordinal
+/// retarget to a different face.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PlanarFaceSignatureDto {
+    pub centroid: Point3Dto,
+    pub normal: Point3Dto,
+    pub area: f64,
+    pub perimeter: f64,
+    pub wire_count: u32,
+    pub edge_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1265,11 +1326,13 @@ pub struct RecomputePlanDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KernelFaceDto {
-    /// Backend-stable topology label (`face:0`, generated history key, ...).
+    /// Backend-local topology label used as a fast lookup hint.
     pub key: String,
     pub first_index: u32,
     pub index_count: u32,
     pub plane: Option<PlaneBasis>,
+    #[serde(default)]
+    pub signature: Option<PlanarFaceSignatureDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1325,6 +1388,8 @@ pub struct FaceDto {
     pub first_index: u32,
     pub index_count: u32,
     pub plane: Option<PlaneBasis>,
+    #[serde(default)]
+    pub signature: Option<PlanarFaceSignatureDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

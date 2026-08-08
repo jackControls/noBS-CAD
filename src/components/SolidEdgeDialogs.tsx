@@ -124,7 +124,10 @@ function SolidEdgeDialog({ kind }: { kind: 'fillet' | 'chamfer' }) {
     : t(kind === 'fillet' ? 'solidEdge.fillet' : 'solidEdge.chamfer');
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div
+      data-native-viewport-dim="0.15"
+      className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
+    >
       <form data-testid={`solid-${kind}-dialog`} onSubmit={submit} className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-80 flex-col overflow-hidden border border-edge bg-panel">
         <header className="feature-dialog-header flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Icon size={15} className="text-accent" />

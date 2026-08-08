@@ -101,38 +101,54 @@ export function SelectionReadout() {
   return (
     <aside
       data-testid="selection-readout"
+      data-native-hud="selection"
+      data-native-viewport-overlay
       aria-label={t('selectionReadout.title')}
       aria-live="polite"
       className="pointer-events-none absolute bottom-12 right-3 z-10 min-w-[208px] max-w-[280px] select-none rounded border border-edge bg-header/95 px-2.5 py-2 text-[11px] text-ink shadow-lg shadow-black/15 backdrop-blur-sm"
     >
       <div className="mb-1.5 flex items-center justify-between gap-4 border-b border-edge/80 pb-1.5">
-        <span className="text-[9px] font-semibold tracking-[0.14em] text-mute">
+        <span
+          data-native-hud-title
+          className="text-[9px] font-semibold tracking-[0.14em] text-mute"
+        >
           {t('selectionReadout.title')}
         </span>
-        <span className="truncate font-medium">{titleFor(measurement, t)}</span>
+        <span data-native-hud-subject className="truncate font-medium">
+          {titleFor(measurement, t)}
+        </span>
       </div>
       {measurement.rows.length > 0 ? (
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
           {measurement.rows.map((row) => (
             <div
               key={row.label}
+              data-native-hud-row
               className="contents"
               data-testid={`selection-measure-${row.label}`}
             >
-              <dt className="text-mute">{t(`selectionReadout.measurements.${row.label}`)}</dt>
-              <dd className="text-right font-mono tabular-nums text-ink">
+              <dt data-native-hud-label className="text-mute">
+                {t(`selectionReadout.measurements.${row.label}`)}
+              </dt>
+              <dd
+                data-native-hud-value
+                className="text-right font-mono tabular-nums text-ink"
+              >
                 {formatRow(row, locale)}
               </dd>
             </div>
           ))}
         </dl>
       ) : (
-        <div className="text-right text-mute">
+        <div data-native-hud-footer className="text-right text-mute">
           {t('selectionReadout.selectedOnly')}
         </div>
       )}
       {measurement.rows.some((row) => row.approximate) && (
-        <div className="mt-1.5 border-t border-edge/60 pt-1 text-right text-[9px] text-mute">
+        <div
+          data-native-hud-footer
+          className="mt-1.5 border-t border-edge/60 pt-1 text-right text-[9px] text-mute"
+        >
           {t('selectionReadout.approximate')}
         </div>
       )}

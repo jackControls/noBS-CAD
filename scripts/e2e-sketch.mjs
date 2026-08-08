@@ -132,6 +132,26 @@ try {
   check('H and V constraints created', ctypes.includes('horizontal') && ctypes.includes('vertical'), ctypes.join(','));
   await shot('05b-line-chain-glyphs');
 
+  // Switching tools must preserve semantic acquisition feedback. The native
+  // viewport needs the snap kind as well as its position so Bevy can draw an
+  // unmistakable endpoint square instead of a generic crosshair.
+  await page.click('button[title="Rectangle"]');
+  await page.mouse.move(p2.x, p2.y);
+  await page.waitForFunction(
+    () => window.__nativeViewportTransient()?.marker?.kind === 'point',
+  );
+  const endpointMarker = await page.evaluate(
+    () => window.__nativeViewportTransient().marker,
+  );
+  check(
+    'rectangle endpoint acquisition reaches Bevy as a point snap',
+    endpointMarker?.kind === 'point',
+    JSON.stringify(endpointMarker),
+  );
+  await shot('05c-rectangle-endpoint-snap');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+
   // --- 6. Drag the free endpoint (60,40): solver pins it; V translates ---
   console.log('6. drag endpoint + undo');
   const before = await sketchToScreen(60, 40);

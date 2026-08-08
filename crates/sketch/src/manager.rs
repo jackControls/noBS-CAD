@@ -1534,8 +1534,10 @@ impl SketchManager {
         let mut record_solid = |feature_id: FeatureId,
                                 operation: ExtrudeOperation,
                                 targets: &[BodyId],
-                                outputs: &[BodyId]| {
+                                outputs: &[BodyId],
+                                additional_inputs: &[BodyId]| {
             let access = body_access.entry(feature_id).or_default();
+            access.inputs.extend(additional_inputs.iter().copied());
             match operation {
                 ExtrudeOperation::NewBody => {
                     access.outputs.extend(outputs.iter().copied());
@@ -1548,15 +1550,19 @@ impl SketchManager {
         };
 
         for definition in self.solids.definitions() {
-            sketch_inputs
-                .entry(definition.feature_id)
-                .or_default()
-                .insert(definition.sketch_name.clone());
+            if definition.source_face.is_none() {
+                sketch_inputs
+                    .entry(definition.feature_id)
+                    .or_default()
+                    .insert(definition.sketch_name.clone());
+            }
+            let source_body = definition.source_face.map(|source| source.body_id);
             record_solid(
                 definition.feature_id,
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                source_body.as_slice(),
             );
             if let ExtrudeExtent::ToFace { face_id } = definition.extent {
                 plane_inputs
@@ -1575,6 +1581,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                &[],
             );
         }
         for definition in self.solids.sweep_definitions() {
@@ -1589,6 +1596,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &[definition.new_body_id],
+                &[],
             );
         }
         for definition in self.solids.loft_definitions() {
@@ -1610,6 +1618,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &[definition.new_body_id],
+                &[],
             );
         }
         for definition in self.solids.rib_definitions() {
@@ -1622,6 +1631,7 @@ impl SketchManager {
                 definition.operation,
                 &definition.target_body_ids,
                 &definition.new_body_ids,
+                &[],
             );
             if let Some(RibExtent::ToFace { face_id }) = definition.extent {
                 plane_inputs
@@ -1868,6 +1878,19 @@ impl SketchManager {
             if !active.contains(&working[index].feature_id) {
                 continue;
             }
+            // The current OCCT scene is the result at the rollback marker,
+            // not the scene that existed when an earlier datum was created.
+            // A downstream boolean may reuse the same body-local `face:n`
+            // slot for a perpendicular face. Re-resolving an upstream datum
+            // against that later topology silently rotates the datum and all
+            // dependent sketches. Its persisted basis is authoritative until
+            // the history marker is at a stage where no later topology writer
+            // is active.
+            if datum_source_reads_solid_topology(&working[index].source)
+                && !self.scene_matches_history_stage(working[index].feature_id)
+            {
+                continue;
+            }
             let mut source = working[index].source.clone();
             match resolve_datum_source(&self.solids, &working, active, &mut source) {
                 Ok(basis) => {
@@ -1921,6 +1944,31 @@ impl SketchManager {
         } else {
             Ok(())
         }
+    }
+
+    /// Whether the current OCCT scene represents the topology visible at one
+    /// feature's position in history. Sketch and datum entries do not alter a
+    /// body; every other active feature can. Earlier face/edge references may
+    /// only be dereferenced when no such writer follows them in the active
+    /// prefix. This is the temporal half of persistent topology naming.
+    fn scene_matches_history_stage(&self, feature_id: FeatureId) -> bool {
+        let tree = self.document.features();
+        let Some(position) = tree
+            .features
+            .iter()
+            .position(|feature| feature.id == feature_id)
+        else {
+            return false;
+        };
+        if position >= tree.rollback_index {
+            return false;
+        }
+        !tree
+            .features
+            .iter()
+            .take(tree.rollback_index)
+            .skip(position + 1)
+            .any(|feature| !feature.suppressed && feature_changes_solid_topology(feature.kind))
     }
 
     fn active_feature_ids_at(&self, rollback_index: usize) -> BTreeSet<FeatureId> {
@@ -2349,6 +2397,25 @@ fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static 
         BodyFeatureRequestDto::Combine(_) => (FeatureKind::Combine, "Combine"),
         BodyFeatureRequestDto::SplitBody(_) => (FeatureKind::SplitBody, "SplitBody"),
         BodyFeatureRequestDto::ImportStep(_) => (FeatureKind::ImportStep, "Import"),
+    }
+}
+
+fn feature_changes_solid_topology(kind: FeatureKind) -> bool {
+    !matches!(kind, FeatureKind::Sketch | FeatureKind::ConstructionPlane)
+}
+
+fn datum_source_reads_solid_topology(source: &DatumPlaneSourceDto) -> bool {
+    match source {
+        DatumPlaneSourceDto::Offset { reference, .. } => {
+            matches!(reference, PlaneRef::PlanarFace { .. })
+        }
+        DatumPlaneSourceDto::Midplane { first, second } => matches!(
+            (first, second),
+            (PlaneRef::PlanarFace { .. }, _) | (_, PlaneRef::PlanarFace { .. })
+        ),
+        // Even when the reference plane is an origin/datum plane, At Angle
+        // reads a body edge and therefore has the same history-stage rule.
+        DatumPlaneSourceDto::AtAngle { .. } => true,
     }
 }
 
@@ -2988,7 +3055,8 @@ mod project_tests {
     use nbcad_solid::{
         ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
         KernelCurveDto, KernelEdgeDto, KernelFaceDto, KernelJobDto, KernelSceneDto, LoftRequest,
-        Point3Dto, ProfileRefDto, ReorderFeatureRequest, RibRequest, SweepRequest,
+        PlanarFaceSignatureDto, Point3Dto, ProfileRefDto, ReorderFeatureRequest, RibRequest,
+        SweepRequest,
     };
 
     fn raw_body(body_id: BodyId, basis: nbcad_core::PlaneBasis) -> KernelBodyDto {
@@ -3002,6 +3070,18 @@ mod project_tests {
                 first_index: 0,
                 index_count: 3,
                 plane: Some(basis),
+                signature: Some(PlanarFaceSignatureDto {
+                    centroid: Point3Dto {
+                        x: 20.0 / 3.0,
+                        y: 10.0 / 3.0,
+                        z: 0.0,
+                    },
+                    normal: Point3Dto::from(basis.normal),
+                    area: 100.0,
+                    perimeter: 30.0 + 500.0_f64.sqrt(),
+                    wire_count: 1,
+                    edge_count: 3,
+                }),
             }],
             edges: vec![
                 KernelEdgeDto {
@@ -3087,6 +3167,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3165,6 +3246,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3309,6 +3391,7 @@ mod project_tests {
         manager.end_sketch().unwrap();
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -3445,6 +3528,7 @@ mod project_tests {
         // resolves to the same outer region and carries the hole to the kernel.
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![inner.index],
                 operation: ExtrudeOperation::NewBody,
@@ -3559,6 +3643,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: profiles.iter().map(|profile| profile.index).collect(),
                 operation: ExtrudeOperation::NewBody,
@@ -3618,6 +3703,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: profiles.iter().map(|profile| profile.index).collect(),
                 operation: ExtrudeOperation::NewBody,
@@ -3864,6 +3950,7 @@ mod project_tests {
 
         let extrude = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -4021,6 +4108,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,
@@ -4117,6 +4205,7 @@ mod project_tests {
 
         let plan = manager
             .prepare_extrude(ExtrudeRequest {
+                source_face: None,
                 sketch_name: "Sketch1".to_string(),
                 profile_indices: vec![0],
                 operation: ExtrudeOperation::NewBody,

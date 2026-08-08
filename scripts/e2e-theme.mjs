@@ -50,6 +50,13 @@ try {
         dimension: css.getPropertyValue('--dimgreen').trim(),
         selectedDimension: css.getPropertyValue('--cad-dimension-selected').trim(),
         holePointSelected: css.getPropertyValue('--cad-hole-point-selected').trim(),
+        sketchHover: css.getPropertyValue('--cad-hover').trim(),
+        sketchSelected: css.getPropertyValue('--cad-sketch-selected').trim(),
+        finishedPoint: css.getPropertyValue('--cad-finished-point').trim(),
+        finishedPointOutline: css
+          .getPropertyValue('--cad-finished-point-outline')
+          .trim(),
+        faceSelected: css.getPropertyValue('--cad-face-selected').trim(),
       };
     });
 
@@ -62,6 +69,10 @@ try {
   assert.equal(theme.dimension, '#344600');
   assert.equal(theme.selectedDimension, '#2e1b78');
   assert.equal(theme.holePointSelected, '#ffd43b');
+  assert.equal(theme.sketchHover, '#9c4400');
+  assert.equal(theme.sketchSelected, '#5038a8');
+  assert.equal(theme.finishedPoint, '#6b2d00');
+  assert.equal(theme.finishedPointOutline, '#ffffff');
   assert.ok(
     contrastRatio(theme.dimension, theme.body) >= 4.5,
     `light dimension/body contrast is ${contrastRatio(theme.dimension, theme.body).toFixed(2)}:1`,
@@ -69,6 +80,22 @@ try {
   assert.ok(
     contrastRatio(theme.selectedDimension, theme.body) >= 4.5,
     `light selected-dimension/body contrast is ${contrastRatio(theme.selectedDimension, theme.body).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.sketchHover, theme.viewport) >= 4.5,
+    `light sketch-hover/viewport contrast is ${contrastRatio(theme.sketchHover, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.sketchSelected, theme.viewport) >= 4.5,
+    `light sketch-selection/viewport contrast is ${contrastRatio(theme.sketchSelected, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.finishedPoint, theme.viewport) >= 4.5,
+    `light finished-point/viewport contrast is ${contrastRatio(theme.finishedPoint, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.finishedPointOutline, theme.faceSelected) >= 3,
+    `light finished-point-outline/selected-face contrast is ${contrastRatio(theme.finishedPointOutline, theme.faceSelected).toFixed(2)}:1`,
   );
   await page.screenshot({ path: path.join(qa, 'theme-light.png') });
 
@@ -99,6 +126,26 @@ try {
   assert.equal(theme.preference, 'dark');
   assert.equal(theme.resolved, 'dark');
   assert.equal(theme.panel, '#23262b');
+  assert.equal(theme.sketchHover, '#ffd166');
+  assert.equal(theme.sketchSelected, '#c4b9ff');
+  assert.equal(theme.finishedPoint, '#ff9f43');
+  assert.equal(theme.finishedPointOutline, '#15191f');
+  assert.ok(
+    contrastRatio(theme.sketchHover, theme.viewport) >= 4.5,
+    `dark sketch-hover/viewport contrast is ${contrastRatio(theme.sketchHover, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.sketchSelected, theme.viewport) >= 4.5,
+    `dark sketch-selection/viewport contrast is ${contrastRatio(theme.sketchSelected, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.finishedPoint, theme.viewport) >= 4.5,
+    `dark finished-point/viewport contrast is ${contrastRatio(theme.finishedPoint, theme.viewport).toFixed(2)}:1`,
+  );
+  assert.ok(
+    contrastRatio(theme.finishedPointOutline, theme.faceSelected) >= 3,
+    `dark finished-point-outline/selected-face contrast is ${contrastRatio(theme.finishedPointOutline, theme.faceSelected).toFixed(2)}:1`,
+  );
   assert.equal(await page.evaluate(() => localStorage.getItem('nbcad.theme')), 'dark');
   const cameraAfterThemeChange = await page.evaluate(() =>
     window.__cameraApi.getSnapshot(),

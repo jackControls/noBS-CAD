@@ -13,9 +13,14 @@ import type {
   BodyAppearance,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
+  ExtrudeOperation,
   OriginPlane,
+  PlanarFaceSourceDto,
+  PlaneBasis,
+  PlaneRef,
   Point3Dto,
   ProfileCatalogItemDto,
+  ProfileLoopDto,
   ProfileRefDto,
   SketchDto,
   SketchPointRefDto,
@@ -35,6 +40,10 @@ import {
   type ResolvedTheme,
   type ThemePreference,
 } from '../theme';
+import {
+  persistSixDofSpeed,
+  readSixDofSpeed,
+} from '../navigationPreferences';
 import type { DocumentDto, NodeId } from '../types/document';
 
 function scrubAppearances(
@@ -86,6 +95,16 @@ function bodyBrowserNode(document: DocumentDto | null, bodyId: number | null): N
  * - `sketch`: a sketch session is active in the engine.
  */
 export type AppMode = 'solid' | 'pickPlane' | 'sketch';
+
+/** Lightweight window-level document metadata. The active OCCT/Bevy model
+ * remains in the engine; inactive model snapshots and native save targets are
+ * intentionally kept outside the inspectable UI store. */
+export interface ProjectTabSummary {
+  id: string;
+  name: string;
+  fileName: string | null;
+  dirty: boolean;
+}
 
 /** Sketch tools (M1a–M1c). `null` = select/edit. */
 export type SketchTool =
@@ -213,7 +232,38 @@ export interface SolidCurvePicker {
   sketchName: string;
 }
 
+/**
+ * Debounced, presentation-only solid command geometry. The profile basis and
+ * offsets are the same values used to build the kernel request, so native
+ * previews cannot silently rotate away from the eventual OCCT operation.
+ */
+export interface ExtrudeCommandPreview {
+  kind: 'extrude';
+  basis: PlaneBasis;
+  /** Exact kernel source identity. Preview geometry may use its tessellation,
+   * but the committed feature resolves the original OCCT TopoDS_Face. */
+  sourceFace: PlanarFaceSourceDto | null;
+  profiles: ProfileLoopDto[];
+  selectedProfileIndices: number[];
+  startOffset: number;
+  endOffset: number;
+  /** Signed arrow-tip offset measured from the sketch plane. */
+  directionOffset: number;
+  operation: ExtrudeOperation;
+}
+
+export type SolidCommandPreview = ExtrudeCommandPreview;
+
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
+export type ConstructionPlanePickTarget =
+  | 'first_reference'
+  | 'second_reference'
+  | 'axis_edge'
+  | null;
+export interface ConstructionPlanePickedEdge {
+  bodyId: number;
+  edgeId: number;
+}
 export type BodyFeatureKind =
   | 'shell'
   | 'mirror'
@@ -242,6 +292,7 @@ const DEFAULT_PALETTE: Record<PaletteOptionKey, boolean> = {
 
 const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
+const INITIAL_SIX_DOF_SPEED = readSixDofSpeed();
 
 interface AppState {
   mode: AppMode;
@@ -252,6 +303,10 @@ interface AppState {
   dirty: boolean;
   /** Current project file name, without exposing the native path. */
   projectFileName: string | null;
+  /** Open documents in this application window. */
+  projectTabs: ProjectTabSummary[];
+  /** Tab whose model is currently hydrated into the single native engine. */
+  activeProjectTabId: string | null;
   /** Which engine host the frontend is talking to (D8). */
   engineKind: 'tauri' | 'wasm' | null;
   /** Live snapshot of the active sketch session (null outside sketch mode). */
@@ -263,6 +318,8 @@ interface AppState {
   datumPlanes: DatumPlaneDefinitionDto[];
   /** Plane currently hovered in pick-plane mode (viewport or browser). */
   hoveredPlane: OriginPlane | null;
+  /** User-defined datum plane currently hovered while choosing sketch support. */
+  hoveredDatumPlane: number | null;
   activeTool: SketchTool;
   /** Active modal nav tool (`select` = normal left-drag behavior). */
   navTool: NavTool;
@@ -277,6 +334,8 @@ interface AppState {
   dimEditor: { dimId: number; initial: string; x: number; y: number } | null;
   /** Show the live "DOF: N" chip in the viewport (D4.3 optional display). */
   showDof: boolean;
+  /** Shared translation/rotation multiplier for raw/native 3D mouse input. */
+  sixDofSpeed: number;
   /** Global appearance preference; System is the first-run/default value. */
   themePreference: ThemePreference;
   resolvedTheme: ResolvedTheme;
@@ -312,6 +371,8 @@ interface AppState {
   profilePicker: SolidProfilePicker | null;
   /** Modeless finished-curve selector shared by path-driven solid dialogs. */
   curvePicker: SolidCurvePicker | null;
+  /** Native translucent tool-volume preview owned by the open solid command. */
+  solidCommandPreview: SolidCommandPreview | null;
   /** null = closed; 0 = new Extrude; positive = edit feature id. */
   extrudeDialogFeature: number | null;
   /** null = closed; 0 = new Revolve; positive = edit feature id. */
@@ -329,8 +390,14 @@ interface AppState {
   holePositionSelections: FinishedSketchPointPick[];
   holePositionHover: FinishedSketchPointPick | null;
   constructionPlaneDialog: { kind: ConstructionPlaneKind; featureId: number } | null;
+  /** Active viewport role for the construction-plane dialog. */
+  constructionPlanePickTarget: ConstructionPlanePickTarget;
+  constructionPlanePickedReference: PlaneRef | null;
+  constructionPlanePickedEdge: ConstructionPlanePickedEdge | null;
   bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
   sketchPatternDialog: 'rectangular' | 'circular' | null;
+  /** File chooser/export operation that must keep the active tab stable. */
+  projectBusy: boolean;
   solidBusy: boolean;
   palette: Record<PaletteOptionKey, boolean>;
 
@@ -355,6 +422,7 @@ interface AppState {
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
   setHoveredPlane: (plane: OriginPlane | null) => void;
+  setHoveredDatumPlane: (datumId: number | null) => void;
   setActiveTool: (tool: SketchTool) => void;
   setNavTool: (tool: NavTool) => void;
   setSelectedEntity: (id: number | null) => void;
@@ -363,6 +431,7 @@ interface AppState {
   setDimEditor: (editor: { dimId: number; initial: string; x: number; y: number } | null) => void;
   setHoveredEntity: (id: number | null) => void;
   setShowDof: (show: boolean) => void;
+  setSixDofSpeed: (speed: number) => void;
   setThemePreference: (preference: ThemePreference) => void;
   syncResolvedTheme: () => void;
   setSettingsOpen: (open: boolean) => void;
@@ -430,6 +499,7 @@ interface AppState {
   ) => void;
   setHoveredCurvePick: (curve: FinishedSketchCurveRef | null) => void;
   clearCurvePicker: (owner?: SolidCurvePickOwner) => void;
+  setSolidCommandPreview: (preview: SolidCommandPreview | null) => void;
   openExtrudeDialog: (featureId?: number) => void;
   closeExtrudeDialog: () => void;
   openRevolveDialog: (featureId?: number) => void;
@@ -453,10 +523,14 @@ interface AppState {
   setHolePositionHover: (selection: FinishedSketchPointPick | null) => void;
   openConstructionPlaneDialog: (kind: ConstructionPlaneKind, featureId?: number) => void;
   closeConstructionPlaneDialog: () => void;
+  setConstructionPlanePickTarget: (target: ConstructionPlanePickTarget) => void;
+  setConstructionPlanePickedReference: (reference: PlaneRef) => void;
+  setConstructionPlanePickedEdge: (edge: ConstructionPlanePickedEdge) => void;
   openBodyFeatureDialog: (kind: BodyFeatureKind, featureId?: number) => void;
   closeBodyFeatureDialog: () => void;
   openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
   closeSketchPatternDialog: () => void;
+  setProjectBusy: (busy: boolean) => void;
   setSolidBusy: (busy: boolean) => void;
   setPaletteOption: (key: PaletteOptionKey, value: boolean) => void;
 }
@@ -471,6 +545,7 @@ function resetDocumentUiState(): Partial<AppState> {
     solidScene: { bodies: [], errors: [] },
     datumPlanes: [],
     hoveredPlane: null,
+    hoveredDatumPlane: null,
     activeTool: null,
     navTool: 'select',
     selectedEntity: null,
@@ -504,6 +579,7 @@ function resetDocumentUiState(): Partial<AppState> {
     hoveredEdge: null,
     profilePicker: null,
     curvePicker: null,
+    solidCommandPreview: null,
     extrudeDialogFeature: null,
     revolveDialogFeature: null,
     revolveAxisSelection: null,
@@ -517,6 +593,9 @@ function resetDocumentUiState(): Partial<AppState> {
     holePositionSelections: [],
     holePositionHover: null,
     constructionPlaneDialog: null,
+    constructionPlanePickTarget: null,
+    constructionPlanePickedReference: null,
+    constructionPlanePickedEdge: null,
     bodyFeatureDialog: null,
     sketchPatternDialog: null,
     solidBusy: false,
@@ -529,12 +608,15 @@ export const useAppStore = create<AppState>()((set) => ({
   document: null,
   dirty: false,
   projectFileName: null,
+  projectTabs: [],
+  activeProjectTabId: null,
   engineKind: null,
   activeSketch: null,
   finishedSketches: [],
   solidScene: { bodies: [], errors: [] },
   datumPlanes: [],
   hoveredPlane: null,
+  hoveredDatumPlane: null,
   activeTool: null,
   navTool: 'select',
   selectedEntity: null,
@@ -543,6 +625,7 @@ export const useAppStore = create<AppState>()((set) => ({
   dimEditor: null,
   hoveredEntity: null,
   showDof: false,
+  sixDofSpeed: INITIAL_SIX_DOF_SPEED,
   themePreference: INITIAL_THEME_PREFERENCE,
   resolvedTheme: INITIAL_RESOLVED_THEME,
   settingsOpen: false,
@@ -564,6 +647,7 @@ export const useAppStore = create<AppState>()((set) => ({
   hoveredEdge: null,
   profilePicker: null,
   curvePicker: null,
+  solidCommandPreview: null,
   extrudeDialogFeature: null,
   revolveDialogFeature: null,
   revolveAxisSelection: null,
@@ -577,8 +661,12 @@ export const useAppStore = create<AppState>()((set) => ({
   holePositionSelections: [],
   holePositionHover: null,
   constructionPlaneDialog: null,
+  constructionPlanePickTarget: null,
+  constructionPlanePickedReference: null,
+  constructionPlanePickedEdge: null,
   bodyFeatureDialog: null,
   sketchPatternDialog: null,
+  projectBusy: false,
   solidBusy: false,
   palette: { ...DEFAULT_PALETTE },
 
@@ -711,6 +799,11 @@ export const useAppStore = create<AppState>()((set) => ({
   setHoveredPlane: (plane) =>
     set((s) => (s.hoveredPlane === plane ? s : { hoveredPlane: plane })),
 
+  setHoveredDatumPlane: (datumId) =>
+    set((s) =>
+      s.hoveredDatumPlane === datumId ? s : { hoveredDatumPlane: datumId },
+    ),
+
   // Inline dimension editing is transient UI owned by the currently active
   // sketch interaction. Switching tools (including Escape -> Select) must
   // always dismiss it; otherwise the editor can outlive the Dimension tool.
@@ -733,6 +826,8 @@ export const useAppStore = create<AppState>()((set) => ({
     set((s) => (s.hoveredEntity === id ? s : { hoveredEntity: id })),
 
   setShowDof: (show) => set({ showDof: show }),
+
+  setSixDofSpeed: (speed) => set({ sixDofSpeed: persistSixDofSpeed(speed) }),
 
   setThemePreference: (themePreference) => {
     persistThemePreference(themePreference);
@@ -1148,6 +1243,8 @@ export const useAppStore = create<AppState>()((set) => ({
         : { curvePicker: null },
     ),
 
+  setSolidCommandPreview: (solidCommandPreview) => set({ solidCommandPreview }),
+
   openExtrudeDialog: (featureId = 0) =>
     set((state) =>
       state.extrudeDialogFeature === featureId
@@ -1172,6 +1269,7 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) => ({
       extrudeDialogFeature: null,
       profilePicker: state.profilePicker?.owner === 'extrude' ? null : state.profilePicker,
+      solidCommandPreview: null,
     })),
 
   openRevolveDialog: (featureId = 0) =>
@@ -1366,27 +1464,78 @@ export const useAppStore = create<AppState>()((set) => ({
     }),
 
   openConstructionPlaneDialog: (kind, featureId = 0) =>
-    set({
-      constructionPlaneDialog: { kind, featureId },
-      bodyFeatureDialog: null,
-      extrudeDialogFeature: null,
-      revolveDialogFeature: null,
-      sweepDialogFeature: null,
-      loftDialogFeature: null,
-      ribDialogFeature: null,
-      filletDialogFeature: null,
-      chamferDialogFeature: null,
-      holeDialogFeature: null,
-      profilePicker: null,
-      curvePicker: null,
+    set((state) => {
+      const planarFaces = state.selectedFaces.filter((faceId) =>
+        state.solidScene.bodies.some((body) =>
+          body.faces.some((face) => face.id === faceId && face.plane !== null),
+        ),
+      );
+      const activeFaceIsPlanar = state.solidScene.bodies.some((body) =>
+        body.faces.some(
+          (face) => face.id === state.selectedFace && face.plane !== null,
+        ),
+      );
+      const constructionPlanePickTarget: ConstructionPlanePickTarget =
+        featureId > 0
+          ? null
+          : kind === 'midplane'
+            ? planarFaces.length >= 2
+              ? null
+              : planarFaces.length === 1
+                ? 'second_reference'
+                : 'first_reference'
+            : kind === 'offset'
+              ? activeFaceIsPlanar
+                ? null
+                : 'first_reference'
+              : 'first_reference';
+      return {
+        constructionPlaneDialog: { kind, featureId },
+        constructionPlanePickTarget,
+        constructionPlanePickedReference: null,
+        constructionPlanePickedEdge: null,
+        bodyFeatureDialog: null,
+        extrudeDialogFeature: null,
+        revolveDialogFeature: null,
+        sweepDialogFeature: null,
+        loftDialogFeature: null,
+        ribDialogFeature: null,
+        filletDialogFeature: null,
+        chamferDialogFeature: null,
+        holeDialogFeature: null,
+        profilePicker: null,
+        curvePicker: null,
+      };
     }),
 
-  closeConstructionPlaneDialog: () => set({ constructionPlaneDialog: null }),
+  closeConstructionPlaneDialog: () =>
+    set({
+      constructionPlaneDialog: null,
+      constructionPlanePickTarget: null,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
+    }),
+
+  setConstructionPlanePickTarget: (target) =>
+    set({
+      constructionPlanePickTarget: target,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
+    }),
+
+  setConstructionPlanePickedReference: (reference) =>
+    set({ constructionPlanePickedReference: reference }),
+
+  setConstructionPlanePickedEdge: (edge) =>
+    set({ constructionPlanePickedEdge: edge }),
 
   openBodyFeatureDialog: (kind, featureId = 0) =>
     set({
       bodyFeatureDialog: { kind, featureId },
       constructionPlaneDialog: null,
+      constructionPlanePickTarget: null,
+      constructionPlanePickedReference: null,
+      constructionPlanePickedEdge: null,
       extrudeDialogFeature: null,
       revolveDialogFeature: null,
       sweepDialogFeature: null,
@@ -1418,6 +1567,8 @@ export const useAppStore = create<AppState>()((set) => ({
     }),
 
   closeSketchPatternDialog: () => set({ sketchPatternDialog: null }),
+
+  setProjectBusy: (busy) => set({ projectBusy: busy }),
 
   setSolidBusy: (busy) => set({ solidBusy: busy }),
 
