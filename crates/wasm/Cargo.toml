@@ -9,10 +9,15 @@ repository = "https://github.com/jackControls/noBS-CAD"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# Current stable Rust emits bulk-memory instructions for this target. Keep the
-# release optimizer enabled while telling Binaryen to validate that feature.
+# Current stable Rust emits bulk-memory and non-trapping float-to-int
+# instructions for this target. Keep the release optimizer enabled while
+# telling Binaryen to validate both standard WebAssembly features.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory"]
+wasm-opt = [
+  "-O",
+  "--enable-bulk-memory",
+  "--enable-nontrapping-float-to-int",
+]
 
 [dependencies]
 wasm-bindgen = "0.2"
