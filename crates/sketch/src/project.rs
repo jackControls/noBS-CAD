@@ -18,6 +18,7 @@ use nbcad_solid::{
 use serde::{Deserialize, Serialize};
 
 use crate::sketch::SketchSnapshot;
+use crate::{DrawingDocumentDto, ProjectVisibilityDto};
 
 pub const PROJECT_FORMAT: &str = "nbcad-project";
 pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
@@ -52,6 +53,13 @@ pub(crate) struct ProjectModelV2 {
     /// older projects deserializes as empty.
     #[serde(default)]
     pub body_appearances: Vec<BodyAppearance>,
+    /// Technical drawing intent. Generated projection curves are deliberately
+    /// omitted and rebuilt from the current solid model.
+    #[serde(default)]
+    pub drawings: DrawingDocumentDto,
+    /// Browser eye-toggle choices. Additive so older projects remain valid.
+    #[serde(default)]
+    pub visibility: ProjectVisibilityDto,
     pub counters: ProjectCountersV2,
     pub preferences: ProjectPreferencesV2,
 }
@@ -180,6 +188,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
     if model.document.history.rollback_index > model.document.history.features.len() {
         return Err("rollback index is beyond the feature history".to_string());
     }
+    model.drawings.validate()?;
 
     let mut feature_ids = HashSet::new();
     for feature in &model.document.history.features {

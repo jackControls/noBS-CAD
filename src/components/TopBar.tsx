@@ -1,6 +1,14 @@
 /** Project controls embedded as the first command-ribbon panel, plus the
  * active project tab rendered directly below that ribbon. */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { createPortal } from 'react-dom';
 import {
   Box,
   ChevronDown,
@@ -27,29 +35,118 @@ import {
 } from '../files/projectFiles';
 import { useAppStore } from '../store/appStore';
 import { switchProjectTab } from '../files/projectTabs';
+import { exportActiveDrawingDxf } from '../drawing/export';
+
+const FILE_MENU_VIEWPORT_MARGIN = 6;
+const FILE_MENU_FALLBACK_WIDTH = 256;
+
+interface FileMenuPosition {
+  left: number;
+  top: number;
+  maxHeight: number;
+}
 
 export function AppMenuControls() {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
   const selectedBody = useAppStore((s) => s.selectedBody);
   const bodyCount = useAppStore((s) => s.solidScene.bodies.length);
+  const drawingWorkspace = useAppStore((s) => s.activeTab === 'drawing');
+  const drawingSheetReady = useAppStore((s) => s.drawingDocument.active_sheet_id !== null
+    && s.drawingDocument.sheets.some((sheet) => sheet.id === s.drawingDocument.active_sheet_id)
+    && !s.drawingSheetSetupOpen);
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
   const setProjectBusy = useAppStore((s) => s.setProjectBusy);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const setDrawingProfileExportOpen = useAppStore((s) => s.setDrawingProfileExportOpen);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<FileMenuPosition | null>(null);
   const [busy, setBusy] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const interactionBusy = busy || modelBusy || projectBusy;
+
+  const updateMenuPosition = useCallback(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const menuWidth = menuRef.current?.getBoundingClientRect().width
+      ?? FILE_MENU_FALLBACK_WIDTH;
+    const left = Math.max(
+      FILE_MENU_VIEWPORT_MARGIN,
+      Math.min(
+        anchorRect.left,
+        window.innerWidth - menuWidth - FILE_MENU_VIEWPORT_MARGIN,
+      ),
+    );
+    const top = Math.max(
+      FILE_MENU_VIEWPORT_MARGIN,
+      Math.min(
+        anchorRect.bottom,
+        window.innerHeight - FILE_MENU_VIEWPORT_MARGIN - 40,
+      ),
+    );
+    const next = {
+      left,
+      top,
+      maxHeight: Math.max(40, window.innerHeight - top - FILE_MENU_VIEWPORT_MARGIN),
+    };
+    setMenuPosition((current) => (
+      current
+      && current.left === next.left
+      && current.top === next.top
+      && current.maxHeight === next.maxHeight
+        ? current
+        : next
+    ));
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
     const close = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      const target = event.target as Node;
+      if (
+        !anchorRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
+        setMenuOpen(false);
+      }
     };
-    window.addEventListener('pointerdown', close);
-    return () => window.removeEventListener('pointerdown', close);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+    };
+    window.document.addEventListener('pointerdown', close);
+    window.document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.document.removeEventListener('pointerdown', close);
+      window.document.removeEventListener('keydown', closeOnEscape);
+    };
   }, [menuOpen]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateMenuPosition);
+    if (anchorRef.current) observer?.observe(anchorRef.current);
+    if (menuRef.current) observer?.observe(menuRef.current);
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [menuOpen, updateMenuPosition]);
 
   const run = (action: () => Promise<unknown>) => {
     if (useAppStore.getState().projectBusy) return;
@@ -76,19 +173,28 @@ export function AppMenuControls() {
 
   return (
     <div
+      ref={anchorRef}
       data-tauri-drag-region
       data-testid="app-menu-controls"
       className="flex h-full shrink-0 flex-col border-r border-edge bg-header pr-1.5"
     >
       <div className="flex h-[62px] items-start gap-0.5 pt-1.5">
-        <div ref={menuRef} className="relative">
+        <div className="relative">
           <button
+            ref={menuButtonRef}
             type="button"
             data-testid="file-menu-button"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             disabled={interactionBusy}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => {
+              if (menuOpen) {
+                setMenuOpen(false);
+                return;
+              }
+              updateMenuPosition();
+              setMenuOpen(true);
+            }}
             className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-50 max-[1400px]:w-10"
           >
             <div
@@ -104,12 +210,18 @@ export function AppMenuControls() {
               <ChevronDown size={8} />
             </span>
           </button>
-          {menuOpen && (
+          {menuOpen && menuPosition && createPortal(
             <div
+              ref={menuRef}
               role="menu"
               data-testid="file-menu"
               data-native-viewport-overlay
-              className="absolute left-0 top-[86px] z-50 w-64 rounded border border-edge bg-panel py-1 shadow-xl shadow-black/50"
+              className="fixed z-[100] w-64 overflow-y-auto rounded border border-edge bg-panel py-1 shadow-xl shadow-black/50"
+              style={{
+                left: menuPosition.left,
+                top: menuPosition.top,
+                maxHeight: menuPosition.maxHeight,
+              }}
             >
               <FileMenuItem
                 icon={<FolderOpen size={14} />}
@@ -181,6 +293,24 @@ export function AppMenuControls() {
                 disabled={selectedBody === null}
                 onClick={() => run(() => exportStl(true))}
               />
+              {drawingWorkspace && (
+                <>
+                  <FileMenuItem
+                    icon={<FileDown size={14} />}
+                    label={t('file.exportDrawingDxf')}
+                    disabled={!drawingSheetReady}
+                    onClick={() => run(exportActiveDrawingDxf)}
+                  />
+                  <FileMenuItem
+                    icon={<FileDown size={14} />}
+                    label={t('file.exportManufacturingProfileDxf')}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setDrawingProfileExportOpen(true);
+                    }}
+                  />
+                </>
+              )}
               <div className="my-1 border-t border-edge" />
               <FileMenuItem
                 icon={<SlidersHorizontal size={14} />}
@@ -190,7 +320,8 @@ export function AppMenuControls() {
               <div className="mt-1 border-t border-edge px-3 pb-1 pt-2 text-[9px] leading-relaxed text-mute">
                 {t('file.zipHint')}
               </div>
-            </div>
+            </div>,
+            window.document.body,
           )}
         </div>
 

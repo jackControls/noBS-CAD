@@ -6,7 +6,12 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
-import { useAppStore, type AppMode, type SketchTool } from './store/appStore';
+import {
+  exportProjectModelWithVisibility,
+  useAppStore,
+  type AppMode,
+  type SketchTool,
+} from './store/appStore';
 
 export type McpFocusPack =
   | 'document'
@@ -89,7 +94,7 @@ async function publishNow(): Promise<void> {
     // Tauri owns this counter across WebView reloads and scopes it per window.
     const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
     const engine = await getEngine();
-    const model = await engine.exportProjectModel();
+    const model = await exportProjectModelWithVisibility(engine);
     const modelJson = typeof model === 'string' ? model : JSON.stringify(model);
     await invoke('mcp_session_bridge_write', {
       payload: JSON.stringify({

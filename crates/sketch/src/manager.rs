@@ -25,6 +25,7 @@ use nbcad_solid::{
 };
 
 use crate::constraint::{Constraint, ConstraintId};
+use crate::drawing::DrawingDocumentDto;
 use crate::dto::{
     AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest, BeginSketchRequest,
     BreakRequest, ChamferRequest, CircleRequest, CircularPatternRequest, ConstraintBatchRequest,
@@ -33,9 +34,10 @@ use crate::dto::{
     FilletRequest, LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest,
     MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
     MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewDto,
-    RectangleRequest, RectangularPatternRequest, ScaleRequest, SegmentRequest,
-    SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto, SlotRequest,
-    SplineRequest, ToggleFixBatchRequest, ToolResult, TrimPreviewDto, TrimRequest, UndoResult,
+    ProjectVisibilityDto, RectangleRequest, RectangularPatternRequest, ScaleRequest,
+    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto,
+    SlotRequest, SplineRequest, ToggleFixBatchRequest, ToolResult, TrimPreviewDto, TrimRequest,
+    UndoResult,
 };
 use crate::entity::EntityId;
 use crate::project::{
@@ -83,6 +85,10 @@ pub struct SketchManager {
     grid_step: f64,
     /// Per-body color/material for viewport and manufacturing export.
     body_appearances: Vec<BodyAppearance>,
+    /// Persistent technical-drawing sheets and view definitions.
+    drawings: DrawingDocumentDto,
+    /// Persistent Browser visibility expressed with stable model identities.
+    project_visibility: ProjectVisibilityDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
@@ -116,6 +122,8 @@ impl SketchManager {
             grid_snap: true,
             grid_step: GRID_STEP_MM,
             body_appearances: Vec::new(),
+            drawings: DrawingDocumentDto::default(),
+            project_visibility: ProjectVisibilityDto::default(),
             pending_project: None,
         }
     }
@@ -171,6 +179,8 @@ impl SketchManager {
             datum_planes: self.datum_planes.clone(),
             body_features: self.solids.body_feature_definitions().to_vec(),
             body_appearances: self.scrubbed_body_appearances(),
+            drawings: self.drawings.clone(),
+            visibility: self.scrubbed_project_visibility(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
                 extrude: self.extrude_count,
@@ -281,6 +291,8 @@ impl SketchManager {
             grid_snap: model.preferences.grid_snap,
             grid_step: GRID_STEP_MM,
             body_appearances: model.body_appearances,
+            drawings: model.drawings,
+            project_visibility: model.visibility,
             pending_project: None,
         };
         candidate.sketch_count = candidate
@@ -491,6 +503,32 @@ impl SketchManager {
         self.body_appearances.clone()
     }
 
+    pub fn drawing_document(&self) -> DrawingDocumentDto {
+        self.drawings.clone()
+    }
+
+    pub fn project_visibility(&self) -> ProjectVisibilityDto {
+        self.scrubbed_project_visibility()
+    }
+
+    pub fn set_project_visibility(
+        &mut self,
+        visibility: ProjectVisibilityDto,
+    ) -> Result<ProjectVisibilityDto, SessionError> {
+        self.project_visibility = visibility;
+        self.scrub_project_visibility();
+        Ok(self.project_visibility.clone())
+    }
+
+    pub fn set_drawing_document(
+        &mut self,
+        drawing: DrawingDocumentDto,
+    ) -> Result<DrawingDocumentDto, SessionError> {
+        drawing.validate().map_err(SessionError::Solid)?;
+        self.drawings = drawing;
+        Ok(self.drawings.clone())
+    }
+
     pub fn set_body_appearance(
         &mut self,
         appearance: BodyAppearance,
@@ -577,6 +615,67 @@ impl SketchManager {
 
     fn scrub_body_appearances(&mut self) {
         self.body_appearances = self.scrubbed_body_appearances();
+    }
+
+    fn scrubbed_project_visibility(&self) -> ProjectVisibilityDto {
+        let live_bodies = self
+            .solids
+            .scene()
+            .bodies
+            .iter()
+            .map(|body| body.id.0)
+            .collect::<BTreeSet<_>>();
+        let live_datums = self
+            .datum_planes
+            .iter()
+            .map(|plane| plane.datum_id.0)
+            .collect::<BTreeSet<_>>();
+        let live_sketches = self
+            .finished
+            .iter()
+            .map(|sketch| sketch.session.name().to_string())
+            .collect::<BTreeSet<_>>();
+
+        let mut hidden_body_ids = self
+            .project_visibility
+            .hidden_body_ids
+            .iter()
+            .copied()
+            .filter(|id| live_bodies.contains(id))
+            .collect::<Vec<_>>();
+        hidden_body_ids.sort_unstable();
+        hidden_body_ids.dedup();
+
+        let mut hidden_datum_plane_ids = self
+            .project_visibility
+            .hidden_datum_plane_ids
+            .iter()
+            .copied()
+            .filter(|id| live_datums.contains(id))
+            .collect::<Vec<_>>();
+        hidden_datum_plane_ids.sort_unstable();
+        hidden_datum_plane_ids.dedup();
+
+        let mut hidden_sketch_names = self
+            .project_visibility
+            .hidden_sketch_names
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty() && live_sketches.contains(*name))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        hidden_sketch_names.sort();
+        hidden_sketch_names.dedup();
+
+        ProjectVisibilityDto {
+            hidden_body_ids,
+            hidden_datum_plane_ids,
+            hidden_sketch_names,
+        }
+    }
+
+    fn scrub_project_visibility(&mut self) {
+        self.project_visibility = self.scrubbed_project_visibility();
     }
 
     pub fn extrude_definitions(&self) -> Vec<ExtrudeDefinitionDto> {
@@ -1389,6 +1488,7 @@ impl SketchManager {
             }
         }
         self.scrub_body_appearances();
+        self.scrub_project_visibility();
 
         // Every recompute starts clean, then kernel failures and persistent
         // reference failures are overlaid onto their timeline entries.
@@ -3051,6 +3151,13 @@ fn ordered_profile_curves(
 #[cfg(test)]
 mod project_tests {
     use super::*;
+    use crate::{
+        DrawingAnnotationDto, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLineRefDto,
+        DrawingLinearDimensionMode, DrawingProjectionMethod, DrawingSheetDto, DrawingSheetFormat,
+        DrawingSheetOrientation, DrawingStandard, DrawingTitleBlockDto, DrawingToleranceNoteDto,
+        DrawingTolerancePreset, DrawingTopologyAnchorRefDto, DrawingViewAlignment, DrawingViewDto,
+        DrawingViewKind,
+    };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
         ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
@@ -3217,7 +3324,7 @@ mod project_tests {
     }
 
     #[test]
-    fn project_roundtrip_persists_body_appearances_and_scrubs_orphans() {
+    fn project_roundtrip_persists_appearance_and_visibility_and_scrubs_orphans() {
         use nbcad_core::{BodyAppearance, Rgba8};
 
         let mut manager = SketchManager::new();
@@ -3294,6 +3401,16 @@ mod project_tests {
             density_g_cm3: None,
             diameter_mm: 1.75,
         });
+        let visibility = manager
+            .set_project_visibility(ProjectVisibilityDto {
+                hidden_body_ids: vec![body_id.0, 999],
+                hidden_datum_plane_ids: vec![999],
+                hidden_sketch_names: vec!["Sketch1".into(), "DeletedSketch".into()],
+            })
+            .unwrap();
+        assert_eq!(visibility.hidden_body_ids, vec![body_id.0]);
+        assert!(visibility.hidden_datum_plane_ids.is_empty());
+        assert_eq!(visibility.hidden_sketch_names, vec!["Sketch1"]);
 
         let json = manager.export_project_model().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -3302,6 +3419,15 @@ mod project_tests {
         assert_eq!(appearances[0]["body_id"], body_id.0);
         assert_eq!(appearances[0]["material_name"], "PLA Red");
         assert_eq!(appearances[0]["color"]["r"], 200);
+        assert_eq!(parsed["visibility"]["hidden_body_ids"][0], body_id.0);
+        assert_eq!(parsed["visibility"]["hidden_sketch_names"][0], "Sketch1");
+        assert_eq!(
+            parsed["visibility"]["hidden_datum_plane_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
 
         let mut loaded = SketchManager::new();
         let replay = loaded.prepare_load_project(json).unwrap();
@@ -3319,6 +3445,7 @@ mod project_tests {
         assert_eq!(restored[0].body_id, body_id);
         assert_eq!(restored[0].material_name, "PLA Red");
         assert_eq!(restored[0].color.r, 200);
+        assert_eq!(loaded.project_visibility(), visibility);
     }
 
     #[test]
@@ -3483,6 +3610,126 @@ mod project_tests {
         assert!(update.document.features.is_empty());
         assert!(update.scene.bodies.is_empty());
         assert!(manager.finished_sketches().is_empty());
+    }
+
+    #[test]
+    fn project_roundtrip_preserves_technical_drawing_intent() {
+        let drawing = DrawingDocumentDto {
+            sheets: vec![DrawingSheetDto {
+                id: 4,
+                name: "Assembly overview".to_string(),
+                format: DrawingSheetFormat::A3,
+                orientation: DrawingSheetOrientation::Landscape,
+                standard: DrawingStandard::Iso,
+                projection_method: DrawingProjectionMethod::FirstAngle,
+                tolerance_note: DrawingToleranceNoteDto {
+                    preset: DrawingTolerancePreset::Iso2768Medium,
+                    custom: String::new(),
+                },
+                title_block: DrawingTitleBlockDto {
+                    title: "Clamp".to_string(),
+                    drawing_number: "NBC-042".to_string(),
+                    revision: "B".to_string(),
+                    author: "QA".to_string(),
+                    ..DrawingTitleBlockDto::default()
+                },
+                views: vec![DrawingViewDto {
+                    id: 9,
+                    name: "Front".to_string(),
+                    kind: DrawingViewKind::Front,
+                    direction: [0.0, -1.0, 0.0],
+                    up: [0.0, 0.0, 1.0],
+                    position: [120.0, 80.0],
+                    scale: 0.5,
+                    body_ids: vec![],
+                    show_hidden_lines: true,
+                    show_tangent_edges: false,
+                    parent_view_id: None,
+                    alignment: DrawingViewAlignment::Free,
+                    derivation: None,
+                }],
+                annotations: vec![
+                    DrawingAnnotationDto::LinearDimension {
+                        id: 12,
+                        view_id: 9,
+                        first: DrawingTopologyAnchorRefDto {
+                            body_id: BodyId(1),
+                            edge_id: nbcad_core::EdgeId(101),
+                            edge_key: "edge:0".to_string(),
+                            endpoint: DrawingEdgeEndpoint::Start,
+                            fallback_point: [0.0, 0.0, 0.0],
+                            circle_center: false,
+                        },
+                        second: DrawingTopologyAnchorRefDto {
+                            body_id: BodyId(1),
+                            edge_id: nbcad_core::EdgeId(102),
+                            edge_key: "edge:1".to_string(),
+                            endpoint: DrawingEdgeEndpoint::End,
+                            fallback_point: [20.0, 0.0, 0.0],
+                            circle_center: false,
+                        },
+                        mode: DrawingLinearDimensionMode::Horizontal,
+                        offset: -12.0,
+                        prefix: String::new(),
+                        suffix: " TYP".to_string(),
+                        precision: 2,
+                        presentation: crate::drawing::DrawingDimensionPresentationDto::default(),
+                    },
+                    DrawingAnnotationDto::CenterLineBetweenEdges {
+                        id: 13,
+                        view_id: 9,
+                        first: DrawingLineRefDto {
+                            body_id: BodyId(1),
+                            edge_id: nbcad_core::EdgeId(201),
+                            edge_key: "edge:center-left".to_string(),
+                            fallback_start: [0.0, 0.0, 0.0],
+                            fallback_end: [20.0, 0.0, 0.0],
+                        },
+                        second: DrawingLineRefDto {
+                            body_id: BodyId(1),
+                            edge_id: nbcad_core::EdgeId(202),
+                            edge_key: "edge:center-right".to_string(),
+                            fallback_start: [0.0, 10.0, 0.0],
+                            fallback_end: [20.0, 10.0, 0.0],
+                        },
+                        extension: 2.5,
+                    },
+                ],
+                style: crate::drawing::DrawingSheetStyleDto::default(),
+                template_name: String::new(),
+                revisions: vec![],
+                bom: vec![],
+                release: crate::drawing::DrawingReleaseDto::default(),
+                revision_table_position: None,
+                bom_table_position: None,
+            }],
+            active_sheet_id: Some(4),
+            next_sheet_id: 5,
+            next_view_id: 10,
+            next_annotation_id: 14,
+            next_revision_id: 1,
+            next_bom_item_id: 1,
+            templates: vec![],
+            next_template_id: 1,
+        };
+        let mut manager = SketchManager::new();
+        manager.set_drawing_document(drawing.clone()).unwrap();
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: Vec::new(),
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.drawing_document(), drawing);
     }
 
     #[test]

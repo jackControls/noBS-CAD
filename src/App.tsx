@@ -20,6 +20,8 @@ import {
 } from './engine/controller';
 import { Ribbon } from './components/Ribbon';
 import { BrowserTree } from './components/BrowserTree';
+import { DrawingBrowser } from './components/drawing/DrawingBrowser';
+import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { SketchPalette } from './components/SketchPalette';
@@ -42,7 +44,6 @@ import { SketchPatternDialog } from './components/SketchPatternDialog';
 import {
   installProjectRecovery,
   newProject,
-  offerProjectRecovery,
   openProject,
   saveProject,
 } from './files/projectFiles';
@@ -52,6 +53,7 @@ import {
   installProjectTabRetention,
 } from './files/projectTabs';
 import { SYSTEM_DARK_QUERY } from './theme';
+import { deleteDrawingAnnotation } from './drawing/document';
 import {
   installNativeEditMenu,
   nativeMacMenuOwnsUndoRedo,
@@ -60,6 +62,8 @@ import {
 export default function App() {
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
+  const activeTab = useAppStore((s) => s.activeTab);
+  const drawingWorkspace = activeTab === 'drawing';
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
   const syncResolvedTheme = useAppStore((s) => s.syncResolvedTheme);
@@ -71,7 +75,9 @@ export default function App() {
     initialized.current = true;
     void loadDocument()
       .then(async () => {
-        await offerProjectRecovery();
+        // A new application launch always begins with one clean Untitled
+        // document. Previous emergency snapshots are retained as a fallback,
+        // but are never reopened as the user's active workspace.
         await initializeProjectTabs();
       })
       .catch((error) => {
@@ -178,6 +184,8 @@ export default function App() {
         // as the viewport boundary. This remains reliable while the document
         // is loading or the native child view is being reparented.
         if (s.navTool !== 'select') s.setNavTool('select');
+        if (s.drawingTool !== null) s.setDrawingTool(null);
+        if (s.drawingPendingViewKind !== null) s.setDrawingPendingViewKind(null);
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
         if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();
@@ -195,6 +203,16 @@ export default function App() {
       }
 
       if (s.document === null) return;
+
+      if (
+        s.activeTab === 'drawing'
+        && (e.key === 'Delete' || e.key === 'Backspace')
+        && s.selectedDrawingAnnotationId !== null
+      ) {
+        e.preventDefault();
+        void deleteDrawingAnnotation(s.selectedDrawingAnnotationId);
+        return;
+      }
 
       if (s.mode === 'solid' && e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
@@ -252,18 +270,24 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
       <Ribbon />
       <div className="flex min-h-0 flex-1">
-        <BrowserTree />
+        {drawingWorkspace ? <DrawingBrowser /> : <BrowserTree />}
         <div className="flex min-w-0 flex-1 flex-col">
           <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
-            <Viewport key={resolvedTheme} />
-            <BodyAppearancePanel />
-            {mode === 'sketch' && <SketchPalette />}
-            <CommentsPanel />
+            {drawingWorkspace ? (
+              <DrawingWorkspace />
+            ) : (
+              <>
+                <Viewport key={resolvedTheme} />
+                <BodyAppearancePanel />
+                {mode === 'sketch' && <SketchPalette />}
+                <CommentsPanel />
+              </>
+            )}
           </main>
         </div>
       </div>
-      <Timeline />
+      {!drawingWorkspace && <Timeline />}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

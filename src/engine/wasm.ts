@@ -11,11 +11,16 @@ import init, { WasmEngine as WasmEngineInner } from '../engine-wasm/pkg/nbcad_wa
 import { unwrapEnvelope, type Engine } from './index';
 import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import { BrowserOcctKernel } from './occtBrowser';
+import { projectSceneForDrawing } from '../drawing/projection';
 
 /** wasm-pack typings lag until `npm run build:wasm`; keep additive methods typed here. */
 type WasmEngineMethods = WasmEngineInner & {
   body_appearances(): string;
   set_body_appearance(payload: string): string;
+  project_visibility(): string;
+  project_set_visibility(payload: string): string;
+  drawing_document(): string;
+  drawing_set_document(payload: string): string;
 };
 import type {
   AddConstraintResult,
@@ -37,6 +42,9 @@ import type {
   DatumPlaneRequest,
   DatumPlaneUpdateDto,
   DocumentDto,
+  DrawingDocumentDto,
+  DrawingProjectionDto,
+  DrawingProjectionRequest,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -76,6 +84,7 @@ import type {
   PolygonRequest,
   PreviewDto,
   ProfileCatalogItemDto,
+  ProjectVisibilityDto,
   RecomputePlanDto,
   RectangleRequest,
   SketchRectangularPatternRequest,
@@ -158,6 +167,30 @@ export class WasmEngine implements Engine {
 
   async bodyAppearances(): Promise<BodyAppearance[]> {
     return unwrapEnvelope((this.inner as WasmEngineMethods).body_appearances());
+  }
+
+  async projectVisibility(): Promise<ProjectVisibilityDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).project_visibility());
+  }
+
+  async setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).project_set_visibility(JSON.stringify(visibility)),
+    );
+  }
+
+  async drawingDocument(): Promise<DrawingDocumentDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).drawing_document());
+  }
+
+  async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).drawing_set_document(JSON.stringify(document)),
+    );
+  }
+
+  async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
+    return projectSceneForDrawing(await this.solidScene(), request);
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

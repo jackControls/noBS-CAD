@@ -961,6 +961,619 @@ export interface SolidUpdateDto {
   scene: SolidSceneDto;
 }
 
+export type DrawingSheetFormat =
+  | 'a0'
+  | 'a1'
+  | 'a2'
+  | 'a3'
+  | 'a4'
+  | 'letter'
+  | 'ansi_b'
+  | 'ansi_c'
+  | 'ansi_d'
+  | 'ansi_e';
+export type DrawingSheetOrientation = 'landscape' | 'portrait';
+export type DrawingStandard = 'iso' | 'ansi';
+export type DrawingProjectionMethod = 'first_angle' | 'third_angle';
+export type DrawingTolerancePreset =
+  | 'none'
+  | 'iso2768_fine'
+  | 'iso2768_medium'
+  | 'iso2768_coarse'
+  | 'iso2768_very_coarse'
+  | 'ansi_decimal'
+  | 'custom';
+export interface DrawingToleranceNoteDto {
+  preset: DrawingTolerancePreset;
+  custom: string;
+}
+export type DrawingViewKind =
+  | 'front'
+  | 'rear'
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'bottom'
+  | 'isometric'
+  | 'custom'
+  | 'section'
+  | 'detail'
+  | 'auxiliary'
+  | 'broken'
+  | 'removed_section';
+
+export interface DrawingTitleBlockDto {
+  title: string;
+  drawing_number: string;
+  revision: string;
+  author: string;
+  checked_by: string;
+  approved_by: string;
+  company: string;
+  material: string;
+  finish: string;
+}
+
+export interface DrawingLineStyleDto {
+  width_mm: number;
+  dash_mm: number[];
+}
+
+export interface DrawingSheetStyleDto {
+  name: string;
+  font_family: string;
+  text_height_mm: number;
+  small_text_height_mm: number;
+  arrow_size_mm: number;
+  visible: DrawingLineStyleDto;
+  hidden: DrawingLineStyleDto;
+  center: DrawingLineStyleDto;
+  cutting_plane: DrawingLineStyleDto;
+  phantom: DrawingLineStyleDto;
+  break_line: DrawingLineStyleDto;
+  dimension: DrawingLineStyleDto;
+  extension: DrawingLineStyleDto;
+  leader: DrawingLineStyleDto;
+  hatch: DrawingLineStyleDto;
+  hatch_angle_deg: number;
+  hatch_spacing_mm: number;
+}
+
+export type DrawingReleaseStatus = 'draft' | 'in_review' | 'released' | 'superseded' | 'obsolete';
+
+export interface DrawingReleaseDto {
+  status: DrawingReleaseStatus;
+  released_revision: string;
+  released_at: string;
+}
+
+export interface DrawingRevisionDto {
+  id: number;
+  revision: string;
+  description: string;
+  date: string;
+  author: string;
+  checked_by: string;
+  approved_by: string;
+  change_order: string;
+  status: DrawingReleaseStatus;
+}
+
+export interface DrawingBomItemDto {
+  id: number;
+  item_number: string;
+  body_id: number | null;
+  part_number: string;
+  description: string;
+  quantity: number;
+  material: string;
+  finish: string;
+}
+
+export interface DrawingViewDto {
+  id: number;
+  name: string;
+  kind: DrawingViewKind;
+  /** Direction from the model toward the viewer. */
+  direction: [number, number, number];
+  up: [number, number, number];
+  /** Paper-space millimetres from the upper-left sheet corner. */
+  position: [number, number];
+  /** Paper millimetres per model millimetre. */
+  scale: number;
+  body_ids: number[];
+  show_hidden_lines: boolean;
+  show_tangent_edges: boolean;
+  parent_view_id: number | null;
+  alignment: 'free' | 'horizontal' | 'vertical';
+  derivation: DrawingViewDerivationDto | null;
+}
+
+export type DrawingBreakAxis = 'horizontal' | 'vertical';
+export type DrawingViewDerivationDto =
+  | {
+      type: 'section';
+      parent_view_id: number;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      label: string;
+      depth: number | null;
+      hatch_angle_deg: number;
+      hatch_spacing_mm: number;
+    }
+  | {
+      type: 'detail';
+      parent_view_id: number;
+      center: DrawingTopologyAnchorRefDto;
+      radius: number;
+      label: string;
+    }
+  | {
+      type: 'auxiliary';
+      parent_view_id: number;
+      reference: DrawingLineRefDto;
+      label: string;
+      flipped: boolean;
+    }
+  | {
+      type: 'broken';
+      parent_view_id: number;
+      axis: DrawingBreakAxis;
+      first: number;
+      second: number;
+      gap_mm: number;
+    }
+  | {
+      type: 'removed_section';
+      parent_view_id: number;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      label: string;
+      hatch_angle_deg: number;
+      hatch_spacing_mm: number;
+    };
+
+export type DrawingEdgeEndpoint = 'start' | 'end';
+export type DrawingLinearDimensionMode = 'aligned' | 'horizontal' | 'vertical';
+export type DrawingLineDimensionMode = 'length' | 'distance' | 'angle';
+export type DrawingRadialDimensionMode = 'diameter' | 'radius';
+export type DrawingDimensionToleranceMode = 'none' | 'symmetric' | 'deviation' | 'limits';
+export type DrawingSecondaryUnit = 'millimetre' | 'centimetre' | 'inch';
+export type DrawingDualUnitPlacement = 'bracketed' | 'stacked';
+export interface DrawingDimensionToleranceDto {
+  mode: DrawingDimensionToleranceMode;
+  upper: number;
+  lower: number;
+}
+export interface DrawingDualUnitDto {
+  unit: DrawingSecondaryUnit;
+  precision: number;
+  placement: DrawingDualUnitPlacement;
+}
+export interface DrawingDimensionPresentationDto {
+  tolerance: DrawingDimensionToleranceDto;
+  basic: boolean;
+  reference: boolean;
+  dual_units: DrawingDualUnitDto | null;
+  fit_class: string;
+}
+export type DrawingChainDimensionLayout = 'chain' | 'baseline' | 'continued';
+export type DrawingOrdinateAxis = 'x' | 'y' | 'both';
+
+export interface DrawingTopologyAnchorRefDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  endpoint: DrawingEdgeEndpoint;
+  fallback_point: [number, number, number];
+  /** True when this associative point is the analytic center of a circle. */
+  circle_center?: boolean;
+}
+
+export interface DrawingCircularRefDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  fallback_center: [number, number, number];
+  fallback_normal: [number, number, number];
+  fallback_radius: number;
+  closed: boolean;
+}
+
+/** Stable exact-topology reference to a straight model edge. */
+export interface DrawingLineRefDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  fallback_start: [number, number, number];
+  fallback_end: [number, number, number];
+}
+
+export type DrawingAttachmentRefDto =
+  | { type: 'anchor'; reference: DrawingTopologyAnchorRefDto }
+  | { type: 'line'; reference: DrawingLineRefDto }
+  | { type: 'circle'; reference: DrawingCircularRefDto };
+
+export type DrawingGdtCharacteristic =
+  | 'straightness' | 'flatness' | 'circularity' | 'cylindricity'
+  | 'profile_line' | 'profile_surface' | 'angularity' | 'perpendicularity'
+  | 'parallelism' | 'position' | 'concentricity' | 'symmetry'
+  | 'circular_runout' | 'total_runout';
+export type DrawingMaterialCondition = 'none' | 'maximum' | 'least' | 'regardless';
+export interface DrawingDatumReferenceDto {
+  label: string;
+  material_condition: DrawingMaterialCondition;
+}
+export type DrawingSurfaceLay = 'none' | 'parallel' | 'perpendicular' | 'crossed' | 'multidirectional' | 'circular' | 'radial' | 'particulate';
+export type DrawingWeldType = 'fillet' | 'square_groove' | 'v_groove' | 'bevel_groove' | 'u_groove' | 'j_groove' | 'plug_slot' | 'spot' | 'seam' | 'surfacing';
+export type DrawingWeldSide = 'arrow' | 'other' | 'both';
+export type DrawingWeldContour = 'none' | 'flush' | 'convex' | 'concave';
+
+export type DrawingAnnotationDto =
+  | {
+      kind: 'linear_dimension';
+      id: number;
+      view_id: number;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      mode: DrawingLinearDimensionMode;
+      /** Signed paper-space offset from the measured span, in millimetres. */
+      offset: number;
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      /** Smart associative dimension driven by one or two exact straight edges. */
+      kind: 'line_dimension';
+      id: number;
+      view_id: number;
+      first: DrawingLineRefDto;
+      second: DrawingLineRefDto | null;
+      mode: DrawingLineDimensionMode;
+      /** Paper-space cursor/drag position; geometry constrains it for the mode. */
+      position: [number, number];
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      /** Perpendicular distance from an associative point to an exact straight edge. */
+      kind: 'point_line_dimension';
+      id: number;
+      view_id: number;
+      point: DrawingTopologyAnchorRefDto;
+      line: DrawingLineRefDto;
+      /** Paper-space cursor/drag position; constrained parallel to the edge. */
+      position: [number, number];
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'note';
+      id: number;
+      text: string;
+      position: [number, number];
+    }
+  | {
+      kind: 'radial_dimension';
+      id: number;
+      view_id: number;
+      feature: DrawingCircularRefDto;
+      mode: DrawingRadialDimensionMode;
+      leader_angle_deg: number;
+      offset: number;
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'angular_dimension';
+      id: number;
+      view_id: number;
+      vertex: DrawingTopologyAnchorRefDto;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      radius: number;
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'hole_note';
+      id: number;
+      view_id: number;
+      feature: DrawingCircularRefDto;
+      position: [number, number];
+      quantity: number;
+      diameter: number;
+      depth: number | null;
+      thread: string;
+      note: string;
+      source_feature_id: number | null;
+      feature_name: string;
+      hole_style: HoleStyle;
+      counterbore_diameter: number | null;
+      counterbore_depth: number | null;
+      countersink_diameter: number | null;
+      countersink_angle_deg: number | null;
+      thread_depth: number | null;
+      pattern_note: string;
+    }
+  | {
+      kind: 'chamfer_note';
+      id: number;
+      view_id: number;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      position: [number, number];
+      length: number;
+      angle_deg: number;
+      prefix: string;
+    }
+  | {
+      kind: 'center_mark';
+      id: number;
+      view_id: number;
+      feature: DrawingCircularRefDto;
+      /** Paper-space extension beyond the selected circular edge. */
+      extension: number;
+    }
+  | {
+      kind: 'center_line';
+      id: number;
+      view_id: number;
+      first: DrawingCircularRefDto;
+      second: DrawingCircularRefDto;
+      /** Paper-space extension beyond both selected circular edges. */
+      extension: number;
+    }
+  | {
+      kind: 'center_line_between_edges';
+      id: number;
+      view_id: number;
+      first: DrawingLineRefDto;
+      second: DrawingLineRefDto;
+      /** Paper-space extension beyond the selected parallel edges. */
+      extension: number;
+    }
+  | {
+      kind: 'automatic_symmetry_axis';
+      id: number;
+      view_id: number;
+      axis: DrawingOrdinateAxis;
+      extension: number;
+    }
+  | {
+      kind: 'bolt_circle_center_line';
+      id: number;
+      view_id: number;
+      features: DrawingCircularRefDto[];
+      extension: number;
+    }
+  | {
+      kind: 'chain_dimension';
+      id: number;
+      view_id: number;
+      anchors: DrawingTopologyAnchorRefDto[];
+      mode: DrawingLinearDimensionMode;
+      layout: DrawingChainDimensionLayout;
+      offset: number;
+      spacing: number;
+      prefix: string;
+      suffix: string;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'ordinate_dimension';
+      id: number;
+      view_id: number;
+      origin: DrawingTopologyAnchorRefDto;
+      target: DrawingTopologyAnchorRefDto;
+      axis: DrawingOrdinateAxis;
+      offset: number;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'arc_length_dimension';
+      id: number;
+      view_id: number;
+      feature: DrawingCircularRefDto;
+      first: DrawingTopologyAnchorRefDto;
+      second: DrawingTopologyAnchorRefDto;
+      offset: number;
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'jogged_radius_dimension';
+      id: number;
+      view_id: number;
+      feature: DrawingCircularRefDto;
+      jog: [number, number];
+      position: [number, number];
+      precision: number;
+      presentation: DrawingDimensionPresentationDto;
+    }
+  | {
+      kind: 'datum_feature';
+      id: number;
+      view_id: number;
+      attachment: DrawingAttachmentRefDto;
+      label: string;
+      position: [number, number];
+      target_index: number | null;
+    }
+  | {
+      kind: 'gdt_frame';
+      id: number;
+      view_id: number;
+      attachment: DrawingAttachmentRefDto;
+      position: [number, number];
+      characteristic: DrawingGdtCharacteristic;
+      tolerance: number;
+      diameter_zone: boolean;
+      material_condition: DrawingMaterialCondition;
+      datums: DrawingDatumReferenceDto[];
+      projected_zone: number | null;
+      free_state: boolean;
+    }
+  | {
+      kind: 'surface_texture';
+      id: number;
+      view_id: number;
+      attachment: DrawingAttachmentRefDto;
+      position: [number, number];
+      roughness_ra: number;
+      process: string;
+      lay: DrawingSurfaceLay;
+      machining_allowance: number | null;
+    }
+  | {
+      kind: 'edge_requirement';
+      id: number;
+      view_id: number;
+      attachment: DrawingLineRefDto;
+      position: [number, number];
+      upper_deviation: number;
+      lower_deviation: number;
+      note: string;
+    }
+  | {
+      kind: 'weld_symbol';
+      id: number;
+      view_id: number;
+      attachment: DrawingLineRefDto;
+      position: [number, number];
+      weld_type: DrawingWeldType;
+      side: DrawingWeldSide;
+      size: number;
+      length: number | null;
+      pitch: number | null;
+      contour: DrawingWeldContour;
+      finish: string;
+      all_around: boolean;
+      field_weld: boolean;
+      tail: string;
+    }
+  | {
+      kind: 'item_balloon';
+      id: number;
+      view_id: number;
+      attachment: DrawingAttachmentRefDto;
+      position: [number, number];
+      bom_item_id: number;
+    }
+  | {
+      kind: 'revision_cloud';
+      id: number;
+      revision: string;
+      points: Array<[number, number]>;
+    };
+
+export interface DrawingSheetDto {
+  id: number;
+  name: string;
+  format: DrawingSheetFormat;
+  orientation: DrawingSheetOrientation;
+  standard: DrawingStandard;
+  projection_method: DrawingProjectionMethod;
+  tolerance_note: DrawingToleranceNoteDto;
+  title_block: DrawingTitleBlockDto;
+  views: DrawingViewDto[];
+  annotations: DrawingAnnotationDto[];
+  style: DrawingSheetStyleDto;
+  template_name: string;
+  revisions: DrawingRevisionDto[];
+  bom: DrawingBomItemDto[];
+  release: DrawingReleaseDto;
+  revision_table_position: [number, number] | null;
+  bom_table_position: [number, number] | null;
+}
+
+export interface DrawingTemplateDto {
+  id: number;
+  name: string;
+  standard: DrawingStandard;
+  projection_method: DrawingProjectionMethod;
+  tolerance_note: DrawingToleranceNoteDto;
+  title_defaults: DrawingTitleBlockDto;
+  style: DrawingSheetStyleDto;
+}
+
+export interface DrawingDocumentDto {
+  sheets: DrawingSheetDto[];
+  active_sheet_id: number | null;
+  next_sheet_id: number;
+  next_view_id: number;
+  next_annotation_id: number;
+  next_revision_id: number;
+  next_bom_item_id: number;
+  templates: DrawingTemplateDto[];
+  next_template_id: number;
+}
+
+export interface DrawingProjectionRequest {
+  body_ids: number[];
+  direction: [number, number, number];
+  up: [number, number, number];
+  include_hidden: boolean;
+  include_tangent_edges: boolean;
+  deflection: number;
+  section_plane?: {
+    point: [number, number, number];
+    normal: [number, number, number];
+    /** Positive model-mm depth behind the cutting plane; null is a full section. */
+    depth?: number | null;
+  } | null;
+}
+
+export interface DrawingPolylineDto {
+  points: Array<[number, number]>;
+}
+
+export interface DrawingProjectionAnchorDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  endpoint: DrawingEdgeEndpoint;
+  model_point: [number, number, number];
+  /** Projected model-millimetre coordinate, before drawing-view scale. */
+  point: [number, number];
+  hidden: boolean;
+}
+
+export interface DrawingProjectedCircleDto {
+  body_id: number;
+  edge_id: number;
+  edge_key: string;
+  center_model: [number, number, number];
+  normal_model: [number, number, number];
+  /** Projected model-millimetre coordinate, before drawing-view scale. */
+  center: [number, number];
+  radius: number;
+  closed: boolean;
+  hidden: boolean;
+}
+
+export interface DrawingProjectionDto {
+  visible: DrawingPolylineDto[];
+  hidden: DrawingPolylineDto[];
+  anchors: DrawingProjectionAnchorDto[];
+  circles: DrawingProjectedCircleDto[];
+  section: DrawingPolylineDto[];
+  /** min x, min y, max x, max y in model millimetres. */
+  bounds: [number, number, number, number];
+}
+
 export interface StepThreadMetadataDto {
   body_id: number;
   feature_id: number;
@@ -996,6 +1609,13 @@ export interface BodyAppearance {
   preset_id: string | null;
   density_g_cm3: number | null;
   diameter_mm: number;
+}
+
+/** Persisted Browser eye-toggle choices, keyed by stable model identity. */
+export interface ProjectVisibilityDto {
+  hidden_body_ids: number[];
+  hidden_datum_plane_ids: number[];
+  hidden_sketch_names: string[];
 }
 
 /** Mesh export selection. Empty body_ids exports every active body. */

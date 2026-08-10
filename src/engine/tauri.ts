@@ -28,6 +28,9 @@ import type {
   DatumPlaneRequest,
   DatumPlaneUpdateDto,
   DocumentDto,
+  DrawingDocumentDto,
+  DrawingProjectionDto,
+  DrawingProjectionRequest,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -67,6 +70,7 @@ import type {
   PolygonRequest,
   PreviewDto,
   ProfileCatalogItemDto,
+  ProjectVisibilityDto,
   RectangleRequest,
   SketchRectangularPatternRequest,
   ScaleRequest,
@@ -132,6 +136,26 @@ export class TauriEngine implements Engine {
 
   async bodyAppearances(): Promise<BodyAppearance[]> {
     return this.call('engine_body_appearances');
+  }
+
+  async projectVisibility(): Promise<ProjectVisibilityDto> {
+    return this.call('engine_project_visibility');
+  }
+
+  async setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto> {
+    return this.call('engine_project_set_visibility', visibility);
+  }
+
+  async drawingDocument(): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_document');
+  }
+
+  async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_set_document', document);
+  }
+
+  async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
+    return this.call('engine_drawing_projection', request);
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

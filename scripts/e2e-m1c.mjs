@@ -288,7 +288,7 @@ try {
   // --- 7. Lock/snap composition: length locked 50, endpoint still snaps ---
   console.log('7. lock/snap composition');
   // Reference point exactly 50 mm from the chain base (10,10).
-  await page.locator('button:has-text("DRAW")').first().click();
+  await page.getByRole('button', { name: 'DRAW', exact: true }).click();
   await page
     .locator('[data-ribbon-menu]')
     .getByText('Point', { exact: true })

@@ -34,14 +34,7 @@ const camera = () => page.evaluate(() => window.__cameraApi.getSnapshot());
 const vecDist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 const clickPanelLabel = async (text) => {
-  for (const l of await page.locator(`button:has-text("${text}")`).all()) {
-    const b = await l.boundingBox();
-    if (b && b.height < 30) {
-      await l.click();
-      return;
-    }
-  }
-  throw new Error(`panel label ${text} not found`);
+  await page.getByRole('button', { name: text, exact: true }).click();
 };
 
 const clickSketch = async (x, y) => {

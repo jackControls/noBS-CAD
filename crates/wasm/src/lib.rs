@@ -83,6 +83,22 @@ impl WasmEngine {
         host::handle(&mut self.manager, "body_appearances", "")
     }
 
+    pub fn project_visibility(&mut self) -> String {
+        host::handle(&mut self.manager, "project_visibility", "")
+    }
+
+    pub fn project_set_visibility(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "project_set_visibility", payload)
+    }
+
+    pub fn drawing_document(&mut self) -> String {
+        host::handle(&mut self.manager, "drawing_document", "")
+    }
+
+    pub fn drawing_set_document(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "drawing_set_document", payload)
+    }
+
     pub fn set_body_appearance(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "set_body_appearance", payload)
     }

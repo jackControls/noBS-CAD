@@ -28,6 +28,9 @@ import type {
   DatumPlaneRequest,
   DatumPlaneUpdateDto,
   DocumentDto,
+  DrawingDocumentDto,
+  DrawingProjectionDto,
+  DrawingProjectionRequest,
   EditDimensionRequest,
   EndSketchResult,
   ExtrudeDefinitionDto,
@@ -62,6 +65,7 @@ import type {
   PlaneRef,
   PointRequest,
   ProfileCatalogItemDto,
+  ProjectVisibilityDto,
   PolygonRequest,
   PreviewDto,
   RectangleRequest,
@@ -97,6 +101,11 @@ export interface Engine {
   profileCatalog(): Promise<ProfileCatalogItemDto[]>;
   solidScene(): Promise<SolidSceneDto>;
   bodyAppearances(): Promise<BodyAppearance[]>;
+  projectVisibility(): Promise<ProjectVisibilityDto>;
+  setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
+  drawingDocument(): Promise<DrawingDocumentDto>;
+  setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
+  drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;
   revolveDefinitions(): Promise<RevolveDefinitionDto[]>;

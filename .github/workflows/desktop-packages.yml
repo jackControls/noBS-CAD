@@ -2,6 +2,15 @@ name: Desktop packages
 
 on:
   workflow_dispatch:
+    inputs:
+      macos_signing:
+        description: macOS signing mode
+        required: true
+        default: diagnostic
+        type: choice
+        options:
+          - diagnostic
+          - production
   pull_request:
     branches:
       - main
@@ -296,9 +305,15 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     env:
-      # Pull-request/manual packages retain symbols for diagnostics. A v* tag
-      # is the production boundary and must ship a stripped Rust executable.
-      CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
+      # Tags are always production builds. A manual production run is the
+      # credential/notarization dry-run path before creating a release tag.
+      MACOS_DISTRIBUTION_BUILD: >-
+        ${{ github.ref_type == 'tag' ||
+            (github.event_name == 'workflow_dispatch' && inputs.macos_signing == 'production') }}
+      CARGO_PROFILE_RELEASE_STRIP: >-
+        ${{ (github.ref_type == 'tag' ||
+             (github.event_name == 'workflow_dispatch' && inputs.macos_signing == 'production')) &&
+            'symbols' || 'none' }}
 
     steps:
       - name: Check out noBS CAD
@@ -344,11 +359,109 @@ jobs:
           fi
           echo "OCCT_ROOT=$(brew --prefix opencascade)" >> "$GITHUB_ENV"
 
+      - name: Import Developer ID Application certificate
+        if: env.MACOS_DISTRIBUTION_BUILD == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE:?Missing APPLE_CERTIFICATE repository secret}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD repository secret}"
+
+          certificate_path="$RUNNER_TEMP/nbcad-signing-certificate.p12"
+          keychain_path="$RUNNER_TEMP/nbcad-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "$APPLE_CERTIFICATE" |
+            openssl base64 -d -A > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path" >/dev/null
+          security default-keychain -d user -s "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          signing_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" |
+              sed -nE 's/^[[:space:]]*[0-9]+\) [[:xdigit:]]+ "(Developer ID Application: .+)"$/\1/p' |
+              sed -n '1p'
+          )"
+          if [[ -z "$signing_identity" ]]; then
+            security find-identity -v -p codesigning "$keychain_path"
+            echo "The imported archive does not contain a valid Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+          echo "Imported production signing identity: $signing_identity"
+
+      - name: Prepare App Store Connect notarization key
+        if: env.MACOS_DISTRIBUTION_BUILD == 'true'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_API_ISSUER:?Missing APPLE_API_ISSUER repository secret}"
+          : "${APPLE_API_KEY:?Missing APPLE_API_KEY repository secret}"
+          : "${APPLE_API_PRIVATE_KEY:?Missing APPLE_API_PRIVATE_KEY repository secret}"
+
+          api_key_path="$RUNNER_TEMP/nbcad-notary-api-key.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$api_key_path"
+          chmod 600 "$api_key_path"
+          if ! grep -q '^-----BEGIN PRIVATE KEY-----$' "$api_key_path"; then
+            echo "APPLE_API_PRIVATE_KEY is not an App Store Connect .p8 private key." >&2
+            exit 1
+          fi
+
       - name: Build ad-hoc signed DMG
+        if: env.MACOS_DISTRIBUTION_BUILD != 'true'
         shell: bash
         env:
           APPLE_SIGNING_IDENTITY: "-"
         run: npm run bundle:macos
+
+      - name: Build Developer ID signed and notarized DMG
+        if: env.MACOS_DISTRIBUTION_BUILD == 'true'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/nbcad-notary-api-key.p8
+        run: npm run bundle:macos
+
+      - name: Verify Developer ID signature and notarization ticket
+        if: env.MACOS_DISTRIBUTION_BUILD == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/release/bundle/macos/noBS CAD.app"
+          signature_details="$(codesign --display --verbose=4 "$app" 2>&1)"
+          if ! grep -q '^Authority=Developer ID Application:' <<< "$signature_details"; then
+            echo "$signature_details"
+            echo "Production app is not signed by a Developer ID Application identity." >&2
+            exit 1
+          fi
+          team_id="$(sed -n 's/^TeamIdentifier=//p' <<< "$signature_details")"
+          if [[ -z "$team_id" || "$team_id" == "not set" ]]; then
+            echo "$signature_details"
+            echo "Production signature has no Apple Team ID." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
 
       - name: Verify packaged architecture and launch
         shell: bash
@@ -404,3 +517,12 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+      - name: Remove Apple signing credentials
+        if: always() && env.MACOS_DISTRIBUTION_BUILD == 'true'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/nbcad-signing.keychain-db" 2>/dev/null || true
+          rm -f \
+            "$RUNNER_TEMP/nbcad-signing-certificate.p12" \
+            "$RUNNER_TEMP/nbcad-notary-api-key.p8"

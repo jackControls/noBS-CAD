@@ -181,7 +181,16 @@ engine_command!(engine_active_sketch, "active_sketch", no_payload);
 engine_command!(engine_profile_catalog, "profile_catalog", no_payload);
 engine_command!(engine_solid_scene, "solid_scene", no_payload);
 engine_command!(engine_body_appearances, "body_appearances", no_payload);
+engine_command!(engine_project_visibility, "project_visibility", no_payload);
+engine_command!(engine_project_set_visibility, "project_set_visibility");
+engine_command!(engine_drawing_document, "drawing_document", no_payload);
+engine_command!(engine_drawing_set_document, "drawing_set_document");
 engine_command!(engine_set_body_appearance, "set_body_appearance");
+
+#[tauri::command]
+fn engine_drawing_projection(state: tauri::State<'_, AppState>, payload: &str) -> String {
+    state.drawing_projection(payload)
+}
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
@@ -570,6 +579,11 @@ pub fn run() {
             engine_profile_catalog,
             engine_solid_scene,
             engine_body_appearances,
+            engine_project_visibility,
+            engine_project_set_visibility,
+            engine_drawing_document,
+            engine_drawing_set_document,
+            engine_drawing_projection,
             engine_set_body_appearance,
             engine_extrude_definitions,
             engine_revolve_definitions,

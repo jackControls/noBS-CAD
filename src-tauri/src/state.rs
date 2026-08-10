@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use nbcad_core::{BodyAppearance, DocumentDto};
-use nbcad_occt::OcctKernel;
+use nbcad_occt::{
+    drawing_projection_anchors, drawing_projection_circles, DrawingProjectionRequest, OcctKernel,
+};
 use nbcad_sketch::{err_json, host, ok_json, SketchDto, SketchManager};
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
@@ -365,6 +367,40 @@ impl AppState {
             .kernel
             .export_step(&request)
             .map_err(|error| error.to_string())
+    }
+
+    pub fn drawing_projection(&self, payload: &str) -> String {
+        let request: DrawingProjectionRequest = match serde_json::from_str(payload) {
+            Ok(request) => request,
+            Err(error) => return err_json(format!("bad request payload: {error}")),
+        };
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
+        let inner = workspace.active();
+        let scene = inner.manager.solid_scene();
+        if !scene.errors.is_empty() {
+            return err_json("Resolve timeline errors before generating a drawing view.");
+        }
+        match inner.kernel.drawing_projection(&request) {
+            Ok(mut projection) => {
+                match drawing_projection_anchors(&scene, &request, &projection) {
+                    Ok(anchors) => {
+                        projection.anchors = anchors;
+                        match drawing_projection_circles(&scene, &request, &projection) {
+                            Ok(circles) => {
+                                projection.circles = circles;
+                                ok_json(projection)
+                            }
+                            Err(error) => err_json(error.to_string()),
+                        }
+                    }
+                    Err(error) => err_json(error.to_string()),
+                }
+            }
+            Err(error) => err_json(error.to_string()),
+        }
     }
 
     pub fn export_stl(&self, payload: &str) -> Result<Vec<u8>, String> {

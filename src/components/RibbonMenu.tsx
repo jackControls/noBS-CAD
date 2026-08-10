@@ -7,28 +7,63 @@ import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import type { MenuEntry, RibbonAction } from '../ribbon/config';
 import { dispatchRibbonAction } from '../ribbon/dispatch';
+import { useAppStore } from '../store/appStore';
 import { CONSTRAINT_ICON_IDS, ToolIcon } from './icons';
+
+function actionRequiresDrawingSheet(action?: RibbonAction): boolean {
+  return action === 'drawingAutoLayout'
+    || action === 'drawingAddView'
+    || action === 'drawingTool'
+    || action === 'drawingExportDxf'
+    || action === 'drawingPrint';
+}
+
+function entryAvailable(entry: MenuEntry, drawingSheetReady: boolean): boolean {
+  if (entry.type === 'separator') return false;
+  const ownAvailable = Boolean(
+    entry.enabled && (!actionRequiresDrawingSheet(entry.action) || drawingSheetReady),
+  );
+  return ownAvailable || (entry.children?.some((child) => entryAvailable(child, drawingSheetReady)) ?? false);
+}
 
 export function RibbonMenu({
   entries,
   onClose,
+  submenuSide = 'right',
 }: {
   entries: MenuEntry[];
   onClose: () => void;
+  submenuSide?: 'left' | 'right';
 }) {
+  const drawingSheetReady = useAppStore((state) => {
+    const activeSheetExists = state.drawingDocument.active_sheet_id !== null
+      && state.drawingDocument.sheets.some((sheet) => sheet.id === state.drawingDocument.active_sheet_id);
+    return activeSheetExists && !state.drawingSheetSetupOpen;
+  });
   return (
     <div
       role="menu"
       className="w-64 rounded border border-edge bg-header py-1 shadow-xl shadow-black/40"
     >
       {entries.map((entry, i) => (
-        <MenuRow key={entry.type === 'separator' ? `sep-${i}` : entry.id} entry={entry} onClose={onClose} />
+        <MenuRow
+          key={entry.type === 'separator' ? `sep-${i}` : entry.id}
+          entry={entry}
+          onClose={onClose}
+          submenuSide={submenuSide}
+          drawingSheetReady={drawingSheetReady}
+        />
       ))}
     </div>
   );
 }
 
-function MenuRow({ entry, onClose }: { entry: MenuEntry; onClose: () => void }) {
+function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
+  entry: MenuEntry;
+  onClose: () => void;
+  submenuSide: 'left' | 'right';
+  drawingSheetReady: boolean;
+}) {
   const { t } = useTranslation();
 
   if (entry.type === 'separator') {
@@ -37,14 +72,12 @@ function MenuRow({ entry, onClose }: { entry: MenuEntry; onClose: () => void }) 
 
   const run = (action?: RibbonAction, payload?: string) => dispatchRibbonAction(action, payload);
 
-  const hasAvailableChild =
-    entry.children?.some(
-      (child) =>
-        child.type === 'item' &&
-        (child.enabled || child.children?.some((grandchild) => grandchild.type === 'item' && grandchild.enabled)),
-    ) ?? false;
-  const available = Boolean(entry.enabled || hasAvailableChild);
-  const clickable = Boolean(entry.enabled && !entry.children);
+  const available = entryAvailable(entry, drawingSheetReady);
+  const clickable = Boolean(
+    entry.enabled
+      && !entry.children
+      && (!actionRequiresDrawingSheet(entry.action) || drawingSheetReady),
+  );
   const activate = () => {
     if (!clickable) return;
     run(entry.action, entry.payload);
@@ -55,6 +88,7 @@ function MenuRow({ entry, onClose }: { entry: MenuEntry; onClose: () => void }) 
     <div
       role="menuitem"
       aria-disabled={!available}
+      data-ribbon-menu-id={entry.id}
       data-ribbon-menu-item
       data-enabled={available ? 'true' : 'false'}
       tabIndex={available ? 0 : -1}
@@ -85,13 +119,18 @@ function MenuRow({ entry, onClose }: { entry: MenuEntry; onClose: () => void }) 
       {entry.children && <ChevronRight size={12} className="shrink-0 text-mute" />}
 
       {entry.children && (
-        <div className="absolute left-full top-0 z-10 hidden pl-0.5 group-hover:block group-focus-within:block">
+        <div className={cx(
+          'absolute top-0 z-10 hidden group-hover:block group-focus-within:block',
+          submenuSide === 'left' ? 'right-full pr-0.5' : 'left-full pl-0.5',
+        )}>
           <div className="w-60 rounded border border-edge bg-header py-1 shadow-xl shadow-black/40">
             {entry.children.map((child, i) => (
               <MenuRow
                 key={child.type === 'separator' ? `sep-${i}` : child.id}
                 entry={child}
                 onClose={onClose}
+                submenuSide={submenuSide}
+                drawingSheetReady={drawingSheetReady}
               />
             ))}
           </div>

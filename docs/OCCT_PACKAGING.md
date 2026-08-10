@@ -121,9 +121,34 @@ entry libraries. The staging script discovers their larger recursive closure
 exactly like the modeling libraries; do not hand-maintain a partial STEP dylib
 list.
 
-For signed/notarized releases, supply the normal Tauri Apple signing identity
-and credentials. The local ad-hoc seal is a verification aid, not distribution
-signing.
+For signed/notarized releases, the `v*` tag path in
+`.github/workflows/desktop-packages.yml` imports a **Developer ID Application**
+identity, enables hardened runtime, submits the app to Apple's notary service,
+waits for Tauri to staple the ticket, and verifies both Gatekeeper assessment
+and the stapled ticket. Pull-request and manually dispatched diagnostic builds
+remain ad-hoc signed; the local ad-hoc seal is a verification aid, not
+distribution signing.
+
+Production tag builds require these GitHub Actions repository secrets:
+
+| Secret | Value |
+|--------|-------|
+| `APPLE_CERTIFICATE` | Single-line base64 encoding of the exported Developer ID Application `.p12`, including its private key |
+| `APPLE_CERTIFICATE_PASSWORD` | Password chosen when exporting that `.p12` |
+| `APPLE_API_ISSUER` | App Store Connect API issuer UUID |
+| `APPLE_API_KEY` | App Store Connect API key ID |
+| `APPLE_API_PRIVATE_KEY` | Complete contents of the downloaded `AuthKey_*.p8` private key |
+
+Never commit these values. The workflow creates an ephemeral keychain, accepts
+only an identity whose certificate name starts with `Developer ID Application`,
+and removes the certificate archive, notary key, and keychain in an `always()`
+cleanup step. An `Apple Development` identity is suitable for development but
+is deliberately rejected at the production boundary.
+
+Before creating a tag, run **Desktop packages** manually with
+`macos_signing: production`. That exercises the same stripped,
+Developer-ID-signed, notarized, and stapled path without publishing a release.
+The default manual option, `diagnostic`, remains ad-hoc signed.
 
 ## 4. Reproducible Windows portable build
 

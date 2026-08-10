@@ -231,6 +231,19 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M12 12l5-4" strokeDasharray="2 2" />
     </>
   ),
+  centerMark: (
+    <>
+      <circle cx="12" cy="12" r="5" />
+      <path d="M2.5 12h19M12 2.5v19" strokeDasharray="6 2 1 2" />
+    </>
+  ),
+  centerLine: (
+    <>
+      <circle cx="6" cy="12" r="3.2" />
+      <circle cx="18" cy="12" r="3.2" />
+      <path d="M1 12h22" strokeDasharray="6 2 1 2" />
+    </>
+  ),
   arc: (
     <>
       <path d="M4 18C6 7 15 3 20 12" />

@@ -18,7 +18,9 @@ use nbcad_solid::{
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSView, NSWindow, NSWindowOrderingMode};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSView, NSWindow, NSWindowOrderingMode,
+};
 #[cfg(target_os = "macos")]
 use objc2_core_graphics::CGMutablePath;
 #[cfg(target_os = "macos")]
@@ -618,6 +620,14 @@ unsafe fn install_native_views(
     let parent = unsafe { webview.superview() }
         .ok_or_else(|| "WKWebView is not attached to an NSView hierarchy".to_string())?;
 
+    // Tauri/Wry may expose the main WKWebView through its child-view path,
+    // whose default mask only anchors the top edge. The CAD host requires the
+    // WebView and its container to follow every live resize and native
+    // full-screen transition, including while the Bevy viewport is unmounted.
+    let flexible = NSAutoresizingMaskOptions::ViewWidthSizable
+        | NSAutoresizingMaskOptions::ViewHeightSizable;
+    parent.setAutoresizingMask(parent.autoresizingMask() | flexible);
+    webview.setAutoresizingMask(webview.autoresizingMask() | flexible);
     webview.setWantsLayer(true);
     let viewport = NSView::new(marker);
     viewport.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0)));
@@ -673,7 +683,8 @@ unsafe fn apply_native_layout(
     let viewport_in_webview = dom_rect_to_view_rect(webview, layout.viewport);
     let viewport_in_parent = webview.convertRect_toView(viewport_in_webview, Some(&parent));
     viewport.setFrame(viewport_in_parent);
-    viewport.setHidden(layout.viewport.width < 2.0 || layout.viewport.height < 2.0);
+    let viewport_visible = layout.viewport.width >= 2.0 && layout.viewport.height >= 2.0;
+    viewport.setHidden(!viewport_visible);
     if std::env::var_os("NBCAD_NATIVE_LAYOUT_DEBUG").is_some() {
         eprintln!(
             "native viewport layout: bounds={webview_bounds:?} safe={:?} dom={:?} appkit={viewport_in_webview:?}",
@@ -683,6 +694,14 @@ unsafe fn apply_native_layout(
     }
 
     if let Some(webview_layer) = webview.layer() {
+        // Drawing (and future non-3D workspaces) unmount the DOM viewport.
+        // Leaving an old even-odd mask installed clips the resized WebView to
+        // its previous window bounds, producing black strips after entering
+        // full screen. With no viewport hole, no mask is needed at all.
+        if !viewport_visible {
+            webview_layer.setMask(None);
+            return ns_window.backingScaleFactor();
+        }
         let layer_bounds = webview_layer.bounds();
         let mask = CAShapeLayer::layer();
         mask.setFrame(layer_bounds);

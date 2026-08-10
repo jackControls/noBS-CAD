@@ -192,3 +192,32 @@ body {
 .project-tab-scroll::-webkit-scrollbar {
   display: none;
 }
+
+@layer components {
+  .drawing-mini-button {
+    @apply flex h-7 w-7 items-center justify-center rounded border border-edge text-mute hover:bg-edge hover:text-ink;
+  }
+
+  .drawing-input {
+    @apply h-8 w-full rounded border border-edge bg-header px-2 text-[11px] text-ink outline-none focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .drawing-sheet,
+  .drawing-sheet * {
+    visibility: visible !important;
+  }
+
+  .drawing-sheet {
+    position: fixed;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+    box-shadow: none !important;
+  }
+}

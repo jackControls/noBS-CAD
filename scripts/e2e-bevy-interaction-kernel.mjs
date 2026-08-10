@@ -495,6 +495,51 @@ try {
 
   await page.getByTestId('file-menu-button').click();
   await page.getByTestId('file-menu').waitFor({ state: 'visible' });
+  const fileMenuGeometry = await page.evaluate(() => {
+    const menu = document.querySelector('[data-testid="file-menu"]');
+    const anchor = document.querySelector('[data-testid="app-menu-controls"]');
+    const firstItem = menu?.querySelector('[role="menuitem"]');
+    if (!menu || !anchor || !firstItem) return null;
+    const menuRect = menu.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const itemRect = firstItem.getBoundingClientRect();
+    const point = {
+      x: itemRect.left + itemRect.width / 2,
+      y: itemRect.top + itemRect.height / 2,
+    };
+    const hit = document.elementFromPoint(point.x, point.y);
+    return {
+      portaled: menu.parentElement === document.body,
+      beginsOutsideRibbonClip: menuRect.top >= anchorRect.bottom - 1,
+      itemOutsideRibbonClip: point.y > anchorRect.bottom,
+      itemHitTestable: hit !== null && menu.contains(hit),
+    };
+  });
+  assert.deepEqual(
+    fileMenuGeometry,
+    {
+      portaled: true,
+      beginsOutsideRibbonClip: true,
+      itemOutsideRibbonClip: true,
+      itemHitTestable: true,
+    },
+    'the File menu must be portaled and hit-testable beyond the clipped ribbon',
+  );
+
+  await page.setViewportSize({ width: 900, height: 520 });
+  await page.waitForFunction(() => {
+    const menu = document.querySelector('[data-testid="file-menu"]');
+    if (!menu) return false;
+    const rect = menu.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + 8, rect.top + 8);
+    return rect.bottom <= window.innerHeight - 5 && hit !== null && menu.contains(hit);
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForFunction(() => {
+    const menu = document.querySelector('[data-testid="file-menu"]');
+    return menu !== null && menu.getBoundingClientRect().bottom <= window.innerHeight - 5;
+  });
+
   const fileMenuMask = await page.evaluate(async () => {
     const bridge = await import(
       '/src/components/viewport/nativeViewportBridge.ts'
@@ -535,7 +580,23 @@ try {
     },
     'the complete windowed File menu must remain above the native viewport',
   );
-  await page.getByTestId('file-menu-button').click();
+  const settingsItem = page.getByRole('menuitem', { name: 'Settings' });
+  await settingsItem.scrollIntoViewIfNeeded();
+  const settingsBounds = await settingsItem.boundingBox();
+  assert.ok(settingsBounds, 'the File menu Settings row has a painted hit target');
+  await page.mouse.click(
+    settingsBounds.x + settingsBounds.width / 2,
+    settingsBounds.y + settingsBounds.height / 2,
+  );
+  await page.waitForFunction(
+    () => window.__appStore.getState().settingsOpen === true,
+  );
+  assert.equal(
+    await page.getByTestId('file-menu').count(),
+    0,
+    'activating a portaled File menu row closes the menu',
+  );
+  await page.evaluate(() => window.__appStore.getState().setSettingsOpen(false));
 
   await page.getByRole('button', { name: 'BUILD' }).click();
   await page.locator('[data-ribbon-menu]').waitFor({ state: 'visible' });

@@ -11,6 +11,7 @@ use nbcad_solid::{
 use std::fmt::Write as _;
 
 use crate::OcctError;
+use crate::{DrawingPolylineDto, DrawingProjectionDto, DrawingProjectionRequest};
 
 #[cxx::bridge(namespace = "nbcad_occt")]
 mod ffi {
@@ -100,6 +101,15 @@ mod ffi {
         edge_refinable: Vec<u8>,
     }
 
+    struct FfiDrawingProjection {
+        visible_offsets: Vec<u32>,
+        visible_points: Vec<f64>,
+        hidden_offsets: Vec<u32>,
+        hidden_points: Vec<f64>,
+        section_offsets: Vec<u32>,
+        section_points: Vec<f64>,
+    }
+
     unsafe extern "C++" {
         include!("shim.hpp");
 
@@ -120,6 +130,28 @@ mod ffi {
             body_ids: &Vec<u64>,
             thread_metadata_hex: &str,
         ) -> Result<Vec<u8>>;
+        fn drawing_projection(
+            self: &Kernel,
+            body_ids: &Vec<u64>,
+            direction_x: f64,
+            direction_y: f64,
+            direction_z: f64,
+            up_x: f64,
+            up_y: f64,
+            up_z: f64,
+            include_hidden: bool,
+            include_tangent_edges: bool,
+            deflection: f64,
+            has_section_plane: bool,
+            section_point_x: f64,
+            section_point_y: f64,
+            section_point_z: f64,
+            section_normal_x: f64,
+            section_normal_y: f64,
+            section_normal_z: f64,
+            has_section_depth: bool,
+            section_depth: f64,
+        ) -> Result<FfiDrawingProjection>;
     }
 }
 
@@ -210,6 +242,101 @@ impl OcctKernel {
             .map_err(|error| OcctError(error.to_string()))
     }
 
+    /// Generate exact OCCT hidden-line projection curves from the active
+    /// B-reps. This deliberately bypasses viewport tessellation.
+    pub fn drawing_projection(
+        &self,
+        request: &DrawingProjectionRequest,
+    ) -> Result<DrawingProjectionDto, OcctError> {
+        validate_projection_basis(request.direction, request.up)?;
+        if !request.deflection.is_finite() || request.deflection <= 0.0 {
+            return Err(OcctError(
+                "drawing projection deflection must be positive and finite".to_string(),
+            ));
+        }
+        if let Some(section) = &request.section_plane {
+            if section
+                .point
+                .iter()
+                .chain(section.normal.iter())
+                .any(|value| !value.is_finite())
+                || section
+                    .normal
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f64>()
+                    < 1.0e-12
+            {
+                return Err(OcctError(
+                    "drawing section plane must contain a finite point and non-zero normal"
+                        .to_string(),
+                ));
+            }
+            if section
+                .depth
+                .is_some_and(|depth| !depth.is_finite() || depth <= 0.0)
+            {
+                return Err(OcctError(
+                    "drawing section depth must be a positive finite model distance".to_string(),
+                ));
+            }
+        }
+        let body_ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+        let raw = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
+            .drawing_projection(
+                &body_ids,
+                request.direction[0],
+                request.direction[1],
+                request.direction[2],
+                request.up[0],
+                request.up[1],
+                request.up[2],
+                request.include_hidden,
+                request.include_tangent_edges,
+                request.deflection.clamp(1.0e-4, 10.0),
+                request.section_plane.is_some(),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[0]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[1]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[2]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.normal[0]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.normal[1]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(1.0, |plane| plane.normal[2]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .and_then(|plane| plane.depth)
+                    .is_some(),
+                request
+                    .section_plane
+                    .as_ref()
+                    .and_then(|plane| plane.depth)
+                    .unwrap_or(0.0),
+            )
+            .map_err(|error| OcctError(error.to_string()))?;
+        projection_from_ffi(raw)
+    }
+
     /// Tessellate selected (or all) live bodies with configurable deflection.
     pub fn tessellate_bodies(
         &self,
@@ -270,6 +397,102 @@ impl OcctKernel {
         nbcad_export::ExportFacade::export_3mf(&meshes, appearances, request)
             .map_err(|error| OcctError(error.to_string()))
     }
+}
+
+fn validate_projection_basis(direction: [f64; 3], up: [f64; 3]) -> Result<(), OcctError> {
+    if direction
+        .iter()
+        .chain(up.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(OcctError(
+            "drawing projection basis contains non-finite values".to_string(),
+        ));
+    }
+    let length_sq = |value: [f64; 3]| {
+        value
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+    };
+    let cross = [
+        up[1] * direction[2] - up[2] * direction[1],
+        up[2] * direction[0] - up[0] * direction[2],
+        up[0] * direction[1] - up[1] * direction[0],
+    ];
+    if length_sq(direction) < 1.0e-12
+        || length_sq(up) < 1.0e-12
+        || length_sq(cross) < length_sq(direction) * length_sq(up) * 1.0e-12
+    {
+        return Err(OcctError(
+            "drawing projection direction and up vectors are degenerate".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjectionDto, OcctError> {
+    let visible = projection_polylines(&raw.visible_offsets, &raw.visible_points)?;
+    let hidden = projection_polylines(&raw.hidden_offsets, &raw.hidden_points)?;
+    let section = projection_polylines(&raw.section_offsets, &raw.section_points)?;
+    let mut bounds = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for point in visible
+        .iter()
+        .chain(hidden.iter())
+        .chain(section.iter())
+        .flat_map(|polyline| polyline.points.iter())
+    {
+        bounds[0] = bounds[0].min(point[0]);
+        bounds[1] = bounds[1].min(point[1]);
+        bounds[2] = bounds[2].max(point[0]);
+        bounds[3] = bounds[3].max(point[1]);
+    }
+    if !bounds.iter().all(|value| value.is_finite()) {
+        bounds = [0.0; 4];
+    }
+    Ok(DrawingProjectionDto {
+        visible,
+        hidden,
+        anchors: Vec::new(),
+        circles: Vec::new(),
+        section,
+        bounds,
+    })
+}
+
+fn projection_polylines(
+    offsets: &[u32],
+    points: &[f64],
+) -> Result<Vec<DrawingPolylineDto>, OcctError> {
+    if offsets.is_empty()
+        || offsets[0] != 0
+        || offsets.last().copied().unwrap_or(0) as usize * 2 != points.len()
+    {
+        return Err(OcctError(
+            "OCCT returned malformed drawing projection buffers".to_string(),
+        ));
+    }
+    let mut result = Vec::with_capacity(offsets.len().saturating_sub(1));
+    for window in offsets.windows(2) {
+        let begin = window[0] as usize;
+        let end = window[1] as usize;
+        if end < begin || end * 2 > points.len() || end - begin < 2 {
+            return Err(OcctError(
+                "OCCT returned a malformed drawing polyline".to_string(),
+            ));
+        }
+        result.push(DrawingPolylineDto {
+            points: (begin..end)
+                .map(|index| [points[index * 2], points[index * 2 + 1]])
+                .collect(),
+        });
+    }
+    Ok(result)
 }
 
 struct ProfileBuffers {
@@ -1163,6 +1386,85 @@ mod tests {
             .unwrap();
         assert!(roundtrip.errors.is_empty());
         assert_eq!(roundtrip.bodies.len(), 1);
+    }
+
+    #[test]
+    fn exact_hlr_projects_a_box_to_vector_edges() {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![box_job(1, 1)],
+            })
+            .unwrap();
+        let projection = kernel
+            .drawing_projection(&DrawingProjectionRequest {
+                body_ids: vec![BodyId(1)],
+                direction: [0.0, 0.0, 1.0],
+                up: [0.0, 1.0, 0.0],
+                include_hidden: true,
+                include_tangent_edges: false,
+                deflection: 0.05,
+                section_plane: None,
+            })
+            .unwrap();
+        assert!(projection.visible.len() >= 4);
+        assert!((projection.bounds[0] + 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[1] + 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[2] - 10.0).abs() < 1.0e-6);
+        assert!((projection.bounds[3] - 10.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn exact_section_hlr_clips_the_retained_half_space_and_depth_slab() {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![box_job(1, 1)],
+            })
+            .unwrap();
+
+        let request = |depth| DrawingProjectionRequest {
+            body_ids: vec![BodyId(1)],
+            direction: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
+            include_hidden: true,
+            include_tangent_edges: false,
+            deflection: 0.05,
+            section_plane: Some(crate::DrawingSectionPlaneDto {
+                point: [0.0, 0.0, 5.0],
+                normal: [1.0, 0.0, 0.0],
+                depth,
+            }),
+        };
+
+        let full = kernel.drawing_projection(&request(None)).unwrap();
+        assert!(!full.visible.is_empty());
+        assert!(!full.section.is_empty());
+        assert!((full.bounds[0] + 10.0).abs() < 1.0e-6);
+        assert!(full.bounds[2].abs() < 1.0e-6);
+
+        let depth = kernel.drawing_projection(&request(Some(4.0))).unwrap();
+        assert!(!depth.visible.is_empty());
+        assert!(!depth.section.is_empty());
+        assert!((depth.bounds[0] + 4.0).abs() < 1.0e-6);
+        assert!(depth.bounds[2].abs() < 1.0e-6);
+
+        let error = kernel.drawing_projection(&request(Some(0.0))).unwrap_err();
+        assert!(error.to_string().contains("section depth"));
+
+        let mut invalid = request(None);
+        invalid.deflection = f64::NAN;
+        let error = kernel.drawing_projection(&invalid).unwrap_err();
+        assert!(error.to_string().contains("deflection"));
+
+        let mut invalid = request(None);
+        invalid.section_plane.as_mut().unwrap().normal = [0.0; 3];
+        let error = kernel.drawing_projection(&invalid).unwrap_err();
+        assert!(error.to_string().contains("section plane"));
     }
 
     #[test]

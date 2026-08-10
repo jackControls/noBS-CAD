@@ -23,6 +23,7 @@ import type {
   SweepRequest,
 } from './types';
 import {
+  exportProjectModelWithVisibility,
   useAppStore,
   type BodyFeatureKind,
   type ConstructionPlaneKind,
@@ -30,17 +31,24 @@ import {
 import {
   authorizeNextSolidRedo,
   beginHistoryMutation,
+  canRedoDrawingHistory,
+  canUndoDrawingHistory,
   currentHistoryProjectKey,
   hasValidSolidRedo,
   pushSolidRedoSnapshot,
   returnSolidRedoSnapshot,
   takeSolidRedoSnapshot,
 } from './applicationHistory';
+import {
+  redoDrawingDocument,
+  undoDrawingDocument,
+} from '../drawing/document';
 
 export function canUndoApplicationHistory(): boolean {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
+  if (state.activeTab === 'drawing') return canUndoDrawingHistory();
   return state.mode === 'solid' && (state.document?.rollback_index ?? 0) > 0;
 }
 
@@ -48,6 +56,7 @@ export function canRedoApplicationHistory(): boolean {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_redo ?? false;
+  if (state.activeTab === 'drawing') return canRedoDrawingHistory();
   if (state.mode !== 'solid' || !state.document) return false;
   return (
     state.document.rollback_index < state.document.features.length ||
@@ -218,14 +227,18 @@ export async function redoSketch(): Promise<void> {
 }
 
 /** Application-level Undo shared by the keyboard and native Edit menu.
- * Sketch mode uses the sketch command stack. At the latest solid marker the
- * feature is still removed from authoritative history, but its compact model
- * snapshot is retained in memory so Redo can restore it exactly. */
+ * Sketch, Drawing, and Solid each own their command boundary. At the latest
+ * solid marker the feature is removed from authoritative history, while
+ * Drawing restores a complete DrawingDocument command snapshot. */
 export async function undoApplicationHistory(): Promise<void> {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return;
   if (state.mode === 'sketch') {
     if (state.activeSketch?.can_undo) await undoSketch();
+    return;
+  }
+  if (state.activeTab === 'drawing') {
+    await undoDrawingDocument();
     return;
   }
   if (state.mode !== 'solid' || !state.document) return;
@@ -236,7 +249,7 @@ export async function undoApplicationHistory(): Promise<void> {
     const projectKey = currentHistoryProjectKey();
     // Prune a stale branch before adding another consecutive Undo entry.
     hasValidSolidRedo(projectKey);
-    const modelJson = await engine.exportProjectModel();
+    const modelJson = await exportProjectModelWithVisibility(engine);
     const finishHistoryMutation = beginHistoryMutation();
     try {
       const deleted = await deleteTimelineFeature(
@@ -258,6 +271,10 @@ export async function redoApplicationHistory(): Promise<void> {
   if (state.projectBusy || state.solidBusy) return;
   if (state.mode === 'sketch') {
     if (state.activeSketch?.can_redo) await redoSketch();
+    return;
+  }
+  if (state.activeTab === 'drawing') {
+    await redoDrawingDocument();
     return;
   }
   if (state.mode !== 'solid' || !state.document) return;

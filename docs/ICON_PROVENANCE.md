@@ -57,7 +57,7 @@ The complete custom inventory is:
 | Solid construction | `extrude`, `revolve`, `sweep`, `loft`, `rib` | Profile/result diagrams joined by a path, axis, or section rails. |
 | Solid refinement and bodies | `hole`, `fillet`, `chamfer`, `shell`, `draft`, `combine`, `splitBody` | Cross-sections and overlapping primitive geometry describe the resulting body change. |
 | Repetition and transforms | `rectPattern`, `circPattern`, `pathPattern`, `scale` | Repeated frames plus an explicit grid, orbit, path, or resize cue. |
-| References and evaluation | `plane`, `midplane`, `planeAngle`, `axis`, `section`, `interference` | Datum centerlines, section hatching, and overlap marks. |
+| References, centers, and evaluation | `plane`, `midplane`, `planeAngle`, `axis`, `section`, `interference`, `centerMark`, `centerLine` | Datum/center lines, section hatching, circular-center construction, and overlap marks. |
 | Sketch creation | `line`, `midpointLine`, `rect`, `circle`, `arc`, `polygon`, `ellipse`, `slot`, `conic`, `dimension` | Canonical mathematical geometry with defining points and construction lines. |
 | Sketch editing | `offset`, `extend`, `break` | Before/after geometry, continuation lines, and a deliberate gap. |
 | Constraints | `coincident`, `midpointC`, `collinear`, `hv`, `parallel`, `perpendicular`, `tangent`, `concentric`, `symmetry`, `fix`, `autoConstrain`, `curvature` | The constrained geometric relationship itself, with small construction cues where needed. |
@@ -123,3 +123,4 @@ For every new icon:
 | 2026-07-20 | Original custom registry replacement | Current diagram family authored directly in noBS CAD source. |
 | 2026-07-25 | Registry/inventory and external-asset audit | Inventory synchronized; automated audit and working-evidence policy added. |
 | 2026-07-26 | NB product mark | Original SVG monogram added; browser and Tauri platform assets generated from one canonical source. |
+| 2026-08-09 | Drawing center geometry | Original center-mark and two-center-line glyphs added for the technical drawing workspace. |

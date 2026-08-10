@@ -64,6 +64,14 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "profile_catalog" => ok_json(manager.profile_catalog()),
         "solid_scene" => ok_json(manager.solid_scene()),
         "body_appearances" => ok_json(manager.body_appearances()),
+        "project_visibility" => ok_json(manager.project_visibility()),
+        "project_set_visibility" => with_payload(payload, |visibility| {
+            manager.set_project_visibility(visibility)
+        }),
+        "drawing_document" => ok_json(manager.drawing_document()),
+        "drawing_set_document" => {
+            with_payload(payload, |drawing| manager.set_drawing_document(drawing))
+        }
         "set_body_appearance" => with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
             manager.set_body_appearance(appearance)
         }),
