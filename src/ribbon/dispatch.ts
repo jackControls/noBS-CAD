@@ -139,10 +139,24 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       void applyConstraintById(payload);
       break;
     case 'drawingWorkspace':
+      useAppStore.getState().setJointDialogOpen(false);
       runDrawingAction(enterDrawingWorkspace);
       break;
+    case 'assemblyWorkspace': {
+      const state = useAppStore.getState();
+      if (state.mode !== 'solid') return;
+      state.setDrawingSheetSetupOpen(false);
+      state.setDrawingTool(null);
+      state.setDrawingPendingViewKind(null);
+      state.setActiveTab('assembly');
+      break;
+    }
     case 'modelWorkspace':
+      useAppStore.getState().setJointDialogOpen(false);
       leaveDrawingWorkspace();
+      break;
+    case 'joint':
+      useAppStore.getState().setJointDialogOpen(true);
       break;
     case 'drawingNewSheet':
       beginDrawingSheetSetup();

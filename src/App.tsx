@@ -22,6 +22,8 @@ import { Ribbon } from './components/Ribbon';
 import { BrowserTree } from './components/BrowserTree';
 import { DrawingBrowser } from './components/drawing/DrawingBrowser';
 import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
+import { AssemblyBrowser } from './components/assembly/AssemblyBrowser';
+import { JointDialog } from './components/assembly/JointDialog';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { SketchPalette } from './components/SketchPalette';
@@ -64,6 +66,7 @@ export default function App() {
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);
   const drawingWorkspace = activeTab === 'drawing';
+  const assemblyWorkspace = activeTab === 'assembly';
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
   const syncResolvedTheme = useAppStore((s) => s.syncResolvedTheme);
@@ -199,6 +202,7 @@ export default function App() {
         if (s.constructionPlaneDialog !== null) s.closeConstructionPlaneDialog();
         if (s.bodyFeatureDialog !== null) s.closeBodyFeatureDialog();
         if (s.sketchPatternDialog !== null) s.closeSketchPatternDialog();
+        if (s.jointDialogOpen) s.setJointDialogOpen(false);
         return;
       }
 
@@ -214,12 +218,27 @@ export default function App() {
         return;
       }
 
-      if (s.mode === 'solid' && e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (
+        s.activeTab === 'assembly'
+        && (e.key === 'Delete' || e.key === 'Backspace')
+        && s.selectedJointId !== null
+      ) {
+        e.preventDefault();
+        void s.deleteJoint(s.selectedJointId).catch((error) => {
+          useAppStore.getState().setConstraintDialog({
+            titleKey: 'file.errorTitle',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+        return;
+      }
+
+      if (s.activeTab === 'solid' && s.mode === 'solid' && e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         openExtrude();
         return;
       }
-      if (s.mode === 'solid' && e.key.toLowerCase() === 'h' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (s.activeTab === 'solid' && s.mode === 'solid' && e.key.toLowerCase() === 'h' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         openHole();
         return;
@@ -270,7 +289,7 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
       <Ribbon />
       <div className="flex min-h-0 flex-1">
-        {drawingWorkspace ? <DrawingBrowser /> : <BrowserTree />}
+        {drawingWorkspace ? <DrawingBrowser /> : assemblyWorkspace ? <AssemblyBrowser /> : <BrowserTree />}
         <div className="flex min-w-0 flex-1 flex-col">
           <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
@@ -287,7 +306,7 @@ export default function App() {
           </main>
         </div>
       </div>
-      {!drawingWorkspace && <Timeline />}
+      {!drawingWorkspace && !assemblyWorkspace && <Timeline />}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />
@@ -302,6 +321,7 @@ export default function App() {
       <BodyFeatureDialog />
       <SketchPatternDialog />
       <AppearanceDialog />
+      <JointDialog />
     </div>
   );
 }

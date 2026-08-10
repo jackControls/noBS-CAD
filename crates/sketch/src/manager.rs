@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
+use nbcad_assembly::{AssemblyDocumentDto, CreateJointRequestDto, JointDefinitionDto, JointId};
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
@@ -87,6 +88,9 @@ pub struct SketchManager {
     body_appearances: Vec<BodyAppearance>,
     /// Persistent technical-drawing sheets and view definitions.
     drawings: DrawingDocumentDto,
+    /// Persistent assembly/joint intent. Kinematic display poses are runtime
+    /// state owned by the future assembly solver, not the solid history.
+    assembly: AssemblyDocumentDto,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
     /// Candidate manager held until its OCCT replay commits successfully.
@@ -123,6 +127,7 @@ impl SketchManager {
             grid_step: GRID_STEP_MM,
             body_appearances: Vec::new(),
             drawings: DrawingDocumentDto::default(),
+            assembly: AssemblyDocumentDto::default(),
             project_visibility: ProjectVisibilityDto::default(),
             pending_project: None,
         }
@@ -180,6 +185,7 @@ impl SketchManager {
             body_features: self.solids.body_feature_definitions().to_vec(),
             body_appearances: self.scrubbed_body_appearances(),
             drawings: self.drawings.clone(),
+            assembly: self.assembly.clone(),
             visibility: self.scrubbed_project_visibility(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
@@ -292,6 +298,7 @@ impl SketchManager {
             grid_step: GRID_STEP_MM,
             body_appearances: model.body_appearances,
             drawings: model.drawings,
+            assembly: model.assembly,
             project_visibility: model.visibility,
             pending_project: None,
         };
@@ -505,6 +512,24 @@ impl SketchManager {
 
     pub fn drawing_document(&self) -> DrawingDocumentDto {
         self.drawings.clone()
+    }
+
+    pub fn assembly_document(&self) -> AssemblyDocumentDto {
+        self.assembly.clone()
+    }
+
+    pub fn create_joint(
+        &mut self,
+        request: CreateJointRequestDto,
+    ) -> Result<JointDefinitionDto, SessionError> {
+        self.assembly
+            .create(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_joint(&mut self, id: JointId) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly.delete(id).map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
     }
 
     pub fn project_visibility(&self) -> ProjectVisibilityDto {
@@ -3730,6 +3755,52 @@ mod project_tests {
             .unwrap();
 
         assert_eq!(loaded.drawing_document(), drawing);
+    }
+
+    #[test]
+    fn project_roundtrip_preserves_host_neutral_joint_intent() {
+        let connector = |body_id, face_id, key: &str, origin| nbcad_assembly::JointConnectorDto {
+            body_id: BodyId(body_id),
+            face_id: FaceId(face_id),
+            face_key: key.to_string(),
+            frame: nbcad_assembly::JointFrameDto {
+                origin,
+                primary_axis: [0.0, 0.0, 1.0],
+                secondary_axis: [1.0, 0.0, 0.0],
+            },
+        };
+        let assembly = AssemblyDocumentDto {
+            joints: vec![nbcad_assembly::JointDefinitionDto {
+                id: JointId(7),
+                name: "Hinge".to_string(),
+                kind: nbcad_assembly::JointKindDto::Revolute,
+                connector_a: connector(1, 11, "body-1:face-a", [0.0, 0.0, 0.0]),
+                connector_b: connector(2, 22, "body-2:face-b", [0.0, 0.0, 10.0]),
+                flipped: true,
+                angle_offset_deg: 15.0,
+                linear_offset_mm: 0.0,
+                limits: Some(nbcad_assembly::JointLimitsDto {
+                    min: -90.0,
+                    max: 90.0,
+                }),
+                enabled: true,
+            }],
+            next_joint_id: 8,
+        };
+
+        let mut manager = SketchManager::new();
+        manager.assembly = assembly.clone();
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto::default(),
+            })
+            .unwrap();
+        assert_eq!(loaded.assembly_document(), assembly);
     }
 
     #[test]

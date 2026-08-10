@@ -30,7 +30,9 @@ export type RibbonAction =
   | 'sketchTool'
   | 'applyConstraint'
   | 'drawingWorkspace'
+  | 'assemblyWorkspace'
   | 'modelWorkspace'
+  | 'joint'
   | 'drawingNewSheet'
   | 'drawingAutoLayout'
   | 'drawingAddView'
@@ -758,11 +760,38 @@ export const DRAWING_TAB: RibbonTab = {
   ],
 };
 
+export const ASSEMBLY_TAB: RibbonTab = {
+  id: 'assembly',
+  labelKey: 'ribbon.tabs.assembly',
+  enabled: true,
+  panels: [
+    {
+      id: 'joints',
+      labelKey: 'ribbon.panels.joints',
+      buttons: [
+        {
+          id: 'createJoint',
+          labelKey: 'ribbon.assembly.joint',
+          icon: 'combine',
+          enabled: true,
+          action: 'joint',
+        },
+      ],
+    },
+  ],
+};
+
 /** Only real workspaces are shown; planned work lives in the roadmap, not disabled tabs. */
 export const SOLID_WORKSPACE_TABS: Array<{ id: string; labelKey: string; enabled: boolean }> = [
   { id: 'solid', labelKey: 'ribbon.tabs.model', enabled: true },
 ];
 
 export function ribbonTabById(id: string): RibbonTab {
-  return id === 'sketch' ? SKETCH_TAB : id === 'drawing' ? DRAWING_TAB : SOLID_TAB;
+  return id === 'sketch'
+    ? SKETCH_TAB
+    : id === 'drawing'
+      ? DRAWING_TAB
+      : id === 'assembly'
+        ? ASSEMBLY_TAB
+        : SOLID_TAB;
 }

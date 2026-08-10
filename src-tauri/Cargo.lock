@@ -3923,6 +3923,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-assembly"
+version = "0.1.0"
+dependencies = [
+ "nbcad-core",
+ "nbcad-solid",
+ "serde",
+]
+
+[[package]]
 name = "nbcad-core"
 version = "0.1.0"
 dependencies = [
@@ -3957,6 +3966,7 @@ dependencies = [
 name = "nbcad-sketch"
 version = "0.1.0"
 dependencies = [
+ "nbcad-assembly",
  "nbcad-core",
  "nbcad-solid",
  "serde",

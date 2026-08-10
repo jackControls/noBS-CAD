@@ -10,6 +10,7 @@
 import type {
   AddConstraintResult,
   AddLineResult,
+  AssemblyDocumentDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -21,6 +22,7 @@ import type {
   SketchCircularPatternRequest,
   CircleRequest,
   ConstraintPayload,
+  CreateJointRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -47,6 +49,7 @@ import type {
   SolidChamferRequest,
   HoleDefinitionDto,
   HoleRequest,
+  JointDefinitionDto,
   EvalExpressionResult,
   ExtendRequest,
   FilletPreviewDto,
@@ -105,6 +108,9 @@ export interface Engine {
   setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
   drawingDocument(): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
+  assemblyDocument(): Promise<AssemblyDocumentDto>;
+  createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto>;
+  deleteJoint(id: number): Promise<AssemblyDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;

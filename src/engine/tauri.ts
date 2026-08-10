@@ -11,6 +11,7 @@ import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import type {
   AddConstraintResult,
   AddLineResult,
+  AssemblyDocumentDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -21,6 +22,7 @@ import type {
   SketchCircularPatternRequest,
   CircleRequest,
   ConstraintPayload,
+  CreateJointRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -49,6 +51,7 @@ import type {
   SolidChamferRequest,
   HoleDefinitionDto,
   HoleRequest,
+  JointDefinitionDto,
   ExtendRequest,
   FilletPreviewDto,
   FilletRequest,
@@ -152,6 +155,18 @@ export class TauriEngine implements Engine {
 
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
     return this.call('engine_drawing_set_document', document);
+  }
+
+  async assemblyDocument(): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_document');
+  }
+
+  async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
+    return this.call('engine_assembly_create_joint', request);
+  }
+
+  async deleteJoint(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_delete_joint', id);
   }
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {

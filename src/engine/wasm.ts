@@ -21,10 +21,14 @@ type WasmEngineMethods = WasmEngineInner & {
   project_set_visibility(payload: string): string;
   drawing_document(): string;
   drawing_set_document(payload: string): string;
+  assembly_document(): string;
+  assembly_create_joint(payload: string): string;
+  assembly_delete_joint(payload: string): string;
 };
 import type {
   AddConstraintResult,
   AddLineResult,
+  AssemblyDocumentDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -35,6 +39,7 @@ import type {
   SketchCircularPatternRequest,
   CircleRequest,
   ConstraintPayload,
+  CreateJointRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -63,6 +68,7 @@ import type {
   SolidChamferRequest,
   HoleDefinitionDto,
   HoleRequest,
+  JointDefinitionDto,
   ExtendRequest,
   FilletPreviewDto,
   FilletRequest,
@@ -186,6 +192,22 @@ export class WasmEngine implements Engine {
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).drawing_set_document(JSON.stringify(document)),
+    );
+  }
+
+  async assemblyDocument(): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).assembly_document());
+  }
+
+  async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_joint(JSON.stringify(request)),
+    );
+  }
+
+  async deleteJoint(id: number): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_delete_joint(JSON.stringify(id)),
     );
   }
 

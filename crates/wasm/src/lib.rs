@@ -99,6 +99,18 @@ impl WasmEngine {
         host::handle(&mut self.manager, "drawing_set_document", payload)
     }
 
+    pub fn assembly_document(&mut self) -> String {
+        host::handle(&mut self.manager, "assembly_document", "")
+    }
+
+    pub fn assembly_create_joint(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_joint", payload)
+    }
+
+    pub fn assembly_delete_joint(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_delete_joint", payload)
+    }
+
     pub fn set_body_appearance(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "set_body_appearance", payload)
     }

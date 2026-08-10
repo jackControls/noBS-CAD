@@ -185,6 +185,9 @@ engine_command!(engine_project_visibility, "project_visibility", no_payload);
 engine_command!(engine_project_set_visibility, "project_set_visibility");
 engine_command!(engine_drawing_document, "drawing_document", no_payload);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
+engine_command!(engine_assembly_document, "assembly_document", no_payload);
+engine_command!(engine_assembly_create_joint, "assembly_create_joint");
+engine_command!(engine_assembly_delete_joint, "assembly_delete_joint");
 engine_command!(engine_set_body_appearance, "set_body_appearance");
 
 #[tauri::command]
@@ -583,6 +586,9 @@ pub fn run() {
             engine_project_set_visibility,
             engine_drawing_document,
             engine_drawing_set_document,
+            engine_assembly_document,
+            engine_assembly_create_joint,
+            engine_assembly_delete_joint,
             engine_drawing_projection,
             engine_set_body_appearance,
             engine_extrude_definitions,

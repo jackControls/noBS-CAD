@@ -103,7 +103,9 @@
       "solidModeling": "Solid Modeling",
       "sketch": "SKETCH",
       "drawing": "DRAWING",
-      "drawingWorkspace": "Drawing"
+      "drawingWorkspace": "Drawing",
+      "assembly": "ASSEMBLY",
+      "assemblyWorkspace": "Assembly"
     },
     "panels": {
       "profile": "PROFILE",
@@ -125,7 +127,8 @@
       "annotate": "ANNOTATE",
       "symbols": "SYMBOLS",
       "output": "OUTPUT",
-      "sheet": "SHEET"
+      "sheet": "SHEET",
+      "joints": "JOINTS"
     },
     "finishSketch": "FINISH SKETCH",
     "solid": {
@@ -156,6 +159,9 @@
       "sectionAnalysis": "Section Analysis",
       "interference": "Interference",
       "select": "Select"
+    },
+    "assembly": {
+      "joint": "Joint"
     },
     "drawing": {
       "open": "Drawing",

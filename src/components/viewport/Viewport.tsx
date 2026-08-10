@@ -5988,6 +5988,38 @@ export function Viewport() {
           surface.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
           return;
         }
+        if (state.jointDialogOpen) {
+          const selectJointFace = (
+            bodyId: number,
+            faceId: number,
+            point: Point3Dto | null,
+          ) => {
+            const current = store.getState();
+            const planar = current.solidScene.bodies
+              .find((body) => body.id === bodyId)
+              ?.faces.find((face) => face.id === faceId)?.plane;
+            if (!planar) return;
+            current.selectSolidFeature('face', bodyId, faceId, point, true);
+          };
+          if (nativeViewportIsActive()) {
+            void pickNativeViewport(e, container)
+              .then((hit) => {
+                if (!hit || !store.getState().jointDialogOpen) return;
+                selectJointFace(hit.bodyId, hit.faceId, {
+                  x: hit.point[0],
+                  y: hit.point[1],
+                  z: hit.point[2],
+                });
+              })
+              .catch(() => undefined);
+          } else {
+            const faceHit = pickSolidFace(e);
+            if (faceHit?.planar) {
+              selectJointFace(faceHit.bodyId, faceHit.faceId, faceHit.point);
+            }
+          }
+          return;
+        }
         const edgeHit = pickSolidEdge(e);
         const hit = edgeHit ? null : pickSolidFace(e);
         state.setHoveredEdge(edgeHit?.edgeId ?? null);

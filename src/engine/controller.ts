@@ -49,6 +49,7 @@ export function canUndoApplicationHistory(): boolean {
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
   if (state.activeTab === 'drawing') return canUndoDrawingHistory();
+  if (state.activeTab !== 'solid') return false;
   return state.mode === 'solid' && (state.document?.rollback_index ?? 0) > 0;
 }
 
@@ -57,6 +58,7 @@ export function canRedoApplicationHistory(): boolean {
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_redo ?? false;
   if (state.activeTab === 'drawing') return canRedoDrawingHistory();
+  if (state.activeTab !== 'solid') return false;
   if (state.mode !== 'solid' || !state.document) return false;
   return (
     state.document.rollback_index < state.document.features.length ||
@@ -241,6 +243,7 @@ export async function undoApplicationHistory(): Promise<void> {
     await undoDrawingDocument();
     return;
   }
+  if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
   const current = state.document.rollback_index;
   if (current === 0) return;
@@ -277,6 +280,7 @@ export async function redoApplicationHistory(): Promise<void> {
     await redoDrawingDocument();
     return;
   }
+  if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
   const current = state.document.rollback_index;
   if (current < state.document.features.length) {

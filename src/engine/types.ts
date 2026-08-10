@@ -961,6 +961,55 @@ export interface SolidUpdateDto {
   scene: SolidSceneDto;
 }
 
+export type JointKindDto = 'rigid' | 'revolute' | 'slider';
+
+export interface JointFrameDto {
+  origin: [number, number, number];
+  primary_axis: [number, number, number];
+  secondary_axis: [number, number, number];
+}
+
+export interface JointConnectorDto {
+  body_id: number;
+  face_id: number;
+  face_key: string;
+  frame: JointFrameDto;
+}
+
+export interface JointLimitsDto {
+  min: number;
+  max: number;
+}
+
+export interface JointDefinitionDto {
+  id: number;
+  name: string;
+  kind: JointKindDto;
+  connector_a: JointConnectorDto;
+  connector_b: JointConnectorDto;
+  flipped: boolean;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+  limits: JointLimitsDto | null;
+  enabled: boolean;
+}
+
+export interface CreateJointRequestDto {
+  name: string;
+  kind: JointKindDto;
+  connector_a: JointConnectorDto;
+  connector_b: JointConnectorDto;
+  flipped: boolean;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+  limits: JointLimitsDto | null;
+}
+
+export interface AssemblyDocumentDto {
+  joints: JointDefinitionDto[];
+  next_joint_id: number;
+}
+
 export type DrawingSheetFormat =
   | 'a0'
   | 'a1'

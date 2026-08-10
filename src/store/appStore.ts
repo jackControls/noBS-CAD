@@ -10,7 +10,9 @@
  */
 import { create } from 'zustand';
 import type {
+  AssemblyDocumentDto,
   BodyAppearance,
+  CreateJointRequestDto,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   DrawingDocumentDto,
@@ -132,6 +134,10 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     templates: [],
     next_template_id: 1,
   };
+}
+
+function emptyAssemblyDocument(): AssemblyDocumentDto {
+  return { joints: [], next_joint_id: 1 };
 }
 
 function appearanceFor(
@@ -475,6 +481,10 @@ interface AppState {
   bodyAppearances: BodyAppearance[];
   /** Persistent technical drawing sheets and projected-view definitions. */
   drawingDocument: DrawingDocumentDto;
+  /** Persistent face-referenced assembly/joint intent. */
+  assemblyDocument: AssemblyDocumentDto;
+  selectedJointId: number | null;
+  jointDialogOpen: boolean;
   selectedDrawingViewId: number | null;
   selectedDrawingAnnotationId: number | null;
   drawingTool: DrawingTool;
@@ -536,6 +546,10 @@ interface AppState {
   setBodyAppearances: (appearances: BodyAppearance[]) => void;
   setBodyAppearance: (appearance: BodyAppearance) => Promise<void>;
   setDrawingDocument: (drawing: DrawingDocumentDto) => Promise<void>;
+  createJoint: (request: CreateJointRequestDto) => Promise<void>;
+  deleteJoint: (id: number) => Promise<void>;
+  setSelectedJointId: (id: number | null) => void;
+  setJointDialogOpen: (open: boolean) => void;
   setSelectedDrawingViewId: (viewId: number | null) => void;
   setSelectedDrawingAnnotationId: (annotationId: number | null) => void;
   setDrawingTool: (tool: DrawingTool) => void;
@@ -549,6 +563,7 @@ interface AppState {
     fileName: string | null,
     bodyAppearances?: BodyAppearance[],
     drawingDocument?: DrawingDocumentDto,
+    assemblyDocument?: AssemblyDocumentDto,
     projectVisibility?: ProjectVisibilityDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
@@ -704,6 +719,9 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedBodies: [],
     bodyAppearances: [],
     drawingDocument: emptyDrawingDocument(),
+    assemblyDocument: emptyAssemblyDocument(),
+    selectedJointId: null,
+    jointDialogOpen: false,
     selectedDrawingViewId: null,
     selectedDrawingAnnotationId: null,
     drawingTool: null,
@@ -780,6 +798,9 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedBodies: [],
   bodyAppearances: [],
   drawingDocument: emptyDrawingDocument(),
+  assemblyDocument: emptyAssemblyDocument(),
+  selectedJointId: null,
+  jointDialogOpen: false,
   selectedDrawingViewId: null,
   selectedDrawingAnnotationId: null,
   drawingTool: null,
@@ -830,12 +851,13 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, projectVisibility] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
       engine.drawingDocument(),
+      engine.assemblyDocument(),
       engine.projectVisibility(),
     ]);
     set({
@@ -846,6 +868,7 @@ export const useAppStore = create<AppState>()((set) => ({
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       drawingDocument,
+      assemblyDocument,
       hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
       projectVisibility,
       dirty: false,
@@ -914,6 +937,27 @@ export const useAppStore = create<AppState>()((set) => ({
     set({ drawingDocument, dirty: true });
   },
 
+  createJoint: async (request) => {
+    const engine = await getEngine();
+    await engine.createJoint(request);
+    const assemblyDocument = await engine.assemblyDocument();
+    set({ assemblyDocument, dirty: true, jointDialogOpen: false });
+  },
+
+  deleteJoint: async (id) => {
+    const engine = await getEngine();
+    const assemblyDocument = await engine.deleteJoint(id);
+    set((state) => ({
+      assemblyDocument,
+      dirty: true,
+      selectedJointId: state.selectedJointId === id ? null : state.selectedJointId,
+    }));
+  },
+
+  setSelectedJointId: (selectedJointId) => set({ selectedJointId }),
+
+  setJointDialogOpen: (jointDialogOpen) => set({ jointDialogOpen }),
+
   setSelectedDrawingViewId: (selectedDrawingViewId) => set({ selectedDrawingViewId }),
 
   setSelectedDrawingAnnotationId: (selectedDrawingAnnotationId) =>
@@ -934,6 +978,7 @@ export const useAppStore = create<AppState>()((set) => ({
     fileName,
     bodyAppearances = [],
     drawingDocument = emptyDrawingDocument(),
+    assemblyDocument = emptyAssemblyDocument(),
     projectVisibility = emptyProjectVisibility(),
   ) =>
     set({
@@ -944,6 +989,7 @@ export const useAppStore = create<AppState>()((set) => ({
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
       drawingDocument: normalizeDrawingDocument(drawingDocument),
+      assemblyDocument,
       hidden: hiddenFromPersistedVisibility(update.document, projectVisibility),
       projectVisibility,
       dirty: false,
