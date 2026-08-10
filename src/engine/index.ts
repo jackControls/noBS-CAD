@@ -65,6 +65,7 @@ import type {
   PlaneRef,
   PointRequest,
   ProfileCatalogItemDto,
+  ProjectVisibilityDto,
   PolygonRequest,
   PreviewDto,
   RectangleRequest,
@@ -100,6 +101,8 @@ export interface Engine {
   profileCatalog(): Promise<ProfileCatalogItemDto[]>;
   solidScene(): Promise<SolidSceneDto>;
   bodyAppearances(): Promise<BodyAppearance[]>;
+  projectVisibility(): Promise<ProjectVisibilityDto>;
+  setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
   drawingDocument(): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;

@@ -14,6 +14,7 @@ import type {
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   DrawingDocumentDto,
+  DrawingViewKind,
   ExtrudeOperation,
   OriginPlane,
   PlanarFaceSourceDto,
@@ -23,12 +24,13 @@ import type {
   ProfileCatalogItemDto,
   ProfileLoopDto,
   ProfileRefDto,
+  ProjectVisibilityDto,
   SketchDto,
   SketchPointRefDto,
   SolidSceneDto,
   SolidUpdateDto,
 } from '../engine/types';
-import { getEngine } from '../engine';
+import { getEngine, type Engine } from '../engine';
 import {
   DEFAULT_BODY_COLOR,
   DEFAULT_MATERIAL_NAME,
@@ -45,7 +47,68 @@ import {
   persistSixDofSpeed,
   readSixDofSpeed,
 } from '../navigationPreferences';
-import type { DocumentDto, NodeId } from '../types/document';
+import type { BrowserNode, DocumentDto, NodeId } from '../types/document';
+import { normalizeDrawingDocument } from '../drawing/sheet';
+
+function emptyProjectVisibility(): ProjectVisibilityDto {
+  return {
+    hidden_body_ids: [],
+    hidden_datum_plane_ids: [],
+    hidden_sketch_names: [],
+  };
+}
+
+function persistedVisibilityFromHidden(
+  document: DocumentDto | null,
+  hidden: Record<NodeId, boolean>,
+): ProjectVisibilityDto {
+  if (!document) return emptyProjectVisibility();
+  const hiddenBodyIds = new Set<number>();
+  const hiddenDatumPlaneIds = new Set<number>();
+  const hiddenSketchNames = new Set<string>();
+  const visit = (nodes: BrowserNode[]) => {
+    for (const node of nodes) {
+      if (hidden[node.id]) {
+        if (node.kind === 'body' && node.reference_id !== null) {
+          hiddenBodyIds.add(node.reference_id);
+        } else if (node.kind === 'construction_plane' && node.reference_id !== null) {
+          hiddenDatumPlaneIds.add(node.reference_id);
+        } else if (node.kind === 'sketch' && node.name) {
+          hiddenSketchNames.add(node.name);
+        }
+      }
+      visit(node.children);
+    }
+  };
+  visit(document.browser);
+  return {
+    hidden_body_ids: [...hiddenBodyIds].sort((a, b) => a - b),
+    hidden_datum_plane_ids: [...hiddenDatumPlaneIds].sort((a, b) => a - b),
+    hidden_sketch_names: [...hiddenSketchNames].sort(),
+  };
+}
+
+function hiddenFromPersistedVisibility(
+  document: DocumentDto,
+  visibility: ProjectVisibilityDto,
+): Record<NodeId, boolean> {
+  const bodyIds = new Set(visibility.hidden_body_ids);
+  const datumIds = new Set(visibility.hidden_datum_plane_ids);
+  const sketchNames = new Set(visibility.hidden_sketch_names);
+  const hidden: Record<NodeId, boolean> = {};
+  const visit = (nodes: BrowserNode[]) => {
+    for (const node of nodes) {
+      const isHidden =
+        (node.kind === 'body' && node.reference_id !== null && bodyIds.has(node.reference_id))
+        || (node.kind === 'construction_plane' && node.reference_id !== null && datumIds.has(node.reference_id))
+        || (node.kind === 'sketch' && node.name !== null && sketchNames.has(node.name));
+      if (isHidden) hidden[node.id] = true;
+      visit(node.children);
+    }
+  };
+  visit(document.browser);
+  return hidden;
+}
 
 function scrubAppearances(
   appearances: BodyAppearance[],
@@ -64,6 +127,10 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     next_sheet_id: 1,
     next_view_id: 1,
     next_annotation_id: 1,
+    next_revision_id: 1,
+    next_bom_item_id: 1,
+    templates: [],
+    next_template_id: 1,
   };
 }
 
@@ -151,7 +218,39 @@ export type SketchTool =
 export type NavTool = 'select' | 'orbit' | 'pan' | 'zoom' | 'zoomWindow';
 
 /** Modeless tool active in the technical drawing workspace. */
-export type DrawingTool = 'dimension' | 'note' | null;
+export type DrawingTool =
+  | 'place_view'
+  | 'dimension'
+  | 'diameter'
+  | 'radius'
+  | 'angle'
+  | 'hole_note'
+  | 'center_mark'
+  | 'center_line'
+  | 'symmetry_axis'
+  | 'bolt_circle'
+  | 'chain_dimension'
+  | 'baseline_dimension'
+  | 'continued_dimension'
+  | 'ordinate_dimension'
+  | 'arc_length'
+  | 'jogged_radius'
+  | 'section_view'
+  | 'detail_view'
+  | 'auxiliary_view'
+  | 'broken_view'
+  | 'removed_section'
+  | 'datum'
+  | 'gdt'
+  | 'surface_texture'
+  | 'edge_requirement'
+  | 'weld'
+  | 'balloon'
+  | 'revision_cloud'
+  | 'reassociate'
+  | 'chamfer_note'
+  | 'note'
+  | null;
 
 /** Sketch palette option keys (labels live in i18n under palette.*). */
 export const PALETTE_OPTION_KEYS = [
@@ -366,6 +465,8 @@ interface AppState {
   expanded: Record<NodeId, boolean>;
   /** Browser nodes explicitly hidden via the eye toggle (default: visible). */
   hidden: Record<NodeId, boolean>;
+  /** Stable project representation of Browser visibility for save/tab state. */
+  projectVisibility: ProjectVisibilityDto;
   selectedNode: NodeId | null;
   selectedBody: number | null;
   /** Explicit solid-body selections. `selectedBody` remains the active owner. */
@@ -377,6 +478,9 @@ interface AppState {
   selectedDrawingViewId: number | null;
   selectedDrawingAnnotationId: number | null;
   drawingTool: DrawingTool;
+  drawingPendingViewKind: DrawingViewKind | null;
+  drawingSheetSetupOpen: boolean;
+  drawingProfileExportOpen: boolean;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -435,6 +539,9 @@ interface AppState {
   setSelectedDrawingViewId: (viewId: number | null) => void;
   setSelectedDrawingAnnotationId: (annotationId: number | null) => void;
   setDrawingTool: (tool: DrawingTool) => void;
+  setDrawingPendingViewKind: (kind: DrawingViewKind | null) => void;
+  setDrawingSheetSetupOpen: (open: boolean) => void;
+  setDrawingProfileExportOpen: (open: boolean) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -442,6 +549,7 @@ interface AppState {
     fileName: string | null,
     bodyAppearances?: BodyAppearance[],
     drawingDocument?: DrawingDocumentDto,
+    projectVisibility?: ProjectVisibilityDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -590,6 +698,7 @@ function resetDocumentUiState(): Partial<AppState> {
     lookAtNonce: 0,
     expanded: {},
     hidden: {},
+    projectVisibility: emptyProjectVisibility(),
     selectedNode: null,
     selectedBody: null,
     selectedBodies: [],
@@ -598,6 +707,9 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedDrawingViewId: null,
     selectedDrawingAnnotationId: null,
     drawingTool: null,
+    drawingPendingViewKind: null,
+    drawingSheetSetupOpen: false,
+    drawingProfileExportOpen: false,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -662,6 +774,7 @@ export const useAppStore = create<AppState>()((set) => ({
   lookAtNonce: 0,
   expanded: {},
   hidden: {},
+  projectVisibility: emptyProjectVisibility(),
   selectedNode: null,
   selectedBody: null,
   selectedBodies: [],
@@ -670,6 +783,9 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedDrawingViewId: null,
   selectedDrawingAnnotationId: null,
   drawingTool: null,
+  drawingPendingViewKind: null,
+  drawingSheetSetupOpen: false,
+  drawingProfileExportOpen: false,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -714,12 +830,13 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
       engine.drawingDocument(),
+      engine.projectVisibility(),
     ]);
     set({
       document: doc,
@@ -729,6 +846,8 @@ export const useAppStore = create<AppState>()((set) => ({
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       drawingDocument,
+      hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
+      projectVisibility,
       dirty: false,
     });
   },
@@ -789,7 +908,9 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setDrawingDocument: async (drawing) => {
     const engine = await getEngine();
-    const drawingDocument = await engine.setDrawingDocument(drawing);
+    const drawingDocument = normalizeDrawingDocument(
+      await engine.setDrawingDocument(normalizeDrawingDocument(drawing)),
+    );
     set({ drawingDocument, dirty: true });
   },
 
@@ -800,6 +921,12 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setDrawingTool: (drawingTool) => set({ drawingTool }),
 
+  setDrawingPendingViewKind: (drawingPendingViewKind) => set({ drawingPendingViewKind }),
+
+  setDrawingSheetSetupOpen: (drawingSheetSetupOpen) => set({ drawingSheetSetupOpen }),
+
+  setDrawingProfileExportOpen: (drawingProfileExportOpen) => set({ drawingProfileExportOpen }),
+
   loadProjectState: (
     update,
     finishedSketches,
@@ -807,6 +934,7 @@ export const useAppStore = create<AppState>()((set) => ({
     fileName,
     bodyAppearances = [],
     drawingDocument = emptyDrawingDocument(),
+    projectVisibility = emptyProjectVisibility(),
   ) =>
     set({
       ...resetDocumentUiState(),
@@ -815,7 +943,9 @@ export const useAppStore = create<AppState>()((set) => ({
       solidScene: update.scene,
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
-      drawingDocument,
+      drawingDocument: normalizeDrawingDocument(drawingDocument),
+      hidden: hiddenFromPersistedVisibility(update.document, projectVisibility),
+      projectVisibility,
       dirty: false,
       projectFileName: fileName,
     }),
@@ -980,7 +1110,15 @@ export const useAppStore = create<AppState>()((set) => ({
     set((s) => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } })),
 
   toggleHidden: (id) =>
-    set((s) => ({ hidden: { ...s.hidden, [id]: !s.hidden[id] } })),
+    set((state) => {
+      const hidden = { ...state.hidden, [id]: !state.hidden[id] };
+      if (!hidden[id]) delete hidden[id];
+      return {
+        hidden,
+        projectVisibility: persistedVisibilityFromHidden(state.document, hidden),
+        dirty: true,
+      };
+    }),
 
   selectNode: (id) => set({ selectedNode: id }),
 
@@ -1634,4 +1772,17 @@ export const useAppStore = create<AppState>()((set) => ({
 /** Resolve appearance for a body id from the live store. */
 export function bodyAppearanceFor(bodyId: number): BodyAppearance {
   return appearanceFor(useAppStore.getState().bodyAppearances, bodyId);
+}
+
+/**
+ * Export the authoritative engine model after applying frontend-owned Browser
+ * visibility. Keeping this boundary explicit prevents a rapid Save or tab
+ * switch from racing an asynchronous eye-toggle IPC call.
+ */
+export async function exportProjectModelWithVisibility(
+  providedEngine?: Engine,
+): Promise<string> {
+  const engine = providedEngine ?? await getEngine();
+  await engine.setProjectVisibility(useAppStore.getState().projectVisibility);
+  return engine.exportProjectModel();
 }

@@ -44,7 +44,6 @@ import { SketchPatternDialog } from './components/SketchPatternDialog';
 import {
   installProjectRecovery,
   newProject,
-  offerProjectRecovery,
   openProject,
   saveProject,
 } from './files/projectFiles';
@@ -76,7 +75,9 @@ export default function App() {
     initialized.current = true;
     void loadDocument()
       .then(async () => {
-        await offerProjectRecovery();
+        // A new application launch always begins with one clean Untitled
+        // document. Previous emergency snapshots are retained as a fallback,
+        // but are never reopened as the user's active workspace.
         await initializeProjectTabs();
       })
       .catch((error) => {
@@ -184,6 +185,7 @@ export default function App() {
         // is loading or the native child view is being reparented.
         if (s.navTool !== 'select') s.setNavTool('select');
         if (s.drawingTool !== null) s.setDrawingTool(null);
+        if (s.drawingPendingViewKind !== null) s.setDrawingPendingViewKind(null);
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
         if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();

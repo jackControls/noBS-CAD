@@ -1,6 +1,9 @@
 import { getEngine } from '../engine';
 import { translate } from '../i18n';
-import { useAppStore } from '../store/appStore';
+import {
+  exportProjectModelWithVisibility,
+  useAppStore,
+} from '../store/appStore';
 import {
   chooseOpenFile,
   chooseSaveTarget,
@@ -130,7 +133,7 @@ export async function saveProject(saveAs = false): Promise<boolean> {
   const document = await engine.setDocumentName(designName);
   let modelJson: string;
   try {
-    modelJson = await engine.exportProjectModel();
+    modelJson = await exportProjectModelWithVisibility(engine);
     await writeSaveTarget(target, createNbcadArchive(modelJson));
   } catch (error) {
     if (designName !== originalName) {
@@ -174,11 +177,12 @@ export async function openProject(): Promise<boolean> {
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
     engine.drawingDocument(),
+    engine.projectVisibility(),
   ]);
   // A legacy project is readable, but the next Save must choose a new
   // `.nbcad` destination instead of silently overwriting the old container.
@@ -194,6 +198,7 @@ export async function openProject(): Promise<boolean> {
       opened.name,
       bodyAppearances,
       drawingDocument,
+      projectVisibility,
     );
   await recordActiveProjectOpen(modelJson, reusableTarget);
   if (!hasUnsavedProjects()) clearProjectRecovery();
@@ -382,16 +387,21 @@ export async function importStep(): Promise<boolean> {
  * ZIP. It is never authoritative after a successful Save/Open. */
 export function installProjectRecovery(): () => void {
   let timer: number | null = null;
+  // Do not treat a clean, freshly bootstrapped document as permission to
+  // erase the previous process's emergency snapshot. This session owns the
+  // recovery slot only after it has produced unsaved work of its own.
+  let sessionOwnsRecovery = false;
   const schedule = () => {
     if (timer !== null) window.clearTimeout(timer);
     timer = null;
-    // The recovery prompt and initial engine load run asynchronously. Do not
-    // erase a previous-session recovery record before that bootstrap finishes.
+    // Initial engine registration runs asynchronously. Startup intentionally
+    // ignores the old snapshot, but retains it as a last-resort fallback.
     if (useAppStore.getState().projectTabs.length === 0) return;
     if (!hasUnsavedProjects()) {
-      clearProjectRecovery();
+      if (sessionOwnsRecovery) clearProjectRecovery();
       return;
     }
+    sessionOwnsRecovery = true;
     timer = window.setTimeout(async () => {
       try {
         const recovery = await collectRecoverableProjectTabs();

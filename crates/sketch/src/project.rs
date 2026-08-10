@@ -18,7 +18,7 @@ use nbcad_solid::{
 use serde::{Deserialize, Serialize};
 
 use crate::sketch::SketchSnapshot;
-use crate::DrawingDocumentDto;
+use crate::{DrawingDocumentDto, ProjectVisibilityDto};
 
 pub const PROJECT_FORMAT: &str = "nbcad-project";
 pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
@@ -57,6 +57,9 @@ pub(crate) struct ProjectModelV2 {
     /// omitted and rebuilt from the current solid model.
     #[serde(default)]
     pub drawings: DrawingDocumentDto,
+    /// Browser eye-toggle choices. Additive so older projects remain valid.
+    #[serde(default)]
+    pub visibility: ProjectVisibilityDto,
     pub counters: ProjectCountersV2,
     pub preferences: ProjectPreferencesV2,
 }

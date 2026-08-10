@@ -37,7 +37,16 @@ class Kernel {
       double up_z,
       bool include_hidden,
       bool include_tangent_edges,
-      double deflection) const;
+      double deflection,
+      bool has_section_plane,
+      double section_point_x,
+      double section_point_y,
+      double section_point_z,
+      double section_normal_x,
+      double section_normal_y,
+      double section_normal_z,
+      bool has_section_depth,
+      double section_depth) const;
 
  private:
   class Impl;

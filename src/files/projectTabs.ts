@@ -11,12 +11,14 @@ import type {
   BodyAppearance,
   DatumPlaneDefinitionDto,
   DrawingDocumentDto,
+  ProjectVisibilityDto,
   SketchDto,
   SolidUpdateDto,
 } from '../engine/types';
 import { translate } from '../i18n';
 import { dropApplicationHistory } from '../engine/applicationHistory';
 import {
+  exportProjectModelWithVisibility,
   useAppStore,
   type ProjectTabSummary,
 } from '../store/appStore';
@@ -40,6 +42,7 @@ interface ProjectTabViewState {
   datumPlanes: DatumPlaneDefinitionDto[];
   bodyAppearances: BodyAppearance[];
   drawingDocument: DrawingDocumentDto;
+  projectVisibility: ProjectVisibilityDto;
 }
 
 export interface RecoverableProjectTab {
@@ -68,6 +71,10 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     next_sheet_id: 1,
     next_view_id: 1,
     next_annotation_id: 1,
+    next_revision_id: 1,
+    next_bom_item_id: 1,
+    templates: [],
+    next_template_id: 1,
   };
 }
 
@@ -97,6 +104,7 @@ function activeViewState(): ProjectTabViewState | null {
     datumPlanes: state.datumPlanes,
     bodyAppearances: state.bodyAppearances,
     drawingDocument: state.drawingDocument,
+    projectVisibility: state.projectVisibility,
   };
 }
 
@@ -112,7 +120,8 @@ function sameViewState(
     left.finishedSketches === right.finishedSketches &&
     left.datumPlanes === right.datumPlanes &&
     left.bodyAppearances === right.bodyAppearances &&
-    left.drawingDocument === right.drawingDocument
+    left.drawingDocument === right.drawingDocument &&
+    left.projectVisibility === right.projectVisibility
   );
 }
 
@@ -136,7 +145,7 @@ async function ensureActiveProjectTab(
 
   const id = createTabId();
   const modelJson =
-    knownModelJson ?? (await (await getEngine()).exportProjectModel());
+    knownModelJson ?? (await exportProjectModelWithVisibility());
   runtimes.set(id, {
     modelJson,
     saveTarget: currentProjectTarget,
@@ -162,7 +171,7 @@ async function snapshotActiveProjectTab(): Promise<string> {
   const viewState = activeViewState();
   const modelJson = sameViewState(existingRuntime?.viewState ?? null, viewState)
     ? existingRuntime!.modelJson
-    : await (await getEngine()).exportProjectModel();
+    : await exportProjectModelWithVisibility();
   const id = await ensureActiveProjectTab(modelJson);
   const runtime = runtimes.get(id);
   runtimes.set(id, {
@@ -181,18 +190,19 @@ async function loadModelState(
 ): Promise<ProjectTabViewState> {
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
     engine.drawingDocument(),
+    engine.projectVisibility(),
   ]);
-  return { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument };
+  return { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility };
 }
 
 async function currentModelState(): Promise<ProjectTabViewState> {
   const engine = await getEngine();
-  const [document, scene, finishedSketches, datumPlanes, bodyAppearances, drawingDocument] =
+  const [document, scene, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] =
     await Promise.all([
       engine.getDocument(),
       engine.solidScene(),
@@ -200,6 +210,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
       engine.drawingDocument(),
+      engine.projectVisibility(),
     ]);
   return {
     update: { document, scene },
@@ -207,6 +218,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     datumPlanes,
     bodyAppearances,
     drawingDocument,
+    projectVisibility,
   };
 }
 
@@ -249,6 +261,7 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
         tab.fileName,
         projectState.bodyAppearances,
         projectState.drawingDocument,
+        projectState.projectVisibility,
       );
     useAppStore.setState({
       activeProjectTabId: tabId,
@@ -319,6 +332,7 @@ export function createProjectTab(): Promise<boolean> {
         datumPlanes: [],
         bodyAppearances: [],
         drawingDocument: emptyDrawingDocument(),
+        projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
       },
     });
     const state = useAppStore.getState();
@@ -403,6 +417,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
         datumPlanes: [],
         bodyAppearances: [],
         drawingDocument: emptyDrawingDocument(),
+        projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
       },
     });
     useAppStore.getState().loadProjectState(update, [], [], null);
@@ -442,6 +457,9 @@ export async function recordActiveProjectOpen(
   saveTarget: SaveTarget | null,
 ): Promise<void> {
   const id = await ensureActiveProjectTab(modelJson);
+  // Open replaces this tab's entire project, so neither Solid nor Drawing
+  // history from the discarded document may operate on the loaded model.
+  dropApplicationHistory(id);
   currentProjectTarget = saveTarget;
   const runtime = runtimes.get(id);
   runtimes.set(id, {
@@ -475,7 +493,7 @@ export async function collectRecoverableProjectTabs(): Promise<{
   let activeModelJson: string | null = null;
   if (state.dirty && !state.activeSketch) {
     try {
-      activeModelJson = await (await getEngine()).exportProjectModel();
+      activeModelJson = await exportProjectModelWithVisibility();
       if (state.activeProjectTabId) {
         runtimes.set(state.activeProjectTabId, {
           modelJson: activeModelJson,
@@ -524,7 +542,7 @@ export async function restoreProjectTabs(
   if (recovered.length === 0) return false;
   const active =
     recovered.find((tab) => tab.id === requestedActiveId) ?? recovered[0];
-  const { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument } =
+  const { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility } =
     await loadModelState(active.modelJson);
 
   runtimes.clear();
@@ -536,7 +554,7 @@ export async function restoreProjectTabs(
       lastUsedAt: Date.now(),
       viewState:
         tab.id === active.id
-          ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument }
+          ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility }
           : null,
     });
   }
@@ -550,6 +568,7 @@ export async function restoreProjectTabs(
       active.fileName,
       bodyAppearances,
       drawingDocument,
+      projectVisibility,
     );
   useAppStore.setState({
     activeProjectTabId: active.id,

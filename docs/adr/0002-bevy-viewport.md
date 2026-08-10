@@ -39,6 +39,32 @@ The desktop application uses four explicit layers:
    viewport while preserving real DOM islands such as menus and dialogs above
    it. CSS transparency is not used as the compositor contract.
 
+## DOM flyout and clipping contract
+
+Any React surface that can cross a shell boundary—menus, combobox lists,
+popovers, tooltips, context menus, and dialogs—must be rendered through a
+React portal under `document.body`. It must not remain a descendant of a
+ribbon, sidebar, tab strip, or other ancestor whose `overflow` can clip it.
+Increasing `z-index` cannot escape an ancestor's clipping boundary.
+
+Portaled surfaces use fixed viewport coordinates derived from the trigger's
+`getBoundingClientRect()`, are clamped to the current window, and are
+repositioned after resize, fullscreen, display-scale, and relevant scroll
+changes. DOM surfaces that cover the native Bevy viewport retain the
+`data-native-viewport-overlay` contract so Tauri preserves them as webview
+islands above the native child. Portaling must not bypass native-composition
+registration.
+
+The File-menu regression that established this rule had an absolutely
+positioned menu beginning exactly at the bottom of an `overflow-hidden`
+ribbon: 92 px in the standard shell and 122 px after the Drawing workspace row
+was added. The menu state changed and the DOM existed, but its entire painted
+and hit-testable area was outside the ancestor's clip. This class of failure
+must be tested by opening the surface and hit-testing/clicking an interior point
+that lies beyond the trigger's shell boundary. DOM presence, state changes,
+overlay-mask rectangles, and screenshots of fullscreen mode alone are not
+sufficient regressions.
+
 Bevy UI is built from the stable core `bevy_ui` flex/grid primitives. The
 experimental, unstyled `bevy_ui_widgets` crate is not a production dependency.
 `ViewportUiTheme` and the component builders in
@@ -48,6 +74,13 @@ for native viewport UI.
 The bridge sends explicit palette, HUD, interaction, camera, and presentation
 state. It does not send screenshots or serialized OCCT geometry through
 JavaScript.
+
+When a workspace such as Drawing has no native 3D viewport, the host hides the
+native child and removes the macOS WKWebView cutout mask completely. Retaining
+an empty or stale even-odd mask is forbidden: it clips the webview to the old
+window bounds after live resize or native full-screen transitions. The
+WKWebView and its parent also retain flexible width/height autoresizing so this
+contract holds while the Bevy child is unmounted.
 
 Solid command forms publish a small, debounced semantic preview rather than
 DOM/SVG viewport pixels. For Extrude this contract contains the authoritative

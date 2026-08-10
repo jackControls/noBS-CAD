@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use nbcad_core::{BodyAppearance, DocumentDto};
-use nbcad_occt::{drawing_projection_anchors, DrawingProjectionRequest, OcctKernel};
+use nbcad_occt::{
+    drawing_projection_anchors, drawing_projection_circles, DrawingProjectionRequest, OcctKernel,
+};
 use nbcad_sketch::{err_json, host, ok_json, SketchDto, SketchManager};
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
@@ -372,7 +374,10 @@ impl AppState {
             Ok(request) => request,
             Err(error) => return err_json(format!("bad request payload: {error}")),
         };
-        let workspace = self.inner.lock().expect("engine lock poisoned");
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
         let inner = workspace.active();
         let scene = inner.manager.solid_scene();
         if !scene.errors.is_empty() {
@@ -383,7 +388,13 @@ impl AppState {
                 match drawing_projection_anchors(&scene, &request, &projection) {
                     Ok(anchors) => {
                         projection.anchors = anchors;
-                        ok_json(projection)
+                        match drawing_projection_circles(&scene, &request, &projection) {
+                            Ok(circles) => {
+                                projection.circles = circles;
+                                ok_json(projection)
+                            }
+                            Err(error) => err_json(error.to_string()),
+                        }
                     }
                     Err(error) => err_json(error.to_string()),
                 }

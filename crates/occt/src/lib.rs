@@ -26,6 +26,20 @@ pub struct DrawingProjectionRequest {
     pub include_tangent_edges: bool,
     #[serde(default = "default_projection_deflection")]
     pub deflection: f64,
+    /// Optional exact cutting plane for associative section and removed-section
+    /// views. The plane is expressed in model millimetres.
+    #[serde(default)]
+    pub section_plane: Option<DrawingSectionPlaneDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawingSectionPlaneDto {
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    /// Optional viewing depth behind the cutting plane. `None` keeps the
+    /// complete rear half-space; a positive value keeps only that finite slab.
+    #[serde(default)]
+    pub depth: Option<f64>,
 }
 
 fn default_projection_deflection() -> f64 {
@@ -43,8 +57,29 @@ pub struct DrawingProjectionDto {
     pub hidden: Vec<DrawingPolylineDto>,
     #[serde(default)]
     pub anchors: Vec<DrawingProjectionAnchorDto>,
+    #[serde(default)]
+    pub circles: Vec<DrawingProjectedCircleDto>,
+    /// Exact OCCT intersection curves when a cutting plane was requested.
+    #[serde(default)]
+    pub section: Vec<DrawingPolylineDto>,
     /// min x, min y, max x, max y in model millimetres.
     pub bounds: [f64; 4],
+}
+
+/// Analytic circular intent recovered from stable B-rep edge tessellation.
+/// Only edges viewed close to normal are exposed because an oblique circle is
+/// an ellipse on paper and cannot carry an unambiguous diameter/radius mark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawingProjectedCircleDto {
+    pub body_id: BodyId,
+    pub edge_id: EdgeId,
+    pub edge_key: String,
+    pub center_model: [f64; 3],
+    pub normal_model: [f64; 3],
+    pub center: [f64; 2],
+    pub radius: f64,
+    pub closed: bool,
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +90,8 @@ pub enum DrawingProjectionAnchorEndpoint {
 }
 
 /// Exact topological endpoint projected into the same model-millimetre page
-/// coordinates as hidden-line output.
+/// coordinates as hidden-line output. Every edge endpoint is retained: two
+/// edges sharing one geometric vertex are distinct associative references.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrawingProjectionAnchorDto {
     pub body_id: BodyId,
@@ -68,8 +104,8 @@ pub struct DrawingProjectionAnchorDto {
 }
 
 /// Project stable topology endpoints with the same orthographic basis used by
-/// OCCT HLR. Duplicate edge uses at one model vertex collapse deterministically
-/// to the lowest stable edge id.
+/// OCCT HLR. The UI may visually collapse coincident pick markers, but the data
+/// contract preserves the exact edge identity required by associative notes.
 pub fn drawing_projection_anchors(
     scene: &SolidSceneDto,
     request: &DrawingProjectionRequest,
@@ -121,16 +157,168 @@ pub fn drawing_projection_anchors(
             endpoint_order(anchor.endpoint),
         )
     });
-    let mut seen = HashSet::new();
-    anchors.retain(|anchor| {
-        seen.insert((
-            anchor.body_id,
-            quantize(anchor.model_point[0]),
-            quantize(anchor.model_point[1]),
-            quantize(anchor.model_point[2]),
-        ))
-    });
     Ok(anchors)
+}
+
+/// Recover circular B-rep edges from their deterministic model-space samples
+/// and project the fitted centers through the exact same drawing basis.
+pub fn drawing_projection_circles(
+    scene: &SolidSceneDto,
+    request: &DrawingProjectionRequest,
+    projection: &DrawingProjectionDto,
+) -> Result<Vec<DrawingProjectedCircleDto>, OcctError> {
+    let direction = normalize(request.direction)?;
+    let right = normalize(cross(request.up, direction))?;
+    let page_up = normalize(cross(direction, right))?;
+    let selected = request.body_ids.iter().copied().collect::<HashSet<_>>();
+    let mut candidates = Vec::new();
+    for body in &scene.bodies {
+        if !selected.is_empty() && !selected.contains(&body.id) {
+            continue;
+        }
+        for edge in &body.edges {
+            let points = edge
+                .points
+                .iter()
+                .map(|point| [point.x, point.y, point.z])
+                .collect::<Vec<_>>();
+            let Some((center_model, normal_model, radius, closed)) = fit_circle(&points) else {
+                continue;
+            };
+            // A circle viewed obliquely is an ellipse. Keep radial tools on
+            // true circular projections, matching conventional drafting.
+            if dot(normal_model, direction).abs() < 0.995 {
+                continue;
+            }
+            let center = [dot(center_model, right), dot(center_model, page_up)];
+            let hidden = !points.iter().any(|point| {
+                let projected = [dot(*point, right), dot(*point, page_up)];
+                point_touches_polylines(
+                    projected,
+                    &projection.visible,
+                    request.deflection.max(1.0e-4) * 2.5,
+                )
+            });
+            candidates.push((
+                DrawingProjectedCircleDto {
+                    body_id: body.id,
+                    edge_id: edge.id,
+                    edge_key: edge.key.clone(),
+                    center_model,
+                    normal_model,
+                    center,
+                    radius,
+                    closed,
+                    hidden,
+                },
+                dot(center_model, direction),
+            ));
+        }
+    }
+    let snapshot = candidates.clone();
+    for (circle, depth) in &mut candidates {
+        if !circle.hidden {
+            continue;
+        }
+        let stack = snapshot
+            .iter()
+            .filter(|(other, _)| same_projected_circle(circle, other))
+            .collect::<Vec<_>>();
+        if stack.len() < 2 || stack.iter().any(|(other, _)| !other.hidden) {
+            continue;
+        }
+        let front_depth = stack
+            .iter()
+            .map(|(_, candidate_depth)| *candidate_depth)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if *depth >= front_depth - 1.0e-7 {
+            circle.hidden = false;
+        }
+    }
+    let mut circles = candidates
+        .into_iter()
+        .map(|(circle, _)| circle)
+        .collect::<Vec<_>>();
+    circles.sort_by_key(|circle| (circle.body_id, circle.edge_id));
+    Ok(circles)
+}
+
+fn same_projected_circle(
+    left: &DrawingProjectedCircleDto,
+    right: &DrawingProjectedCircleDto,
+) -> bool {
+    let scale = left.radius.max(right.radius).max(1.0);
+    let center_distance = ((left.center[0] - right.center[0]).powi(2)
+        + (left.center[1] - right.center[1]).powi(2))
+    .sqrt();
+    center_distance <= scale * 1.0e-5 && (left.radius - right.radius).abs() <= scale * 1.0e-5
+}
+
+fn fit_circle(points: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3], f64, bool)> {
+    if points.len() < 5 {
+        return None;
+    }
+    let first = points[0];
+    let last = *points.last()?;
+    let closed_guess = distance(first, last)
+        <= points
+            .windows(2)
+            .map(|pair| distance(pair[0], pair[1]))
+            .fold(0.0_f64, f64::max)
+            * 1.5;
+    let (a, b, c) = if closed_guess {
+        (
+            points[0],
+            points[points.len() / 3],
+            points[points.len() * 2 / 3],
+        )
+    } else {
+        (points[0], points[points.len() / 2], last)
+    };
+    let ab = subtract3(b, a);
+    let ac = subtract3(c, a);
+    let normal_raw = cross(ab, ac);
+    let normal_sq = dot(normal_raw, normal_raw);
+    if normal_sq < 1.0e-16 {
+        return None;
+    }
+    let ab_sq = dot(ab, ab);
+    let ac_sq = dot(ac, ac);
+    let term_a = scale3(cross(ac, normal_raw), ab_sq);
+    let term_b = scale3(cross(normal_raw, ab), ac_sq);
+    let center = add3(a, scale3(add3(term_a, term_b), 1.0 / (2.0 * normal_sq)));
+    let radius = distance(center, a);
+    if !radius.is_finite() || radius <= 1.0e-7 {
+        return None;
+    }
+    let normal = scale3(normal_raw, 1.0 / normal_sq.sqrt());
+    let radial_tolerance = radius.mul_add(2.0e-3, 2.0e-5);
+    let planar_tolerance = radius.mul_add(1.0e-3, 2.0e-5);
+    if points.iter().any(|point| {
+        (distance(*point, center) - radius).abs() > radial_tolerance
+            || dot(subtract3(*point, center), normal).abs() > planar_tolerance
+    }) {
+        return None;
+    }
+    let closed = distance(first, last) <= radial_tolerance * 2.0;
+    Some((center, normal, radius, closed))
+}
+
+fn add3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+fn subtract3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn scale3(vector: [f64; 3], factor: f64) -> [f64; 3] {
+    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
+}
+
+fn distance(left: [f64; 3], right: [f64; 3]) -> f64 {
+    let delta = subtract3(left, right);
+    dot(delta, delta).sqrt()
 }
 
 fn normalize(vector: [f64; 3]) -> Result<[f64; 3], OcctError> {
@@ -183,10 +371,6 @@ fn point_segment_distance(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f6
         .clamp(0.0, 1.0);
     let closest = [start[0] + delta[0] * t, start[1] + delta[1] * t];
     ((point[0] - closest[0]).powi(2) + (point[1] - closest[1]).powi(2)).sqrt()
-}
-
-fn quantize(value: f64) -> i64 {
-    (value * 1.0e7).round() as i64
 }
 
 fn endpoint_order(endpoint: DrawingProjectionAnchorEndpoint) -> u8 {
@@ -288,6 +472,7 @@ mod drawing_anchor_tests {
             include_hidden: false,
             include_tangent_edges: false,
             deflection: 0.05,
+            section_plane: None,
         };
         let projection = DrawingProjectionDto {
             visible: vec![DrawingPolylineDto {
@@ -295,6 +480,8 @@ mod drawing_anchor_tests {
             }],
             hidden: vec![],
             anchors: vec![],
+            circles: vec![],
+            section: vec![],
             bounds: [-10.0, -5.0, 10.0, -5.0],
         };
 
@@ -304,5 +491,154 @@ mod drawing_anchor_tests {
         assert_eq!(anchors[0].point, [-10.0, -5.0]);
         assert_eq!(anchors[1].point, [10.0, -5.0]);
         assert!(anchors.iter().all(|anchor| !anchor.hidden));
+    }
+
+    #[test]
+    fn retains_distinct_edge_references_at_a_shared_vertex() {
+        let edge = |id, key: &str, first: [f64; 3], last: [f64; 3]| EdgeDto {
+            id: EdgeId(id),
+            key: key.to_string(),
+            points: vec![
+                Point3Dto {
+                    x: first[0],
+                    y: first[1],
+                    z: first[2],
+                },
+                Point3Dto {
+                    x: last[0],
+                    y: last[1],
+                    z: last[2],
+                },
+            ],
+            refinable: true,
+        };
+        let scene = SolidSceneDto {
+            bodies: vec![BodyDto {
+                id: BodyId(3),
+                name: "Body1".to_string(),
+                feature_id: FeatureId(1),
+                mesh: MeshDto {
+                    positions: vec![],
+                    normals: vec![],
+                    indices: vec![],
+                },
+                faces: vec![],
+                edges: vec![
+                    edge(7, "edge-7", [0.0, 0.0, 0.0], [10.0, 0.0, 0.0]),
+                    edge(8, "edge-8", [0.0, 0.0, 0.0], [0.0, 10.0, 0.0]),
+                ],
+            }],
+            errors: vec![],
+        };
+        let request = DrawingProjectionRequest {
+            body_ids: vec![BodyId(3)],
+            direction: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
+            include_hidden: false,
+            include_tangent_edges: false,
+            deflection: 0.05,
+            section_plane: None,
+        };
+        let projection = DrawingProjectionDto {
+            visible: vec![DrawingPolylineDto {
+                points: vec![[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]],
+            }],
+            hidden: vec![],
+            anchors: vec![],
+            circles: vec![],
+            section: vec![],
+            bounds: [0.0, 0.0, 10.0, 10.0],
+        };
+
+        let anchors = drawing_projection_anchors(&scene, &request, &projection).unwrap();
+        assert_eq!(anchors.len(), 4);
+        assert!(anchors.iter().any(|anchor| anchor.edge_id == EdgeId(7)
+            && anchor.endpoint == DrawingProjectionAnchorEndpoint::Start));
+        assert!(anchors.iter().any(|anchor| anchor.edge_id == EdgeId(8)
+            && anchor.endpoint == DrawingProjectionAnchorEndpoint::Start));
+    }
+
+    #[test]
+    fn recognizes_circular_edges_and_exposes_only_the_front_rim() {
+        let circle_points = |z: f64| {
+            (0..=32)
+                .map(|index| {
+                    let angle = std::f64::consts::TAU * f64::from(index) / 32.0;
+                    Point3Dto {
+                        x: 4.0 + angle.cos() * 8.0,
+                        y: -3.0 + angle.sin() * 8.0,
+                        z,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let scene = SolidSceneDto {
+            bodies: vec![BodyDto {
+                id: BodyId(9),
+                name: "Cylinder".to_string(),
+                feature_id: FeatureId(2),
+                mesh: MeshDto {
+                    positions: vec![],
+                    normals: vec![],
+                    indices: vec![],
+                },
+                faces: vec![],
+                edges: vec![
+                    EdgeDto {
+                        id: EdgeId(1),
+                        key: "bottom-rim".to_string(),
+                        points: circle_points(0.0),
+                        refinable: true,
+                    },
+                    EdgeDto {
+                        id: EdgeId(2),
+                        key: "top-rim".to_string(),
+                        points: circle_points(10.0),
+                        refinable: true,
+                    },
+                ],
+            }],
+            errors: vec![],
+        };
+        let request = DrawingProjectionRequest {
+            body_ids: vec![],
+            direction: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
+            include_hidden: false,
+            include_tangent_edges: false,
+            deflection: 0.05,
+            section_plane: None,
+        };
+        // Empty visible HLR simulates the coplanar-boundary ambiguity that the
+        // front-rim fallback is designed to resolve.
+        let projection = DrawingProjectionDto {
+            visible: vec![],
+            hidden: vec![],
+            anchors: vec![],
+            circles: vec![],
+            section: vec![],
+            bounds: [-4.0, -11.0, 12.0, 5.0],
+        };
+
+        let circles = drawing_projection_circles(&scene, &request, &projection).unwrap();
+        assert_eq!(circles.len(), 2);
+        assert!(circles.iter().all(|circle| circle.closed));
+        assert!(circles
+            .iter()
+            .all(|circle| (circle.radius - 8.0).abs() < 1.0e-8));
+        assert!(
+            circles
+                .iter()
+                .find(|circle| circle.edge_id == EdgeId(1))
+                .unwrap()
+                .hidden
+        );
+        assert!(
+            !circles
+                .iter()
+                .find(|circle| circle.edge_id == EdgeId(2))
+                .unwrap()
+                .hidden
+        );
     }
 }

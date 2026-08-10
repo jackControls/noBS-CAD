@@ -106,6 +106,8 @@ mod ffi {
         visible_points: Vec<f64>,
         hidden_offsets: Vec<u32>,
         hidden_points: Vec<f64>,
+        section_offsets: Vec<u32>,
+        section_points: Vec<f64>,
     }
 
     unsafe extern "C++" {
@@ -140,6 +142,15 @@ mod ffi {
             include_hidden: bool,
             include_tangent_edges: bool,
             deflection: f64,
+            has_section_plane: bool,
+            section_point_x: f64,
+            section_point_y: f64,
+            section_point_z: f64,
+            section_normal_x: f64,
+            section_normal_y: f64,
+            section_normal_z: f64,
+            has_section_depth: bool,
+            section_depth: f64,
         ) -> Result<FfiDrawingProjection>;
     }
 }
@@ -238,6 +249,38 @@ impl OcctKernel {
         request: &DrawingProjectionRequest,
     ) -> Result<DrawingProjectionDto, OcctError> {
         validate_projection_basis(request.direction, request.up)?;
+        if !request.deflection.is_finite() || request.deflection <= 0.0 {
+            return Err(OcctError(
+                "drawing projection deflection must be positive and finite".to_string(),
+            ));
+        }
+        if let Some(section) = &request.section_plane {
+            if section
+                .point
+                .iter()
+                .chain(section.normal.iter())
+                .any(|value| !value.is_finite())
+                || section
+                    .normal
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f64>()
+                    < 1.0e-12
+            {
+                return Err(OcctError(
+                    "drawing section plane must contain a finite point and non-zero normal"
+                        .to_string(),
+                ));
+            }
+            if section
+                .depth
+                .is_some_and(|depth| !depth.is_finite() || depth <= 0.0)
+            {
+                return Err(OcctError(
+                    "drawing section depth must be a positive finite model distance".to_string(),
+                ));
+            }
+        }
         let body_ids = request.body_ids.iter().map(|id| id.0).collect::<Vec<_>>();
         let raw = self
             .inner
@@ -254,6 +297,41 @@ impl OcctKernel {
                 request.include_hidden,
                 request.include_tangent_edges,
                 request.deflection.clamp(1.0e-4, 10.0),
+                request.section_plane.is_some(),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[0]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[1]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.point[2]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.normal[0]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(0.0, |plane| plane.normal[1]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .map_or(1.0, |plane| plane.normal[2]),
+                request
+                    .section_plane
+                    .as_ref()
+                    .and_then(|plane| plane.depth)
+                    .is_some(),
+                request
+                    .section_plane
+                    .as_ref()
+                    .and_then(|plane| plane.depth)
+                    .unwrap_or(0.0),
             )
             .map_err(|error| OcctError(error.to_string()))?;
         projection_from_ffi(raw)
@@ -356,6 +434,7 @@ fn validate_projection_basis(direction: [f64; 3], up: [f64; 3]) -> Result<(), Oc
 fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjectionDto, OcctError> {
     let visible = projection_polylines(&raw.visible_offsets, &raw.visible_points)?;
     let hidden = projection_polylines(&raw.hidden_offsets, &raw.hidden_points)?;
+    let section = projection_polylines(&raw.section_offsets, &raw.section_points)?;
     let mut bounds = [
         f64::INFINITY,
         f64::INFINITY,
@@ -365,6 +444,7 @@ fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjecti
     for point in visible
         .iter()
         .chain(hidden.iter())
+        .chain(section.iter())
         .flat_map(|polyline| polyline.points.iter())
     {
         bounds[0] = bounds[0].min(point[0]);
@@ -379,6 +459,8 @@ fn projection_from_ffi(raw: ffi::FfiDrawingProjection) -> Result<DrawingProjecti
         visible,
         hidden,
         anchors: Vec::new(),
+        circles: Vec::new(),
+        section,
         bounds,
     })
 }
@@ -1324,6 +1406,7 @@ mod tests {
                 include_hidden: true,
                 include_tangent_edges: false,
                 deflection: 0.05,
+                section_plane: None,
             })
             .unwrap();
         assert!(projection.visible.len() >= 4);
@@ -1331,6 +1414,57 @@ mod tests {
         assert!((projection.bounds[1] + 10.0).abs() < 1.0e-6);
         assert!((projection.bounds[2] - 10.0).abs() < 1.0e-6);
         assert!((projection.bounds[3] - 10.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn exact_section_hlr_clips_the_retained_half_space_and_depth_slab() {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![box_job(1, 1)],
+            })
+            .unwrap();
+
+        let request = |depth| DrawingProjectionRequest {
+            body_ids: vec![BodyId(1)],
+            direction: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0],
+            include_hidden: true,
+            include_tangent_edges: false,
+            deflection: 0.05,
+            section_plane: Some(crate::DrawingSectionPlaneDto {
+                point: [0.0, 0.0, 5.0],
+                normal: [1.0, 0.0, 0.0],
+                depth,
+            }),
+        };
+
+        let full = kernel.drawing_projection(&request(None)).unwrap();
+        assert!(!full.visible.is_empty());
+        assert!(!full.section.is_empty());
+        assert!((full.bounds[0] + 10.0).abs() < 1.0e-6);
+        assert!(full.bounds[2].abs() < 1.0e-6);
+
+        let depth = kernel.drawing_projection(&request(Some(4.0))).unwrap();
+        assert!(!depth.visible.is_empty());
+        assert!(!depth.section.is_empty());
+        assert!((depth.bounds[0] + 4.0).abs() < 1.0e-6);
+        assert!(depth.bounds[2].abs() < 1.0e-6);
+
+        let error = kernel.drawing_projection(&request(Some(0.0))).unwrap_err();
+        assert!(error.to_string().contains("section depth"));
+
+        let mut invalid = request(None);
+        invalid.deflection = f64::NAN;
+        let error = kernel.drawing_projection(&invalid).unwrap_err();
+        assert!(error.to_string().contains("deflection"));
+
+        let mut invalid = request(None);
+        invalid.section_plane.as_mut().unwrap().normal = [0.0; 3];
+        let error = kernel.drawing_projection(&invalid).unwrap_err();
+        assert!(error.to_string().contains("section plane"));
     }
 
     #[test]

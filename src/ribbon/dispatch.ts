@@ -28,12 +28,12 @@ import {
 } from '../store/appStore';
 import type { RibbonAction } from './config';
 import {
-  addDrawingSheet,
-  addDrawingView,
+  autoLayoutDrawingViews,
+  beginDrawingSheetSetup,
   enterDrawingWorkspace,
   leaveDrawingWorkspace,
 } from '../drawing/document';
-import { exportActiveDrawingSvg, printActiveDrawing } from '../drawing/export';
+import { exportActiveDrawingDxf, printActiveDrawing } from '../drawing/export';
 import type { DrawingViewKind } from '../engine/types';
 
 function runDrawingAction(action: () => Promise<unknown>): void {
@@ -145,21 +145,43 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       leaveDrawingWorkspace();
       break;
     case 'drawingNewSheet':
-      runDrawingAction(addDrawingSheet);
+      beginDrawingSheetSetup();
       break;
-    case 'drawingAddView':
-      runDrawingAction(() => addDrawingView((payload ?? 'isometric') as DrawingViewKind));
+    case 'drawingAutoLayout':
+      runDrawingAction(autoLayoutDrawingViews);
       break;
+    case 'drawingAddView': {
+      const state = useAppStore.getState();
+      const kind = (payload ?? 'isometric') as DrawingViewKind;
+      state.setDrawingPendingViewKind(kind);
+      state.setDrawingTool('place_view');
+      state.setSelectedDrawingAnnotationId(null);
+      break;
+    }
     case 'drawingTool': {
       const state = useAppStore.getState();
-      const tool = payload === 'note' ? 'note' : 'dimension';
+      const tool = (
+        [
+          'dimension', 'diameter', 'radius', 'hole_note', 'center_mark', 'center_line',
+          'symmetry_axis', 'bolt_circle', 'chain_dimension', 'baseline_dimension',
+          'continued_dimension', 'ordinate_dimension', 'arc_length', 'jogged_radius',
+          'section_view', 'detail_view', 'auxiliary_view', 'broken_view', 'removed_section',
+          'datum', 'gdt', 'surface_texture', 'edge_requirement', 'weld', 'balloon',
+          'revision_cloud', 'angle', 'chamfer_note', 'note',
+        ]
+          .includes(payload ?? '') ? payload : 'dimension'
+      ) as Exclude<typeof state.drawingTool, null>;
       state.setDrawingTool(state.drawingTool === tool ? null : tool);
+      state.setDrawingPendingViewKind(null);
       state.setSelectedDrawingViewId(null);
       state.setSelectedDrawingAnnotationId(null);
       break;
     }
-    case 'drawingExportSvg':
-      runDrawingAction(exportActiveDrawingSvg);
+    case 'drawingExportDxf':
+      runDrawingAction(exportActiveDrawingDxf);
+      break;
+    case 'drawingExportProfileDxf':
+      useAppStore.getState().setDrawingProfileExportOpen(true);
       break;
     case 'drawingPrint':
       printActiveDrawing();

@@ -33,9 +33,12 @@ pub mod host;
 
 pub use constraint::{Constraint, ConstraintId, ConstraintKind};
 pub use drawing::{
-    DrawingAnnotationDto, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLinearDimensionMode,
-    DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation, DrawingTitleBlockDto,
-    DrawingTopologyAnchorRefDto, DrawingViewDto, DrawingViewKind,
+    DrawingAnnotationDto, DrawingCircularRefDto, DrawingDocumentDto, DrawingEdgeEndpoint,
+    DrawingLineRefDto, DrawingLinearDimensionMode, DrawingProjectionMethod,
+    DrawingRadialDimensionMode, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
+    DrawingStandard, DrawingTemplateDto, DrawingTitleBlockDto, DrawingToleranceNoteDto,
+    DrawingTolerancePreset, DrawingTopologyAnchorRefDto, DrawingViewAlignment, DrawingViewDto,
+    DrawingViewKind,
 };
 pub use dto::{
     err_json, ok_json, AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest,
@@ -47,8 +50,8 @@ pub use dto::{
     FaceSketchOrigin, FilletPreviewDto, FilletRequest, Inference, LockedCircleRequest,
     LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest, MirrorRequest,
     MoveCopyRequest, MoveDimensionRequest, MovePointRequest, MovePointResult, OffsetPreviewDto,
-    OffsetRequest, PointRequest, PolygonRequest, PreviewCurve, PreviewDto, RectangleMode,
-    RectangleRequest, RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest,
+    OffsetRequest, PointRequest, PolygonRequest, PreviewCurve, PreviewDto, ProjectVisibilityDto,
+    RectangleMode, RectangleRequest, RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest,
     SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto,
     SlotMode, SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult,
     TrimPreviewDto, TrimRequest, UndoResult,

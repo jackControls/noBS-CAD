@@ -40,7 +40,7 @@ const moveSketch = async (x, y) => {
 };
 
 const pickSlotVariant = async (label) => {
-  await page.locator('button:has-text("DRAW")').first().click();
+  await page.getByRole('button', { name: 'DRAW', exact: true }).click();
   await page.waitForTimeout(250);
   const menu = page.locator('[data-ribbon-menu]');
   await menu.locator('span:text-is("Slot")').first().hover();

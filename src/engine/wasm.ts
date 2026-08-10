@@ -17,6 +17,8 @@ import { projectSceneForDrawing } from '../drawing/projection';
 type WasmEngineMethods = WasmEngineInner & {
   body_appearances(): string;
   set_body_appearance(payload: string): string;
+  project_visibility(): string;
+  project_set_visibility(payload: string): string;
   drawing_document(): string;
   drawing_set_document(payload: string): string;
 };
@@ -82,6 +84,7 @@ import type {
   PolygonRequest,
   PreviewDto,
   ProfileCatalogItemDto,
+  ProjectVisibilityDto,
   RecomputePlanDto,
   RectangleRequest,
   SketchRectangularPatternRequest,
@@ -164,6 +167,16 @@ export class WasmEngine implements Engine {
 
   async bodyAppearances(): Promise<BodyAppearance[]> {
     return unwrapEnvelope((this.inner as WasmEngineMethods).body_appearances());
+  }
+
+  async projectVisibility(): Promise<ProjectVisibilityDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).project_visibility());
+  }
+
+  async setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).project_set_visibility(JSON.stringify(visibility)),
+    );
   }
 
   async drawingDocument(): Promise<DrawingDocumentDto> {

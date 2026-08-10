@@ -84,14 +84,8 @@ try {
 
   // --- 4. SKETCH > DRAW dropdown ---
   console.log('4. sketch DRAW menu');
-  // Click the small DRAW panel label (height < 30), not an icon button.
-  for (const l of await page.locator('button:has-text("DRAW")').all()) {
-    const b = await l.boundingBox();
-    if (b && b.height < 30) {
-      await l.click();
-      break;
-    }
-  }
+  // Exact naming avoids the peer Drawing workspace tab.
+  await page.getByRole('button', { name: 'DRAW', exact: true }).click();
   await page.waitForTimeout(350);
   const lineItem = page.locator('[data-ribbon-menu]').getByText('Line', { exact: true });
   check('Line item visible in open menu', await lineItem.isVisible());

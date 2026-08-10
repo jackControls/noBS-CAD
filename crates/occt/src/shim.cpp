@@ -6,6 +6,7 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Section.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -77,6 +78,7 @@
 #include <gp_Vec.hxx>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -1136,6 +1138,51 @@ void append_projection_shape(
   }
 }
 
+void append_section_shape(
+    const TopoDS_Shape& shape,
+    const gp_Vec& right,
+    const gp_Vec& page_up,
+    double deflection,
+    rust::Vec<std::uint32_t>& offsets,
+    rust::Vec<double>& coordinates,
+    std::set<std::vector<std::int64_t>>& seen) {
+  if (shape.IsNull()) {
+    return;
+  }
+  constexpr double kQuantize = 1.0e7;
+  for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+    const std::vector<gp_Pnt> points = sample_projection_edge(edge, deflection);
+    if (points.size() < 2) {
+      continue;
+    }
+    std::vector<std::int64_t> forward;
+    std::vector<std::int64_t> reverse;
+    std::vector<std::array<double, 2>> projected;
+    projected.reserve(points.size());
+    for (const gp_Pnt& point : points) {
+      const double x = point.X() * right.X() + point.Y() * right.Y() + point.Z() * right.Z();
+      const double y = point.X() * page_up.X() + point.Y() * page_up.Y() + point.Z() * page_up.Z();
+      projected.push_back({x, y});
+      forward.push_back(static_cast<std::int64_t>(std::llround(x * kQuantize)));
+      forward.push_back(static_cast<std::int64_t>(std::llround(y * kQuantize)));
+    }
+    for (auto iterator = projected.rbegin(); iterator != projected.rend(); ++iterator) {
+      reverse.push_back(static_cast<std::int64_t>(std::llround((*iterator)[0] * kQuantize)));
+      reverse.push_back(static_cast<std::int64_t>(std::llround((*iterator)[1] * kQuantize)));
+    }
+    const auto& key = reverse < forward ? reverse : forward;
+    if (!seen.insert(key).second) {
+      continue;
+    }
+    for (const auto& point : projected) {
+      coordinates.push_back(point[0]);
+      coordinates.push_back(point[1]);
+    }
+    offsets.push_back(static_cast<std::uint32_t>(coordinates.size() / 2));
+  }
+}
+
 void append_vec(rust::Vec<float>& output, const gp_Vec& value) {
   output.push_back(static_cast<float>(value.X()));
   output.push_back(static_cast<float>(value.Y()));
@@ -1911,7 +1958,16 @@ FfiDrawingProjection Kernel::drawing_projection(
     double up_z,
     bool include_hidden,
     bool include_tangent_edges,
-    double deflection) const {
+    double deflection,
+    bool has_section_plane,
+    double section_point_x,
+    double section_point_y,
+    double section_point_z,
+    double section_normal_x,
+    double section_normal_y,
+    double section_normal_z,
+    bool has_section_depth,
+    double section_depth) const {
   if (impl_->bodies.empty()) {
     throw std::runtime_error("there are no active bodies to project");
   }
@@ -1929,11 +1985,11 @@ FfiDrawingProjection Kernel::drawing_projection(
   }
   right.Normalize();
 
-  Handle(HLRBRep_Algo) algorithm = new HLRBRep_Algo();
+  std::vector<TopoDS_Shape> source_shapes;
   if (requested_body_ids.empty()) {
     for (const auto& [body_id, shape] : impl_->bodies) {
       (void)body_id;
-      algorithm->Add(shape);
+      source_shapes.push_back(shape);
     }
   } else {
     std::set<std::uint64_t> unique_ids;
@@ -1945,8 +2001,63 @@ FfiDrawingProjection Kernel::drawing_projection(
       if (found == impl_->bodies.end()) {
         throw std::runtime_error("selected drawing body is missing");
       }
-      algorithm->Add(found->second);
+      source_shapes.push_back(found->second);
     }
+  }
+
+  gp_Vec section_normal(section_normal_x, section_normal_y, section_normal_z);
+  const gp_Pnt section_point(section_point_x, section_point_y, section_point_z);
+  if (has_section_plane) {
+    if (section_normal.SquareMagnitude() < 1.0e-18) {
+      throw std::runtime_error("drawing section plane normal is degenerate");
+    }
+    section_normal.Normalize();
+    if (has_section_depth &&
+        (!std::isfinite(section_depth) || section_depth <= 0.0)) {
+      throw std::runtime_error("drawing section depth must be positive");
+    }
+  }
+
+  auto retain_half_space = [](const TopoDS_Shape& source,
+                              const gp_Pln& boundary,
+                              const gp_Pnt& retained_point) {
+    const TopoDS_Face face = BRepBuilderAPI_MakeFace(boundary).Face();
+    const TopoDS_Solid half_space =
+        BRepPrimAPI_MakeHalfSpace(face, retained_point).Solid();
+    BRepAlgoAPI_Common common(source, half_space);
+    common.Build();
+    if (!common.IsDone()) {
+      throw std::runtime_error("OCCT could not clip the drawing section");
+    }
+    return common.Shape();
+  };
+
+  std::vector<TopoDS_Shape> projection_shapes;
+  projection_shapes.reserve(source_shapes.size());
+  for (const TopoDS_Shape& source : source_shapes) {
+    if (!has_section_plane) {
+      projection_shapes.push_back(source);
+      continue;
+    }
+    const gp_Pln front_plane(section_point, gp_Dir(section_normal));
+    const gp_Pnt behind_front = section_point.Translated(section_normal.Multiplied(-1.0));
+    TopoDS_Shape clipped = retain_half_space(source, front_plane, behind_front);
+    if (has_section_depth && !clipped.IsNull()) {
+      const gp_Pnt back_point =
+          section_point.Translated(section_normal.Multiplied(-section_depth));
+      const gp_Pln back_plane(back_point, gp_Dir(section_normal));
+      const gp_Pnt inside_slab = section_point.Translated(
+          section_normal.Multiplied(-section_depth * 0.5));
+      clipped = retain_half_space(clipped, back_plane, inside_slab);
+    }
+    if (!clipped.IsNull()) {
+      projection_shapes.push_back(clipped);
+    }
+  }
+
+  Handle(HLRBRep_Algo) algorithm = new HLRBRep_Algo();
+  for (const TopoDS_Shape& shape : projection_shapes) {
+    algorithm->Add(shape);
   }
   algorithm->Projector(HLRAlgo_Projector(
       gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(direction), gp_Dir(right))));
@@ -1957,6 +2068,7 @@ FfiDrawingProjection Kernel::drawing_projection(
   FfiDrawingProjection output;
   output.visible_offsets.push_back(0);
   output.hidden_offsets.push_back(0);
+  output.section_offsets.push_back(0);
   std::set<std::vector<std::int64_t>> seen;
   const double curve_deflection = std::max(1.0e-4, deflection);
   append_projection_shape(extractor.VCompound(), curve_deflection,
@@ -1981,6 +2093,23 @@ FfiDrawingProjection Kernel::drawing_projection(
                               output.hidden_offsets, output.hidden_points, seen);
       append_projection_shape(extractor.RgNLineHCompound(), curve_deflection,
                               output.hidden_offsets, output.hidden_points, seen);
+    }
+  }
+  if (has_section_plane) {
+    const gp_Pln cutting_plane(section_point, gp_Dir(section_normal));
+    gp_Vec page_up = direction.Crossed(right);
+    page_up.Normalize();
+    std::set<std::vector<std::int64_t>> section_seen;
+    for (const TopoDS_Shape& shape : source_shapes) {
+      BRepAlgoAPI_Section section_operation(shape, cutting_plane, false);
+      section_operation.Approximation(true);
+      section_operation.Build();
+      if (!section_operation.IsDone() || section_operation.Shape().IsNull()) {
+        continue;
+      }
+      append_section_shape(
+          section_operation.Shape(), right, page_up, curve_deflection,
+          output.section_offsets, output.section_points, section_seen);
     }
   }
   return output;

@@ -3,16 +3,22 @@
  * stack and parametric feature timeline.
  *
  * Solid Undo keeps its established behavior of deleting the latest feature.
- * The pre-delete project model is retained in memory so Redo can restore the
- * exact feature definition, references, appearances, and stable IDs. Nothing
- * is written to disk, and a normal mutation after Undo invalidates the branch.
+ * Drawing Undo stores complete before/after DrawingDocument snapshots, because
+ * one user command can create several related projected views. Nothing is
+ * written to disk, and a normal mutation after Undo invalidates that branch.
  */
 import { useAppStore } from '../store/appStore';
+import type { DrawingDocumentDto } from './types';
 
 export type SolidRedoSnapshot = {
   modelJson: string;
   /** The active model generation this snapshot is allowed to replace. */
   expectedGeneration: number;
+};
+
+export type DrawingHistoryEntry = {
+  before: DrawingDocumentDto;
+  after: DrawingDocumentDto;
 };
 
 type ObservedModel = {
@@ -26,8 +32,11 @@ type ObservedModel = {
 };
 
 const SOLID_REDO_LIMIT = 32;
+const DRAWING_HISTORY_LIMIT = 64;
 const solidRedoByProject = new Map<string, SolidRedoSnapshot[]>();
 const solidGenerationByProject = new Map<string, number>();
+const drawingUndoByProject = new Map<string, DrawingHistoryEntry[]>();
+const drawingRedoByProject = new Map<string, DrawingHistoryEntry[]>();
 const listeners = new Set<() => void>();
 let historyMutationDepth = 0;
 let reconcileQueued = false;
@@ -69,6 +78,18 @@ function stack(projectKey = currentHistoryProjectKey()): SolidRedoSnapshot[] {
   if (!value) {
     value = [];
     solidRedoByProject.set(projectKey, value);
+  }
+  return value;
+}
+
+function drawingStack(
+  stacks: Map<string, DrawingHistoryEntry[]>,
+  projectKey = currentHistoryProjectKey(),
+): DrawingHistoryEntry[] {
+  let value = stacks.get(projectKey);
+  if (!value) {
+    value = [];
+    stacks.set(projectKey, value);
   }
   return value;
 }
@@ -136,7 +157,14 @@ export function returnSolidRedoSnapshot(
 export function dropApplicationHistory(projectKey: string): void {
   const removedRedo = solidRedoByProject.delete(projectKey);
   const removedGeneration = solidGenerationByProject.delete(projectKey);
-  if (removedRedo || removedGeneration) notify();
+  const removedDrawingUndo = drawingUndoByProject.delete(projectKey);
+  const removedDrawingRedo = drawingRedoByProject.delete(projectKey);
+  if (
+    removedRedo
+    || removedGeneration
+    || removedDrawingUndo
+    || removedDrawingRedo
+  ) notify();
 }
 
 /** After one Redo, the next older snapshot is now valid against the restored
@@ -145,6 +173,78 @@ export function authorizeNextSolidRedo(projectKey: string): void {
   const redo = stack(projectKey);
   const next = redo[redo.length - 1];
   if (next) next.expectedGeneration = generation(projectKey);
+}
+
+/** Record one complete drawing command. Call this only after the Rust document
+ * accepted the new snapshot, so a failed write cannot create a phantom Undo. */
+export function recordDrawingHistory(
+  projectKey: string,
+  before: DrawingDocumentDto,
+  after: DrawingDocumentDto,
+): void {
+  const undo = drawingStack(drawingUndoByProject, projectKey);
+  undo.push({
+    before: structuredClone(before),
+    after: structuredClone(after),
+  });
+  if (undo.length > DRAWING_HISTORY_LIMIT) {
+    undo.splice(0, undo.length - DRAWING_HISTORY_LIMIT);
+  }
+  drawingStack(drawingRedoByProject, projectKey).length = 0;
+  notify();
+}
+
+export function canUndoDrawingHistory(
+  projectKey = currentHistoryProjectKey(),
+): boolean {
+  return drawingStack(drawingUndoByProject, projectKey).length > 0;
+}
+
+export function canRedoDrawingHistory(
+  projectKey = currentHistoryProjectKey(),
+): boolean {
+  return drawingStack(drawingRedoByProject, projectKey).length > 0;
+}
+
+/** Peek first and commit only after the engine accepts the restored drawing.
+ * Drawing writes are serialized by drawing/document.ts, so the identity check
+ * also protects against committing a different queued operation. */
+export function peekDrawingUndoHistory(
+  projectKey: string,
+): DrawingHistoryEntry | null {
+  const undo = drawingStack(drawingUndoByProject, projectKey);
+  return undo[undo.length - 1] ?? null;
+}
+
+export function commitDrawingUndoHistory(
+  projectKey: string,
+  entry: DrawingHistoryEntry,
+): boolean {
+  const undo = drawingStack(drawingUndoByProject, projectKey);
+  if (undo[undo.length - 1] !== entry) return false;
+  undo.pop();
+  drawingStack(drawingRedoByProject, projectKey).push(entry);
+  notify();
+  return true;
+}
+
+export function peekDrawingRedoHistory(
+  projectKey: string,
+): DrawingHistoryEntry | null {
+  const redo = drawingStack(drawingRedoByProject, projectKey);
+  return redo[redo.length - 1] ?? null;
+}
+
+export function commitDrawingRedoHistory(
+  projectKey: string,
+  entry: DrawingHistoryEntry,
+): boolean {
+  const redo = drawingStack(drawingRedoByProject, projectKey);
+  if (redo[redo.length - 1] !== entry) return false;
+  redo.pop();
+  drawingStack(drawingUndoByProject, projectKey).push(entry);
+  notify();
+  return true;
 }
 
 let observedModel = observeModel();

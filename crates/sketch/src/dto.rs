@@ -12,6 +12,20 @@ use crate::geometry::Vec2;
 use crate::params::ParamId;
 use crate::plane::{PlaneBasis, PlaneRef};
 
+/// Project-owned visibility choices for model objects shown in the Browser.
+///
+/// Browser row ids are reconstructed UI details, so persistence uses stable
+/// model identities (body/datum ids) and the unique saved sketch name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectVisibilityDto {
+    #[serde(default)]
+    pub hidden_body_ids: Vec<u64>,
+    #[serde(default)]
+    pub hidden_datum_plane_ids: Vec<u64>,
+    #[serde(default)]
+    pub hidden_sketch_names: Vec<String>,
+}
+
 /// One entity in a sketch snapshot. Lines carry both their endpoint point
 /// ids (structural coincident) and the resolved endpoint coordinates so the
 /// frontend can render without resolving references itself.

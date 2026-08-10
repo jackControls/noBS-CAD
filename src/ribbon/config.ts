@@ -32,9 +32,11 @@ export type RibbonAction =
   | 'drawingWorkspace'
   | 'modelWorkspace'
   | 'drawingNewSheet'
+  | 'drawingAutoLayout'
   | 'drawingAddView'
   | 'drawingTool'
-  | 'drawingExportSvg'
+  | 'drawingExportDxf'
+  | 'drawingExportProfileDxf'
   | 'drawingPrint';
 
 export type MenuEntry =
@@ -529,13 +531,6 @@ export const SOLID_TAB: RibbonTab = {
       labelKey: 'ribbon.panels.selection',
       buttons: [{ id: 'select', labelKey: 'ribbon.solid.select', icon: 'select', enabled: true }],
     },
-    {
-      id: 'drawing',
-      labelKey: 'ribbon.panels.drawing',
-      buttons: [
-        { id: 'openDrawing', labelKey: 'ribbon.drawing.open', icon: 'section', enabled: true, action: 'drawingWorkspace' },
-      ],
-    },
   ],
 };
 
@@ -612,42 +607,151 @@ export const SKETCH_TAB: RibbonTab = {
   ],
 };
 
+/* ------------------------------------------------------------------ */
+/* Drawing workspace menus                                            */
+/* ------------------------------------------------------------------ */
+
+const DRAWING_VIEWS_MENU: MenuEntry[] = [
+  item('drawingStandardViews', 'ribbon.drawing.standardViews', 'plane', {
+    children: [
+      item('drawingFrontViewMenu', 'ribbon.drawing.front', 'plane', { enabled: true, action: 'drawingAddView', payload: 'front' }),
+      item('drawingTopViewMenu', 'ribbon.drawing.top', 'plane', { enabled: true, action: 'drawingAddView', payload: 'top' }),
+      item('drawingLeftViewMenu', 'ribbon.drawing.left', 'plane', { enabled: true, action: 'drawingAddView', payload: 'left' }),
+      item('drawingRightViewMenu', 'ribbon.drawing.right', 'plane', { enabled: true, action: 'drawingAddView', payload: 'right' }),
+      item('drawingIsometricViewMenu', 'ribbon.drawing.isometric', 'section', { enabled: true, action: 'drawingAddView', payload: 'isometric' }),
+    ],
+  }),
+  item('drawingDerivedViews', 'ribbon.drawing.derivedViews', 'section', {
+    children: [
+      item('drawingSectionViewMenu', 'ribbon.drawing.sectionView', 'section', { enabled: true, action: 'drawingTool', payload: 'section_view' }),
+      item('drawingDetailViewMenu', 'ribbon.drawing.detailView', 'circle', { enabled: true, action: 'drawingTool', payload: 'detail_view' }),
+      item('drawingAuxiliaryViewMenu', 'ribbon.drawing.auxiliaryView', 'plane', { enabled: true, action: 'drawingTool', payload: 'auxiliary_view' }),
+      item('drawingBrokenViewMenu', 'ribbon.drawing.brokenView', 'splitBody', { enabled: true, action: 'drawingTool', payload: 'broken_view' }),
+      item('drawingRemovedSectionMenu', 'ribbon.drawing.removedSection', 'section', { enabled: true, action: 'drawingTool', payload: 'removed_section' }),
+    ],
+  }),
+];
+
+const DRAWING_DIMENSIONS_MENU: MenuEntry[] = [
+  item('drawingLinearDimensions', 'ribbon.drawing.linearDimensions', 'measure', {
+    children: [
+      item('drawingDimensionMenu', 'ribbon.drawing.dimension', 'measure', { enabled: true, action: 'drawingTool', payload: 'dimension' }),
+      item('drawingChainDimensionMenu', 'ribbon.drawing.chainDimension', 'measure', { enabled: true, action: 'drawingTool', payload: 'chain_dimension' }),
+      item('drawingBaselineDimensionMenu', 'ribbon.drawing.baselineDimension', 'measure', { enabled: true, action: 'drawingTool', payload: 'baseline_dimension' }),
+      item('drawingContinuedDimensionMenu', 'ribbon.drawing.continuedDimension', 'measure', { enabled: true, action: 'drawingTool', payload: 'continued_dimension' }),
+      item('drawingOrdinateDimensionMenu', 'ribbon.drawing.ordinateDimension', 'measure', { enabled: true, action: 'drawingTool', payload: 'ordinate_dimension' }),
+    ],
+  }),
+  item('drawingFeatureDimensions', 'ribbon.drawing.featureDimensions', 'circle', {
+    children: [
+      item('drawingDiameterMenu', 'ribbon.drawing.diameter', 'circle', { enabled: true, action: 'drawingTool', payload: 'diameter' }),
+      item('drawingRadiusMenu', 'ribbon.drawing.radius', 'arc', { enabled: true, action: 'drawingTool', payload: 'radius' }),
+      item('drawingArcLengthMenu', 'ribbon.drawing.arcLength', 'arc', { enabled: true, action: 'drawingTool', payload: 'arc_length' }),
+      item('drawingJoggedRadiusMenu', 'ribbon.drawing.joggedRadius', 'arc', { enabled: true, action: 'drawingTool', payload: 'jogged_radius' }),
+      item('drawingAngleMenu', 'ribbon.drawing.angle', 'planeAngle', { enabled: true, action: 'drawingTool', payload: 'angle' }),
+    ],
+  }),
+];
+
+const DRAWING_ANNOTATE_MENU: MenuEntry[] = [
+  item('drawingCenterGeometry', 'ribbon.drawing.centerGeometry', 'centerLine', {
+    children: [
+      item('drawingCenterMarkMenu', 'ribbon.drawing.centerMark', 'centerMark', { enabled: true, action: 'drawingTool', payload: 'center_mark' }),
+      item('drawingCenterLineMenu', 'ribbon.drawing.centerLine', 'centerLine', { enabled: true, action: 'drawingTool', payload: 'center_line' }),
+      item('drawingSymmetryAxisMenu', 'ribbon.drawing.symmetryAxis', 'centerLine', { enabled: true, action: 'drawingTool', payload: 'symmetry_axis' }),
+      item('drawingBoltCircleMenu', 'ribbon.drawing.boltCircle', 'circle', { enabled: true, action: 'drawingTool', payload: 'bolt_circle' }),
+    ],
+  }),
+  item('drawingManufacturingNotes', 'ribbon.drawing.manufacturingNotes', 'text', {
+    children: [
+      item('drawingHoleNoteMenu', 'ribbon.drawing.holeNote', 'hole', { enabled: true, action: 'drawingTool', payload: 'hole_note' }),
+      item('drawingChamferNoteMenu', 'ribbon.drawing.chamferNote', 'chamfer', { enabled: true, action: 'drawingTool', payload: 'chamfer_note' }),
+      item('drawingNoteMenu', 'ribbon.drawing.note', 'text', { enabled: true, action: 'drawingTool', payload: 'note' }),
+    ],
+  }),
+];
+
+const DRAWING_SYMBOLS_MENU: MenuEntry[] = [
+  item('drawingTolerancingSymbols', 'ribbon.drawing.tolerancingSymbols', 'measure', {
+    children: [
+      item('drawingDatumMenu', 'ribbon.drawing.datum', 'plane', { enabled: true, action: 'drawingTool', payload: 'datum' }),
+      item('drawingGdtMenu', 'ribbon.drawing.gdt', 'measure', { enabled: true, action: 'drawingTool', payload: 'gdt' }),
+      item('drawingSurfaceTextureMenu', 'ribbon.drawing.surfaceTexture', 'chamfer', { enabled: true, action: 'drawingTool', payload: 'surface_texture' }),
+      item('drawingEdgeRequirementMenu', 'ribbon.drawing.edgeRequirement', 'chamfer', { enabled: true, action: 'drawingTool', payload: 'edge_requirement' }),
+    ],
+  }),
+  item('drawingDocumentSymbols', 'ribbon.drawing.documentSymbols', 'text', {
+    children: [
+      item('drawingWeldMenu', 'ribbon.drawing.weld', 'sweep', { enabled: true, action: 'drawingTool', payload: 'weld' }),
+      item('drawingBalloonMenu', 'ribbon.drawing.balloon', 'circle', { enabled: true, action: 'drawingTool', payload: 'balloon' }),
+      item('drawingRevisionCloudMenu', 'ribbon.drawing.revisionCloud', 'spline', { enabled: true, action: 'drawingTool', payload: 'revision_cloud' }),
+    ],
+  }),
+];
+
+const DRAWING_OUTPUT_MENU: MenuEntry[] = [
+  item('exportDrawingDxfMenu', 'ribbon.drawing.exportDxf', 'measure', { enabled: true, action: 'drawingExportDxf' }),
+  item('exportDrawingProfileDxfMenu', 'ribbon.drawing.exportProfileDxf', 'profile', { enabled: true, action: 'drawingExportProfileDxf' }),
+  sep,
+  item('printDrawingMenu', 'ribbon.drawing.print', 'section', { enabled: true, action: 'drawingPrint' }),
+];
+
 export const DRAWING_TAB: RibbonTab = {
   id: 'drawing',
   labelKey: 'ribbon.tabs.drawing',
   enabled: true,
   panels: [
     {
-      id: 'workspace',
-      labelKey: 'ribbon.panels.workspace',
+      id: 'sheet',
+      labelKey: 'ribbon.panels.sheet',
       buttons: [
-        { id: 'returnModel', labelKey: 'ribbon.drawing.model', icon: 'select', enabled: true, action: 'modelWorkspace' },
         { id: 'newSheet', labelKey: 'ribbon.drawing.newSheet', icon: 'rect', enabled: true, action: 'drawingNewSheet' },
+        { id: 'autoLayout', labelKey: 'ribbon.drawing.autoLayout', icon: 'rectPattern', enabled: true, action: 'drawingAutoLayout' },
       ],
     },
     {
       id: 'views',
       labelKey: 'ribbon.panels.views',
+      menu: DRAWING_VIEWS_MENU,
       buttons: [
         { id: 'frontView', labelKey: 'ribbon.drawing.front', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'front' },
-        { id: 'topView', labelKey: 'ribbon.drawing.top', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'top' },
-        { id: 'rightView', labelKey: 'ribbon.drawing.right', icon: 'plane', enabled: true, action: 'drawingAddView', payload: 'right' },
         { id: 'isometricView', labelKey: 'ribbon.drawing.isometric', icon: 'section', enabled: true, action: 'drawingAddView', payload: 'isometric' },
+        { id: 'drawingSectionView', labelKey: 'ribbon.drawing.sectionView', icon: 'section', enabled: true, action: 'drawingTool', payload: 'section_view' },
+      ],
+    },
+    {
+      id: 'dimensions',
+      labelKey: 'ribbon.panels.dimensions',
+      menu: DRAWING_DIMENSIONS_MENU,
+      buttons: [
+        { id: 'drawingDimension', labelKey: 'ribbon.drawing.dimension', icon: 'measure', enabled: true, action: 'drawingTool', payload: 'dimension' },
       ],
     },
     {
       id: 'annotate',
       labelKey: 'ribbon.panels.annotate',
+      menu: DRAWING_ANNOTATE_MENU,
       buttons: [
-        { id: 'drawingDimension', labelKey: 'ribbon.drawing.dimension', icon: 'measure', enabled: true, action: 'drawingTool', payload: 'dimension' },
+        { id: 'drawingCenterLine', labelKey: 'ribbon.drawing.centerLine', icon: 'centerLine', enabled: true, action: 'drawingTool', payload: 'center_line' },
+        { id: 'drawingHoleNote', labelKey: 'ribbon.drawing.holeNote', icon: 'hole', enabled: true, action: 'drawingTool', payload: 'hole_note' },
         { id: 'drawingNote', labelKey: 'ribbon.drawing.note', icon: 'text', enabled: true, action: 'drawingTool', payload: 'note' },
+      ],
+    },
+    {
+      id: 'symbols',
+      labelKey: 'ribbon.panels.symbols',
+      menu: DRAWING_SYMBOLS_MENU,
+      buttons: [
+        { id: 'drawingDatum', labelKey: 'ribbon.drawing.datum', icon: 'plane', enabled: true, action: 'drawingTool', payload: 'datum' },
+        { id: 'drawingGdt', labelKey: 'ribbon.drawing.gdt', icon: 'measure', enabled: true, action: 'drawingTool', payload: 'gdt' },
       ],
     },
     {
       id: 'output',
       labelKey: 'ribbon.panels.output',
+      menu: DRAWING_OUTPUT_MENU,
       buttons: [
-        { id: 'exportDrawingSvg', labelKey: 'ribbon.drawing.exportSvg', icon: 'measure', enabled: true, action: 'drawingExportSvg' },
+        { id: 'exportDrawingDxf', labelKey: 'ribbon.drawing.exportDxf', icon: 'measure', enabled: true, action: 'drawingExportDxf' },
         { id: 'printDrawing', labelKey: 'ribbon.drawing.print', icon: 'section', enabled: true, action: 'drawingPrint' },
       ],
     },

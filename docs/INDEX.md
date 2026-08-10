@@ -23,6 +23,7 @@
 | [agentic/INDEX.md](agentic/INDEX.md) | Agents + maintainers | Structure changes |
 | [agentic/STEERABLE_MCP.md](agentic/STEERABLE_MCP.md) | Agents | Disclosure invariants |
 | [agentic/MAINTENANCE.md](agentic/MAINTENANCE.md) | Agents + CI | Toolchain / test commands |
+| [agentic/UI_OVERLAYS.md](agentic/UI_OVERLAYS.md) | UI agents + maintainers | Overlay or shell-layout changes |
 
 ## Manufacturing export
 
