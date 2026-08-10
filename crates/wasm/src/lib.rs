@@ -103,12 +103,24 @@ impl WasmEngine {
         host::handle(&mut self.manager, "assembly_document", "")
     }
 
+    pub fn assembly_solution(&mut self) -> String {
+        host::handle(&mut self.manager, "assembly_solution", "")
+    }
+
     pub fn assembly_create_joint(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "assembly_create_joint", payload)
     }
 
     pub fn assembly_delete_joint(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "assembly_delete_joint", payload)
+    }
+
+    pub fn assembly_set_joint_value(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_joint_value", payload)
+    }
+
+    pub fn assembly_set_grounded_body(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_grounded_body", payload)
     }
 
     pub fn set_body_appearance(&mut self, payload: &str) -> String {

@@ -177,12 +177,13 @@ export async function openProject(): Promise<boolean> {
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, projectVisibility] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
     engine.drawingDocument(),
     engine.assemblyDocument(),
+    engine.assemblySolution(),
     engine.projectVisibility(),
   ]);
   // A legacy project is readable, but the next Save must choose a new
@@ -201,6 +202,7 @@ export async function openProject(): Promise<boolean> {
       drawingDocument,
       assemblyDocument,
       projectVisibility,
+      assemblySolution,
     );
   await recordActiveProjectOpen(modelJson, reusableTarget);
   if (!hasUnsavedProjects()) clearProjectRecovery();

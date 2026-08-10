@@ -31,6 +31,9 @@ export function JointDialog() {
   const [kind, setKind] = useState<JointKindDto>('rigid');
   const [flipped, setFlipped] = useState(false);
   const [offset, setOffset] = useState('0');
+  const [limitsEnabled, setLimitsEnabled] = useState(false);
+  const [minimum, setMinimum] = useState('-90');
+  const [maximum, setMaximum] = useState('90');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +43,9 @@ export function JointDialog() {
     setKind('rigid');
     setFlipped(false);
     setOffset('0');
+    setLimitsEnabled(false);
+    setMinimum('-90');
+    setMaximum('90');
     setError(null);
   }, [open, nextJointId]);
 
@@ -61,8 +67,16 @@ export function JointDialog() {
   const validSelection =
     selections.length === 2 && selections[0].bodyId !== selections[1].bodyId;
   const offsetValue = Number(offset);
+  const minimumValue = Number(minimum);
+  const maximumValue = Number(maximum);
   const canSubmit =
-    !busy && name.trim().length > 0 && validSelection && Number.isFinite(offsetValue);
+    !busy && name.trim().length > 0 && validSelection && Number.isFinite(offsetValue)
+    && (!limitsEnabled || (
+      Number.isFinite(minimumValue)
+      && Number.isFinite(maximumValue)
+      && minimumValue <= offsetValue
+      && offsetValue <= maximumValue
+    ));
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -75,7 +89,7 @@ export function JointDialog() {
       flipped,
       angle_offset_deg: kind === 'revolute' ? offsetValue : 0,
       linear_offset_mm: kind === 'slider' ? offsetValue : 0,
-      limits: null,
+      limits: limitsEnabled ? { min: minimumValue, max: maximumValue } : null,
     };
     setBusy(true);
     setError(null);
@@ -163,30 +177,62 @@ export function JointDialog() {
           </label>
           <label>
             <span className={LABEL}>Joint type</span>
-            <select value={kind} onChange={(event) => setKind(event.target.value as JointKindDto)} className={INPUT}>
+            <select
+              value={kind}
+              onChange={(event) => {
+                const next = event.target.value as JointKindDto;
+                setKind(next);
+                if (next === 'revolute') {
+                  setMinimum('-90');
+                  setMaximum('90');
+                } else if (next === 'slider') {
+                  setMinimum('-25');
+                  setMaximum('25');
+                }
+              }}
+              className={INPUT}
+            >
               <option value="rigid">Rigid</option>
               <option value="revolute">Revolute</option>
               <option value="slider">Slider</option>
             </select>
           </label>
           {kind !== 'rigid' && (
-            <label>
-              <span className={LABEL}>{kind === 'revolute' ? 'Angle offset (deg)' : 'Linear offset (mm)'}</span>
-              <input
-                type="number"
-                step="any"
-                value={offset}
-                onChange={(event) => setOffset(event.target.value)}
-                className={INPUT}
-              />
-            </label>
+            <>
+              <label>
+                <span className={LABEL}>{kind === 'revolute' ? 'Angle (deg)' : 'Position (mm)'}</span>
+                <input
+                  type="number"
+                  step="any"
+                  value={offset}
+                  onChange={(event) => setOffset(event.target.value)}
+                  className={INPUT}
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs text-ink">
+                <input type="checkbox" checked={limitsEnabled} onChange={(event) => setLimitsEnabled(event.target.checked)} />
+                Limit motion
+              </label>
+              {limitsEnabled && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label>
+                    <span className={LABEL}>Minimum</span>
+                    <input type="number" step="any" value={minimum} onChange={(event) => setMinimum(event.target.value)} className={INPUT} />
+                  </label>
+                  <label>
+                    <span className={LABEL}>Maximum</span>
+                    <input type="number" step="any" value={maximum} onChange={(event) => setMaximum(event.target.value)} className={INPUT} />
+                  </label>
+                </div>
+              )}
+            </>
           )}
           <label className="flex items-center gap-2 text-xs text-ink">
             <input type="checkbox" checked={flipped} onChange={(event) => setFlipped(event.target.checked)} />
             Flip connector alignment
           </label>
           <p className="text-[10px] leading-4 text-mute">
-            This first slice persists exact joint intent. Body motion and constraint solving will be added on top of this model.
+            The first connector body is grounded automatically. Motion is solved without changing the OCCT model.
           </p>
           {error && <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">{error}</p>}
         </div>

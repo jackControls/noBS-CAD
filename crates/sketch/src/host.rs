@@ -32,7 +32,7 @@ use crate::dto::{
 use crate::manager::SketchManager;
 use crate::plane::PlaneRef;
 use crate::session::SessionError;
-use crate::JointId;
+use crate::{JointId, SetJointValueRequestDto};
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -74,8 +74,15 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
             with_payload(payload, |drawing| manager.set_drawing_document(drawing))
         }
         "assembly_document" => ok_json(manager.assembly_document()),
+        "assembly_solution" => ok_json(manager.assembly_solution()),
         "assembly_create_joint" => with_payload(payload, |request| manager.create_joint(request)),
         "assembly_delete_joint" => with_payload(payload, |id: JointId| manager.delete_joint(id)),
+        "assembly_set_joint_value" => with_payload(payload, |request: SetJointValueRequestDto| {
+            manager.set_joint_value(request)
+        }),
+        "assembly_set_grounded_body" => {
+            with_payload(payload, |body_id| manager.set_grounded_body(body_id))
+        }
         "set_body_appearance" => with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
             manager.set_body_appearance(appearance)
         }),

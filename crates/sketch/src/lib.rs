@@ -64,8 +64,9 @@ pub use expr::{
 pub use geometry::Vec2;
 pub use manager::SketchManager;
 pub use nbcad_assembly::{
-    AssemblyDocumentDto, CreateJointRequestDto, JointConnectorDto, JointDefinitionDto,
-    JointFrameDto, JointId, JointKindDto, JointLimitsDto,
+    AssemblyDiagnosticDto, AssemblyDiagnosticKindDto, AssemblyDocumentDto, AssemblySolutionDto,
+    BodyPoseDto, CreateJointRequestDto, JointConnectorDto, JointDefinitionDto, JointFrameDto,
+    JointId, JointKindDto, JointLimitsDto, SetJointValueRequestDto,
 };
 pub use params::{ParamId, ParamKind, ParamTable, Parameter};
 pub use plane::{FaceId, OriginPlane, PlaneBasis, PlaneError, PlaneRef};

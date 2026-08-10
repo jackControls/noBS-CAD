@@ -1,4 +1,4 @@
-/** Assembly joint intent: workspace, exact face references, and persistence. */
+/** Assembly joints: exact references, persistence, solving, and live poses. */
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
@@ -100,6 +100,7 @@ try {
       savedAssembly: model.assembly,
       selectedFaces: window.__appStore.getState().selectedFaces,
       joint,
+      solution: await window.__engine.assemblySolution(),
     };
   });
   assert.equal(result.joint.name, 'Main hinge');
@@ -108,14 +109,38 @@ try {
   assert.equal(result.joint.connector_a.face_key, selected[0].faceKey);
   assert.equal(result.joint.connector_b.face_key, selected[1].faceKey);
   assert.deepEqual(result.savedAssembly, result.engineDocument);
+  assert.equal(result.engineDocument.grounded_body_id, selected[0].bodyId);
+  assert.equal(result.solution.solved, true);
+  assert.equal(result.solution.body_poses.length, 2);
   assert.deepEqual(result.selectedFaces, [], 'successful creation clears transient face selection');
 
   console.log('3. Selecting the browser row highlights both referenced faces');
   await page.getByRole('button', { name: /Main hinge/i }).click();
   const highlighted = await page.evaluate(() => window.__appStore.getState().selectedFaces);
   assert.deepEqual(highlighted, selected.map((entry) => entry.faceId));
+
+  console.log('4. Live revolute motion updates the solved GPU display pose');
+  await page.getByTestId('joint-motion-value').fill('45');
+  await page.waitForFunction(
+    () => window.__appStore.getState().assemblyDocument.joints[0]?.angle_offset_deg === 45,
+  );
+  const motion = await page.evaluate(() => {
+    const state = window.__appStore.getState();
+    const bodyId = state.assemblyDocument.joints[0].connector_b.body_id;
+    const solved = state.assemblySolution.body_poses.find((pose) => pose.body_id === bodyId);
+    return {
+      solved,
+      displayed: window.__solidBodyDisplayPose?.(bodyId) ?? null,
+    };
+  });
+  assert.ok(motion.solved);
+  assert.ok(motion.displayed);
+  assert.deepEqual(motion.displayed.translation, motion.solved.translation);
+  for (let index = 0; index < 4; index += 1) {
+    assert.ok(Math.abs(motion.displayed.rotation[index] - motion.solved.rotation[index]) < 1e-9);
+  }
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
-  console.log('  [ok] joint intent, exact topology, workspace UI, and persistence work');
+  console.log('  [ok] exact topology, persistence, forward kinematics, and live display poses work');
 } finally {
   await browser.close();
 }

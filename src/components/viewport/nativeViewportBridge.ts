@@ -116,6 +116,7 @@ interface NativePresentation {
   candidateProfiles: ProfileRefDto[];
   selectedProfiles: ProfileRefDto[];
   hoveredProfile: ProfileRefDto | null;
+  bodyPoses: import('../../engine/types').BodyPoseDto[];
 }
 
 export interface NativeViewportLineLayer {
@@ -643,6 +644,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
       ) ?? [],
     selectedProfiles: state.profilePicker?.selected ?? [],
     hoveredProfile: state.profilePicker?.hovered ?? null,
+    bodyPoses: state.assemblySolution.body_poses,
   };
 }
 

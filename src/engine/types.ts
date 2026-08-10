@@ -1008,6 +1008,39 @@ export interface CreateJointRequestDto {
 export interface AssemblyDocumentDto {
   joints: JointDefinitionDto[];
   next_joint_id: number;
+  grounded_body_id: number | null;
+}
+
+export interface BodyPoseDto {
+  body_id: number;
+  translation: [number, number, number];
+  /** Unit quaternion in x, y, z, w order. */
+  rotation: [number, number, number, number];
+}
+
+export type AssemblyDiagnosticKindDto =
+  | 'broken_reference'
+  | 'invalid_ground'
+  | 'free_component'
+  | 'limit_violation'
+  | 'cycle_conflict';
+
+export interface AssemblyDiagnosticDto {
+  kind: AssemblyDiagnosticKindDto;
+  message: string;
+  joint_id: number | null;
+  body_id: number | null;
+}
+
+export interface AssemblySolutionDto {
+  body_poses: BodyPoseDto[];
+  diagnostics: AssemblyDiagnosticDto[];
+  solved: boolean;
+}
+
+export interface SetJointValueRequestDto {
+  joint_id: number;
+  value: number;
 }
 
 export type DrawingSheetFormat =

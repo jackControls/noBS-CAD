@@ -21,7 +21,7 @@ pub mod ui;
 pub mod ui_lab;
 
 use nbcad_core::BodyAppearance;
-use nbcad_sketch::SketchDto;
+use nbcad_sketch::{BodyPoseDto, SketchDto};
 use nbcad_solid::{DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
@@ -164,6 +164,10 @@ pub struct ViewportPresentation {
     #[serde(default)]
     pub candidate_profiles: Vec<ProfileRefDto>,
     pub hovered_profile: Option<ProfileRefDto>,
+    /// Host-neutral rigid poses. Kept with the small presentation stream so
+    /// live motion never clones or retessellates the OCCT scene.
+    #[serde(default)]
+    pub body_poses: Vec<BodyPoseDto>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -427,6 +431,7 @@ pub(crate) struct ViewportModel {
     pub datum_planes: Vec<DatumPlaneDefinitionDto>,
     pub profile_catalog: Vec<ProfileCatalogItemDto>,
     pub body_appearances: Vec<BodyAppearance>,
+    pub body_poses: Vec<BodyPoseDto>,
 }
 
 pub struct NativeViewport {

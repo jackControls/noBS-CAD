@@ -12,6 +12,7 @@ import type {
   AddConstraintResult,
   AddLineResult,
   AssemblyDocumentDto,
+  AssemblySolutionDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -23,6 +24,7 @@ import type {
   CircleRequest,
   ConstraintPayload,
   CreateJointRequestDto,
+  SetJointValueRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -161,12 +163,24 @@ export class TauriEngine implements Engine {
     return this.call('engine_assembly_document');
   }
 
+  async assemblySolution(): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_solution');
+  }
+
   async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
     return this.call('engine_assembly_create_joint', request);
   }
 
   async deleteJoint(id: number): Promise<AssemblyDocumentDto> {
     return this.call('engine_assembly_delete_joint', id);
+  }
+
+  async setJointValue(request: SetJointValueRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_joint_value', request);
+  }
+
+  async setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_grounded_body', bodyId);
   }
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {

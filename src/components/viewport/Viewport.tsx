@@ -724,6 +724,21 @@ export function Viewport() {
     scene.add(datumGroup);
     const lineMaterials = new Set<ScreenLineMaterial>();
 
+    /** Assembly poses are additional display transforms. OCCT tessellation,
+     * topology ids, and feature history remain in model coordinates. */
+    const applyAssemblyPose = (object: CAD.Object3D, bodyId: number) => {
+      const pose = store.getState().assemblySolution.body_poses.find(
+        (candidate) => candidate.body_id === bodyId,
+      );
+      if (!pose) {
+        object.position.set(0, 0, 0);
+        object.quaternion.set(0, 0, 0, 1);
+        return;
+      }
+      object.position.set(...pose.translation);
+      object.quaternion.set(...pose.rotation).normalize();
+    };
+
     const clearGroup = (group: CAD.Group) => {
       for (const child of [...group.children]) {
         group.remove(child);
@@ -5178,6 +5193,7 @@ export function Viewport() {
         outline.userData.faceId = face.faceId;
         outline.userData.bodyId = face.bodyId;
         outline.userData.faceHighlightKind = face.selected ? 'selected' : 'hover';
+        applyAssemblyPose(outline, face.bodyId);
       }
 
       for (const body of s.solidScene.bodies) {
@@ -5214,6 +5230,7 @@ export function Viewport() {
             ? 'tool'
             : 'target'
           : 'hover';
+        applyAssemblyPose(outline, body.id);
       }
 
       for (const body of s.solidScene.bodies) {
@@ -5236,6 +5253,7 @@ export function Viewport() {
           );
           line.userData.edgeId = edge.id;
           line.userData.edgeHighlightKind = selected ? 'selected' : 'hover';
+          applyAssemblyPose(line, body.id);
         }
       }
     };
@@ -5251,6 +5269,7 @@ export function Viewport() {
         const bodyGroup = new CAD.Group();
         bodyGroup.name = body.name;
         bodyGroup.userData.bodyId = body.id;
+        applyAssemblyPose(bodyGroup, body.id);
 
         for (const face of body.faces) {
           const positions: number[] = [];
@@ -5320,6 +5339,16 @@ export function Viewport() {
 
         solidGroup.add(bodyGroup);
       }
+      updateSolidStyles();
+    };
+
+    const updateAssemblyPoses = () => {
+      for (const body of solidGroup.children) {
+        const bodyId = body.userData.bodyId as number | undefined;
+        if (bodyId !== undefined) applyAssemblyPose(body, bodyId);
+      }
+      // Highlight layers are retained separately from the body meshes, so
+      // rebuild only their inexpensive line objects at the new poses.
       updateSolidStyles();
     };
 
@@ -7306,6 +7335,23 @@ export function Viewport() {
     };
     (
       window as unknown as {
+        __solidBodyDisplayPose?: (bodyId: number) => {
+          translation: [number, number, number];
+          rotation: [number, number, number, number];
+        } | null;
+      }
+    ).__solidBodyDisplayPose = (bodyId) => {
+      const body = solidGroup.children.find(
+        (candidate) => candidate.userData.bodyId === bodyId,
+      );
+      if (!body) return null;
+      return {
+        translation: [body.position.x, body.position.y, body.position.z],
+        rotation: [body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w],
+      };
+    };
+    (
+      window as unknown as {
         __solidEdgeVisualState?: (edgeId: number) => {
           color: string;
           depthTest: boolean;
@@ -7477,6 +7523,7 @@ export function Viewport() {
     let lastSolidHidden = store.getState().hidden;
     let lastSolidDocument = store.getState().document;
     let lastBodyAppearances = store.getState().bodyAppearances;
+    let lastAssemblySolution = store.getState().assemblySolution;
     let lastSolidSelection = {
       body: store.getState().selectedBody,
       bodies: store.getState().selectedBodies.join(','),
@@ -7575,6 +7622,11 @@ export function Viewport() {
         lastSolidDocument = s.document;
         lastBodyAppearances = s.bodyAppearances;
         rebuildSolids();
+        refreshSharedOrbitPivot();
+      }
+      if (s.assemblySolution !== lastAssemblySolution) {
+        lastAssemblySolution = s.assemblySolution;
+        updateAssemblyPoses();
         refreshSharedOrbitPivot();
       }
       if (

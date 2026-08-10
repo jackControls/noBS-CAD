@@ -22,13 +22,17 @@ type WasmEngineMethods = WasmEngineInner & {
   drawing_document(): string;
   drawing_set_document(payload: string): string;
   assembly_document(): string;
+  assembly_solution(): string;
   assembly_create_joint(payload: string): string;
   assembly_delete_joint(payload: string): string;
+  assembly_set_joint_value(payload: string): string;
+  assembly_set_grounded_body(payload: string): string;
 };
 import type {
   AddConstraintResult,
   AddLineResult,
   AssemblyDocumentDto,
+  AssemblySolutionDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -40,6 +44,7 @@ import type {
   CircleRequest,
   ConstraintPayload,
   CreateJointRequestDto,
+  SetJointValueRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -199,6 +204,10 @@ export class WasmEngine implements Engine {
     return unwrapEnvelope((this.inner as WasmEngineMethods).assembly_document());
   }
 
+  async assemblySolution(): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).assembly_solution());
+  }
+
   async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).assembly_create_joint(JSON.stringify(request)),
@@ -208,6 +217,18 @@ export class WasmEngine implements Engine {
   async deleteJoint(id: number): Promise<AssemblyDocumentDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).assembly_delete_joint(JSON.stringify(id)),
+    );
+  }
+
+  async setJointValue(request: SetJointValueRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_joint_value(JSON.stringify(request)),
+    );
+  }
+
+  async setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_grounded_body(JSON.stringify(bodyId)),
     );
   }
 

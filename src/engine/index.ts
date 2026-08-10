@@ -11,6 +11,7 @@ import type {
   AddConstraintResult,
   AddLineResult,
   AssemblyDocumentDto,
+  AssemblySolutionDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -23,6 +24,7 @@ import type {
   CircleRequest,
   ConstraintPayload,
   CreateJointRequestDto,
+  SetJointValueRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -109,8 +111,11 @@ export interface Engine {
   drawingDocument(): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
   assemblyDocument(): Promise<AssemblyDocumentDto>;
+  assemblySolution(): Promise<AssemblySolutionDto>;
   createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto>;
   deleteJoint(id: number): Promise<AssemblyDocumentDto>;
+  setJointValue(request: SetJointValueRequestDto): Promise<AssemblyDocumentDto>;
+  setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;

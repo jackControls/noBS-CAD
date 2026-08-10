@@ -5,7 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
-use nbcad_assembly::{AssemblyDocumentDto, CreateJointRequestDto, JointDefinitionDto, JointId};
+use nbcad_assembly::{
+    AssemblyDocumentDto, AssemblySolutionDto, CreateJointRequestDto, JointDefinitionDto, JointId,
+    SetJointValueRequestDto,
+};
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
@@ -88,8 +91,8 @@ pub struct SketchManager {
     body_appearances: Vec<BodyAppearance>,
     /// Persistent technical-drawing sheets and view definitions.
     drawings: DrawingDocumentDto,
-    /// Persistent assembly/joint intent. Kinematic display poses are runtime
-    /// state owned by the future assembly solver, not the solid history.
+    /// Persistent assembly/joint intent. Kinematic display poses are derived
+    /// by the assembly solver at runtime and never baked into solid history.
     assembly: AssemblyDocumentDto,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
@@ -518,6 +521,10 @@ impl SketchManager {
         self.assembly.clone()
     }
 
+    pub fn assembly_solution(&self) -> AssemblySolutionDto {
+        self.assembly.solve(self.solids.scene())
+    }
+
     pub fn create_joint(
         &mut self,
         request: CreateJointRequestDto,
@@ -529,6 +536,26 @@ impl SketchManager {
 
     pub fn delete_joint(&mut self, id: JointId) -> Result<AssemblyDocumentDto, SessionError> {
         self.assembly.delete(id).map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_joint_value(
+        &mut self,
+        request: SetJointValueRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_value(request.joint_id, request.value)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_grounded_body(
+        &mut self,
+        body_id: Option<nbcad_core::BodyId>,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_grounded_body(body_id, self.solids.scene())
+            .map_err(SessionError::Solid)?;
         Ok(self.assembly.clone())
     }
 
@@ -3786,6 +3813,7 @@ mod project_tests {
                 enabled: true,
             }],
             next_joint_id: 8,
+            grounded_body_id: Some(BodyId(1)),
         };
 
         let mut manager = SketchManager::new();

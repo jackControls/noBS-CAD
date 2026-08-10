@@ -5,7 +5,7 @@ use nbcad_core::{BodyAppearance, DocumentDto};
 use nbcad_occt::{
     drawing_projection_anchors, drawing_projection_circles, DrawingProjectionRequest, OcctKernel,
 };
-use nbcad_sketch::{err_json, host, ok_json, SketchDto, SketchManager};
+use nbcad_sketch::{err_json, host, ok_json, BodyPoseDto, SketchDto, SketchManager};
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
     EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
@@ -187,6 +187,7 @@ impl AppState {
         Vec<DatumPlaneDefinitionDto>,
         Vec<ProfileCatalogItemDto>,
         Vec<BodyAppearance>,
+        Vec<BodyPoseDto>,
     ) {
         let workspace = self.inner.lock().expect("engine lock poisoned");
         let inner = workspace.active();
@@ -199,6 +200,7 @@ impl AppState {
             inner.manager.datum_plane_definitions(),
             inner.manager.profile_catalog(),
             inner.manager.body_appearances(),
+            inner.manager.assembly_solution().body_poses,
         )
     }
 
@@ -384,21 +386,19 @@ impl AppState {
             return err_json("Resolve timeline errors before generating a drawing view.");
         }
         match inner.kernel.drawing_projection(&request) {
-            Ok(mut projection) => {
-                match drawing_projection_anchors(&scene, &request, &projection) {
-                    Ok(anchors) => {
-                        projection.anchors = anchors;
-                        match drawing_projection_circles(&scene, &request, &projection) {
-                            Ok(circles) => {
-                                projection.circles = circles;
-                                ok_json(projection)
-                            }
-                            Err(error) => err_json(error.to_string()),
+            Ok(mut projection) => match drawing_projection_anchors(&scene, &request, &projection) {
+                Ok(anchors) => {
+                    projection.anchors = anchors;
+                    match drawing_projection_circles(&scene, &request, &projection) {
+                        Ok(circles) => {
+                            projection.circles = circles;
+                            ok_json(projection)
                         }
+                        Err(error) => err_json(error.to_string()),
                     }
-                    Err(error) => err_json(error.to_string()),
                 }
-            }
+                Err(error) => err_json(error.to_string()),
+            },
             Err(error) => err_json(error.to_string()),
         }
     }
@@ -566,13 +566,14 @@ mod tests {
             }"#,
         ));
 
-        let (before_id, before_revision, before_scene, _, _, _, _, _) = state.viewport_snapshot();
+        let (before_id, before_revision, before_scene, _, _, _, _, _, _) =
+            state.viewport_snapshot();
         assert_eq!(before_id, BOOTSTRAP_SESSION_ID);
         assert_eq!(before_scene.bodies.len(), 1);
         assert!(!before_scene.bodies[0].faces.is_empty());
 
         value(state.bind_project_session("recovered-tab"));
-        let (after_id, after_revision, after_scene, _, _, _, _, _) = state.viewport_snapshot();
+        let (after_id, after_revision, after_scene, _, _, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(after_id, "recovered-tab");
         assert_eq!(after_revision, before_revision);
         assert_eq!(after_scene.bodies.len(), before_scene.bodies.len());
