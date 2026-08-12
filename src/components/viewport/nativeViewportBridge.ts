@@ -31,9 +31,17 @@ interface NativeViewportMetrics {
 
 export interface NativeViewportPick {
   bodyId: number;
+  occurrenceId: number | null;
   faceId: number;
+  edgeId: number | null;
   point: [number, number, number];
   distance: number;
+  connectorKind: 'planar_face' | 'cylindrical_face' | 'virtual_circular_face' | 'circular_edge' | null;
+  /** Connector frame remains body-local even when the displayed body is posed. */
+  connectorOrigin: [number, number, number] | null;
+  connectorPrimaryAxis: [number, number, number] | null;
+  connectorSecondaryAxis: [number, number, number] | null;
+  connectorRadius: number | null;
 }
 
 export interface NativeRect {
@@ -102,6 +110,8 @@ interface NativePresentation {
   hoveredOriginPlane: 'xy' | 'xz' | 'yz' | null;
   hoveredDatumPlaneId: number | null;
   selectedBodyIds: number[];
+  selectedOccurrenceId: number | null;
+  hoveredOccurrenceId: number | null;
   hoveredBodyId: number | null;
   selectedFaceIds: number[];
   hoveredFaceId: number | null;
@@ -117,6 +127,7 @@ interface NativePresentation {
   selectedProfiles: ProfileRefDto[];
   hoveredProfile: ProfileRefDto | null;
   bodyPoses: import('../../engine/types').BodyPoseDto[];
+  instanceBodyPoses: import('../../engine/types').InstanceBodyPoseDto[];
 }
 
 export interface NativeViewportLineLayer {
@@ -618,6 +629,8 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredOriginPlane: state.hoveredPlane,
     hoveredDatumPlaneId: state.hoveredDatumPlane,
     selectedBodyIds: state.selectedBodies,
+    selectedOccurrenceId: state.selectedOccurrenceId,
+    hoveredOccurrenceId: state.hoveredOccurrenceId,
     hoveredBodyId,
     selectedFaceIds: state.selectedFaces,
     hoveredFaceId: state.hoveredFace,
@@ -644,7 +657,20 @@ export function collectNativeViewportPresentation(): NativePresentation {
       ) ?? [],
     selectedProfiles: state.profilePicker?.selected ?? [],
     hoveredProfile: state.profilePicker?.hovered ?? null,
-    bodyPoses: state.assemblySolution.body_poses,
+    bodyPoses: (
+      state.jointDialogOpen && state.jointPreviewSolution
+        ? state.jointPreviewSolution
+        : state.mechanismPreview?.solution
+          ?? state.jointMotionPreview?.solution
+          ?? state.assemblySolution
+    ).body_poses,
+    instanceBodyPoses: (
+      state.jointDialogOpen && state.jointPreviewSolution
+        ? state.jointPreviewSolution
+        : state.mechanismPreview?.solution
+          ?? state.jointMotionPreview?.solution
+          ?? state.assemblySolution
+    ).instance_body_poses,
   };
 }
 
@@ -1160,6 +1186,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     layoutRequested = true;
     void flushLayout();
   };
+  const onImmediateLayoutRequest = () => flushResizeLayout();
   const onHudPointerOver = (event: PointerEvent) => {
     const next = nativeHudControl(event.target);
     if (next === hoveredHudControl) return;
@@ -1202,7 +1229,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
 
   const observedLayoutElements = new Set<Element>();
   const viewportResize = new ResizeObserver(flushResizeLayout);
-  const overlayResize = new ResizeObserver(scheduleLayout);
+  const overlayResize = new ResizeObserver(flushResizeLayout);
   viewportResize.observe(container);
   const refreshObservedLayoutElements = () => {
     const next = new Set(
@@ -1225,7 +1252,10 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   refreshObservedLayoutElements();
   const mutation = new MutationObserver(() => {
     refreshObservedLayoutElements();
-    scheduleLayout();
+    // Native viewport cutouts are part of the platform view hierarchy, not
+    // the DOM stacking context. A deferred frame leaves newly-mounted menus
+    // behind the child view long enough to flash or consume the first click.
+    flushResizeLayout();
   });
   mutation.observe(document.documentElement, {
     subtree: true,
@@ -1246,6 +1276,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   window.addEventListener('resize', settleLayout);
   window.visualViewport?.addEventListener('resize', settleLayout);
   document.addEventListener('fullscreenchange', settleLayout);
+  document.addEventListener('nbcad:native-viewport-layout', onImmediateLayoutRequest);
   document.addEventListener('input', scheduleLayout, true);
   document.addEventListener('change', scheduleLayout, true);
   document.addEventListener('transitionend', scheduleLayout, true);
@@ -1373,6 +1404,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     window.removeEventListener('resize', settleLayout);
     window.visualViewport?.removeEventListener('resize', settleLayout);
     document.removeEventListener('fullscreenchange', settleLayout);
+    document.removeEventListener('nbcad:native-viewport-layout', onImmediateLayoutRequest);
     document.removeEventListener('input', scheduleLayout, true);
     document.removeEventListener('change', scheduleLayout, true);
     document.removeEventListener('transitionend', scheduleLayout, true);
@@ -1391,6 +1423,13 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     delete document.documentElement.dataset.nativeViewport;
     delete container.dataset.nativeViewport;
   };
+}
+
+/** Request a synchronous platform cutout refresh after a React layout effect
+ * mounts or repositions a transient DOM island above the native viewport. */
+export function requestNativeViewportLayout(): void {
+  if (typeof document === 'undefined') return;
+  document.dispatchEvent(new Event('nbcad:native-viewport-layout'));
 }
 
 function previewKey(preview: NativeViewportTransient): string {

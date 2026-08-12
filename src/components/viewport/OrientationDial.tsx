@@ -136,7 +136,7 @@ export function OrientationDial({
       title={t(`orientationDial.${preset}`)}
       aria-label={t(`orientationDial.${preset}`)}
       onClick={() => snap(preset)}
-      className={`absolute z-10 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header/95 text-[9px] font-bold text-mute shadow-sm transition-all duration-150 ease-out hover:scale-105 hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
+      className={`absolute z-20 flex h-5 w-7 items-center justify-center rounded-full border border-edge bg-header text-[9px] font-bold text-mute shadow-sm transition-all duration-150 ease-out hover:scale-105 hover:border-accent hover:bg-accent/15 hover:text-accent ${className}`}
     >
       {shortLabel}
     </button>
@@ -157,13 +157,8 @@ export function OrientationDial({
         {t('orientationDial.label')}
       </div>
 
-      <div className="relative mx-auto h-[104px] w-[104px]">
-        {presetButton('front', 'F', 'left-1/2 top-0 -translate-x-1/2')}
-        {presetButton('right', 'R', 'right-0 top-1/2 -translate-y-1/2')}
-        {presetButton('back', 'B', 'bottom-0 left-1/2 -translate-x-1/2')}
-        {presetButton('left', 'L', 'left-0 top-1/2 -translate-y-1/2')}
-
-        <div className="absolute left-1/2 top-1/2 h-[76px] w-[76px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-edge bg-viewport/80 shadow-inner">
+      <div className="relative isolate mx-auto h-[104px] w-[104px]">
+        <div className="absolute left-1/2 top-1/2 z-0 h-[76px] w-[76px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full border border-edge bg-viewport/80 shadow-inner">
           <svg
             ref={indicatorRef}
             data-native-hud-control="orientation:orbit"
@@ -189,6 +184,11 @@ export function OrientationDial({
             <circle cx="38" cy="38" r="2.5" className="fill-ink" />
           </svg>
         </div>
+
+        {presetButton('front', 'F', 'left-1/2 top-0 -translate-x-1/2')}
+        {presetButton('right', 'R', 'right-0 top-1/2 -translate-y-1/2')}
+        {presetButton('back', 'B', 'bottom-0 left-1/2 -translate-x-1/2')}
+        {presetButton('left', 'L', 'left-0 top-1/2 -translate-y-1/2')}
       </div>
 
       <div className="mt-1 grid grid-cols-3 gap-1">

@@ -4,12 +4,16 @@
  * eye-visibility toggles, hover states, and selection highlight.
  */
 import {
+  Anchor,
   Bookmark,
   Box,
   ChevronDown,
   ChevronRight,
   CircleDot,
+  ClipboardPaste,
+  Copy,
   Crosshair,
+  Download,
   Eye,
   EyeOff,
   Globe,
@@ -21,6 +25,7 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
+  Unlock,
   type LucideIcon,
 } from 'lucide-react';
 import { useState, type KeyboardEvent, type MouseEvent } from 'react';
@@ -34,6 +39,12 @@ import {
   pickPlane,
 } from '../engine/controller';
 import { useAppStore } from '../store/appStore';
+import {
+  copyBodyToClipboard,
+  exportBodyAsStep,
+  hasBodyClipboard,
+  pasteBodyFromClipboard,
+} from '../files/projectFiles';
 import type { BrowserNode, BrowserNodeKind } from '../types/document';
 import type { FeatureDto } from '../types/document';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
@@ -114,6 +125,7 @@ export function BrowserTree() {
   const hidden = useAppStore((s) => s.hidden);
   const solidScene = useAppStore((s) => s.solidScene);
   const datumPlanes = useAppStore((s) => s.datumPlanes);
+  const assemblyDocument = useAppStore((s) => s.assemblyDocument);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const [contextTarget, setContextTarget] = useState<BrowserContextTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FeatureDto | null>(null);
@@ -150,6 +162,7 @@ export function BrowserTree() {
     const isActiveSketch =
       node.kind === 'sketch' && node.name !== null && node.name === activeSketchName;
     const deleteFeature = featureForNode(node);
+    const bodyId = node.kind === 'body' ? node.reference_id : null;
 
     if (plane) {
       primary.push({
@@ -196,6 +209,57 @@ export function BrowserTree() {
         icon: <Pencil size={14} />,
         disabled: isActiveSketch || mode !== 'solid' || busy,
         onSelect: () => void editSketch(node.name!),
+      });
+    }
+    if (bodyId !== null) {
+      primary.push(
+        {
+          type: 'item',
+          id: 'copy-body',
+          label: t('browser.copyBody'),
+          icon: <Copy size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () => void copyBodyToClipboard(bodyId).catch(showBrowserActionError),
+        },
+        {
+          type: 'item',
+          id: 'export-body-step',
+          label: t('browser.exportBodyStep'),
+          icon: <Download size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () => void exportBodyAsStep(bodyId).catch(showBrowserActionError),
+        },
+        {
+          type: 'item',
+          id: assemblyDocument.grounded_body_id === bodyId ? 'release-component' : 'fix-component',
+          label: t(
+            assemblyDocument.grounded_body_id === bodyId
+              ? 'browser.releaseComponent'
+              : 'browser.fixComponent',
+          ),
+          icon:
+            assemblyDocument.grounded_body_id === bodyId
+              ? <Unlock size={14} />
+              : <Anchor size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () =>
+            void useAppStore
+              .getState()
+              .setGroundedBody(
+                assemblyDocument.grounded_body_id === bodyId ? null : bodyId,
+              )
+              .catch(showBrowserActionError),
+        },
+      );
+    }
+    if (node.kind === 'bodies_folder' || bodyId !== null) {
+      primary.push({
+        type: 'item',
+        id: 'paste-body',
+        label: t('browser.pasteBody'),
+        icon: <ClipboardPaste size={14} />,
+        disabled: mode !== 'solid' || busy || !hasBodyClipboard(),
+        onSelect: () => void pasteBodyFromClipboard().catch(showBrowserActionError),
       });
     }
     if (
@@ -296,6 +360,13 @@ export function BrowserTree() {
   );
 }
 
+function showBrowserActionError(error: unknown): void {
+  useAppStore.getState().setConstraintDialog({
+    titleKey: 'file.errorTitle',
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function RootRow({
   onOpenContext,
 }: {
@@ -354,6 +425,7 @@ function NodeRow({
   const setHoveredDatumPlane = useAppStore((s) => s.setHoveredDatumPlane);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const activeFullyDefined = useAppStore((s) => s.activeSketch?.dof.fully_defined ?? false);
+  const groundedBodyId = useAppStore((s) => s.assemblyDocument.grounded_body_id);
 
   const hasChildren = node.children.length > 0;
   const Icon = KIND_ICONS[node.kind];
@@ -379,6 +451,8 @@ function NodeRow({
     node.kind === 'body' ||
     node.kind === 'sketch' ||
     node.kind === 'construction_plane';
+  const isGroundedBody =
+    node.kind === 'body' && node.reference_id !== null && node.reference_id === groundedBodyId;
 
   const openPointerContext = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -478,6 +552,13 @@ function NodeRow({
         <span className={cx('min-w-0 flex-1 truncate', isActiveSketch ? 'font-semibold text-accent' : 'text-ink')}>
           {label}
         </span>
+        {isGroundedBody && (
+          <Anchor
+            size={11}
+            className="shrink-0 text-accent"
+            aria-label={t('browser.fixComponent')}
+          />
+        )}
         {isActiveSketch && activeFullyDefined && (
           <Lock size={11} className="shrink-0 text-mute" aria-label={t('browser.fullyDefined')} />
         )}

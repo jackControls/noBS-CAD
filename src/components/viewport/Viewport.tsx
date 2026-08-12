@@ -34,6 +34,9 @@ import { pickDatumPlane, pickPlanarFace, pickPlane } from '../../engine/controll
 import type {
   DimensionDto,
   EntityDto,
+  FaceDto,
+  JointConnectorDto,
+  JointDefinitionDto,
   OriginPlane,
   PlaneBasis,
   PlaneRef,
@@ -89,10 +92,44 @@ import {
   pickNativeViewport,
   syncNativeViewportCamera,
   syncNativeViewportPreview,
+  type NativeViewportPick,
   type NativeViewportSnapKind,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
 import { triangulateProfileRegion } from './profileTriangulation';
+
+function hasMovableJointPath(
+  joints: JointDefinitionDto[],
+  startOccurrenceId: number,
+  targetOccurrenceId: number,
+): boolean {
+  const queue: Array<{ occurrenceId: number; movable: boolean }> = [
+    { occurrenceId: startOccurrenceId, movable: false },
+  ];
+  const visited = new Set<string>([`${startOccurrenceId}:0`]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.occurrenceId === targetOccurrenceId && current.movable) return true;
+    for (const joint of joints) {
+      if (!joint.enabled) continue;
+      const occurrenceA = joint.advanced.connector_a_occurrence_id;
+      const occurrenceB = joint.advanced.connector_b_occurrence_id;
+      if (occurrenceA === null || occurrenceB === null) continue;
+      const nextOccurrenceId = occurrenceA === current.occurrenceId
+        ? occurrenceB
+        : occurrenceB === current.occurrenceId
+          ? occurrenceA
+          : null;
+      if (nextOccurrenceId === null) continue;
+      const movable = current.movable || joint.kind !== 'rigid';
+      const key = `${nextOccurrenceId}:${movable ? 1 : 0}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      queue.push({ occurrenceId: nextOccurrenceId, movable });
+    }
+  }
+  return false;
+}
 
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
 const HOME_TARGET = new CAD.Vector3(0, 0, 0);
@@ -726,10 +763,27 @@ export function Viewport() {
 
     /** Assembly poses are additional display transforms. OCCT tessellation,
      * topology ids, and feature history remain in model coordinates. */
-    const applyAssemblyPose = (object: CAD.Object3D, bodyId: number) => {
-      const pose = store.getState().assemblySolution.body_poses.find(
-        (candidate) => candidate.body_id === bodyId,
-      );
+    const effectiveAssemblySolution = () => {
+      const state = store.getState();
+      return state.jointDialogOpen && state.jointPreviewSolution
+        ? state.jointPreviewSolution
+        : state.mechanismPreview?.solution
+          ?? state.jointMotionPreview?.solution
+          ?? state.motionStudyPreview?.sample.solution
+          ?? state.assemblySolution;
+    };
+    const applyAssemblyPose = (
+      object: CAD.Object3D,
+      bodyId: number,
+      occurrenceId?: number | null,
+    ) => {
+      const solution = effectiveAssemblySolution();
+      const pose = occurrenceId !== null && occurrenceId !== undefined
+        ? solution.instance_body_poses.find(
+            (candidate) => candidate.body_id === bodyId
+              && candidate.occurrence_id === occurrenceId,
+          )
+        : solution.body_poses.find((candidate) => candidate.body_id === bodyId);
       if (!pose) {
         object.position.set(0, 0, 0);
         object.quaternion.set(0, 0, 0, 1);
@@ -740,24 +794,28 @@ export function Viewport() {
     };
 
     const clearGroup = (group: CAD.Group) => {
+      const geometries = new Set<CAD.BufferGeometry>();
+      const materials = new Set<CAD.Material>();
       for (const child of [...group.children]) {
         group.remove(child);
         child.traverse((c) => {
           if (c instanceof CAD.Mesh || c instanceof CAD.Line || c instanceof CAD.Points || c instanceof CAD.Sprite) {
-            c.geometry?.dispose?.();
+            if (c.geometry) geometries.add(c.geometry);
             const material = c.material as CAD.Material | CAD.Material[] | undefined;
             if (Array.isArray(material)) {
               material.forEach((item) => {
                 lineMaterials.delete(item as ScreenLineMaterial);
-                item.dispose();
+                materials.add(item);
               });
             } else if (material) {
               lineMaterials.delete(material as ScreenLineMaterial);
-              material.dispose();
+              materials.add(material);
             }
           }
         });
       }
+      geometries.forEach((geometry) => geometry.dispose());
+      materials.forEach((material) => material.dispose());
     };
 
     const buildGridLines = (spacing: number, cells: number, color: number, opacity: number) => {
@@ -1564,6 +1622,129 @@ export function Viewport() {
         cachedSolidArrows = arrows.slice(arrowStart);
       }
 
+      // Joint connectors are semantic native overlays. A compact ring and
+      // two-axis frame makes the inferred origin/orientation explicit without
+      // copying another CAD application's manipulator chrome.
+      const connectorEntries = [
+        ...transientState.jointConnectorPicks.map((connector, index) => ({
+          connector,
+          selected: true,
+          index,
+        })),
+        ...(transientState.jointConnectorHover
+          && !transientState.jointConnectorPicks.some((connector) =>
+            connector.occurrence_id === transientState.jointConnectorHover?.occurrence_id
+            &&
+            connector.body_id === transientState.jointConnectorHover?.body_id
+            && connector.face_id === transientState.jointConnectorHover?.face_id
+            && connector.edge_id === transientState.jointConnectorHover?.edge_id
+            && connector.kind === transientState.jointConnectorHover?.kind)
+          ? [{ connector: transientState.jointConnectorHover, selected: false, index: -1 }]
+          : []),
+      ];
+      for (const entry of connectorEntries) {
+        const { connector } = entry;
+        const connectorSolution = (
+          transientState.jointDialogOpen && transientState.jointPreviewSolution
+            ? transientState.jointPreviewSolution
+            : transientState.mechanismPreview?.solution
+              ?? transientState.jointMotionPreview?.solution
+              ?? transientState.motionStudyPreview?.sample.solution
+              ?? transientState.assemblySolution
+        );
+        const pose = connector.occurrence_id !== null && connector.occurrence_id !== undefined
+          ? connectorSolution.instance_body_poses.find(
+              (candidate) => candidate.body_id === connector.body_id
+                && candidate.occurrence_id === connector.occurrence_id,
+            )
+          : connectorSolution.body_poses.find(
+              (candidate) => candidate.body_id === connector.body_id,
+            );
+        const poseMatrix = pose
+          ? new CAD.Matrix4().compose(
+              new CAD.Vector3(...pose.translation),
+              new CAD.Quaternion(...pose.rotation).normalize(),
+              new CAD.Vector3(1, 1, 1),
+            )
+          : new CAD.Matrix4();
+        const origin = new CAD.Vector3(...connector.frame.origin).applyMatrix4(poseMatrix);
+        const primary = new CAD.Vector3(...connector.frame.primary_axis)
+          .transformDirection(poseMatrix)
+          .normalize();
+        const secondary = new CAD.Vector3(...connector.frame.secondary_axis)
+          .transformDirection(poseMatrix);
+        secondary.addScaledVector(primary, -secondary.dot(primary)).normalize();
+        const tertiary = new CAD.Vector3().crossVectors(primary, secondary).normalize();
+        const size = Math.max(2.5, Math.min(14, camera.position.distanceTo(origin) * 0.045));
+        const color: Rgba = entry.selected
+          ? entry.index === 0
+            ? [0.48, 0.39, 0.95, 1]
+            : [1.0, 0.58, 0.2, 1]
+          : [0.16, 0.72, 0.96, 0.9];
+        const ringColor: Rgba = [color[0], color[1], color[2], entry.selected ? 0.95 : 0.7];
+        const connectorRadius = connector.radius ?? transientState.solidScene.bodies
+            .find((body) => body.id === connector.body_id)
+            ?.faces.find((face) => face.id === connector.face_id)
+            ?.cylinder?.radius;
+        if (connector.kind === 'virtual_circular_face') {
+          if (connectorRadius && connectorRadius > 0) {
+            const disk: number[] = [];
+            for (let segment = 0; segment < 32; segment += 1) {
+              const a = segment / 32 * Math.PI * 2;
+              const b = (segment + 1) / 32 * Math.PI * 2;
+              const pointA = origin.clone()
+                .addScaledVector(secondary, Math.cos(a) * connectorRadius)
+                .addScaledVector(tertiary, Math.sin(a) * connectorRadius);
+              const pointB = origin.clone()
+                .addScaledVector(secondary, Math.cos(b) * connectorRadius)
+                .addScaledVector(tertiary, Math.sin(b) * connectorRadius);
+              disk.push(...origin.toArray(), ...pointA.toArray(), ...pointB.toArray());
+            }
+            triangles.push({
+              color: [color[0], color[1], color[2], entry.selected ? 0.18 : 0.11],
+              positions: disk,
+              xray: true,
+            });
+          }
+        }
+        if (connectorRadius && connectorRadius > 0) {
+          let previous = origin.clone().addScaledVector(secondary, connectorRadius);
+          for (let segment = 1; segment <= 48; segment += 1) {
+            const angle = segment / 48 * Math.PI * 2;
+            const next = origin.clone()
+              .addScaledVector(secondary, Math.cos(angle) * connectorRadius)
+              .addScaledVector(tertiary, Math.sin(angle) * connectorRadius);
+            appendSegment(ringColor, entry.selected ? 2 : 1.55, previous, next);
+            previous = next;
+          }
+        }
+        const ringRadius = size * 0.28;
+        let previous = origin.clone().addScaledVector(secondary, ringRadius);
+        for (let segment = 1; segment <= 24; segment += 1) {
+          const angle = segment / 24 * Math.PI * 2;
+          const next = origin.clone()
+            .addScaledVector(secondary, Math.cos(angle) * ringRadius)
+            .addScaledVector(tertiary, Math.sin(angle) * ringRadius);
+          appendSegment(ringColor, entry.selected ? 1.8 : 1.35, previous, next);
+          previous = next;
+        }
+        appendPoint(color, size * 0.055, origin);
+        arrows.push({
+          start: origin.toArray() as [number, number, number],
+          end: origin.clone().addScaledVector(primary, size).toArray() as [number, number, number],
+          color,
+          width: entry.selected ? 2 : 1.5,
+          xray: true,
+        });
+        arrows.push({
+          start: origin.toArray() as [number, number, number],
+          end: origin.clone().addScaledVector(secondary, size * 0.62).toArray() as [number, number, number],
+          color: [color[0], color[1], color[2], entry.selected ? 0.82 : 0.65],
+          width: entry.selected ? 1.6 : 1.25,
+          xray: true,
+        });
+      }
+
       let marker: NativeViewportTransient['marker'] = null;
       if (sketchGroup.visible && snapMarker.visible) {
         snapMarker.getWorldPosition(transientPosition);
@@ -2105,6 +2286,258 @@ export function Viewport() {
       return (2 * dist * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) / height;
     };
 
+    const beginJointMotionDrag = (
+      bodyId: number,
+      occurrenceId: number | null,
+      event: PointerEvent,
+      state: ReturnType<typeof store.getState>,
+      pickedWorldPoint?: Point3Dto | [number, number, number],
+    ): boolean => {
+      if (state.solidSidebarMode !== 'assembly' || state.selectedJointId === null) return false;
+      const joint = state.assemblyDocument.joints.find(
+        (candidate) => candidate.id === state.selectedJointId,
+      );
+      if (!joint || !['revolute', 'slider', 'cylindrical'].includes(joint.kind)) return false;
+      const occurrenceA = joint.advanced.connector_a_occurrence_id;
+      const occurrenceB = joint.advanced.connector_b_occurrence_id;
+      if (occurrenceId === null || occurrenceA === null || occurrenceB === null) return false;
+      const groundedOccurrenceId = state.assemblyDocument.component_structure.occurrences.find(
+        (candidate) => candidate.grounded
+          && (candidate.id === occurrenceA || candidate.id === occurrenceB),
+      )?.id ?? occurrenceA;
+      const movingOccurrenceId = groundedOccurrenceId === occurrenceB ? occurrenceA : occurrenceB;
+      if (occurrenceId !== movingOccurrenceId) return false;
+
+      const movingBodyId = joint.advanced.connector_a_occurrence_id === movingOccurrenceId
+        ? joint.connector_a.body_id
+        : joint.connector_b.body_id;
+
+      const movingConnector = occurrenceA === movingOccurrenceId
+        ? joint.connector_a
+        : joint.connector_b;
+      const fixedConnector = movingConnector === joint.connector_a
+        ? joint.connector_b
+        : joint.connector_a;
+      const solution = effectiveAssemblySolution();
+      const poseMatrixFor = (targetBodyId: number, targetOccurrenceId: number) => {
+        const pose = solution.instance_body_poses.find(
+          (candidate) => candidate.body_id === targetBodyId
+            && candidate.occurrence_id === targetOccurrenceId,
+        );
+        return pose
+          ? new CAD.Matrix4().compose(
+            new CAD.Vector3(...pose.translation),
+            new CAD.Quaternion(...pose.rotation).normalize(),
+            new CAD.Vector3(1, 1, 1),
+          )
+          : new CAD.Matrix4();
+      };
+      const movingPoseMatrix = poseMatrixFor(movingBodyId, movingOccurrenceId);
+      const fixedOccurrenceId = movingOccurrenceId === occurrenceA ? occurrenceB : occurrenceA;
+      const fixedPoseMatrix = poseMatrixFor(fixedConnector.body_id, fixedOccurrenceId);
+      const origin = new CAD.Vector3(...movingConnector.frame.origin)
+        .applyMatrix4(movingPoseMatrix);
+      // Positive motion is defined in the fixed connector's frame. Using the
+      // moving face normal reverses the screen direction after the mate flip.
+      // Derivative of the saved A→B joint relation. With B moving, positive
+      // travel always follows connector A's +axis. With A moving the inverse
+      // relation reverses that axis only for the aligned-frame mate; the
+      // opposing-frame mate contributes its own 180° reversal. Projecting
+      // this exact world derivative makes the part follow the cursor for
+      // either grounded side and for either Flip setting.
+      const motionDirection = movingOccurrenceId === occurrenceA
+        ? (joint.flipped ? -1 : 1)
+        : 1;
+      const worldAxis = new CAD.Vector3(...fixedConnector.frame.primary_axis)
+        .transformDirection(fixedPoseMatrix)
+        .normalize()
+        .multiplyScalar(motionDirection);
+      const axisEnd = origin.clone().add(worldAxis);
+      const rect = surface.domElement.getBoundingClientRect();
+      const toScreen = (point: CAD.Vector3): [number, number] => {
+        const projected = point.clone().project(camera);
+        return [
+          rect.left + (projected.x + 1) * rect.width / 2,
+          rect.top + (1 - projected.y) * rect.height / 2,
+        ];
+      };
+      const center = toScreen(origin);
+      const axisPoint = toScreen(axisEnd);
+      const axisX = axisPoint[0] - center[0];
+      const axisY = axisPoint[1] - center[1];
+      const axisLength = Math.hypot(axisX, axisY);
+      const screenAxis: [number, number] = axisLength > 1e-6
+        ? [axisX / axisLength, axisY / axisLength]
+        : [1, 0];
+      const startRadius = Math.hypot(event.clientX - center[0], event.clientY - center[1]);
+      const radialX = event.clientX - center[0];
+      const radialY = event.clientY - center[1];
+      const startAngleValue = state.jointMotionPreview?.jointId === joint.id
+        ? state.jointMotionPreview.angleOffsetDeg
+        : joint.angle_offset_deg;
+      const startLinearValue = state.jointMotionPreview?.jointId === joint.id
+        ? state.jointMotionPreview.linearOffsetMm
+        : joint.linear_offset_mm;
+      const angleLimits = joint.angle_limits
+        ?? (joint.kind === 'revolute' ? joint.limits : null);
+      const linearLimits = joint.linear_limits
+        ?? (joint.kind === 'slider' ? joint.limits : null);
+      const cameraForward = new CAD.Vector3(0, 0, -1)
+        .applyQuaternion(camera.quaternion)
+        .normalize();
+      const depth = Math.max(
+        camera.near * 2,
+        origin.clone().sub(camera.position).dot(cameraForward),
+      );
+      const millimetersPerPixel =
+        (2 * depth * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) /
+        Math.max(1, rect.height);
+      const screenTangent: [number, number] = startRadius >= 12
+        ? [-radialY / startRadius, radialX / startRadius]
+        : [-screenAxis[1], screenAxis[0]];
+      const pickedPoint = pickedWorldPoint
+        ? new CAD.Vector3(
+          Array.isArray(pickedWorldPoint) ? pickedWorldPoint[0] : pickedWorldPoint.x,
+          Array.isArray(pickedWorldPoint) ? pickedWorldPoint[1] : pickedWorldPoint.y,
+          Array.isArray(pickedWorldPoint) ? pickedWorldPoint[2] : pickedWorldPoint.z,
+        )
+        : null;
+      let rotationScreenSign = Math.sign(worldAxis.dot(cameraForward)) || 1;
+      if (pickedPoint) {
+        // Derive the sign from the visible motion of the exact picked point.
+        // This remains correct for either grounded connector, either mate
+        // alignment, an oblique camera, and perspective projection. A simple
+        // camera-hemisphere test reverses in some of those combinations.
+        const positivePoint = pickedPoint
+          .clone()
+          .sub(origin)
+          .applyQuaternion(
+            new CAD.Quaternion().setFromAxisAngle(worldAxis, CAD.MathUtils.degToRad(1)),
+          )
+          .add(origin);
+        const pickedScreen = toScreen(pickedPoint);
+        const positiveScreen = toScreen(positivePoint);
+        const positiveX = positiveScreen[0] - pickedScreen[0];
+        const positiveY = positiveScreen[1] - pickedScreen[1];
+        const projectedMotion = positiveX * screenTangent[0] + positiveY * screenTangent[1];
+        if (Math.abs(projectedMotion) > 1e-6) {
+          rotationScreenSign = Math.sign(projectedMotion);
+        }
+      }
+      jointMotionDrag = {
+        pointerId: event.pointerId,
+        jointId: joint.id,
+        kind: joint.kind as 'revolute' | 'slider' | 'cylindrical',
+        activeDof: joint.kind === 'revolute'
+          ? 'angle'
+          : joint.kind === 'slider'
+            ? 'linear'
+            : null,
+        startAngleValue,
+        startLinearValue,
+        angleValue: startAngleValue,
+        linearValue: startLinearValue,
+        angleMinimum: angleLimits?.min ?? -180,
+        angleMaximum: angleLimits?.max ?? 180,
+        linearMinimum: linearLimits?.min ?? -100,
+        linearMaximum: linearLimits?.max ?? 100,
+        startX: event.clientX,
+        startY: event.clientY,
+        center,
+        startAngle: startRadius >= 12
+          ? Math.atan2(event.clientY - center[1], event.clientX - center[0])
+          : null,
+        screenAxis,
+        screenTangent,
+        rotationScreenSign,
+        millimetersPerPixel,
+        moved: false,
+        lastPreviewAt: 0,
+      };
+      state.setSelectedBody(movingBodyId);
+      state.setSelectedOccurrenceId(movingOccurrenceId);
+      surface.domElement.style.cursor = 'grabbing';
+      try {
+        surface.domElement.setPointerCapture(event.pointerId);
+      } catch {
+        // Native child-view delivery may already own pointer capture.
+      }
+      event.preventDefault();
+      return true;
+    };
+
+    const beginMechanismDrag = (
+      bodyId: number,
+      occurrenceId: number | null,
+      event: PointerEvent,
+      state: ReturnType<typeof store.getState>,
+    ): boolean => {
+      if (state.solidSidebarMode !== 'assembly' || state.jointDialogOpen) return false;
+      if (occurrenceId === null) return false;
+      const occurrence = state.assemblyDocument.component_structure.occurrences.find(
+        (candidate) => candidate.id === occurrenceId,
+      );
+      if (!occurrence) return false;
+      const groundedOccurrenceId = state.assemblyDocument.component_structure.occurrences.find(
+        (candidate) => candidate.grounded
+          && candidate.parent_occurrence_id === occurrence.parent_occurrence_id,
+      )?.id
+        ?? state.assemblyDocument.component_structure.occurrences
+          .filter((candidate) => candidate.parent_occurrence_id === occurrence.parent_occurrence_id)
+          .sort((a, b) => a.id - b.id)[0]?.id
+        ?? null;
+      if (groundedOccurrenceId === null || occurrenceId === groundedOccurrenceId) return false;
+      if (!hasMovableJointPath(
+        state.assemblyDocument.joints,
+        groundedOccurrenceId,
+        occurrenceId,
+      )) return false;
+      const solution = effectiveAssemblySolution();
+      const pose = solution.instance_body_poses.find(
+        (candidate) => candidate.body_id === bodyId
+          && candidate.occurrence_id === occurrenceId,
+      );
+      if (!pose) return false;
+      const rect = surface.domElement.getBoundingClientRect();
+      const cameraForward = new CAD.Vector3(0, 0, -1)
+        .applyQuaternion(camera.quaternion)
+        .normalize();
+      const depth = Math.max(
+        camera.near * 2,
+        new CAD.Vector3(...pose.translation).sub(camera.position).dot(cameraForward),
+      );
+      const millimetersPerPixel =
+        (2 * depth * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) /
+        Math.max(1, rect.height);
+      const cameraRight = new CAD.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+      const cameraUp = new CAD.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+      mechanismDrag = {
+        pointerId: event.pointerId,
+        bodyId,
+        occurrenceId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startTranslation: [...pose.translation],
+        rotation: [...pose.rotation],
+        cameraRight: cameraRight.toArray() as [number, number, number],
+        cameraUp: cameraUp.toArray() as [number, number, number],
+        millimetersPerPixel,
+        moved: false,
+        lastPreviewAt: 0,
+        targetTranslation: [...pose.translation],
+      };
+      state.setSelectedBody(bodyId);
+      state.setSelectedOccurrenceId(occurrenceId);
+      surface.domElement.style.cursor = 'grabbing';
+      try {
+        surface.domElement.setPointerCapture(event.pointerId);
+      } catch {
+        // Native child-view delivery may already own pointer capture.
+      }
+      event.preventDefault();
+      return true;
+    };
+
     const referencePlaneHalfSize = (origin: CAD.Vector3) => {
       const forward = new CAD.Vector3(0, 0, -1)
         .applyQuaternion(camera.quaternion)
@@ -2451,6 +2884,49 @@ export function Viewport() {
       startX: number;
       startY: number;
       moved: boolean;
+    } | null = null;
+    /** Transient direct manipulation for the selected motion joint.
+     * Release keeps a preview only; the Assembly panel owns Capture/Revert. */
+    let jointMotionDrag: {
+      pointerId: number;
+      jointId: number;
+      kind: 'revolute' | 'slider' | 'cylindrical';
+      activeDof: 'angle' | 'linear' | null;
+      startAngleValue: number;
+      startLinearValue: number;
+      angleValue: number;
+      linearValue: number;
+      angleMinimum: number;
+      angleMaximum: number;
+      linearMinimum: number;
+      linearMaximum: number;
+      startX: number;
+      startY: number;
+      center: [number, number];
+      startAngle: number | null;
+      screenAxis: [number, number];
+      screenTangent: [number, number];
+      rotationScreenSign: number;
+      millimetersPerPixel: number;
+      moved: boolean;
+      lastPreviewAt: number;
+    } | null = null;
+    /** Screen-plane component drag solved across every joint on the grounded
+     * kinematic path. Release keeps a transient result for Capture/Revert. */
+    let mechanismDrag: {
+      pointerId: number;
+      bodyId: number;
+      occurrenceId: number;
+      startX: number;
+      startY: number;
+      startTranslation: [number, number, number];
+      targetTranslation: [number, number, number];
+      rotation: [number, number, number, number];
+      cameraRight: [number, number, number];
+      cameraUp: [number, number, number];
+      millimetersPerPixel: number;
+      moved: boolean;
+      lastPreviewAt: number;
     } | null = null;
     /** Dimension text drag (live sprite move, engine commit on release). */
     let dimDragging: { dimId: number; sprite: CAD.Sprite } | null = null;
@@ -5121,6 +5597,7 @@ export function Viewport() {
           : null;
       const faceHighlights: Array<{
         bodyId: number;
+        occurrenceId: number | null;
         faceId: number;
         positions: number[];
         selected: boolean;
@@ -5132,10 +5609,15 @@ export function Viewport() {
         if (object instanceof CAD.Mesh && object.userData.solidFace === true) {
           const material = object.material as CAD.MeshStandardMaterial;
           const bodyId = object.userData.bodyId as number;
+          const occurrenceId = object.userData.occurrenceId as number | null | undefined;
           const bodySelectionIndex = s.selectedBodies.indexOf(bodyId);
-          const bodySelected = bodySelectionIndex >= 0;
-          const faceSelected = selectedFaceIds.has(object.userData.faceId as number);
-          const faceHovered = object.userData.faceId === s.hoveredFace;
+          const bodySelected = s.selectedOccurrenceId !== null
+            ? occurrenceId === s.selectedOccurrenceId
+            : bodySelectionIndex >= 0;
+          const faceSelected = selectedFaceIds.has(object.userData.faceId as number)
+            && (s.selectedOccurrenceId === null || occurrenceId === s.selectedOccurrenceId);
+          const faceHovered = object.userData.faceId === s.hoveredFace
+            && (s.hoveredOccurrenceId === null || occurrenceId === s.hoveredOccurrenceId);
           material.color.setHex(
             faceSelected
               ? COLOR_FACE_SELECTED
@@ -5152,6 +5634,7 @@ export function Viewport() {
           if (faceSelected || faceHovered) {
             faceHighlights.push({
               bodyId,
+              occurrenceId: occurrenceId ?? null,
               faceId: object.userData.faceId as number,
               positions:
                 (object.userData.boundaryPositions as number[] | undefined) ?? [],
@@ -5160,8 +5643,11 @@ export function Viewport() {
           }
         } else if (object instanceof CAD.Line && object.userData.solidEdge === true) {
           const material = object.material as CAD.LineBasicMaterial;
-          const selected = s.selectedEdges.includes(object.userData.edgeId as number);
-          const hovered = object.userData.edgeId === s.hoveredEdge;
+          const occurrenceId = object.userData.occurrenceId as number | null | undefined;
+          const selected = s.selectedEdges.includes(object.userData.edgeId as number)
+            && (s.selectedOccurrenceId === null || occurrenceId === s.selectedOccurrenceId);
+          const hovered = object.userData.edgeId === s.hoveredEdge
+            && (s.hoveredOccurrenceId === null || occurrenceId === s.hoveredOccurrenceId);
           material.color.setHex(
             selected
               ? COLOR_EDGE_SELECTED
@@ -5192,15 +5678,22 @@ export function Viewport() {
         );
         outline.userData.faceId = face.faceId;
         outline.userData.bodyId = face.bodyId;
+        outline.userData.occurrenceId = face.occurrenceId;
         outline.userData.faceHighlightKind = face.selected ? 'selected' : 'hover';
-        applyAssemblyPose(outline, face.bodyId);
+        applyAssemblyPose(outline, face.bodyId, face.occurrenceId);
       }
 
-      for (const body of s.solidScene.bodies) {
-        if (hidden.has(body.id)) continue;
+      for (const bodyObject of solidGroup.children) {
+        const bodyId = bodyObject.userData.bodyId as number | undefined;
+        const occurrenceId = bodyObject.userData.occurrenceId as number | null | undefined;
+        const body = s.solidScene.bodies.find((candidate) => candidate.id === bodyId);
+        if (!body || hidden.has(body.id)) continue;
         const selectedIndex = s.selectedBodies.indexOf(body.id);
-        const selected = selectedIndex >= 0;
-        const hovered = body.id === hoveredBodyId;
+        const selected = s.selectedOccurrenceId !== null
+          ? occurrenceId === s.selectedOccurrenceId
+          : selectedIndex >= 0;
+        const hovered = body.id === hoveredBodyId
+          && (s.hoveredOccurrenceId === null || occurrenceId === s.hoveredOccurrenceId);
         if (!selected && !hovered) continue;
         const positions: number[] = [];
         for (const edge of body.edges) {
@@ -5225,12 +5718,13 @@ export function Viewport() {
           true,
         );
         outline.userData.bodyId = body.id;
+        outline.userData.occurrenceId = occurrenceId ?? null;
         outline.userData.bodyHighlightKind = selected
           ? toolBody
             ? 'tool'
             : 'target'
           : 'hover';
-        applyAssemblyPose(outline, body.id);
+        applyAssemblyPose(outline, body.id, occurrenceId);
       }
 
       for (const body of s.solidScene.bodies) {
@@ -5244,16 +5738,31 @@ export function Viewport() {
             point.y,
             point.z,
           ]);
-          const line = addScreenPolyline(
-            solidEdgeHighlightGroup,
-            positions,
-            selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
-            1.5,
-            selected ? 23 : 21,
+          const instances = solidGroup.children.filter(
+            (candidate) => candidate.userData.bodyId === body.id
+              && (selected
+                ? s.selectedOccurrenceId === null
+                  || candidate.userData.occurrenceId === s.selectedOccurrenceId
+                : s.hoveredOccurrenceId === null
+                  || candidate.userData.occurrenceId === s.hoveredOccurrenceId),
           );
-          line.userData.edgeId = edge.id;
-          line.userData.edgeHighlightKind = selected ? 'selected' : 'hover';
-          applyAssemblyPose(line, body.id);
+          for (const instance of instances) {
+            const line = addScreenPolyline(
+              solidEdgeHighlightGroup,
+              positions,
+              selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
+              1.5,
+              selected ? 23 : 21,
+            );
+            line.userData.edgeId = edge.id;
+            line.userData.edgeHighlightKind = selected ? 'selected' : 'hover';
+            line.userData.occurrenceId = instance.userData.occurrenceId ?? null;
+            applyAssemblyPose(
+              line,
+              body.id,
+              line.userData.occurrenceId as number | null,
+            );
+          }
         }
       }
     };
@@ -5264,39 +5773,80 @@ export function Viewport() {
       const hidden = hiddenBodyIds();
       clearGroup(solidGroup);
 
-      for (const body of s.solidScene.bodies) {
+      const solvedInstances = effectiveAssemblySolution().instance_body_poses;
+      const instances = solvedInstances.length > 0
+        ? solvedInstances
+            .filter((instance) => instance.visible)
+            .map((instance) => ({
+              bodyId: instance.body_id,
+              occurrenceId: instance.occurrence_id as number | null,
+              componentId: instance.component_id as number | null,
+            }))
+        : s.solidScene.bodies.map((body) => ({
+            bodyId: body.id,
+            occurrenceId: null,
+            componentId: null,
+          }));
+      // Occurrences share the exact retained source geometry. Materials stay
+      // per-instance so hover/selection can differ without duplicating GPU
+      // vertex/index buffers for every reusable occurrence.
+      const faceTemplates = new Map<string, {
+        geometry: CAD.BufferGeometry;
+        boundaryPositions: number[];
+      }>();
+      const edgeTemplates = new Map<string, CAD.BufferGeometry>();
+
+      for (const instance of instances) {
+        const body = s.solidScene.bodies.find((candidate) => candidate.id === instance.bodyId);
+        if (!body) continue;
         if (hidden.has(body.id)) continue;
         const bodyGroup = new CAD.Group();
-        bodyGroup.name = body.name;
+        const occurrence = instance.occurrenceId === null
+          ? null
+          : s.assemblyDocument.component_structure.occurrences.find(
+              (candidate) => candidate.id === instance.occurrenceId,
+            );
+        bodyGroup.name = occurrence?.name ?? body.name;
         bodyGroup.userData.bodyId = body.id;
-        applyAssemblyPose(bodyGroup, body.id);
+        bodyGroup.userData.occurrenceId = instance.occurrenceId;
+        bodyGroup.userData.componentId = instance.componentId;
+        applyAssemblyPose(bodyGroup, body.id, instance.occurrenceId);
 
         for (const face of body.faces) {
-          const positions: number[] = [];
-          const normals: number[] = [];
-          const first = face.first_index;
-          const end = first + face.index_count;
-          for (let offset = first; offset < end; offset += 1) {
-            const vertex = body.mesh.indices[offset];
-            if (vertex === undefined) continue;
-            const base = vertex * 3;
-            positions.push(
-              body.mesh.positions[base] ?? 0,
-              body.mesh.positions[base + 1] ?? 0,
-              body.mesh.positions[base + 2] ?? 0,
-            );
-            normals.push(
-              body.mesh.normals[base] ?? 0,
-              body.mesh.normals[base + 1] ?? 0,
-              body.mesh.normals[base + 2] ?? 1,
-            );
+          const templateKey = `${body.id}:${face.id}`;
+          let template = faceTemplates.get(templateKey);
+          if (!template) {
+            const positions: number[] = [];
+            const normals: number[] = [];
+            const first = face.first_index;
+            const end = first + face.index_count;
+            for (let offset = first; offset < end; offset += 1) {
+              const vertex = body.mesh.indices[offset];
+              if (vertex === undefined) continue;
+              const base = vertex * 3;
+              positions.push(
+                body.mesh.positions[base] ?? 0,
+                body.mesh.positions[base + 1] ?? 0,
+                body.mesh.positions[base + 2] ?? 0,
+              );
+              normals.push(
+                body.mesh.normals[base] ?? 0,
+                body.mesh.normals[base + 1] ?? 0,
+                body.mesh.normals[base + 2] ?? 1,
+              );
+            }
+            if (positions.length < 9) continue;
+            const geometry = new CAD.BufferGeometry();
+            geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('normal', new CAD.Float32BufferAttribute(normals, 3));
+            geometry.computeBoundingBox();
+            geometry.computeBoundingSphere();
+            template = {
+              geometry,
+              boundaryPositions: triangleBoundarySegments(positions),
+            };
+            faceTemplates.set(templateKey, template);
           }
-          if (positions.length < 9) continue;
-          const geometry = new CAD.BufferGeometry();
-          geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
-          geometry.setAttribute('normal', new CAD.Float32BufferAttribute(normals, 3));
-          geometry.computeBoundingBox();
-          geometry.computeBoundingSphere();
           const material = new CAD.MeshStandardMaterial({
             color: bodyBaseColor(body.id, useAppStore.getState().bodyAppearances),
             roughness: 0.72,
@@ -5306,21 +5856,28 @@ export function Viewport() {
             polygonOffsetFactor: 1,
             polygonOffsetUnits: 1,
           });
-          const mesh = new CAD.Mesh(geometry, material);
+          const mesh = new CAD.Mesh(template.geometry, material);
           mesh.name = `${body.name}:${face.key}`;
           mesh.userData.solidFace = true;
           mesh.userData.bodyId = body.id;
+          mesh.userData.occurrenceId = instance.occurrenceId;
+          mesh.userData.componentId = instance.componentId;
           mesh.userData.faceId = face.id;
           mesh.userData.planar = face.plane !== null;
-          mesh.userData.boundaryPositions = triangleBoundarySegments(positions);
+          mesh.userData.boundaryPositions = template.boundaryPositions;
           bodyGroup.add(mesh);
         }
 
         for (const edge of body.edges) {
           if (edge.points.length < 2) continue;
-          const geometry = new CAD.BufferGeometry().setFromPoints(
-            edge.points.map((point) => new CAD.Vector3(point.x, point.y, point.z)),
-          );
+          const templateKey = `${body.id}:${edge.id}`;
+          let geometry = edgeTemplates.get(templateKey);
+          if (!geometry) {
+            geometry = new CAD.BufferGeometry().setFromPoints(
+              edge.points.map((point) => new CAD.Vector3(point.x, point.y, point.z)),
+            );
+            edgeTemplates.set(templateKey, geometry);
+          }
           const material = new CAD.LineBasicMaterial({
             color: COLOR_EDGE,
             transparent: true,
@@ -5331,6 +5888,8 @@ export function Viewport() {
           line.name = `${body.name}:${edge.key}`;
           line.userData.solidEdge = true;
           line.userData.bodyId = body.id;
+          line.userData.occurrenceId = instance.occurrenceId;
+          line.userData.componentId = instance.componentId;
           line.userData.edgeId = edge.id;
           line.userData.refinable = edge.refinable;
           line.userData.straight = isStraightSolidEdge(edge.points);
@@ -5345,7 +5904,8 @@ export function Viewport() {
     const updateAssemblyPoses = () => {
       for (const body of solidGroup.children) {
         const bodyId = body.userData.bodyId as number | undefined;
-        if (bodyId !== undefined) applyAssemblyPose(body, bodyId);
+        const occurrenceId = body.userData.occurrenceId as number | null | undefined;
+        if (bodyId !== undefined) applyAssemblyPose(body, bodyId, occurrenceId);
       }
       // Highlight layers are retained separately from the body meshes, so
       // rebuild only their inexpensive line objects at the new poses.
@@ -5354,7 +5914,13 @@ export function Viewport() {
 
     const pickSolidFace = (
       event: PointerEvent,
-    ): { bodyId: number; faceId: number; planar: boolean; point: Point3Dto } | null => {
+    ): {
+      bodyId: number;
+      occurrenceId: number | null;
+      faceId: number;
+      planar: boolean;
+      point: Point3Dto;
+    } | null => {
       raycaster.setFromCamera(ndcFromEvent(event), camera);
       const hit = raycaster
         .intersectObjects(solidGroup.children, true)
@@ -5362,10 +5928,186 @@ export function Viewport() {
       if (!hit) return null;
       return {
         bodyId: hit.object.userData.bodyId as number,
+        occurrenceId: (hit.object.userData.occurrenceId as number | null | undefined) ?? null,
         faceId: hit.object.userData.faceId as number,
         planar: hit.object.userData.planar as boolean,
         point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
       };
+    };
+
+    const bodyLocalPoint = (
+      bodyId: number,
+      world: Point3Dto,
+      occurrenceId?: number | null,
+    ): CAD.Vector3 => {
+      const solution = effectiveAssemblySolution();
+      const pose = occurrenceId !== null && occurrenceId !== undefined
+        ? solution.instance_body_poses.find(
+            (candidate) => candidate.body_id === bodyId
+              && candidate.occurrence_id === occurrenceId,
+          )
+        : solution.body_poses.find((candidate) => candidate.body_id === bodyId);
+      const point = new CAD.Vector3(world.x, world.y, world.z);
+      if (!pose) return point;
+      const matrix = new CAD.Matrix4().compose(
+        new CAD.Vector3(...pose.translation),
+        new CAD.Quaternion(...pose.rotation).normalize(),
+        new CAD.Vector3(1, 1, 1),
+      );
+      return point.applyMatrix4(matrix.invert());
+    };
+
+    const jointConnectorFromFace = (
+      bodyId: number,
+      face: FaceDto,
+      worldPoint: Point3Dto,
+      occurrenceId: number | null = null,
+    ): JointConnectorDto | null => {
+      if (face.plane) {
+        const origin = face.signature
+          ? [
+              face.signature.centroid.x,
+              face.signature.centroid.y,
+              face.signature.centroid.z,
+            ] as [number, number, number]
+          : face.plane.origin;
+        return {
+          occurrence_id: occurrenceId,
+          body_id: bodyId,
+          face_id: face.id,
+          face_key: face.key,
+          edge_id: null,
+          edge_key: null,
+          kind: 'planar_face',
+          radius: null,
+          frame: {
+            origin,
+            primary_axis: face.plane.normal,
+            secondary_axis: face.plane.u,
+          },
+        };
+      }
+      if (!face.cylinder) return null;
+      const localPoint = bodyLocalPoint(bodyId, worldPoint, occurrenceId);
+      const axisOrigin = new CAD.Vector3(
+        face.cylinder.origin.x,
+        face.cylinder.origin.y,
+        face.cylinder.origin.z,
+      );
+      const axis = new CAD.Vector3(
+        face.cylinder.axis.x,
+        face.cylinder.axis.y,
+        face.cylinder.axis.z,
+      ).normalize();
+      const origin = axisOrigin.clone().add(
+        axis.clone().multiplyScalar(localPoint.clone().sub(axisOrigin).dot(axis)),
+      );
+      let secondary = localPoint.clone().sub(origin);
+      if (secondary.lengthSq() <= 1e-10) {
+        secondary = new CAD.Vector3(
+          face.cylinder.reference.x,
+          face.cylinder.reference.y,
+          face.cylinder.reference.z,
+        );
+      }
+      secondary.addScaledVector(axis, -secondary.dot(axis)).normalize();
+      return {
+        occurrence_id: occurrenceId,
+        body_id: bodyId,
+        face_id: face.id,
+        face_key: face.key,
+        edge_id: null,
+        edge_key: null,
+        kind: 'cylindrical_face',
+        radius: face.cylinder.radius,
+        frame: {
+          origin: origin.toArray() as [number, number, number],
+          primary_axis: axis.toArray() as [number, number, number],
+          secondary_axis: secondary.toArray() as [number, number, number],
+        },
+      };
+    };
+
+    const jointConnectorFromEdge = (
+      bodyId: number,
+      edgeId: number,
+      occurrenceId: number | null = null,
+    ): JointConnectorDto | null => {
+      const body = store.getState().solidScene.bodies.find((candidate) => candidate.id === bodyId);
+      const edge = body?.edges.find((candidate) => candidate.id === edgeId);
+      const circle = edge?.circle;
+      if (!body || !edge || !circle?.closed || circle.radius <= 0) return null;
+      return {
+        occurrence_id: occurrenceId,
+        body_id: body.id,
+        face_id: 0,
+        face_key: '',
+        edge_id: edge.id,
+        edge_key: edge.key,
+        kind: 'circular_edge',
+        radius: circle.radius,
+        frame: {
+          origin: [circle.center.x, circle.center.y, circle.center.z],
+          primary_axis: [circle.normal.x, circle.normal.y, circle.normal.z],
+          secondary_axis: [circle.reference.x, circle.reference.y, circle.reference.z],
+        },
+      };
+    };
+
+    const jointConnectorFromNativePick = (
+      hit: NativeViewportPick,
+    ): JointConnectorDto | null => {
+      const state = store.getState();
+      const body = state.solidScene.bodies.find((candidate) => candidate.id === hit.bodyId);
+      if (!body) return null;
+      if (hit.connectorKind === 'circular_edge' && hit.edgeId !== null) {
+        const edge = body.edges.find((candidate) => candidate.id === hit.edgeId);
+        if (!edge) return null;
+        return {
+          occurrence_id: hit.occurrenceId,
+          body_id: body.id,
+          face_id: 0,
+          face_key: '',
+          edge_id: edge.id,
+          edge_key: edge.key,
+          kind: 'circular_edge',
+          radius: hit.connectorRadius ?? edge.circle?.radius ?? null,
+          frame: {
+            origin: hit.connectorOrigin!,
+            primary_axis: hit.connectorPrimaryAxis!,
+            secondary_axis: hit.connectorSecondaryAxis!,
+          },
+        };
+      }
+      const face = body.faces.find((candidate) => candidate.id === hit.faceId);
+      if (!face) return null;
+      if (
+        hit.connectorKind
+        && hit.connectorOrigin
+        && hit.connectorPrimaryAxis
+        && hit.connectorSecondaryAxis
+      ) {
+        return {
+          occurrence_id: hit.occurrenceId,
+          body_id: body.id,
+          face_id: face.id,
+          face_key: face.key,
+          edge_id: null,
+          edge_key: null,
+          kind: hit.connectorKind,
+          radius: hit.connectorRadius,
+          frame: {
+            origin: hit.connectorOrigin,
+            primary_axis: hit.connectorPrimaryAxis,
+            secondary_axis: hit.connectorSecondaryAxis,
+          },
+        };
+      }
+      return jointConnectorFromFace(body.id, face, {
+        x: hit.point[0],
+        y: hit.point[1],
+        z: hit.point[2],
+      }, hit.occurrenceId);
     };
 
     /** Hole placement picker for stable points in finished sketches. The
@@ -5467,7 +6209,12 @@ export function Viewport() {
     const pickSolidEdge = (
       event: PointerEvent,
       mode: SolidEdgePickMode = 'any',
-    ): { bodyId: number; edgeId: number } | null => {
+    ): {
+      bodyId: number;
+      occurrenceId: number | null;
+      edgeId: number;
+      point: Point3Dto;
+    } | null => {
       raycaster.setFromCamera(ndcFromEvent(event), camera);
       raycaster.params.Line = {
         threshold: Math.max(0.15, worldPerPixel() * 6),
@@ -5481,7 +6228,9 @@ export function Viewport() {
       if (!hit) return null;
       return {
         bodyId: hit.object.userData.bodyId as number,
+        occurrenceId: (hit.object.userData.occurrenceId as number | null | undefined) ?? null,
         edgeId: hit.object.userData.edgeId as number,
+        point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
       };
     };
 
@@ -5786,9 +6535,100 @@ export function Viewport() {
         aligned: sketch.dimension_style === 'aligned',
       });
     };
+    let jointHoverPickGeneration = 0;
+    let jointClickPickGeneration = 0;
+    let jointMotionPickGeneration = 0;
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
+
+      if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
+        const drag = jointMotionDrag;
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (Math.hypot(dx, dy) > 3) drag.moved = true;
+        if (drag.kind === 'cylindrical' && drag.activeDof === null && drag.moved) {
+          const linearScore = Math.abs(dx * drag.screenAxis[0] + dy * drag.screenAxis[1]);
+          const angularScore = Math.abs(
+            dx * drag.screenTangent[0] + dy * drag.screenTangent[1],
+          );
+          drag.activeDof = angularScore > linearScore ? 'angle' : 'linear';
+        }
+        if (drag.activeDof === 'angle') {
+          let angleValue = drag.startAngleValue;
+          if (drag.startAngle !== null) {
+            const angle = Math.atan2(
+              e.clientY - drag.center[1],
+              e.clientX - drag.center[0],
+            );
+            const delta = Math.atan2(
+              Math.sin(angle - drag.startAngle),
+              Math.cos(angle - drag.startAngle),
+            );
+            angleValue += CAD.MathUtils.radToDeg(delta) * drag.rotationScreenSign;
+          } else {
+            const tangential = dx * drag.screenTangent[0] + dy * drag.screenTangent[1];
+            angleValue += tangential * 0.35 * drag.rotationScreenSign;
+          }
+          drag.angleValue = Math.max(
+            drag.angleMinimum,
+            Math.min(drag.angleMaximum, angleValue),
+          );
+        } else if (drag.activeDof === 'linear') {
+          const alongAxis = dx * drag.screenAxis[0] + dy * drag.screenAxis[1];
+          const linearValue = drag.startLinearValue + alongAxis * drag.millimetersPerPixel;
+          drag.linearValue = Math.max(
+            drag.linearMinimum,
+            Math.min(drag.linearMaximum, linearValue),
+          );
+        }
+        const now = performance.now();
+        if (drag.moved && now - drag.lastPreviewAt >= 16) {
+          drag.lastPreviewAt = now;
+          void state.previewJointMotion(
+            drag.jointId,
+            drag.angleValue,
+            drag.linearValue,
+          ).catch((error) => {
+            state.setConstraintDialog({
+              titleKey: 'file.errorTitle',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        surface.domElement.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
+
+      if (mechanismDrag && e.pointerId === mechanismDrag.pointerId) {
+        const drag = mechanismDrag;
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (Math.hypot(dx, dy) > 3) drag.moved = true;
+        drag.targetTranslation = [0, 1, 2].map((axis) => (
+          drag.startTranslation[axis]
+          + drag.cameraRight[axis] * dx * drag.millimetersPerPixel
+          - drag.cameraUp[axis] * dy * drag.millimetersPerPixel
+        )) as [number, number, number];
+        const now = performance.now();
+        if (drag.moved && now - drag.lastPreviewAt >= 32) {
+          drag.lastPreviewAt = now;
+          void state.previewMechanismDrag(drag.bodyId, {
+            body_id: drag.bodyId,
+            translation: drag.targetTranslation,
+            rotation: drag.rotation,
+          }, drag.occurrenceId).catch((error) => {
+            state.setConstraintDialog({
+              titleKey: 'file.errorTitle',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        surface.domElement.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
 
       // Modal nav-tool drag takes over the left button when active.
       if (navDrag) {
@@ -5894,6 +6734,7 @@ export function Viewport() {
         if (state.navTool !== 'select') {
           state.setHoveredFace(null);
           state.setHoveredEdge(null);
+          state.setHoveredOccurrenceId(null);
           state.setRevolveAxisHover(null);
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
@@ -5954,6 +6795,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(faceHit?.faceId ?? null);
+          state.setHoveredOccurrenceId(faceHit?.occurrenceId ?? null);
           surface.domElement.style.cursor = faceHit ? 'crosshair' : '';
           return;
         }
@@ -5965,6 +6807,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(edgeHit?.edgeId ?? null);
           state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(edgeHit?.occurrenceId ?? null);
           surface.domElement.style.cursor = edgeHit ? 'crosshair' : '';
           return;
         }
@@ -5974,6 +6817,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
           surface.domElement.style.cursor = 'crosshair';
           return;
         }
@@ -5983,6 +6827,7 @@ export function Viewport() {
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
           surface.domElement.style.cursor = 'crosshair';
           return;
         }
@@ -5991,6 +6836,7 @@ export function Viewport() {
         if (profileHit) {
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
           surface.domElement.style.cursor = 'crosshair';
           return;
         }
@@ -5999,12 +6845,14 @@ export function Viewport() {
           const planarFace = faceHit?.planar ? faceHit : null;
           state.setHoveredEdge(null);
           state.setHoveredFace(planarFace?.faceId ?? null);
+          state.setHoveredOccurrenceId(planarFace?.occurrenceId ?? null);
           surface.domElement.style.cursor = planarFace ? 'crosshair' : 'not-allowed';
           return;
         }
         if (state.profilePicker) {
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
           surface.domElement.style.cursor = 'not-allowed';
           return;
         }
@@ -6018,41 +6866,43 @@ export function Viewport() {
           return;
         }
         if (state.jointDialogOpen) {
-          const selectJointFace = (
-            bodyId: number,
-            faceId: number,
-            point: Point3Dto | null,
-          ) => {
-            const current = store.getState();
-            const planar = current.solidScene.bodies
-              .find((body) => body.id === bodyId)
-              ?.faces.find((face) => face.id === faceId)?.plane;
-            if (!planar) return;
-            current.selectSolidFeature('face', bodyId, faceId, point, true);
-          };
+          const generation = ++jointHoverPickGeneration;
           if (nativeViewportIsActive()) {
             void pickNativeViewport(e, container)
               .then((hit) => {
-                if (!hit || !store.getState().jointDialogOpen) return;
-                selectJointFace(hit.bodyId, hit.faceId, {
-                  x: hit.point[0],
-                  y: hit.point[1],
-                  z: hit.point[2],
-                });
+                const current = store.getState();
+                if (generation !== jointHoverPickGeneration || !current.jointDialogOpen) return;
+                const connector = hit ? jointConnectorFromNativePick(hit) : null;
+                current.setJointConnectorHover(connector);
+                current.setHoveredOccurrenceId(hit?.occurrenceId ?? null);
+                surface.domElement.style.cursor = connector ? 'crosshair' : 'not-allowed';
               })
               .catch(() => undefined);
           } else {
-            const faceHit = pickSolidFace(e);
-            if (faceHit?.planar) {
-              selectJointFace(faceHit.bodyId, faceHit.faceId, faceHit.point);
-            }
+            const edgeHit = pickSolidEdge(e);
+            const edgeConnector = edgeHit
+              ? jointConnectorFromEdge(edgeHit.bodyId, edgeHit.edgeId, edgeHit.occurrenceId)
+              : null;
+            const faceHit = edgeConnector ? null : pickSolidFace(e);
+            const body = faceHit
+              ? state.solidScene.bodies.find((candidate) => candidate.id === faceHit.bodyId)
+              : null;
+            const face = body?.faces.find((candidate) => candidate.id === faceHit?.faceId);
+            const connector = edgeConnector ?? (body && face && faceHit
+              ? jointConnectorFromFace(body.id, face, faceHit.point, faceHit.occurrenceId)
+              : null);
+            state.setJointConnectorHover(connector);
+            state.setHoveredOccurrenceId(connector?.occurrence_id ?? null);
+            surface.domElement.style.cursor = connector ? 'crosshair' : 'not-allowed';
           }
           return;
         }
+        jointHoverPickGeneration += 1;
         const edgeHit = pickSolidEdge(e);
         const hit = edgeHit ? null : pickSolidFace(e);
         state.setHoveredEdge(edgeHit?.edgeId ?? null);
         state.setHoveredFace(hit?.faceId ?? null);
+        state.setHoveredOccurrenceId(edgeHit?.occurrenceId ?? hit?.occurrenceId ?? null);
         surface.domElement.style.cursor = axisLine ? 'crosshair' : edgeHit || hit ? 'pointer' : '';
         return;
       }
@@ -6178,16 +7028,23 @@ export function Viewport() {
     };
 
     const onPointerLeave = () => {
+      jointHoverPickGeneration += 1;
       const state = store.getState();
+      if (jointMotionDrag || mechanismDrag) {
+        surface.domElement.style.cursor = 'grabbing';
+        return;
+      }
       state.setHoveredPlane(null);
       state.setHoveredDatumPlane(null);
       state.setHoveredFace(null);
       state.setHoveredEdge(null);
+      state.setHoveredOccurrenceId(null);
       state.setHoveredEntity(null);
       state.setRevolveAxisHover(null);
       state.setHoveredCurvePick(null);
       state.setHoveredProfilePick(null);
       state.setHolePositionHover(null);
+      state.setJointConnectorHover(null);
       highlightDatumPlane(
         null,
         state.mode === 'pickPlane' ||
@@ -6226,6 +7083,87 @@ export function Viewport() {
       }
 
       if (state.mode === 'solid') {
+        if (state.jointDialogOpen) {
+          const generation = ++jointClickPickGeneration;
+          if (nativeViewportIsActive()) {
+            void pickNativeViewport(e, container)
+              .then((hit) => {
+                const current = store.getState();
+                if (generation !== jointClickPickGeneration || !current.jointDialogOpen || !hit) {
+                  return;
+                }
+                const connector = jointConnectorFromNativePick(hit);
+                if (connector) current.toggleJointConnectorPick(connector);
+              })
+              .catch(() => undefined);
+          } else {
+            const edgeHit = pickSolidEdge(e);
+            const edgeConnector = edgeHit
+              ? jointConnectorFromEdge(edgeHit.bodyId, edgeHit.edgeId, edgeHit.occurrenceId)
+              : null;
+            const faceHit = edgeConnector ? null : pickSolidFace(e);
+            const body = faceHit
+              ? state.solidScene.bodies.find((candidate) => candidate.id === faceHit.bodyId)
+              : null;
+            const face = body?.faces.find((candidate) => candidate.id === faceHit?.faceId);
+            const connector = edgeConnector ?? (body && face && faceHit
+              ? jointConnectorFromFace(body.id, face, faceHit.point, faceHit.occurrenceId)
+              : null);
+            if (connector) state.toggleJointConnectorPick(connector);
+          }
+          return;
+        }
+        if (state.solidSidebarMode === 'assembly') {
+          const edgeHit = pickSolidEdge(e);
+          const faceHit = edgeHit ? null : pickSolidFace(e);
+          const localBodyId = edgeHit?.bodyId ?? faceHit?.bodyId ?? null;
+          const localOccurrenceId = edgeHit?.occurrenceId ?? faceHit?.occurrenceId ?? null;
+          if (
+            localBodyId !== null
+            && (
+              beginJointMotionDrag(
+                localBodyId,
+                localOccurrenceId,
+                e,
+                state,
+                edgeHit?.point ?? faceHit?.point,
+              )
+              || beginMechanismDrag(localBodyId, localOccurrenceId, e, state)
+            )
+          ) return;
+          if (nativeViewportIsActive()) {
+            const generation = ++jointMotionPickGeneration;
+            void pickNativeViewport(e, container)
+              .then((hit) => {
+                const current = store.getState();
+                if (
+                  generation !== jointMotionPickGeneration
+                  || current.mode !== 'solid'
+                  || !hit
+                ) {
+                  return;
+                }
+                if (
+                  beginJointMotionDrag(hit.bodyId, hit.occurrenceId, e, current, hit.point)
+                  || beginMechanismDrag(hit.bodyId, hit.occurrenceId, e, current)
+                ) return;
+                current.setSelectedOccurrenceId(hit.occurrenceId);
+                if (hit.edgeId) {
+                  current.selectSolidFeature('edge', hit.bodyId, hit.edgeId, null, false);
+                } else if (hit.faceId !== 0) {
+                  current.selectSolidFeature(
+                    'face',
+                    hit.bodyId,
+                    hit.faceId,
+                    { x: hit.point[0], y: hit.point[1], z: hit.point[2] },
+                    false,
+                  );
+                }
+              })
+              .catch(() => undefined);
+            return;
+          }
+        }
         const constructionReferencePicking =
           state.constructionPlanePickTarget === 'first_reference' ||
           state.constructionPlanePickTarget === 'second_reference';
@@ -6372,6 +7310,9 @@ export function Viewport() {
         }
         const edgeHit = pickSolidEdge(e);
         if (edgeHit) {
+          if (state.solidSidebarMode === 'assembly') {
+            state.setSelectedOccurrenceId(edgeHit.occurrenceId);
+          }
           state.selectSolidFeature(
             'edge',
             edgeHit.bodyId,
@@ -6388,6 +7329,9 @@ export function Viewport() {
               const current = store.getState();
               if (current.mode !== 'solid') return;
               if (hit) {
+                if (current.solidSidebarMode === 'assembly') {
+                  current.setSelectedOccurrenceId(hit.occurrenceId);
+                }
                 current.selectSolidFeature(
                   'face',
                   hit.bodyId,
@@ -6408,6 +7352,9 @@ export function Viewport() {
         }
         const hit = pickSolidFace(e);
         if (hit) {
+          if (state.solidSidebarMode === 'assembly') {
+            state.setSelectedOccurrenceId(hit.occurrenceId);
+          }
           state.selectSolidFeature(
             'face',
             hit.bodyId,
@@ -6518,6 +7465,57 @@ export function Viewport() {
     const onPointerUp = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const state = store.getState();
+
+      if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
+        const drag = jointMotionDrag;
+        jointMotionDrag = null;
+        if (drag.moved) {
+          void state.previewJointMotion(
+            drag.jointId,
+            drag.angleValue,
+            drag.linearValue,
+          ).catch((error) => {
+            state.setConstraintDialog({
+              titleKey: 'file.errorTitle',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        try {
+          surface.domElement.releasePointerCapture(e.pointerId);
+        } catch {
+          // The native child view may have released capture first.
+        }
+        surface.domElement.style.cursor = 'pointer';
+        e.preventDefault();
+        return;
+      }
+
+
+      if (mechanismDrag && e.pointerId === mechanismDrag.pointerId) {
+        const drag = mechanismDrag;
+        mechanismDrag = null;
+        if (drag.moved) {
+          void state.previewMechanismDrag(drag.bodyId, {
+            body_id: drag.bodyId,
+            translation: drag.targetTranslation,
+            rotation: drag.rotation,
+          }, drag.occurrenceId).catch((error) => {
+            state.setConstraintDialog({
+              titleKey: 'file.errorTitle',
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        try {
+          surface.domElement.releasePointerCapture(e.pointerId);
+        } catch {
+          // The native child view may have released capture first.
+        }
+        surface.domElement.style.cursor = 'pointer';
+        e.preventDefault();
+        return;
+      }
 
       if (navDrag) {
         const drag = navDrag;
@@ -6722,6 +7720,20 @@ export function Viewport() {
         return;
       }
       if (state.mode === 'solid') {
+        if (
+          jointMotionDrag
+          || mechanismDrag
+          || state.jointMotionPreview
+          || state.mechanismPreview
+        ) {
+          jointMotionDrag = null;
+          mechanismDrag = null;
+          state.clearJointMotionPreview();
+          state.clearMechanismPreview();
+          surface.domElement.style.cursor = '';
+          e.stopPropagation();
+          return;
+        }
         if (state.constructionPlanePickTarget !== null) {
           state.setConstructionPlanePickTarget(null);
           e.stopPropagation();
@@ -6763,6 +7775,17 @@ export function Viewport() {
     const cancelModalNavigation = () => {
       if (navDrag?.tool === 'zoomWindow') hideZoomRect();
       navDrag = null;
+      jointMotionPickGeneration += 1;
+      if (jointMotionDrag) {
+        jointMotionDrag = null;
+        store.getState().clearJointMotionPreview();
+        surface.domElement.style.cursor = '';
+      }
+      if (mechanismDrag) {
+        mechanismDrag = null;
+        store.getState().clearMechanismPreview();
+        surface.domElement.style.cursor = '';
+      }
       downInfo = null;
     };
     window.addEventListener('pointercancel', cancelModalNavigation);
@@ -7523,7 +8546,12 @@ export function Viewport() {
     let lastSolidHidden = store.getState().hidden;
     let lastSolidDocument = store.getState().document;
     let lastBodyAppearances = store.getState().bodyAppearances;
-    let lastAssemblySolution = store.getState().assemblySolution;
+    let lastAssemblySolution = effectiveAssemblySolution();
+    const assemblyInstanceLayoutKey = (solution: typeof lastAssemblySolution) =>
+      solution.instance_body_poses
+        .map((pose) => `${pose.occurrence_id}:${pose.body_id}:${pose.visible ? 1 : 0}`)
+        .join('|');
+    let lastAssemblyInstanceLayoutKey = assemblyInstanceLayoutKey(lastAssemblySolution);
     let lastSolidSelection = {
       body: store.getState().selectedBody,
       bodies: store.getState().selectedBodies.join(','),
@@ -7624,9 +8652,21 @@ export function Viewport() {
         rebuildSolids();
         refreshSharedOrbitPivot();
       }
-      if (s.assemblySolution !== lastAssemblySolution) {
-        lastAssemblySolution = s.assemblySolution;
-        updateAssemblyPoses();
+      const nextAssemblySolution = s.jointDialogOpen && s.jointPreviewSolution
+        ? s.jointPreviewSolution
+        : s.mechanismPreview?.solution
+          ?? s.jointMotionPreview?.solution
+          ?? s.motionStudyPreview?.sample.solution
+          ?? s.assemblySolution;
+      if (nextAssemblySolution !== lastAssemblySolution) {
+        lastAssemblySolution = nextAssemblySolution;
+        const nextLayoutKey = assemblyInstanceLayoutKey(nextAssemblySolution);
+        if (nextLayoutKey !== lastAssemblyInstanceLayoutKey) {
+          lastAssemblyInstanceLayoutKey = nextLayoutKey;
+          rebuildSolids();
+        } else {
+          updateAssemblyPoses();
+        }
         refreshSharedOrbitPivot();
       }
       if (

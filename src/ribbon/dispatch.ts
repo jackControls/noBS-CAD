@@ -148,14 +148,18 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       state.setDrawingSheetSetupOpen(false);
       state.setDrawingTool(null);
       state.setDrawingPendingViewKind(null);
-      state.setActiveTab('assembly');
+      state.setActiveTab('solid');
+      state.setSolidSidebarMode('assembly');
       break;
     }
     case 'modelWorkspace':
       useAppStore.getState().setJointDialogOpen(false);
+      useAppStore.getState().setSolidSidebarMode('model');
       leaveDrawingWorkspace();
       break;
     case 'joint':
+      useAppStore.getState().setActiveTab('solid');
+      useAppStore.getState().setSolidSidebarMode('assembly');
       useAppStore.getState().setJointDialogOpen(true);
       break;
     case 'drawingNewSheet':

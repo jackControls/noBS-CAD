@@ -29,6 +29,7 @@ type ObservedModel = {
   solidScene: unknown;
   datumPlanes: unknown;
   bodyAppearances: unknown;
+  assemblyDocument: unknown;
 };
 
 const SOLID_REDO_LIMIT = 32;
@@ -55,6 +56,7 @@ function observeModel(): ObservedModel {
     solidScene: state.solidScene,
     datumPlanes: state.datumPlanes,
     bodyAppearances: state.bodyAppearances,
+    assemblyDocument: state.assemblyDocument,
   };
 }
 
@@ -65,7 +67,8 @@ function sameObservedModel(left: ObservedModel, right: ObservedModel): boolean {
     left.finishedSketches === right.finishedSketches &&
     left.solidScene === right.solidScene &&
     left.datumPlanes === right.datumPlanes &&
-    left.bodyAppearances === right.bodyAppearances
+    left.bodyAppearances === right.bodyAppearances &&
+    left.assemblyDocument === right.assemblyDocument
   );
 }
 
@@ -256,7 +259,8 @@ useAppStore.subscribe((state, previous) => {
     state.finishedSketches !== previous.finishedSketches ||
     state.solidScene !== previous.solidScene ||
     state.datumPlanes !== previous.datumPlanes ||
-    state.bodyAppearances !== previous.bodyAppearances;
+    state.bodyAppearances !== previous.bodyAppearances ||
+    state.assemblyDocument !== previous.assemblyDocument;
   if (!mayAffectHistory || reconcileQueued) return;
   reconcileQueued = true;
   queueMicrotask(() => {

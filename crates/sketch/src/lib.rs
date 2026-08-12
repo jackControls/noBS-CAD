@@ -64,9 +64,24 @@ pub use expr::{
 pub use geometry::Vec2;
 pub use manager::SketchManager;
 pub use nbcad_assembly::{
-    AssemblyDiagnosticDto, AssemblyDiagnosticKindDto, AssemblyDocumentDto, AssemblySolutionDto,
-    BodyPoseDto, CreateJointRequestDto, JointConnectorDto, JointDefinitionDto, JointFrameDto,
-    JointId, JointKindDto, JointLimitsDto, SetJointValueRequestDto,
+    broad_phase_interference_pairs, ApplyJointMotionsRequestDto, AssemblyDiagnosticDto,
+    AssemblyDiagnosticKindDto, AssemblyDocumentDto, AssemblyPositionDto, AssemblyPositionId,
+    AssemblySolutionDto, AssemblyTransformDto, BodyPoseDto, ComponentDefinitionDto, ComponentId,
+    ComponentOccurrenceDto, ComponentStructureDto, ContactSetDto, ContactSetId,
+    CreateAssemblyPositionRequestDto, CreateComponentRequestDto, CreateContactSetRequestDto,
+    CreateJointRequestDto, CreateMotionStudyRequestDto, CreateOccurrenceRequestDto,
+    DuplicateOccurrenceRequestDto, EvaluateMotionStudyRequestDto, InstanceBodyPoseDto,
+    InterferenceCheckRequestDto, InterferencePairResultDto, InterferenceReportDto,
+    JointAdvancedDto, JointConnectorDto, JointDefinitionDto, JointFrameDto, JointId, JointKindDto,
+    JointLimitsDto, JointMotionStateDto, MechanismDragRequestDto, MechanismPreviewDto,
+    MotionCoordinateDto, MotionDriverDto, MotionDriverId, MotionDriverLawDto,
+    MotionDriverSampleDto, MotionInterpolationDto, MotionKeyframeDto, MotionPathRequestDto,
+    MotionStudyDto, MotionStudyEvaluationDto, MotionStudyId, MotionStudySampleDto, OccurrenceId,
+    OccurrencePoseDto, SampleMotionStudyRequestDto, SetJointCoordinatesRequestDto,
+    SetJointEnabledRequestDto, SetJointMotionRequestDto, SetOccurrenceGroundedRequestDto,
+    SetOccurrencePoseRequestDto, SweptCollisionEventDto, SweptCollisionReportDto,
+    SweptCollisionRequestDto, UpdateComponentRequestDto, UpdateJointRequestDto,
+    UpdateOccurrenceRequestDto,
 };
 pub use params::{ParamId, ParamKind, ParamTable, Parameter};
 pub use plane::{FaceId, OriginPlane, PlaneBasis, PlaneError, PlaneRef};

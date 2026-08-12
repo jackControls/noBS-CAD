@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, Check, ChevronDown, FileText, Link2 } from 'lucide-react';
+import { Box, Check, ChevronDown, FileText } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import { ribbonTabById, type RibbonAction, type RibbonButton, type RibbonPanel } from '../ribbon/config';
@@ -71,14 +71,6 @@ export function Ribbon() {
           label={t('ribbon.tabs.solidModeling')}
           detail={mode === 'sketch' ? t('ribbon.tabs.sketch') : undefined}
           onClick={() => dispatchRibbonAction('modelWorkspace')}
-        />
-        <WorkspaceButton
-          active={activeTab === 'assembly'}
-          disabled={!documentOpen || mode === 'sketch'}
-          icon={<Link2 size={13} />}
-          label={t('ribbon.tabs.assemblyWorkspace')}
-          title={mode === 'sketch' ? 'Finish the active sketch before opening Assembly' : undefined}
-          onClick={() => dispatchRibbonAction('assemblyWorkspace')}
         />
         <WorkspaceButton
           active={activeTab === 'drawing'}

@@ -1,4 +1,5 @@
 import { getEngine } from '../engine';
+import type { BodyAppearance } from '../engine/types';
 import { translate } from '../i18n';
 import {
   exportProjectModelWithVisibility,
@@ -54,6 +55,17 @@ const THREEMF_TYPE: SaveType = {
 const MAX_STEP_IMPORT_BYTES = 96 * 1024 * 1024;
 const AUTOSAVE_KEY = 'nbcad:recovery:v1';
 const LEGACY_AUTOSAVE_KEYS = ['tfcad:recovery:v1'] as const;
+
+interface BodyClipboardEntry {
+  bytes: Uint8Array;
+  name: string;
+  appearance: BodyAppearance | null;
+}
+
+// Deliberately application-scoped rather than project-scoped: retained tabs
+// use isolated engine sessions, while this clipboard lets a final B-rep body
+// cross that boundary without coupling the two project histories.
+let bodyClipboard: BodyClipboardEntry | null = null;
 
 function recoveryEntry(): { key: string; value: string } | null {
   const current = localStorage.getItem(AUTOSAVE_KEY);
@@ -258,6 +270,27 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
   const bytes = await engine.exportStep({
     body_ids: bodyIds,
     thread_metadata: threadMetadata,
+    occurrences: state.assemblySolution.instance_body_poses
+      .filter((pose) => pose.visible)
+      .filter((pose) => bodyIds.includes(pose.body_id))
+      .filter((pose) => (
+        !selectedOnly
+        || state.selectedOccurrenceId === null
+        || pose.occurrence_id === state.selectedOccurrenceId
+      ))
+      .map((pose) => {
+        const occurrence = state.assemblyDocument.component_structure.occurrences.find(
+          (candidate) => candidate.id === pose.occurrence_id,
+        );
+        return {
+          occurrence_id: pose.occurrence_id,
+          component_id: pose.component_id,
+          body_id: pose.body_id,
+          name: occurrence?.name ?? `Occurrence ${pose.occurrence_id}`,
+          translation: pose.translation,
+          rotation: pose.rotation,
+        };
+      }),
   });
   await writeSaveTarget(target, bytes);
   return true;
@@ -338,6 +371,100 @@ function bytesToBase64(bytes: Uint8Array): string {
     chunks.push(btoa(binary));
   }
   return chunks.join('');
+}
+
+function assertBodyTransferAllowed(): void {
+  const state = useAppStore.getState();
+  if (state.activeSketch) {
+    throw new Error(translate('file.finishBeforeStepImport'));
+  }
+  if (state.solidScene.errors.length > 0) {
+    throw new Error(translate('file.resolveErrors'));
+  }
+}
+
+export function hasBodyClipboard(): boolean {
+  return bodyClipboard !== null;
+}
+
+/** Copy one body's final OCCT B-rep plus its display appearance. Feature
+ * history intentionally remains owned by the source project. */
+export async function copyBodyToClipboard(bodyId: number): Promise<void> {
+  assertBodyTransferAllowed();
+  const state = useAppStore.getState();
+  const body = state.solidScene.bodies.find((candidate) => candidate.id === bodyId);
+  if (!body) throw new Error(translate('file.selectBody'));
+
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const bytes = await engine.exportStep({
+      body_ids: [bodyId],
+      thread_metadata: [],
+      // Clipboard transfer is deliberately part-local; assembly placement is
+      // authored independently in the destination project.
+      occurrences: [],
+    });
+    const appearance = state.bodyAppearances.find((entry) => entry.body_id === bodyId) ?? null;
+    bodyClipboard = {
+      bytes: bytes.slice(),
+      name: body.name || `Body${bodyId}`,
+      appearance: appearance ? structuredClone(appearance) : null,
+    };
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
+/** Paste the copied body as an imported STEP feature in the active project.
+ * This works across retained project tabs and gives the destination its own
+ * stable body/topology ids. */
+export async function pasteBodyFromClipboard(): Promise<void> {
+  assertBodyTransferAllowed();
+  const clipboard = bodyClipboard;
+  if (!clipboard) throw new Error(translate('file.bodyClipboardEmpty'));
+
+  const state = useAppStore.getState();
+  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const safeName = clipboard.name.replace(/[^a-zA-Z0-9._ -]+/g, '_').trim() || 'Copied Body';
+    const update = await engine.bodyFeature({
+      type: 'import_step',
+      request: {
+        file_name: `${safeName}.step`,
+        data_base64: bytesToBase64(clipboard.bytes),
+      },
+    });
+    state.applySolidUpdate(update);
+    const imported = update.scene.bodies.find((body) => !previousBodies.has(body.id));
+    if (!imported) throw new Error(translate('file.bodyPasteFailed'));
+
+    state.setSelectedBody(imported.id);
+    state.setSelectedFace(null);
+    state.setSelectedEdges([]);
+    if (clipboard.appearance) {
+      await state.setBodyAppearance({ ...clipboard.appearance, body_id: imported.id });
+    }
+    const bodiesFolder = update.document.browser.find(
+      (node) => node.kind === 'bodies_folder',
+    );
+    if (bodiesFolder && !useAppStore.getState().expanded[bodiesFolder.id]) {
+      state.toggleExpanded(bodiesFolder.id);
+    }
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
+export async function exportBodyAsStep(bodyId: number): Promise<boolean> {
+  const state = useAppStore.getState();
+  if (!state.solidScene.bodies.some((body) => body.id === bodyId)) {
+    throw new Error(translate('file.selectBody'));
+  }
+  state.setSelectedBody(bodyId);
+  return exportStep(true);
 }
 
 /** Add a STEP/STP file to the current parametric history. The original

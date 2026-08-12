@@ -83,11 +83,33 @@ function emptyDrawingDocument(): DrawingDocumentDto {
 }
 
 function emptyAssemblyDocument(): AssemblyDocumentDto {
-  return { joints: [], next_joint_id: 1, grounded_body_id: null };
+  return {
+    joints: [],
+    next_joint_id: 1,
+    grounded_body_id: null,
+    component_structure: {
+      definitions: [],
+      occurrences: [],
+      next_component_id: 1,
+      next_occurrence_id: 1,
+    },
+    positions: [],
+    next_position_id: 1,
+    motion_studies: [],
+    next_motion_study_id: 1,
+    contact_sets: [],
+    next_contact_set_id: 1,
+  };
 }
 
 function emptyAssemblySolution(): AssemblySolutionDto {
-  return { body_poses: [], diagnostics: [], solved: true };
+  return {
+    body_poses: [],
+    occurrence_poses: [],
+    instance_body_poses: [],
+    diagnostics: [],
+    solved: true,
+  };
 }
 
 function createTabId(): string {

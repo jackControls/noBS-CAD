@@ -171,6 +171,27 @@ impl SolidDocument {
         &self.body_features
     }
 
+    /// Stable bodies owned by one history feature, including identities that
+    /// are currently rolled back. Assembly cleanup calls this only for an
+    /// explicit deletion; moving the build cursor must preserve references.
+    pub fn owned_body_ids_for_feature(&self, feature_id: FeatureId) -> Vec<BodyId> {
+        body_owners(
+            &self.extrudes,
+            &self.revolves,
+            &self.sweeps,
+            &self.lofts,
+            &self.ribs,
+            &self.fillets,
+            &self.chamfers,
+            &self.holes,
+            &self.body_features,
+            &self.feature_order,
+        )
+        .into_iter()
+        .filter_map(|(body_id, owner)| (owner == feature_id).then_some(body_id))
+        .collect()
+    }
+
     pub fn scene(&self) -> &SolidSceneDto {
         &self.scene
     }
@@ -1576,6 +1597,7 @@ impl SolidDocument {
                     index_count: face.index_count,
                     plane: face.plane,
                     signature: face.signature,
+                    cylinder: face.cylinder,
                 })
                 .collect();
             let edges = raw
@@ -1585,6 +1607,7 @@ impl SolidDocument {
                     id: stable::edge_id(raw.body_id, &edge.key),
                     key: edge.key,
                     points: edge.points,
+                    circle: edge.circle,
                     refinable: edge.refinable,
                 })
                 .collect();
@@ -4667,6 +4690,7 @@ mod tests {
                     wire_count: 1,
                     edge_count: 3,
                 }),
+                cylinder: None,
             }],
             edges: vec![],
         }

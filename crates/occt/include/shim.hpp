@@ -10,6 +10,7 @@ namespace nbcad_occt {
 struct FfiJob;
 struct FfiMesh;
 struct FfiDrawingProjection;
+struct FfiInterferenceResult;
 
 class Kernel {
  public:
@@ -26,7 +27,8 @@ class Kernel {
       double angular_deflection) const;
   rust::Vec<std::uint8_t> export_step(
       const rust::Vec<std::uint64_t>& body_ids,
-      rust::Str thread_metadata_hex) const;
+      rust::Str thread_metadata_hex,
+      rust::Str occurrence_placements_hex) const;
   FfiDrawingProjection drawing_projection(
       const rust::Vec<std::uint64_t>& body_ids,
       double direction_x,
@@ -47,6 +49,23 @@ class Kernel {
       double section_normal_z,
       bool has_section_depth,
       double section_depth) const;
+  FfiInterferenceResult exact_interference(
+      std::uint64_t body_a,
+      double translation_a_x,
+      double translation_a_y,
+      double translation_a_z,
+      double rotation_a_x,
+      double rotation_a_y,
+      double rotation_a_z,
+      double rotation_a_w,
+      std::uint64_t body_b,
+      double translation_b_x,
+      double translation_b_y,
+      double translation_b_z,
+      double rotation_b_x,
+      double rotation_b_y,
+      double rotation_b_z,
+      double rotation_b_w) const;
 
  private:
   class Impl;

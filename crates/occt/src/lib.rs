@@ -383,6 +383,23 @@ fn endpoint_order(endpoint: DrawingProjectionAnchorEndpoint) -> u8 {
 #[derive(Debug, Clone)]
 pub struct OcctError(pub String);
 
+/// One retained source B-rep placed as an assembly occurrence. The transform
+/// uses translation plus an x/y/z/w unit quaternion.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlacedBodyQueryDto {
+    pub body_id: nbcad_core::BodyId,
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExactInterferenceResultDto {
+    pub minimum_clearance_mm: f64,
+    pub overlap_volume_mm3: f64,
+    pub closest_point_a: [f64; 3],
+    pub closest_point_b: [f64; 3],
+}
+
 impl std::fmt::Display for OcctError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -415,6 +432,16 @@ impl OcctKernel {
         &self,
         _request: &DrawingProjectionRequest,
     ) -> Result<DrawingProjectionDto, OcctError> {
+        Err(OcctError(
+            "native OCCT support was not enabled at compile time".to_string(),
+        ))
+    }
+
+    pub fn exact_interference(
+        &self,
+        _a: PlacedBodyQueryDto,
+        _b: PlacedBodyQueryDto,
+    ) -> Result<ExactInterferenceResultDto, OcctError> {
         Err(OcctError(
             "native OCCT support was not enabled at compile time".to_string(),
         ))
@@ -460,6 +487,7 @@ mod drawing_anchor_tests {
                             z: 2.0,
                         },
                     ],
+                    circle: None,
                     refinable: true,
                 }],
             }],
@@ -510,6 +538,7 @@ mod drawing_anchor_tests {
                     z: last[2],
                 },
             ],
+            circle: None,
             refinable: true,
         };
         let scene = SolidSceneDto {
@@ -588,12 +617,14 @@ mod drawing_anchor_tests {
                         id: EdgeId(1),
                         key: "bottom-rim".to_string(),
                         points: circle_points(0.0),
+                        circle: None,
                         refinable: true,
                     },
                     EdgeDto {
                         id: EdgeId(2),
                         key: "top-rim".to_string(),
                         points: circle_points(10.0),
+                        circle: None,
                         refinable: true,
                     },
                 ],

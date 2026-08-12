@@ -55,6 +55,16 @@ function pickerType(type: SaveType) {
   };
 }
 
+async function withNativeViewportSuspended<T>(action: () => Promise<T>): Promise<T> {
+  if (!isTauriRuntime()) return action();
+  await invoke('native_viewport_set_suspended', { suspended: true }).catch(() => undefined);
+  try {
+    return await action();
+  } finally {
+    await invoke('native_viewport_set_suspended', { suspended: false }).catch(() => undefined);
+  }
+}
+
 export async function chooseSaveTarget(
   suggestedName: string,
   type: SaveType,
@@ -62,20 +72,20 @@ export async function chooseSaveTarget(
   const fileName = withExtension(suggestedName, type.extension);
   if (isTauriRuntime()) {
     const { save } = await import('@tauri-apps/plugin-dialog');
-    const selected = await save({
-      defaultPath: fileName,
-      filters: [
-        {
-          name: type.description,
-          extensions: [
-            type.extension.slice(1),
-            ...(type.alternateExtensions ?? []).map((extension) =>
-              extension.slice(1),
-            ),
-          ],
-        },
-      ],
-    });
+    const selected = await withNativeViewportSuspended(() => save({
+        defaultPath: fileName,
+        filters: [
+          {
+            name: type.description,
+            extensions: [
+              type.extension.slice(1),
+              ...(type.alternateExtensions ?? []).map((extension) =>
+                extension.slice(1),
+              ),
+            ],
+          },
+        ],
+      }));
     if (!selected) return null;
     const path = withExtension(selected, type.extension);
     return { kind: 'native', path, name: pathName(path) };
@@ -131,21 +141,21 @@ export async function writeSaveTarget(target: SaveTarget, bytes: Uint8Array): Pr
 export async function chooseOpenFile(type: SaveType): Promise<OpenedFile | null> {
   if (isTauriRuntime()) {
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const selected = await open({
-      multiple: false,
-      directory: false,
-      filters: [
-        {
-          name: type.description,
-          extensions: [
-            type.extension.slice(1),
-            ...(type.alternateExtensions ?? []).map((extension) =>
-              extension.slice(1),
-            ),
-          ],
-        },
-      ],
-    });
+    const selected = await withNativeViewportSuspended(() => open({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: type.description,
+            extensions: [
+              type.extension.slice(1),
+              ...(type.alternateExtensions ?? []).map((extension) =>
+                extension.slice(1),
+              ),
+            ],
+          },
+        ],
+      }));
     if (!selected || Array.isArray(selected)) return null;
     const raw = await invoke<number[]>('read_binary_file', { path: selected });
     return {

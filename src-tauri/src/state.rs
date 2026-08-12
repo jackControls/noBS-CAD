@@ -4,8 +4,15 @@ use std::sync::Mutex;
 use nbcad_core::{BodyAppearance, DocumentDto};
 use nbcad_occt::{
     drawing_projection_anchors, drawing_projection_circles, DrawingProjectionRequest, OcctKernel,
+    PlacedBodyQueryDto,
 };
-use nbcad_sketch::{err_json, host, ok_json, BodyPoseDto, SketchDto, SketchManager};
+use nbcad_sketch::{
+    broad_phase_interference_pairs, err_json, host, ok_json, BodyPoseDto, ContactSetDto,
+    EvaluateMotionStudyRequestDto, InstanceBodyPoseDto, InterferenceCheckRequestDto,
+    InterferencePairResultDto, InterferenceReportDto, MotionStudyEvaluationDto,
+    MotionStudySampleDto, SampleMotionStudyRequestDto, SketchDto, SketchManager,
+    SweptCollisionEventDto, SweptCollisionReportDto, SweptCollisionRequestDto,
+};
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
     EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
@@ -188,9 +195,11 @@ impl AppState {
         Vec<ProfileCatalogItemDto>,
         Vec<BodyAppearance>,
         Vec<BodyPoseDto>,
+        Vec<InstanceBodyPoseDto>,
     ) {
         let workspace = self.inner.lock().expect("engine lock poisoned");
         let inner = workspace.active();
+        let assembly_solution = inner.manager.assembly_solution();
         (
             workspace.active_session_id.clone(),
             inner.geometry_revision,
@@ -200,7 +209,8 @@ impl AppState {
             inner.manager.datum_plane_definitions(),
             inner.manager.profile_catalog(),
             inner.manager.body_appearances(),
-            inner.manager.assembly_solution().body_poses,
+            assembly_solution.body_poses,
+            assembly_solution.instance_body_poses,
         )
     }
 
@@ -354,6 +364,252 @@ impl AppState {
         self.execute(SketchManager::prepare_new_project)
     }
 
+    pub fn assembly_interference_check(&self, payload: &str) -> String {
+        let request: InterferenceCheckRequestDto = match serde_json::from_str(payload) {
+            Ok(request) => request,
+            Err(error) => return err_json(format!("bad request payload: {error}")),
+        };
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
+        let inner = workspace.active();
+        let solution = inner.manager.assembly_solution();
+        match exact_interference_report(
+            &inner.kernel,
+            &inner.manager.solid_scene(),
+            &solution.instance_body_poses,
+            &request,
+        ) {
+            Ok(report) => ok_json(report),
+            Err(error) => err_json(error),
+        }
+    }
+
+    pub fn assembly_evaluate_motion_study(&self, payload: &str) -> String {
+        let request: EvaluateMotionStudyRequestDto = match serde_json::from_str(payload) {
+            Ok(request) => request,
+            Err(error) => return err_json(format!("bad request payload: {error}")),
+        };
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
+        let inner = workspace.active();
+        let document = inner.manager.assembly_document();
+        let candidate = match inner
+            .manager
+            .sample_motion_study(SampleMotionStudyRequestDto {
+                study_id: request.study_id,
+                time_seconds: request.time_seconds,
+            }) {
+            Ok(sample) => sample,
+            Err(error) => return err_json(error.to_string()),
+        };
+        let mut final_sample = candidate;
+        let mut stopped_by_contact = None;
+        let mut stop_time_seconds = None;
+        if request.enforce_contacts {
+            let start_time = request.previous_time_seconds.unwrap_or(0.0);
+            let start = inner
+                .manager
+                .sample_motion_study(SampleMotionStudyRequestDto {
+                    study_id: request.study_id,
+                    time_seconds: start_time,
+                });
+            if let Ok(start) = start {
+                for contact in document
+                    .contact_sets
+                    .iter()
+                    .filter(|contact| contact.enabled && contact.stop_motion)
+                {
+                    let start_violation =
+                        exact_contact_violation(&inner.kernel, &start, contact).unwrap_or(0.0);
+                    let end_violation =
+                        match exact_contact_violation(&inner.kernel, &final_sample, contact) {
+                            Ok(violation) => violation,
+                            Err(error) => return err_json(error),
+                        };
+                    if start_violation > 1.0e-7 && end_violation >= start_violation {
+                        final_sample = start;
+                        stopped_by_contact = Some(contact.id);
+                        stop_time_seconds = Some(final_sample.time_seconds);
+                        break;
+                    }
+                    if start_violation <= 1.0e-7 && end_violation > 1.0e-7 {
+                        let (mut low, mut high) = (start.time_seconds, final_sample.time_seconds);
+                        if high < low {
+                            std::mem::swap(&mut low, &mut high);
+                        }
+                        for _ in 0..24 {
+                            let middle = (low + high) * 0.5;
+                            let sample = match inner.manager.sample_motion_study(
+                                SampleMotionStudyRequestDto {
+                                    study_id: request.study_id,
+                                    time_seconds: middle,
+                                },
+                            ) {
+                                Ok(sample) => sample,
+                                Err(error) => return err_json(error.to_string()),
+                            };
+                            match exact_contact_violation(&inner.kernel, &sample, contact) {
+                                Ok(violation) if violation > 1.0e-7 => high = middle,
+                                Ok(_) => low = middle,
+                                Err(error) => return err_json(error),
+                            }
+                        }
+                        final_sample =
+                            match inner
+                                .manager
+                                .sample_motion_study(SampleMotionStudyRequestDto {
+                                    study_id: request.study_id,
+                                    time_seconds: high,
+                                }) {
+                                Ok(sample) => sample,
+                                Err(error) => return err_json(error.to_string()),
+                            };
+                        stopped_by_contact = Some(contact.id);
+                        stop_time_seconds = Some(high);
+                        break;
+                    }
+                }
+            }
+        }
+        let contact_request = InterferenceCheckRequestDto {
+            occurrence_ids: Vec::new(),
+            clearance_threshold_mm: document
+                .contact_sets
+                .iter()
+                .filter(|contact| contact.enabled)
+                .map(|contact| contact.clearance_mm)
+                .fold(0.0_f64, f64::max),
+        };
+        let contacts = match exact_interference_report(
+            &inner.kernel,
+            &inner.manager.solid_scene(),
+            &final_sample.solution.instance_body_poses,
+            &contact_request,
+        ) {
+            Ok(report) => report,
+            Err(error) => return err_json(error),
+        };
+        ok_json(MotionStudyEvaluationDto {
+            sample: final_sample,
+            contacts,
+            stopped_by_contact,
+            stop_time_seconds,
+        })
+    }
+
+    pub fn assembly_swept_collision_check(&self, payload: &str) -> String {
+        let request: SweptCollisionRequestDto = match serde_json::from_str(payload) {
+            Ok(request) => request,
+            Err(error) => return err_json(format!("bad request payload: {error}")),
+        };
+        if !request.sample_rate_hz.is_finite() || !(1.0..=240.0).contains(&request.sample_rate_hz) {
+            return err_json("swept collision sample rate must be between 1 and 240 Hz");
+        }
+        if !request.clearance_threshold_mm.is_finite() || request.clearance_threshold_mm < 0.0 {
+            return err_json("swept collision clearance must be finite and non-negative");
+        }
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
+        let inner = workspace.active();
+        let document = inner.manager.assembly_document();
+        let study = match document
+            .motion_studies
+            .iter()
+            .find(|study| study.id == request.study_id)
+        {
+            Some(study) => study,
+            None => {
+                return err_json(format!(
+                    "motion study {} does not exist",
+                    request.study_id.0
+                ))
+            }
+        };
+        let count = (study.duration_seconds * request.sample_rate_hz).ceil() as u32 + 1;
+        if count > 100_001 {
+            return err_json("swept collision study exceeds 100,001 samples");
+        }
+        let mut events = HashMap::<(u64, u64, u64, u64), SweptCollisionEventDto>::new();
+        for index in 0..count {
+            let time = ((index as f64) / request.sample_rate_hz).min(study.duration_seconds);
+            let sample = match inner
+                .manager
+                .sample_motion_study(SampleMotionStudyRequestDto {
+                    study_id: request.study_id,
+                    time_seconds: time,
+                }) {
+                Ok(sample) => sample,
+                Err(error) => return err_json(error.to_string()),
+            };
+            let report = match exact_interference_report(
+                &inner.kernel,
+                &inner.manager.solid_scene(),
+                &sample.solution.instance_body_poses,
+                &InterferenceCheckRequestDto {
+                    occurrence_ids: Vec::new(),
+                    clearance_threshold_mm: request.clearance_threshold_mm,
+                },
+            ) {
+                Ok(report) => report,
+                Err(error) => return err_json(error),
+            };
+            for pair in report
+                .pairs
+                .into_iter()
+                .filter(|pair| pair.interfering || pair.below_clearance)
+            {
+                let key = (
+                    pair.occurrence_a.0,
+                    pair.body_a.0,
+                    pair.occurrence_b.0,
+                    pair.body_b.0,
+                );
+                events
+                    .entry(key)
+                    .and_modify(|event| {
+                        event.last_time_seconds = time;
+                        event.minimum_clearance_mm =
+                            event.minimum_clearance_mm.min(pair.minimum_clearance_mm);
+                        event.maximum_overlap_volume_mm3 = event
+                            .maximum_overlap_volume_mm3
+                            .max(pair.overlap_volume_mm3);
+                    })
+                    .or_insert(SweptCollisionEventDto {
+                        occurrence_a: pair.occurrence_a,
+                        body_a: pair.body_a,
+                        occurrence_b: pair.occurrence_b,
+                        body_b: pair.body_b,
+                        first_time_seconds: time,
+                        last_time_seconds: time,
+                        minimum_clearance_mm: pair.minimum_clearance_mm,
+                        maximum_overlap_volume_mm3: pair.overlap_volume_mm3,
+                    });
+            }
+            if request.stop_at_first && !events.is_empty() {
+                let mut result = events.into_values().collect::<Vec<_>>();
+                result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+                return ok_json(SweptCollisionReportDto {
+                    exact: true,
+                    sample_count: index + 1,
+                    events: result,
+                });
+            }
+        }
+        let mut result = events.into_values().collect::<Vec<_>>();
+        result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+        ok_json(SweptCollisionReportDto {
+            exact: true,
+            sample_count: count,
+            events: result,
+        })
+    }
+
     pub fn export_step(&self, payload: &str) -> Result<Vec<u8>, String> {
         let request: StepExportRequest = serde_json::from_str(payload)
             .map_err(|error| format!("bad request payload: {error}"))?;
@@ -501,6 +757,90 @@ impl AppState {
     }
 }
 
+fn exact_interference_report(
+    kernel: &OcctKernel,
+    scene: &SolidSceneDto,
+    poses: &[InstanceBodyPoseDto],
+    request: &InterferenceCheckRequestDto,
+) -> Result<InterferenceReportDto, String> {
+    if !request.clearance_threshold_mm.is_finite() || request.clearance_threshold_mm < 0.0 {
+        return Err("interference clearance must be finite and non-negative".to_string());
+    }
+    let mut pairs = Vec::new();
+    for (a_index, b_index) in broad_phase_interference_pairs(scene, poses, request)? {
+        pairs.push(exact_pair_result(
+            kernel,
+            &poses[a_index],
+            &poses[b_index],
+            request.clearance_threshold_mm,
+        )?);
+    }
+    Ok(InterferenceReportDto { exact: true, pairs })
+}
+
+fn exact_pair_result(
+    kernel: &OcctKernel,
+    a: &InstanceBodyPoseDto,
+    b: &InstanceBodyPoseDto,
+    clearance_threshold_mm: f64,
+) -> Result<InterferencePairResultDto, String> {
+    let exact = kernel
+        .exact_interference(
+            PlacedBodyQueryDto {
+                body_id: a.body_id,
+                translation: a.translation,
+                rotation: a.rotation,
+            },
+            PlacedBodyQueryDto {
+                body_id: b.body_id,
+                translation: b.translation,
+                rotation: b.rotation,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(InterferencePairResultDto {
+        occurrence_a: a.occurrence_id,
+        body_a: a.body_id,
+        occurrence_b: b.occurrence_id,
+        body_b: b.body_id,
+        minimum_clearance_mm: exact.minimum_clearance_mm,
+        overlap_volume_mm3: exact.overlap_volume_mm3,
+        closest_point_a: exact.closest_point_a,
+        closest_point_b: exact.closest_point_b,
+        interfering: exact.overlap_volume_mm3 > 1.0e-7,
+        below_clearance: exact.minimum_clearance_mm <= clearance_threshold_mm + 1.0e-7,
+    })
+}
+
+fn exact_contact_violation(
+    kernel: &OcctKernel,
+    sample: &MotionStudySampleDto,
+    contact: &ContactSetDto,
+) -> Result<f64, String> {
+    let a = sample
+        .solution
+        .instance_body_poses
+        .iter()
+        .find(|pose| pose.occurrence_id == contact.occurrence_a && pose.body_id == contact.body_a)
+        .ok_or_else(|| format!("contact '{}' first placed body is missing", contact.name))?;
+    let b = sample
+        .solution
+        .instance_body_poses
+        .iter()
+        .find(|pose| pose.occurrence_id == contact.occurrence_b && pose.body_id == contact.body_b)
+        .ok_or_else(|| format!("contact '{}' second placed body is missing", contact.name))?;
+    let result = exact_pair_result(kernel, a, b, contact.clearance_mm)?;
+    Ok(contact_violation_score(&result, contact.clearance_mm))
+}
+
+fn contact_violation_score(result: &InterferencePairResultDto, required_clearance_mm: f64) -> f64 {
+    if result.overlap_volume_mm3 > 1.0e-7 {
+        required_clearance_mm + result.overlap_volume_mm3.cbrt()
+    } else {
+        (required_clearance_mm - result.minimum_clearance_mm).max(0.0)
+    }
+}
+
 fn validate_session_id(session_id: &str) -> Result<(), String> {
     if session_id.is_empty() || session_id.len() > 128 {
         return Err("invalid project session id".to_string());
@@ -566,14 +906,15 @@ mod tests {
             }"#,
         ));
 
-        let (before_id, before_revision, before_scene, _, _, _, _, _, _) =
+        let (before_id, before_revision, before_scene, _, _, _, _, _, _, _) =
             state.viewport_snapshot();
         assert_eq!(before_id, BOOTSTRAP_SESSION_ID);
         assert_eq!(before_scene.bodies.len(), 1);
         assert!(!before_scene.bodies[0].faces.is_empty());
 
         value(state.bind_project_session("recovered-tab"));
-        let (after_id, after_revision, after_scene, _, _, _, _, _, _) = state.viewport_snapshot();
+        let (after_id, after_revision, after_scene, _, _, _, _, _, _, _) =
+            state.viewport_snapshot();
         assert_eq!(after_id, "recovered-tab");
         assert_eq!(after_revision, before_revision);
         assert_eq!(after_scene.bodies.len(), before_scene.bodies.len());

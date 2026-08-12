@@ -107,16 +107,156 @@ impl WasmEngine {
         host::handle(&mut self.manager, "assembly_solution", "")
     }
 
+    pub fn assembly_create_component(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_component", payload)
+    }
+
+    pub fn assembly_update_component(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_component", payload)
+    }
+
+    pub fn assembly_create_occurrence(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_occurrence", payload)
+    }
+
+    pub fn assembly_update_occurrence(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_occurrence", payload)
+    }
+
+    pub fn assembly_duplicate_occurrence(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_duplicate_occurrence", payload)
+    }
+
+    pub fn assembly_set_occurrence_grounded(&mut self, payload: &str) -> String {
+        host::handle(
+            &mut self.manager,
+            "assembly_set_occurrence_grounded",
+            payload,
+        )
+    }
+
+    pub fn assembly_set_occurrence_pose(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_occurrence_pose", payload)
+    }
+
+    pub fn assembly_preview_joint(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_preview_joint", payload)
+    }
+
     pub fn assembly_create_joint(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "assembly_create_joint", payload)
+    }
+
+    pub fn assembly_update_joint(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_joint", payload)
+    }
+
+    pub fn assembly_preview_joint_update(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_preview_joint_update", payload)
     }
 
     pub fn assembly_delete_joint(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "assembly_delete_joint", payload)
     }
 
-    pub fn assembly_set_joint_value(&mut self, payload: &str) -> String {
-        host::handle(&mut self.manager, "assembly_set_joint_value", payload)
+    pub fn assembly_set_joint_enabled(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_joint_enabled", payload)
+    }
+
+    pub fn assembly_set_joint_motion(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_joint_motion", payload)
+    }
+
+    pub fn assembly_preview_joint_motion(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_preview_joint_motion", payload)
+    }
+
+    pub fn assembly_set_joint_coordinates(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_set_joint_coordinates", payload)
+    }
+
+    pub fn assembly_preview_joint_coordinates(&mut self, payload: &str) -> String {
+        host::handle(
+            &mut self.manager,
+            "assembly_preview_joint_coordinates",
+            payload,
+        )
+    }
+
+    pub fn assembly_preview_mechanism_drag(&mut self, payload: &str) -> String {
+        host::handle(
+            &mut self.manager,
+            "assembly_preview_mechanism_drag",
+            payload,
+        )
+    }
+
+    pub fn assembly_apply_joint_motions(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_apply_joint_motions", payload)
+    }
+
+    pub fn assembly_create_position(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_position", payload)
+    }
+
+    pub fn assembly_update_position(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_position", payload)
+    }
+
+    pub fn assembly_delete_position(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_delete_position", payload)
+    }
+
+    pub fn assembly_apply_position(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_apply_position", payload)
+    }
+
+    pub fn assembly_create_motion_study(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_motion_study", payload)
+    }
+
+    pub fn assembly_update_motion_study(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_motion_study", payload)
+    }
+
+    pub fn assembly_delete_motion_study(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_delete_motion_study", payload)
+    }
+
+    pub fn assembly_sample_motion_study(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_sample_motion_study", payload)
+    }
+
+    pub fn assembly_export_motion_path_csv(&mut self, payload: &str) -> String {
+        host::handle(
+            &mut self.manager,
+            "assembly_export_motion_path_csv",
+            payload,
+        )
+    }
+
+    pub fn assembly_create_contact_set(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_create_contact_set", payload)
+    }
+
+    pub fn assembly_update_contact_set(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_update_contact_set", payload)
+    }
+
+    pub fn assembly_delete_contact_set(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_delete_contact_set", payload)
+    }
+
+    pub fn assembly_interference_check(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_interference_check", payload)
+    }
+
+    pub fn assembly_evaluate_motion_study(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_evaluate_motion_study", payload)
+    }
+
+    pub fn assembly_swept_collision_check(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "assembly_swept_collision_check", payload)
     }
 
     pub fn assembly_set_grounded_body(&mut self, payload: &str) -> String {

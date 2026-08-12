@@ -612,6 +612,21 @@ pub struct StepThreadMetadataDto {
     pub thread: HoleThreadDto,
 }
 
+/// One solved component occurrence included in an assembly-aware STEP export.
+/// The referenced OCCT body remains the exact part-history B-rep; this rigid
+/// placement is applied only to the exchange copy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepOccurrencePlacementDto {
+    pub occurrence_id: u64,
+    pub component_id: u64,
+    pub body_id: BodyId,
+    #[serde(default)]
+    pub name: String,
+    pub translation: [f64; 3],
+    /// Unit quaternion in x, y, z, w order.
+    pub rotation: [f64; 4],
+}
+
 /// STEP export selection. An empty body list means every active body.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StepExportRequest {
@@ -621,6 +636,10 @@ pub struct StepExportRequest {
     /// Modeled threads additionally travel as ordinary AP242 B-rep geometry.
     #[serde(default)]
     pub thread_metadata: Vec<StepThreadMetadataDto>,
+    /// When populated, export exact placed occurrence copies instead of one
+    /// unplaced copy per source body. Empty retains part-export behavior.
+    #[serde(default)]
+    pub occurrences: Vec<StepOccurrencePlacementDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1333,16 +1352,42 @@ pub struct KernelFaceDto {
     pub plane: Option<PlaneBasis>,
     #[serde(default)]
     pub signature: Option<PlanarFaceSignatureDto>,
+    /// Exact analytic cylinder metadata supplied by OCCT. This is separate
+    /// from tessellation so picking and joint frames do not infer axes from
+    /// triangles.
+    #[serde(default)]
+    pub cylinder: Option<CylindricalSurfaceDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CylindricalSurfaceDto {
+    pub origin: Point3Dto,
+    pub axis: Point3Dto,
+    pub reference: Point3Dto,
+    pub radius: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KernelEdgeDto {
     pub key: String,
     pub points: Vec<Point3Dto>,
+    /// Exact analytic circle metadata supplied by OCCT. Closed circular edges
+    /// are first-class joint connector references, independent of tessellation.
+    #[serde(default)]
+    pub circle: Option<CircularCurveDto>,
     /// True when the edge is a real break between two faces and can be used
     /// by edge-refinement tools such as fillet and chamfer.
     #[serde(default = "default_true")]
     pub refinable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CircularCurveDto {
+    pub center: Point3Dto,
+    pub normal: Point3Dto,
+    pub reference: Point3Dto,
+    pub radius: f64,
+    pub closed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1390,6 +1435,8 @@ pub struct FaceDto {
     pub plane: Option<PlaneBasis>,
     #[serde(default)]
     pub signature: Option<PlanarFaceSignatureDto>,
+    #[serde(default)]
+    pub cylinder: Option<CylindricalSurfaceDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1397,6 +1444,8 @@ pub struct EdgeDto {
     pub id: EdgeId,
     pub key: String,
     pub points: Vec<Point3Dto>,
+    #[serde(default)]
+    pub circle: Option<CircularCurveDto>,
     #[serde(default = "default_true")]
     pub refinable: bool,
 }

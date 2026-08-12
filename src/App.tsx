@@ -60,13 +60,14 @@ import {
   installNativeEditMenu,
   nativeMacMenuOwnsUndoRedo,
 } from './nativeEditMenu';
+import { isTauriRuntime } from './engine';
 
 export default function App() {
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);
   const drawingWorkspace = activeTab === 'drawing';
-  const assemblyWorkspace = activeTab === 'assembly';
+  const solidSidebarMode = useAppStore((s) => s.solidSidebarMode);
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
   const syncResolvedTheme = useAppStore((s) => s.syncResolvedTheme);
@@ -113,6 +114,77 @@ export default function App() {
     };
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let promptOpen = false;
+    let unlistenClose: (() => void) | null = null;
+    let unlistenQuit: (() => void) | null = null;
+    void Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/event'),
+      import('@tauri-apps/api/window'),
+      import('@tauri-apps/plugin-dialog'),
+    ]).then(async ([{ invoke }, { listen }, { getCurrentWindow }, { confirm }]) => {
+      if (disposed) return;
+      const appWindow = getCurrentWindow();
+      const requestQuit = async () => {
+        if (promptOpen || disposed) return;
+        if (!hasUnsavedProjects()) {
+          await invoke('native_force_quit');
+          return;
+        }
+        promptOpen = true;
+        try {
+          const approved = await confirm(t('file.quitDiscardConfirm'), {
+            title: t('file.unsaved'),
+            kind: 'warning',
+          });
+          if (approved && !disposed) await invoke('native_force_quit');
+        } finally {
+          promptOpen = false;
+        }
+      };
+      unlistenClose = await appWindow.onCloseRequested((event) => {
+        if (!hasUnsavedProjects()) return;
+        event.preventDefault();
+        void requestQuit();
+      });
+      unlistenQuit = await listen('native-quit-request', () => {
+        void requestQuit();
+      });
+      if (disposed) {
+        unlistenClose();
+        unlistenQuit();
+        unlistenClose = null;
+        unlistenQuit = null;
+      }
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlistenClose?.();
+      unlistenQuit?.();
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
+    void import('@tauri-apps/api/core').then(({ invoke }) => {
+      if (disposed) return;
+      const sync = () => {
+        void invoke('native_unsaved_set', { unsaved: hasUnsavedProjects() });
+      };
+      sync();
+      unsubscribe = useAppStore.subscribe(sync);
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -219,7 +291,7 @@ export default function App() {
       }
 
       if (
-        s.activeTab === 'assembly'
+        s.solidSidebarMode === 'assembly'
         && (e.key === 'Delete' || e.key === 'Backspace')
         && s.selectedJointId !== null
       ) {
@@ -289,7 +361,13 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
       <Ribbon />
       <div className="flex min-h-0 flex-1">
-        {drawingWorkspace ? <DrawingBrowser /> : assemblyWorkspace ? <AssemblyBrowser /> : <BrowserTree />}
+        {drawingWorkspace ? (
+          <DrawingBrowser />
+        ) : solidSidebarMode === 'assembly' ? (
+          <AssemblyBrowser />
+        ) : (
+          <BrowserTree />
+        )}
         <div className="flex min-w-0 flex-1 flex-col">
           <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
@@ -306,7 +384,7 @@ export default function App() {
           </main>
         </div>
       </div>
-      {!drawingWorkspace && !assemblyWorkspace && <Timeline />}
+      {!drawingWorkspace && <Timeline />}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

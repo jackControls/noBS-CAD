@@ -45,10 +45,13 @@
     "tabUnavailable": "This document tab is no longer available.",
     "discardConfirm": "Open another project and discard the current unsaved changes?",
     "closeDiscardConfirm": "Close this design and discard its unsaved changes?",
+    "quitDiscardConfirm": "Quit noBS CAD and discard unsaved changes in all open designs?",
     "finishBeforeStep": "Finish the active sketch before exporting STEP.",
     "finishBeforeMesh": "Finish the active sketch before exporting mesh files.",
     "finishBeforeStepImport": "Finish the active sketch before importing STEP.",
     "stepImportTooLarge": "STEP import is limited to 96 MB in this build.",
+    "bodyClipboardEmpty": "Copy a body before pasting into this project.",
+    "bodyPasteFailed": "The copied body could not be added to this project.",
     "resolveErrors": "Resolve timeline errors before exporting.",
     "selectBody": "Select a body before using Export Selected Body.",
     "noBodies": "There are no active bodies to export.",
@@ -302,6 +305,11 @@
     "toggleVisibility": "Toggle visibility",
     "fullyDefined": "Fully defined",
     "editSketch": "Edit sketch",
+    "copyBody": "Copy body",
+    "pasteBody": "Paste copied body",
+    "exportBodyStep": "Export selected body as STEP…",
+    "fixComponent": "Fix component in place",
+    "releaseComponent": "Release fixed component",
     "deleteItem": "Delete {name}…",
     "deleteOwningFeature": "Delete owning feature {name}…"
   },
@@ -342,7 +350,7 @@
     "sixDofConnect": "Connect a compatible 3D mouse. In a browser, the optional 3Dconnexion driver bridge loads only after you click."
   },
   "timeline": {
-    "historyTitle": "Build history",
+    "historyTitle": "Design history",
     "goToStart": "Beginning",
     "stepBack": "Previous feature",
     "stepForward": "Next feature",
@@ -363,7 +371,14 @@
     "deleteConfirm": "Delete",
     "deleteCancel": "Cancel",
     "deleteFailed": "Could not delete feature",
-    "reorderFailed": "Could not reorder feature"
+    "reorderFailed": "Could not reorder feature",
+    "assemblyHistory": "Assembly joints",
+    "joints": "joints",
+    "jointContextMenu": "Joint history actions",
+    "editJoint": "Edit joint",
+    "suppressJoint": "Suppress joint",
+    "unsuppressJoint": "Unsuppress joint",
+    "deleteJoint": "Delete joint"
   },
   "extrude": {
     "title": "Extrude",

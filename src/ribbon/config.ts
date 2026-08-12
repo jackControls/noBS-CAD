@@ -529,6 +529,26 @@ export const SOLID_TAB: RibbonTab = {
       ],
     },
     {
+      id: 'assembly',
+      labelKey: 'ribbon.tabs.assembly',
+      buttons: [
+        {
+          id: 'assemblyBrowser',
+          labelKey: 'ribbon.tabs.assembly',
+          icon: 'combine',
+          enabled: true,
+          action: 'assemblyWorkspace',
+        },
+        {
+          id: 'createJoint',
+          labelKey: 'ribbon.assembly.joint',
+          icon: 'combine',
+          enabled: true,
+          action: 'joint',
+        },
+      ],
+    },
+    {
       id: 'selection',
       labelKey: 'ribbon.panels.selection',
       buttons: [{ id: 'select', labelKey: 'ribbon.solid.select', icon: 'select', enabled: true }],

@@ -2,12 +2,24 @@
 //! (`begin_sketch` / `end_sketch`) and routes drawing ops to the active
 //! session. This is the object both engine hosts (Tauri, WASM) hold.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f64::consts::TAU;
 
 use nbcad_assembly::{
-    AssemblyDocumentDto, AssemblySolutionDto, CreateJointRequestDto, JointDefinitionDto, JointId,
-    SetJointValueRequestDto,
+    approximate_interference_report, approximate_pair_result, contact_violation_score,
+    ApplyJointMotionsRequestDto, AssemblyDocumentDto, AssemblyPositionDto, AssemblyPositionId,
+    AssemblySolutionDto, ComponentDefinitionDto, ComponentOccurrenceDto, ContactSetDto,
+    ContactSetId, CreateAssemblyPositionRequestDto, CreateComponentRequestDto,
+    CreateContactSetRequestDto, CreateJointRequestDto, CreateMotionStudyRequestDto,
+    CreateOccurrenceRequestDto, DuplicateOccurrenceRequestDto, EvaluateMotionStudyRequestDto,
+    InterferenceCheckRequestDto, InterferenceReportDto, JointDefinitionDto, JointId,
+    MechanismDragRequestDto, MechanismPreviewDto, MotionPathRequestDto, MotionStudyDto,
+    MotionStudyEvaluationDto, MotionStudyId, MotionStudySampleDto, SampleMotionStudyRequestDto,
+    SetJointCoordinatesRequestDto, SetJointEnabledRequestDto, SetJointMotionRequestDto,
+    SetOccurrenceGroundedRequestDto, SetOccurrencePoseRequestDto, SweptCollisionEventDto,
+    SweptCollisionReportDto, SweptCollisionRequestDto, UpdateComponentRequestDto,
+    UpdateJointRequestDto, UpdateOccurrenceRequestDto,
 };
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
@@ -94,11 +106,18 @@ pub struct SketchManager {
     /// Persistent assembly/joint intent. Kinematic display poses are derived
     /// by the assembly solver at runtime and never baked into solid history.
     assembly: AssemblyDocumentDto,
+    /// Solving a large occurrence graph is deterministic but not free. The
+    /// authoritative result is retained until assembly intent or source
+    /// geometry changes; render snapshots and UI reads then share one solve.
+    assembly_solution_cache: RefCell<Option<AssemblySolutionDto>>,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
+    /// Armed only for an explicit history deletion. Rollback and ordinary
+    /// recompute can hide a body temporarily and must retain assembly joints.
+    pending_joint_body_deletion: Option<(u64, BTreeSet<BodyId>)>,
 }
 
 #[derive(Debug)]
@@ -131,8 +150,10 @@ impl SketchManager {
             body_appearances: Vec::new(),
             drawings: DrawingDocumentDto::default(),
             assembly: AssemblyDocumentDto::default(),
+            assembly_solution_cache: RefCell::new(None),
             project_visibility: ProjectVisibilityDto::default(),
             pending_project: None,
+            pending_joint_body_deletion: None,
         }
     }
 
@@ -302,8 +323,10 @@ impl SketchManager {
             body_appearances: model.body_appearances,
             drawings: model.drawings,
             assembly: model.assembly,
+            assembly_solution_cache: RefCell::new(None),
             project_visibility: model.visibility,
             pending_project: None,
+            pending_joint_body_deletion: None,
         };
         candidate.sketch_count = candidate
             .sketch_count
@@ -522,31 +545,564 @@ impl SketchManager {
     }
 
     pub fn assembly_solution(&self) -> AssemblySolutionDto {
-        self.assembly.solve(self.solids.scene())
+        if let Some(solution) = self.assembly_solution_cache.borrow().as_ref() {
+            return solution.clone();
+        }
+        let solution = self.assembly.solve(self.solids.scene());
+        *self.assembly_solution_cache.borrow_mut() = Some(solution.clone());
+        solution
+    }
+
+    fn invalidate_assembly_solution(&mut self) {
+        *self.assembly_solution_cache.get_mut() = None;
+    }
+
+    pub fn create_component(
+        &mut self,
+        request: CreateComponentRequestDto,
+    ) -> Result<ComponentDefinitionDto, SessionError> {
+        let component = self
+            .assembly
+            .create_component(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(component)
+    }
+
+    pub fn update_component(
+        &mut self,
+        request: UpdateComponentRequestDto,
+    ) -> Result<ComponentDefinitionDto, SessionError> {
+        let component = self
+            .assembly
+            .update_component(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(component)
+    }
+
+    pub fn create_occurrence(
+        &mut self,
+        request: CreateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .create_occurrence(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn update_occurrence(
+        &mut self,
+        request: UpdateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .update_occurrence(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn duplicate_occurrence(
+        &mut self,
+        request: DuplicateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .duplicate_occurrence_subtree(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn set_occurrence_grounded(
+        &mut self,
+        request: SetOccurrenceGroundedRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_occurrence_grounded(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_occurrence_pose(
+        &mut self,
+        request: SetOccurrencePoseRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_occurrence_pose(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn preview_joint(
+        &self,
+        request: CreateJointRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .create(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
     }
 
     pub fn create_joint(
         &mut self,
         request: CreateJointRequestDto,
     ) -> Result<JointDefinitionDto, SessionError> {
-        self.assembly
+        let joint = self
+            .assembly
             .create(request, self.solids.scene())
-            .map_err(SessionError::Solid)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(joint)
     }
 
     pub fn delete_joint(&mut self, id: JointId) -> Result<AssemblyDocumentDto, SessionError> {
         self.assembly.delete(id).map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
         Ok(self.assembly.clone())
     }
 
-    pub fn set_joint_value(
+    pub fn update_joint(
         &mut self,
-        request: SetJointValueRequestDto,
+        request: UpdateJointRequestDto,
+    ) -> Result<JointDefinitionDto, SessionError> {
+        let joint = self
+            .assembly
+            .update(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(joint)
+    }
+
+    pub fn preview_joint_update(
+        &self,
+        request: UpdateJointRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .update(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn set_joint_enabled(
+        &mut self,
+        request: SetJointEnabledRequestDto,
     ) -> Result<AssemblyDocumentDto, SessionError> {
         self.assembly
-            .set_joint_value(request.joint_id, request.value)
+            .set_joint_enabled(request.joint_id, request.enabled)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_joint_motion(
+        &mut self,
+        request: SetJointMotionRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_motion(
+                request.joint_id,
+                request.angle_offset_deg,
+                request.linear_offset_mm,
+            )
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    /// Solve a candidate joint position without mutating the saved assembly.
+    /// Viewport animation and direct manipulation must cross this boundary so
+    /// a preview can never dirty the project or silently become a design pose.
+    pub fn preview_joint_motion(
+        &self,
+        request: SetJointMotionRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .set_joint_motion(
+                request.joint_id,
+                request.angle_offset_deg,
+                request.linear_offset_mm,
+            )
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn set_joint_coordinates(
+        &mut self,
+        request: SetJointCoordinatesRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_coordinates(request.motion.joint_id, request.motion)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    /// Solve a complete (possibly multi-axis) joint coordinate state without
+    /// mutating the saved assembly document.
+    pub fn preview_joint_coordinates(
+        &self,
+        request: SetJointCoordinatesRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .set_joint_coordinates(request.motion.joint_id, request.motion)
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn preview_mechanism_drag(
+        &self,
+        request: MechanismDragRequestDto,
+    ) -> Result<MechanismPreviewDto, SessionError> {
+        self.assembly
+            .preview_mechanism_drag(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn apply_joint_motions(
+        &mut self,
+        request: ApplyJointMotionsRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .apply_joint_motions(&request.motions)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn create_assembly_position(
+        &mut self,
+        request: CreateAssemblyPositionRequestDto,
+    ) -> Result<AssemblyPositionDto, SessionError> {
+        self.assembly
+            .create_position(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_assembly_position(
+        &mut self,
+        position: AssemblyPositionDto,
+    ) -> Result<AssemblyPositionDto, SessionError> {
+        self.assembly
+            .update_position(position)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_assembly_position(
+        &mut self,
+        id: AssemblyPositionId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_position(id)
             .map_err(SessionError::Solid)?;
         Ok(self.assembly.clone())
+    }
+
+    pub fn apply_assembly_position(
+        &mut self,
+        id: AssemblyPositionId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .apply_position(id)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn create_motion_study(
+        &mut self,
+        request: CreateMotionStudyRequestDto,
+    ) -> Result<MotionStudyDto, SessionError> {
+        self.assembly
+            .create_motion_study(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_motion_study(
+        &mut self,
+        study: MotionStudyDto,
+    ) -> Result<MotionStudyDto, SessionError> {
+        self.assembly
+            .update_motion_study(study)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_motion_study(
+        &mut self,
+        id: MotionStudyId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_motion_study(id)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn sample_motion_study(
+        &self,
+        request: SampleMotionStudyRequestDto,
+    ) -> Result<MotionStudySampleDto, SessionError> {
+        self.assembly
+            .sample_motion_study(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn export_motion_path_csv(
+        &self,
+        request: MotionPathRequestDto,
+    ) -> Result<String, SessionError> {
+        self.assembly
+            .export_motion_path_csv(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn create_contact_set(
+        &mut self,
+        request: CreateContactSetRequestDto,
+    ) -> Result<ContactSetDto, SessionError> {
+        self.assembly
+            .create_contact_set(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_contact_set(
+        &mut self,
+        contact: ContactSetDto,
+    ) -> Result<ContactSetDto, SessionError> {
+        self.assembly
+            .update_contact_set(contact)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_contact_set(
+        &mut self,
+        id: ContactSetId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_contact_set(id)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn approximate_interference_check(
+        &self,
+        request: InterferenceCheckRequestDto,
+    ) -> Result<InterferenceReportDto, SessionError> {
+        approximate_interference_report(
+            self.solids.scene(),
+            &self.assembly_solution().instance_body_poses,
+            &request,
+        )
+        .map_err(SessionError::Solid)
+    }
+
+    pub fn approximate_motion_study_evaluation(
+        &self,
+        request: EvaluateMotionStudyRequestDto,
+    ) -> Result<MotionStudyEvaluationDto, SessionError> {
+        let mut sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+            study_id: request.study_id,
+            time_seconds: request.time_seconds,
+        })?;
+        let mut stopped_by_contact = None;
+        let mut stop_time_seconds = None;
+        if request.enforce_contacts {
+            let start = self.sample_motion_study(SampleMotionStudyRequestDto {
+                study_id: request.study_id,
+                time_seconds: request.previous_time_seconds.unwrap_or(0.0),
+            })?;
+            for contact in self
+                .assembly
+                .contact_sets
+                .iter()
+                .filter(|contact| contact.enabled && contact.stop_motion)
+            {
+                let violation = |candidate: &MotionStudySampleDto| -> Result<f64, SessionError> {
+                    let a = candidate
+                        .solution
+                        .instance_body_poses
+                        .iter()
+                        .find(|pose| {
+                            pose.occurrence_id == contact.occurrence_a
+                                && pose.body_id == contact.body_a
+                        })
+                        .ok_or_else(|| {
+                            SessionError::Solid(format!(
+                                "contact '{}' first body is missing",
+                                contact.name
+                            ))
+                        })?;
+                    let b = candidate
+                        .solution
+                        .instance_body_poses
+                        .iter()
+                        .find(|pose| {
+                            pose.occurrence_id == contact.occurrence_b
+                                && pose.body_id == contact.body_b
+                        })
+                        .ok_or_else(|| {
+                            SessionError::Solid(format!(
+                                "contact '{}' second body is missing",
+                                contact.name
+                            ))
+                        })?;
+                    let pair =
+                        approximate_pair_result(self.solids.scene(), a, b, contact.clearance_mm)
+                            .map_err(SessionError::Solid)?;
+                    Ok(contact_violation_score(&pair, contact.clearance_mm))
+                };
+                let start_violation = violation(&start)?;
+                let end_violation = violation(&sample)?;
+                if start_violation > 1.0e-7 && end_violation >= start_violation {
+                    sample = start;
+                    stopped_by_contact = Some(contact.id);
+                    stop_time_seconds = Some(sample.time_seconds);
+                    break;
+                }
+                if start_violation <= 1.0e-7 && end_violation > 1.0e-7 {
+                    let (mut low, mut high) = (
+                        start.time_seconds.min(sample.time_seconds),
+                        start.time_seconds.max(sample.time_seconds),
+                    );
+                    for _ in 0..20 {
+                        let middle = (low + high) * 0.5;
+                        let candidate = self.sample_motion_study(SampleMotionStudyRequestDto {
+                            study_id: request.study_id,
+                            time_seconds: middle,
+                        })?;
+                        if violation(&candidate)? > 1.0e-7 {
+                            high = middle;
+                        } else {
+                            low = middle;
+                        }
+                    }
+                    sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+                        study_id: request.study_id,
+                        time_seconds: high,
+                    })?;
+                    stopped_by_contact = Some(contact.id);
+                    stop_time_seconds = Some(high);
+                    break;
+                }
+            }
+        }
+        let contacts = approximate_interference_report(
+            self.solids.scene(),
+            &sample.solution.instance_body_poses,
+            &InterferenceCheckRequestDto {
+                occurrence_ids: Vec::new(),
+                clearance_threshold_mm: self
+                    .assembly
+                    .contact_sets
+                    .iter()
+                    .filter(|contact| contact.enabled)
+                    .map(|contact| contact.clearance_mm)
+                    .fold(0.0_f64, f64::max),
+            },
+        )
+        .map_err(SessionError::Solid)?;
+        Ok(MotionStudyEvaluationDto {
+            sample,
+            contacts,
+            stopped_by_contact,
+            stop_time_seconds,
+        })
+    }
+
+    pub fn approximate_swept_collision_check(
+        &self,
+        request: SweptCollisionRequestDto,
+    ) -> Result<SweptCollisionReportDto, SessionError> {
+        if !request.sample_rate_hz.is_finite() || !(1.0..=240.0).contains(&request.sample_rate_hz) {
+            return Err(SessionError::Solid(
+                "swept collision sample rate must be between 1 and 240 Hz".to_string(),
+            ));
+        }
+        let study = self
+            .assembly
+            .motion_studies
+            .iter()
+            .find(|study| study.id == request.study_id)
+            .ok_or_else(|| {
+                SessionError::Solid(format!(
+                    "motion study {} does not exist",
+                    request.study_id.0
+                ))
+            })?;
+        let count = (study.duration_seconds * request.sample_rate_hz).ceil() as u32 + 1;
+        let mut events = HashMap::<(u64, u64, u64, u64), SweptCollisionEventDto>::new();
+        for index in 0..count {
+            let time = (index as f64 / request.sample_rate_hz).min(study.duration_seconds);
+            let sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+                study_id: request.study_id,
+                time_seconds: time,
+            })?;
+            let report = approximate_interference_report(
+                self.solids.scene(),
+                &sample.solution.instance_body_poses,
+                &InterferenceCheckRequestDto {
+                    occurrence_ids: Vec::new(),
+                    clearance_threshold_mm: request.clearance_threshold_mm,
+                },
+            )
+            .map_err(SessionError::Solid)?;
+            for pair in report
+                .pairs
+                .into_iter()
+                .filter(|pair| pair.interfering || pair.below_clearance)
+            {
+                let key = (
+                    pair.occurrence_a.0,
+                    pair.body_a.0,
+                    pair.occurrence_b.0,
+                    pair.body_b.0,
+                );
+                events
+                    .entry(key)
+                    .and_modify(|event| {
+                        event.last_time_seconds = time;
+                        event.minimum_clearance_mm =
+                            event.minimum_clearance_mm.min(pair.minimum_clearance_mm);
+                        event.maximum_overlap_volume_mm3 = event
+                            .maximum_overlap_volume_mm3
+                            .max(pair.overlap_volume_mm3);
+                    })
+                    .or_insert(SweptCollisionEventDto {
+                        occurrence_a: pair.occurrence_a,
+                        body_a: pair.body_a,
+                        occurrence_b: pair.occurrence_b,
+                        body_b: pair.body_b,
+                        first_time_seconds: time,
+                        last_time_seconds: time,
+                        minimum_clearance_mm: pair.minimum_clearance_mm,
+                        maximum_overlap_volume_mm3: pair.overlap_volume_mm3,
+                    });
+            }
+            if request.stop_at_first && !events.is_empty() {
+                let mut result = events.into_values().collect::<Vec<_>>();
+                result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+                return Ok(SweptCollisionReportDto {
+                    exact: false,
+                    sample_count: index + 1,
+                    events: result,
+                });
+            }
+        }
+        let mut result = events.into_values().collect::<Vec<_>>();
+        result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+        Ok(SweptCollisionReportDto {
+            exact: false,
+            sample_count: count,
+            events: result,
+        })
     }
 
     pub fn set_grounded_body(
@@ -556,6 +1112,7 @@ impl SketchManager {
         self.assembly
             .set_grounded_body(body_id, self.solids.scene())
             .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
         Ok(self.assembly.clone())
     }
 
@@ -1378,6 +1935,13 @@ impl SketchManager {
             .solids
             .prepare_delete_feature(request.feature_id, &catalog, &active)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
+        self.pending_joint_body_deletion = Some((
+            plan.transaction_id,
+            self.solids
+                .owned_body_ids_for_feature(request.feature_id)
+                .into_iter()
+                .collect(),
+        ));
 
         self.document.features_mut().remove(request.feature_id);
         match feature.kind {
@@ -1503,6 +2067,13 @@ impl SketchManager {
             return;
         }
         self.solids.cancel_pending(transaction_id);
+        if self
+            .pending_joint_body_deletion
+            .as_ref()
+            .is_some_and(|(pending_id, _)| *pending_id == transaction_id)
+        {
+            self.pending_joint_body_deletion = None;
+        }
     }
 
     pub fn commit_solid(
@@ -1526,6 +2097,16 @@ impl SketchManager {
             .commit(request.transaction_id, request.scene)
             .map_err(|error| SessionError::Solid(error.to_string()))?
             .clone();
+        if let Some((pending_id, deleted_body_ids)) = self.pending_joint_body_deletion.take() {
+            if pending_id == request.transaction_id {
+                let deleted_body_ids = deleted_body_ids
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>();
+                self.assembly
+                    .remove_joints_for_deleted_bodies(&deleted_body_ids)
+                    .map_err(SessionError::Solid)?;
+            }
+        }
 
         let body_ids = scene
             .bodies
@@ -1539,6 +2120,10 @@ impl SketchManager {
                 self.document.add_body_node(body.id.0, &body.name);
             }
         }
+        self.assembly
+            .synchronize_components(&scene)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
         self.scrub_body_appearances();
         self.scrub_project_visibility();
 
@@ -3241,6 +3826,7 @@ mod project_tests {
                     wire_count: 1,
                     edge_count: 3,
                 }),
+                cylinder: None,
             }],
             edges: vec![
                 KernelEdgeDto {
@@ -3249,6 +3835,7 @@ mod project_tests {
                         Point3Dto::from([0.0, 0.0, 0.0]),
                         Point3Dto::from([20.0, 0.0, 0.0]),
                     ],
+                    circle: None,
                     refinable: true,
                 },
                 KernelEdgeDto {
@@ -3257,6 +3844,7 @@ mod project_tests {
                         Point3Dto::from([20.0, 0.0, 0.0]),
                         Point3Dto::from([0.0, 10.0, 0.0]),
                     ],
+                    circle: None,
                     refinable: true,
                 },
             ],
@@ -3373,6 +3961,134 @@ mod project_tests {
             .export_project_model()
             .unwrap()
             .contains("\"Sketch1\""));
+    }
+
+    #[test]
+    fn component_occurrences_roundtrip_without_mutating_part_history() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        let basis = plane.origin_basis().unwrap();
+        manager.begin_sketch(plane).unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(0.0, 0.0),
+                p2: crate::Vec2::new(20.0, 10.0),
+                ctrl_held: false,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".to_string(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 15.0 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: Vec::new(),
+            })
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        let history_before = manager.document.features().clone();
+        let extrudes_before = manager.solids.definitions().to_vec();
+        let promoted = manager
+            .assembly_document()
+            .component_structure
+            .definitions
+            .into_iter()
+            .find(|definition| definition.body_ids == vec![body_id])
+            .unwrap();
+        manager
+            .update_component(UpdateComponentRequestDto {
+                component: nbcad_assembly::ComponentDefinitionDto {
+                    local_coordinate_system: nbcad_assembly::AssemblyTransformDto {
+                        translation: [2.0, 0.0, 0.0],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    ..promoted.clone()
+                },
+            })
+            .unwrap();
+        let subassembly = manager
+            .create_component(CreateComponentRequestDto {
+                name: "Nested fixture".to_string(),
+                body_ids: Vec::new(),
+                local_coordinate_system: nbcad_assembly::AssemblyTransformDto::default(),
+                absorb_promoted_bodies: false,
+            })
+            .unwrap();
+        let subassembly_occurrence = manager
+            .assembly_document()
+            .component_structure
+            .occurrences
+            .into_iter()
+            .find(|occurrence| occurrence.component_id == subassembly.id)
+            .unwrap();
+        manager
+            .create_occurrence(CreateOccurrenceRequestDto {
+                component_id: promoted.id,
+                name: "Nested part".to_string(),
+                parent_occurrence_id: Some(subassembly_occurrence.id),
+                local_pose: nbcad_assembly::AssemblyTransformDto {
+                    translation: [15.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                },
+            })
+            .unwrap();
+        let duplicate = manager
+            .duplicate_occurrence(DuplicateOccurrenceRequestDto {
+                occurrence_id: subassembly_occurrence.id,
+                parent_occurrence_id: None,
+            })
+            .unwrap();
+        manager
+            .set_occurrence_pose(SetOccurrencePoseRequestDto {
+                occurrence_id: duplicate.id,
+                local_pose: nbcad_assembly::AssemblyTransformDto {
+                    translation: [50.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                },
+            })
+            .unwrap();
+
+        assert_eq!(manager.document.features(), &history_before);
+        assert_eq!(manager.solids.definitions(), extrudes_before.as_slice());
+        assert_eq!(manager.solid_scene().bodies.len(), 1);
+        assert_eq!(manager.assembly_solution().instance_body_poses.len(), 3);
+        let assembly_before = manager.assembly_document();
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.assembly_document(), assembly_before);
+        assert_eq!(loaded.document.features(), &history_before);
+        assert_eq!(loaded.solids.definitions(), extrudes_before.as_slice());
+        assert_eq!(loaded.solid_scene().bodies.len(), 1);
+        assert_eq!(loaded.assembly_solution().instance_body_poses.len(), 3);
     }
 
     #[test]
@@ -3790,6 +4506,10 @@ mod project_tests {
             body_id: BodyId(body_id),
             face_id: FaceId(face_id),
             face_key: key.to_string(),
+            edge_id: None,
+            edge_key: None,
+            kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
+            radius: None,
             frame: nbcad_assembly::JointFrameDto {
                 origin,
                 primary_axis: [0.0, 0.0, 1.0],
@@ -3810,14 +4530,28 @@ mod project_tests {
                     min: -90.0,
                     max: 90.0,
                 }),
+                angle_limits: None,
+                linear_limits: None,
+                advanced: nbcad_assembly::JointAdvancedDto::default(),
                 enabled: true,
             }],
             next_joint_id: 8,
             grounded_body_id: Some(BodyId(1)),
+            component_structure: nbcad_assembly::ComponentStructureDto::default(),
+            ..AssemblyDocumentDto::default()
         };
 
         let mut manager = SketchManager::new();
         manager.assembly = assembly.clone();
+        let preview = manager
+            .preview_joint_motion(SetJointMotionRequestDto {
+                joint_id: JointId(7),
+                angle_offset_deg: 45.0,
+                linear_offset_mm: 0.0,
+            })
+            .unwrap();
+        assert!(!preview.body_poses.is_empty() || !preview.diagnostics.is_empty());
+        assert_eq!(manager.assembly_document(), assembly);
         let json = manager.export_project_model().unwrap();
         let mut loaded = SketchManager::new();
         let replay = loaded.prepare_load_project(json).unwrap();
@@ -3829,6 +4563,103 @@ mod project_tests {
             })
             .unwrap();
         assert_eq!(loaded.assembly_document(), assembly);
+    }
+
+    #[test]
+    fn committed_feature_deletion_removes_joints_that_reference_its_body() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        let basis = plane.origin_basis().unwrap();
+
+        for expected_name in ["Sketch1", "Sketch2"] {
+            manager.begin_sketch(plane).unwrap();
+            manager
+                .add_rectangle(RectangleRequest {
+                    mode: crate::dto::RectangleMode::TwoPoint,
+                    p1: crate::Vec2::new(0.0, 0.0),
+                    p2: crate::Vec2::new(20.0, 10.0),
+                    ctrl_held: false,
+                })
+                .unwrap();
+            manager.end_sketch().unwrap();
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: expected_name.to_string(),
+                    profile_indices: vec![0],
+                    operation: ExtrudeOperation::NewBody,
+                    extent: ExtrudeExtent::Distance { distance: 15.0 },
+                    taper_angle_deg: 0.0,
+                    flip: false,
+                    target_body_ids: Vec::new(),
+                })
+                .unwrap();
+            commit_plan(&mut manager, plan, basis);
+        }
+
+        let scene = manager.solid_scene();
+        assert_eq!(scene.bodies.len(), 2);
+        let connector = |body: &nbcad_solid::BodyDto| {
+            let face = &body.faces[0];
+            let face_basis = face.plane.unwrap();
+            nbcad_assembly::JointConnectorDto {
+                body_id: body.id,
+                face_id: face.id,
+                face_key: face.key.clone(),
+                edge_id: None,
+                edge_key: None,
+                kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
+                radius: None,
+                frame: nbcad_assembly::JointFrameDto {
+                    origin: face_basis.origin,
+                    primary_axis: face_basis.normal,
+                    secondary_axis: face_basis.u,
+                },
+            }
+        };
+        manager
+            .create_joint(CreateJointRequestDto {
+                name: "Disposable mate".to_string(),
+                kind: nbcad_assembly::JointKindDto::Rigid,
+                connector_a: connector(&scene.bodies[0]),
+                connector_b: connector(&scene.bodies[1]),
+                flipped: true,
+                angle_offset_deg: 0.0,
+                linear_offset_mm: 0.0,
+                limits: None,
+                angle_limits: None,
+                linear_limits: None,
+                advanced: nbcad_assembly::JointAdvancedDto::default(),
+                grounded_body_id: Some(scene.bodies[1].id),
+                grounded_occurrence_id: None,
+            })
+            .unwrap();
+        assert_eq!(manager.assembly_document().joints.len(), 1);
+
+        let deleted_body = &scene.bodies[0];
+        let retained_body = &scene.bodies[1];
+        let plan = manager
+            .prepare_delete_feature(DeleteFeatureRequest {
+                feature_id: deleted_body.feature_id,
+            })
+            .unwrap();
+        assert_eq!(
+            manager.assembly_document().joints.len(),
+            1,
+            "joint intent must remain intact until the kernel transaction commits"
+        );
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(retained_body.id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+        assert!(manager.assembly_document().joints.is_empty());
     }
 
     #[test]

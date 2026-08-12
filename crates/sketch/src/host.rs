@@ -32,7 +32,7 @@ use crate::dto::{
 use crate::manager::SketchManager;
 use crate::plane::PlaneRef;
 use crate::session::SessionError;
-use crate::{JointId, SetJointValueRequestDto};
+use crate::{JointId, SetJointMotionRequestDto};
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -75,10 +75,101 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         }
         "assembly_document" => ok_json(manager.assembly_document()),
         "assembly_solution" => ok_json(manager.assembly_solution()),
+        "assembly_create_component" => {
+            with_payload(payload, |request| manager.create_component(request))
+        }
+        "assembly_update_component" => {
+            with_payload(payload, |request| manager.update_component(request))
+        }
+        "assembly_create_occurrence" => {
+            with_payload(payload, |request| manager.create_occurrence(request))
+        }
+        "assembly_update_occurrence" => {
+            with_payload(payload, |request| manager.update_occurrence(request))
+        }
+        "assembly_duplicate_occurrence" => {
+            with_payload(payload, |request| manager.duplicate_occurrence(request))
+        }
+        "assembly_set_occurrence_grounded" => {
+            with_payload(payload, |request| manager.set_occurrence_grounded(request))
+        }
+        "assembly_set_occurrence_pose" => {
+            with_payload(payload, |request| manager.set_occurrence_pose(request))
+        }
+        "assembly_preview_joint" => with_payload(payload, |request| manager.preview_joint(request)),
         "assembly_create_joint" => with_payload(payload, |request| manager.create_joint(request)),
+        "assembly_update_joint" => with_payload(payload, |request| manager.update_joint(request)),
+        "assembly_preview_joint_update" => {
+            with_payload(payload, |request| manager.preview_joint_update(request))
+        }
         "assembly_delete_joint" => with_payload(payload, |id: JointId| manager.delete_joint(id)),
-        "assembly_set_joint_value" => with_payload(payload, |request: SetJointValueRequestDto| {
-            manager.set_joint_value(request)
+        "assembly_set_joint_enabled" => {
+            with_payload(payload, |request| manager.set_joint_enabled(request))
+        }
+        "assembly_set_joint_motion" => {
+            with_payload(payload, |request: SetJointMotionRequestDto| {
+                manager.set_joint_motion(request)
+            })
+        }
+        "assembly_preview_joint_motion" => {
+            with_payload(payload, |request: SetJointMotionRequestDto| {
+                manager.preview_joint_motion(request)
+            })
+        }
+        "assembly_set_joint_coordinates" => {
+            with_payload(payload, |request| manager.set_joint_coordinates(request))
+        }
+        "assembly_preview_joint_coordinates" => with_payload(payload, |request| {
+            manager.preview_joint_coordinates(request)
+        }),
+        "assembly_preview_mechanism_drag" => {
+            with_payload(payload, |request| manager.preview_mechanism_drag(request))
+        }
+        "assembly_apply_joint_motions" => {
+            with_payload(payload, |request| manager.apply_joint_motions(request))
+        }
+        "assembly_create_position" => {
+            with_payload(payload, |request| manager.create_assembly_position(request))
+        }
+        "assembly_update_position" => with_payload(payload, |position| {
+            manager.update_assembly_position(position)
+        }),
+        "assembly_delete_position" => {
+            with_payload(payload, |id| manager.delete_assembly_position(id))
+        }
+        "assembly_apply_position" => {
+            with_payload(payload, |id| manager.apply_assembly_position(id))
+        }
+        "assembly_create_motion_study" => {
+            with_payload(payload, |request| manager.create_motion_study(request))
+        }
+        "assembly_update_motion_study" => {
+            with_payload(payload, |study| manager.update_motion_study(study))
+        }
+        "assembly_delete_motion_study" => {
+            with_payload(payload, |id| manager.delete_motion_study(id))
+        }
+        "assembly_sample_motion_study" => {
+            with_payload(payload, |request| manager.sample_motion_study(request))
+        }
+        "assembly_export_motion_path_csv" => {
+            with_payload(payload, |request| manager.export_motion_path_csv(request))
+        }
+        "assembly_create_contact_set" => {
+            with_payload(payload, |request| manager.create_contact_set(request))
+        }
+        "assembly_update_contact_set" => {
+            with_payload(payload, |contact| manager.update_contact_set(contact))
+        }
+        "assembly_delete_contact_set" => with_payload(payload, |id| manager.delete_contact_set(id)),
+        "assembly_interference_check" => with_payload(payload, |request| {
+            manager.approximate_interference_check(request)
+        }),
+        "assembly_evaluate_motion_study" => with_payload(payload, |request| {
+            manager.approximate_motion_study_evaluation(request)
+        }),
+        "assembly_swept_collision_check" => with_payload(payload, |request| {
+            manager.approximate_swept_collision_check(request)
         }),
         "assembly_set_grounded_body" => {
             with_payload(payload, |body_id| manager.set_grounded_body(body_id))

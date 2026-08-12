@@ -23,9 +23,40 @@ type WasmEngineMethods = WasmEngineInner & {
   drawing_set_document(payload: string): string;
   assembly_document(): string;
   assembly_solution(): string;
+  assembly_create_component(payload: string): string;
+  assembly_update_component(payload: string): string;
+  assembly_create_occurrence(payload: string): string;
+  assembly_update_occurrence(payload: string): string;
+  assembly_duplicate_occurrence(payload: string): string;
+  assembly_set_occurrence_grounded(payload: string): string;
+  assembly_set_occurrence_pose(payload: string): string;
+  assembly_preview_joint(payload: string): string;
   assembly_create_joint(payload: string): string;
+  assembly_update_joint(payload: string): string;
+  assembly_preview_joint_update(payload: string): string;
   assembly_delete_joint(payload: string): string;
-  assembly_set_joint_value(payload: string): string;
+  assembly_set_joint_enabled(payload: string): string;
+  assembly_set_joint_motion(payload: string): string;
+  assembly_preview_joint_motion(payload: string): string;
+  assembly_set_joint_coordinates(payload: string): string;
+  assembly_preview_joint_coordinates(payload: string): string;
+  assembly_preview_mechanism_drag(payload: string): string;
+  assembly_apply_joint_motions(payload: string): string;
+  assembly_create_position(payload: string): string;
+  assembly_update_position(payload: string): string;
+  assembly_delete_position(payload: string): string;
+  assembly_apply_position(payload: string): string;
+  assembly_create_motion_study(payload: string): string;
+  assembly_update_motion_study(payload: string): string;
+  assembly_delete_motion_study(payload: string): string;
+  assembly_sample_motion_study(payload: string): string;
+  assembly_export_motion_path_csv(payload: string): string;
+  assembly_create_contact_set(payload: string): string;
+  assembly_update_contact_set(payload: string): string;
+  assembly_delete_contact_set(payload: string): string;
+  assembly_interference_check(payload: string): string;
+  assembly_evaluate_motion_study(payload: string): string;
+  assembly_swept_collision_check(payload: string): string;
   assembly_set_grounded_body(payload: string): string;
 };
 import type {
@@ -42,9 +73,39 @@ import type {
   ChamferRequest,
   SketchCircularPatternRequest,
   CircleRequest,
+  ComponentDefinitionDto,
+  ComponentOccurrenceDto,
   ConstraintPayload,
+  CreateComponentRequestDto,
   CreateJointRequestDto,
-  SetJointValueRequestDto,
+  CreateOccurrenceRequestDto,
+  DuplicateOccurrenceRequestDto,
+  UpdateJointRequestDto,
+  SetJointEnabledRequestDto,
+  SetJointCoordinatesRequestDto,
+  ApplyJointMotionsRequestDto,
+  AssemblyPositionDto,
+  ContactSetDto,
+  CreateAssemblyPositionRequestDto,
+  CreateContactSetRequestDto,
+  CreateMotionStudyRequestDto,
+  EvaluateMotionStudyRequestDto,
+  InterferenceCheckRequestDto,
+  InterferenceReportDto,
+  MechanismDragRequestDto,
+  MechanismPreviewDto,
+  MotionPathRequestDto,
+  MotionStudyDto,
+  MotionStudyEvaluationDto,
+  MotionStudySampleDto,
+  SampleMotionStudyRequestDto,
+  SetJointMotionRequestDto,
+  SetOccurrenceGroundedRequestDto,
+  SetOccurrencePoseRequestDto,
+  SweptCollisionReportDto,
+  SweptCollisionRequestDto,
+  UpdateComponentRequestDto,
+  UpdateOccurrenceRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -208,9 +269,69 @@ export class WasmEngine implements Engine {
     return unwrapEnvelope((this.inner as WasmEngineMethods).assembly_solution());
   }
 
+  async createComponent(request: CreateComponentRequestDto): Promise<ComponentDefinitionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_component(JSON.stringify(request)),
+    );
+  }
+
+  async updateComponent(request: UpdateComponentRequestDto): Promise<ComponentDefinitionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_component(JSON.stringify(request)),
+    );
+  }
+
+  async createOccurrence(request: CreateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_occurrence(JSON.stringify(request)),
+    );
+  }
+
+  async updateOccurrence(request: UpdateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_occurrence(JSON.stringify(request)),
+    );
+  }
+
+  async duplicateOccurrence(request: DuplicateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_duplicate_occurrence(JSON.stringify(request)),
+    );
+  }
+
+  async setOccurrenceGrounded(request: SetOccurrenceGroundedRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_occurrence_grounded(JSON.stringify(request)),
+    );
+  }
+
+  async setOccurrencePose(request: SetOccurrencePoseRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_occurrence_pose(JSON.stringify(request)),
+    );
+  }
+
+  async previewJoint(request: CreateJointRequestDto): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_preview_joint(JSON.stringify(request)),
+    );
+  }
+
   async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).assembly_create_joint(JSON.stringify(request)),
+    );
+  }
+
+  async updateJoint(request: UpdateJointRequestDto): Promise<JointDefinitionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_joint(JSON.stringify(request)),
+    );
+  }
+
+  async previewJointUpdate(request: UpdateJointRequestDto): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_preview_joint_update(JSON.stringify(request)),
     );
   }
 
@@ -220,9 +341,135 @@ export class WasmEngine implements Engine {
     );
   }
 
-  async setJointValue(request: SetJointValueRequestDto): Promise<AssemblyDocumentDto> {
+  async setJointEnabled(request: SetJointEnabledRequestDto): Promise<AssemblyDocumentDto> {
     return unwrapEnvelope(
-      (this.inner as WasmEngineMethods).assembly_set_joint_value(JSON.stringify(request)),
+      (this.inner as WasmEngineMethods).assembly_set_joint_enabled(JSON.stringify(request)),
+    );
+  }
+
+  async setJointMotion(request: SetJointMotionRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_joint_motion(JSON.stringify(request)),
+    );
+  }
+
+  async previewJointMotion(request: SetJointMotionRequestDto): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_preview_joint_motion(JSON.stringify(request)),
+    );
+  }
+
+  async setJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_joint_coordinates(JSON.stringify(request)),
+    );
+  }
+
+  async previewJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_preview_joint_coordinates(JSON.stringify(request)),
+    );
+  }
+
+  async previewMechanismDrag(request: MechanismDragRequestDto): Promise<MechanismPreviewDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_preview_mechanism_drag(JSON.stringify(request)),
+    );
+  }
+
+  async applyJointMotions(request: ApplyJointMotionsRequestDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_apply_joint_motions(JSON.stringify(request)),
+    );
+  }
+
+  async createAssemblyPosition(request: CreateAssemblyPositionRequestDto): Promise<AssemblyPositionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_position(JSON.stringify(request)),
+    );
+  }
+
+  async updateAssemblyPosition(position: AssemblyPositionDto): Promise<AssemblyPositionDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_position(JSON.stringify(position)),
+    );
+  }
+
+  async deleteAssemblyPosition(id: number): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_delete_position(JSON.stringify(id)),
+    );
+  }
+
+  async applyAssemblyPosition(id: number): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_apply_position(JSON.stringify(id)),
+    );
+  }
+
+  async createMotionStudy(request: CreateMotionStudyRequestDto): Promise<MotionStudyDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_motion_study(JSON.stringify(request)),
+    );
+  }
+
+  async updateMotionStudy(study: MotionStudyDto): Promise<MotionStudyDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_motion_study(JSON.stringify(study)),
+    );
+  }
+
+  async deleteMotionStudy(id: number): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_delete_motion_study(JSON.stringify(id)),
+    );
+  }
+
+  async sampleMotionStudy(request: SampleMotionStudyRequestDto): Promise<MotionStudySampleDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_sample_motion_study(JSON.stringify(request)),
+    );
+  }
+
+  async evaluateMotionStudy(request: EvaluateMotionStudyRequestDto): Promise<MotionStudyEvaluationDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_evaluate_motion_study(JSON.stringify(request)),
+    );
+  }
+
+  async exportMotionPathCsv(request: MotionPathRequestDto): Promise<string> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_export_motion_path_csv(JSON.stringify(request)),
+    );
+  }
+
+  async createContactSet(request: CreateContactSetRequestDto): Promise<ContactSetDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_create_contact_set(JSON.stringify(request)),
+    );
+  }
+
+  async updateContactSet(contact: ContactSetDto): Promise<ContactSetDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_update_contact_set(JSON.stringify(contact)),
+    );
+  }
+
+  async deleteContactSet(id: number): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_delete_contact_set(JSON.stringify(id)),
+    );
+  }
+
+  async interferenceCheck(request: InterferenceCheckRequestDto): Promise<InterferenceReportDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_interference_check(JSON.stringify(request)),
+    );
+  }
+
+  async sweptCollisionCheck(request: SweptCollisionRequestDto): Promise<SweptCollisionReportDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_swept_collision_check(JSON.stringify(request)),
     );
   }
 
