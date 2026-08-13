@@ -438,7 +438,41 @@ export interface ExtrudeCommandPreview {
   operation: ExtrudeOperation;
 }
 
-export type SolidCommandPreview = ExtrudeCommandPreview;
+/** Presentation-only construction plane used while editing an offset. */
+export interface OffsetPlaneCommandPreview {
+  kind: 'offset_plane';
+  basis: PlaneBasis;
+  distance: number;
+  /** Half width/height in the basis u/v directions, in millimetres. */
+  halfSize: [number, number];
+}
+
+export interface MoveCopyPreviewTarget {
+  bodyId: number;
+  /** Existing display pose before the command delta is applied. */
+  baseTranslation: [number, number, number];
+  baseRotation: [number, number, number, number];
+}
+
+/** Rigid-transform ghost and original six-axis viewport manipulator. */
+export interface MoveCopyCommandPreview {
+  kind: 'move_copy';
+  targets: MoveCopyPreviewTarget[];
+  pivot: Point3Dto;
+  translation: Point3Dto;
+  rotation: [number, number, number, number];
+  copy: boolean;
+  /** Body features transform model geometry before occurrence placement;
+   * component moves transform the already placed occurrence. */
+  transformInBodySpace: boolean;
+  /** The full six-axis control belongs to Free Move only. */
+  showSixAxisGizmo: boolean;
+}
+
+export type SolidCommandPreview =
+  | ExtrudeCommandPreview
+  | OffsetPlaneCommandPreview
+  | MoveCopyCommandPreview;
 
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
 export type ConstructionPlanePickTarget =
@@ -2506,6 +2540,7 @@ export const useAppStore = create<AppState>()((set) => ({
         holeDialogFeature: null,
         profilePicker: null,
         curvePicker: null,
+        solidCommandPreview: null,
       };
     }),
 
@@ -2515,6 +2550,7 @@ export const useAppStore = create<AppState>()((set) => ({
       constructionPlanePickTarget: null,
       constructionPlanePickedReference: null,
       constructionPlanePickedEdge: null,
+      solidCommandPreview: null,
     }),
 
   setConstructionPlanePickTarget: (target) =>
@@ -2547,9 +2583,11 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      solidCommandPreview: null,
     }),
 
-  closeBodyFeatureDialog: () => set({ bodyFeatureDialog: null }),
+  closeBodyFeatureDialog: () =>
+    set({ bodyFeatureDialog: null, solidCommandPreview: null }),
 
   openSketchPatternDialog: (kind) =>
     set({

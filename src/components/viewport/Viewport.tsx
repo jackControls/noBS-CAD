@@ -1167,6 +1167,21 @@ export function Viewport() {
         basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y
           + basis.normal[2] * offset,
       ];
+      const rotateTuple = (
+        value: [number, number, number],
+        quaternion: [number, number, number, number],
+      ): [number, number, number] => {
+        const [x, y, z, w] = quaternion;
+        const [vx, vy, vz] = value;
+        const tx = 2 * (y * vz - z * vy);
+        const ty = 2 * (z * vx - x * vz);
+        const tz = 2 * (x * vy - y * vx);
+        return [
+          vx + w * tx + (y * tz - z * ty),
+          vy + w * ty + (z * tx - x * tz),
+          vz + w * tz + (x * ty - y * tx),
+        ];
+      };
       const appendAnnotation = (object: CAD.Object3D) => {
         const text = object.userData.nativeAnnotationText;
         if (typeof text !== 'string' || text.length === 0) return;
@@ -1399,9 +1414,12 @@ export function Viewport() {
       // Debounced Extrude tool volume. This is presentation-only, but it is
       // generated from the same basis and signed offsets submitted to OCCT.
       const solidPreview = transientState.solidCommandPreview;
+      const solidPreviewDependsOnScene =
+        solidPreview?.kind === 'move_copy'
+        || (solidPreview?.kind === 'extrude' && solidPreview.sourceFace !== null);
       const solidPreviewCached =
         solidPreview === cachedSolidPreview
-        && (!solidPreview?.sourceFace || transientState.solidScene === cachedSolidScene);
+        && (!solidPreviewDependsOnScene || transientState.solidScene === cachedSolidScene);
       if (solidPreviewCached) {
         triangles.push(...cachedSolidTriangles);
         arrows.push(...cachedSolidArrows);
@@ -1616,11 +1634,201 @@ export function Viewport() {
               xray: true,
             });
           }
+        } else if (solidPreview?.kind === 'offset_plane') {
+          const [halfU, halfV] = solidPreview.halfSize;
+          const corner = (u: number, v: number): [number, number, number] => [
+            solidPreview.basis.origin[0]
+              + solidPreview.basis.normal[0] * solidPreview.distance
+              + solidPreview.basis.u[0] * u
+              + solidPreview.basis.v[0] * v,
+            solidPreview.basis.origin[1]
+              + solidPreview.basis.normal[1] * solidPreview.distance
+              + solidPreview.basis.u[1] * u
+              + solidPreview.basis.v[1] * v,
+            solidPreview.basis.origin[2]
+              + solidPreview.basis.normal[2] * solidPreview.distance
+              + solidPreview.basis.u[2] * u
+              + solidPreview.basis.v[2] * v,
+          ];
+          const a = corner(-halfU, -halfV);
+          const b = corner(halfU, -halfV);
+          const c = corner(halfU, halfV);
+          const d = corner(-halfU, halfV);
+          triangles.push({
+            color: rgbaFromHex(0xe1a33b, 0.20),
+            positions: [...a, ...b, ...c, ...a, ...c, ...d],
+            xray: true,
+          });
+          arrows.push({
+            start: solidPreview.basis.origin,
+            end: [
+              solidPreview.basis.origin[0]
+                + solidPreview.basis.normal[0] * solidPreview.distance,
+              solidPreview.basis.origin[1]
+                + solidPreview.basis.normal[1] * solidPreview.distance,
+              solidPreview.basis.origin[2]
+                + solidPreview.basis.normal[2] * solidPreview.distance,
+            ],
+            color: rgbaFromHex(0xe1a33b, 1),
+            width: 2,
+            xray: true,
+          });
+        } else if (solidPreview?.kind === 'move_copy') {
+          const ghostPositions: number[] = [];
+          for (const target of solidPreview.targets) {
+            const body = transientState.solidScene.bodies.find(
+              (candidate) => candidate.id === target.bodyId,
+            );
+            if (!body) continue;
+            for (const vertexIndex of body.mesh.indices) {
+              const local: [number, number, number] = [
+                body.mesh.positions[vertexIndex * 3],
+                body.mesh.positions[vertexIndex * 3 + 1],
+                body.mesh.positions[vertexIndex * 3 + 2],
+              ];
+              if (solidPreview.transformInBodySpace) {
+                const localAboutPivot: [number, number, number] = [
+                  local[0] - solidPreview.pivot.x,
+                  local[1] - solidPreview.pivot.y,
+                  local[2] - solidPreview.pivot.z,
+                ];
+                const localMoved = rotateTuple(localAboutPivot, solidPreview.rotation);
+                const localResult: [number, number, number] = [
+                  solidPreview.pivot.x + localMoved[0] + solidPreview.translation.x,
+                  solidPreview.pivot.y + localMoved[1] + solidPreview.translation.y,
+                  solidPreview.pivot.z + localMoved[2] + solidPreview.translation.z,
+                ];
+                const world = rotateTuple(localResult, target.baseRotation);
+                ghostPositions.push(
+                  world[0] + target.baseTranslation[0],
+                  world[1] + target.baseTranslation[1],
+                  world[2] + target.baseTranslation[2],
+                );
+              } else {
+                const baseRotated = rotateTuple(local, target.baseRotation);
+                const world: [number, number, number] = [
+                  baseRotated[0] + target.baseTranslation[0],
+                  baseRotated[1] + target.baseTranslation[1],
+                  baseRotated[2] + target.baseTranslation[2],
+                ];
+                const aboutPivot: [number, number, number] = [
+                  world[0] - solidPreview.pivot.x,
+                  world[1] - solidPreview.pivot.y,
+                  world[2] - solidPreview.pivot.z,
+                ];
+                const moved = rotateTuple(aboutPivot, solidPreview.rotation);
+                ghostPositions.push(
+                  solidPreview.pivot.x + moved[0] + solidPreview.translation.x,
+                  solidPreview.pivot.y + moved[1] + solidPreview.translation.y,
+                  solidPreview.pivot.z + moved[2] + solidPreview.translation.z,
+                );
+              }
+            }
+          }
+          if (ghostPositions.length >= 9) {
+            triangles.push({
+              color: rgbaFromHex(solidPreview.copy ? 0x50c98b : 0x8065df, 0.25),
+              positions: ghostPositions,
+              xray: true,
+            });
+          }
         }
         cachedSolidPreview = solidPreview;
         cachedSolidScene = transientState.solidScene;
         cachedSolidTriangles = triangles.slice(triangleStart);
         cachedSolidArrows = arrows.slice(arrowStart);
+      }
+
+      // Cached command primitives are appended above; any camera-sized gizmo
+      // pieces added below must not be re-appended from the cache on the next
+      // frame.
+      const cachedArrowCount = arrows.length;
+
+      // Borders and the six-axis control are cheap camera-scaled primitives,
+      // so rebuild them on every camera event while the heavier ghost mesh is
+      // cached by command input and OCCT scene identity.
+      if (solidPreview?.kind === 'offset_plane') {
+        const [halfU, halfV] = solidPreview.halfSize;
+        const corner = (u: number, v: number) => new CAD.Vector3(
+          solidPreview.basis.origin[0]
+            + solidPreview.basis.normal[0] * solidPreview.distance
+            + solidPreview.basis.u[0] * u
+            + solidPreview.basis.v[0] * v,
+          solidPreview.basis.origin[1]
+            + solidPreview.basis.normal[1] * solidPreview.distance
+            + solidPreview.basis.u[1] * u
+            + solidPreview.basis.v[1] * v,
+          solidPreview.basis.origin[2]
+            + solidPreview.basis.normal[2] * solidPreview.distance
+            + solidPreview.basis.u[2] * u
+            + solidPreview.basis.v[2] * v,
+        );
+        const corners = [
+          corner(-halfU, -halfV),
+          corner(halfU, -halfV),
+          corner(halfU, halfV),
+          corner(-halfU, halfV),
+        ];
+        for (let index = 0; index < corners.length; index += 1) {
+          appendSegment(
+            rgbaFromHex(0xe1a33b, 1),
+            2,
+            corners[index],
+            corners[(index + 1) % corners.length],
+          );
+        }
+      } else if (solidPreview?.kind === 'move_copy' && solidPreview.showSixAxisGizmo) {
+        const length = Math.max(6, worldPerPixel() * 72);
+        const radius = length * 0.62;
+        const pivot = new CAD.Vector3(
+          solidPreview.pivot.x + solidPreview.translation.x,
+          solidPreview.pivot.y + solidPreview.translation.y,
+          solidPreview.pivot.z + solidPreview.translation.z,
+        );
+        const axes = [
+          { axis: new CAD.Vector3(1, 0, 0), color: 0xe75f62 },
+          { axis: new CAD.Vector3(0, 1, 0), color: 0x54bd78 },
+          { axis: new CAD.Vector3(0, 0, 1), color: 0x4f9dde },
+        ] as const;
+        for (const entry of axes) {
+          arrows.push({
+            start: [pivot.x, pivot.y, pivot.z],
+            end: [
+              pivot.x + entry.axis.x * length,
+              pivot.y + entry.axis.y * length,
+              pivot.z + entry.axis.z * length,
+            ],
+            color: rgbaFromHex(entry.color, 1),
+            width: 2,
+            xray: true,
+          });
+        }
+        const ringAxes = [
+          { a: new CAD.Vector3(0, 1, 0), b: new CAD.Vector3(0, 0, 1), color: 0xe75f62 },
+          { a: new CAD.Vector3(0, 0, 1), b: new CAD.Vector3(1, 0, 0), color: 0x54bd78 },
+          { a: new CAD.Vector3(1, 0, 0), b: new CAD.Vector3(0, 1, 0), color: 0x4f9dde },
+        ] as const;
+        for (const ring of ringAxes) {
+          for (let index = 0; index < 64; index += 1) {
+            const angle = (index / 64) * Math.PI * 2;
+            const next = ((index + 1) / 64) * Math.PI * 2;
+            const at = (value: number) => pivot.clone()
+              .addScaledVector(ring.a, Math.cos(value) * radius)
+              .addScaledVector(ring.b, Math.sin(value) * radius);
+            appendSegment(
+              rgbaFromHex(ring.color, 0.82),
+              1.6,
+              at(angle),
+              at(next),
+            );
+          }
+        }
+      }
+
+      if (arrows.length > cachedArrowCount) {
+        // Keep only command-stable arrows (extrude/offset direction) in the
+        // cache. Six-axis arrows are regenerated at their current screen size.
+        cachedSolidArrows = arrows.slice(0, cachedArrowCount);
       }
 
       // Joint connectors are semantic native overlays. A compact ring and

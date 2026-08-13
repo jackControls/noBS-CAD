@@ -74,6 +74,61 @@ try {
   assert.equal(selected.length, 2);
   assert.notEqual(selected[0].bodyId, selected[1].bodyId);
 
+  console.log('1b. Native command previews expose signed offset and six-axis Move/Copy intent');
+  await page.evaluate((bodyId) => {
+    const store = window.__appStore.getState();
+    store.replaceSelectedBodies([bodyId]);
+    store.openBodyFeatureDialog('move_copy');
+  }, selected[0].bodyId);
+  const moveCopyDialog = page.getByTestId('body-feature-dialog');
+  await moveCopyDialog.waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.kind === 'move_copy',
+  );
+  assert.match(await moveCopyDialog.innerText(), /°/);
+  assert.equal(await page.getByTestId('move-copy-translate-x-handle').count(), 1);
+  assert.equal(await page.getByTestId('move-copy-rotate-z-handle').count(), 1);
+  await moveCopyDialog.getByLabel('Translation X').fill('5');
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.kind === 'move_copy'
+      && window.__appStore.getState().solidCommandPreview.translation.x === 5,
+  );
+  const movePreview = await page.evaluate(
+    () => window.__appStore.getState().solidCommandPreview,
+  );
+  assert.equal(movePreview.targets.length, 1);
+  assert.equal(movePreview.showSixAxisGizmo, true);
+  await page.evaluate(() => window.__appStore.getState().closeBodyFeatureDialog());
+  await moveCopyDialog.waitFor({ state: 'hidden' });
+
+  await page.evaluate(({ bodyId, faceId }) => {
+    const store = window.__appStore.getState();
+    store.replaceSelectedFaces(bodyId, [faceId]);
+    store.openConstructionPlaneDialog('offset');
+  }, selected[0]);
+  const offsetDialog = page.getByTestId('construction-plane-dialog');
+  await offsetDialog.waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.kind === 'offset_plane',
+  );
+  const initialOffsetPreview = await page.evaluate(
+    () => window.__appStore.getState().solidCommandPreview,
+  );
+  assert.equal(initialOffsetPreview.distance, 10);
+  assert.ok(initialOffsetPreview.halfSize.every((value) => value >= 8));
+  assert.equal(await page.getByTestId('offset-plane-direction-handle').count(), 1);
+  await offsetDialog.locator('input[type="number"]').fill('-12.5');
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.kind === 'offset_plane'
+      && window.__appStore.getState().solidCommandPreview.distance === -12.5,
+  );
+  await page.evaluate(() => {
+    const store = window.__appStore.getState();
+    store.closeConstructionPlaneDialog();
+    store.clearSolidSelection();
+  });
+  await offsetDialog.waitFor({ state: 'hidden' });
+
   console.log('2. Solid Modeling assembly sub-function creates a cylindrical joint');
   await page.locator('[data-ribbon-button="assemblyBrowser"]').click();
   await page.getByTestId('assembly-browser').waitFor({ state: 'visible' });

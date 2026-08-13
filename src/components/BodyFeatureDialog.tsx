@@ -20,8 +20,13 @@ import type {
   PlaneRef,
   Point3Dto,
 } from '../engine/types';
-import { useAppStore, type BodyFeatureKind } from '../store/appStore';
+import {
+  useAppStore,
+  type BodyFeatureKind,
+  type MoveCopyCommandPreview,
+} from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
+import { MoveCopyManipulator } from './viewport/MoveCopyManipulator';
 
 const INPUT =
   'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
@@ -194,10 +199,12 @@ function VectorFields({
   label,
   values,
   onChange,
+  unit,
 }: {
   label: string;
   values: [string, string, string];
   onChange: (values: [string, string, string]) => void;
+  unit?: 'mm' | '°';
 }) {
   return (
     <fieldset>
@@ -206,21 +213,49 @@ function VectorFields({
         {(['X', 'Y', 'Z'] as const).map((axis, index) => (
           <label key={axis}>
             <span className="mb-1 block text-[9px] text-mute">{axis}</span>
-            <DimensionInput
-              aria-label={`${label} ${axis}`}
-              step="any"
-              value={values[index]}
-              onValueChange={(value) => {
-                const next = [...values] as [string, string, string];
-                next[index] = value;
-                onChange(next);
-              }}
-            />
+            <span className="relative block">
+              <DimensionInput
+                aria-label={`${label} ${axis}`}
+                step="any"
+                value={values[index]}
+                onValueChange={(value) => {
+                  const next = [...values] as [string, string, string];
+                  next[index] = value;
+                  onChange(next);
+                }}
+                className={`h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent ${
+                  unit ? 'pr-8' : ''
+                }`}
+              />
+              {unit && (
+                <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[10px] text-mute">
+                  {unit}
+                </span>
+              )}
+            </span>
           </label>
         ))}
       </div>
     </fieldset>
   );
+}
+
+function MoveCopyPreviewPublisher({
+  preview,
+}: {
+  preview: MoveCopyCommandPreview | null;
+}) {
+  const setPreview = useAppStore((state) => state.setSolidCommandPreview);
+  useEffect(() => {
+    if (!preview) {
+      setPreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setPreview(preview), 64);
+    return () => window.clearTimeout(timer);
+  }, [preview, setPreview]);
+  useEffect(() => () => setPreview(null), [setPreview]);
+  return null;
 }
 
 const TITLES: Record<BodyFeatureKind, string> = {
@@ -260,6 +295,7 @@ export function BodyFeatureDialog() {
   );
   const datumPlanes = useAppStore((state) => state.datumPlanes);
   const assembly = useAppStore((state) => state.assemblyDocument);
+  const assemblySolution = useAppStore((state) => state.assemblySolution);
   const selectedOccurrenceId = useAppStore((state) => state.selectedOccurrenceId);
   const moveCopyOccurrence = useAppStore((state) => state.moveCopyOccurrence);
   const [definitions, setDefinitions] = useState<BodyFeatureDefinitionDto[]>([]);
@@ -730,6 +766,57 @@ export function BodyFeatureDialog() {
     };
   };
 
+  const movePreview = (() => {
+    if (kind !== 'move_copy' || !moveTargetValid || !moveValuesValid) return null;
+    const resolved = resolveMove();
+    const targetIds = moveObjectType === 'component'
+      ? (() => {
+          const occurrence = assembly.component_structure.occurrences.find(
+            (candidate) => candidate.id === occurrenceId,
+          );
+          return assembly.component_structure.definitions.find(
+            (definition) => definition.id === occurrence?.component_id,
+          )?.body_ids ?? [];
+        })()
+      : bodyIds;
+    const targets: MoveCopyCommandPreview['targets'] = [];
+    for (const targetBodyId of targetIds) {
+      const instancePoses = moveObjectType === 'component'
+        ? assemblySolution.instance_body_poses.filter(
+            (pose) => pose.body_id === targetBodyId && pose.occurrence_id === occurrenceId,
+          )
+        : assemblySolution.instance_body_poses.filter(
+            (pose) => pose.body_id === targetBodyId,
+          );
+      if (instancePoses.length > 0) {
+        targets.push(...instancePoses.map((pose) => ({
+          bodyId: targetBodyId,
+          baseTranslation: pose.translation,
+          baseRotation: pose.rotation,
+        })));
+        continue;
+      }
+      const pose = assemblySolution.body_poses.find(
+        (candidate) => candidate.body_id === targetBodyId,
+      );
+      targets.push({
+        bodyId: targetBodyId,
+        baseTranslation: pose?.translation ?? [0, 0, 0],
+        baseRotation: pose?.rotation ?? [0, 0, 0, 1],
+      });
+    }
+    return {
+      kind: 'move_copy',
+      targets,
+      pivot: movePivotValue,
+      translation: resolved.translation,
+      rotation: resolved.rotation,
+      copy: moveCopy,
+      transformInBodySpace: moveObjectType === 'bodies',
+      showSixAxisGizmo: moveMode === 'free',
+    } satisfies MoveCopyCommandPreview;
+  })();
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
@@ -889,6 +976,19 @@ export function BodyFeatureDialog() {
       data-native-viewport-dim="0.15"
       className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
     >
+      {kind === 'move_copy' && (
+        <MoveCopyPreviewPublisher preview={movePreview} />
+      )}
+      {kind === 'move_copy' && moveMode === 'free' && moveValuesValid && (
+        <MoveCopyManipulator
+          pivot={movePivotValue}
+          translation={moveTranslation}
+          rotation={moveRotation}
+          disabled={!valid}
+          onTranslationChange={setMoveTranslation}
+          onRotationChange={setMoveRotation}
+        />
+      )}
       <form
         data-testid="body-feature-dialog"
         onSubmit={submit}
@@ -990,8 +1090,8 @@ export function BodyFeatureDialog() {
               </label>
               {moveMode === 'free' ? (
                 <>
-                  <VectorFields label="Translation (mm)" values={moveTranslation} onChange={setMoveTranslation} />
-                  <VectorFields label="Rotation (degrees)" values={moveRotation} onChange={setMoveRotation} />
+                  <VectorFields label="Translation" unit="mm" values={moveTranslation} onChange={setMoveTranslation} />
+                  <VectorFields label="Rotation" unit="°" values={moveRotation} onChange={setMoveRotation} />
                 </>
               ) : moveMode === 'translate' ? (
                 <>
@@ -1006,17 +1106,25 @@ export function BodyFeatureDialog() {
                   <VectorFields label="Axis" values={moveAxis} onChange={setMoveAxis} />
                   <label>
                     <span className={LABEL}>Angle (degrees)</span>
-                    <DimensionInput step="any" value={moveAngle} onValueChange={setMoveAngle} />
+                    <span className="relative block">
+                      <DimensionInput
+                        step="any"
+                        value={moveAngle}
+                        onValueChange={setMoveAngle}
+                        className="h-7 w-full rounded border border-edge bg-header px-2 pr-8 text-xs text-ink outline-none focus:border-accent"
+                      />
+                      <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[10px] text-mute">°</span>
+                    </span>
                   </label>
                 </>
               ) : (
                 <>
-                  <VectorFields label="From point (mm)" values={moveFrom} onChange={setMoveFrom} />
-                  <VectorFields label="To point (mm)" values={moveTo} onChange={setMoveTo} />
+                  <VectorFields label="From point" unit="mm" values={moveFrom} onChange={setMoveFrom} />
+                  <VectorFields label="To point" unit="mm" values={moveTo} onChange={setMoveTo} />
                 </>
               )}
               {(moveMode === 'free' || moveMode === 'rotate') && (
-                <VectorFields label="Rotation pivot (mm)" values={movePivot} onChange={setMovePivot} />
+                <VectorFields label="Rotation pivot" unit="mm" values={movePivot} onChange={setMovePivot} />
               )}
               <label className="flex cursor-pointer items-start gap-2 rounded border border-edge bg-header p-2 text-xs text-ink">
                 <input
