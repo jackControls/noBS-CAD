@@ -32,7 +32,7 @@ Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 
 - session ids are **UUID v4** (document names rejected);
 - Tauri owns one UUID per desktop window and publishes
-  `<uuid>/{model.json,focus.json,heartbeat.json}` with pre-export generation reservations;
+  `<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}` with pre-export generation reservations;
 - attach **fails** if `model.json` is missing or invalid;
 - MCP **never** writes the session files back after editing in memory;
 - refresh is explicit (no filesystem watcher);

@@ -404,8 +404,12 @@ export function switchProjectTab(tabId: string): Promise<boolean> {
   });
 }
 
-/** Close one tab. Closing the last document leaves one fresh Untitled tab. */
-export function closeProjectTab(tabId?: string): Promise<boolean> {
+/** Close one tab after its caller has resolved any unsaved-work decision.
+ * A dirty tab remains protected unless `discardUnsaved` is explicit. */
+export function closeProjectTab(
+  tabId?: string,
+  discardUnsaved = false,
+): Promise<boolean> {
   return withProjectTransition(async () => {
     const state = useAppStore.getState();
     const id = tabId ?? state.activeProjectTabId;
@@ -414,9 +418,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
     if (index < 0) return false;
     const tab = state.projectTabs[index];
     const dirty = id === state.activeProjectTabId ? state.dirty : tab.dirty;
-    if (dirty && !window.confirm(translate('file.closeDiscardConfirm'))) {
-      return false;
-    }
+    if (dirty && !discardUnsaved) return false;
 
     if (id !== state.activeProjectTabId) {
       const runtime = runtimes.get(id);

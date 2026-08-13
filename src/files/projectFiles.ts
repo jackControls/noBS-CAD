@@ -27,8 +27,10 @@ import {
   recordActiveProjectOpen,
   recordActiveProjectSave,
   restoreProjectTabs,
+  switchProjectTab,
   type RecoverableProjectTab,
 } from './projectTabs';
+import { requestUnsavedDecision } from './unsavedChanges';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -171,18 +173,69 @@ export function newProject(): Promise<boolean> {
 
 /** Close one document tab; the last tab is replaced with a fresh Untitled. */
 export async function closeProject(tabId?: string): Promise<boolean> {
-  const closed = await closeProjectTab(tabId);
+  let state = useAppStore.getState();
+  const id = tabId ?? state.activeProjectTabId;
+  if (!id) return false;
+  const tab = state.projectTabs.find((candidate) => candidate.id === id);
+  if (!tab) return false;
+  const dirty = id === state.activeProjectTabId ? state.dirty : tab.dirty;
+  let discardUnsaved = false;
+  const previouslyActiveId = state.activeProjectTabId;
+  if (dirty) {
+    const decision = await requestUnsavedDecision('close', tab.name);
+    if (decision === 'cancel') return false;
+    if (decision === 'save') {
+      if (id !== state.activeProjectTabId && !(await switchProjectTab(id))) return false;
+      if (!(await saveProject(false))) return false;
+    } else {
+      discardUnsaved = true;
+    }
+  }
+
+  const closed = await closeProjectTab(id, discardUnsaved);
+  state = useAppStore.getState();
+  if (
+    closed
+    && previouslyActiveId
+    && previouslyActiveId !== id
+    && state.projectTabs.some((candidate) => candidate.id === previouslyActiveId)
+    && state.activeProjectTabId !== previouslyActiveId
+  ) {
+    await switchProjectTab(previouslyActiveId);
+  }
   if (closed && !hasUnsavedProjects()) clearProjectRecovery();
   return closed;
 }
 
+/** Save every dirty retained tab before application quit. A cancelled native
+ * file picker aborts quitting without silently discarding any later tab. */
+export async function saveAllUnsavedProjects(): Promise<boolean> {
+  const initialState = useAppStore.getState();
+  const dirtyIds = initialState.projectTabs
+    .filter((tab) => (
+      tab.id === initialState.activeProjectTabId
+        ? initialState.dirty
+        : tab.dirty
+    ))
+    .map((tab) => tab.id);
+  for (const id of dirtyIds) {
+    if (useAppStore.getState().activeProjectTabId !== id) {
+      if (!(await switchProjectTab(id))) return false;
+    }
+    if (!(await saveProject(false))) return false;
+  }
+  return !hasUnsavedProjects();
+}
+
 export async function openProject(): Promise<boolean> {
   const state = useAppStore.getState();
-  if (
-    state.dirty &&
-    !window.confirm(translate('file.discardConfirm'))
-  ) {
-    return false;
+  if (state.dirty) {
+    const decision = await requestUnsavedDecision(
+      'replace',
+      state.document?.name ?? null,
+    );
+    if (decision === 'cancel') return false;
+    if (decision === 'save' && !(await saveProject(false))) return false;
   }
   const opened = await chooseOpenFile(PROJECT_TYPE);
   if (!opened) return false;

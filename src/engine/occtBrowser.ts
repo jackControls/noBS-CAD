@@ -1500,7 +1500,7 @@ function makeTransform(oc: Oc, transform: KernelTransformDto) {
     plane.delete();
     normal.delete();
     origin.delete();
-  } else {
+  } else if (transform.kind === 'rotate') {
     const origin = new oc.gp_Pnt_3(
       transform.origin.x,
       transform.origin.y,
@@ -1516,6 +1516,33 @@ function makeTransform(oc: Oc, transform: KernelTransformDto) {
     axis.delete();
     direction.delete();
     origin.delete();
+  } else {
+    const [rawX, rawY, rawZ, rawW] = transform.rotation;
+    const magnitude = Math.hypot(rawX, rawY, rawZ, rawW);
+    if (!Number.isFinite(magnitude) || magnitude <= 1e-12) {
+      value.delete();
+      throw new Error('Move/Copy rotation is degenerate');
+    }
+    const x = rawX / magnitude;
+    const y = rawY / magnitude;
+    const z = rawZ / magnitude;
+    const w = rawW / magnitude;
+    const r00 = 1 - 2 * (y * y + z * z);
+    const r01 = 2 * (x * y - z * w);
+    const r02 = 2 * (x * z + y * w);
+    const r10 = 2 * (x * y + z * w);
+    const r11 = 1 - 2 * (x * x + z * z);
+    const r12 = 2 * (y * z - x * w);
+    const r20 = 2 * (x * z - y * w);
+    const r21 = 2 * (y * z + x * w);
+    const r22 = 1 - 2 * (x * x + y * y);
+    const { x: px, y: py, z: pz } = transform.pivot;
+    const { x: tx, y: ty, z: tz } = transform.translation;
+    value.SetValues(
+      r00, r01, r02, px + tx - (r00 * px + r01 * py + r02 * pz),
+      r10, r11, r12, py + ty - (r10 * px + r11 * py + r12 * pz),
+      r20, r21, r22, pz + tz - (r20 * px + r21 * py + r22 * pz),
+    );
   }
   return value;
 }
@@ -1960,10 +1987,11 @@ export class BrowserOcctKernel {
             for (const sourceId of job.source_body_ids) {
               const source = this.bodies.get(sourceId);
               if (!source) throw new Error(`Body transform source ${sourceId} is missing`);
-              this.bodies.set(
-                job.result_body_ids[outputIndex],
-                applyBodyTransform(this.oc, source, transform),
-              );
+              const resultId = job.result_body_ids[outputIndex];
+              const result = applyBodyTransform(this.oc, source, transform);
+              const previous = this.bodies.get(resultId);
+              if (previous) previous.delete();
+              this.bodies.set(resultId, result);
               outputIndex += 1;
             }
           }

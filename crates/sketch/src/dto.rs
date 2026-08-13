@@ -47,6 +47,10 @@ pub enum EntityDto {
         start: Vec2,
         end: Vec2,
         fully_defined: bool,
+        /// Retained for parametric editability after fillet/chamfer trims
+        /// consume the complete visible span.
+        #[serde(default)]
+        consumed: bool,
     },
     Arc {
         id: EntityId,

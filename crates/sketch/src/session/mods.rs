@@ -147,6 +147,40 @@ impl SketchSession {
         }
     }
 
+    /// A midpoint attached to a finite carrier must retain the original
+    /// corner-to-corner span when a corner operation shortens that carrier.
+    /// Capture and retarget those relations before the line endpoint changes.
+    fn preserve_midpoint_span(&mut self, line: EntityId, corner: EntityId) {
+        let Some((start, end)) = self.sketch.line_endpoint_ids(line) else {
+            return;
+        };
+        let opposite = if start == corner {
+            end
+        } else if end == corner {
+            start
+        } else {
+            return;
+        };
+        let midpoint_constraints = self
+            .sketch
+            .constraints()
+            .filter_map(|(id, constraint)| match *constraint {
+                Constraint::Midpoint { a, b } if b == line => Some((id, a)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (id, point) in midpoint_constraints {
+            self.sketch.replace_constraint(
+                id,
+                Constraint::SpanMidpoint {
+                    point,
+                    start: corner,
+                    end: opposite,
+                },
+            );
+        }
+    }
+
     fn mutate_with_undo<R>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<R, SessionError>,
@@ -223,6 +257,8 @@ impl SketchSession {
             // Retarget each line's vertex-side endpoint to its tangent point.
             let v = line_vertex(&s.line_seg(l1)?, &s.line_seg(l2)?).unwrap();
             let corner = s.vertex_endpoint(l1, v); // shared by both lines
+            s.preserve_midpoint_span(l1, corner);
+            s.preserve_midpoint_span(l2, corner);
             let p1 = s.retarget_line_end(l1, v, t1);
             let p2 = s.retarget_line_end(l2, v, t2);
             // Keep the original corner as a persistent constraint reference,
@@ -308,6 +344,8 @@ impl SketchSession {
         self.mutate_with_undo(move |s| {
             let v = line_vertex(&s.line_seg(l1)?, &s.line_seg(l2)?).unwrap();
             let corner = s.vertex_endpoint(l1, v); // shared by both lines
+            s.preserve_midpoint_span(l1, corner);
+            s.preserve_midpoint_span(l2, corner);
             let t1 = s.retarget_line_end(l1, v, p1);
             let t2 = s.retarget_line_end(l2, v, p2);
             s.anchor_corner_reference(corner, l1, l2);

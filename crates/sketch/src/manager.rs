@@ -26,18 +26,19 @@ use nbcad_core::{
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
 };
 use nbcad_solid::{
-    extract_closed_loops_allow_open, BodyFeatureDefinitionDto, BodyFeatureRequestDto,
-    CommitKernelRequest, DatumPlaneDefinitionDto, DatumPlaneRequest, DatumPlaneSourceDto,
-    DatumPlaneUpdateDto, DeleteFeatureRequest, EditBodyFeatureRequest, EditDatumPlaneRequest,
-    EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
-    EditSolidChamferRequest, EditSolidFilletRequest, EditSweepRequest, ExtrudeDefinitionDto,
-    ExtrudeExtent, ExtrudeOperation, ExtrudeRequest, HoleDefinitionDto, HoleRequest,
-    LoftDefinitionDto, LoftRequest, Point2Dto, Point3Dto, ProfileCatalogItemDto, ProfileCurveDto,
-    ProfileLoopDto, RecomputePlanDto, ReorderFeatureRequest, RevolveDefinitionDto, RevolveRequest,
-    RibDefinitionDto, RibExtent, RibRequest, Segment2, SetRollbackRequest, SketchLineDto,
-    SketchPathCurveDto, SketchPointKindDto, SketchReferencePointDto, SolidChamferDefinitionDto,
-    SolidChamferRequest, SolidDocument, SolidFilletDefinitionDto, SolidFilletRequest,
-    SolidSceneDto, SolidUpdateDto, SweepDefinitionDto, SweepRequest,
+    canonicalize_profile_curves, extract_closed_loops_allow_open, BodyFeatureDefinitionDto,
+    BodyFeatureRequestDto, CommitKernelRequest, DatumPlaneDefinitionDto, DatumPlaneRequest,
+    DatumPlaneSourceDto, DatumPlaneUpdateDto, DeleteFeatureRequest, EditBodyFeatureRequest,
+    EditDatumPlaneRequest, EditExtrudeRequest, EditHoleRequest, EditLoftRequest,
+    EditRevolveRequest, EditRibRequest, EditSolidChamferRequest, EditSolidFilletRequest,
+    EditSweepRequest, ExtrudeDefinitionDto, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest,
+    HoleDefinitionDto, HoleRequest, LoftDefinitionDto, LoftRequest, Point2Dto, Point3Dto,
+    ProfileCatalogItemDto, ProfileCurveDto, ProfileLoopDto, RecomputePlanDto,
+    ReorderFeatureRequest, RevolveDefinitionDto, RevolveRequest, RibDefinitionDto, RibExtent,
+    RibRequest, Segment2, SetRollbackRequest, SketchLineDto, SketchPathCurveDto,
+    SketchPointKindDto, SketchReferencePointDto, SolidChamferDefinitionDto, SolidChamferRequest,
+    SolidDocument, SolidFilletDefinitionDto, SolidFilletRequest, SolidSceneDto, SolidUpdateDto,
+    SweepDefinitionDto, SweepRequest,
 };
 
 use crate::constraint::{Constraint, ConstraintId};
@@ -2410,6 +2411,21 @@ impl SketchManager {
         }
         for definition in self.solids.body_feature_definitions() {
             match definition {
+                BodyFeatureDefinitionDto::MoveCopy {
+                    feature_id,
+                    body_ids,
+                    copy,
+                    result_body_ids,
+                    ..
+                } => {
+                    let access = body_access.entry(*feature_id).or_default();
+                    access.inputs.extend(body_ids.iter().copied());
+                    if *copy {
+                        access.outputs.extend(result_body_ids.iter().copied());
+                    } else {
+                        access.writes.extend(body_ids.iter().copied());
+                    }
+                }
                 BodyFeatureDefinitionDto::Shell {
                     feature_id,
                     body_id,
@@ -3124,6 +3140,7 @@ fn support_edge_midpoints(
 fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static str) {
     match request {
         BodyFeatureRequestDto::Shell(_) => (FeatureKind::Shell, "Shell"),
+        BodyFeatureRequestDto::MoveCopy(_) => (FeatureKind::MoveCopy, "MoveCopy"),
         BodyFeatureRequestDto::Mirror(_) => (FeatureKind::Mirror, "Mirror"),
         BodyFeatureRequestDto::RectangularPattern(_) => {
             (FeatureKind::RectangularPattern, "RectangularPattern")
@@ -3362,6 +3379,7 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
     let mut lines = Vec::new();
     let mut path_curves = Vec::new();
     let mut reference_points = Vec::new();
+    let consumed_trim_carriers = consumed_trim_carrier_ids(sketch, CONSUMED_LINE_TOLERANCE);
     for entity in &sketch.entities {
         match entity {
             crate::dto::EntityDto::Line { id, start, end, .. } => {
@@ -3391,7 +3409,7 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
                 // An exact fillet boundary intentionally leaves a zero-span
                 // carrier line. It remains addressable in the sketch but is
                 // not part of the closed profile boundary.
-                if point2_distance(a, b) > CONSUMED_LINE_TOLERANCE {
+                if !consumed_trim_carriers.contains(&id.0) {
                     segments.push(Segment2 {
                         id: id.0 * 1_000,
                         a,
@@ -3515,10 +3533,13 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
         }
     }
 
-    let loops = if segments.is_empty() {
-        Vec::new()
+    let (loops, profile_error) = if segments.is_empty() {
+        (Vec::new(), None)
     } else {
-        extract_closed_loops_allow_open(&segments, PROFILE_TOLERANCE).unwrap_or_default()
+        match extract_closed_loops_allow_open(&segments, PROFILE_TOLERANCE) {
+            Ok(loops) => (loops, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        }
     };
     let mut profiles = loops
         .into_iter()
@@ -3528,7 +3549,10 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
             area: polygon_area(&points).abs(),
             parent_index: None,
             nesting_depth: 0,
-            curves: ordered_profile_curves(sketch, &segments, &points, PROFILE_TOLERANCE),
+            curves: canonicalize_profile_curves(
+                &ordered_profile_curves(sketch, &segments, &points, PROFILE_TOLERANCE),
+                PROFILE_TOLERANCE,
+            ),
             points,
         })
         .collect::<Vec<_>>();
@@ -3538,10 +3562,61 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
         feature_id,
         basis: sketch.basis,
         profiles,
+        profile_error,
         lines,
         path_curves,
         reference_points,
     }
+}
+
+/// A sub-micron line is not automatically disposable: users can deliberately
+/// model tiny geometry. Suppress it only when both endpoints are owned by
+/// corner modifiers and the line has actually reached the limiting condition.
+fn consumed_trim_carrier_ids(sketch: &SketchDto, tolerance: f64) -> BTreeSet<u64> {
+    let arc_tangencies = sketch
+        .constraints
+        .iter()
+        .filter_map(|constraint| match constraint.constraint {
+            Constraint::Tangent { a, b } => Some((a.0, b.0)),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    sketch
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            let crate::dto::EntityDto::Line {
+                id,
+                start_id,
+                end_id,
+                start,
+                end,
+                ..
+            } = entity
+            else {
+                return None;
+            };
+            if start.distance(*end) > tolerance {
+                return None;
+            }
+            let endpoint_is_trimmed = |point: EntityId| {
+                sketch
+                    .constraints
+                    .iter()
+                    .any(|constraint| match constraint.constraint {
+                        Constraint::ArcEndpointCoincident {
+                            point: owner, arc, ..
+                        } if owner == point => {
+                            arc_tangencies.contains(&(id.0, arc.0))
+                                || arc_tangencies.contains(&(arc.0, id.0))
+                        }
+                        Constraint::EqualDistance { a, b, .. } => a == point || b == point,
+                        _ => false,
+                    })
+            };
+            (endpoint_is_trimmed(*start_id) && endpoint_is_trimmed(*end_id)).then_some(id.0)
+        })
+        .collect()
 }
 
 fn classify_profile_nesting(profiles: &mut [ProfileLoopDto], tolerance: f64) {
@@ -3752,6 +3827,7 @@ fn ordered_profile_curves(
             Some(match entity {
                 crate::dto::EntityDto::Line { .. } => ProfileCurveDto::Line {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     start,
                     end,
                 },
@@ -3760,23 +3836,43 @@ fn ordered_profile_curves(
                 {
                     ProfileCurveDto::Circle {
                         entity_id,
+                        source_entity_ids: vec![entity_id],
                         center: Point2Dto::new(center.x, center.y),
                         radius: *radius,
                     }
                 }
                 crate::dto::EntityDto::Arc { .. } => ProfileCurveDto::Arc {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     start,
                     mid: path[path.len() / 2],
                     end,
                 },
-                crate::dto::EntityDto::Circle { center, radius, .. } => ProfileCurveDto::Circle {
+                crate::dto::EntityDto::Circle { center, radius, .. }
+                    if point2_distance(start, end) <= tolerance =>
+                {
+                    ProfileCurveDto::Circle {
+                        entity_id,
+                        source_entity_ids: vec![entity_id],
+                        center: Point2Dto::new(center.x, center.y),
+                        radius: *radius,
+                    }
+                }
+                // A line, arc, spline, or another circle may divide a circle
+                // into multiple selectable regions. Preserve just this
+                // boundary fragment as an analytic arc; emitting the source
+                // entity's full circle would create a kernel wire unrelated
+                // to the profile the user selected.
+                crate::dto::EntityDto::Circle { .. } => ProfileCurveDto::Arc {
                     entity_id,
-                    center: Point2Dto::new(center.x, center.y),
-                    radius: *radius,
+                    source_entity_ids: vec![entity_id],
+                    start,
+                    mid: path[path.len() / 2],
+                    end,
                 },
                 crate::dto::EntityDto::Spline { .. } => ProfileCurveDto::Polyline {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     points: path,
                 },
                 crate::dto::EntityDto::Point { .. } => return None,
@@ -4053,6 +4149,7 @@ mod project_tests {
             .duplicate_occurrence(DuplicateOccurrenceRequestDto {
                 occurrence_id: subassembly_occurrence.id,
                 parent_occurrence_id: None,
+                local_pose: None,
             })
             .unwrap();
         manager
@@ -4725,6 +4822,188 @@ mod project_tests {
         assert_eq!(job.result_body_ids.len(), 1);
     }
 
+    /// Live desktop regression from 2026-08-12: two R10 fillets consume the
+    /// entire top edge of a 20 mm-wide rectangle. A centerline runs from the
+    /// now-shared arc endpoint into a concentric circle. Profile discovery
+    /// must ignore that graph bridge and expose one outer material region
+    /// with one hole to Extrude.
+    #[test]
+    fn fully_consumed_edge_arch_with_centerline_and_circle_is_extrudable() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(-10.0, 0.0),
+                p2: crate::Vec2::new(10.0, 40.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        let lines = manager.active_snapshot().unwrap();
+        let line = |horizontal: bool, ordinate: f64| {
+            lines
+                .entities
+                .iter()
+                .find_map(|entity| match entity {
+                    crate::dto::EntityDto::Line { id, start, end, .. }
+                        if if horizontal {
+                            (start.y - ordinate).abs() < 1e-8 && (end.y - ordinate).abs() < 1e-8
+                        } else {
+                            (start.x - ordinate).abs() < 1e-8 && (end.x - ordinate).abs() < 1e-8
+                        } =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let top = line(true, 40.0);
+        let right = line(false, 10.0);
+        let left = line(false, -10.0);
+        manager
+            .fillet_lines(FilletRequest {
+                l1: top,
+                l2: right,
+                radius_text: "10".to_string(),
+            })
+            .unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: top,
+                l2: left,
+                radius_text: "10".to_string(),
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(0.0, 40.0),
+                to_raw: crate::Vec2::new(0.0, 30.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager
+            .add_circle_locked(LockedCircleRequest {
+                mode: crate::dto::CircleMode::CenterDiameter,
+                anchor: crate::Vec2::new(0.0, 30.0),
+                diameter_mm: Some(10.0),
+                diameter_text: None,
+                edge_hint: crate::Vec2::new(5.0, 30.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let catalog = manager.profile_catalog();
+        assert_eq!(catalog[0].profiles.len(), 2, "outer boundary plus hole");
+        let outer = catalog[0]
+            .profiles
+            .iter()
+            .find(|profile| profile.nesting_depth == 0)
+            .unwrap();
+        let hole = catalog[0]
+            .profiles
+            .iter()
+            .find(|profile| profile.nesting_depth == 1)
+            .unwrap();
+        assert_eq!(hole.parent_index, Some(outer.index));
+        assert_eq!(
+            outer.curves.len(),
+            4,
+            "three straight edges and one canonical semicircle form the outer wire"
+        );
+        assert!(matches!(
+            outer.curves.iter().find(|curve| matches!(curve, ProfileCurveDto::Arc { .. })),
+            Some(ProfileCurveDto::Arc { source_entity_ids, .. }) if source_entity_ids.len() == 2
+        ));
+
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".to_string(),
+                profile_indices: vec![outer.index],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 10.0 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: Vec::new(),
+            })
+            .unwrap();
+        let KernelJobDto::Extrude(job) = &plan.jobs[0] else {
+            panic!("arch profile should plan an Extrude job");
+        };
+        assert_eq!(job.profiles.len(), 1);
+        assert_eq!(job.profiles[0].holes.len(), 1);
+        assert_eq!(job.profiles[0].curves.len(), 4);
+        assert_eq!(job.profiles[0].holes[0].curves.len(), 1);
+    }
+
+    #[test]
+    fn circle_divided_by_a_crossing_line_uses_partial_analytic_arcs() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_circle_locked(LockedCircleRequest {
+                mode: crate::dto::CircleMode::CenterDiameter,
+                anchor: crate::Vec2::new(0.0, 0.0),
+                diameter_mm: Some(20.0),
+                diameter_text: None,
+                edge_hint: crate::Vec2::new(10.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(-12.0, 0.0),
+                to_raw: crate::Vec2::new(12.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let catalog = manager.profile_catalog();
+        assert_eq!(catalog[0].profiles.len(), 2);
+        assert!(catalog[0].profiles.iter().all(|profile| {
+            profile.curves.len() == 2
+                && profile
+                    .curves
+                    .iter()
+                    .any(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
+                && profile
+                    .curves
+                    .iter()
+                    .any(|curve| matches!(curve, ProfileCurveDto::Line { .. }))
+        }));
+
+        for profile in &catalog[0].profiles {
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: "Sketch1".to_string(),
+                    profile_indices: vec![profile.index],
+                    operation: ExtrudeOperation::NewBody,
+                    extent: ExtrudeExtent::Distance { distance: 4.0 },
+                    taper_angle_deg: 0.0,
+                    flip: false,
+                    target_body_ids: Vec::new(),
+                })
+                .unwrap();
+            let KernelJobDto::Extrude(job) = &plan.jobs[0] else {
+                panic!("semicircular region should plan an Extrude job");
+            };
+            assert_eq!(job.profiles[0].curves.len(), 2);
+            manager.cancel_solid_recompute(plan.transaction_id);
+        }
+    }
+
     #[test]
     fn dimensioned_chain_with_an_attached_rectangle_keeps_its_closed_profile() {
         let mut manager = SketchManager::new();
@@ -5366,14 +5645,14 @@ mod project_tests {
 
         let catalog = manager.profile_catalog();
         let profile = &catalog[0].profiles[0];
-        assert_eq!(profile.curves.len(), 5, "top + two sides + two arcs");
+        assert_eq!(profile.curves.len(), 4, "top + two sides + one semicircle");
         assert_eq!(
             profile
                 .curves
                 .iter()
                 .filter(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
                 .count(),
-            2
+            1
         );
         assert!(profile.curves.iter().all(|curve| match curve {
             ProfileCurveDto::Line { start, end, .. } => point2_distance(*start, *end) > 1e-3,
@@ -5401,8 +5680,147 @@ mod project_tests {
                 .iter()
                 .filter(|curve| matches!(curve, KernelCurveDto::Arc { .. }))
                 .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn adjacent_fillets_below_the_limit_keep_their_real_carrier() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(0.0, 0.0),
+                p2: crate::Vec2::new(30.0, 30.0),
+                ctrl_held: false,
+            })
+            .unwrap();
+        let dto = manager.active_snapshot().unwrap();
+        let horizontal = |y: f64| {
+            dto.entities.iter().find_map(|entity| match entity {
+                crate::dto::EntityDto::Line { id, start, end, .. }
+                    if (start.y - y).abs() < 1e-8 && (end.y - y).abs() < 1e-8 =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+        };
+        let vertical = |x: f64| {
+            dto.entities.iter().find_map(|entity| match entity {
+                crate::dto::EntityDto::Line { id, start, end, .. }
+                    if (start.x - x).abs() < 1e-8 && (end.x - x).abs() < 1e-8 =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+        };
+        let bottom = horizontal(0.0).unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: bottom,
+                l2: vertical(0.0).unwrap(),
+                radius_text: "14".to_string(),
+            })
+            .unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: bottom,
+                l2: vertical(30.0).unwrap(),
+                radius_text: "14".to_string(),
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let profile = &manager.profile_catalog()[0].profiles[0];
+        assert_eq!(profile.curves.len(), 6);
+        assert_eq!(
+            profile
+                .curves
+                .iter()
+                .filter(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
+                .count(),
             2
         );
+        assert!(profile.curves.iter().any(|curve| matches!(
+            curve,
+            ProfileCurveDto::Line { start, end, .. }
+                if (point2_distance(*start, *end) - 2.0).abs() < 1e-3
+        )));
+    }
+
+    #[test]
+    fn intentional_tiny_untrimmed_edges_are_not_classified_as_consumed() {
+        let sketch = SketchDto {
+            name: "Tiny".to_string(),
+            plane: PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            },
+            basis: PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            }
+            .origin_basis()
+            .unwrap(),
+            entities: vec![
+                crate::dto::EntityDto::Line {
+                    id: EntityId(1),
+                    start_id: EntityId(10),
+                    end_id: EntityId(11),
+                    start: crate::Vec2::new(0.0, 0.0),
+                    end: crate::Vec2::new(0.0005, 0.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(2),
+                    start_id: EntityId(11),
+                    end_id: EntityId(12),
+                    start: crate::Vec2::new(0.0005, 0.0),
+                    end: crate::Vec2::new(0.0005, 1.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(3),
+                    start_id: EntityId(12),
+                    end_id: EntityId(13),
+                    start: crate::Vec2::new(0.0005, 1.0),
+                    end: crate::Vec2::new(0.0, 1.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(4),
+                    start_id: EntityId(13),
+                    end_id: EntityId(10),
+                    start: crate::Vec2::new(0.0, 1.0),
+                    end: crate::Vec2::new(0.0, 0.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+            ],
+            constraints: Vec::new(),
+            reference_midpoints: Vec::new(),
+            dimensions: Vec::new(),
+            dimension_style: DimensionStyle::Aligned,
+            dof: crate::dto::DofDto {
+                value: 0,
+                fully_defined: true,
+            },
+            can_undo: false,
+            can_redo: false,
+        };
+
+        assert!(consumed_trim_carrier_ids(&sketch, 1e-3).is_empty());
+        let catalog = profile_catalog_item(&sketch, FeatureId(1));
+        assert_eq!(catalog.profiles.len(), 1);
+        assert!(catalog.profiles[0].area > 0.00049);
     }
 
     #[test]

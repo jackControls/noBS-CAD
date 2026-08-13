@@ -53,12 +53,22 @@ pub struct ProfileLoopDto {
 pub enum ProfileCurveDto {
     Line {
         entity_id: u64,
+        /// Every editable sketch entity represented by this derived boundary
+        /// curve. A canonical line can replace several adjacent collinear
+        /// entities without losing the design-intent provenance.
+        #[serde(default)]
+        source_entity_ids: Vec<u64>,
         start: Point2Dto,
         end: Point2Dto,
     },
     /// A circular arc oriented from `start` through `mid` to `end`.
     Arc {
         entity_id: u64,
+        /// Source sketch entities merged into this analytic boundary arc.
+        /// For example, two limiting R10 fillets can become one semicircle
+        /// for the solid kernel while remaining two editable sketch fillets.
+        #[serde(default)]
+        source_entity_ids: Vec<u64>,
         start: Point2Dto,
         mid: Point2Dto,
         end: Point2Dto,
@@ -66,12 +76,18 @@ pub enum ProfileCurveDto {
     /// One closed analytic circle edge.
     Circle {
         entity_id: u64,
+        /// Source sketch entities represented by this derived full circle.
+        #[serde(default)]
+        source_entity_ids: Vec<u64>,
         center: Point2Dto,
         radius: f64,
     },
     /// Spline fallback until native B-spline control data is carried through.
     Polyline {
         entity_id: u64,
+        /// Source sketch entities represented by this simplified fallback.
+        #[serde(default)]
+        source_entity_ids: Vec<u64>,
         points: Vec<Point2Dto>,
     },
 }
@@ -82,6 +98,12 @@ pub struct ProfileCatalogItemDto {
     pub feature_id: FeatureId,
     pub basis: PlaneBasis,
     pub profiles: Vec<ProfileLoopDto>,
+    /// When no bounded face was found, retain the specific topology reason
+    /// instead of collapsing every failure into an indistinguishable empty
+    /// catalog. Solid dialogs can then tell users whether geometry is open,
+    /// degenerate, branching, or self-intersecting.
+    #[serde(default)]
+    pub profile_error: Option<String>,
     /// Stable straight-line entities available as references for axes,
     /// sweep paths, and rib centerlines. Curves can join this catalog later
     /// without changing the persisted feature reference shape.
@@ -885,6 +907,24 @@ pub struct SolidMirrorRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoveCopyBodyRequest {
+    pub body_ids: Vec<BodyId>,
+    /// Final rigid transform applied to each source body. Rotation is a unit
+    /// quaternion in x, y, z, w order and translation is in millimetres.
+    pub translation: Point3Dto,
+    #[serde(default = "identity_quaternion")]
+    pub rotation: [f64; 4],
+    /// Pivot used by the rotation, normally the selection bounds center.
+    pub pivot: Point3Dto,
+    #[serde(default)]
+    pub copy: bool,
+}
+
+fn identity_quaternion() -> [f64; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RectangularPatternRequest {
     pub body_ids: Vec<BodyId>,
     pub direction: Point3Dto,
@@ -954,6 +994,7 @@ pub struct ImportStepRequest {
 #[serde(tag = "type", content = "request", rename_all = "snake_case")]
 pub enum BodyFeatureRequestDto {
     Shell(ShellRequest),
+    MoveCopy(MoveCopyBodyRequest),
     Mirror(SolidMirrorRequest),
     RectangularPattern(RectangularPatternRequest),
     CircularPattern(CircularPatternRequest),
@@ -980,6 +1021,16 @@ pub enum BodyFeatureDefinitionDto {
         face_keys: Vec<String>,
         thickness: f64,
         inward: bool,
+    },
+    MoveCopy {
+        feature_id: FeatureId,
+        name: String,
+        body_ids: Vec<BodyId>,
+        translation: Point3Dto,
+        rotation: [f64; 4],
+        pivot: Point3Dto,
+        copy: bool,
+        result_body_ids: Vec<BodyId>,
     },
     Mirror {
         feature_id: FeatureId,
@@ -1040,6 +1091,7 @@ impl BodyFeatureDefinitionDto {
     pub fn feature_id(&self) -> FeatureId {
         match self {
             Self::Shell { feature_id, .. }
+            | Self::MoveCopy { feature_id, .. }
             | Self::Mirror { feature_id, .. }
             | Self::RectangularPattern { feature_id, .. }
             | Self::CircularPattern { feature_id, .. }
@@ -1052,6 +1104,7 @@ impl BodyFeatureDefinitionDto {
     pub fn name(&self) -> &str {
         match self {
             Self::Shell { name, .. }
+            | Self::MoveCopy { name, .. }
             | Self::Mirror { name, .. }
             | Self::RectangularPattern { name, .. }
             | Self::CircularPattern { name, .. }
@@ -1209,6 +1262,11 @@ pub enum KernelTransformDto {
         origin: Point3Dto,
         axis: Point3Dto,
         angle_rad: f64,
+    },
+    Rigid {
+        translation: Point3Dto,
+        rotation: [f64; 4],
+        pivot: Point3Dto,
     },
 }
 

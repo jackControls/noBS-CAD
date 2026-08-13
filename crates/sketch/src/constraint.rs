@@ -66,6 +66,16 @@ pub enum Constraint {
         a: EntityId,
         b: EntityId,
     },
+    /// Midpoint of an edge's original corner-to-corner span after a corner
+    /// modifier trims one or both finite endpoints. `start` and `end` are
+    /// the persistent corner reference points retained by Fillet/Chamfer.
+    /// This keeps construction datums attached to the overall part envelope
+    /// instead of silently shifting to the shortened carrier segment.
+    SpanMidpoint {
+        point: EntityId,
+        start: EntityId,
+        end: EntityId,
+    },
     Concentric {
         a: EntityId,
         b: EntityId,
@@ -136,6 +146,7 @@ impl Constraint {
             Constraint::Perpendicular { .. } => "perpendicular",
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
+            Constraint::SpanMidpoint { .. } => "span_midpoint",
             Constraint::Concentric { .. } => "concentric",
             Constraint::Collinear { .. } => "collinear",
             Constraint::Symmetry { .. } => "symmetry",
@@ -176,6 +187,7 @@ impl Constraint {
             | Constraint::Collinear { a, b }
             | Constraint::Angle { a, b, .. } => vec![a, b],
             Constraint::ArcEndpointCoincident { point, arc, .. } => vec![point, arc],
+            Constraint::SpanMidpoint { point, start, end } => vec![point, start, end],
             Constraint::EqualDistance { origin, a, b } => vec![origin, a, b],
             Constraint::Symmetry { a, b, axis } => vec![a, b, axis],
             Constraint::Distance { from, to, .. } => match to {

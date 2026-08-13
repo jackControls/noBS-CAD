@@ -1,6 +1,6 @@
 //! Desktop → disk snapshot publisher for MCP `cad_attach`.
 //!
-//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
+//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
 //! with atomic temp+rename. Tauri owns one session UUID per desktop window and
 //! reserves generations before async exports so stale publishes cannot
 //! overwrite newer snapshots, including across WebView reloads.
@@ -42,7 +42,17 @@ pub struct SessionBridgeState {
 #[derive(Debug, Deserialize)]
 struct PublishPayload {
     focus: String,
-    model_json: String,
+    /// Project export is unavailable while a sketch transaction is active.
+    /// In that state retain the last completed model.json and still publish
+    /// the live sketch snapshot below.
+    #[serde(default)]
+    model_json: Option<String>,
+    /// The normal project export intentionally refuses an active sketch.
+    /// Carry its live read-only DTO beside model.json so diagnostics can see
+    /// exactly what the user is editing without making the project format
+    /// accept half-finished history state.
+    #[serde(default)]
+    active_sketch_json: Option<String>,
     generation: u64,
 }
 
@@ -158,7 +168,16 @@ impl SessionBridgeState {
         }))
         .map_err(|error| format!("encode heartbeat.json: {error}"))?;
 
-        atomic_write(&dir.join("model.json"), &parsed.model_json)?;
+        if let Some(model_json) = parsed.model_json.as_deref() {
+            atomic_write(&dir.join("model.json"), model_json)?;
+        }
+        let active_sketch_path = dir.join("active-sketch.json");
+        if let Some(active_sketch_json) = parsed.active_sketch_json.as_deref() {
+            atomic_write(&active_sketch_path, active_sketch_json)?;
+        } else if active_sketch_path.exists() {
+            fs::remove_file(&active_sketch_path)
+                .map_err(|error| format!("remove stale active-sketch.json: {error}"))?;
+        }
         atomic_write(&dir.join("focus.json"), &focus_body)?;
         atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)?;
 
@@ -228,7 +247,7 @@ pub fn mcp_session_bridge_reserve(
 
 /// Publish a read-only snapshot for MCP attach.
 ///
-/// Payload JSON: `{ focus, model_json, generation }`.
+/// Payload JSON: `{ focus, model_json?, active_sketch_json?, generation }`.
 #[tauri::command]
 pub fn mcp_session_bridge_write(
     window: tauri::WebviewWindow,
@@ -267,7 +286,8 @@ mod tests {
     fn payload(generation: u64, marker: &str) -> PublishPayload {
         PublishPayload {
             focus: "solid".to_string(),
-            model_json: format!(r#"{{"version":1,"marker":"{marker}"}}"#),
+            model_json: Some(format!(r#"{{"version":1,"marker":"{marker}"}}"#)),
+            active_sketch_json: None,
             generation,
         }
     }
@@ -376,6 +396,37 @@ mod tests {
         assert!(
             beat.contains("\"kind\": \"heartbeat\"") || beat.contains("\"kind\":\"heartbeat\"")
         );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_sketch_snapshot_is_published_and_removed_when_editing_ends() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let state = SessionBridgeState::default();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-sketch-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        let (session_id, first) = reserve(&state, "main");
+        let mut editing = payload(first, "editing");
+        editing.model_json = None;
+        editing.active_sketch_json = Some(r#"{"name":"Sketch1","entities":[]}"#.to_string());
+        state.write_for_window("main", editing).unwrap();
+        let sketch_path = dir.join(&session_id).join("active-sketch.json");
+        assert!(fs::read_to_string(&sketch_path)
+            .unwrap()
+            .contains("Sketch1"));
+        assert!(
+            !dir.join(&session_id).join("model.json").exists(),
+            "a live sketch must publish even before the first completed project snapshot"
+        );
+
+        let (_, second) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(second, "finished"))
+            .unwrap();
+        assert!(!sketch_path.exists());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

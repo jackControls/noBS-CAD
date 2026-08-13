@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::Point2Dto;
+use crate::{Point2Dto, ProfileCurveDto};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Segment2 {
@@ -34,6 +34,348 @@ impl fmt::Display for ProfileError {
 }
 
 impl std::error::Error for ProfileError {}
+
+/// Produce the minimal analytic boundary consumed by solid kernels while
+/// leaving the editable sketch topology untouched.
+///
+/// Sketch solvers intentionally keep trimmed carriers and individual fillet
+/// entities so dimensions, undo, and later edits remain reversible. At a
+/// limiting condition those entities can resolve to null edges or several
+/// consecutive pieces of the same analytic circle. B-rep kernels do better
+/// with the equivalent canonical boundary: null pieces removed and compatible
+/// co-circular arcs unified. Every returned curve retains all contributing
+/// sketch entity IDs so callers can map the derived topology back to design
+/// intent.
+pub fn canonicalize_profile_curves(
+    curves: &[ProfileCurveDto],
+    linear_tolerance: f64,
+) -> Vec<ProfileCurveDto> {
+    let tolerance = linear_tolerance.max(1e-9);
+    let mut canonical = curves
+        .iter()
+        .filter_map(|curve| normalize_profile_curve(curve, tolerance))
+        .collect::<Vec<_>>();
+
+    // Merge in boundary order, then across the cyclic vector boundary. Repeat
+    // because four quarter arcs may successively become one full circle.
+    loop {
+        let mut changed = false;
+        let mut merged = Vec::with_capacity(canonical.len());
+        for curve in canonical {
+            if let Some(previous) = merged.pop() {
+                if let Some(combined) = merge_compatible_curves(&previous, &curve, tolerance) {
+                    merged.push(combined);
+                    changed = true;
+                } else {
+                    merged.push(previous);
+                    merged.push(curve);
+                }
+            } else {
+                merged.push(curve);
+            }
+        }
+
+        if merged.len() > 1 {
+            let last = merged.last().cloned().unwrap();
+            let first = merged.first().cloned().unwrap();
+            if let Some(combined) = merge_compatible_curves(&last, &first, tolerance) {
+                merged.pop();
+                merged.remove(0);
+                merged.insert(0, combined);
+                changed = true;
+            }
+        }
+
+        canonical = merged;
+        if !changed {
+            return canonical;
+        }
+    }
+}
+
+fn profile_curve_sources(entity_id: u64, sources: &[u64]) -> Vec<u64> {
+    let mut result = if sources.is_empty() {
+        vec![entity_id]
+    } else {
+        sources.to_vec()
+    };
+    if !result.contains(&entity_id) {
+        result.push(entity_id);
+    }
+    result.sort_unstable();
+    result.dedup();
+    result
+}
+
+fn normalize_profile_curve(curve: &ProfileCurveDto, tolerance: f64) -> Option<ProfileCurveDto> {
+    match curve {
+        ProfileCurveDto::Line {
+            entity_id,
+            source_entity_ids,
+            start,
+            end,
+        } => (point_is_finite(*start)
+            && point_is_finite(*end)
+            && dist2(*start, *end) > tolerance * tolerance)
+            .then(|| ProfileCurveDto::Line {
+                entity_id: *entity_id,
+                source_entity_ids: profile_curve_sources(*entity_id, source_entity_ids),
+                start: *start,
+                end: *end,
+            }),
+        ProfileCurveDto::Arc {
+            entity_id,
+            source_entity_ids,
+            start,
+            mid,
+            end,
+        } => (point_is_finite(*start)
+            && point_is_finite(*mid)
+            && point_is_finite(*end)
+            && (dist2(*start, *mid) > tolerance * tolerance
+                || dist2(*mid, *end) > tolerance * tolerance))
+            .then(|| ProfileCurveDto::Arc {
+                entity_id: *entity_id,
+                source_entity_ids: profile_curve_sources(*entity_id, source_entity_ids),
+                start: *start,
+                mid: *mid,
+                end: *end,
+            }),
+        ProfileCurveDto::Circle {
+            entity_id,
+            source_entity_ids,
+            center,
+            radius,
+        } => (point_is_finite(*center) && radius.is_finite() && *radius > tolerance).then(|| {
+            ProfileCurveDto::Circle {
+                entity_id: *entity_id,
+                source_entity_ids: profile_curve_sources(*entity_id, source_entity_ids),
+                center: *center,
+                radius: *radius,
+            }
+        }),
+        ProfileCurveDto::Polyline {
+            entity_id,
+            source_entity_ids,
+            points,
+        } => {
+            if points.iter().any(|point| !point_is_finite(*point)) {
+                return None;
+            }
+            let mut cleaned = Vec::with_capacity(points.len());
+            for point in points {
+                if cleaned
+                    .last()
+                    .is_none_or(|previous| dist2(*previous, *point) > tolerance * tolerance)
+                {
+                    cleaned.push(*point);
+                }
+            }
+            (cleaned.len() >= 2).then(|| ProfileCurveDto::Polyline {
+                entity_id: *entity_id,
+                source_entity_ids: profile_curve_sources(*entity_id, source_entity_ids),
+                points: cleaned,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ArcCircle {
+    center: Point2Dto,
+    radius: f64,
+    start_angle: f64,
+    sweep: f64,
+}
+
+fn arc_circle(start: Point2Dto, mid: Point2Dto, end: Point2Dto) -> Option<ArcCircle> {
+    let determinant =
+        2.0 * (start.x * (mid.y - end.y) + mid.x * (end.y - start.y) + end.x * (start.y - mid.y));
+    if !determinant.is_finite() || determinant.abs() <= 1e-15 {
+        return None;
+    }
+    let start_norm = start.x * start.x + start.y * start.y;
+    let mid_norm = mid.x * mid.x + mid.y * mid.y;
+    let end_norm = end.x * end.x + end.y * end.y;
+    let center = Point2Dto::new(
+        (start_norm * (mid.y - end.y)
+            + mid_norm * (end.y - start.y)
+            + end_norm * (start.y - mid.y))
+            / determinant,
+        (start_norm * (end.x - mid.x)
+            + mid_norm * (start.x - end.x)
+            + end_norm * (mid.x - start.x))
+            / determinant,
+    );
+    let radius = dist2(center, start).sqrt();
+    if !point_is_finite(center) || !radius.is_finite() || radius <= 1e-12 {
+        return None;
+    }
+
+    let start_angle = (start.y - center.y).atan2(start.x - center.x);
+    let mid_angle = (mid.y - center.y).atan2(mid.x - center.x);
+    let end_angle = (end.y - center.y).atan2(end.x - center.x);
+    let ccw = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
+    let ccw_sweep = ccw(start_angle, end_angle);
+    let mid_ccw = ccw(start_angle, mid_angle);
+    let angular_epsilon = 1e-10;
+    let sweep = if mid_ccw <= ccw_sweep + angular_epsilon {
+        ccw_sweep
+    } else {
+        -ccw(end_angle, start_angle)
+    };
+    (sweep.abs() > angular_epsilon).then_some(ArcCircle {
+        center,
+        radius,
+        start_angle,
+        sweep,
+    })
+}
+
+fn merge_same_circle_arcs(
+    left: &ProfileCurveDto,
+    right: &ProfileCurveDto,
+    tolerance: f64,
+) -> Option<ProfileCurveDto> {
+    let (
+        ProfileCurveDto::Arc {
+            entity_id: left_id,
+            source_entity_ids: left_sources,
+            start: left_start,
+            mid: left_mid,
+            end: left_end,
+        },
+        ProfileCurveDto::Arc {
+            entity_id: right_id,
+            source_entity_ids: right_sources,
+            start: right_start,
+            mid: right_mid,
+            end: right_end,
+        },
+    ) = (left, right)
+    else {
+        return None;
+    };
+    if dist2(*left_end, *right_start) > tolerance * tolerance {
+        return None;
+    }
+
+    let left_circle = arc_circle(*left_start, *left_mid, *left_end)?;
+    let right_circle = arc_circle(*right_start, *right_mid, *right_end)?;
+    let geometry_tolerance = tolerance.max(left_circle.radius.max(right_circle.radius) * 1e-9);
+    if dist2(left_circle.center, right_circle.center) > geometry_tolerance * geometry_tolerance
+        || (left_circle.radius - right_circle.radius).abs() > geometry_tolerance
+        || left_circle.sweep.signum() != right_circle.sweep.signum()
+    {
+        return None;
+    }
+
+    let combined_sweep = left_circle.sweep + right_circle.sweep;
+    let radius = (left_circle.radius + right_circle.radius) * 0.5;
+    let angular_tolerance = (geometry_tolerance / radius).clamp(1e-10, 1e-3);
+    if combined_sweep.abs() > std::f64::consts::TAU + angular_tolerance {
+        return None;
+    }
+    let center = Point2Dto::new(
+        (left_circle.center.x + right_circle.center.x) * 0.5,
+        (left_circle.center.y + right_circle.center.y) * 0.5,
+    );
+    let mut sources = profile_curve_sources(*left_id, left_sources);
+    sources.extend(profile_curve_sources(*right_id, right_sources));
+    sources.sort_unstable();
+    sources.dedup();
+    let entity_id = *sources.first()?;
+
+    // Endpoint coincidence alone is not enough to prove a full circle: an
+    // invalid/retraced pair of arcs can also close on itself.  Only collapse
+    // to Circle when the accumulated analytic sweep is actually 2π.
+    if (combined_sweep.abs() - std::f64::consts::TAU).abs() <= angular_tolerance {
+        return Some(ProfileCurveDto::Circle {
+            entity_id,
+            source_entity_ids: sources,
+            center,
+            radius,
+        });
+    }
+
+    let mid_angle = left_circle.start_angle + combined_sweep * 0.5;
+    Some(ProfileCurveDto::Arc {
+        entity_id,
+        source_entity_ids: sources,
+        start: *left_start,
+        mid: Point2Dto::new(
+            center.x + radius * mid_angle.cos(),
+            center.y + radius * mid_angle.sin(),
+        ),
+        end: *right_end,
+    })
+}
+
+fn merge_compatible_curves(
+    left: &ProfileCurveDto,
+    right: &ProfileCurveDto,
+    tolerance: f64,
+) -> Option<ProfileCurveDto> {
+    merge_collinear_lines(left, right, tolerance)
+        .or_else(|| merge_same_circle_arcs(left, right, tolerance))
+}
+
+fn merge_collinear_lines(
+    left: &ProfileCurveDto,
+    right: &ProfileCurveDto,
+    tolerance: f64,
+) -> Option<ProfileCurveDto> {
+    let (
+        ProfileCurveDto::Line {
+            entity_id: left_id,
+            source_entity_ids: left_sources,
+            start: left_start,
+            end: left_end,
+        },
+        ProfileCurveDto::Line {
+            entity_id: right_id,
+            source_entity_ids: right_sources,
+            start: right_start,
+            end: right_end,
+        },
+    ) = (left, right)
+    else {
+        return None;
+    };
+    if dist2(*left_end, *right_start) > tolerance * tolerance {
+        return None;
+    }
+    let left_vector = Point2Dto::new(left_end.x - left_start.x, left_end.y - left_start.y);
+    let right_vector = Point2Dto::new(right_end.x - right_start.x, right_end.y - right_start.y);
+    let left_length = dist2(*left_start, *left_end).sqrt();
+    let right_length = dist2(*right_start, *right_end).sqrt();
+    if left_length <= tolerance || right_length <= tolerance {
+        return None;
+    }
+    // Cross/dot are normalized by lengths so the decision is scale neutral.
+    let normalized_cross = cross(left_vector, right_vector) / (left_length * right_length);
+    let normalized_dot = (left_vector.x * right_vector.x + left_vector.y * right_vector.y)
+        / (left_length * right_length);
+    let angular_tolerance = (tolerance / left_length.min(right_length)).clamp(1e-10, 1e-3);
+    if normalized_cross.abs() > angular_tolerance || normalized_dot <= 0.0 {
+        return None;
+    }
+    let offset = orientation(*left_start, *left_end, *right_end).abs() / left_length;
+    if offset > tolerance {
+        return None;
+    }
+
+    let mut sources = profile_curve_sources(*left_id, left_sources);
+    sources.extend(profile_curve_sources(*right_id, right_sources));
+    sources.sort_unstable();
+    sources.dedup();
+    Some(ProfileCurveDto::Line {
+        entity_id: *sources.first()?,
+        source_entity_ids: sources,
+        start: *left_start,
+        end: *right_end,
+    })
+}
 
 fn dist2(a: Point2Dto, b: Point2Dto) -> f64 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
@@ -95,32 +437,64 @@ fn validate_simple(points: &[Point2Dto], eps: f64) -> Result<(), ProfileError> {
     Ok(())
 }
 
-/// Split each carrier segment wherever another sketch-segment endpoint lies on
-/// its interior. Sketch entities remain stable and unsplit; this is only the
-/// planar graph used for profile discovery. Retaining the source segment ID on
-/// every piece lets the caller recover the original analytic curve.
-fn node_segments_at_endpoints(
+fn point_is_finite(point: Point2Dto) -> bool {
+    point.x.is_finite() && point.y.is_finite()
+}
+
+fn cross(a: Point2Dto, b: Point2Dto) -> f64 {
+    a.x * b.y - a.y * b.x
+}
+
+/// Split each carrier segment wherever another sketch-segment endpoint lies
+/// on its interior. For face discovery, also node proper interior crossings:
+/// two crossing sketch curves form selectable planar regions even when the
+/// sketch solver has not created an explicit coincident point there.
+///
+/// Sketch entities remain stable and unsplit; this is only the planar graph
+/// used for profile discovery. Retaining the source segment ID on every piece
+/// lets the caller recover the original analytic curve.
+fn node_segments_impl(
     segments: &[Segment2],
     tolerance: f64,
+    split_crossings: bool,
+    ignore_degenerate: bool,
 ) -> Result<Vec<Segment2>, ProfileError> {
     let tolerance = tolerance.max(1e-9);
     let tol2 = tolerance * tolerance;
-    let candidate_points = segments
+    let valid_segments = segments
+        .iter()
+        .copied()
+        .filter_map(|segment| {
+            let valid = point_is_finite(segment.a)
+                && point_is_finite(segment.b)
+                && dist2(segment.a, segment.b) > tol2;
+            if valid {
+                Some(Ok(segment))
+            } else if ignore_degenerate {
+                None
+            } else {
+                Some(Err(ProfileError::Degenerate))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if valid_segments.is_empty() {
+        return Err(ProfileError::Empty);
+    }
+    let candidate_points = valid_segments
         .iter()
         .flat_map(|segment| [segment.a, segment.b])
         .collect::<Vec<_>>();
-    let mut noded = Vec::new();
+    let mut parameters = valid_segments
+        .iter()
+        .map(|_| vec![0.0, 1.0])
+        .collect::<Vec<_>>();
 
-    for segment in segments {
+    for (segment_index, segment) in valid_segments.iter().enumerate() {
         let dx = segment.b.x - segment.a.x;
         let dy = segment.b.y - segment.a.y;
         let length2 = dx * dx + dy * dy;
-        if length2 <= tol2 {
-            return Err(ProfileError::Degenerate);
-        }
         let length = length2.sqrt();
         let parameter_tolerance = (tolerance / length).min(0.25);
-        let mut parameters = vec![0.0, 1.0];
         for point in &candidate_points {
             let parameter = ((point.x - segment.a.x) * dx + (point.y - segment.a.y) * dy) / length2;
             if parameter <= parameter_tolerance || parameter >= 1.0 - parameter_tolerance {
@@ -129,9 +503,72 @@ fn node_segments_at_endpoints(
             let projected =
                 Point2Dto::new(segment.a.x + parameter * dx, segment.a.y + parameter * dy);
             if dist2(projected, *point) <= tol2 {
-                parameters.push(parameter);
+                parameters[segment_index].push(parameter);
             }
         }
+    }
+
+    if split_crossings {
+        for left_index in 0..valid_segments.len() {
+            let left = valid_segments[left_index];
+            let left_vector = Point2Dto::new(left.b.x - left.a.x, left.b.y - left.a.y);
+            let left_length = dist2(left.a, left.b).sqrt();
+            for right_index in (left_index + 1)..valid_segments.len() {
+                let right = valid_segments[right_index];
+                let right_vector = Point2Dto::new(right.b.x - right.a.x, right.b.y - right.a.y);
+                let right_length = dist2(right.a, right.b).sqrt();
+                let denominator = cross(left_vector, right_vector);
+                // Cross product has squared-length units. Scaling the
+                // parallel threshold by both carrier lengths keeps the same
+                // geometric tolerance from microscopic to large sketches.
+                let parallel_tolerance = tolerance * (left_length + right_length);
+                if denominator.abs() <= parallel_tolerance {
+                    // Collinear overlaps are already completely handled by
+                    // projecting all endpoints onto every carrier above.
+                    continue;
+                }
+                let delta = Point2Dto::new(right.a.x - left.a.x, right.a.y - left.a.y);
+                let left_parameter = cross(delta, right_vector) / denominator;
+                let right_parameter = cross(delta, left_vector) / denominator;
+                let left_parameter_tolerance = (tolerance / left_length).min(0.25);
+                let right_parameter_tolerance = (tolerance / right_length).min(0.25);
+                if left_parameter < -left_parameter_tolerance
+                    || left_parameter > 1.0 + left_parameter_tolerance
+                    || right_parameter < -right_parameter_tolerance
+                    || right_parameter > 1.0 + right_parameter_tolerance
+                {
+                    continue;
+                }
+                let left_point = Point2Dto::new(
+                    left.a.x + left_parameter * left_vector.x,
+                    left.a.y + left_parameter * left_vector.y,
+                );
+                let right_point = Point2Dto::new(
+                    right.a.x + right_parameter * right_vector.x,
+                    right.a.y + right_parameter * right_vector.y,
+                );
+                if dist2(left_point, right_point) > tol2 * 4.0 {
+                    continue;
+                }
+                if left_parameter > left_parameter_tolerance
+                    && left_parameter < 1.0 - left_parameter_tolerance
+                {
+                    parameters[left_index].push(left_parameter.clamp(0.0, 1.0));
+                }
+                if right_parameter > right_parameter_tolerance
+                    && right_parameter < 1.0 - right_parameter_tolerance
+                {
+                    parameters[right_index].push(right_parameter.clamp(0.0, 1.0));
+                }
+            }
+        }
+    }
+
+    let mut noded = Vec::new();
+    for (segment, parameters) in valid_segments.iter().zip(parameters.iter_mut()) {
+        let dx = segment.b.x - segment.a.x;
+        let dy = segment.b.y - segment.a.y;
+        let length = dist2(segment.a, segment.b).sqrt();
         parameters.sort_by(f64::total_cmp);
         parameters.dedup_by(|left, right| (*left - *right).abs() * length <= tolerance);
 
@@ -166,6 +603,94 @@ fn node_segments_at_endpoints(
         }
     }
     Ok(unique)
+}
+
+fn node_segments_at_endpoints(
+    segments: &[Segment2],
+    tolerance: f64,
+) -> Result<Vec<Segment2>, ProfileError> {
+    node_segments_impl(segments, tolerance, false, false)
+}
+
+fn node_segments_for_faces(
+    segments: &[Segment2],
+    tolerance: f64,
+) -> Result<Vec<Segment2>, ProfileError> {
+    node_segments_impl(segments, tolerance, true, true)
+}
+
+/// Remove every edge that does not belong to a cycle in the active embedded
+/// graph. Degree peeling alone is insufficient: a construction line can join
+/// two otherwise valid closed profiles at both ends, making a bridge whose
+/// endpoints each have degree three. A face walk then traverses that bridge
+/// twice and incorrectly reports one self-intersecting loop instead of two
+/// profile boundaries.
+fn remove_bridges(active: &mut [bool], endpoints: &[[usize; 2]], vertex_count: usize) {
+    fn visit(
+        vertex: usize,
+        parent_edge: Option<usize>,
+        adjacency: &[Vec<(usize, usize)>],
+        discovery: &mut [usize],
+        low: &mut [usize],
+        next_time: &mut usize,
+        bridges: &mut [bool],
+    ) {
+        discovery[vertex] = *next_time;
+        low[vertex] = *next_time;
+        *next_time += 1;
+        for &(next, edge) in &adjacency[vertex] {
+            if Some(edge) == parent_edge {
+                continue;
+            }
+            if discovery[next] == usize::MAX {
+                visit(
+                    next,
+                    Some(edge),
+                    adjacency,
+                    discovery,
+                    low,
+                    next_time,
+                    bridges,
+                );
+                low[vertex] = low[vertex].min(low[next]);
+                if low[next] > discovery[vertex] {
+                    bridges[edge] = true;
+                }
+            } else {
+                low[vertex] = low[vertex].min(discovery[next]);
+            }
+        }
+    }
+
+    let mut adjacency = vec![Vec::<(usize, usize)>::new(); vertex_count];
+    for (edge, [a, b]) in endpoints.iter().copied().enumerate() {
+        if active[edge] {
+            adjacency[a].push((b, edge));
+            adjacency[b].push((a, edge));
+        }
+    }
+    let mut discovery = vec![usize::MAX; vertex_count];
+    let mut low = vec![usize::MAX; vertex_count];
+    let mut bridges = vec![false; active.len()];
+    let mut next_time = 0;
+    for vertex in 0..vertex_count {
+        if discovery[vertex] == usize::MAX && !adjacency[vertex].is_empty() {
+            visit(
+                vertex,
+                None,
+                &adjacency,
+                &mut discovery,
+                &mut low,
+                &mut next_time,
+                &mut bridges,
+            );
+        }
+    }
+    for (keep, bridge) in active.iter_mut().zip(bridges) {
+        if bridge {
+            *keep = false;
+        }
+    }
 }
 
 /// Extract deterministic CCW loops from unordered, possibly reversed curve
@@ -294,7 +819,7 @@ pub fn extract_closed_loops_allow_open(
     }
     let tolerance = tolerance.max(1e-9);
     let tol2 = tolerance * tolerance;
-    let mut ordered = node_segments_at_endpoints(segments, tolerance)?;
+    let mut ordered = node_segments_for_faces(segments, tolerance)?;
     ordered.sort_by(|left, right| {
         left.id
             .cmp(&right.id)
@@ -340,6 +865,11 @@ pub fn extract_closed_loops_allow_open(
             break;
         }
     }
+
+    // Keep only edges which actually bound a region. This strips dangling
+    // construction/path geometry as well as bridges connecting two closed
+    // regions, without requiring the sketch entity itself to be deleted.
+    remove_bridges(&mut active, &endpoints, vertices.len());
 
     if !active.iter().any(|keep| *keep) {
         return Err(ProfileError::Empty);
@@ -446,6 +976,202 @@ mod tests {
 
     fn p(x: f64, y: f64) -> Point2Dto {
         Point2Dto::new(x, y)
+    }
+
+    fn arc(
+        entity_id: u64,
+        center: Point2Dto,
+        radius: f64,
+        start_angle: f64,
+        end_angle: f64,
+    ) -> ProfileCurveDto {
+        let point = |angle: f64| {
+            p(
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
+            )
+        };
+        ProfileCurveDto::Arc {
+            entity_id,
+            source_entity_ids: vec![entity_id],
+            start: point(start_angle),
+            mid: point((start_angle + end_angle) * 0.5),
+            end: point(end_angle),
+        }
+    }
+
+    #[test]
+    fn canonicalization_merges_adjacent_co_circular_fillets_with_provenance() {
+        let curves = vec![
+            ProfileCurveDto::Line {
+                entity_id: 1,
+                source_entity_ids: vec![1],
+                start: p(0.0, 40.0),
+                end: p(5e-7, 40.0),
+            },
+            arc(16, p(0.0, 30.0), 10.0, 0.0, std::f64::consts::FRAC_PI_2),
+            arc(
+                19,
+                p(0.0, 30.0),
+                10.0,
+                std::f64::consts::FRAC_PI_2,
+                std::f64::consts::PI,
+            ),
+        ];
+
+        let result = canonicalize_profile_curves(&curves, 1e-3);
+        assert_eq!(result.len(), 1);
+        let ProfileCurveDto::Arc {
+            source_entity_ids,
+            start,
+            mid,
+            end,
+            ..
+        } = &result[0]
+        else {
+            panic!("two quarter arcs should become one semicircle");
+        };
+        assert_eq!(source_entity_ids, &[16, 19]);
+        assert!(dist2(*start, p(10.0, 30.0)) < 1e-12);
+        assert!(dist2(*mid, p(0.0, 40.0)) < 1e-12);
+        assert!(dist2(*end, p(-10.0, 30.0)) < 1e-12);
+    }
+
+    #[test]
+    fn canonicalization_merges_across_closed_loop_boundary() {
+        let curves = vec![
+            arc(
+                2,
+                p(0.0, 0.0),
+                5.0,
+                std::f64::consts::PI,
+                std::f64::consts::PI * 1.5,
+            ),
+            ProfileCurveDto::Line {
+                entity_id: 3,
+                source_entity_ids: vec![3],
+                start: p(0.0, -5.0),
+                end: p(8.0, -5.0),
+            },
+            ProfileCurveDto::Line {
+                entity_id: 4,
+                source_entity_ids: vec![4],
+                start: p(8.0, -5.0),
+                end: p(8.0, 0.0),
+            },
+            ProfileCurveDto::Line {
+                entity_id: 5,
+                source_entity_ids: vec![5],
+                start: p(8.0, 0.0),
+                end: p(5.0, 0.0),
+            },
+            arc(1, p(0.0, 0.0), 5.0, 0.0, std::f64::consts::PI),
+        ];
+
+        let result = canonicalize_profile_curves(&curves, 1e-6);
+        assert_eq!(result.len(), 4);
+        assert!(result.iter().any(|curve| matches!(
+            curve,
+            ProfileCurveDto::Arc { source_entity_ids, .. } if source_entity_ids == &vec![1, 2]
+        )));
+    }
+
+    #[test]
+    fn canonicalization_does_not_merge_different_radii_or_directions() {
+        let different_radius = canonicalize_profile_curves(
+            &[
+                arc(1, p(0.0, 0.0), 10.0, 0.0, std::f64::consts::FRAC_PI_2),
+                arc(
+                    2,
+                    p(0.0, 0.001),
+                    9.999,
+                    std::f64::consts::FRAC_PI_2,
+                    std::f64::consts::PI,
+                ),
+            ],
+            1e-5,
+        );
+        assert_eq!(different_radius.len(), 2);
+
+        let reverse = canonicalize_profile_curves(
+            &[
+                arc(1, p(0.0, 0.0), 10.0, 0.0, std::f64::consts::FRAC_PI_2),
+                arc(2, p(0.0, 0.0), 10.0, std::f64::consts::FRAC_PI_2, 0.0),
+            ],
+            1e-5,
+        );
+        assert_eq!(reverse.len(), 2);
+    }
+
+    #[test]
+    fn canonicalization_merges_collinear_lines_but_not_corners() {
+        let line = |entity_id, start, end| ProfileCurveDto::Line {
+            entity_id,
+            source_entity_ids: vec![entity_id],
+            start,
+            end,
+        };
+        let result = canonicalize_profile_curves(
+            &[
+                line(7, p(0.0, 0.0), p(5.0, 0.0)),
+                line(8, p(5.0, 0.0), p(10.0, 0.0)),
+                line(9, p(10.0, 0.0), p(10.0, 4.0)),
+            ],
+            1e-6,
+        );
+        assert_eq!(result.len(), 2);
+        assert!(matches!(
+            &result[0],
+            ProfileCurveDto::Line {
+                source_entity_ids,
+                start,
+                end,
+                ..
+            } if source_entity_ids == &vec![7, 8]
+                && dist2(*start, p(0.0, 0.0)) < 1e-12
+                && dist2(*end, p(10.0, 0.0)) < 1e-12
+        ));
+        assert!(matches!(
+            &result[1],
+            ProfileCurveDto::Line { source_entity_ids, .. } if source_entity_ids == &vec![9]
+        ));
+    }
+
+    #[test]
+    fn four_quarter_arcs_become_one_full_circle() {
+        let result = canonicalize_profile_curves(
+            &[
+                arc(1, p(0.0, 0.0), 4.0, 0.0, std::f64::consts::FRAC_PI_2),
+                arc(
+                    2,
+                    p(0.0, 0.0),
+                    4.0,
+                    std::f64::consts::FRAC_PI_2,
+                    std::f64::consts::PI,
+                ),
+                arc(
+                    3,
+                    p(0.0, 0.0),
+                    4.0,
+                    std::f64::consts::PI,
+                    std::f64::consts::PI * 1.5,
+                ),
+                arc(
+                    4,
+                    p(0.0, 0.0),
+                    4.0,
+                    std::f64::consts::PI * 1.5,
+                    std::f64::consts::TAU,
+                ),
+            ],
+            1e-6,
+        );
+        assert_eq!(result.len(), 1);
+        assert!(matches!(
+            &result[0],
+            ProfileCurveDto::Circle { source_entity_ids, .. }
+                if source_entity_ids == &vec![1, 2, 3, 4]
+        ));
     }
 
     fn s(id: u64, a: Point2Dto, b: Point2Dto) -> Segment2 {
@@ -638,5 +1364,184 @@ mod tests {
             .collect::<Vec<_>>();
         areas.sort_by(|a, b| a.total_cmp(b));
         assert_eq!(areas, vec![4.0, 12.0]);
+    }
+
+    #[test]
+    fn interior_curve_crossings_are_noded_into_selectable_regions() {
+        // A rectangle crossed by two full-span sketch lines has no explicit
+        // points at the interior crossing. Face discovery must still expose
+        // all four bounded regions, as desktop CAD sketchers do.
+        let loops = extract_closed_loops_allow_open(
+            &[
+                s(1, p(0.0, 0.0), p(4.0, 0.0)),
+                s(2, p(4.0, 0.0), p(4.0, 4.0)),
+                s(3, p(4.0, 4.0), p(0.0, 4.0)),
+                s(4, p(0.0, 4.0), p(0.0, 0.0)),
+                s(5, p(2.0, 0.0), p(2.0, 4.0)),
+                s(6, p(0.0, 2.0), p(4.0, 2.0)),
+            ],
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(loops.len(), 4);
+        assert!(loops
+            .iter()
+            .all(|points| (signed_area(points) - 4.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn self_crossed_contour_is_resolved_into_its_bounded_faces() {
+        let loops = extract_closed_loops_allow_open(
+            &[
+                s(1, p(0.0, 0.0), p(2.0, 2.0)),
+                s(2, p(2.0, 2.0), p(0.0, 2.0)),
+                s(3, p(0.0, 2.0), p(2.0, 0.0)),
+                s(4, p(2.0, 0.0), p(0.0, 0.0)),
+            ],
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(loops.len(), 2);
+        assert!(loops
+            .iter()
+            .all(|points| (signed_area(points) - 1.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn tiny_or_non_finite_strays_do_not_hide_valid_profiles() {
+        let loops = extract_closed_loops_allow_open(
+            &[
+                s(1, p(0.0, 0.0), p(3.0, 0.0)),
+                s(2, p(3.0, 0.0), p(3.0, 2.0)),
+                s(3, p(3.0, 2.0), p(0.0, 2.0)),
+                s(4, p(0.0, 2.0), p(0.0, 0.0)),
+                s(5, p(10.0, 10.0), p(10.0 + 1e-12, 10.0)),
+                s(6, p(f64::NAN, 0.0), p(1.0, 0.0)),
+            ],
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(loops.len(), 1);
+        assert!((signed_area(&loops[0]) - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bridge_between_two_closed_regions_is_not_a_profile_boundary() {
+        let loops = extract_closed_loops_allow_open(
+            &[
+                s(1, p(-4.0, -4.0), p(4.0, -4.0)),
+                s(2, p(4.0, -4.0), p(4.0, 4.0)),
+                s(3, p(4.0, 4.0), p(-4.0, 4.0)),
+                s(4, p(-4.0, 4.0), p(-4.0, -4.0)),
+                s(5, p(-1.0, -1.0), p(1.0, -1.0)),
+                s(6, p(1.0, -1.0), p(1.0, 1.0)),
+                s(7, p(1.0, 1.0), p(-1.0, 1.0)),
+                s(8, p(-1.0, 1.0), p(-1.0, -1.0)),
+                // A center/construction line whose endpoints are noded into
+                // both closed regions. It is a graph bridge, not material.
+                s(9, p(0.0, 4.0), p(0.0, 1.0)),
+            ],
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(loops.len(), 2);
+        let mut areas = loops
+            .iter()
+            .map(|points| signed_area(points))
+            .collect::<Vec<_>>();
+        areas.sort_by(f64::total_cmp);
+        assert_eq!(areas, vec![4.0, 64.0]);
+    }
+
+    #[test]
+    fn chain_connecting_separate_closed_regions_at_both_ends_is_removed() {
+        let loops = extract_closed_loops_allow_open(
+            &[
+                s(1, p(-5.0, -2.0), p(-1.0, -2.0)),
+                s(2, p(-1.0, -2.0), p(-1.0, 2.0)),
+                s(3, p(-1.0, 2.0), p(-5.0, 2.0)),
+                s(4, p(-5.0, 2.0), p(-5.0, -2.0)),
+                s(5, p(1.0, -2.0), p(5.0, -2.0)),
+                s(6, p(5.0, -2.0), p(5.0, 2.0)),
+                s(7, p(5.0, 2.0), p(1.0, 2.0)),
+                s(8, p(1.0, 2.0), p(1.0, -2.0)),
+                s(9, p(-1.0, 0.0), p(0.0, 0.0)),
+                s(10, p(0.0, 0.0), p(1.0, 0.0)),
+            ],
+            1e-6,
+        )
+        .unwrap();
+
+        assert_eq!(loops.len(), 2);
+        assert!(loops
+            .iter()
+            .all(|points| (signed_area(points) - 16.0).abs() < 1e-9));
+    }
+
+    /// Exact reproduction of the profile graph published by the live desktop
+    /// debug bridge for the 2026-08-12 arch-with-hole report. Two R10 fillets
+    /// fully consume a 20 mm carrier, an open center line hangs from the arc
+    /// junction, and a redundant line overlaps half the bottom edge. None of
+    /// those non-material curves may hide either the outer region or its hole.
+    #[test]
+    fn arch_with_consumed_carrier_open_centerline_and_hole_has_two_loops() {
+        let mut segments = vec![
+            s(3_000, p(0.0, 0.0), p(-10.0, 0.0)),
+            s(7_000, p(-10.0, 0.0), p(10.0, 0.0)),
+            s(8_000, p(10.0, 0.0), p(10.0, 30.0)),
+            s(10_000, p(-10.0, 30.0), p(-10.0, 0.0)),
+            s(13_000, p(0.0, 40.0), p(0.0, 30.0)),
+        ];
+        let mut push_arc = |entity: u64, start: f64, end: f64, radius: f64| {
+            let steps = 16;
+            let points = (0..=steps)
+                .map(|index| {
+                    let angle = start + (end - start) * index as f64 / steps as f64;
+                    p(radius * angle.cos(), 30.0 + radius * angle.sin())
+                })
+                .collect::<Vec<_>>();
+            for (index, pair) in points.windows(2).enumerate() {
+                segments.push(s(entity * 1_000 + index as u64, pair[0], pair[1]));
+            }
+        };
+        push_arc(16, 0.0, std::f64::consts::FRAC_PI_2, 10.0);
+        push_arc(19, std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 10.0);
+        let circle = (0..64)
+            .map(|index| {
+                let angle = std::f64::consts::TAU * index as f64 / 64.0;
+                p(5.0 * angle.cos(), 30.0 + 5.0 * angle.sin())
+            })
+            .collect::<Vec<_>>();
+        for (index, (a, b)) in circle
+            .iter()
+            .copied()
+            .zip(circle.iter().copied().cycle().skip(1))
+            .take(circle.len())
+            .enumerate()
+        {
+            segments.push(s(20_000 + index as u64, a, b));
+        }
+
+        let loops = extract_closed_loops_allow_open(&segments, 1e-5).unwrap();
+        assert_eq!(loops.len(), 2);
+        let mut areas = loops
+            .iter()
+            .map(|points| signed_area(points))
+            .collect::<Vec<_>>();
+        areas.sort_by(f64::total_cmp);
+        assert!(
+            areas[0] > 70.0 && areas[0] < 80.0,
+            "hole area: {}",
+            areas[0]
+        );
+        assert!(
+            areas[1] > 750.0 && areas[1] < 760.0,
+            "outer area: {}",
+            areas[1]
+        );
     }
 }

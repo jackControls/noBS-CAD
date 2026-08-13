@@ -157,6 +157,12 @@ const MODEL_REPEAT_MENU: MenuEntry[] = [
 ];
 
 const MODEL_BODY_MENU: MenuEntry[] = [
+  item('moveCopy', 'ribbon.solid.moveCopy', 'moveCopy', {
+    enabled: true,
+    action: 'bodyFeature',
+    payload: 'move_copy',
+  }),
+  sep,
   item('combine', 'ribbon.solid.combine', 'combine', {
     enabled: true,
     action: 'bodyFeature',
@@ -506,6 +512,7 @@ export const SOLID_TAB: RibbonTab = {
       labelKey: 'ribbon.panels.body',
       menu: MODEL_BODY_MENU,
       buttons: [
+        { id: 'moveCopy', labelKey: 'ribbon.solid.moveCopy', icon: 'moveCopy', enabled: true, action: 'bodyFeature', payload: 'move_copy' },
         { id: 'combine', labelKey: 'ribbon.solid.combine', icon: 'combine', enabled: true, action: 'bodyFeature', payload: 'combine' },
         { id: 'splitBody', labelKey: 'ribbon.solid.splitBody', icon: 'splitBody', enabled: true, action: 'bodyFeature', payload: 'split_body' },
       ],

@@ -596,6 +596,7 @@ function hiddenNames(
 export function collectNativeViewportPresentation(): NativePresentation {
   const state = useAppStore.getState();
   const bodyHoverKinds = new Set([
+    'move_copy',
     'combine',
     'mirror',
     'rectangular_pattern',

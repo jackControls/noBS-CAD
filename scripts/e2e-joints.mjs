@@ -149,13 +149,26 @@ try {
   assert.equal(result.solution.body_poses.length, 2);
   assert.deepEqual(result.selectedFaces, [], 'successful creation clears transient face selection');
 
-  console.log('3. Selecting the browser row highlights both referenced faces');
+  console.log('3. Joint is a first-class model-browser object and highlights both references');
   await page
-    .getByTestId(`assembly-joint-${result.joint.id}`)
-    .getByRole('button', { name: /Main hinge/i })
+    .getByTestId('assembly-browser')
+    .getByRole('button', { name: 'MODEL', exact: true })
     .click();
+  const modelBrowserJoint = page.locator(`[data-browser-joint-id="${result.joint.id}"]`);
+  await modelBrowserJoint.waitFor({ state: 'visible' });
+  assert.match(await modelBrowserJoint.innerText(), /Main hinge/i);
+  await modelBrowserJoint.click();
   const highlighted = await page.evaluate(() => window.__appStore.getState().selectedFaces);
   assert.deepEqual(highlighted, selected.map((entry) => entry.faceId));
+  await modelBrowserJoint.click({ button: 'right' });
+  assert.equal(
+    await page.getByRole('menuitem', { name: 'Edit joint' }).count(),
+    1,
+    'model-browser joints expose assembly actions',
+  );
+  await page.keyboard.press('Escape');
+  await page.locator('[data-ribbon-button="assemblyBrowser"]').click();
+  await page.getByTestId('assembly-browser').waitFor({ state: 'visible' });
 
   console.log('4. Live cylindrical motion previews both DOFs and saves a named position without overwriting the joint');
   await page.getByTestId('joint-motion-angle-value').fill('45');

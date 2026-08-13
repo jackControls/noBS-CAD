@@ -47,6 +47,7 @@ import {
   installProjectRecovery,
   newProject,
   openProject,
+  saveAllUnsavedProjects,
   saveProject,
 } from './files/projectFiles';
 import {
@@ -61,6 +62,8 @@ import {
   nativeMacMenuOwnsUndoRedo,
 } from './nativeEditMenu';
 import { isTauriRuntime } from './engine';
+import { requestUnsavedDecision } from './files/unsavedChanges';
+import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
 
 export default function App() {
   const { t } = useTranslation();
@@ -126,8 +129,7 @@ export default function App() {
       import('@tauri-apps/api/core'),
       import('@tauri-apps/api/event'),
       import('@tauri-apps/api/window'),
-      import('@tauri-apps/plugin-dialog'),
-    ]).then(async ([{ invoke }, { listen }, { getCurrentWindow }, { confirm }]) => {
+    ]).then(async ([{ invoke }, { listen }, { getCurrentWindow }]) => {
       if (disposed) return;
       const appWindow = getCurrentWindow();
       const requestQuit = async () => {
@@ -138,11 +140,15 @@ export default function App() {
         }
         promptOpen = true;
         try {
-          const approved = await confirm(t('file.quitDiscardConfirm'), {
-            title: t('file.unsaved'),
-            kind: 'warning',
+          const decision = await requestUnsavedDecision('quit');
+          if (decision === 'cancel' || disposed) return;
+          if (decision === 'save' && !(await saveAllUnsavedProjects())) return;
+          if (!disposed) await invoke('native_force_quit');
+        } catch (error) {
+          useAppStore.getState().setConstraintDialog({
+            titleKey: 'file.errorTitle',
+            message: error instanceof Error ? error.message : String(error),
           });
-          if (approved && !disposed) await invoke('native_force_quit');
         } finally {
           promptOpen = false;
         }
@@ -167,7 +173,7 @@ export default function App() {
       unlistenClose?.();
       unlistenQuit?.();
     };
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -400,6 +406,7 @@ export default function App() {
       <SketchPatternDialog />
       <AppearanceDialog />
       <JointDialog />
+      <UnsavedChangesDialog />
     </div>
   );
 }

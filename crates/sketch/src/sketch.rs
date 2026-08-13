@@ -247,6 +247,18 @@ impl Sketch {
         Some(self.constraints.remove(index).1)
     }
 
+    /// Replace one constraint without changing its stable id. Corner-edit
+    /// topology migration uses this to retarget midpoint intent while keeping
+    /// diagnostics and serialized references stable.
+    pub fn replace_constraint(
+        &mut self,
+        id: ConstraintId,
+        constraint: Constraint,
+    ) -> Option<Constraint> {
+        let (_, current) = self.constraints.iter_mut().find(|(cid, _)| *cid == id)?;
+        Some(std::mem::replace(current, constraint))
+    }
+
     pub fn constraint(&self, id: ConstraintId) -> Option<&Constraint> {
         self.constraints
             .iter()

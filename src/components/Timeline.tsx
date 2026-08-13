@@ -13,6 +13,7 @@ import {
   History,
   Layers3,
   Link2,
+  Move3d,
   MoveRight,
   PanelTop,
   Pencil,
@@ -72,6 +73,7 @@ function editTimelineFeature(feature: FeatureDto) {
   if (feature.kind === 'fillet') openSolidFillet(feature.id);
   if (feature.kind === 'chamfer') openSolidChamfer(feature.id);
   if (feature.kind === 'hole') openHole(feature.id);
+  if (feature.kind === 'move_copy') openBodyFeature('move_copy', feature.id);
   if (feature.kind === 'construction_plane') {
     const definition = useAppStore
       .getState()
@@ -696,6 +698,8 @@ function TimelineFeature({
                   ? CircleDot
                   : feature.kind === 'construction_plane'
                     ? Layers3
+                    : feature.kind === 'move_copy'
+                      ? Move3d
                     : feature.kind === 'shell'
                       ? Shell
                       : feature.kind === 'mirror'

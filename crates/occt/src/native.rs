@@ -1034,13 +1034,15 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                     KernelTransformDto::Mirror { origin, normal } => {
                         job.transform_kinds.push(0);
                         job.transform_values.extend([
-                            origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, 0.0,
+                            origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, 0.0, 0.0,
+                            0.0, 0.0,
                         ]);
                     }
                     KernelTransformDto::Translate { vector } => {
                         job.transform_kinds.push(1);
-                        job.transform_values
-                            .extend([vector.x, vector.y, vector.z, 0.0, 0.0, 0.0, 0.0]);
+                        job.transform_values.extend([
+                            vector.x, vector.y, vector.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                        ]);
                     }
                     KernelTransformDto::Rotate {
                         origin,
@@ -1049,7 +1051,27 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                     } => {
                         job.transform_kinds.push(2);
                         job.transform_values.extend([
-                            origin.x, origin.y, origin.z, axis.x, axis.y, axis.z, *angle_rad,
+                            origin.x, origin.y, origin.z, axis.x, axis.y, axis.z, *angle_rad, 0.0,
+                            0.0, 0.0,
+                        ]);
+                    }
+                    KernelTransformDto::Rigid {
+                        translation,
+                        rotation,
+                        pivot,
+                    } => {
+                        job.transform_kinds.push(3);
+                        job.transform_values.extend([
+                            translation.x,
+                            translation.y,
+                            translation.z,
+                            rotation[0],
+                            rotation[1],
+                            rotation[2],
+                            rotation[3],
+                            pivot.x,
+                            pivot.y,
+                            pivot.z,
                         ]);
                     }
                 }
@@ -1995,6 +2017,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn occt_extrudes_an_arch_profile_with_an_analytic_circular_hole() {
+        let p = |x, y| Point3Dto { x, y, z: 0.0 };
+        let mut outer = KernelProfileDto {
+            profile_index: 0,
+            points: vec![
+                p(-10.0, 0.0),
+                p(10.0, 0.0),
+                p(10.0, 30.0),
+                p(0.0, 40.0),
+                p(-10.0, 30.0),
+            ],
+            curves: vec![
+                KernelCurveDto::Line {
+                    entity_id: 1,
+                    start: p(-10.0, 0.0),
+                    end: p(10.0, 0.0),
+                },
+                KernelCurveDto::Line {
+                    entity_id: 2,
+                    start: p(10.0, 0.0),
+                    end: p(10.0, 30.0),
+                },
+                KernelCurveDto::Arc {
+                    entity_id: 3,
+                    start: p(10.0, 30.0),
+                    mid: p(0.0, 40.0),
+                    end: p(-10.0, 30.0),
+                },
+                KernelCurveDto::Line {
+                    entity_id: 4,
+                    start: p(-10.0, 30.0),
+                    end: p(-10.0, 0.0),
+                },
+            ],
+            holes: Vec::new(),
+        };
+        outer.holes.push(KernelProfileDto {
+            profile_index: 1,
+            points: (0..64)
+                .map(|index| {
+                    let angle = std::f64::consts::TAU * index as f64 / 64.0;
+                    p(5.0 * angle.cos(), 30.0 + 5.0 * angle.sin())
+                })
+                .collect(),
+            curves: vec![KernelCurveDto::Circle {
+                entity_id: 5,
+                center: p(0.0, 30.0),
+                axis_point: p(5.0, 30.0),
+                normal: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+            }],
+            holes: Vec::new(),
+        });
+
+        let mut kernel = OcctKernel::new().unwrap();
+        let scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
+                    feature_id: FeatureId(2),
+                    operation: ExtrudeOperation::NewBody,
+                    source_face: None,
+                    profiles: vec![outer],
+                    normal: Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                    start_offset: 0.0,
+                    end_offset: 10.0,
+                    taper_angle_deg: 0.0,
+                    target_body_ids: Vec::new(),
+                    result_body_ids: vec![BodyId(1)],
+                })],
+            })
+            .unwrap();
+
+        assert!(scene.errors.is_empty(), "{:?}", scene.errors);
+        assert_eq!(scene.bodies.len(), 1);
+        assert!(scene.bodies[0].faces.iter().any(|face| face
+            .cylinder
+            .is_some_and(|cylinder| (cylinder.radius - 5.0).abs() < 1e-6)));
     }
 
     #[test]

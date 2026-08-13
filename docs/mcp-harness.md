@@ -38,7 +38,12 @@ Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 ### Read-only snapshot bridge (not live UI co-link)
 Headless goldens work **without** attach.
 Desktop UI (Tauri) publishes:
-`<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
+`<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
+
+While a sketch transaction is active, project export intentionally keeps the
+last completed `model.json`; `active-sketch.json` carries the current
+read-only entity/constraint snapshot so a desktop failure can still be
+inspected without admitting half-finished history into the project format.
 (atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
 1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`.

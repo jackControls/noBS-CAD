@@ -446,6 +446,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
             return Err(format!("duplicate saved body feature {}", feature_id.0));
         }
         let (kind, label) = match definition {
+            BodyFeatureDefinitionDto::MoveCopy { .. } => (FeatureKind::MoveCopy, "Move/Copy"),
             BodyFeatureDefinitionDto::Shell { .. } => (FeatureKind::Shell, "Shell"),
             BodyFeatureDefinitionDto::Mirror { .. } => (FeatureKind::Mirror, "Mirror"),
             BodyFeatureDefinitionDto::RectangularPattern { .. } => {
@@ -460,6 +461,12 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
         };
         validate_feature_entry(model, feature_id, definition.name(), kind, label)?;
         let reserved: &[nbcad_core::BodyId] = match definition {
+            BodyFeatureDefinitionDto::MoveCopy {
+                copy: true,
+                result_body_ids,
+                ..
+            } => result_body_ids,
+            BodyFeatureDefinitionDto::MoveCopy { .. } => &[],
             BodyFeatureDefinitionDto::Mirror { new_body_ids, .. }
             | BodyFeatureDefinitionDto::RectangularPattern { new_body_ids, .. }
             | BodyFeatureDefinitionDto::CircularPattern { new_body_ids, .. } => new_body_ids,

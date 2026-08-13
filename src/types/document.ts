@@ -49,6 +49,7 @@ export type FeatureKind =
   | 'fillet'
   | 'chamfer'
   | 'hole'
+  | 'move_copy'
   | 'shell'
   | 'mirror'
   | 'rectangular_pattern'

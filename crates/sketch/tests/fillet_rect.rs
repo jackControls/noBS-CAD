@@ -29,6 +29,20 @@ fn lines_of(dto: &nbcad_sketch::SketchDto) -> Vec<(nbcad_sketch::EntityId, Vec2,
         .collect()
 }
 
+fn line_is_consumed(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> bool {
+    dto.entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Line {
+                id: line_id,
+                consumed,
+                ..
+            } if *line_id == id => Some(*consumed),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn close(a: Vec2, b: Vec2) -> bool {
     a.distance(b) < 1e-7
 }
@@ -273,6 +287,69 @@ fn second_fillet_on_dimensioned_rect_is_accepted() {
     assert_eq!(arcs, 4, "all four corners filleted");
 }
 
+/// Regression from the owner's 2026-08-12 report. A construction line tied
+/// between the midpoints of opposite rectangle edges is an overall-part
+/// datum. Filleting one end of an edge must not reinterpret that datum as the
+/// midpoint of only the shortened carrier and reject the radius dimension.
+#[test]
+fn fillet_preserves_midpoint_datum_across_original_corner_span() {
+    let mut s = session();
+    let lines = typed_40_square(&mut s);
+    let (bottom, top, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'y', 40.0),
+        edge(&lines, 'x', 40.0),
+    );
+
+    let centerline = s
+        .add_line(v(20.0, 40.0), v(20.0, 0.0), false)
+        .expect("midpoint-to-midpoint construction line");
+    assert!(centerline.sketch.constraints.iter().any(|constraint| {
+        matches!(
+            constraint.constraint,
+            nbcad_sketch::Constraint::Midpoint { a, b }
+                if a == centerline.start_point_id && b == top
+        )
+    }));
+    assert!(centerline.sketch.constraints.iter().any(|constraint| {
+        matches!(
+            constraint.constraint,
+            nbcad_sketch::Constraint::Midpoint { a, b }
+                if a == centerline.end_point_id && b == bottom
+        )
+    }));
+    s.add_constraint(nbcad_sketch::Constraint::Vertical {
+        entity: centerline.entity_id,
+    })
+    .expect("construction line stays vertical");
+
+    let result = s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: right,
+        radius_text: "10".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "corner fillet must preserve the overall-edge midpoint datum: {result:?}"
+    );
+
+    let dto = s.dto();
+    let top_midpoint = dto
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Point { id, position, .. } if *id == centerline.start_point_id => {
+                Some(*position)
+            }
+            _ => None,
+        })
+        .expect("construction-line top datum remains");
+    assert!(
+        top_midpoint.distance(v(20.0, 40.0)) < 1e-3,
+        "overall top midpoint stays at the original span center: {top_midpoint:?}"
+    );
+}
+
 /// Boundary regression from the owner's 2026-07-20 report: two fillets on
 /// the ends of one 30 mm edge may each be R15. The remaining straight edge
 /// is a valid zero-length carrier at exactly R1 + R2 == L; only values above
@@ -311,6 +388,10 @@ fn adjacent_r15_fillets_fit_exactly_on_a_30_mm_edge() {
     assert!(
         a.distance(b) < 1e-6,
         "shared edge must close exactly: {a:?} -> {b:?}"
+    );
+    assert!(
+        line_is_consumed(&dto, bottom),
+        "the parametric carrier stays addressable but is marked non-presentational"
     );
 }
 
@@ -446,6 +527,7 @@ fn editing_adjacent_fillet_to_exact_sum_is_accepted_and_reversible() {
         a.distance(b) < 5e-4,
         "edge closes at equality: {a:?} -> {b:?}"
     );
+    assert!(line_is_consumed(&equal.sketch, bottom));
 
     let over_limit = s.edit_dimension(EditDimensionRequest {
         constraint_id: radius_dimension.constraint_id,
@@ -470,6 +552,10 @@ fn editing_adjacent_fillet_to_exact_sum_is_accepted_and_reversible() {
         (a.distance(b) - 5.0).abs() < 5e-4,
         "reopened edge length: {}",
         a.distance(b)
+    );
+    assert!(
+        !line_is_consumed(&reopened.sketch, bottom),
+        "reducing either fillet restores the carrier to rendering and picking"
     );
 }
 

@@ -451,6 +451,7 @@ export interface ConstructionPlanePickedEdge {
   edgeId: number;
 }
 export type BodyFeatureKind =
+  | 'move_copy'
   | 'shell'
   | 'mirror'
   | 'rectangular_pattern'
@@ -654,6 +655,11 @@ interface AppState {
   duplicateOccurrence: (
     occurrenceId: number,
     parentOccurrenceId?: number | null,
+  ) => Promise<void>;
+  moveCopyOccurrence: (
+    occurrenceId: number,
+    localPose: AssemblyTransformDto,
+    copy: boolean,
   ) => Promise<void>;
   setOccurrenceGrounded: (occurrenceId: number, grounded: boolean) => Promise<void>;
   setOccurrencePose: (occurrenceId: number, localPose: AssemblyTransformDto) => Promise<void>;
@@ -1246,6 +1252,7 @@ export const useAppStore = create<AppState>()((set) => ({
     const occurrence = await engine.duplicateOccurrence({
       occurrence_id: occurrenceId,
       parent_occurrence_id: parentOccurrenceId,
+      local_pose: null,
     });
     const [assemblyDocument, assemblySolution] = await Promise.all([
       engine.assemblyDocument(),
@@ -1277,6 +1284,30 @@ export const useAppStore = create<AppState>()((set) => ({
     });
     const assemblySolution = await engine.assemblySolution();
     set({ assemblyDocument, assemblySolution, selectedOccurrenceId: occurrenceId, dirty: true });
+  },
+
+  moveCopyOccurrence: async (occurrenceId, localPose, copy) => {
+    const engine = await getEngine();
+    let selectedOccurrenceId = occurrenceId;
+    if (copy) {
+      const source = useAppStore.getState().assemblyDocument.component_structure.occurrences.find(
+        (occurrence) => occurrence.id === occurrenceId,
+      );
+      if (!source) throw new Error(`Occurrence ${occurrenceId} does not exist`);
+      const duplicate = await engine.duplicateOccurrence({
+        occurrence_id: occurrenceId,
+        parent_occurrence_id: source.parent_occurrence_id,
+        local_pose: localPose,
+      });
+      selectedOccurrenceId = duplicate.id;
+    } else {
+      await engine.setOccurrencePose({ occurrence_id: occurrenceId, local_pose: localPose });
+    }
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({ assemblyDocument, assemblySolution, selectedOccurrenceId, dirty: true });
   },
 
   setSelectedOccurrenceId: (selectedOccurrenceId) => set({ selectedOccurrenceId }),

@@ -1618,7 +1618,7 @@ void Kernel::apply_job(const FfiJob& job) {
   }
   if (job.kind == 9) {
     if (job.target_body_ids.empty() || job.transform_kinds.empty() ||
-        job.transform_values.size() != job.transform_kinds.size() * 7 ||
+        job.transform_values.size() != job.transform_kinds.size() * 10 ||
         job.result_body_ids.size() !=
             job.target_body_ids.size() * job.transform_kinds.size()) {
       throw std::runtime_error("body transform buffers are malformed");
@@ -1626,7 +1626,7 @@ void Kernel::apply_job(const FfiJob& job) {
     std::size_t output_index = 0;
     for (std::size_t transform_index = 0;
          transform_index < job.transform_kinds.size(); ++transform_index) {
-      const std::size_t offset = transform_index * 7;
+      const std::size_t offset = transform_index * 10;
       gp_Trsf transform;
       if (job.transform_kinds[transform_index] == 0) {
         const gp_Vec normal(job.transform_values[offset + 3],
@@ -1658,6 +1658,39 @@ void Kernel::apply_job(const FfiJob& job) {
                           job.transform_values[offset + 2]),
                    gp_Dir(axis)),
             job.transform_values[offset + 6]);
+      } else if (job.transform_kinds[transform_index] == 3) {
+        const double qx = job.transform_values[offset + 3];
+        const double qy = job.transform_values[offset + 4];
+        const double qz = job.transform_values[offset + 5];
+        const double qw = job.transform_values[offset + 6];
+        const double magnitude =
+            std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+        if (!std::isfinite(magnitude) || magnitude <= 1.0e-12) {
+          throw std::runtime_error("Move/Copy rotation is degenerate");
+        }
+        const double x = qx / magnitude;
+        const double y = qy / magnitude;
+        const double z = qz / magnitude;
+        const double w = qw / magnitude;
+        const double px = job.transform_values[offset + 7];
+        const double py = job.transform_values[offset + 8];
+        const double pz = job.transform_values[offset + 9];
+        const double tx = job.transform_values[offset];
+        const double ty = job.transform_values[offset + 1];
+        const double tz = job.transform_values[offset + 2];
+        const double r00 = 1.0 - 2.0 * (y * y + z * z);
+        const double r01 = 2.0 * (x * y - z * w);
+        const double r02 = 2.0 * (x * z + y * w);
+        const double r10 = 2.0 * (x * y + z * w);
+        const double r11 = 1.0 - 2.0 * (x * x + z * z);
+        const double r12 = 2.0 * (y * z - x * w);
+        const double r20 = 2.0 * (x * z - y * w);
+        const double r21 = 2.0 * (y * z + x * w);
+        const double r22 = 1.0 - 2.0 * (x * x + y * y);
+        transform.SetValues(
+            r00, r01, r02, px + tx - (r00 * px + r01 * py + r02 * pz),
+            r10, r11, r12, py + ty - (r10 * px + r11 * py + r12 * pz),
+            r20, r21, r22, pz + tz - (r20 * px + r21 * py + r22 * pz));
       } else {
         throw std::runtime_error("unknown body transform kind");
       }

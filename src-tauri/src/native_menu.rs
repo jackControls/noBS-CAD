@@ -13,8 +13,10 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 pub const EDIT_COMMAND_EVENT: &str = "native-edit-command";
+pub const QUIT_COMMAND_EVENT: &str = "native-quit-request";
 const UNDO_ID: &str = "nbcad-edit-undo";
 const REDO_ID: &str = "nbcad-edit-redo";
+const QUIT_ID: &str = "nbcad-app-quit";
 
 #[derive(Default)]
 pub struct NativeEditMenuState {
@@ -50,6 +52,35 @@ impl NativeEditMenuState {
 #[cfg(target_os = "macos")]
 pub fn build(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::default(app)?;
+    let application = menu
+        .items()?
+        .into_iter()
+        .find_map(|item| match item {
+            MenuItemKind::Submenu(submenu) => Some(submenu),
+            _ => None,
+        })
+        .ok_or_else(|| io::Error::other("default macOS menu has no application submenu"))?;
+    let quit_index = application
+        .items()?
+        .into_iter()
+        .enumerate()
+        .find_map(|(index, item)| match item {
+            MenuItemKind::Predefined(item) if item.text().ok().is_some_and(|text| {
+                text.replace('&', "").trim_start().starts_with("Quit")
+            }) => Some(index),
+            _ => None,
+        })
+        .ok_or_else(|| io::Error::other("default macOS application menu has no Quit item"))?;
+    application.remove_at(quit_index)?;
+    let quit = MenuItem::with_id(
+        app,
+        QUIT_ID,
+        format!("Quit {}", app.package_info().name),
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    application.insert(&quit, quit_index)?;
+
     let edit = menu
         .items()?
         .into_iter()
@@ -78,6 +109,9 @@ pub fn handle_event(app: &AppHandle<Wry>, event: MenuEvent) {
         Some("undo")
     } else if event.id() == REDO_ID {
         Some("redo")
+    } else if event.id() == QUIT_ID {
+        let _ = app.emit(QUIT_COMMAND_EVENT, ());
+        None
     } else {
         None
     };

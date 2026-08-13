@@ -288,6 +288,7 @@ export function Viewport() {
     if (s.holeDialogFeature !== null) return 'Select a planar face, then visible sketch points for holes';
     if (s.bodyFeatureDialog?.kind === 'shell') return 'Select faces to remove for Shell';
     if (s.bodyFeatureDialog?.kind === 'split_body') return 'Select the body to split';
+    if (s.bodyFeatureDialog?.kind === 'move_copy') return 'Select bodies or a component occurrence to move or copy';
     if (s.bodyFeatureDialog) return 'Select the target and tool bodies in the viewport';
     return null;
   });
@@ -1868,6 +1869,7 @@ export function Viewport() {
         const color = colorOf(entity.id, entity.fully_defined);
         switch (entity.kind) {
           case 'line':
+            if (entity.consumed) break;
             lines.set(entity.id, { start: entity.start, end: entity.end });
             addScreenLine(
               entityGroup,
@@ -2614,6 +2616,7 @@ export function Viewport() {
             break;
           }
           case 'line':
+            if (entity.consumed) break;
             best = consider(best, entity.id, pointToSegment(p, entity.start, entity.end));
             break;
           case 'circle': {
@@ -4811,6 +4814,7 @@ export function Viewport() {
         if (!ent) continue;
         switch (ent.kind) {
           case 'line':
+            if (ent.consumed) break;
             addScreenPolyline(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2);
             break;
           case 'arc':
@@ -4848,6 +4852,7 @@ export function Viewport() {
         case 'point':
           return [{ entityId: entity.id, point: entity.position, kind: { kind: 'point' } }];
         case 'line':
+          if (entity.consumed) return [];
           return [
             { entityId: entity.id, point: entity.start, kind: { kind: 'start' } },
             { entityId: entity.id, point: entity.end, kind: { kind: 'end' } },
@@ -5432,7 +5437,7 @@ export function Viewport() {
         for (const entity of sketch.entities) {
           if (!valid.has(`${sketch.name}:${entity.id}`)) continue;
           let localPoints: Vec2[] = [];
-          if (entity.kind === 'line') localPoints = [entity.start, entity.end];
+          if (entity.kind === 'line' && !entity.consumed) localPoints = [entity.start, entity.end];
           if (entity.kind === 'arc') {
             const positions = tessellateArc(
               entity.center,
@@ -5573,7 +5578,8 @@ export function Viewport() {
       if (kind === 'shell') return 'face-multi';
       if (kind === 'split_body') return 'body-single';
       if (
-        kind === 'combine'
+        kind === 'move_copy'
+        || kind === 'combine'
         || kind === 'mirror'
         || kind === 'rectangular_pattern'
         || kind === 'circular_pattern'

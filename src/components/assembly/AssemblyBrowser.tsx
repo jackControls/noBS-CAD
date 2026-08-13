@@ -15,6 +15,7 @@ import {
   FolderTree,
   Gauge,
   Link2,
+  Move3d,
   Pencil,
   Pause,
   Play,
@@ -45,6 +46,7 @@ import type {
 import { getEngine } from '../../engine';
 import { chooseSaveTarget, writeSaveTarget } from '../../files/fileIO';
 import { useAppStore } from '../../store/appStore';
+import { openBodyFeature } from '../../engine/controller';
 
 interface MotionValues {
   angle: number;
@@ -341,6 +343,10 @@ export function AssemblyBrowser() {
                     occurrence.id,
                     occurrence.parent_occurrence_id,
                   ).catch(showAssemblyError)}
+                  onMoveCopy={(occurrence) => {
+                    setSelectedOccurrenceId(occurrence.id);
+                    openBodyFeature('move_copy');
+                  }}
                 />
               )}
             </div>
@@ -1153,6 +1159,7 @@ function OccurrenceTree({
   onToggleVisibility,
   onToggleGround,
   onDuplicate,
+  onMoveCopy,
 }: {
   parentId: number | null;
   occurrences: ComponentOccurrenceDto[];
@@ -1165,6 +1172,7 @@ function OccurrenceTree({
   onToggleVisibility: (occurrence: ComponentOccurrenceDto) => void;
   onToggleGround: (occurrence: ComponentOccurrenceDto) => void;
   onDuplicate: (occurrence: ComponentOccurrenceDto) => void;
+  onMoveCopy: (occurrence: ComponentOccurrenceDto) => void;
 }) {
   const siblings = occurrences
     .filter((occurrence) => occurrence.parent_occurrence_id === parentId)
@@ -1189,6 +1197,14 @@ function OccurrenceTree({
               }`}
               style={{ paddingLeft: `${4 + depth * 13}px` }}
             >
+              <button
+                type="button"
+                title="Move or create a linked copy of this component occurrence"
+                onClick={() => onMoveCopy(occurrence)}
+                className="invisible rounded p-1 text-mute hover:bg-edge hover:text-accent group-hover:visible"
+              >
+                <Move3d size={11} />
+              </button>
               <button
                 type="button"
                 aria-label={isExpanded ? 'Collapse occurrence' : 'Expand occurrence'}
@@ -1251,6 +1267,7 @@ function OccurrenceTree({
                 onToggleVisibility={onToggleVisibility}
                 onToggleGround={onToggleGround}
                 onDuplicate={onDuplicate}
+                onMoveCopy={onMoveCopy}
               />
             )}
           </div>

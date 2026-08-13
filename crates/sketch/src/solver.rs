@@ -747,6 +747,26 @@ fn build_equations(
                     );
                 }
             }
+            Constraint::SpanMidpoint { point, start, end } => {
+                if let (Some(p), Some(a), Some(b)) = (
+                    map.pt(sketch, point),
+                    map.pt(sketch, start),
+                    map.pt(sketch, end),
+                ) {
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(p.0, 1.0), (a.0, -0.5), (b.0, -0.5)],
+                        0.0,
+                    );
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(p.1, 1.0), (a.1, -0.5), (b.1, -0.5)],
+                        0.0,
+                    );
+                }
+            }
             Constraint::Equal { a, b } => match (sketch.entity(a), sketch.entity(b)) {
                 (Some(Entity::Line { .. }), Some(Entity::Line { .. })) => {
                     if let (Some(da), Some(db)) =
@@ -1695,6 +1715,18 @@ fn line_is_trimmed_at_both_ends(
     };
 
     endpoint_is_trimmed(start) && endpoint_is_trimmed(end)
+}
+
+/// Presentation predicate for a stable carrier whose visible span is fully
+/// consumed. Keeping the entity lets later dimension edits reopen it.
+pub(crate) fn line_is_consumed_trim_carrier(sketch: &Sketch, line: EntityId) -> bool {
+    let Some((start, end)) = sketch.line_endpoint_ids(line) else {
+        return false;
+    };
+    line_is_trimmed_at_both_ends(sketch, line, start, end)
+        && sketch
+            .resolved_line(line)
+            .is_some_and(|(a, b)| a.distance(b) < CONSUMED_CARRIER_EPS)
 }
 
 /// Analysis without mutation (residual at the current state).

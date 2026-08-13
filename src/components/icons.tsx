@@ -120,6 +120,13 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M8 8l-3-3M16 16l3 3" />
     </>
   ),
+  moveCopy: (
+    <>
+      <path d="M5 5h7v7H5z" />
+      <path d="M12 12h7v7h-7z" strokeDasharray="2 2" />
+      <path d="M13 5h6v6M19 5l-8 8" />
+    </>
+  ),
 
   // Repetition and transforms.
   rectPattern: (

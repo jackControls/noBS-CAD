@@ -265,24 +265,6 @@ fn spawn_orientation_dial(
                 ..default()
             })
             .with_children(|dial| {
-                for (label, preset, left, top) in [
-                    ("F", "front", 38.0, 0.0),
-                    ("R", "right", 76.0, 42.0),
-                    ("B", "back", 38.0, 84.0),
-                    ("L", "left", 0.0, 42.0),
-                ] {
-                    spawn_dial_button(
-                        dial,
-                        label,
-                        &format!("orientation:{preset}"),
-                        left,
-                        top,
-                        hud,
-                        theme,
-                        assets,
-                    );
-                }
-
                 let orbit_state = visual_state(hud, "orientation:orbit", false, false);
                 let (orbit_fill, _, orbit_edge) = button_colors(theme, orbit_state);
                 dial.spawn((
@@ -374,6 +356,27 @@ fn spawn_orientation_dial(
                         BackgroundColor(theme.ink),
                     ));
                 });
+
+                // Preset pills deliberately come after the translucent orbit
+                // sphere as well as carrying a higher Z index. That makes the
+                // visual and hit-test order unambiguous on every Bevy backend.
+                for (label, preset, left, top) in [
+                    ("F", "front", 38.0, 0.0),
+                    ("R", "right", 76.0, 42.0),
+                    ("B", "back", 38.0, 84.0),
+                    ("L", "left", 0.0, 42.0),
+                ] {
+                    spawn_dial_button(
+                        dial,
+                        label,
+                        &format!("orientation:{preset}"),
+                        left,
+                        top,
+                        hud,
+                        theme,
+                        assets,
+                    );
+                }
             });
 
             card.spawn(Node {
@@ -485,6 +488,9 @@ fn spawn_dial_button(
             } else {
                 edge
             }),
+            // Explicit sibling depth keeps F/R/B/L above the orbit sphere
+            // independently of backend batching and translucent theme colors.
+            ZIndex(2),
         ))
         .with_child((
             Text::new(label),

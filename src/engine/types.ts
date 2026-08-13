@@ -38,7 +38,7 @@ export interface BeginSketchRequest {
 
 export type EntityDto =
   | { kind: 'point'; id: number; position: Vec2; fully_defined: boolean }
-  | { kind: 'line'; id: number; start_id: number; end_id: number; start: Vec2; end: Vec2; fully_defined: boolean }
+  | { kind: 'line'; id: number; start_id: number; end_id: number; start: Vec2; end: Vec2; fully_defined: boolean; consumed: boolean }
   | { kind: 'arc'; id: number; center: Vec2; radius: number; start_angle: number; end_angle: number; fully_defined: boolean }
   | { kind: 'circle'; id: number; center: Vec2; radius: number; fully_defined: boolean }
   | { kind: 'spline'; id: number; points: Vec2[]; tessellation: Vec2[]; fully_defined: boolean };
@@ -50,6 +50,9 @@ export interface ConstraintDto {
   entity?: number;
   a?: number;
   b?: number;
+  point?: number;
+  start?: number;
+  end?: number;
   axis?: number;
   from?: number;
   to?: number | null;
@@ -294,16 +297,18 @@ export interface ProfileLoopDto {
 }
 
 export type ProfileCurveDto =
-  | { kind: 'line'; entity_id: number; start: Vec2; end: Vec2 }
-  | { kind: 'arc'; entity_id: number; start: Vec2; mid: Vec2; end: Vec2 }
-  | { kind: 'circle'; entity_id: number; center: Vec2; radius: number }
-  | { kind: 'polyline'; entity_id: number; points: Vec2[] };
+  | { kind: 'line'; entity_id: number; source_entity_ids: number[]; start: Vec2; end: Vec2 }
+  | { kind: 'arc'; entity_id: number; source_entity_ids: number[]; start: Vec2; mid: Vec2; end: Vec2 }
+  | { kind: 'circle'; entity_id: number; source_entity_ids: number[]; center: Vec2; radius: number }
+  | { kind: 'polyline'; entity_id: number; source_entity_ids: number[]; points: Vec2[] };
 
 export interface ProfileCatalogItemDto {
   sketch_name: string;
   feature_id: number;
   basis: PlaneBasis;
   profiles: ProfileLoopDto[];
+  /** Specific topology diagnostic when no bounded profile could be recovered. */
+  profile_error: string | null;
   lines: SketchLineDto[];
   path_curves: SketchPathCurveDto[];
   reference_points: SketchReferencePointDto[];
@@ -589,6 +594,15 @@ export interface SolidMirrorRequest {
   plane_basis?: PlaneBasis | null;
 }
 
+export interface MoveCopyBodyRequest {
+  body_ids: number[];
+  translation: Point3Dto;
+  /** Unit quaternion in [x, y, z, w] order. */
+  rotation: [number, number, number, number];
+  pivot: Point3Dto;
+  copy: boolean;
+}
+
 export interface RectangularPatternRequest {
   body_ids: number[];
   direction: Point3Dto;
@@ -629,6 +643,7 @@ export interface ImportStepRequest {
 
 export type BodyFeatureRequestDto =
   | { type: 'shell'; request: ShellRequest }
+  | { type: 'move_copy'; request: MoveCopyBodyRequest }
   | { type: 'mirror'; request: SolidMirrorRequest }
   | { type: 'rectangular_pattern'; request: RectangularPatternRequest }
   | { type: 'circular_pattern'; request: CircularPatternRequest }
@@ -637,6 +652,17 @@ export type BodyFeatureRequestDto =
   | { type: 'import_step'; request: ImportStepRequest };
 
 export type BodyFeatureDefinitionDto =
+  | {
+      type: 'move_copy';
+      feature_id: number;
+      name: string;
+      body_ids: number[];
+      translation: Point3Dto;
+      rotation: [number, number, number, number];
+      pivot: Point3Dto;
+      copy: boolean;
+      result_body_ids: number[];
+    }
   | {
       type: 'shell';
       feature_id: number;
@@ -827,7 +853,13 @@ export interface KernelHoleJobDto {
 export type KernelTransformDto =
   | { kind: 'mirror'; origin: Point3Dto; normal: Point3Dto }
   | { kind: 'translate'; vector: Point3Dto }
-  | { kind: 'rotate'; origin: Point3Dto; axis: Point3Dto; angle_rad: number };
+  | { kind: 'rotate'; origin: Point3Dto; axis: Point3Dto; angle_rad: number }
+  | {
+      kind: 'rigid';
+      translation: Point3Dto;
+      rotation: [number, number, number, number];
+      pivot: Point3Dto;
+    };
 
 export interface KernelTransformJobDto {
   feature_id: number;
@@ -1149,6 +1181,8 @@ export interface UpdateOccurrenceRequestDto {
 export interface DuplicateOccurrenceRequestDto {
   occurrence_id: number;
   parent_occurrence_id: number | null;
+  /** Optional atomic placement for the duplicated root occurrence. */
+  local_pose?: AssemblyTransformDto | null;
 }
 
 export interface SetOccurrenceGroundedRequestDto {

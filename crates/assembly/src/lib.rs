@@ -738,7 +738,11 @@ impl AssemblyDocumentDto {
                     .unique_occurrence_name(parent_occurrence_id, &node.name),
                 component_id: node.component_id,
                 parent_occurrence_id,
-                local_pose: node.local_pose,
+                local_pose: if node.id == source.id {
+                    request.local_pose.unwrap_or(node.local_pose)
+                } else {
+                    node.local_pose
+                },
                 visible: node.visible,
                 grounded: false,
             });
@@ -1062,6 +1066,11 @@ pub struct DuplicateOccurrenceRequestDto {
     pub occurrence_id: OccurrenceId,
     #[serde(default)]
     pub parent_occurrence_id: Option<OccurrenceId>,
+    /// Optional placement for the duplicated root. Supplying it makes
+    /// Move/Copy atomic: the linked occurrence is never observable at the
+    /// source placement before its requested placement is applied.
+    #[serde(default)]
+    pub local_pose: Option<AssemblyTransformDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -5611,6 +5620,7 @@ mod tests {
             .duplicate_occurrence_subtree(DuplicateOccurrenceRequestDto {
                 occurrence_id: subassembly_occurrence,
                 parent_occurrence_id: None,
+                local_pose: None,
             })
             .unwrap();
         document

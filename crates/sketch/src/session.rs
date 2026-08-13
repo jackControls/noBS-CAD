@@ -1740,7 +1740,9 @@ impl SketchSession {
         let invalid = |msg: &str| SessionError::InvalidConstraint(msg.to_string());
 
         match *constraint {
-            Constraint::ArcEndpointCoincident { .. } | Constraint::EqualDistance { .. } => {
+            Constraint::ArcEndpointCoincident { .. }
+            | Constraint::EqualDistance { .. }
+            | Constraint::SpanMidpoint { .. } => {
                 return Err(invalid(
                     "This relation is internal and is created by its sketch tool",
                 ));
@@ -2201,6 +2203,7 @@ impl SketchSession {
                         start: a,
                         end: b,
                         fully_defined: fd(id),
+                        consumed: crate::solver::line_is_consumed_trim_carrier(&self.sketch, id),
                     })
                 }
                 Entity::Arc {
