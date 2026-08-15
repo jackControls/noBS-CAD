@@ -4027,7 +4027,7 @@ export function Viewport() {
     };
 
     /**
-     * Fusion-style object-snap tracking for line endpoints. Existing point,
+     * CAD object-snap tracking for line endpoints. Existing point,
      * origin, and midpoint snaps retain priority. Otherwise a nearby
      * horizontal/vertical axis through an existing point may consume the
      * segment's remaining freedom (free endpoint, typed angle, or typed
