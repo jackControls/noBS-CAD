@@ -600,6 +600,10 @@ interface AppState {
   drawingDocument: DrawingDocumentDto;
   /** Persistent face-referenced assembly/joint intent. */
   assemblyDocument: AssemblyDocumentDto;
+  /** Monotonic marker for assembly snapshots hydrated as part of a solid
+   * recompute. Application history uses it to keep that synchronization in
+   * the owning solid command instead of creating a second assembly command. */
+  assemblySolidSyncRevision: number;
   /** Derived rigid poses; never baked into OCCT or project feature history. */
   assemblySolution: AssemblySolutionDto;
   /** Non-persistent alignment preview for the open joint command. */
@@ -924,6 +928,7 @@ function resetDocumentUiState(): Partial<AppState> {
     bodyAppearances: [],
     drawingDocument: emptyDrawingDocument(),
     assemblyDocument: emptyAssemblyDocument(),
+    assemblySolidSyncRevision: 0,
     assemblySolution: emptyAssemblySolution(),
     jointPreviewSolution: null,
     jointMotionPreview: null,
@@ -1035,6 +1040,7 @@ export const useAppStore = create<AppState>()((set) => ({
   bodyAppearances: [],
   drawingDocument: emptyDrawingDocument(),
   assemblyDocument: emptyAssemblyDocument(),
+  assemblySolidSyncRevision: 0,
   assemblySolution: emptyAssemblySolution(),
   jointPreviewSolution: null,
   jointMotionPreview: null,
@@ -1155,7 +1161,13 @@ export const useAppStore = create<AppState>()((set) => ({
       .then((engine) => Promise.all([engine.assemblyDocument(), engine.assemblySolution()]))
       .then(([assemblyDocument, assemblySolution]) =>
         set((state) => (
-          state.solidScene === solidScene ? { assemblyDocument, assemblySolution } : {}
+          state.solidScene === solidScene
+            ? {
+                assemblyDocument,
+                assemblySolution,
+                assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
+              }
+            : {}
         )),
       )
       .catch(() => undefined);
@@ -1211,6 +1223,7 @@ export const useAppStore = create<AppState>()((set) => ({
           return {
             assemblyDocument,
             assemblySolution,
+            assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
             selectedJointId,
             jointEditingId,
             jointDialogOpen: state.jointEditingId !== null && jointEditingId === null

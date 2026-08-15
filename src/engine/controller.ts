@@ -31,10 +31,16 @@ import {
 import {
   authorizeNextSolidRedo,
   beginHistoryMutation,
+  canRedoAssemblyHistory,
   canRedoDrawingHistory,
+  canUndoAssemblyHistory,
   canUndoDrawingHistory,
+  commitAssemblyRedoHistory,
+  commitAssemblyUndoHistory,
   currentHistoryProjectKey,
   hasValidSolidRedo,
+  peekAssemblyRedoHistory,
+  peekAssemblyUndoHistory,
   pushSolidRedoSnapshot,
   returnSolidRedoSnapshot,
   takeSolidRedoSnapshot,
@@ -50,7 +56,9 @@ export function canUndoApplicationHistory(): boolean {
   if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
   if (state.activeTab === 'drawing') return canUndoDrawingHistory();
   if (state.activeTab !== 'solid') return false;
-  return state.mode === 'solid' && (state.document?.rollback_index ?? 0) > 0;
+  return state.mode === 'solid' && (
+    canUndoAssemblyHistory() || (state.document?.rollback_index ?? 0) > 0
+  );
 }
 
 export function canRedoApplicationHistory(): boolean {
@@ -61,6 +69,7 @@ export function canRedoApplicationHistory(): boolean {
   if (state.activeTab !== 'solid') return false;
   if (state.mode !== 'solid' || !state.document) return false;
   return (
+    canRedoAssemblyHistory() ||
     state.document.rollback_index < state.document.features.length ||
     hasValidSolidRedo()
   );
@@ -245,11 +254,20 @@ export async function undoApplicationHistory(): Promise<void> {
   }
   if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
+  const projectKey = currentHistoryProjectKey();
+  const assemblyEntry = peekAssemblyUndoHistory(projectKey);
+  if (assemblyEntry) {
+    await restoreAssemblyHistoryDocument(
+      projectKey,
+      assemblyEntry.before,
+      () => commitAssemblyUndoHistory(projectKey, assemblyEntry),
+    );
+    return;
+  }
   const current = state.document.rollback_index;
   if (current === 0) return;
   if (current === state.document.features.length) {
     const engine = await getEngine();
-    const projectKey = currentHistoryProjectKey();
     // Prune a stale branch before adding another consecutive Undo entry.
     hasValidSolidRedo(projectKey);
     const modelJson = await exportProjectModelWithVisibility(engine);
@@ -259,6 +277,10 @@ export async function undoApplicationHistory(): Promise<void> {
         state.document.features[current - 1].id,
       );
       if (!deleted) return;
+      // applySolidUpdate publishes synchronously, while the history observer
+      // advances its generation in a microtask. Keep the transaction guarded
+      // until that generation exists, then bind Redo to the resulting model.
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
       pushSolidRedoSnapshot(projectKey, modelJson);
     } finally {
       finishHistoryMutation();
@@ -282,13 +304,22 @@ export async function redoApplicationHistory(): Promise<void> {
   }
   if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
+  const projectKey = currentHistoryProjectKey();
+  const assemblyEntry = peekAssemblyRedoHistory(projectKey);
+  if (assemblyEntry) {
+    await restoreAssemblyHistoryDocument(
+      projectKey,
+      assemblyEntry.after,
+      () => commitAssemblyRedoHistory(projectKey, assemblyEntry),
+    );
+    return;
+  }
   const current = state.document.rollback_index;
   if (current < state.document.features.length) {
     await setTimelineRollback(current + 1);
     return;
   }
 
-  const projectKey = currentHistoryProjectKey();
   const entry = takeSolidRedoSnapshot(projectKey);
   if (!entry) return;
   const finishHistoryMutation = beginHistoryMutation();
@@ -320,6 +351,56 @@ export async function redoApplicationHistory(): Promise<void> {
     state.setConstraintDialog({
       titleKey: 'constraints.invalidTitle',
       message: error instanceof Error ? error.message : 'Redo failed',
+    });
+  } finally {
+    state.setSolidBusy(false);
+    finishHistoryMutation();
+  }
+}
+
+async function restoreAssemblyHistoryDocument(
+  projectKey: string,
+  document: import('./types').AssemblyDocumentDto,
+  commit: () => boolean,
+): Promise<void> {
+  const finishHistoryMutation = beginHistoryMutation();
+  const state = useAppStore.getState();
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setAssemblyDocument(structuredClone(document));
+    const assemblySolution = await engine.assemblySolution();
+    const occurrenceIds = new Set(
+      assemblyDocument.component_structure.occurrences.map((occurrence) => occurrence.id),
+    );
+    const jointIds = new Set(assemblyDocument.joints.map((joint) => joint.id));
+    useAppStore.setState((current) => ({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId: current.selectedOccurrenceId !== null
+        && occurrenceIds.has(current.selectedOccurrenceId)
+        ? current.selectedOccurrenceId
+        : null,
+      hoveredOccurrenceId: null,
+      selectedJointId: current.selectedJointId !== null
+        && jointIds.has(current.selectedJointId)
+        ? current.selectedJointId
+        : null,
+      jointEditingId: null,
+      jointDialogOpen: false,
+      jointConnectorPicks: [],
+      jointConnectorHover: null,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      motionStudyPreview: null,
+      dirty: true,
+    }));
+    commit();
+  } catch (error) {
+    state.setConstraintDialog({
+      titleKey: 'constraints.invalidTitle',
+      message: error instanceof Error ? error.message : 'Assembly history replay failed',
     });
   } finally {
     state.setSolidBusy(false);

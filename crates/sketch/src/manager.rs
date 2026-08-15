@@ -545,6 +545,16 @@ impl SketchManager {
         self.assembly.clone()
     }
 
+    pub fn set_assembly_document(
+        &mut self,
+        document: AssemblyDocumentDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        document.validate().map_err(SessionError::Solid)?;
+        self.assembly = document;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
     pub fn assembly_solution(&self) -> AssemblySolutionDto {
         if let Some(solution) = self.assembly_solution_cache.borrow().as_ref() {
             return solution.clone();
@@ -968,48 +978,101 @@ impl SketchManager {
                     stop_time_seconds = Some(sample.time_seconds);
                     break;
                 }
-                if start_violation <= 1.0e-7 && end_violation > 1.0e-7 {
-                    let (mut low, mut high) = (
-                        start.time_seconds.min(sample.time_seconds),
-                        start.time_seconds.max(sample.time_seconds),
-                    );
-                    for _ in 0..20 {
-                        let middle = (low + high) * 0.5;
-                        let candidate = self.sample_motion_study(SampleMotionStudyRequestDto {
-                            study_id: request.study_id,
-                            time_seconds: middle,
-                        })?;
-                        if violation(&candidate)? > 1.0e-7 {
-                            high = middle;
+                if start_violation <= 1.0e-7 {
+                    const PROBE_STEPS: usize = 8;
+                    let end = sample.clone();
+                    let mut safe_time = start.time_seconds;
+                    let mut crossing = None;
+                    for step in 1..=PROBE_STEPS {
+                        let fraction = step as f64 / PROBE_STEPS as f64;
+                        let time =
+                            start.time_seconds + (end.time_seconds - start.time_seconds) * fraction;
+                        let candidate = if step == PROBE_STEPS {
+                            end.clone()
                         } else {
-                            low = middle;
+                            self.sample_motion_study(SampleMotionStudyRequestDto {
+                                study_id: request.study_id,
+                                time_seconds: time,
+                            })?
+                        };
+                        let candidate_violation = if step == PROBE_STEPS {
+                            end_violation
+                        } else {
+                            violation(&candidate)?
+                        };
+                        if candidate_violation <= 1.0e-7 {
+                            safe_time = candidate.time_seconds;
+                            continue;
                         }
+                        let mut safe = safe_time;
+                        let mut blocked = candidate.time_seconds;
+                        for _ in 0..16 {
+                            let middle = (safe + blocked) * 0.5;
+                            let middle_sample =
+                                self.sample_motion_study(SampleMotionStudyRequestDto {
+                                    study_id: request.study_id,
+                                    time_seconds: middle,
+                                })?;
+                            if violation(&middle_sample)? > 1.0e-7 {
+                                blocked = middle;
+                            } else {
+                                safe = middle;
+                            }
+                        }
+                        crossing = Some(blocked);
+                        break;
                     }
-                    sample = self.sample_motion_study(SampleMotionStudyRequestDto {
-                        study_id: request.study_id,
-                        time_seconds: high,
-                    })?;
-                    stopped_by_contact = Some(contact.id);
-                    stop_time_seconds = Some(high);
-                    break;
+                    if let Some(blocked) = crossing {
+                        sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+                            study_id: request.study_id,
+                            time_seconds: blocked,
+                        })?;
+                        stopped_by_contact = Some(contact.id);
+                        stop_time_seconds = Some(blocked);
+                        break;
+                    }
                 }
             }
         }
-        let contacts = approximate_interference_report(
-            self.solids.scene(),
-            &sample.solution.instance_body_poses,
-            &InterferenceCheckRequestDto {
-                occurrence_ids: Vec::new(),
-                clearance_threshold_mm: self
-                    .assembly
-                    .contact_sets
-                    .iter()
-                    .filter(|contact| contact.enabled)
-                    .map(|contact| contact.clearance_mm)
-                    .fold(0.0_f64, f64::max),
-            },
-        )
-        .map_err(SessionError::Solid)?;
+        let mut contact_pairs = Vec::new();
+        for contact in self
+            .assembly
+            .contact_sets
+            .iter()
+            .filter(|contact| contact.enabled)
+        {
+            let a = sample
+                .solution
+                .instance_body_poses
+                .iter()
+                .find(|pose| {
+                    pose.occurrence_id == contact.occurrence_a && pose.body_id == contact.body_a
+                })
+                .ok_or_else(|| {
+                    SessionError::Solid(format!("contact '{}' first body is missing", contact.name))
+                })?;
+            let b = sample
+                .solution
+                .instance_body_poses
+                .iter()
+                .find(|pose| {
+                    pose.occurrence_id == contact.occurrence_b && pose.body_id == contact.body_b
+                })
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "contact '{}' second body is missing",
+                        contact.name
+                    ))
+                })?;
+            contact_pairs.push(
+                approximate_pair_result(self.solids.scene(), a, b, contact.clearance_mm)
+                    .map_err(SessionError::Solid)?,
+            );
+        }
+        let contacts = InterferenceReportDto {
+            exact: false,
+            pairs: contact_pairs,
+        };
         Ok(MotionStudyEvaluationDto {
             sample,
             contacts,
@@ -4057,6 +4120,17 @@ mod project_tests {
             .export_project_model()
             .unwrap()
             .contains("\"Sketch1\""));
+    }
+
+    #[test]
+    fn assembly_document_restore_rejects_invalid_snapshots_transactionally() {
+        let mut manager = SketchManager::new();
+        let before = manager.assembly_document();
+        let mut invalid = before.clone();
+        invalid.next_joint_id = 0;
+
+        assert!(manager.set_assembly_document(invalid).is_err());
+        assert_eq!(manager.assembly_document(), before);
     }
 
     #[test]

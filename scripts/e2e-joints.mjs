@@ -290,6 +290,36 @@ try {
   assert.equal(result.solution.body_poses.length, 2);
   assert.deepEqual(result.selectedFaces, [], 'successful creation clears transient face selection');
 
+  console.log('2a. Application Undo/Redo treats the joint as one assembly command');
+  const solidHistoryBeforeAssemblyUndo = await page.evaluate(() => ({
+    features: structuredClone(window.__appStore.getState().document.features),
+    bodyIds: window.__appStore.getState().solidScene.bodies.map((body) => body.id),
+  }));
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => window.__appStore.getState().assemblyDocument.joints.length === 0);
+  const afterAssemblyUndo = await page.evaluate(async () => ({
+    features: window.__appStore.getState().document.features,
+    bodyIds: window.__appStore.getState().solidScene.bodies.map((body) => body.id),
+    engineJointCount: (await window.__engine.assemblyDocument()).joints.length,
+  }));
+  assert.deepEqual(afterAssemblyUndo.features, solidHistoryBeforeAssemblyUndo.features);
+  assert.deepEqual(afterAssemblyUndo.bodyIds, solidHistoryBeforeAssemblyUndo.bodyIds);
+  assert.equal(afterAssemblyUndo.engineJointCount, 0);
+
+  await page.keyboard.press('Control+Shift+z');
+  await page.waitForFunction(
+    (jointId) => window.__appStore.getState().assemblyDocument.joints[0]?.id === jointId,
+    result.joint.id,
+  );
+  const afterAssemblyRedo = await page.evaluate(async () => ({
+    features: window.__appStore.getState().document.features,
+    bodyIds: window.__appStore.getState().solidScene.bodies.map((body) => body.id),
+    assembly: await window.__engine.assemblyDocument(),
+  }));
+  assert.deepEqual(afterAssemblyRedo.features, solidHistoryBeforeAssemblyUndo.features);
+  assert.deepEqual(afterAssemblyRedo.bodyIds, solidHistoryBeforeAssemblyUndo.bodyIds);
+  assert.equal(afterAssemblyRedo.assembly.joints[0]?.id, result.joint.id);
+
   console.log('2b. Moving the fixed body routes to component placement and rebases the connected mechanism');
   const anchoredMoveBefore = await page.evaluate((fixedBodyId) => {
     const state = window.__appStore.getState();

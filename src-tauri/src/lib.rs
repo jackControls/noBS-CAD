@@ -221,6 +221,7 @@ engine_command!(engine_project_set_visibility, "project_set_visibility");
 engine_command!(engine_drawing_document, "drawing_document", no_payload);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
 engine_command!(engine_assembly_document, "assembly_document", no_payload);
+engine_command!(engine_assembly_set_document, "assembly_set_document");
 engine_command!(engine_assembly_solution, "assembly_solution", no_payload);
 engine_command!(
     engine_assembly_create_component,
@@ -754,6 +755,7 @@ pub fn run() {
             engine_drawing_document,
             engine_drawing_set_document,
             engine_assembly_document,
+            engine_assembly_set_document,
             engine_assembly_solution,
             engine_assembly_create_component,
             engine_assembly_update_component,

@@ -74,6 +74,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
             with_payload(payload, |drawing| manager.set_drawing_document(drawing))
         }
         "assembly_document" => ok_json(manager.assembly_document()),
+        "assembly_set_document" => {
+            with_payload(payload, |document| manager.set_assembly_document(document))
+        }
         "assembly_solution" => ok_json(manager.assembly_solution()),
         "assembly_create_component" => {
             with_payload(payload, |request| manager.create_component(request))

@@ -180,6 +180,11 @@ acceleration, and angular velocity and acceleration. This makes the path useful
 for CAM handoff, external analysis, or regression comparison without depending
 on Bevy or the DOM.
 
+A later production slice will add reusable, pre-designed motion scripts and
+direct video capture/export of simulated motion playback. Both will consume the
+same deterministic motion-study timeline so authored demonstrations, recorded
+video, and exported paths stay synchronized.
+
 ## Interference, clearance, and contact stops
 
 Native desktop checks use the retained OCCT B-reps transformed by the solved
@@ -193,7 +198,10 @@ Swept collision evaluates the same exact native pair query at deterministic
 timeline samples. The requested sample rate is persisted in the report so a
 reviewer can judge temporal resolution; it is not represented as a continuous
 closed-form swept solid. Reports include first and last collision times, minimum
-clearance, and maximum overlap for every colliding pair.
+clearance, and maximum overlap for every colliding pair. Interactive playback
+evaluates only enabled contact pairs, rejects distant pairs with transformed
+bounds, and probes each frame interval before refining the first physical stop;
+the all-body exact report remains an explicit Inspect operation.
 
 A contact set binds two placed source bodies by stable occurrence and body ids,
 plus a nonnegative clearance. When **stop motion** is enabled, playback detects

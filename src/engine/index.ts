@@ -141,6 +141,7 @@ export interface Engine {
   drawingDocument(): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
   assemblyDocument(): Promise<AssemblyDocumentDto>;
+  setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto>;
   assemblySolution(): Promise<AssemblySolutionDto>;
   createComponent(request: CreateComponentRequestDto): Promise<ComponentDefinitionDto>;
   updateComponent(request: UpdateComponentRequestDto): Promise<ComponentDefinitionDto>;

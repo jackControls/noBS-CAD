@@ -778,6 +778,23 @@ impl AssemblyDocumentDto {
         &mut self,
         request: DuplicateOccurrenceRequestDto,
     ) -> Result<ComponentOccurrenceDto, String> {
+        if let Some(local_pose) = request.local_pose {
+            validate_transform(local_pose, "duplicate occurrence pose")?;
+        }
+        // Allocate ids and clone the complete subtree on a candidate document.
+        // A late validation failure must not consume ids or append a partial
+        // occurrence/joint graph to the live assembly.
+        let mut candidate = self.clone();
+        let root = candidate.duplicate_occurrence_subtree_in_place(request)?;
+        candidate.validate()?;
+        *self = candidate;
+        Ok(root)
+    }
+
+    fn duplicate_occurrence_subtree_in_place(
+        &mut self,
+        request: DuplicateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, String> {
         let source = self
             .component_structure
             .occurrence(request.occurrence_id)
@@ -830,7 +847,7 @@ impl AssemblyDocumentDto {
                 component_id: node.component_id,
                 parent_occurrence_id,
                 local_pose: if node.id == source.id {
-                    request.local_pose.unwrap_or(node.local_pose)
+                    normalized_transform(request.local_pose.unwrap_or(node.local_pose))
                 } else {
                     node.local_pose
                 },
@@ -865,7 +882,6 @@ impl AssemblyDocumentDto {
         let root = clones[0].clone();
         self.component_structure.occurrences.extend(clones);
         self.joints.extend(cloned_joints);
-        self.validate()?;
         Ok(root)
     }
 }
@@ -6445,6 +6461,63 @@ mod tests {
         x.sort_by(f64::total_cmp);
         assert_eq!(x, vec![15.0, 35.0]);
         assert_eq!(document.component_structure.definitions.len(), 3);
+    }
+
+    #[test]
+    fn occurrence_duplication_is_transactional_on_invalid_pose() {
+        let scene = scene();
+        let mut document = AssemblyDocumentDto::default();
+        let component = document
+            .create_component(
+                CreateComponentRequestDto {
+                    name: "Reusable Part".to_string(),
+                    body_ids: vec![BodyId(1)],
+                    local_coordinate_system: AssemblyTransformDto::default(),
+                    absorb_promoted_bodies: true,
+                },
+                &scene,
+            )
+            .unwrap();
+        let occurrence_id = document
+            .component_structure
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.component_id == component.id)
+            .unwrap()
+            .id;
+        let before = document.clone();
+
+        let error = document
+            .duplicate_occurrence_subtree(DuplicateOccurrenceRequestDto {
+                occurrence_id,
+                parent_occurrence_id: None,
+                local_pose: Some(AssemblyTransformDto {
+                    translation: [25.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 0.0],
+                }),
+            })
+            .unwrap_err();
+
+        assert!(error.contains("quaternion"));
+        assert_eq!(
+            document, before,
+            "failed duplication must consume no ids or nodes"
+        );
+
+        // Exercise a failure that occurs only after the candidate subtree has
+        // allocated ids and appended its cloned graph. The live document must
+        // still remain byte-for-byte at its pre-command state.
+        document.next_joint_id = 0;
+        let before_late_failure = document.clone();
+        let error = document
+            .duplicate_occurrence_subtree(DuplicateOccurrenceRequestDto {
+                occurrence_id,
+                parent_occurrence_id: None,
+                local_pose: None,
+            })
+            .unwrap_err();
+        assert!(error.contains("next joint id"));
+        assert_eq!(document, before_late_failure);
     }
 
     #[test]

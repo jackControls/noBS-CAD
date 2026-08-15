@@ -22,6 +22,7 @@ type WasmEngineMethods = WasmEngineInner & {
   drawing_document(): string;
   drawing_set_document(payload: string): string;
   assembly_document(): string;
+  assembly_set_document(payload: string): string;
   assembly_solution(): string;
   assembly_create_component(payload: string): string;
   assembly_update_component(payload: string): string;
@@ -263,6 +264,12 @@ export class WasmEngine implements Engine {
 
   async assemblyDocument(): Promise<AssemblyDocumentDto> {
     return unwrapEnvelope((this.inner as WasmEngineMethods).assembly_document());
+  }
+
+  async setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).assembly_set_document(JSON.stringify(document)),
+    );
   }
 
   async assemblySolution(): Promise<AssemblySolutionDto> {

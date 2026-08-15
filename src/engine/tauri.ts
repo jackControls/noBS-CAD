@@ -193,6 +193,10 @@ export class TauriEngine implements Engine {
     return this.call('engine_assembly_document');
   }
 
+  async setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_document', document);
+  }
+
   async assemblySolution(): Promise<AssemblySolutionDto> {
     return this.call('engine_assembly_solution');
   }
