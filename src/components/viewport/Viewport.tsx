@@ -38,6 +38,7 @@ import type {
   JointConnectorDto,
   JointDefinitionDto,
   JointMotionStateDto,
+  LineTrackingRequest,
   OriginPlane,
   PlaneBasis,
   PlaneRef,
@@ -49,6 +50,7 @@ import type {
   SketchDto,
   SketchPointKindDto,
   SnapTarget,
+  TrackingAxis,
   Vec2,
 } from '../../engine/types';
 import {
@@ -170,6 +172,12 @@ const ORIGIN_PLANE_CAPTURE_PX = 8;
 const POINT_EXTENSION_REACH_PX = 96;
 /** Reject near-tied extension candidates rather than constrain arbitrarily. */
 const POINT_EXTENSION_AMBIGUITY_PX = 3;
+/** Cursor distance from a projected point axis that acquires tracking. */
+const LINE_TRACKING_CAPTURE_PX = 12;
+/** Long enough for across-part inference without flooding the whole canvas. */
+const LINE_TRACKING_REACH_PX = 480;
+/** Near-tied tracking candidates remain free instead of choosing randomly. */
+const LINE_TRACKING_AMBIGUITY_PX = 2.5;
 const LINE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line']);
 const CURVE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line', 'circle', 'arc']);
 type SolidEdgePickMode = 'any' | 'refinable' | 'straight';
@@ -1049,6 +1057,8 @@ export function Viewport() {
     previewLine.visible = false;
     lineMaterials.add(previewMaterial);
     previewGroup.add(previewLine);
+    const trackingGuideGroup = new CAD.Group();
+    previewGroup.add(trackingGuideGroup);
 
     const transientStart = new CAD.Vector3();
     const transientEnd = new CAD.Vector3();
@@ -2204,6 +2214,35 @@ export function Viewport() {
       // toggle is off.
       if (!palette.constraints) return;
       for (const constraint of sketch.constraints) {
+        if (
+          constraint.type === 'horizontal_points'
+          || constraint.type === 'vertical_points'
+        ) {
+          const a = sketch.entities.find(
+            (entity) => entity.kind === 'point' && entity.id === constraint.a,
+          );
+          const b = sketch.entities.find(
+            (entity) => entity.kind === 'point' && entity.id === constraint.b,
+          );
+          if (a?.kind !== 'point' || b?.kind !== 'point') continue;
+          const horizontal = constraint.type === 'horizontal_points';
+          const mid = {
+            x: (a.position.x + b.position.x) / 2,
+            y: (a.position.y + b.position.y) / 2,
+          };
+          const label = horizontal ? 'H' : 'V';
+          const sprite = makeSprite(glyphTexture(label), 15, 7);
+          sprite.position.set(
+            mid.x + (horizontal ? 0 : 7),
+            mid.y + (horizontal ? -7 : 0),
+            0.2,
+          );
+          sprite.userData.nativeAnnotationText = label;
+          sprite.userData.nativeAnnotationKind = 'constraint';
+          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
+          glyphGroup.add(sprite);
+          continue;
+        }
         if (constraint.type === 'midpoint') {
           // Green up-triangle at the host line's midpoint,
           // nudged off the line along its normal so endpoint grips and H/V
@@ -3982,6 +4021,144 @@ export function Viewport() {
       return acquired.target.kind === 'grid' ? p : acquired.point;
     };
 
+    type LineIntent = {
+      hint: Vec2;
+      tracking: LineTrackingRequest | null;
+    };
+
+    /**
+     * Fusion-style object-snap tracking for line endpoints. Existing point,
+     * origin, and midpoint snaps retain priority. Otherwise a nearby
+     * horizontal/vertical axis through an existing point may consume the
+     * segment's remaining freedom (free endpoint, typed angle, or typed
+     * length). The engine recomputes the exact intersection and persists the
+     * relation; this function only performs screen-space acquisition.
+     */
+    const acquireLineIntent = (
+      p: Vec2,
+      anchor: Vec2,
+      locks: ToolLocks,
+      ctrlHeld: boolean,
+      allowMidpoint = true,
+    ): LineIntent => {
+      const acquired = acquireCreateSnap(p, allowMidpoint);
+      if (acquired.target.kind !== 'grid') {
+        return { hint: acquired.point, tracking: null };
+      }
+      const state = store.getState();
+      if (ctrlHeld || !state.palette.snap || !state.activeSketch) {
+        return { hint: p, tracking: null };
+      }
+      // With both fields locked there is no free DOF for tracking to consume.
+      if (locks.length !== undefined && locks.angle !== undefined) {
+        return { hint: p, tracking: null };
+      }
+
+      const wpp = worldPerPixel();
+      const capture = wpp * LINE_TRACKING_CAPTURE_PX;
+      const reach = wpp * LINE_TRACKING_REACH_PX;
+      const ambiguity = wpp * LINE_TRACKING_AMBIGUITY_PX;
+      const angle = locks.angle === undefined ? undefined : CAD.MathUtils.degToRad(locks.angle);
+
+      const trackedCandidate = (
+        source: Vec2,
+        axis: TrackingAxis,
+      ): Vec2 | null => {
+        if (angle !== undefined) {
+          const direction = { x: Math.cos(angle), y: Math.sin(angle) };
+          const denominator = axis === 'horizontal' ? direction.y : direction.x;
+          if (Math.abs(denominator) < 1e-9) return null;
+          const t = axis === 'horizontal'
+            ? (source.y - anchor.y) / denominator
+            : (source.x - anchor.x) / denominator;
+          if (t < -1e-7) return null;
+          return {
+            x: anchor.x + direction.x * Math.max(0, t),
+            y: anchor.y + direction.y * Math.max(0, t),
+          };
+        }
+        if (locks.length !== undefined) {
+          const radius = Math.abs(locks.length);
+          const fixed = axis === 'horizontal' ? source.y - anchor.y : source.x - anchor.x;
+          if (Math.abs(fixed) > radius + 1e-7) return null;
+          const free = Math.sqrt(Math.max(0, radius * radius - fixed * fixed));
+          const candidates = axis === 'horizontal'
+            ? [
+                { x: anchor.x + free, y: source.y },
+                { x: anchor.x - free, y: source.y },
+              ]
+            : [
+                { x: source.x, y: anchor.y + free },
+                { x: source.x, y: anchor.y - free },
+              ];
+          return Math.hypot(candidates[0].x - p.x, candidates[0].y - p.y)
+            <= Math.hypot(candidates[1].x - p.x, candidates[1].y - p.y)
+            ? candidates[0]
+            : candidates[1];
+        }
+        return axis === 'horizontal'
+          ? { x: p.x, y: source.y }
+          : { x: source.x, y: p.y };
+      };
+
+      type TrackingCandidate = {
+        request: LineTrackingRequest;
+        endpoint: Vec2;
+        cursorDistance: number;
+        guideLength: number;
+      };
+      // Several topological points can share one projected axis (for
+      // example, connected endpoints on a rectangle). Collapse those into a
+      // single visual intent before ambiguity testing; otherwise duplicate
+      // geometry can hide a genuinely competing H/V candidate and flicker.
+      const candidatesByEndpoint = new Map<string, TrackingCandidate>();
+      for (const entity of state.activeSketch.entities) {
+        if (entity.kind !== 'point') continue;
+        if (Math.hypot(entity.position.x - anchor.x, entity.position.y - anchor.y) <= 1e-7) {
+          continue;
+        }
+        for (const axis of ['horizontal', 'vertical'] as const) {
+          const endpoint = trackedCandidate(entity.position, axis);
+          if (!endpoint) continue;
+          const cursorDistance = Math.hypot(endpoint.x - p.x, endpoint.y - p.y);
+          const guideLength = Math.hypot(
+            endpoint.x - entity.position.x,
+            endpoint.y - entity.position.y,
+          );
+          if (
+            cursorDistance <= capture
+            && guideLength <= reach
+            && Math.hypot(endpoint.x - anchor.x, endpoint.y - anchor.y) > 1e-7
+          ) {
+            const candidate = {
+              request: { point: entity.id, axis },
+              endpoint,
+              cursorDistance,
+              guideLength,
+            } satisfies TrackingCandidate;
+            const key = `${axis}:${Math.round(endpoint.x * 1e7)}:${Math.round(endpoint.y * 1e7)}`;
+            const current = candidatesByEndpoint.get(key);
+            if (!current || candidate.guideLength < current.guideLength) {
+              candidatesByEndpoint.set(key, candidate);
+            }
+          }
+        }
+      }
+      const candidates = [...candidatesByEndpoint.values()];
+      candidates.sort(
+        (a, b) => a.cursorDistance - b.cursorDistance || a.guideLength - b.guideLength,
+      );
+      const best = candidates[0];
+      const next = candidates[1];
+      if (
+        !best
+        || (next && next.cursorDistance - best.cursorDistance <= ambiguity)
+      ) {
+        return { hint: p, tracking: null };
+      }
+      return { hint: p, tracking: best.request };
+    };
+
     /** Snap the cursor through the engine (points > origin > grid > raw). */
     const snapCursorInfo = async (p: Vec2, allowMidpoint = false): Promise<PreviewDto> => {
       const acquired = acquireCreateSnap(p, allowMidpoint);
@@ -4141,6 +4318,7 @@ export function Viewport() {
     const endToolRun = () => {
       toolRun = null;
       setPreviewPositions(null);
+      clearGroup(trackingGuideGroup);
       clearGroup(acquireGroup);
       hideSnapMarker();
       hideChips();
@@ -4264,11 +4442,35 @@ export function Viewport() {
       inferences: string[],
       e: PointerEvent,
       snapKind?: SnapTarget['kind'],
+      tracking?: PreviewDto['tracking'],
     ) => {
       setPreviewPositions([from.x, from.y, 0.12, snapped.x, snapped.y, 0.12]);
+      clearGroup(trackingGuideGroup);
+      if (tracking) {
+        addScreenPolyline(
+          trackingGuideGroup,
+          [
+            tracking.source.x,
+            tracking.source.y,
+            0.1,
+            tracking.snapped_to.x,
+            tracking.snapped_to.y,
+            0.1,
+          ],
+          COLOR_PREVIEW,
+          1.15,
+          5,
+          false,
+          0.62,
+        );
+      }
       showSnapMarker(snapped, nativeSnapKind(snapKind ?? 'grid'));
       const rect = surface.domElement.getBoundingClientRect();
-      showChips(inferences, e.clientX - rect.left, e.clientY - rect.top);
+      showChips(
+        tracking ? [...inferences, tracking.axis] : inferences,
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+      );
     };
 
     /** Live preview for the active tool run (per pointer move). */
@@ -4282,20 +4484,28 @@ export function Viewport() {
       switch (run.tool) {
         case 'line': {
           const texts = dynTexts();
-          const hint = acquireLineHint(p, !e.ctrlKey);
+          const intent = acquireLineIntent(p, anchor, locks, e.ctrlKey, !e.ctrlKey);
           void engine
             .previewSegmentLocked({
               from: anchor,
-              to_hint: hint,
+              to_hint: intent.hint,
               length_mm: locks.length ?? null,
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
               ctrl_held: e.ctrlKey,
+              tracking: intent.tracking,
             })
             .then((preview) => {
               if (seq !== previewSeq) return;
-              applyPreview(anchor, preview.snapped_to, preview.inferences, e, preview.snap.kind);
+              applyPreview(
+                anchor,
+                preview.snapped_to,
+                preview.inferences,
+                e,
+                preview.snap.kind,
+                preview.tracking,
+              );
               // Live dynamic-input values from the effective endpoint.
               const dx = preview.snapped_to.x - anchor.x;
               const dy = preview.snapped_to.y - anchor.y;
@@ -4520,16 +4730,17 @@ export function Viewport() {
       };
       switch (run.tool) {
         case 'line': {
-          const hint = acquireLineHint(p, !ctrlHeld);
+          const intent = acquireLineIntent(p, anchor, locks, ctrlHeld, !ctrlHeld);
           void engine
             .addLineLocked({
               from: anchor,
-              to_hint: hint,
+              to_hint: intent.hint,
               length_mm: locks.length ?? null,
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
               ctrl_held: ctrlHeld,
+              tracking: intent.tracking,
             })
             .then((result) => {
               store.getState().setActiveSketch(result.sketch);

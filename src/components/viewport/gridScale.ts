@@ -6,7 +6,11 @@ export const DEFAULT_SKETCH_GRID_STEP_MM = 10;
 /** Keep adjacent minor lines comfortably visible without making the canvas
  * visually dense. The selected interval follows the standard engineering
  * 1-2-5 sequence as the camera zooms. */
-export const TARGET_SKETCH_GRID_PX = 48;
+// A 24 px minor interval keeps 5 mm available at the zoom level where a
+// 10 mm-only grid felt too coarse, while remaining legible on Retina and
+// standard-density displays. The same 1-2-5 sequence naturally reaches
+// 1 / 0.1 / 0.01 mm as the user zooms in.
+export const TARGET_SKETCH_GRID_PX = 24;
 
 export function adaptiveSketchGridStep(
   worldPerPixel: number,

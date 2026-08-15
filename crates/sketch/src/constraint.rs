@@ -39,6 +39,18 @@ pub enum Constraint {
     Vertical {
         entity: EntityId,
     },
+    /// Keep two point entities on the same sketch-horizontal axis. This is
+    /// the persistent form of temporary horizontal object-snap tracking.
+    HorizontalPoints {
+        a: EntityId,
+        b: EntityId,
+    },
+    /// Keep two point entities on the same sketch-vertical axis. This is the
+    /// persistent form of temporary vertical object-snap tracking.
+    VerticalPoints {
+        a: EntityId,
+        b: EntityId,
+    },
     Coincident {
         a: EntityId,
         b: EntityId,
@@ -139,6 +151,8 @@ impl Constraint {
         match self {
             Constraint::Horizontal { .. } => "horizontal",
             Constraint::Vertical { .. } => "vertical",
+            Constraint::HorizontalPoints { .. } => "horizontal_points",
+            Constraint::VerticalPoints { .. } => "vertical_points",
             Constraint::Coincident { .. } => "coincident",
             Constraint::Tangent { .. } => "tangent",
             Constraint::Equal { .. } => "equal",
@@ -178,6 +192,8 @@ impl Constraint {
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
             Constraint::Coincident { a, b }
+            | Constraint::HorizontalPoints { a, b }
+            | Constraint::VerticalPoints { a, b }
             | Constraint::Tangent { a, b }
             | Constraint::Equal { a, b }
             | Constraint::Parallel { a, b }

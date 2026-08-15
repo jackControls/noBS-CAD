@@ -2901,6 +2901,7 @@ impl SketchManager {
             angle_deg,
             request.to_hint,
             request.ctrl_held,
+            request.tracking,
         ))
     }
 
@@ -5103,6 +5104,7 @@ mod project_tests {
                 length_text: Some("15".to_string()),
                 angle_text: None,
                 ctrl_held: false,
+                tracking: None,
             })
             .unwrap();
         let vertical = manager
@@ -5114,6 +5116,7 @@ mod project_tests {
                 length_text: Some("7.5".to_string()),
                 angle_text: None,
                 ctrl_held: false,
+                tracking: None,
             })
             .unwrap();
         assert_eq!(vertical.sketch.dimensions.len(), 2);

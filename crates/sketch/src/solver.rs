@@ -623,6 +623,16 @@ fn build_equations(
                     push_lin(&mut eqs, cid, vec![(d.x2, 1.0), (d.x1, -1.0)], 0.0);
                 }
             }
+            Constraint::HorizontalPoints { a, b } => {
+                if let (Some(a), Some(b)) = (map.pt(sketch, a), map.pt(sketch, b)) {
+                    push_lin(&mut eqs, cid, vec![(b.1, 1.0), (a.1, -1.0)], 0.0);
+                }
+            }
+            Constraint::VerticalPoints { a, b } => {
+                if let (Some(a), Some(b)) = (map.pt(sketch, a), map.pt(sketch, b)) {
+                    push_lin(&mut eqs, cid, vec![(b.0, 1.0), (a.0, -1.0)], 0.0);
+                }
+            }
             Constraint::Fix { entity } => {
                 if let Some(targets) = sketch.fix_targets(&cid) {
                     let mut vars: Vec<usize> = Vec::new();

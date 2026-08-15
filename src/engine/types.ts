@@ -232,6 +232,17 @@ export type SnapTarget =
   | { kind: 'reference_midpoint'; edge: number };
 
 export type Inference = 'horizontal' | 'vertical' | 'coincident';
+export type TrackingAxis = 'horizontal' | 'vertical';
+
+export interface LineTrackingRequest {
+  point: number;
+  axis: TrackingAxis;
+}
+
+export interface TrackingGuideDto extends LineTrackingRequest {
+  source: Vec2;
+  snapped_to: Vec2;
+}
 
 export interface SegmentRequest {
   from: Vec2;
@@ -252,6 +263,7 @@ export interface PreviewDto {
   snapped_to: Vec2;
   snap: SnapTarget;
   inferences: Inference[];
+  tracking?: TrackingGuideDto | null;
 }
 
 export interface AddLineResult {
@@ -2174,6 +2186,7 @@ export interface LockedSegmentRequest {
   length_text?: string | null;
   angle_text?: string | null;
   ctrl_held: boolean;
+  tracking?: LineTrackingRequest | null;
 }
 
 export type RectangleMode = 'two_point' | 'center';
