@@ -4607,6 +4607,7 @@ mod project_tests {
             edge_key: None,
             kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
             radius: None,
+            source_surface_frame: None,
             frame: nbcad_assembly::JointFrameDto {
                 origin,
                 primary_axis: [0.0, 0.0, 1.0],
@@ -4647,7 +4648,12 @@ mod project_tests {
                 linear_offset_mm: 0.0,
             })
             .unwrap();
-        assert!(!preview.body_poses.is_empty() || !preview.diagnostics.is_empty());
+        assert!(preview.solved);
+        assert!(preview.body_poses.is_empty());
+        assert!(preview.diagnostics.is_empty());
+        // Host-neutral assembly intent can legitimately outlive the current
+        // feature-history marker. Its absent bodies are inactive here, not a
+        // damaged reference, and the persisted document remains untouched.
         assert_eq!(manager.assembly_document(), assembly);
         let json = manager.export_project_model().unwrap();
         let mut loaded = SketchManager::new();
@@ -4709,6 +4715,7 @@ mod project_tests {
                 edge_key: None,
                 kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
                 radius: None,
+                source_surface_frame: None,
                 frame: nbcad_assembly::JointFrameDto {
                     origin: face_basis.origin,
                     primary_axis: face_basis.normal,

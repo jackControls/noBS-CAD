@@ -322,6 +322,97 @@ impl AssemblyDocumentDto {
         self.validate()
     }
 
+    /// Build the non-destructive assembly view for the current feature-history
+    /// marker. Undo can temporarily remove bodies while redo must retain their
+    /// component/joint intent, so solving filters inactive references on a
+    /// clone rather than deleting them from the project document.
+    fn project_active_scene(&mut self, scene: &SolidSceneDto) -> Result<(), String> {
+        self.synchronize_components(scene)?;
+        let live_body_ids = scene
+            .bodies
+            .iter()
+            .map(|body| body.id)
+            .collect::<HashSet<_>>();
+
+        for definition in &mut self.component_structure.definitions {
+            definition
+                .body_ids
+                .retain(|body_id| live_body_ids.contains(body_id));
+        }
+        let definitions_with_bodies = self
+            .component_structure
+            .definitions
+            .iter()
+            .filter(|definition| !definition.body_ids.is_empty())
+            .map(|definition| definition.id)
+            .collect::<HashSet<_>>();
+        let parents = self
+            .component_structure
+            .occurrences
+            .iter()
+            .map(|occurrence| (occurrence.id, occurrence.parent_occurrence_id))
+            .collect::<HashMap<_, _>>();
+        let mut active_occurrences = self
+            .component_structure
+            .occurrences
+            .iter()
+            .filter(|occurrence| definitions_with_bodies.contains(&occurrence.component_id))
+            .map(|occurrence| occurrence.id)
+            .collect::<HashSet<_>>();
+        let mut frontier = active_occurrences.iter().copied().collect::<Vec<_>>();
+        while let Some(occurrence_id) = frontier.pop() {
+            if let Some(Some(parent)) = parents.get(&occurrence_id) {
+                if active_occurrences.insert(*parent) {
+                    frontier.push(*parent);
+                }
+            }
+        }
+        self.component_structure
+            .occurrences
+            .retain(|occurrence| active_occurrences.contains(&occurrence.id));
+
+        self.joints.retain(|joint| {
+            live_body_ids.contains(&joint.connector_a.body_id)
+                && live_body_ids.contains(&joint.connector_b.body_id)
+                && joint
+                    .advanced
+                    .connector_a_occurrence_id
+                    .is_none_or(|id| active_occurrences.contains(&id))
+                && joint
+                    .advanced
+                    .connector_b_occurrence_id
+                    .is_none_or(|id| active_occurrences.contains(&id))
+        });
+        let active_joint_ids = self
+            .joints
+            .iter()
+            .map(|joint| joint.id)
+            .collect::<HashSet<_>>();
+        for position in &mut self.positions {
+            position
+                .motions
+                .retain(|motion| active_joint_ids.contains(&motion.joint_id));
+        }
+        for study in &mut self.motion_studies {
+            study
+                .drivers
+                .retain(|driver| active_joint_ids.contains(&driver.joint_id));
+        }
+        self.contact_sets.retain(|contact| {
+            live_body_ids.contains(&contact.body_a)
+                && live_body_ids.contains(&contact.body_b)
+                && active_occurrences.contains(&contact.occurrence_a)
+                && active_occurrences.contains(&contact.occurrence_b)
+        });
+        if self
+            .grounded_body_id
+            .is_some_and(|body_id| !live_body_ids.contains(&body_id))
+        {
+            self.grounded_body_id = None;
+        }
+        self.validate()
+    }
+
     pub fn create_component(
         &mut self,
         request: CreateComponentRequestDto,
@@ -891,6 +982,12 @@ pub struct JointConnectorDto {
     pub kind: JointConnectorKindDto,
     #[serde(default)]
     pub radius: Option<f64>,
+    /// Analytic cylinder frame at the time this connector was last
+    /// canonicalized. Cylindrical surfaces do not have a unique origin, so
+    /// retaining this frame is what lets a connector's picked axial location
+    /// and zero-angle direction follow a later rigid part transform exactly.
+    #[serde(default)]
+    pub source_surface_frame: Option<JointFrameDto>,
     pub frame: JointFrameDto,
 }
 
@@ -2120,12 +2217,26 @@ pub struct ApplyJointMotionsRequestDto {
     pub motions: Vec<JointMotionStateDto>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MechanismDragRequestDto {
     pub body_id: BodyId,
     #[serde(default)]
     pub occurrence_id: Option<OccurrenceId>,
     pub target_pose: BodyPoseDto,
+    /// Exact point grabbed by the user, expressed in the dragged body's
+    /// model-local coordinates. When paired with `target_point_world`, inverse
+    /// kinematics follows the material point under the cursor instead of the
+    /// component origin.
+    #[serde(default)]
+    pub grab_point_local: Option<[f64; 3]>,
+    /// Cursor-plane target for `grab_point_local`, in document coordinates.
+    #[serde(default)]
+    pub target_point_world: Option<[f64; 3]>,
+    /// Coordinates from the pose currently displayed by the UI. Seeding the
+    /// nonlinear solve from that pose preserves the user's kinematic branch
+    /// across consecutive drags instead of snapping back to the saved pose.
+    #[serde(default)]
+    pub initial_joint_motions: Vec<JointMotionStateDto>,
     /// Component dragging normally constrains the picked position while the
     /// mechanism is free to rotate. Manipulators that explicitly request a
     /// target orientation opt into the rotational residual as well.
@@ -3236,7 +3347,7 @@ fn solve_edges(
 fn solve_assembly(document: &AssemblyDocumentDto, scene: &SolidSceneDto) -> AssemblySolutionDto {
     let mut document = document.clone();
     let mut diagnostics = Vec::new();
-    if let Err(error) = document.synchronize_components(scene) {
+    if let Err(error) = document.project_active_scene(scene) {
         diagnostics.push(AssemblyDiagnosticDto {
             kind: AssemblyDiagnosticKindDto::BrokenReference,
             message: format!("Component structure: {error}"),
@@ -3514,8 +3625,25 @@ fn solve_mechanism_drag(
     {
         return Err("mechanism target pose must be finite".to_string());
     }
+    if request.grab_point_local.is_some() != request.target_point_world.is_some() {
+        return Err(
+            "mechanism drag grab point and world target must be supplied together".to_string(),
+        );
+    }
+    if request
+        .grab_point_local
+        .into_iter()
+        .chain(request.target_point_world)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err("mechanism drag points must be finite".to_string());
+    }
     let mut candidate = document.clone();
-    candidate.synchronize_components(scene)?;
+    candidate.project_active_scene(scene)?;
+    if !request.initial_joint_motions.is_empty() {
+        candidate.apply_joint_motions(&request.initial_joint_motions)?;
+    }
     let target_occurrence = request
         .occurrence_id
         .or_else(|| {
@@ -3576,6 +3704,7 @@ fn solve_mechanism_drag(
         translation: request.target_pose.translation,
         rotation: normalize_quaternion(request.target_pose.rotation),
     };
+    let point_target = request.grab_point_local.zip(request.target_point_world);
     let maximum_iterations = request.maximum_iterations.clamp(1, 96);
     let mut iterations = 0;
     let mut converged = false;
@@ -3585,8 +3714,14 @@ fn solve_mechanism_drag(
     if !variables.is_empty() {
         for iteration in 0..maximum_iterations {
             iterations = iteration + 1;
-            let residual_state =
-                mechanism_residual(&candidate, scene, target_occurrence, target, &mechanism_ids)?;
+            let residual_state = mechanism_residual(
+                &candidate,
+                scene,
+                target_occurrence,
+                target,
+                point_target,
+                &mechanism_ids,
+            )?;
             let residual = residual_state.values;
             position_error_mm = residual_state.position_error_mm;
             orientation_error_deg = residual_state.orientation_error_deg;
@@ -3630,6 +3765,7 @@ fn solve_mechanism_drag(
                     scene,
                     target_occurrence,
                     target,
+                    point_target,
                     &mechanism_ids,
                 )?
                 .values;
@@ -3654,51 +3790,186 @@ fn solve_mechanism_drag(
             for index in 0..variables.len() {
                 normal[index][index] += damping;
             }
-            let Some(delta) = solve_linear_system(normal, rhs) else {
-                break;
-            };
-            if delta.iter().all(|value| value.abs() <= 1.0e-8) {
-                break;
-            }
+            let delta = solve_linear_system(normal, rhs);
             // Backtrack the locally linear Gauss-Newton step. Without this,
             // long serial chains can overshoot the quaternion branch and
             // monotonically drive every revolute coordinate into its limit.
             let objective = weighted_mechanism_residual(&residual, request.solve_orientation);
             let mut accepted = None;
-            for step_scale in [1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125] {
-                let mut trial = candidate.clone();
-                for ((joint_id, coordinate), delta) in
-                    variables.iter().copied().zip(delta.iter().copied())
-                {
+            if delta
+                .as_ref()
+                .is_some_and(|values| values.iter().any(|value| value.abs() > 1.0e-8))
+            {
+                let delta = delta.as_ref().expect("non-zero delta exists");
+                for step_scale in [1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125] {
+                    let mut trial = candidate.clone();
+                    for ((joint_id, coordinate), delta) in
+                        variables.iter().copied().zip(delta.iter().copied())
+                    {
+                        let joint = trial
+                            .joints
+                            .iter_mut()
+                            .find(|joint| joint.id == joint_id)
+                            .expect("candidate joint exists");
+                        let maximum_step = match coordinate {
+                            JointCoordinate::PrimaryAngle
+                            | JointCoordinate::SecondaryAngle
+                            | JointCoordinate::TertiaryAngle => 20.0,
+                            JointCoordinate::PrimaryLinear | JointCoordinate::SecondaryLinear => {
+                                8.0
+                            }
+                        };
+                        let step = delta.clamp(-maximum_step, maximum_step) * step_scale;
+                        let next = clamp_coordinate(
+                            joint,
+                            coordinate,
+                            coordinate_value(joint, coordinate) + step,
+                        );
+                        set_coordinate_value(joint, coordinate, next);
+                    }
+                    let trial_residual = mechanism_residual(
+                        &trial,
+                        scene,
+                        target_occurrence,
+                        target,
+                        point_target,
+                        &mechanism_ids,
+                    )?;
+                    let trial_objective = weighted_mechanism_residual(
+                        &trial_residual.values,
+                        request.solve_orientation,
+                    );
+                    if trial_objective + 1.0e-12 < objective {
+                        accepted = Some(trial);
+                        break;
+                    }
+                }
+            }
+            if let Some(next_candidate) = accepted {
+                candidate = next_candidate;
+                continue;
+            }
+
+            // At a straight-link singularity the pointer error can be
+            // orthogonal to every first-order Jacobian column, producing a
+            // zero Gauss-Newton step even though bending either adjacent
+            // joint would move toward the target. Probe a small deterministic
+            // coordinate perturbation only on that stalled path. This is
+            // deliberately outside the normal fast path and gives continued
+            // dragging a way through a dead-center linkage without requiring
+            // the user to release and grab a different material point.
+            let mut exploratory: Option<(f64, AssemblyDocumentDto)> = None;
+            for (joint_id, coordinate) in variables.iter().copied() {
+                for direction in [-1.0, 1.0] {
+                    let mut trial = candidate.clone();
                     let joint = trial
                         .joints
                         .iter_mut()
                         .find(|joint| joint.id == joint_id)
                         .expect("candidate joint exists");
-                    let maximum_step = match coordinate {
+                    let step = match coordinate {
                         JointCoordinate::PrimaryAngle
                         | JointCoordinate::SecondaryAngle
-                        | JointCoordinate::TertiaryAngle => 20.0,
-                        JointCoordinate::PrimaryLinear | JointCoordinate::SecondaryLinear => 8.0,
-                    };
-                    let step = delta.clamp(-maximum_step, maximum_step) * step_scale;
-                    let next = clamp_coordinate(
-                        joint,
-                        coordinate,
-                        coordinate_value(joint, coordinate) + step,
-                    );
+                        | JointCoordinate::TertiaryAngle => 2.0,
+                        JointCoordinate::PrimaryLinear | JointCoordinate::SecondaryLinear => 0.5,
+                    } * direction;
+                    let base = coordinate_value(joint, coordinate);
+                    let next = clamp_coordinate(joint, coordinate, base + step);
+                    if (next - base).abs() <= 1.0e-12 {
+                        continue;
+                    }
                     set_coordinate_value(joint, coordinate, next);
-                }
-                let trial_residual =
-                    mechanism_residual(&trial, scene, target_occurrence, target, &mechanism_ids)?;
-                let trial_objective =
-                    weighted_mechanism_residual(&trial_residual.values, request.solve_orientation);
-                if trial_objective + 1.0e-12 < objective {
-                    accepted = Some(trial);
-                    break;
+                    let trial_residual = mechanism_residual(
+                        &trial,
+                        scene,
+                        target_occurrence,
+                        target,
+                        point_target,
+                        &mechanism_ids,
+                    )?;
+                    let trial_objective = weighted_mechanism_residual(
+                        &trial_residual.values,
+                        request.solve_orientation,
+                    );
+                    if trial_objective + 1.0e-12 < objective
+                        && exploratory
+                            .as_ref()
+                            .is_none_or(|(best, _)| trial_objective < *best)
+                    {
+                        exploratory = Some((trial_objective, trial));
+                    }
                 }
             }
-            let Some(next_candidate) = accepted else {
+            // A fully extended serial linkage needs two neighboring angular
+            // coordinates to leave dead center together: perturbing either
+            // joint alone initially moves the grabbed point sideways and can
+            // make the objective worse. Probe a small set of coordinated
+            // bends (including the 1:-2 relationship of equal-length links)
+            // before declaring the pointer target stuck. This remains a rare
+            // stalled-path fallback rather than work paid on every frame.
+            let angular_variables = variables
+                .iter()
+                .copied()
+                .filter(|(_, coordinate)| {
+                    matches!(
+                        coordinate,
+                        JointCoordinate::PrimaryAngle
+                            | JointCoordinate::SecondaryAngle
+                            | JointCoordinate::TertiaryAngle
+                    )
+                })
+                .collect::<Vec<_>>();
+            for pair in angular_variables.windows(2) {
+                for (first_step, second_step) in [
+                    (1.0, -2.0),
+                    (2.0, -1.0),
+                    (-1.0, 2.0),
+                    (-2.0, 1.0),
+                    (1.0, 2.0),
+                    (2.0, 1.0),
+                    (-1.0, -2.0),
+                    (-2.0, -1.0),
+                ] {
+                    let mut trial = candidate.clone();
+                    let mut changed = true;
+                    for ((joint_id, coordinate), step) in
+                        pair.iter().copied().zip([first_step, second_step])
+                    {
+                        let joint = trial
+                            .joints
+                            .iter_mut()
+                            .find(|joint| joint.id == joint_id)
+                            .expect("candidate joint exists");
+                        let base = coordinate_value(joint, coordinate);
+                        let next = clamp_coordinate(joint, coordinate, base + step);
+                        changed &= (next - base).abs() > 1.0e-12;
+                        set_coordinate_value(joint, coordinate, next);
+                    }
+                    if !changed {
+                        continue;
+                    }
+                    let trial_residual = mechanism_residual(
+                        &trial,
+                        scene,
+                        target_occurrence,
+                        target,
+                        point_target,
+                        &mechanism_ids,
+                    )?;
+                    let trial_objective = weighted_mechanism_residual(
+                        &trial_residual.values,
+                        request.solve_orientation,
+                    );
+                    if trial_objective + 1.0e-12 < objective
+                        && exploratory
+                            .as_ref()
+                            .is_none_or(|(best, _)| trial_objective < *best)
+                    {
+                        exploratory = Some((trial_objective, trial));
+                    }
+                }
+            }
+            let Some((_, next_candidate)) = exploratory else {
                 break;
             };
             candidate = next_candidate;
@@ -3706,9 +3977,14 @@ fn solve_mechanism_drag(
     }
 
     let mut solution = candidate.solve(scene);
-    if let Ok(residual) =
-        mechanism_residual(&candidate, scene, target_occurrence, target, &mechanism_ids)
-    {
+    if let Ok(residual) = mechanism_residual(
+        &candidate,
+        scene,
+        target_occurrence,
+        target,
+        point_target,
+        &mechanism_ids,
+    ) {
         position_error_mm = residual.position_error_mm;
         orientation_error_deg = residual.orientation_error_deg;
         converged = position_error_mm <= 0.05
@@ -3827,12 +4103,21 @@ fn mechanism_residual(
     scene: &SolidSceneDto,
     target_occurrence: OccurrenceId,
     target: RigidPose,
+    point_target: Option<([f64; 3], [f64; 3])>,
     mechanism_joint_ids: &HashSet<JointId>,
 ) -> Result<MechanismResidual, String> {
     let solution = document.solve(scene);
     let current = solution_occurrence_pose(&solution, target_occurrence)
         .ok_or_else(|| "dragged component has no solved pose".to_string())?;
-    let target_residual = pose_residual(current, target);
+    let mut target_residual = pose_residual(current, target);
+    if let Some((grab_point_local, target_point_world)) = point_target {
+        let current_grab_point = add(
+            current.translation,
+            rotate(current.rotation, grab_point_local),
+        );
+        let point_residual = sub(current_grab_point, target_point_world);
+        target_residual[..3].copy_from_slice(&point_residual);
+    }
     let position_error_mm = length([target_residual[0], target_residual[1], target_residual[2]]);
     let orientation_error_deg =
         length([target_residual[3], target_residual[4], target_residual[5]]).to_degrees();
@@ -4095,6 +4380,7 @@ pub fn connector_from_planar_face(
         edge_key: None,
         kind: JointConnectorKindDto::PlanarFace,
         radius: None,
+        source_surface_frame: None,
         frame: JointFrameDto {
             origin,
             primary_axis: plane.normal,
@@ -4121,6 +4407,7 @@ pub fn connector_from_circular_edge(
         edge_key: Some(edge.key.clone()),
         kind: JointConnectorKindDto::CircularEdge,
         radius: Some(circle.radius),
+        source_surface_frame: None,
         frame: JointFrameDto {
             origin: [circle.center.x, circle.center.y, circle.center.z],
             primary_axis: [circle.normal.x, circle.normal.y, circle.normal.z],
@@ -4253,22 +4540,29 @@ fn validate_connector(connector: &JointConnectorDto) -> Result<(), String> {
             return Err("joint connector radius must be positive".to_string());
         }
     }
-    let frame = connector.frame;
+    validate_connector_frame(connector.frame, "joint connector frame")?;
+    if let Some(frame) = connector.source_surface_frame {
+        validate_connector_frame(frame, "joint connector source surface frame")?;
+    }
+    Ok(())
+}
+
+fn validate_connector_frame(frame: JointFrameDto, label: &str) -> Result<(), String> {
     if !frame.origin.into_iter().all(f64::is_finite)
         || !frame.primary_axis.into_iter().all(f64::is_finite)
         || !frame.secondary_axis.into_iter().all(f64::is_finite)
     {
-        return Err("joint connector frame must contain finite values".to_string());
+        return Err(format!("{label} must contain finite values"));
     }
     let primary_len = length(frame.primary_axis);
     let secondary_len = length(frame.secondary_axis);
     if primary_len <= 1e-9 || secondary_len <= 1e-9 {
-        return Err("joint connector axes must be non-zero".to_string());
+        return Err(format!("{label} axes must be non-zero"));
     }
     let parallel =
         dot(frame.primary_axis, frame.secondary_axis).abs() / (primary_len * secondary_len);
     if parallel > 1.0 - 1e-6 {
-        return Err("joint connector axes must not be parallel".to_string());
+        return Err(format!("{label} axes must not be parallel"));
     }
     Ok(())
 }
@@ -4317,24 +4611,63 @@ fn canonical_connector_against_scene(
                 .ok_or_else(|| format!("face {} is no longer cylindrical", face.id.0))?;
             let axis = normalize([cylinder.axis.x, cylinder.axis.y, cylinder.axis.z]);
             let surface_origin = [cylinder.origin.x, cylinder.origin.y, cylinder.origin.z];
-            let axial = dot(sub(connector.frame.origin, surface_origin), axis);
-            let origin = add(surface_origin, scale(axis, axial));
-            let mut secondary = sub(
-                connector.frame.secondary_axis,
-                scale(axis, dot(connector.frame.secondary_axis, axis)),
-            );
-            if length(secondary) <= 1.0e-9 {
-                secondary = [
-                    cylinder.reference.x,
-                    cylinder.reference.y,
-                    cylinder.reference.z,
-                ];
+            let mut surface_reference = [
+                cylinder.reference.x,
+                cylinder.reference.y,
+                cylinder.reference.z,
+            ];
+            surface_reference = sub(surface_reference, scale(axis, dot(surface_reference, axis)));
+            if length(surface_reference) <= 1.0e-9 {
+                return Err(format!(
+                    "face {} has an invalid cylindrical reference direction",
+                    face.id.0
+                ));
             }
-            secondary = normalize(secondary);
-            let primary = if dot(connector.frame.primary_axis, axis) < 0.0 {
-                scale(axis, -1.0)
+            let live_surface_frame = JointFrameDto {
+                origin: surface_origin,
+                primary_axis: axis,
+                secondary_axis: normalize(surface_reference),
+            };
+            let frame = if let Some(source_surface_frame) = connector.source_surface_frame {
+                // Map the originally picked connector through the exact rigid
+                // change of the analytic cylinder frame. Re-projecting the old
+                // point into the new cylinder loses axial translation and
+                // arbitrary 3D rotation, which can tear an otherwise valid
+                // multi-joint mechanism apart.
+                let delta = RigidPose::from_frame(live_surface_frame)
+                    .compose(RigidPose::from_frame(source_surface_frame).inverse());
+                JointFrameDto {
+                    origin: add(
+                        delta.translation,
+                        rotate(delta.rotation, connector.frame.origin),
+                    ),
+                    primary_axis: rotate(delta.rotation, connector.frame.primary_axis),
+                    secondary_axis: rotate(delta.rotation, connector.frame.secondary_axis),
+                }
             } else {
-                axis
+                // Legacy projects did not retain the analytic source frame.
+                // Canonicalize once using the former behavior, then rebase the
+                // returned connector onto today's live surface so all future
+                // rigid edits are exact.
+                let axial = dot(sub(connector.frame.origin, surface_origin), axis);
+                let origin = add(surface_origin, scale(axis, axial));
+                let mut secondary = sub(
+                    connector.frame.secondary_axis,
+                    scale(axis, dot(connector.frame.secondary_axis, axis)),
+                );
+                if length(secondary) <= 1.0e-9 {
+                    secondary = live_surface_frame.secondary_axis;
+                }
+                let primary = if dot(connector.frame.primary_axis, axis) < 0.0 {
+                    scale(axis, -1.0)
+                } else {
+                    axis
+                };
+                JointFrameDto {
+                    origin,
+                    primary_axis: primary,
+                    secondary_axis: normalize(secondary),
+                }
             };
             let canonical = JointConnectorDto {
                 body_id: body.id,
@@ -4344,11 +4677,8 @@ fn canonical_connector_against_scene(
                 edge_key: None,
                 kind: connector.kind,
                 radius: Some(cylinder.radius),
-                frame: JointFrameDto {
-                    origin,
-                    primary_axis: primary,
-                    secondary_axis: secondary,
-                },
+                source_surface_frame: Some(live_surface_frame),
+                frame,
             };
             validate_connector(&canonical)?;
             Ok(canonical)
@@ -4676,6 +5006,42 @@ mod tests {
     }
 
     #[test]
+    fn undo_projection_ignores_inactive_bodies_without_destroying_redo_intent() {
+        let scene = scene();
+        let mut document = AssemblyDocumentDto::default();
+        let joint = document.create(request(&scene), &scene).unwrap();
+        let persisted = document.clone();
+        let mut marker_scene = scene.clone();
+        marker_scene.bodies.retain(|body| body.id == BodyId(1));
+
+        let marker_solution = document.solve(&marker_scene);
+        assert!(marker_solution.solved, "{:?}", marker_solution.diagnostics);
+        assert!(marker_solution
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.kind != AssemblyDiagnosticKindDto::BrokenReference));
+        assert!(marker_solution
+            .instance_body_poses
+            .iter()
+            .all(|pose| pose.body_id == BodyId(1)));
+        assert_eq!(
+            document, persisted,
+            "feature-history projection must be read-only"
+        );
+
+        let redo_solution = document.solve(&scene);
+        assert!(redo_solution.solved, "{:?}", redo_solution.diagnostics);
+        assert!(redo_solution
+            .instance_body_poses
+            .iter()
+            .any(|pose| pose.body_id == BodyId(2)));
+        assert!(document
+            .joints
+            .iter()
+            .any(|candidate| candidate.id == joint.id));
+    }
+
+    #[test]
     fn an_existing_ground_is_preserved_when_a_new_joint_does_not_request_one() {
         let scene = scene();
         let mut document = AssemblyDocumentDto::default();
@@ -4840,6 +5206,7 @@ mod tests {
                 edge_id: None,
                 edge_key: None,
                 kind,
+                source_surface_frame: None,
                 frame: JointFrameDto {
                     origin: [body_index as f64 * 20.0, 0.0, 6.0],
                     primary_axis: [0.0, 0.0, 1.0],
@@ -4879,6 +5246,139 @@ mod tests {
         );
         assert_eq!(joint.connector_b.face_key, scene.bodies[1].faces[0].key);
         assert!(document.solve(&scene).solved);
+    }
+
+    #[test]
+    fn cylindrical_connector_frame_follows_an_arbitrary_rigid_part_transform() {
+        let mut scene = scene();
+        for (index, body) in scene.bodies.iter_mut().enumerate() {
+            body.faces[0].plane = None;
+            body.faces[0].cylinder = Some(nbcad_solid::CylindricalSurfaceDto {
+                origin: Point3Dto {
+                    x: index as f64 * 20.0,
+                    y: 0.0,
+                    z: 2.0,
+                },
+                axis: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                reference: Point3Dto {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                radius: 5.0,
+            });
+        }
+        let picked = |body_index: usize, kind| {
+            let body = &scene.bodies[body_index];
+            JointConnectorDto {
+                body_id: body.id,
+                face_id: body.faces[0].id,
+                face_key: body.faces[0].key.clone(),
+                edge_id: None,
+                edge_key: None,
+                kind,
+                radius: Some(5.0),
+                source_surface_frame: None,
+                frame: JointFrameDto {
+                    origin: [body_index as f64 * 20.0, 0.0, 8.0],
+                    primary_axis: [0.0, 0.0, 1.0],
+                    secondary_axis: [0.0, 1.0, 0.0],
+                },
+            }
+        };
+        let mut document = AssemblyDocumentDto::default();
+        let created = document
+            .create(
+                CreateJointRequestDto {
+                    name: "Rigidly transformed opening".to_string(),
+                    kind: JointKindDto::Revolute,
+                    connector_a: picked(0, JointConnectorKindDto::VirtualCircularFace),
+                    connector_b: picked(1, JointConnectorKindDto::CylindricalFace),
+                    flipped: false,
+                    angle_offset_deg: 0.0,
+                    linear_offset_mm: 0.0,
+                    limits: None,
+                    angle_limits: None,
+                    linear_limits: None,
+                    advanced: JointAdvancedDto::default(),
+                    grounded_body_id: Some(BodyId(1)),
+                    grounded_occurrence_id: None,
+                },
+                &scene,
+            )
+            .unwrap();
+        assert!(created.connector_a.source_surface_frame.is_some());
+
+        let delta = RigidPose::translation([7.0, -4.0, 11.0])
+            .compose(RigidPose::rotation([0.3, 0.8, -0.2], 1.17));
+        let original_frame = created.connector_a.frame;
+        let cylinder = scene.bodies[0].faces[0].cylinder.as_mut().unwrap();
+        let old_origin = [cylinder.origin.x, cylinder.origin.y, cylinder.origin.z];
+        let old_axis = [cylinder.axis.x, cylinder.axis.y, cylinder.axis.z];
+        let old_reference = [
+            cylinder.reference.x,
+            cylinder.reference.y,
+            cylinder.reference.z,
+        ];
+        let transformed_origin = add(delta.translation, rotate(delta.rotation, old_origin));
+        let transformed_axis = rotate(delta.rotation, old_axis);
+        let transformed_reference = rotate(delta.rotation, old_reference);
+        cylinder.origin = Point3Dto {
+            x: transformed_origin[0],
+            y: transformed_origin[1],
+            z: transformed_origin[2],
+        };
+        cylinder.axis = Point3Dto {
+            x: transformed_axis[0],
+            y: transformed_axis[1],
+            z: transformed_axis[2],
+        };
+        cylinder.reference = Point3Dto {
+            x: transformed_reference[0],
+            y: transformed_reference[1],
+            z: transformed_reference[2],
+        };
+
+        let live = canonical_connector_against_scene(&created.connector_a, &scene).unwrap();
+        assert_vec3(
+            live.frame.origin,
+            add(
+                delta.translation,
+                rotate(delta.rotation, original_frame.origin),
+            ),
+        );
+        assert_vec3(
+            live.frame.primary_axis,
+            rotate(delta.rotation, original_frame.primary_axis),
+        );
+        assert_vec3(
+            live.frame.secondary_axis,
+            rotate(delta.rotation, original_frame.secondary_axis),
+        );
+
+        let solution = document.solve(&scene);
+        assert!(solution.solved, "{:?}", solution.diagnostics);
+        let occurrence_a = created.advanced.connector_a_occurrence_id.unwrap();
+        let occurrence_b = created.advanced.connector_b_occurrence_id.unwrap();
+        let pose = |occurrence_id| {
+            let solved = solution
+                .occurrence_poses
+                .iter()
+                .find(|candidate| candidate.occurrence_id == occurrence_id)
+                .unwrap();
+            RigidPose {
+                translation: solved.translation,
+                rotation: solved.rotation,
+            }
+        };
+        let connector_b = canonical_connector_against_scene(&created.connector_b, &scene).unwrap();
+        let world_a = pose(occurrence_a).compose(RigidPose::from_frame(live.frame));
+        let world_b = pose(occurrence_b).compose(RigidPose::from_frame(connector_b.frame));
+        assert_vec3(world_a.translation, world_b.translation);
     }
 
     #[test]
@@ -5299,6 +5799,11 @@ mod tests {
             .find(|pose| pose.body_id == BodyId(3))
             .copied()
             .unwrap();
+        let grab_point_local = [4.0, 1.5, -0.5];
+        let target_point_world = add(
+            target_pose.translation,
+            rotate(target_pose.rotation, grab_point_local),
+        );
 
         let preview = document
             .preview_mechanism_drag(
@@ -5306,13 +5811,20 @@ mod tests {
                     body_id: BodyId(3),
                     occurrence_id: None,
                     target_pose,
+                    grab_point_local: Some(grab_point_local),
+                    target_point_world: Some(target_point_world),
+                    initial_joint_motions: vec![],
                     solve_orientation: true,
                     maximum_iterations: 96,
                 },
                 &scene,
             )
             .unwrap();
-        assert!(preview.converged, "{:?}", preview.solution.diagnostics);
+        assert!(
+            preview.converged,
+            "{:?}; motions={:?}",
+            preview.solution.diagnostics, preview.joint_motions
+        );
         assert!(preview.position_error_mm < 0.05);
         assert!(preview.orientation_error_deg < 0.35);
         assert_eq!(preview.joint_motions.len(), 2);
@@ -5346,10 +5858,181 @@ mod tests {
                 < 0.35
         );
 
+        // A viewport drag does not prescribe the component origin or its
+        // orientation: it prescribes the exact material point beneath the
+        // pointer. Keep a deliberately stale origin target here so this test
+        // fails if the solver ever regresses to origin chasing.
+        let initial_pose = document
+            .solve(&scene)
+            .body_poses
+            .into_iter()
+            .find(|pose| pose.body_id == BodyId(3))
+            .unwrap();
+        let point_preview = document
+            .preview_mechanism_drag(
+                MechanismDragRequestDto {
+                    body_id: BodyId(3),
+                    occurrence_id: None,
+                    target_pose: initial_pose,
+                    grab_point_local: Some(grab_point_local),
+                    target_point_world: Some(target_point_world),
+                    initial_joint_motions: vec![],
+                    solve_orientation: false,
+                    maximum_iterations: 96,
+                },
+                &scene,
+            )
+            .unwrap();
+        assert!(
+            point_preview.position_error_mm < 0.05,
+            "picked-point residual was {} mm",
+            point_preview.position_error_mm
+        );
+        let mut point_captured = document.clone();
+        point_captured
+            .apply_joint_motions(&point_preview.joint_motions)
+            .unwrap();
+        let point_pose = solved_pose(&point_captured.solve(&scene), 3);
+        let solved_grab_point = add(
+            point_pose.translation,
+            rotate(point_pose.rotation, grab_point_local),
+        );
+        assert!(length(sub(solved_grab_point, target_point_world)) < 0.05);
+
+        // Consecutive viewport drags must continue from the pose already on
+        // screen. Starting this exact same target from its displayed joint
+        // coordinates should therefore converge without taking a branch-changing
+        // Newton step back through the saved document pose.
+        let seeded_preview = document
+            .preview_mechanism_drag(
+                MechanismDragRequestDto {
+                    body_id: BodyId(3),
+                    occurrence_id: None,
+                    target_pose: initial_pose,
+                    grab_point_local: Some(grab_point_local),
+                    target_point_world: Some(target_point_world),
+                    initial_joint_motions: target_document.current_joint_motions(),
+                    solve_orientation: false,
+                    maximum_iterations: 96,
+                },
+                &scene,
+            )
+            .unwrap();
+        assert!(seeded_preview.converged);
+        assert!(seeded_preview.iterations <= 1);
+
         let before_duplicate_capture = document.clone();
         let duplicate = [preview.joint_motions[0], preview.joint_motions[0]];
         assert!(document.apply_joint_motions(&duplicate).is_err());
         assert_eq!(document, before_duplicate_capture);
+    }
+
+    #[test]
+    fn inverse_kinematics_drags_through_a_straight_linkage_dead_center() {
+        let mut scene = scene();
+        scene.bodies[0].faces[0].plane.as_mut().unwrap().origin = [0.0, 0.0, 0.0];
+        scene.bodies[1].faces[0].plane.as_mut().unwrap().origin = [0.0, 0.0, 0.0];
+
+        let mut far_end = scene.bodies[1].faces[0].clone();
+        far_end.id = FaceId(21);
+        far_end.key = "body-2-far-end".to_string();
+        far_end.plane.as_mut().unwrap().origin = [20.0, 0.0, 0.0];
+        scene.bodies[1].faces.push(far_end);
+
+        let mut third = scene.bodies[1].clone();
+        third.id = BodyId(3);
+        third.name = "Body3".to_string();
+        third.feature_id = FeatureId(3);
+        third.faces.truncate(1);
+        third.faces[0].id = FaceId(30);
+        third.faces[0].key = "body-3-near-end".to_string();
+        third.faces[0].plane.as_mut().unwrap().origin = [0.0, 0.0, 0.0];
+        scene.bodies.push(third);
+
+        let connector = |body: usize, face: usize| {
+            connector_from_planar_face(scene.bodies[body].id, &scene.bodies[body].faces[face])
+                .unwrap()
+        };
+        let mut document = AssemblyDocumentDto::default();
+        for (name, connector_a, connector_b, grounded_body_id) in [
+            (
+                "Shoulder",
+                connector(0, 0),
+                connector(1, 0),
+                Some(BodyId(1)),
+            ),
+            ("Elbow", connector(1, 1), connector(2, 0), None),
+        ] {
+            document
+                .create(
+                    CreateJointRequestDto {
+                        name: name.to_string(),
+                        kind: JointKindDto::Revolute,
+                        connector_a,
+                        connector_b,
+                        flipped: false,
+                        angle_offset_deg: 0.0,
+                        linear_offset_mm: 0.0,
+                        limits: None,
+                        angle_limits: Some(JointLimitsDto {
+                            min: -170.0,
+                            max: 170.0,
+                        }),
+                        linear_limits: None,
+                        advanced: JointAdvancedDto::default(),
+                        grounded_body_id,
+                        grounded_occurrence_id: None,
+                    },
+                    &scene,
+                )
+                .unwrap();
+        }
+
+        let initial_pose = document
+            .solve(&scene)
+            .body_poses
+            .into_iter()
+            .find(|pose| pose.body_id == BodyId(3))
+            .unwrap();
+        let grab_point_local = [20.0, 0.0, 0.0];
+        let initial_grab_world = add(
+            initial_pose.translation,
+            rotate(initial_pose.rotation, grab_point_local),
+        );
+        // Pull straight back along the fully extended linkage. At this pose
+        // every revolute joint's first-order motion is perpendicular to the
+        // cursor residual, so a pure Gauss-Newton solver can report a zero
+        // step and remain frozen until the user grabs again.
+        let target_point_world = [
+            initial_grab_world[0] - 2.0,
+            initial_grab_world[1],
+            initial_grab_world[2],
+        ];
+        let preview = document
+            .preview_mechanism_drag(
+                MechanismDragRequestDto {
+                    body_id: BodyId(3),
+                    occurrence_id: None,
+                    target_pose: initial_pose,
+                    grab_point_local: Some(grab_point_local),
+                    target_point_world: Some(target_point_world),
+                    initial_joint_motions: vec![],
+                    solve_orientation: false,
+                    maximum_iterations: 96,
+                },
+                &scene,
+            )
+            .unwrap();
+        assert!(
+            preview.converged,
+            "{:?}; motions={:?}",
+            preview.solution.diagnostics, preview.joint_motions
+        );
+        assert!(preview.position_error_mm < 0.05);
+        assert!(preview
+            .joint_motions
+            .iter()
+            .any(|motion| motion.angle_offset_deg.abs() > 0.1));
     }
 
     #[test]
@@ -5419,6 +6102,9 @@ mod tests {
                     body_id: BodyId(3),
                     occurrence_id: None,
                     target_pose,
+                    grab_point_local: None,
+                    target_point_world: None,
+                    initial_joint_motions: vec![],
                     solve_orientation: false,
                     maximum_iterations: 96,
                 },
@@ -5462,6 +6148,9 @@ mod tests {
                         ],
                         ..current
                     },
+                    grab_point_local: None,
+                    target_point_world: None,
+                    initial_joint_motions: vec![],
                     solve_orientation: false,
                     maximum_iterations: 16,
                 },
@@ -5552,6 +6241,111 @@ mod tests {
             scene, scene_before,
             "assembly placement must not alter part geometry"
         );
+    }
+
+    #[test]
+    fn rotating_the_grounded_occurrence_rigidly_rebases_a_five_body_chain() {
+        let mut scene = scene();
+        for id in 3_u64..=6 {
+            let mut body = scene.bodies[1].clone();
+            body.id = BodyId(id);
+            body.name = format!("Body{id}");
+            body.feature_id = FeatureId(id);
+            body.faces[0].id = FaceId(id * 10);
+            body.faces[0].key = format!("face-{id}");
+            body.faces[0].plane.as_mut().unwrap().origin = [id as f64, 0.0, 0.0];
+            scene.bodies.push(body);
+        }
+        let connector = |body_id: u64| {
+            let body = scene
+                .bodies
+                .iter()
+                .find(|candidate| candidate.id == BodyId(body_id))
+                .unwrap();
+            connector_from_planar_face(body.id, &body.faces[0]).unwrap()
+        };
+        let mut document = AssemblyDocumentDto::default();
+        for body_id in 1_u64..5 {
+            document
+                .create(
+                    CreateJointRequestDto {
+                        name: format!("Link {body_id}-{}", body_id + 1),
+                        kind: JointKindDto::Rigid,
+                        connector_a: connector(body_id),
+                        connector_b: connector(body_id + 1),
+                        flipped: false,
+                        angle_offset_deg: 0.0,
+                        linear_offset_mm: 0.0,
+                        limits: None,
+                        angle_limits: None,
+                        linear_limits: None,
+                        advanced: JointAdvancedDto::default(),
+                        grounded_body_id: (body_id == 1).then_some(BodyId(1)),
+                        grounded_occurrence_id: None,
+                    },
+                    &scene,
+                )
+                .unwrap();
+        }
+        let before = document.solve(&scene);
+        assert!(before.solved, "{:?}", before.diagnostics);
+        let root = document
+            .component_structure
+            .occurrence_for_body(BodyId(1))
+            .unwrap();
+        let root_delta = RigidPose::translation([49.78, -6.5, 33.32])
+            .compose(RigidPose::rotation([0.4, -0.2, 0.7], 1.31));
+        document
+            .set_occurrence_pose(SetOccurrencePoseRequestDto {
+                occurrence_id: root,
+                local_pose: AssemblyTransformDto {
+                    translation: root_delta.translation,
+                    rotation: root_delta.rotation,
+                },
+            })
+            .unwrap();
+        let after = document.solve(&scene);
+        assert!(after.solved, "{:?}", after.diagnostics);
+
+        for body_id in 1_u64..=5 {
+            let occurrence_id = document
+                .component_structure
+                .occurrence_for_body(BodyId(body_id))
+                .unwrap();
+            let pose_from = |solution: &AssemblySolutionDto| {
+                let value = solution
+                    .occurrence_poses
+                    .iter()
+                    .find(|pose| pose.occurrence_id == occurrence_id)
+                    .unwrap();
+                RigidPose {
+                    translation: value.translation,
+                    rotation: value.rotation,
+                }
+            };
+            let expected = root_delta.compose(pose_from(&before));
+            assert!(
+                pose_from(&after).approximately_eq(expected),
+                "body {body_id} did not follow the grounded occurrence"
+            );
+        }
+
+        let free_occurrence = document
+            .component_structure
+            .occurrence_for_body(BodyId(6))
+            .unwrap();
+        let free_before = before
+            .occurrence_poses
+            .iter()
+            .find(|pose| pose.occurrence_id == free_occurrence)
+            .unwrap();
+        let free_after = after
+            .occurrence_poses
+            .iter()
+            .find(|pose| pose.occurrence_id == free_occurrence)
+            .unwrap();
+        assert_eq!(free_after.translation, free_before.translation);
+        assert_eq!(free_after.rotation, free_before.rotation);
     }
 
     #[test]

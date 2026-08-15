@@ -138,6 +138,15 @@ impl fmt::Display for SessionError {
                     .map(|e| e.label.as_str())
                     .collect::<Vec<_>>()
                     .join(" and ");
+                if conflicts_with.len() > 4 {
+                    return write!(
+                        f,
+                        "Cannot add {} between {}: conflicts with the existing constrained geometry ({} related constraints)",
+                        rejected.kind,
+                        ents,
+                        conflicts_with.len()
+                    );
+                }
                 let conflicts = conflicts_with
                     .iter()
                     .map(|c| {

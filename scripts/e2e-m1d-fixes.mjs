@@ -166,13 +166,11 @@ try {
   await page.waitForTimeout(180);
   await shot('fix-02a-fillet-corner-suction');
   await clickNearSketch(60, 40, 9, -9);
-  await page.waitForTimeout(350);
-  await shot('fix-02a-fillet-corner-picked-preview');
-  await page.keyboard.press('Enter'); // radius locked → commit
   await page.waitForTimeout(450);
+  await shot('fix-02a-fillet-corner-click-committed');
   const arc = (await sketch()).entities.find((e) => e.kind === 'arc');
   check('fillet acquired a corner from 12.7 px away', !!arc);
-  check('corner click produced a fillet arc', !!arc && Math.abs(arc.radius - 10) < 0.01, arc ? `r=${arc.radius}` : 'none');
+  check('corner click alone produced a fillet arc', !!arc && Math.abs(arc.radius - 10) < 0.01, arc ? `r=${arc.radius}` : 'none');
   // 2026-07-19 bug class: BOTH edges must be trimmed to the tangent points
   // (the arc existing is NOT enough — the previous suite only checked it).
   const sk2 = await sketch();
@@ -212,8 +210,6 @@ try {
   await page.keyboard.type('4', { delay: 40 });
   await page.waitForTimeout(250);
   await clickSketch(-60, -35); // top-left corner of the typed rect
-  await page.waitForTimeout(350);
-  await page.keyboard.press('Enter');
   await page.waitForTimeout(500);
   const sk3 = await sketch();
   const leftEdge = sk3.entities.find(
@@ -251,11 +247,7 @@ try {
 
   // --- 2d. Second fillet on the SAME dimensioned rect (PM bug report) -----
   console.log('2d. second corner op on the dimensioned rect is accepted');
-  // The fillet tool retired on Enter (new #1 behavior) — re-arm it.
-  await page.click('button[title="Fillet"]');
-  await page.waitForTimeout(250);
-  await page.keyboard.type('4', { delay: 40 });
-  await page.waitForTimeout(250);
+  // Click-commit intentionally keeps the tool armed and reuses R4.
   // Click the corner where it IS, not where it was: dims legitimately shift
   // the sketch after the first fillet, so read the live corner from the
   // bottom + left edges (stale coordinates can miss the pick tolerance).
@@ -265,15 +257,13 @@ try {
     const bottom = sk.entities.find((e) => e.kind === 'line' && Math.abs(e.start.y - e.end.y) < 0.05 && Math.min(e.start.y, e.end.y) < -45);
     await clickSketch(left.start.x, Math.min(bottom.start.y, bottom.end.y));
   }
-  await page.waitForTimeout(350);
-  await page.keyboard.press('Enter');
   await page.waitForTimeout(500);
   const sk4 = await sketch();
   // 3 arcs total: section 2's R10 + 2b's R4 (top-left) + this R4 (bottom-left).
   check('second fillet accepted (no false over-constraint)', sk4.entities.filter((e) => e.kind === 'arc').length === 3,
     `arcs=${sk4.entities.filter((e) => e.kind === 'arc').length}`);
   check('no error dialog popped', !(await page.locator('div[role="dialog"]').isVisible().catch(() => false)));
-  check('Enter retired the tool', (await state()).activeTool === null, (await state()).activeTool ?? 'null');
+  check('click-commit keeps Fillet armed for repeat corners', (await state()).activeTool === 'fillet', (await state()).activeTool ?? 'null');
   await shot('fix-02d-second-fillet-accepted');
 
   // --- 2e. Chamfer THEN fillet on the dimensioned rect (user's failing
@@ -292,12 +282,10 @@ try {
     );
     await clickNearSketch(Math.max(bottom.start.x, bottom.end.x), bottom.start.y, 9, 9);
   }
-  await page.waitForTimeout(350);
-  await page.keyboard.press('Enter'); // commit chamfer + exit
   await page.waitForTimeout(500);
   let skc = await sketch();
   check('chamfer acquired a corner from 12.7 px away', skc.entities.filter((e) => e.kind === 'line').length === 9);
-  check('chamfer line created', skc.entities.filter((e) => e.kind === 'line').length === 9, `lines=${skc.entities.filter((e) => e.kind === 'line').length}`);
+  check('corner click alone created the chamfer line', skc.entities.filter((e) => e.kind === 'line').length === 9, `lines=${skc.entities.filter((e) => e.kind === 'line').length}`);
 
   await page.click('button[title="Fillet"]');
   await page.waitForTimeout(250);
@@ -311,8 +299,6 @@ try {
     );
     await clickSketch(Math.max(top.start.x, top.end.x), Math.max(top.start.y, top.end.y));
   }
-  await page.waitForTimeout(350);
-  await page.keyboard.press('Enter');
   await page.waitForTimeout(500);
   skc = await sketch();
   check('fillet after chamfer accepted (4 arcs total)', skc.entities.filter((e) => e.kind === 'arc').length === 4,
@@ -355,8 +341,6 @@ try {
   await page.keyboard.type('20', { delay: 40 });
   await page.waitForTimeout(200);
   await clickSketch(-110, -20);
-  await page.waitForTimeout(250);
-  await page.keyboard.press('Enter');
   await page.waitForTimeout(450);
 
   const errorDialog = page.locator('div[role="dialog"]');
@@ -396,7 +380,6 @@ try {
   // Recreate the rejection to retain coverage for in-place correction.
   await page.keyboard.type('20', { delay: 40 });
   await clickSketch(-110, -20);
-  await page.keyboard.press('Enter');
   await page.waitForTimeout(450);
   check('second oversized attempt reports an error', await errorDialog.isVisible().catch(() => false));
   await page.getByRole('button', { name: 'OK', exact: true }).click();

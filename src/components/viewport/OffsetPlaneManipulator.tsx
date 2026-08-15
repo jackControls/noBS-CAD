@@ -217,6 +217,7 @@ export function OffsetPlaneManipulator({
           Offset
         </span>
         <DimensionInput
+          autoSelectKey={`offset:${basis.origin.join(',')}:${basis.normal.join(',')}`}
           data-testid="offset-plane-canvas-distance"
           aria-label="Offset plane distance"
           step="any"

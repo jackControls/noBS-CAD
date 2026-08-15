@@ -442,6 +442,7 @@ export async function submitConstructionPlane(
         planes: await engine.datumPlaneDefinitions(),
       });
     }
+    state.clearSolidSelection();
     state.closeConstructionPlaneDialog();
     const folder = update.document.browser.find(
       (node) => node.kind === 'construction_folder',
@@ -465,7 +466,6 @@ export async function submitBodyFeature(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -473,18 +473,7 @@ export async function submitBodyFeature(
       ? await engine.editBodyFeature(featureId, request)
       : await engine.bodyFeature(request);
     state.applySolidUpdate(update);
-    const added = update.scene.bodies.find((body) => !previousBodies.has(body.id));
-    const requestBody =
-      request.type === 'shell' || request.type === 'split_body'
-        ? request.request.body_id
-        : request.type === 'combine'
-          ? request.request.target_body_id
-          : request.type === 'import_step'
-            ? undefined
-            : request.request.body_ids[0];
-    state.setSelectedBody(added?.id ?? requestBody ?? null);
-    state.setSelectedFace(null);
-    state.setSelectedEdges([]);
+    state.clearSolidSelection();
     state.closeBodyFeatureDialog();
     const bodies = update.document.browser.find(
       (node) => node.kind === 'bodies_folder',
@@ -555,7 +544,6 @@ export async function submitExtrude(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -564,16 +552,7 @@ export async function submitExtrude(
         ? await engine.editExtrude(featureId, request)
         : await engine.extrude(request);
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     state.closeExtrudeDialog();
     const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
@@ -594,7 +573,6 @@ export async function submitRevolve(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -603,16 +581,7 @@ export async function submitRevolve(
         ? await engine.editRevolve(featureId, request)
         : await engine.revolve(request);
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     state.closeRevolveDialog();
     const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
@@ -634,7 +603,6 @@ async function submitAdvancedSolid(
   kind: 'sweep' | 'loft' | 'rib',
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -653,16 +621,7 @@ async function submitAdvancedSolid(
         : await engine.rib(request as RibRequest);
     }
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     if (kind === 'sweep') state.closeSweepDialog();
     else if (kind === 'loft') state.closeLoftDialog();
     else state.closeRibDialog();
@@ -731,9 +690,7 @@ async function submitRefinement(
           ? await engine.editHole(featureId, request as HoleRequest)
           : await engine.hole(request as HoleRequest);
     state.applySolidUpdate(update);
-    state.setSelectedBody(request.body_id);
-    state.setSelectedFace(null);
-    state.setSelectedEdges([]);
+    state.clearSolidSelection();
     if (kind === 'fillet') state.closeFilletDialog();
     else if (kind === 'chamfer') state.closeChamferDialog();
     else state.closeHoleDialog();

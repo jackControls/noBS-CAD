@@ -241,6 +241,11 @@ export function ExtrudeDialog() {
   const secondDistanceNumber = Number(secondDistance);
   const taperNumber = Number(taper);
   const profileSelectionKey = profileIndices.join(',');
+  const sourceSelectionKey = sourceFace
+    ? `face:${sourceFace.body_id}:${sourceFace.face_id}`
+    : profileSelectionKey.length > 0
+      ? `profiles:${sketchName}:${profileSelectionKey}`
+      : null;
   const automaticInference = useMemo(() => {
     if (
       openFeature !== 0 ||
@@ -310,7 +315,7 @@ export function ExtrudeDialog() {
       distanceInputRef.current?.select();
     });
     return () => cancelAnimationFrame(frame);
-  }, [extentType, loadError, loading, openFeature]);
+  }, [extentType, loadError, loading, openFeature, sourceSelectionKey]);
 
   const booleanOperation = operation !== 'new_body';
   const extentValid = (() => {
@@ -987,6 +992,7 @@ export function ExtrudeDialog() {
                     </span>
                     <DimensionInput
                       ref={distanceInputRef}
+                      autoSelectKey={sourceSelectionKey}
                       data-testid="extrude-distance"
                       min={extentType === 'distance' ? undefined : '0.000001'}
                       step="any"

@@ -4,7 +4,9 @@
 fully free, and fully open source. It is designed first for mechanical parts,
 around the familiar sketch-and-extrude workflow.
 
-> noBS CAD is currently pre-alpha.
+> noBS CAD is currently pre-alpha. Download the current macOS and Windows
+> desktop snapshots from [GitHub Releases](https://github.com/jackControls/noBS-CAD/releases).
+> These builds are for testing and feedback, not production-critical work.
 
 ![testPiece modeled in noBS CAD](docs/assets/testPiece.png)
 
@@ -35,21 +37,42 @@ That is the direction we are exploring with noBS CAD:
 
 ## What works today
 
-noBS CAD can already make solid models. Right now it is happiest making
-relatively simple boxy and cylindrical parts, but the best way to understand
-the real boundary is to try building something for the real world.
+noBS CAD now spans part design, technical drawings, and an early assembly
+workflow. It is happiest with small and medium mechanical models; the best way
+to understand the real boundary is still to try building something useful and
+report where it breaks down.
 
-The current application includes early implementations of:
+The current application includes:
 
-- parametric sketches with dimensions and geometric constraints;
-- extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, and shell
-  features;
+- a native Bevy/wgpu desktop viewport beneath the React interface, packaged
+  with Tauri for Apple-silicon macOS and x64 Windows;
+- parametric sketches with dimensions, geometric constraints, snapping,
+  construction geometry, patterns, trim/extend, and fillet/chamfer tools;
+- extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
+  split-body, mirror, pattern, and construction-plane features;
 - modeled hole threads for common ISO metric and Unified standards;
-- mirrors, patterns, construction planes, combine, and split-body tools;
-- editable feature history, undo, project saving, and reopening;
-- local `.nbcad` project files (ZIP archives containing editable model data
-  and metadata);
-- STEP import and AP242 STEP export.
+- live feature previews, direct viewport manipulators, body/component
+  Move/Copy, stable topology references, and an editable design history;
+- ISO and ANSI/ASME drawing sheets with aligned projected and derived views,
+  semantic dimensions, center geometry, manufacturing annotations, title
+  blocks, DXF output, and the platform print/PDF path;
+- reusable components and occurrences, multi-body components, nested
+  subassemblies, grounding, and rigid/revolute/slider/cylindrical/planar/ball/
+  universal/pin-slot/screw joints;
+- multi-joint kinematic previews, direct mechanism dragging, named positions,
+  motion studies, path export, and native static/sampled interference checks;
+- multi-document tabs, undo/redo, project saving and reopening, and unsaved
+  change protection;
+- local `.nbcad` project files (ZIP archives containing editable part,
+  drawing, assembly, and metadata records); and
+- STEP import plus AP242 STEP export, including placed visible assembly
+  occurrences as flattened exact geometry.
+
+Drawing and assembly are newer than the core part-modeling path. Assembly is
+currently deterministic rigid-body kinematics, not a physics or dynamics
+engine, and large/closed-loop mechanisms still need broad real-world testing.
+Exact OCCT projection, interference, and export behavior belongs to the native
+desktop build; the browser build is a development and automated-test surface.
 
 Not every tool or combination is reliable yet. We would especially like
 people to try real mechanical parts and whatever else is useful to you. Tell
@@ -128,13 +151,15 @@ until prototyped.
 
 Near-term engineering priorities:
 
-1. Make today's sketching, solid modeling, history, undo, and project-file
-   workflows more dependable.
-2. Harden and expand modeled hole-thread coverage; add regression tests for
-   edge cases.
-3. Keep improving general UX.
-4. Improve preview, selection, and recompute performance.
-5. Turn reported failures into focused regression tests.
+1. Make sketching, solid modeling, drawings, assemblies, history, undo, and
+   project-file workflows more dependable.
+2. Harden closed-loop and large-assembly solving, connector repair, collision
+   workflows, and component editing.
+3. Keep improving selection, manipulators, navigation, responsive desktop UI,
+   and accessibility on both macOS and Windows.
+4. Improve interactive preview, picking, recompute, and large-model rendering
+   performance.
+5. Turn reported failures into focused cross-platform regression tests.
 
 In the longer run, we prefer a true native desktop experience. The browser
 build is valuable for development and automated testing, but it is not the
@@ -232,7 +257,8 @@ npm run build
 - React, TypeScript, and Vite provide the DOM interface; Bevy renders the
   native desktop viewport.
 - Host-neutral Rust crates own project data, sketches, feature definitions,
-  history, stable references, and recompute planning.
+  history, stable references, drawing intent, assembly structure, kinematics,
+  and recompute planning.
 - Native builds use Open CASCADE Technology through a narrow C++ bridge.
 - The browser development build uses the same Rust model through WebAssembly
   and OpenCascade.js for solid operations.
@@ -241,7 +267,10 @@ npm run build
 
 Public technical references:
 
+- [Download pre-release desktop builds](https://github.com/jackControls/noBS-CAD/releases)
 - [Goals / directions](docs/goals.md)
+- [2D technical drawings](docs/2D_DRAWINGS.md)
+- [Assemblies, components, and joints](docs/ASSEMBLIES.md)
 - [Proposed architecture](docs/proposed-architecture.md)
 - [MCP harness notes](docs/mcp-harness.md)
 - [Open Knowledge Format bundle](knowledge/index.md)

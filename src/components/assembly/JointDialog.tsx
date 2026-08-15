@@ -565,10 +565,10 @@ export function JointDialog() {
               checked={form.flipped}
               onChange={(event) => setForm((current) => ({ ...current, flipped: event.target.checked }))}
             />
-            Keep connector directions aligned
+            Flip direction
           </label>
           <p className="-mt-1 text-[9px] leading-3 text-mute">
-            On by default so the moving component keeps its facing direction. Turn it off to mate opposing connector directions.
+            Reverse the connector mate direction when the default orientation is not the one you want.
           </p>
           <p className="text-[10px] leading-4 text-mute">
             Joint motion changes component poses only; OCCT feature geometry remains unchanged.

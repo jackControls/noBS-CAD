@@ -382,6 +382,9 @@ export function RevolveDialog() {
               <label>
                 <span className={LABEL_CLASS}>{t('revolve.angle')}</span>
                 <DimensionInput
+                  autoSelectKey={profileIndices.length > 0
+                    ? `${sketchName}:${profileIndices.join(',')}:${axisPreset}:${axisLineEntityId ?? ''}`
+                    : null}
                   data-testid="revolve-angle"
                   min="0.000001"
                   max="360"

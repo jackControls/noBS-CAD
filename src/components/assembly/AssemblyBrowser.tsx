@@ -85,7 +85,17 @@ export function AssemblyBrowser() {
   const captureJointPosition = useAppStore((state) => state.captureJointPosition);
   const clearMechanismPreview = useAppStore((state) => state.clearMechanismPreview);
   const captureMechanismPosition = useAppStore((state) => state.captureMechanismPosition);
-  const selectedJoint = assembly.joints.find((joint) => joint.id === selectedJointId) ?? null;
+  const liveBodyIds = useMemo(
+    () => new Set(bodies.map((body) => body.id)),
+    [bodies],
+  );
+  const activeJoints = useMemo(
+    () => assembly.joints.filter((joint) =>
+      liveBodyIds.has(joint.connector_a.body_id)
+      && liveBodyIds.has(joint.connector_b.body_id)),
+    [assembly.joints, liveBodyIds],
+  );
+  const selectedJoint = activeJoints.find((joint) => joint.id === selectedJointId) ?? null;
   const [motionValues, setMotionValues] = useState<MotionValues>(() => valuesForJoint(selectedJoint));
   const [demoRunning, setDemoRunning] = useState(false);
   const [panel, setPanel] = useState<'assembly' | 'motion' | 'inspect'>('assembly');
@@ -105,6 +115,12 @@ export function AssemblyBrowser() {
     ?? motionPreview?.solution
     ?? motionStudyPreview?.sample.solution
     ?? solution;
+  const visibleDiagnostics = visibleSolution.diagnostics.filter(
+    (diagnostic) => !(
+      mechanismPreview
+      && diagnostic.kind === 'kinematic_unreachable'
+    ),
+  );
   const structure = assembly.component_structure;
   const definitionsById = useMemo(
     () => new Map(structure.definitions.map((definition) => [definition.id, definition])),
@@ -135,6 +151,12 @@ export function AssemblyBrowser() {
       ? valuesForMotion(selectedMotionPreview.motion)
       : valuesForJoint(selectedJoint));
   }, [selectedJoint, selectedMotionPreview]);
+
+  useEffect(() => {
+    if (selectedJointId !== null && !activeJoints.some((joint) => joint.id === selectedJointId)) {
+      setSelectedJointId(null);
+    }
+  }, [activeJoints, selectedJointId, setSelectedJointId]);
 
   useEffect(() => () => {
     if (motionTimer.current) clearTimeout(motionTimer.current);
@@ -274,7 +296,10 @@ export function AssemblyBrowser() {
         ))}
       </nav>
 
-      <div className={panel === 'assembly' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+      <div
+        data-testid="assembly-structure-scroll"
+        className={panel === 'assembly' ? 'min-h-0 flex-1 overflow-y-auto' : 'hidden'}
+      >
 
       <section className="shrink-0 border-b border-edge">
         <button
@@ -418,17 +443,20 @@ export function AssemblyBrowser() {
             </button>
             <button
               type="button"
-              disabled={!mechanismPreview.converged}
+              disabled={mechanismPreview.joint_motions.length === 0}
+              title={mechanismPreview.converged
+                ? 'Save this solved mechanism position'
+                : 'The cursor target is unreachable; save the closest valid constrained position'}
               onClick={() => void captureMechanismPosition().catch(showAssemblyError)}
               className="flex h-7 flex-1 items-center justify-center gap-1 rounded bg-accent text-[9px] font-semibold text-white hover:brightness-110 disabled:opacity-40"
             >
-              <Save size={11} /> Save position
+              <Save size={11} /> {mechanismPreview.converged ? 'Save position' : 'Save closest'}
             </button>
           </div>
         </section>
       )}
 
-      <section className="flex min-h-0 flex-1 flex-col">
+      <section className="flex flex-col">
         <button
           type="button"
           onClick={() => setJointsExpanded((expanded) => !expanded)}
@@ -437,12 +465,12 @@ export function AssemblyBrowser() {
           {jointsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <Link2 size={13} className="text-accent" /> Joints
           <span className="ml-auto rounded bg-header px-1.5 py-0.5 text-[8px] font-normal tracking-normal">
-            {assembly.joints.length}
+            {activeJoints.length}
           </span>
         </button>
         {jointsExpanded && (
-          <div className="min-h-0 flex-1 overflow-y-auto py-1">
-          {assembly.joints.length === 0 && (
+          <div className="py-1">
+          {activeJoints.length === 0 && (
           <div className="px-4 py-8 text-center">
             <Link2 className="mx-auto mb-2 text-mute/50" size={28} />
             <p className="text-[11px] font-medium text-ink">No joints</p>
@@ -458,7 +486,7 @@ export function AssemblyBrowser() {
             </button>
           </div>
         )}
-          {assembly.joints.map((joint) => {
+          {activeJoints.map((joint) => {
           const broken = jointHasBrokenReference(joint, bodies);
           return (
             <div
@@ -520,7 +548,7 @@ export function AssemblyBrowser() {
       </section>
 
       {selectedJoint && (
-        <section data-testid="joint-motion-panel" className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-edge p-2.5">
+        <section data-testid="joint-motion-panel" className="border-t border-edge p-2.5">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-mute">
             <Gauge size={13} className="text-accent" /> Motion
           </div>
@@ -569,7 +597,7 @@ export function AssemblyBrowser() {
                 />
               ))}
               <p className="mt-1 text-[9px] leading-3 text-mute">
-                Drag the selected component for this joint, or clear the joint selection and drag any movable component to solve the whole mechanism.
+                With this joint selected, drag its component to drive only this joint. Clear the joint selection and drag any movable component to solve the whole mechanism from the exact point under the cursor.
               </p>
               {selectedMotionPreview && !demoRunning && (
                 <div data-testid="joint-position-capture" className="mt-2 flex gap-1.5 border-t border-edge pt-2">
@@ -597,9 +625,9 @@ export function AssemblyBrowser() {
         </section>
       )}
 
-      {visibleSolution.diagnostics.length > 0 && (
-        <section data-testid="assembly-diagnostics" className="max-h-28 shrink-0 overflow-y-auto border-t border-edge p-2">
-          {visibleSolution.diagnostics.map((diagnostic, index) => (
+      {visibleDiagnostics.length > 0 && (
+        <section data-testid="assembly-diagnostics" className="border-t border-edge p-2">
+          {visibleDiagnostics.map((diagnostic, index) => (
             <div key={`${diagnostic.kind}-${diagnostic.joint_id ?? diagnostic.body_id ?? index}`} className="mb-1 flex gap-1.5 text-[9px] leading-3 text-mute last:mb-0">
               <TriangleAlert size={11} className={diagnostic.kind === 'free_component' ? 'text-mute' : 'text-warn'} />
               <span>{diagnostic.message}</span>

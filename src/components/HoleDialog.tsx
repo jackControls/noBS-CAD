@@ -623,7 +623,7 @@ export function HoleDialog() {
                       </dl>
                     </section>
                   )}
-                  <label><span className={LABEL_CLASS}>{t(threaded ? 'hole.predrillDiameter' : 'hole.diameter')}</span><DimensionInput data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>
+                  <label><span className={LABEL_CLASS}>{t(threaded ? 'hole.predrillDiameter' : 'hole.diameter')}</span><DimensionInput autoSelectKey={faceId > 0 ? `${bodyId}:${faceId}` : null} data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>
                   <label><span className={LABEL_CLASS}>{t('hole.extent')}</span><select data-testid="hole-extent" value={extentType} onChange={(event) => setExtentType(event.target.value as HoleExtent['type'])} className={INPUT_CLASS}><option value="through_all">{t('hole.throughAll')}</option><option value="distance">{t('hole.distance')}</option></select></label>
                   {extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('hole.depth')}</span><DimensionInput min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}
                   <label><span className={LABEL_CLASS}>{t('hole.style')}</span><select value={style} onChange={(event) => setStyle(event.target.value as HoleStyle)} className={INPUT_CLASS}><option value="simple">{t('hole.simple')}</option><option value="counterbore">{t('hole.counterbore')}</option><option value="countersink">{t('hole.countersink')}</option></select></label>

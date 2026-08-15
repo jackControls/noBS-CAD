@@ -542,6 +542,7 @@ export function ConstructionPlaneDialog() {
                 <label>
                   <span className={LABEL}>Offset distance (mm)</span>
                   <DimensionInput
+                    autoSelectKey={pickTarget === null ? first : null}
                     step="any"
                     value={distance}
                     onValueChange={setDistance}
@@ -647,6 +648,9 @@ export function ConstructionPlaneDialog() {
                   <label>
                     <span className={LABEL}>Angle (degrees)</span>
                     <DimensionInput
+                      autoSelectKey={pickTarget === null && edgeId > 0
+                        ? `${bodyId}:${edgeId}:${first}`
+                        : null}
                       step="any"
                       value={angle}
                       onValueChange={setAngle}

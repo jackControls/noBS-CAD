@@ -37,6 +37,7 @@ import type {
   FaceDto,
   JointConnectorDto,
   JointDefinitionDto,
+  JointMotionStateDto,
   OriginPlane,
   PlaneBasis,
   PlaneRef,
@@ -1675,7 +1676,12 @@ export function Viewport() {
           });
         } else if (solidPreview?.kind === 'move_copy') {
           const ghostPositions: number[] = [];
-          for (const target of solidPreview.targets) {
+          // Native desktop moves existing retained meshes by pose (see the
+          // presentation bridge), avoiding a full tessellation upload on
+          // every drag frame. Copy previews still need a second ghost mesh.
+          for (const target of nativeViewportIsActive() && !solidPreview.copy
+            ? []
+            : solidPreview.targets) {
             const body = transientState.solidScene.bodies.find(
               (candidate) => candidate.id === target.bodyId,
             );
@@ -1778,19 +1784,33 @@ export function Viewport() {
           );
         }
       } else if (solidPreview?.kind === 'move_copy' && solidPreview.showSixAxisGizmo) {
-        const length = Math.max(6, worldPerPixel() * 72);
-        const radius = length * 0.62;
         const pivot = new CAD.Vector3(
-          solidPreview.pivot.x + solidPreview.translation.x,
-          solidPreview.pivot.y + solidPreview.translation.y,
-          solidPreview.pivot.z + solidPreview.translation.z,
+          solidPreview.gizmoPivot.x,
+          solidPreview.gizmoPivot.y,
+          solidPreview.gizmoPivot.z,
         );
+        const cameraForward = new CAD.Vector3(0, 0, -1)
+          .applyQuaternion(camera.quaternion)
+          .normalize();
+        const pivotDepth = Math.max(
+          camera.near * 2,
+          pivot.clone().sub(camera.position).dot(cameraForward),
+        );
+        const gizmoWorldPerPixel = (
+          2 * pivotDepth * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))
+        ) / Math.max(1, surface.domElement.clientHeight);
+        const length = Math.max(6, gizmoWorldPerPixel * 96);
+        const radius = length * 0.62;
+        const orientation = new CAD.Quaternion(...solidPreview.gizmoOrientation).normalize();
+        const oriented = (axis: CAD.Vector3) => axis.applyQuaternion(orientation);
         const axes = [
-          { axis: new CAD.Vector3(1, 0, 0), color: 0xe75f62 },
-          { axis: new CAD.Vector3(0, 1, 0), color: 0x54bd78 },
-          { axis: new CAD.Vector3(0, 0, 1), color: 0x4f9dde },
+          { axis: oriented(new CAD.Vector3(1, 0, 0)), color: 0xe75f62 },
+          { axis: oriented(new CAD.Vector3(0, 1, 0)), color: 0x54bd78 },
+          { axis: oriented(new CAD.Vector3(0, 0, 1)), color: 0x4f9dde },
         ] as const;
-        for (const entry of axes) {
+        for (const [index, entry] of axes.entries()) {
+          const emphasized = solidPreview.gizmoInteraction?.kind === 'translate'
+            && solidPreview.gizmoInteraction.axis === index;
           arrows.push({
             start: [pivot.x, pivot.y, pivot.z],
             end: [
@@ -1798,17 +1818,19 @@ export function Viewport() {
               pivot.y + entry.axis.y * length,
               pivot.z + entry.axis.z * length,
             ],
-            color: rgbaFromHex(entry.color, 1),
-            width: 2,
+            color: rgbaFromHex(emphasized ? COLOR_HOVER : entry.color, 1),
+            width: emphasized ? 4.5 : 3,
             xray: true,
           });
         }
         const ringAxes = [
-          { a: new CAD.Vector3(0, 1, 0), b: new CAD.Vector3(0, 0, 1), color: 0xe75f62 },
-          { a: new CAD.Vector3(0, 0, 1), b: new CAD.Vector3(1, 0, 0), color: 0x54bd78 },
-          { a: new CAD.Vector3(1, 0, 0), b: new CAD.Vector3(0, 1, 0), color: 0x4f9dde },
+          { a: oriented(new CAD.Vector3(0, 1, 0)), b: oriented(new CAD.Vector3(0, 0, 1)), color: 0xe75f62 },
+          { a: oriented(new CAD.Vector3(0, 0, 1)), b: oriented(new CAD.Vector3(1, 0, 0)), color: 0x54bd78 },
+          { a: oriented(new CAD.Vector3(1, 0, 0)), b: oriented(new CAD.Vector3(0, 1, 0)), color: 0x4f9dde },
         ] as const;
-        for (const ring of ringAxes) {
+        for (const [ringIndex, ring] of ringAxes.entries()) {
+          const emphasized = solidPreview.gizmoInteraction?.kind === 'rotate'
+            && solidPreview.gizmoInteraction.axis === ringIndex;
           for (let index = 0; index < 64; index += 1) {
             const angle = (index / 64) * Math.PI * 2;
             const next = ((index + 1) / 64) * Math.PI * 2;
@@ -1816,12 +1838,21 @@ export function Viewport() {
               .addScaledVector(ring.a, Math.cos(value) * radius)
               .addScaledVector(ring.b, Math.sin(value) * radius);
             appendSegment(
-              rgbaFromHex(ring.color, 0.82),
-              1.6,
+              rgbaFromHex(emphasized ? COLOR_HOVER : ring.color, emphasized ? 1 : 0.72),
+              emphasized ? 4.2 : 2.4,
               at(angle),
               at(next),
             );
           }
+          // Rotation is intentionally acquired only from this bead. It gives
+          // every ring an unambiguous handle and avoids accidental rotation
+          // while the user is trying to translate along a nearby axis.
+          const beadRadial = ring.a.clone().add(ring.b).normalize();
+          appendPoint(
+            rgbaFromHex(emphasized ? COLOR_HOVER : ring.color, 1),
+            Math.max(worldPerPixel() * (emphasized ? 9 : 6.5), radius * 0.04),
+            pivot.clone().addScaledVector(beadRadial, radius),
+          );
         }
       }
 
@@ -2496,6 +2527,18 @@ export function Viewport() {
       return (2 * dist * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) / height;
     };
 
+    const constrainDraggedAngle = (value: number, minimum: number, maximum: number) => {
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return value;
+      const span = maximum - minimum;
+      // A complete-turn range is cyclic, not a pair of physical stops. Wrap
+      // across its seam so dragging through +180° continues at -180° without
+      // reversing or pinning the mechanism.
+      if (span >= 360 - 1e-6) {
+        return minimum + (((value - minimum) % span) + span) % span;
+      }
+      return Math.max(minimum, Math.min(maximum, value));
+    };
+
     const beginJointMotionDrag = (
       bodyId: number,
       occurrenceId: number | null,
@@ -2511,11 +2554,42 @@ export function Viewport() {
       const occurrenceA = joint.advanced.connector_a_occurrence_id;
       const occurrenceB = joint.advanced.connector_b_occurrence_id;
       if (occurrenceId === null || occurrenceA === null || occurrenceB === null) return false;
-      const groundedOccurrenceId = state.assemblyDocument.component_structure.occurrences.find(
-        (candidate) => candidate.grounded
-          && (candidate.id === occurrenceA || candidate.id === occurrenceB),
-      )?.id ?? occurrenceA;
-      const movingOccurrenceId = groundedOccurrenceId === occurrenceB ? occurrenceA : occurrenceB;
+      const occurrences = state.assemblyDocument.component_structure.occurrences;
+      const parentOccurrenceId = occurrences.find(
+        (candidate) => candidate.id === occurrenceA,
+      )?.parent_occurrence_id ?? null;
+      const siblingIds = new Set(
+        occurrences
+          .filter((candidate) => candidate.parent_occurrence_id === parentOccurrenceId)
+          .map((candidate) => candidate.id),
+      );
+      const groundedOccurrenceId = occurrences.find(
+        (candidate) => candidate.grounded && siblingIds.has(candidate.id),
+      )?.id
+        ?? [...siblingIds].sort((a, b) => a - b)[0]
+        ?? occurrenceA;
+      // Remove the selected joint and determine which connector remains on
+      // the grounded side. Connector ordering is an authoring detail; using
+      // it as the ground heuristic made the wrong link react in long chains.
+      const reachable = new Set<number>([groundedOccurrenceId]);
+      const queue = [groundedOccurrenceId];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        for (const candidate of state.assemblyDocument.joints) {
+          if (!candidate.enabled || candidate.id === joint.id) continue;
+          const a = candidate.advanced.connector_a_occurrence_id;
+          const b = candidate.advanced.connector_b_occurrence_id;
+          if (a === null || b === null || !siblingIds.has(a) || !siblingIds.has(b)) continue;
+          const next = a === current ? b : b === current ? a : null;
+          if (next === null || reachable.has(next)) continue;
+          reachable.add(next);
+          queue.push(next);
+        }
+      }
+      const aGroundedSide = reachable.has(occurrenceA);
+      const bGroundedSide = reachable.has(occurrenceB);
+      if (aGroundedSide === bGroundedSide) return false;
+      const movingOccurrenceId = aGroundedSide ? occurrenceB : occurrenceA;
       if (occurrenceId !== movingOccurrenceId) return false;
 
       const movingBodyId = joint.advanced.connector_a_occurrence_id === movingOccurrenceId
@@ -2634,6 +2708,9 @@ export function Viewport() {
           rotationScreenSign = Math.sign(projectedMotion);
         }
       }
+      const pointerAngle = startRadius >= 12
+        ? Math.atan2(event.clientY - center[1], event.clientX - center[0])
+        : null;
       jointMotionDrag = {
         pointerId: event.pointerId,
         jointId: joint.id,
@@ -2647,16 +2724,16 @@ export function Viewport() {
         startLinearValue,
         angleValue: startAngleValue,
         linearValue: startLinearValue,
-        angleMinimum: angleLimits?.min ?? -180,
-        angleMaximum: angleLimits?.max ?? 180,
+        angleMinimum: angleLimits?.min ?? Number.NEGATIVE_INFINITY,
+        angleMaximum: angleLimits?.max ?? Number.POSITIVE_INFINITY,
         linearMinimum: linearLimits?.min ?? -100,
         linearMaximum: linearLimits?.max ?? 100,
         startX: event.clientX,
         startY: event.clientY,
         center,
-        startAngle: startRadius >= 12
-          ? Math.atan2(event.clientY - center[1], event.clientX - center[0])
-          : null,
+        startAngle: pointerAngle,
+        lastPointerAngle: pointerAngle,
+        accumulatedAngleDeg: 0,
         screenAxis,
         screenTangent,
         rotationScreenSign,
@@ -2681,6 +2758,7 @@ export function Viewport() {
       occurrenceId: number | null,
       event: PointerEvent,
       state: ReturnType<typeof store.getState>,
+      pickedPoint?: Point3Dto,
     ): boolean => {
       if (state.solidSidebarMode !== 'assembly' || state.jointDialogOpen) return false;
       if (occurrenceId === null) return false;
@@ -2688,17 +2766,51 @@ export function Viewport() {
         (candidate) => candidate.id === occurrenceId,
       );
       if (!occurrence) return false;
-      const groundedOccurrenceId = state.assemblyDocument.component_structure.occurrences.find(
+      const liveBodyIds = new Set(state.solidScene.bodies.map((body) => body.id));
+      const liveComponentIds = new Set(
+        state.assemblyDocument.component_structure.definitions
+          .filter((definition) => definition.body_ids.some((id) => liveBodyIds.has(id)))
+          .map((definition) => definition.id),
+      );
+      const occurrences = state.assemblyDocument.component_structure.occurrences;
+      const occurrenceParents = new Map(
+        occurrences.map((candidate) => [candidate.id, candidate.parent_occurrence_id]),
+      );
+      const activeOccurrenceIds = new Set(
+        occurrences
+          .filter((candidate) => liveComponentIds.has(candidate.component_id))
+          .map((candidate) => candidate.id),
+      );
+      for (const activeId of [...activeOccurrenceIds]) {
+        const lineage = new Set<number>();
+        let parent = occurrenceParents.get(activeId) ?? null;
+        while (parent !== null && !lineage.has(parent)) {
+          lineage.add(parent);
+          activeOccurrenceIds.add(parent);
+          parent = occurrenceParents.get(parent) ?? null;
+        }
+      }
+      if (!activeOccurrenceIds.has(occurrenceId)) return false;
+      const activeJoints = state.assemblyDocument.joints.filter((joint) =>
+        liveBodyIds.has(joint.connector_a.body_id)
+        && liveBodyIds.has(joint.connector_b.body_id)
+        && joint.advanced.connector_a_occurrence_id !== null
+        && joint.advanced.connector_b_occurrence_id !== null
+        && activeOccurrenceIds.has(joint.advanced.connector_a_occurrence_id)
+        && activeOccurrenceIds.has(joint.advanced.connector_b_occurrence_id));
+      const groundedOccurrenceId = occurrences.find(
         (candidate) => candidate.grounded
+          && activeOccurrenceIds.has(candidate.id)
           && candidate.parent_occurrence_id === occurrence.parent_occurrence_id,
       )?.id
-        ?? state.assemblyDocument.component_structure.occurrences
-          .filter((candidate) => candidate.parent_occurrence_id === occurrence.parent_occurrence_id)
+        ?? occurrences
+          .filter((candidate) => activeOccurrenceIds.has(candidate.id)
+            && candidate.parent_occurrence_id === occurrence.parent_occurrence_id)
           .sort((a, b) => a.id - b.id)[0]?.id
         ?? null;
       if (groundedOccurrenceId === null || occurrenceId === groundedOccurrenceId) return false;
       if (!hasMovableJointPath(
-        state.assemblyDocument.joints,
+        activeJoints,
         groundedOccurrenceId,
         occurrenceId,
       )) return false;
@@ -2708,13 +2820,21 @@ export function Viewport() {
           && candidate.occurrence_id === occurrenceId,
       );
       if (!pose) return false;
+      const grabbedWorld: [number, number, number] = pickedPoint
+        ? [pickedPoint.x, pickedPoint.y, pickedPoint.z]
+        : [...pose.translation];
+      const grabbedLocal = bodyLocalPoint(
+        bodyId,
+        { x: grabbedWorld[0], y: grabbedWorld[1], z: grabbedWorld[2] },
+        occurrenceId,
+      ).toArray() as [number, number, number];
       const rect = surface.domElement.getBoundingClientRect();
       const cameraForward = new CAD.Vector3(0, 0, -1)
         .applyQuaternion(camera.quaternion)
         .normalize();
       const depth = Math.max(
         camera.near * 2,
-        new CAD.Vector3(...pose.translation).sub(camera.position).dot(cameraForward),
+        new CAD.Vector3(...grabbedWorld).sub(camera.position).dot(cameraForward),
       );
       const millimetersPerPixel =
         (2 * depth * Math.tan(CAD.MathUtils.degToRad(camera.fov / 2))) /
@@ -2735,6 +2855,12 @@ export function Viewport() {
         moved: false,
         lastPreviewAt: 0,
         targetTranslation: [...pose.translation],
+        grabPointLocal: grabbedLocal,
+        startGrabWorld: grabbedWorld,
+        targetGrabWorld: grabbedWorld,
+        initialJointMotions: state.mechanismPreview?.joint_motions.map(
+          (motion) => ({ ...motion }),
+        ) ?? [],
       };
       state.setSelectedBody(bodyId);
       state.setSelectedOccurrenceId(occurrenceId);
@@ -3115,6 +3241,8 @@ export function Viewport() {
       startY: number;
       center: [number, number];
       startAngle: number | null;
+      lastPointerAngle: number | null;
+      accumulatedAngleDeg: number;
       screenAxis: [number, number];
       screenTangent: [number, number];
       rotationScreenSign: number;
@@ -3132,6 +3260,10 @@ export function Viewport() {
       startY: number;
       startTranslation: [number, number, number];
       targetTranslation: [number, number, number];
+      grabPointLocal: [number, number, number];
+      startGrabWorld: [number, number, number];
+      targetGrabWorld: [number, number, number];
+      initialJointMotions: JointMotionStateDto[];
       rotation: [number, number, number, number];
       cameraRight: [number, number, number];
       cameraUp: [number, number, number];
@@ -6565,7 +6697,13 @@ export function Viewport() {
                 state.showDynInput(TOOL_FIELDS[state.activeTool]!, pos.x, pos.y);
                 refreshLockValues();
               }
-              if (modTool.picks.length === 2) previewModTool(corner.point);
+              if (modTool.picks.length === 2) {
+                // The hover state already presented a complete, valid
+                // fillet/chamfer preview for this magnetic corner. Treat the
+                // confirming click as the operation commit; requiring a
+                // second click or Enter made the first click appear broken.
+                commitModTool(corner.point);
+              }
               return true;
             }
             const hit = pickLineOnly(p);
@@ -6579,6 +6717,9 @@ export function Viewport() {
                   state.showDynInput(TOOL_FIELDS[state.activeTool]!, pos.x, pos.y);
                   refreshLockValues();
                 }
+                // Explicit edge-by-edge selection has only become complete
+                // on this click, so first present its preview and keep value
+                // editing available. A later canvas click or Enter commits.
                 previewModTool(p);
               }
             }
@@ -6752,6 +6893,13 @@ export function Viewport() {
     let jointHoverPickGeneration = 0;
     let jointClickPickGeneration = 0;
     let jointMotionPickGeneration = 0;
+    const releaseJointSelection = (state: ViewportState) => {
+      if (state.selectedJointId !== null) state.setSelectedJointId(null);
+    };
+    const clearViewportSelection = (state: ViewportState) => {
+      releaseJointSelection(state);
+      state.clearSolidSelection();
+    };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
@@ -6775,18 +6923,24 @@ export function Viewport() {
               e.clientY - drag.center[1],
               e.clientX - drag.center[0],
             );
-            const delta = Math.atan2(
-              Math.sin(angle - drag.startAngle),
-              Math.cos(angle - drag.startAngle),
-            );
-            angleValue += CAD.MathUtils.radToDeg(delta) * drag.rotationScreenSign;
+            if (drag.lastPointerAngle !== null) {
+              const step = Math.atan2(
+                Math.sin(angle - drag.lastPointerAngle),
+                Math.cos(angle - drag.lastPointerAngle),
+              );
+              drag.accumulatedAngleDeg +=
+                CAD.MathUtils.radToDeg(step) * drag.rotationScreenSign;
+            }
+            drag.lastPointerAngle = angle;
+            angleValue += drag.accumulatedAngleDeg;
           } else {
             const tangential = dx * drag.screenTangent[0] + dy * drag.screenTangent[1];
             angleValue += tangential * 0.35 * drag.rotationScreenSign;
           }
-          drag.angleValue = Math.max(
+          drag.angleValue = constrainDraggedAngle(
+            angleValue,
             drag.angleMinimum,
-            Math.min(drag.angleMaximum, angleValue),
+            drag.angleMaximum,
           );
         } else if (drag.activeDof === 'linear') {
           const alongAxis = dx * drag.screenAxis[0] + dy * drag.screenAxis[1];
@@ -6825,14 +6979,21 @@ export function Viewport() {
           + drag.cameraRight[axis] * dx * drag.millimetersPerPixel
           - drag.cameraUp[axis] * dy * drag.millimetersPerPixel
         )) as [number, number, number];
+        drag.targetGrabWorld = [0, 1, 2].map((axis) => (
+          drag.startGrabWorld[axis]
+          + drag.cameraRight[axis] * dx * drag.millimetersPerPixel
+          - drag.cameraUp[axis] * dy * drag.millimetersPerPixel
+        )) as [number, number, number];
         const now = performance.now();
-        if (drag.moved && now - drag.lastPreviewAt >= 32) {
+        if (drag.moved && now - drag.lastPreviewAt >= 16) {
           drag.lastPreviewAt = now;
+          const initialJointMotions = state.mechanismPreview?.joint_motions
+            ?? drag.initialJointMotions;
           void state.previewMechanismDrag(drag.bodyId, {
             body_id: drag.bodyId,
             translation: drag.targetTranslation,
             rotation: drag.rotation,
-          }, drag.occurrenceId).catch((error) => {
+          }, drag.occurrenceId, drag.grabPointLocal, drag.targetGrabWorld, initialJointMotions, 12).catch((error) => {
             state.setConstraintDialog({
               titleKey: 'file.errorTitle',
               message: error instanceof Error ? error.message : String(error),
@@ -7328,6 +7489,7 @@ export function Viewport() {
           return;
         }
         if (state.solidSidebarMode === 'assembly') {
+          const additive = e.shiftKey || e.ctrlKey || e.metaKey;
           const edgeHit = pickSolidEdge(e);
           const faceHit = edgeHit ? null : pickSolidFace(e);
           const localBodyId = edgeHit?.bodyId ?? faceHit?.bodyId ?? null;
@@ -7342,7 +7504,13 @@ export function Viewport() {
                 state,
                 edgeHit?.point ?? faceHit?.point,
               )
-              || beginMechanismDrag(localBodyId, localOccurrenceId, e, state)
+              || beginMechanismDrag(
+                localBodyId,
+                localOccurrenceId,
+                e,
+                state,
+                edgeHit?.point ?? faceHit?.point,
+              )
             )
           ) return;
           if (nativeViewportIsActive()) {
@@ -7353,24 +7521,37 @@ export function Viewport() {
                 if (
                   generation !== jointMotionPickGeneration
                   || current.mode !== 'solid'
-                  || !hit
                 ) {
+                  return;
+                }
+                // The native picker only returns CAD geometry. The construction
+                // grid and viewport background are intentionally both an empty
+                // hit, so a plain click on either must clear the current pick.
+                if (!hit) {
+                  if (!additive) clearViewportSelection(current);
                   return;
                 }
                 if (
                   beginJointMotionDrag(hit.bodyId, hit.occurrenceId, e, current, hit.point)
-                  || beginMechanismDrag(hit.bodyId, hit.occurrenceId, e, current)
+                  || beginMechanismDrag(
+                    hit.bodyId,
+                    hit.occurrenceId,
+                    e,
+                    current,
+                    { x: hit.point[0], y: hit.point[1], z: hit.point[2] },
+                  )
                 ) return;
+                if (!additive) releaseJointSelection(current);
                 current.setSelectedOccurrenceId(hit.occurrenceId);
                 if (hit.edgeId) {
-                  current.selectSolidFeature('edge', hit.bodyId, hit.edgeId, null, false);
+                  current.selectSolidFeature('edge', hit.bodyId, hit.edgeId, null, additive);
                 } else if (hit.faceId !== 0) {
                   current.selectSolidFeature(
                     'face',
                     hit.bodyId,
                     hit.faceId,
                     { x: hit.point[0], y: hit.point[1], z: hit.point[2] },
-                    false,
+                    additive,
                   );
                 }
               })
@@ -7524,6 +7705,7 @@ export function Viewport() {
         }
         const edgeHit = pickSolidEdge(e);
         if (edgeHit) {
+          if (!(e.shiftKey || e.ctrlKey || e.metaKey)) releaseJointSelection(state);
           if (state.solidSidebarMode === 'assembly') {
             state.setSelectedOccurrenceId(edgeHit.occurrenceId);
           }
@@ -7543,6 +7725,7 @@ export function Viewport() {
               const current = store.getState();
               if (current.mode !== 'solid') return;
               if (hit) {
+                if (!additive) releaseJointSelection(current);
                 if (current.solidSidebarMode === 'assembly') {
                   current.setSelectedOccurrenceId(hit.occurrenceId);
                 }
@@ -7558,7 +7741,7 @@ export function Viewport() {
                   additive,
                 );
               } else if (!additive) {
-                current.clearSolidSelection();
+                clearViewportSelection(current);
               }
             })
             .catch(() => undefined);
@@ -7566,6 +7749,7 @@ export function Viewport() {
         }
         const hit = pickSolidFace(e);
         if (hit) {
+          if (!(e.shiftKey || e.ctrlKey || e.metaKey)) releaseJointSelection(state);
           if (state.solidSidebarMode === 'assembly') {
             state.setSelectedOccurrenceId(hit.occurrenceId);
           }
@@ -7577,7 +7761,7 @@ export function Viewport() {
             e.shiftKey || e.ctrlKey || e.metaKey,
           );
         } else if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
-          state.clearSolidSelection();
+          clearViewportSelection(state);
         }
         return;
       }
@@ -7710,11 +7894,13 @@ export function Viewport() {
         const drag = mechanismDrag;
         mechanismDrag = null;
         if (drag.moved) {
+          const initialJointMotions = state.mechanismPreview?.joint_motions
+            ?? drag.initialJointMotions;
           void state.previewMechanismDrag(drag.bodyId, {
             body_id: drag.bodyId,
             translation: drag.targetTranslation,
             rotation: drag.rotation,
-          }, drag.occurrenceId).catch((error) => {
+          }, drag.occurrenceId, drag.grabPointLocal, drag.targetGrabWorld, initialJointMotions, 48).catch((error) => {
             state.setConstraintDialog({
               titleKey: 'file.errorTitle',
               message: error instanceof Error ? error.message : String(error),

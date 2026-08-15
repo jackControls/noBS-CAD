@@ -449,9 +449,17 @@ export interface OffsetPlaneCommandPreview {
 
 export interface MoveCopyPreviewTarget {
   bodyId: number;
+  /** Disambiguates reusable instances that share one source body. */
+  occurrenceId: number | null;
   /** Existing display pose before the command delta is applied. */
   baseTranslation: [number, number, number];
   baseRotation: [number, number, number, number];
+}
+
+export interface MoveCopyGizmoInteraction {
+  kind: 'translate' | 'rotate';
+  axis: 0 | 1 | 2;
+  active: boolean;
 }
 
 /** Rigid-transform ghost and original six-axis viewport manipulator. */
@@ -467,6 +475,13 @@ export interface MoveCopyCommandPreview {
   transformInBodySpace: boolean;
   /** The full six-axis control belongs to Free Move only. */
   showSixAxisGizmo: boolean;
+  /** Display-space origin and orientation of the same coordinate frame the
+   * command transform uses. These keep the visible rings, pointer targets,
+   * and actual rotation axis coincident for already-placed bodies. */
+  gizmoPivot: Point3Dto;
+  gizmoOrientation: [number, number, number, number];
+  /** Hover/drag state is presentation-only and never enters feature history. */
+  gizmoInteraction: MoveCopyGizmoInteraction | null;
 }
 
 export type SolidCommandPreview =
@@ -723,6 +738,10 @@ interface AppState {
     bodyId: number,
     targetPose: BodyPoseDto,
     occurrenceId?: number | null,
+    grabPointLocal?: [number, number, number] | null,
+    targetPointWorld?: [number, number, number] | null,
+    initialJointMotions?: JointMotionStateDto[],
+    maximumIterations?: number,
   ) => Promise<void>;
   clearMechanismPreview: () => void;
   captureMechanismPosition: () => Promise<void>;
@@ -959,6 +978,23 @@ function resetDocumentUiState(): Partial<AppState> {
 let jointPreviewGeneration = 0;
 let jointMotionPreviewGeneration = 0;
 let mechanismPreviewGeneration = 0;
+interface MechanismPreviewJob {
+  generation: number;
+  bodyId: number;
+  occurrenceId: number | null;
+  targetPose: BodyPoseDto;
+  grabPointLocal: [number, number, number] | null;
+  targetPointWorld: [number, number, number] | null;
+  initialJointMotions: JointMotionStateDto[];
+  maximumIterations: number;
+}
+let pendingMechanismPreview: MechanismPreviewJob | null = null;
+let mechanismPreviewPump: Promise<void> | null = null;
+
+// Async engine work can be superseded while it is awaited. Reading through a
+// function prevents TypeScript from incorrectly treating the shared queue as
+// permanently null after the assignment immediately before that await.
+const queuedMechanismPreview = () => pendingMechanismPreview;
 
 export const useAppStore = create<AppState>()((set) => ({
   mode: 'solid',
@@ -1533,26 +1569,118 @@ export const useAppStore = create<AppState>()((set) => ({
     });
   },
 
-  previewMechanismDrag: async (bodyId, targetPose, occurrenceId = null) => {
+  previewMechanismDrag: async (
+    bodyId,
+    targetPose,
+    occurrenceId = null,
+    grabPointLocal = null,
+    targetPointWorld = null,
+    initialJointMotions = [],
+    maximumIterations = 12,
+  ) => {
     const generation = ++mechanismPreviewGeneration;
-    const engine = await getEngine();
-    const mechanismPreview = await engine.previewMechanismDrag({
-      body_id: bodyId,
-      occurrence_id: occurrenceId,
-      target_pose: targetPose,
-      solve_orientation: false,
-      maximum_iterations: 48,
-    });
-    set((state) => (
-      generation === mechanismPreviewGeneration
-      && state.solidScene.bodies.some((body) => body.id === bodyId)
-        ? { mechanismPreview, jointMotionPreview: null }
-        : {}
-    ));
+    pendingMechanismPreview = {
+      generation,
+      bodyId,
+      occurrenceId,
+      targetPose,
+      grabPointLocal,
+      targetPointWorld,
+      initialJointMotions,
+      maximumIterations: Math.max(1, Math.min(96, Math.round(maximumIterations))),
+    };
+
+    const startPump = () => {
+      if (mechanismPreviewPump) return;
+      const running = (async () => {
+        const engine = await getEngine();
+        while (pendingMechanismPreview) {
+          const job = pendingMechanismPreview;
+          pendingMechanismPreview = null;
+          try {
+            const mechanismPreview = await engine.previewMechanismDrag({
+              body_id: job.bodyId,
+              occurrence_id: job.occurrenceId,
+              target_pose: job.targetPose,
+              grab_point_local: job.grabPointLocal,
+              target_point_world: job.targetPointWorld,
+              initial_joint_motions: job.initialJointMotions,
+              solve_orientation: false,
+              maximum_iterations: job.maximumIterations,
+            });
+            // Pointer targets are deliberately coalesced, but every completed
+            // intermediate solve is still the best continuity seed for the
+            // newer target waiting behind it. Without carrying that pose
+            // forward, a busy multi-joint mechanism repeatedly restarts from
+            // the last rendered frame and can appear to freeze until the
+            // pointer is released and grabbed again.
+            const nextJob = queuedMechanismPreview();
+            if (
+              nextJob
+              && nextJob.generation > job.generation
+              && nextJob.bodyId === job.bodyId
+              && nextJob.occurrenceId === job.occurrenceId
+            ) {
+              nextJob.initialJointMotions =
+                mechanismPreview.joint_motions.map((motion) => ({ ...motion }));
+            }
+            const publishAsProgress = nextJob
+              && nextJob.generation === mechanismPreviewGeneration
+              && nextJob.bodyId === job.bodyId
+              && nextJob.occurrenceId === job.occurrenceId;
+            set((state) => (
+              (job.generation === mechanismPreviewGeneration || publishAsProgress)
+              && state.solidScene.bodies.some((body) => body.id === job.bodyId)
+                ? { mechanismPreview, jointMotionPreview: null }
+                : {}
+            ));
+          } catch (error) {
+            // A slower superseded solve must not abort the pump or surface an
+            // error after a newer pointer target is already waiting. Only the
+            // newest request owns user-visible failure reporting.
+            if (
+              job.generation === mechanismPreviewGeneration
+              && pendingMechanismPreview === null
+            ) {
+              throw error;
+            }
+          }
+        }
+      })();
+      mechanismPreviewPump = running;
+      // Register reset before any caller awaits `running`. A target queued as
+      // the previous loop drains will then see a null pump and immediately
+      // start another pass instead of remaining stranded until the next grab.
+      void running.then(
+        () => {
+          if (mechanismPreviewPump === running) mechanismPreviewPump = null;
+        },
+        () => {
+          if (mechanismPreviewPump === running) mechanismPreviewPump = null;
+        },
+      );
+    };
+
+    // A drag may enqueue while the previous pump is completing. Keep the
+    // newest caller responsible for restarting until its target has either
+    // been processed or superseded by a newer pointer position.
+    while (generation === mechanismPreviewGeneration) {
+      startPump();
+      const running = mechanismPreviewPump;
+      if (!running) break;
+      try {
+        await running;
+      } catch (error) {
+        if (generation === mechanismPreviewGeneration) throw error;
+        return;
+      }
+      if (pendingMechanismPreview === null) break;
+    }
   },
 
   clearMechanismPreview: () => {
     mechanismPreviewGeneration += 1;
+    pendingMechanismPreview = null;
     set({ mechanismPreview: null });
   },
 
@@ -1561,12 +1689,17 @@ export const useAppStore = create<AppState>()((set) => ({
     const preview = state.mechanismPreview;
     if (!preview) return;
     mechanismPreviewGeneration += 1;
+    pendingMechanismPreview = null;
     jointMotionPreviewGeneration += 1;
     const engine = await getEngine();
     const solvedById = new Map(preview.joint_motions.map((motion) => [motion.joint_id, motion]));
+    const liveBodyIds = new Set(state.solidScene.bodies.map((body) => body.id));
+    const activeJoints = state.assemblyDocument.joints.filter((joint) =>
+      liveBodyIds.has(joint.connector_a.body_id)
+      && liveBodyIds.has(joint.connector_b.body_id));
     await engine.createAssemblyPosition({
       name: `Position ${state.assemblyDocument.next_position_id}`,
-      motions: state.assemblyDocument.joints.map((joint) => (
+      motions: activeJoints.map((joint) => (
         solvedById.get(joint.id) ?? jointMotionState(joint)
       )),
     });
@@ -2124,6 +2257,10 @@ export const useAppStore = create<AppState>()((set) => ({
       selectedFaces: [],
       selectedFacePoint: null,
       selectedEdges: [],
+      hoveredFace: null,
+      hoveredEdge: null,
+      hoveredPlane: null,
+      hoveredDatumPlane: null,
       selectedOccurrenceId: null,
       hoveredOccurrenceId: null,
     }),

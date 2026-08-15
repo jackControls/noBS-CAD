@@ -88,16 +88,101 @@ try {
   assert.match(await moveCopyDialog.innerText(), /°/);
   assert.equal(await page.getByTestId('move-copy-translate-x-handle').count(), 1);
   assert.equal(await page.getByTestId('move-copy-rotate-z-handle').count(), 1);
-  await moveCopyDialog.getByLabel('Translation X').fill('5');
+  const translationX = moveCopyDialog.getByLabel('Translation X');
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'Translation X',
+  );
+  await page.keyboard.type('5');
   await page.waitForFunction(
     () => window.__appStore.getState().solidCommandPreview?.kind === 'move_copy'
       && window.__appStore.getState().solidCommandPreview.translation.x === 5,
   );
+  const gizmoHitTargets = await page.evaluate(() => {
+    const translate = document.querySelector('[data-testid="move-copy-translate-x-handle"]');
+    const rotate = document.querySelector('[data-testid="move-copy-rotate-x-handle"]');
+    if (!(translate instanceof HTMLElement) || !(rotate instanceof HTMLElement)) return null;
+    const translationStyle = getComputedStyle(translate);
+    const translationRect = translate.getBoundingClientRect();
+    const rotationRect = rotate.getBoundingClientRect();
+    return {
+      shaftWidth: Number.parseFloat(translationStyle.width),
+      centerSeparation: Math.hypot(
+        translationRect.x + translationRect.width / 2 - rotationRect.x - rotationRect.width / 2,
+        translationRect.y + translationRect.height / 2 - rotationRect.y - rotationRect.height / 2,
+      ),
+    };
+  });
+  assert.ok(gizmoHitTargets?.shaftWidth >= 90, 'the complete translation arrow is pointer-active');
+  assert.ok(gizmoHitTargets?.centerSeparation >= 10, 'rotation bead is separated from translation arrow');
   const movePreview = await page.evaluate(
     () => window.__appStore.getState().solidCommandPreview,
   );
   assert.equal(movePreview.targets.length, 1);
   assert.equal(movePreview.showSixAxisGizmo, true);
+
+  const translateHandle = page.getByTestId('move-copy-translate-x-handle');
+  await translateHandle.hover();
+  await page.waitForFunction(() => {
+    const interaction = window.__appStore.getState().solidCommandPreview?.gizmoInteraction;
+    return interaction?.kind === 'translate' && interaction.axis === 0 && !interaction.active;
+  });
+
+  // A ring must rotate about the exact oriented axis represented by its bead,
+  // even after another Euler component is already non-zero. Directly editing
+  // the X Euler field here would instead rotate about a Y-tilted world axis.
+  await moveCopyDialog.getByLabel('Rotation Y').fill('30');
+  await page.waitForFunction(() => {
+    const preview = window.__appStore.getState().solidCommandPreview;
+    return preview?.kind === 'move_copy' && Math.abs(preview.rotation[1]) > 0.1;
+  });
+  const rotationBefore = await page.evaluate(
+    () => window.__appStore.getState().solidCommandPreview.rotation,
+  );
+  const rotateHandle = page.getByTestId('move-copy-rotate-x-handle');
+  await rotateHandle.hover();
+  await page.waitForFunction(() => {
+    const interaction = window.__appStore.getState().solidCommandPreview?.gizmoInteraction;
+    return interaction?.kind === 'rotate' && interaction.axis === 0 && !interaction.active;
+  });
+  const rotateBox = await rotateHandle.boundingBox();
+  assert.ok(rotateBox);
+  const rotateX = rotateBox.x + rotateBox.width / 2;
+  const rotateY = rotateBox.y + rotateBox.height / 2;
+  await page.mouse.move(rotateX, rotateY);
+  await page.mouse.down();
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.gizmoInteraction?.active === true,
+  );
+  await page.mouse.move(rotateX + 80, rotateY + 37, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForFunction(() => {
+    const preview = window.__appStore.getState().solidCommandPreview;
+    return preview?.kind === 'move_copy' && preview.gizmoInteraction === null;
+  });
+  const rotationAfter = await page.evaluate(
+    () => window.__appStore.getState().solidCommandPreview.rotation,
+  );
+  const multiplyQuaternion = (a, b) => [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+  const relativeRotation = multiplyQuaternion(rotationAfter, [
+    -rotationBefore[0],
+    -rotationBefore[1],
+    -rotationBefore[2],
+    rotationBefore[3],
+  ]);
+  assert.ok(Math.abs(relativeRotation[0]) > 1e-3, 'rotation bead changed its selected X axis');
+  assert.ok(
+    Math.abs(relativeRotation[1]) < Math.abs(relativeRotation[0]) * 0.03,
+    `rotation bead did not leak into Y: ${relativeRotation.join(', ')}`,
+  );
+  assert.ok(
+    Math.abs(relativeRotation[2]) < Math.abs(relativeRotation[0]) * 0.03,
+    `rotation bead did not leak into Z: ${relativeRotation.join(', ')}`,
+  );
   await page.evaluate(() => window.__appStore.getState().closeBodyFeatureDialog());
   await moveCopyDialog.waitFor({ state: 'hidden' });
 
@@ -135,6 +220,7 @@ try {
   await page.locator('[data-ribbon-button="createJoint"]').click();
   const dialog = page.getByTestId('joint-dialog');
   await dialog.waitFor({ state: 'visible' });
+  assert.match(await dialog.innerText(), /Flip direction/i);
   await page.evaluate((connectors) => {
     const store = window.__appStore.getState();
     const bodies = store.solidScene.bodies;
@@ -204,6 +290,125 @@ try {
   assert.equal(result.solution.body_poses.length, 2);
   assert.deepEqual(result.selectedFaces, [], 'successful creation clears transient face selection');
 
+  console.log('2b. Moving the fixed body routes to component placement and rebases the connected mechanism');
+  const anchoredMoveBefore = await page.evaluate((fixedBodyId) => {
+    const state = window.__appStore.getState();
+    const definition = state.assemblyDocument.component_structure.definitions.find(
+      (candidate) => candidate.body_ids.includes(fixedBodyId),
+    );
+    const occurrence = state.assemblyDocument.component_structure.occurrences.find(
+      (candidate) => candidate.component_id === definition?.id,
+    );
+    if (!occurrence) throw new Error('fixed body has no component occurrence');
+    state.setSelectedOccurrenceId(null);
+    state.replaceSelectedBodies([fixedBodyId]);
+    state.openBodyFeatureDialog('move_copy');
+    return {
+      occurrenceId: occurrence.id,
+      localPose: occurrence.local_pose,
+      occurrencePoses: state.assemblySolution.occurrence_poses,
+    };
+  }, selected[0].bodyId);
+  await moveCopyDialog.waitFor({ state: 'visible' });
+  await page.waitForFunction(() => {
+    const preview = window.__appStore.getState().solidCommandPreview;
+    return preview?.kind === 'move_copy'
+      && preview.transformInBodySpace === false
+      && preview.targets.length === 2;
+  });
+  assert.match(await moveCopyDialog.innerText(), /mechanism anchor/i);
+  await moveCopyDialog.getByLabel('Translation X').fill('13');
+  await moveCopyDialog.getByLabel('Rotation Z').fill('37');
+  await page.waitForTimeout(100);
+  const anchoredPreview = await page.evaluate(
+    () => window.__appStore.getState().solidCommandPreview,
+  );
+  assert.equal(anchoredPreview?.kind, 'move_copy');
+  assert.ok(Math.abs(anchoredPreview.translation.x - 13) < 1e-9);
+  assert.ok(
+    Math.abs(anchoredPreview.rotation[2]) > 0.1,
+    `expected a Z rotation preview, got ${anchoredPreview.rotation.join(', ')}`,
+  );
+  await moveCopyDialog.locator('button[type="submit"]').click();
+  await moveCopyDialog.waitFor({ state: 'hidden' });
+  await page.waitForFunction(
+    (occurrenceId) => window.__appStore.getState().assemblyDocument.component_structure.occurrences
+      .find((candidate) => candidate.id === occurrenceId)?.local_pose.translation[0] !== 0,
+    anchoredMoveBefore.occurrenceId,
+  );
+  const anchoredMoveResult = await page.evaluate((before) => {
+    const state = window.__appStore.getState();
+    const after = state.assemblySolution.occurrence_poses;
+    const beforeRoot = before.occurrencePoses.find(
+      (pose) => pose.occurrence_id === before.occurrenceId,
+    );
+    const afterRoot = after.find((pose) => pose.occurrence_id === before.occurrenceId);
+    if (!beforeRoot || !afterRoot) throw new Error('root occurrence pose is missing');
+    const multiply = (a, b) => [
+      a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+      a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+      a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+      a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ];
+    const rotate = (point, quaternion) => {
+      const [qx, qy, qz, qw] = quaternion;
+      const [x, y, z] = point;
+      const uv = [qy * z - qz * y, qz * x - qx * z, qx * y - qy * x];
+      const uuv = [
+        qy * uv[2] - qz * uv[1],
+        qz * uv[0] - qx * uv[2],
+        qx * uv[1] - qy * uv[0],
+      ];
+      return point.map((value, index) => value + 2 * (qw * uv[index] + uuv[index]));
+    };
+    const inverseRoot = [
+      -beforeRoot.rotation[0],
+      -beforeRoot.rotation[1],
+      -beforeRoot.rotation[2],
+      beforeRoot.rotation[3],
+    ];
+    const deltaRotation = multiply(afterRoot.rotation, inverseRoot);
+    const rotatedBeforeRoot = rotate(beforeRoot.translation, deltaRotation);
+    const deltaTranslation = afterRoot.translation.map(
+      (value, index) => value - rotatedBeforeRoot[index],
+    );
+    let maximumPositionError = 0;
+    let minimumRotationDot = 1;
+    for (const original of before.occurrencePoses) {
+      const moved = after.find((pose) => pose.occurrence_id === original.occurrence_id);
+      if (!moved) continue;
+      const expectedTranslation = rotate(original.translation, deltaRotation).map(
+        (value, index) => value + deltaTranslation[index],
+      );
+      maximumPositionError = Math.max(
+        maximumPositionError,
+        Math.hypot(...moved.translation.map(
+          (value, index) => value - expectedTranslation[index],
+        )),
+      );
+      const expectedRotation = multiply(deltaRotation, original.rotation);
+      minimumRotationDot = Math.min(
+        minimumRotationDot,
+        Math.abs(expectedRotation.reduce(
+          (sum, value, index) => sum + value * moved.rotation[index],
+          0,
+        )),
+      );
+    }
+    return {
+      solved: state.assemblySolution.solved,
+      maximumPositionError,
+      minimumRotationDot,
+    };
+  }, anchoredMoveBefore);
+  assert.equal(anchoredMoveResult.solved, true);
+  assert.ok(anchoredMoveResult.maximumPositionError < 1e-6);
+  assert.ok(anchoredMoveResult.minimumRotationDot > 1 - 1e-8);
+  await page.evaluate(async (before) => {
+    await window.__appStore.getState().setOccurrencePose(before.occurrenceId, before.localPose);
+    window.__appStore.getState().clearSolidSelection();
+  }, anchoredMoveBefore);
+
   console.log('3. Joint is a first-class model-browser object and highlights both references');
   await page
     .getByTestId('assembly-browser')
@@ -215,6 +420,22 @@ try {
   await modelBrowserJoint.click();
   const highlighted = await page.evaluate(() => window.__appStore.getState().selectedFaces);
   assert.deepEqual(highlighted, selected.map((entry) => entry.faceId));
+  const viewportCanvas = page.locator('main canvas').first();
+  const viewportBox = await viewportCanvas.boundingBox();
+  assert.ok(viewportBox, 'viewport canvas is visible');
+  await page.mouse.click(
+    viewportBox.x + viewportBox.width * 0.12,
+    viewportBox.y + viewportBox.height * 0.18,
+  );
+  await page.waitForFunction(() => {
+    const state = window.__appStore.getState();
+    return state.selectedJointId === null
+      && state.selectedBodies.length === 0
+      && state.selectedFaces.length === 0
+      && state.selectedEdges.length === 0
+      && state.selectedOccurrenceId === null;
+  });
+  await modelBrowserJoint.click();
   await modelBrowserJoint.click({ button: 'right' });
   assert.equal(
     await page.getByRole('menuitem', { name: 'Edit joint' }).count(),
@@ -255,6 +476,20 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().assemblyDocument.positions.length === 1
       && window.__appStore.getState().jointMotionPreview === null,
+  );
+  const assemblyPanelOverflow = await page.evaluate(() => {
+    const structure = document.querySelector('[data-testid="assembly-structure-scroll"]');
+    const motion = document.querySelector('[data-testid="joint-motion-panel"]');
+    return {
+      structure: structure ? getComputedStyle(structure).overflowY : null,
+      motion: motion ? getComputedStyle(motion).overflowY : null,
+    };
+  });
+  assert.equal(assemblyPanelOverflow.structure, 'auto');
+  assert.notEqual(
+    assemblyPanelOverflow.motion,
+    'auto',
+    'Joints, Motion, and diagnostics share one scrollbar instead of overlapping',
   );
   const savedPositionResult = await page.evaluate(async () => {
     const document = await window.__engine.assemblyDocument();

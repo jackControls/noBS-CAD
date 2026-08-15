@@ -1048,6 +1048,8 @@ export interface JointConnectorDto {
   edge_key?: string | null;
   kind: JointConnectorKindDto;
   radius?: number | null;
+  /** Analytic cylinder frame captured with cylindrical/opening connectors. */
+  source_surface_frame?: JointFrameDto | null;
   frame: JointFrameDto;
 }
 
@@ -1368,6 +1370,10 @@ export interface MechanismDragRequestDto {
   body_id: number;
   occurrence_id?: number | null;
   target_pose: BodyPoseDto;
+  grab_point_local?: [number, number, number] | null;
+  target_point_world?: [number, number, number] | null;
+  /** Current on-screen joint coordinates used as the next IK seed. */
+  initial_joint_motions?: JointMotionStateDto[];
   solve_orientation?: boolean;
   maximum_iterations?: number;
 }

@@ -1,7 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../../store/appStore';
-import type { ProfileRefDto } from '../../engine/types';
+import type {
+  BodyPoseDto,
+  InstanceBodyPoseDto,
+  ProfileRefDto,
+} from '../../engine/types';
+import type { MoveCopyCommandPreview } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
 
 export interface NativeCameraState {
@@ -593,6 +598,132 @@ function hiddenNames(
   return names;
 }
 
+function quaternionMultiply(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+): [number, number, number, number] {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+}
+
+function rotateByQuaternion(
+  value: [number, number, number],
+  quaternion: [number, number, number, number],
+): [number, number, number] {
+  const [x, y, z, w] = quaternion;
+  const [vx, vy, vz] = value;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [
+    vx + w * tx + (y * tz - z * ty),
+    vy + w * ty + (z * tx - x * tz),
+    vz + w * tz + (x * ty - y * tx),
+  ];
+}
+
+function samePose(
+  translation: [number, number, number],
+  rotation: [number, number, number, number],
+  target: MoveCopyCommandPreview['targets'][number],
+): boolean {
+  return translation.every((value, index) =>
+    Math.abs(value - target.baseTranslation[index]) <= 1e-7)
+    && rotation.every((value, index) =>
+      Math.abs(value - target.baseRotation[index]) <= 1e-7);
+}
+
+function movedPreviewPose(
+  target: MoveCopyCommandPreview['targets'][number],
+  preview: MoveCopyCommandPreview,
+): {
+  translation: [number, number, number];
+  rotation: [number, number, number, number];
+} {
+  const pivot: [number, number, number] = [
+    preview.pivot.x,
+    preview.pivot.y,
+    preview.pivot.z,
+  ];
+  const delta: [number, number, number] = [
+    preview.translation.x,
+    preview.translation.y,
+    preview.translation.z,
+  ];
+  if (preview.transformInBodySpace) {
+    const rotatedNegativePivot = rotateByQuaternion(
+      [-pivot[0], -pivot[1], -pivot[2]],
+      preview.rotation,
+    );
+    const localOffset: [number, number, number] = [
+      pivot[0] + delta[0] + rotatedNegativePivot[0],
+      pivot[1] + delta[1] + rotatedNegativePivot[1],
+      pivot[2] + delta[2] + rotatedNegativePivot[2],
+    ];
+    const worldOffset = rotateByQuaternion(localOffset, target.baseRotation);
+    return {
+      translation: [
+        target.baseTranslation[0] + worldOffset[0],
+        target.baseTranslation[1] + worldOffset[1],
+        target.baseTranslation[2] + worldOffset[2],
+      ],
+      rotation: quaternionMultiply(target.baseRotation, preview.rotation),
+    };
+  }
+  const rotatedBase = rotateByQuaternion(
+    [
+      target.baseTranslation[0] - pivot[0],
+      target.baseTranslation[1] - pivot[1],
+      target.baseTranslation[2] - pivot[2],
+    ],
+    preview.rotation,
+  );
+  return {
+    translation: [
+      pivot[0] + delta[0] + rotatedBase[0],
+      pivot[1] + delta[1] + rotatedBase[1],
+      pivot[2] + delta[2] + rotatedBase[2],
+    ],
+    rotation: quaternionMultiply(preview.rotation, target.baseRotation),
+  };
+}
+
+function moveCopyPresentationPoses(
+  bodyPoses: BodyPoseDto[],
+  instanceBodyPoses: InstanceBodyPoseDto[],
+  preview: MoveCopyCommandPreview | null,
+): [BodyPoseDto[], InstanceBodyPoseDto[]] {
+  if (!preview || preview.copy) return [bodyPoses, instanceBodyPoses];
+  const targetFor = (
+    bodyId: number,
+    occurrenceId: number | null,
+    translation: [number, number, number],
+    rotation: [number, number, number, number],
+  ) => preview.targets.find((target) =>
+    target.bodyId === bodyId
+      && target.occurrenceId === occurrenceId
+      && samePose(translation, rotation, target));
+  return [
+    bodyPoses.map((pose) => {
+      const target = targetFor(pose.body_id, null, pose.translation, pose.rotation);
+      return target ? { ...pose, ...movedPreviewPose(target, preview) } : pose;
+    }),
+    instanceBodyPoses.map((pose) => {
+      const target = targetFor(
+        pose.body_id,
+        pose.occurrence_id,
+        pose.translation,
+        pose.rotation,
+      );
+      return target ? { ...pose, ...movedPreviewPose(target, preview) } : pose;
+    }),
+  ];
+}
+
 export function collectNativeViewportPresentation(): NativePresentation {
   const state = useAppStore.getState();
   const bodyHoverKinds = new Set([
@@ -619,6 +750,19 @@ export function collectNativeViewportPresentation(): NativePresentation {
     selectedSketchEntityIds.push(state.selectedEntity);
   }
   const browser = state.document?.browser ?? [];
+  const solved = state.jointDialogOpen && state.jointPreviewSolution
+    ? state.jointPreviewSolution
+    : state.mechanismPreview?.solution
+      ?? state.jointMotionPreview?.solution
+      ?? state.assemblySolution;
+  const movePreview = state.solidCommandPreview?.kind === 'move_copy'
+    ? state.solidCommandPreview
+    : null;
+  const [bodyPoses, instanceBodyPoses] = moveCopyPresentationPoses(
+    solved.body_poses,
+    solved.instance_body_poses,
+    movePreview,
+  );
 
   return {
     mode:
@@ -658,20 +802,8 @@ export function collectNativeViewportPresentation(): NativePresentation {
       ) ?? [],
     selectedProfiles: state.profilePicker?.selected ?? [],
     hoveredProfile: state.profilePicker?.hovered ?? null,
-    bodyPoses: (
-      state.jointDialogOpen && state.jointPreviewSolution
-        ? state.jointPreviewSolution
-        : state.mechanismPreview?.solution
-          ?? state.jointMotionPreview?.solution
-          ?? state.assemblySolution
-    ).body_poses,
-    instanceBodyPoses: (
-      state.jointDialogOpen && state.jointPreviewSolution
-        ? state.jointPreviewSolution
-        : state.mechanismPreview?.solution
-          ?? state.jointMotionPreview?.solution
-          ?? state.assemblySolution
-    ).instance_body_poses,
+    bodyPoses,
+    instanceBodyPoses,
   };
 }
 

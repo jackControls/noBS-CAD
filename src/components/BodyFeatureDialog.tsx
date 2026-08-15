@@ -14,9 +14,13 @@ import {
 import { getEngine } from '../engine';
 import { submitBodyFeature } from '../engine/controller';
 import type {
+  AssemblyDocumentDto,
+  AssemblySolutionDto,
+  AssemblyTransformDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   CombineOperation,
+  ComponentOccurrenceDto,
   PlaneRef,
   Point3Dto,
 } from '../engine/types';
@@ -24,6 +28,7 @@ import {
   useAppStore,
   type BodyFeatureKind,
   type MoveCopyCommandPreview,
+  type MoveCopyGizmoInteraction,
 } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
 import { MoveCopyManipulator } from './viewport/MoveCopyManipulator';
@@ -159,6 +164,22 @@ function multiplyQuaternion(
   ];
 }
 
+function normalizeQuaternion(
+  value: [number, number, number, number],
+): [number, number, number, number] {
+  const length = Math.hypot(...value);
+  return length > 1e-12
+    ? value.map((component) => component / length) as [number, number, number, number]
+    : [0, 0, 0, 1];
+}
+
+function inverseQuaternion(
+  value: [number, number, number, number],
+): [number, number, number, number] {
+  const normalized = normalizeQuaternion(value);
+  return [-normalized[0], -normalized[1], -normalized[2], normalized[3]];
+}
+
 function rotateVector(value: [number, number, number], quaternion: [number, number, number, number]): [number, number, number] {
   const [x, y, z, w] = quaternion;
   const [vx, vy, vz] = value;
@@ -195,16 +216,133 @@ function componentPivot(
   };
 }
 
+function occurrenceWorldPose(
+  occurrence: ComponentOccurrenceDto,
+  solution: AssemblySolutionDto,
+): AssemblyTransformDto {
+  const solved = solution.occurrence_poses.find(
+    (pose) => pose.occurrence_id === occurrence.id,
+  );
+  return solved
+    ? { translation: solved.translation, rotation: solved.rotation }
+    : occurrence.local_pose;
+}
+
+function occurrenceIdsConnectedTo(
+  assembly: AssemblyDocumentDto,
+  occurrenceId: number,
+): number[] {
+  const adjacent = new Map<number, Set<number>>();
+  const connect = (a: number, b: number) => {
+    if (!adjacent.has(a)) adjacent.set(a, new Set());
+    if (!adjacent.has(b)) adjacent.set(b, new Set());
+    adjacent.get(a)!.add(b);
+    adjacent.get(b)!.add(a);
+  };
+  for (const joint of assembly.joints) {
+    if (!joint.enabled) continue;
+    const a = joint.advanced.connector_a_occurrence_id;
+    const b = joint.advanced.connector_b_occurrence_id;
+    if (a !== null && b !== null) connect(a, b);
+  }
+  const result: number[] = [];
+  const pending = [occurrenceId];
+  const visited = new Set<number>();
+  while (pending.length > 0) {
+    const current = pending.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    result.push(current);
+    for (const next of adjacent.get(current) ?? []) pending.push(next);
+  }
+  return result;
+}
+
+function placementAnchorOccurrenceId(
+  assembly: AssemblyDocumentDto,
+  occurrenceId: number,
+): number {
+  const occurrence = assembly.component_structure.occurrences.find(
+    (candidate) => candidate.id === occurrenceId,
+  );
+  if (!occurrence) return occurrenceId;
+  const connected = new Set(occurrenceIdsConnectedTo(assembly, occurrenceId));
+  const siblings = assembly.component_structure.occurrences
+    .filter((candidate) =>
+      candidate.parent_occurrence_id === occurrence.parent_occurrence_id
+        && connected.has(candidate.id),
+    )
+    .sort((a, b) => a.id - b.id);
+  return siblings.find((candidate) => candidate.grounded)?.id
+    ?? siblings[0]?.id
+    ?? occurrenceId;
+}
+
+function smartMoveOccurrence(
+  assembly: AssemblyDocumentDto,
+  selectedOccurrenceId: number | null,
+  selectedBodyIds: number[],
+): ComponentOccurrenceDto | undefined {
+  const definitionsById = new Map(
+    assembly.component_structure.definitions.map((definition) => [definition.id, definition]),
+  );
+  const containsSelection = (occurrence: ComponentOccurrenceDto) => {
+    const bodyIds = definitionsById.get(occurrence.component_id)?.body_ids ?? [];
+    return selectedBodyIds.length > 0
+      && selectedBodyIds.every((bodyId) => bodyIds.includes(bodyId));
+  };
+  const explicit = assembly.component_structure.occurrences.find(
+    (candidate) => candidate.id === selectedOccurrenceId && containsSelection(candidate),
+  );
+  if (explicit) return explicit;
+  if (selectedBodyIds.length !== 1) return undefined;
+  const matches = assembly.component_structure.occurrences.filter(containsSelection);
+  if (matches.length !== 1) return undefined;
+  const candidate = matches[0];
+  const jointConnected = assembly.joints.some((joint) => joint.enabled && (
+    joint.advanced.connector_a_occurrence_id === candidate.id
+      || joint.advanced.connector_b_occurrence_id === candidate.id
+  ));
+  // A plain unassembled body keeps part-history Move/Copy as its default.
+  // Fixed and joint-connected bodies represent assembly placement intent.
+  return candidate.grounded || jointConnected ? candidate : undefined;
+}
+
+function worldPoseToLocal(
+  worldPose: AssemblyTransformDto,
+  parentWorldPose: AssemblyTransformDto | null,
+): AssemblyTransformDto {
+  if (!parentWorldPose) {
+    return {
+      translation: worldPose.translation,
+      rotation: normalizeQuaternion(worldPose.rotation),
+    };
+  }
+  const inverseParentRotation = inverseQuaternion(parentWorldPose.rotation);
+  return {
+    translation: rotateVector([
+      worldPose.translation[0] - parentWorldPose.translation[0],
+      worldPose.translation[1] - parentWorldPose.translation[1],
+      worldPose.translation[2] - parentWorldPose.translation[2],
+    ], inverseParentRotation),
+    rotation: normalizeQuaternion(
+      multiplyQuaternion(inverseParentRotation, worldPose.rotation),
+    ),
+  };
+}
+
 function VectorFields({
   label,
   values,
   onChange,
   unit,
+  autoSelectKey,
 }: {
   label: string;
   values: [string, string, string];
   onChange: (values: [string, string, string]) => void;
   unit?: 'mm' | '°';
+  autoSelectKey?: string | number | boolean | null;
 }) {
   return (
     <fieldset>
@@ -215,6 +353,7 @@ function VectorFields({
             <span className="mb-1 block text-[9px] text-mute">{axis}</span>
             <span className="relative block">
               <DimensionInput
+                autoSelectKey={index === 0 ? autoSelectKey : null}
                 aria-label={`${label} ${axis}`}
                 step="any"
                 value={values[index]}
@@ -246,15 +385,23 @@ function MoveCopyPreviewPublisher({
   preview: MoveCopyCommandPreview | null;
 }) {
   const setPreview = useAppStore((state) => state.setSolidCommandPreview);
+  const latestPreview = useRef(preview);
+  const frame = useRef<number | null>(null);
   useEffect(() => {
-    if (!preview) {
-      setPreview(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setPreview(preview), 64);
-    return () => window.clearTimeout(timer);
+    latestPreview.current = preview;
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      setPreview(latestPreview.current);
+    });
   }, [preview, setPreview]);
-  useEffect(() => () => setPreview(null), [setPreview]);
+  useEffect(() => () => {
+    if (frame.current !== null) {
+      cancelAnimationFrame(frame.current);
+      frame.current = null;
+    }
+    setPreview(null);
+  }, [setPreview]);
   return null;
 }
 
@@ -344,6 +491,8 @@ export function BodyFeatureDialog() {
   const [moveTo, setMoveTo] = useState<[string, string, string]>(['10', '0', '0']);
   const [movePivot, setMovePivot] = useState<[string, string, string]>(['0', '0', '0']);
   const [moveCopy, setMoveCopy] = useState(false);
+  const [moveGizmoInteraction, setMoveGizmoInteraction] =
+    useState<MoveCopyGizmoInteraction | null>(null);
   const [occurrenceId, setOccurrenceId] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -352,6 +501,10 @@ export function BodyFeatureDialog() {
   useEffect(() => {
     if (!dialog) selectionDialogKeyRef.current = null;
   }, [dialog]);
+
+  useEffect(() => {
+    setMoveGizmoInteraction(null);
+  }, [dialog?.kind, moveMode, moveObjectType]);
 
   const planeOptions = useMemo<PlaneOption[]>(() => {
     const result: PlaneOption[] = [
@@ -474,13 +627,31 @@ export function BodyFeatureDialog() {
         }
         if (!edit) {
           if (dialog.kind === 'move_copy') {
-            const occurrence = assembly.component_structure.occurrences.find(
-              (candidate) => candidate.id === selectedOccurrenceId,
+            if (initializeSelection) {
+              setMoveMode('free');
+              setMoveTranslation(['0', '0', '0']);
+              setMoveRotation(['0', '0', '0']);
+              setMoveDirection(['1', '0', '0']);
+              setMoveDistance('10');
+              setMoveAxis(['0', '0', '1']);
+              setMoveAngle('90');
+              setMoveFrom(['0', '0', '0']);
+              setMoveTo(['10', '0', '0']);
+              setMoveCopy(false);
+              setMoveGizmoInteraction(null);
+            }
+            const occurrence = smartMoveOccurrence(
+              assembly,
+              selectedOccurrenceId,
+              directlySelectedBodies,
             );
             setMoveObjectType(occurrence ? 'component' : 'bodies');
             setOccurrenceId(
               occurrence?.id ?? assembly.component_structure.occurrences[0]?.id ?? 0,
             );
+            if (initializeSelection && occurrence && selectedOccurrenceId !== occurrence.id) {
+              current.setSelectedOccurrenceId(occurrence.id);
+            }
             const centerIds = occurrence
               ? assembly.component_structure.definitions.find(
                   (definition) => definition.id === occurrence.component_id,
@@ -491,8 +662,16 @@ export function BodyFeatureDialog() {
                   (definition) => definition.id === occurrence.component_id,
                 )
               : undefined;
+            const worldPose = occurrence
+              ? occurrenceWorldPose(occurrence, assemblySolution)
+              : null;
             const center = occurrence && component
-              ? componentPivot(bodies, centerIds, component.local_coordinate_system, occurrence.local_pose)
+              ? componentPivot(
+                  bodies,
+                  centerIds,
+                  component.local_coordinate_system,
+                  worldPose ?? occurrence.local_pose,
+                )
               : selectionBoundsCenter(bodies, centerIds);
             setMovePivot([String(center.x), String(center.y), String(center.z)]);
             syncBodies(occurrence ? centerIds : directlySelectedBodies);
@@ -605,6 +784,7 @@ export function BodyFeatureDialog() {
     selectedFace,
     selectedFaces,
     assembly,
+    assemblySolution,
     selectedOccurrenceId,
   ]);
 
@@ -633,8 +813,21 @@ export function BodyFeatureDialog() {
   const movePivotValue = vector(...movePivot);
   const moveDistanceValue = Number(moveDistance);
   const moveAngleValue = Number(moveAngle);
+  const moveOccurrence = assembly.component_structure.occurrences.find(
+    (candidate) => candidate.id === occurrenceId,
+  );
+  const moveOccurrenceCluster = moveOccurrence
+    ? occurrenceIdsConnectedTo(assembly, moveOccurrence.id)
+    : [];
+  const moveOccurrenceAnchorId = moveOccurrence
+    ? placementAnchorOccurrenceId(assembly, moveOccurrence.id)
+    : 0;
+  const constrainedNonAnchorMove = moveObjectType === 'component'
+    && !moveCopy
+    && moveOccurrenceCluster.length > 1
+    && moveOccurrenceAnchorId !== occurrenceId;
   const moveTargetValid = moveObjectType === 'component'
-    ? occurrenceId > 0
+    ? occurrenceId > 0 && !constrainedNonAnchorMove
     : bodyIds.length > 0;
   const moveValuesValid = finiteVector(movePivotValue) && (
     moveMode === 'free'
@@ -769,41 +962,63 @@ export function BodyFeatureDialog() {
   const movePreview = (() => {
     if (kind !== 'move_copy' || !moveTargetValid || !moveValuesValid) return null;
     const resolved = resolveMove();
-    const targetIds = moveObjectType === 'component'
-      ? (() => {
-          const occurrence = assembly.component_structure.occurrences.find(
-            (candidate) => candidate.id === occurrenceId,
-          );
-          return assembly.component_structure.definitions.find(
-            (definition) => definition.id === occurrence?.component_id,
-          )?.body_ids ?? [];
-        })()
-      : bodyIds;
     const targets: MoveCopyCommandPreview['targets'] = [];
-    for (const targetBodyId of targetIds) {
-      const instancePoses = moveObjectType === 'component'
-        ? assemblySolution.instance_body_poses.filter(
-            (pose) => pose.body_id === targetBodyId && pose.occurrence_id === occurrenceId,
-          )
-        : assemblySolution.instance_body_poses.filter(
-            (pose) => pose.body_id === targetBodyId,
-          );
-      if (instancePoses.length > 0) {
-        targets.push(...instancePoses.map((pose) => ({
-          bodyId: targetBodyId,
+    if (moveObjectType === 'component') {
+      const previewOccurrenceIds = new Set(
+        moveCopy ? [occurrenceId] : moveOccurrenceCluster,
+      );
+      targets.push(...assemblySolution.instance_body_poses
+        .filter((pose) => previewOccurrenceIds.has(pose.occurrence_id))
+        .map((pose) => ({
+          bodyId: pose.body_id,
+          occurrenceId: pose.occurrence_id,
           baseTranslation: pose.translation,
           baseRotation: pose.rotation,
         })));
-        continue;
+    } else {
+      for (const targetBodyId of bodyIds) {
+        const instancePoses = assemblySolution.instance_body_poses.filter(
+          (pose) => pose.body_id === targetBodyId,
+        );
+        if (instancePoses.length > 0) {
+          targets.push(...instancePoses.map((pose) => ({
+            bodyId: targetBodyId,
+            occurrenceId: pose.occurrence_id,
+            baseTranslation: pose.translation,
+            baseRotation: pose.rotation,
+          })));
+          continue;
+        }
+        const pose = assemblySolution.body_poses.find(
+          (candidate) => candidate.body_id === targetBodyId,
+        );
+        targets.push({
+          bodyId: targetBodyId,
+          occurrenceId: null,
+          baseTranslation: pose?.translation ?? [0, 0, 0],
+          baseRotation: pose?.rotation ?? [0, 0, 0, 1],
+        });
       }
-      const pose = assemblySolution.body_poses.find(
-        (candidate) => candidate.body_id === targetBodyId,
+    }
+    const transformInBodySpace = moveObjectType === 'bodies';
+    let gizmoPivot = {
+      x: movePivotValue.x + resolved.translation.x,
+      y: movePivotValue.y + resolved.translation.y,
+      z: movePivotValue.z + resolved.translation.z,
+    };
+    let gizmoOrientation: [number, number, number, number] = [0, 0, 0, 1];
+    const displayTarget = targets[0];
+    if (transformInBodySpace && displayTarget) {
+      const [x, y, z] = rotateVector(
+        [gizmoPivot.x, gizmoPivot.y, gizmoPivot.z],
+        displayTarget.baseRotation,
       );
-      targets.push({
-        bodyId: targetBodyId,
-        baseTranslation: pose?.translation ?? [0, 0, 0],
-        baseRotation: pose?.rotation ?? [0, 0, 0, 1],
-      });
+      gizmoPivot = {
+        x: displayTarget.baseTranslation[0] + x,
+        y: displayTarget.baseTranslation[1] + y,
+        z: displayTarget.baseTranslation[2] + z,
+      };
+      gizmoOrientation = displayTarget.baseRotation;
     }
     return {
       kind: 'move_copy',
@@ -812,8 +1027,11 @@ export function BodyFeatureDialog() {
       translation: resolved.translation,
       rotation: resolved.rotation,
       copy: moveCopy,
-      transformInBodySpace: moveObjectType === 'bodies',
+      transformInBodySpace,
       showSixAxisGizmo: moveMode === 'free',
+      gizmoPivot,
+      gizmoOrientation,
+      gizmoInteraction: moveGizmoInteraction,
     } satisfies MoveCopyCommandPreview;
   })();
 
@@ -822,27 +1040,37 @@ export function BodyFeatureDialog() {
     if (!valid) return;
     const resolvedMove = resolveMove();
     if (kind === 'move_copy' && moveObjectType === 'component') {
-      const occurrence = assembly.component_structure.occurrences.find(
-        (candidate) => candidate.id === occurrenceId,
-      );
+      const occurrence = moveOccurrence;
       if (!occurrence) return;
       const deltaRotation = resolvedMove.rotation;
+      const currentWorldPose = occurrenceWorldPose(occurrence, assemblySolution);
       const [rotatedX, rotatedY, rotatedZ] = rotateVector(
         [
-          occurrence.local_pose.translation[0] - movePivotValue.x,
-          occurrence.local_pose.translation[1] - movePivotValue.y,
-          occurrence.local_pose.translation[2] - movePivotValue.z,
+          currentWorldPose.translation[0] - movePivotValue.x,
+          currentWorldPose.translation[1] - movePivotValue.y,
+          currentWorldPose.translation[2] - movePivotValue.z,
         ],
         deltaRotation,
       );
-      const localPose = {
+      const desiredWorldPose: AssemblyTransformDto = {
         translation: [
           movePivotValue.x + rotatedX + resolvedMove.translation.x,
           movePivotValue.y + rotatedY + resolvedMove.translation.y,
           movePivotValue.z + rotatedZ + resolvedMove.translation.z,
         ] as [number, number, number],
-        rotation: multiplyQuaternion(deltaRotation, occurrence.local_pose.rotation),
+        rotation: normalizeQuaternion(
+          multiplyQuaternion(deltaRotation, currentWorldPose.rotation),
+        ),
       };
+      const parentOccurrence = occurrence.parent_occurrence_id === null
+        ? null
+        : assembly.component_structure.occurrences.find(
+            (candidate) => candidate.id === occurrence.parent_occurrence_id,
+          ) ?? null;
+      const localPose = worldPoseToLocal(
+        desiredWorldPose,
+        parentOccurrence ? occurrenceWorldPose(parentOccurrence, assemblySolution) : null,
+      );
       setError(null);
       setLoading(true);
       void moveCopyOccurrence(occurrence.id, localPose, moveCopy)
@@ -981,12 +1209,14 @@ export function BodyFeatureDialog() {
       )}
       {kind === 'move_copy' && moveMode === 'free' && moveValuesValid && (
         <MoveCopyManipulator
-          pivot={movePivotValue}
+          pivot={movePreview?.gizmoPivot ?? movePivotValue}
+          orientation={movePreview?.gizmoOrientation ?? [0, 0, 0, 1]}
           translation={moveTranslation}
           rotation={moveRotation}
           disabled={!valid}
           onTranslationChange={setMoveTranslation}
           onRotationChange={setMoveRotation}
+          onInteractionChange={setMoveGizmoInteraction}
         />
       )}
       <form
@@ -1061,7 +1291,12 @@ export function BodyFeatureDialog() {
                       );
                       const ids = component?.body_ids ?? [];
                       const center = occurrence && component
-                        ? componentPivot(bodies, ids, component.local_coordinate_system, occurrence.local_pose)
+                        ? componentPivot(
+                            bodies,
+                            ids,
+                            component.local_coordinate_system,
+                            occurrenceWorldPose(occurrence, assemblySolution),
+                          )
                         : selectionBoundsCenter(bodies, ids);
                       setMovePivot([String(center.x), String(center.y), String(center.z)]);
                     }}
@@ -1073,8 +1308,26 @@ export function BodyFeatureDialog() {
                       </option>
                     ))}
                   </select>
+                  {moveOccurrenceCluster.length > 1 && moveOccurrenceAnchorId === occurrenceId && (
+                    <span className="mt-1 block text-[10px] leading-4 text-mute">
+                      This is the mechanism anchor. Move/Copy keeps all {moveOccurrenceCluster.length} connected components together.
+                    </span>
+                  )}
+                  {constrainedNonAnchorMove && (
+                    <span className="mt-1 block rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
+                      This component is constrained by the mechanism. Move the anchored component or use joint motion dragging instead.
+                    </span>
+                  )}
                 </label>
               )}
+              {moveObjectType === 'bodies' && (() => {
+                const candidate = smartMoveOccurrence(assembly, null, bodyIds);
+                return candidate ? (
+                  <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
+                    Bodies edits the part geometry used by every occurrence. Choose Component to reposition this fixed or joint-connected part without changing its feature history.
+                  </p>
+                ) : null;
+              })()}
               <label>
                 <span className={LABEL}>Move type</span>
                 <select
@@ -1090,7 +1343,15 @@ export function BodyFeatureDialog() {
               </label>
               {moveMode === 'free' ? (
                 <>
-                  <VectorFields label="Translation" unit="mm" values={moveTranslation} onChange={setMoveTranslation} />
+                  <VectorFields
+                    label="Translation"
+                    unit="mm"
+                    values={moveTranslation}
+                    onChange={setMoveTranslation}
+                    autoSelectKey={moveObjectType === 'component'
+                      ? `component:${occurrenceId}`
+                      : bodyIds.length > 0 ? `bodies:${bodyIds.join(',')}` : null}
+                  />
                   <VectorFields label="Rotation" unit="°" values={moveRotation} onChange={setMoveRotation} />
                 </>
               ) : moveMode === 'translate' ? (
@@ -1098,7 +1359,7 @@ export function BodyFeatureDialog() {
                   <VectorFields label="Direction" values={moveDirection} onChange={setMoveDirection} />
                   <label>
                     <span className={LABEL}>Distance (mm)</span>
-                    <DimensionInput step="any" value={moveDistance} onValueChange={setMoveDistance} />
+                    <DimensionInput autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null} step="any" value={moveDistance} onValueChange={setMoveDistance} />
                   </label>
                 </>
               ) : moveMode === 'rotate' ? (
@@ -1108,6 +1369,7 @@ export function BodyFeatureDialog() {
                     <span className={LABEL}>Angle (degrees)</span>
                     <span className="relative block">
                       <DimensionInput
+                        autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
                         step="any"
                         value={moveAngle}
                         onValueChange={setMoveAngle}
@@ -1182,6 +1444,7 @@ export function BodyFeatureDialog() {
               <label>
                 <span className={LABEL}>Wall thickness (mm)</span>
                 <DimensionInput
+                  autoSelectKey={faceIds.length > 0 ? `${bodyId}:${faceIds.join(',')}` : null}
                   min="0.000001"
                   step="any"
                   value={thickness}
@@ -1215,6 +1478,7 @@ export function BodyFeatureDialog() {
                 <label>
                   <span className={LABEL}>Spacing (mm)</span>
                   <DimensionInput
+                    autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
                     step="any"
                     value={spacing}
                     onValueChange={setSpacing}
@@ -1285,6 +1549,7 @@ export function BodyFeatureDialog() {
                 <label>
                   <span className={LABEL}>Count</span>
                   <DimensionInput
+                    autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
                     min="2"
                     step="1"
                     value={count}
