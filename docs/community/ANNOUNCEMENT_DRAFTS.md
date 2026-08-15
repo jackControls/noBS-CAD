@@ -1,10 +1,13 @@
 # Announcement drafts
 
 Ready-to-adapt copy for announcing noBS CAD publicly. **Do not post yet** —
-work through the checklist at the bottom first (demo link, screenshots,
-Discussions toggle).
+work through the checklist at the bottom first.
 
-Replace every `[DEMO URL]` with the real try-it link before posting.
+**Two modes.** Current plan is **release-first**: point people at downloadable
+desktop builds (GitHub Releases) instead of a browser demo. A browser demo
+remains a later, optional upgrade (the code already supports it). Replace
+`[DEMO URL]` with the real try-it link when a demo exists, otherwise use
+`[RELEASES URL]` = `https://github.com/jackControls/noBS-CAD/releases`.
 
 ---
 
@@ -150,8 +153,14 @@ instability).
 
 ## Posting checklist
 
-- [ ] Deploy the browser demo and fill every `[DEMO URL]` (or link the README
-      browser-dev-build instructions as a fallback).
+Release-first path:
+
+- [ ] Tag `v0.1.0` and cut a GitHub Release with the macOS `.dmg` + Windows
+      portable ZIP attached (merge the assembly branch first, then PR #46).
+- [ ] Release notes call out install friction honestly: macOS build is
+      ad-hoc signed (right-click → Open past the Gatekeeper warning); Windows
+      needs the VC++ x64 Redistributable and WebView2. One sentence each.
+- [ ] Replace `[RELEASES URL]` in the drafts with the real releases link.
 - [ ] Enable GitHub Discussions (repo Settings → General → Features →
       Discussions) and paste `docs/community/DISCUSSIONS_WELCOME.md` as the
       first post in *General*.
@@ -159,10 +168,14 @@ instability).
       (https://github.com/jackControls/noBS-CAD/issues/45) is visible on the
       repo front page.
 - [ ] Recheck screenshots in `docs/assets/` render correctly (README images).
-- [ ] Record the demo GIF per the script above; keep it under 2 MB for HN.
-- [ ] Tag `v0.1.0` so the release page exists before announcing (optional but
-      recommended).
+- [ ] Record the demo GIF per the script above (record on a real part, not a
+      test piece); keep it under 2 MB for HN.
 - [ ] Post Show HN first (most forgiving audience for pre-alpha), then Reddit
       a few hours later with any fixes learned from HN feedback.
 - [ ] Stick around and answer comments — responsiveness is what converts
       curious readers into testers.
+
+Later, optional: deploy the browser demo (the code already supports save/load
+and autosave in-browser — see `src/files/fileIO.ts`) and add a Try-it-now
+button above the downloads. Until then, the drafts above stand on their own
+with `[RELEASES URL]`.
