@@ -32,6 +32,14 @@
 | [manufacturing/INDEX.md](manufacturing/INDEX.md) | 3MF/STL export subsystem |
 | [manufacturing/DRAFT_PR.md](manufacturing/DRAFT_PR.md) | A+ PR summary (humans) |
 
+## Community / feedback
+
+| Doc | Audience | When to update |
+|-----|----------|----------------|
+| [EDGE_CASE_HUNT.md](EDGE_CASE_HUNT.md) | Users + contributors | Challenge list / process changes |
+| [community/ANNOUNCEMENT_DRAFTS.md](community/ANNOUNCEMENT_DRAFTS.md) | Maintainers | Before public announcements |
+| [community/DISCUSSIONS_WELCOME.md](community/DISCUSSIONS_WELCOME.md) | Maintainers | First Discussions post |
+
 ## Packaging / provenance
 
 | Doc | Notes |

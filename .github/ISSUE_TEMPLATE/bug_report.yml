@@ -1,5 +1,5 @@
 name: Bug report
-description: Something broke in modeling, UI, MCP, or packaging
+description: Something broke in modeling, UI, MCP, or packaging — edge cases and weird geometry are very welcome
 title: "[bug] "
 labels: ["bug"]
 body:
@@ -17,6 +17,22 @@ body:
         - other
     validations:
       required: true
+  - type: dropdown
+    id: edge_case
+    attributes:
+      label: Is this an edge case?
+      description: Unusual geometry, extreme values, or an uncommon tool combination? Edge-case reports become regression tests.
+      options:
+        - "Yes — weird geometry or corner case"
+        - "Not sure"
+        - "No — ordinary workflow"
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What were you trying to build?
+      description: A sentence about the part helps us understand the intent behind the geometry
   - type: textarea
     id: steps
     attributes:
@@ -45,4 +61,4 @@ body:
     id: artifacts
     attributes:
       label: Artifacts
-      description: Screenshot, recording, or safe .nbcad / STEP snippet
+      description: Screenshot, short recording, or a safe .nbcad file — plus a STEP backup if the geometry matters

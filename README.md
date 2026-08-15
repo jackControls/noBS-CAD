@@ -84,6 +84,13 @@ exporting a STEP copy of any design you care about as a backup. STEP preserves
 the final solid geometry for use in other CAD software, but not the editable
 noBS CAD feature history.
 
+> **🐞 Edge-case hunters wanted.** Pre-alpha CAD gets reliable by breaking on
+> purpose. Model something real — or work the
+> [challenge list](docs/EDGE_CASE_HUNT.md) of nasty geometry (thin walls,
+> tangent faces, grazing fillets, self-intersecting sweeps). Every report
+> becomes a regression test. Join the
+> [Edge-case hunt](https://github.com/jackControls/noBS-CAD/issues/45).
+
 ## Local automation (MCP)
 
 The repository includes a stateful, headless
@@ -122,7 +129,9 @@ license from 3Dconnexion. © 3Dconnexion 1992 - 2020. All rights reserved.
 ## We want your feedback
 
 The most helpful contribution right now is simply trying to make a real part
-and showing us what gets in the way.
+and showing us what gets in the way. Not sure what to try? The
+[edge-case hunt guide](docs/EDGE_CASE_HUNT.md) lists the geometry most likely
+to break.
 
 For a bug, it helps to include:
 
