@@ -34,6 +34,7 @@ fn locked_seg_text(
         length_text: length_text.map(|t| t.to_string()),
         angle_text: angle_text.map(|t| t.to_string()),
         ctrl_held: false,
+        tracking: None,
     }
 }
 

@@ -31,10 +31,16 @@ import {
 import {
   authorizeNextSolidRedo,
   beginHistoryMutation,
+  canRedoAssemblyHistory,
   canRedoDrawingHistory,
+  canUndoAssemblyHistory,
   canUndoDrawingHistory,
+  commitAssemblyRedoHistory,
+  commitAssemblyUndoHistory,
   currentHistoryProjectKey,
   hasValidSolidRedo,
+  peekAssemblyRedoHistory,
+  peekAssemblyUndoHistory,
   pushSolidRedoSnapshot,
   returnSolidRedoSnapshot,
   takeSolidRedoSnapshot,
@@ -49,7 +55,10 @@ export function canUndoApplicationHistory(): boolean {
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
   if (state.activeTab === 'drawing') return canUndoDrawingHistory();
-  return state.mode === 'solid' && (state.document?.rollback_index ?? 0) > 0;
+  if (state.activeTab !== 'solid') return false;
+  return state.mode === 'solid' && (
+    canUndoAssemblyHistory() || (state.document?.rollback_index ?? 0) > 0
+  );
 }
 
 export function canRedoApplicationHistory(): boolean {
@@ -57,8 +66,10 @@ export function canRedoApplicationHistory(): boolean {
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_redo ?? false;
   if (state.activeTab === 'drawing') return canRedoDrawingHistory();
+  if (state.activeTab !== 'solid') return false;
   if (state.mode !== 'solid' || !state.document) return false;
   return (
+    canRedoAssemblyHistory() ||
     state.document.rollback_index < state.document.features.length ||
     hasValidSolidRedo()
   );
@@ -241,12 +252,22 @@ export async function undoApplicationHistory(): Promise<void> {
     await undoDrawingDocument();
     return;
   }
+  if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
+  const projectKey = currentHistoryProjectKey();
+  const assemblyEntry = peekAssemblyUndoHistory(projectKey);
+  if (assemblyEntry) {
+    await restoreAssemblyHistoryDocument(
+      projectKey,
+      assemblyEntry.before,
+      () => commitAssemblyUndoHistory(projectKey, assemblyEntry),
+    );
+    return;
+  }
   const current = state.document.rollback_index;
   if (current === 0) return;
   if (current === state.document.features.length) {
     const engine = await getEngine();
-    const projectKey = currentHistoryProjectKey();
     // Prune a stale branch before adding another consecutive Undo entry.
     hasValidSolidRedo(projectKey);
     const modelJson = await exportProjectModelWithVisibility(engine);
@@ -256,6 +277,10 @@ export async function undoApplicationHistory(): Promise<void> {
         state.document.features[current - 1].id,
       );
       if (!deleted) return;
+      // applySolidUpdate publishes synchronously, while the history observer
+      // advances its generation in a microtask. Keep the transaction guarded
+      // until that generation exists, then bind Redo to the resulting model.
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
       pushSolidRedoSnapshot(projectKey, modelJson);
     } finally {
       finishHistoryMutation();
@@ -277,14 +302,24 @@ export async function redoApplicationHistory(): Promise<void> {
     await redoDrawingDocument();
     return;
   }
+  if (state.activeTab !== 'solid') return;
   if (state.mode !== 'solid' || !state.document) return;
+  const projectKey = currentHistoryProjectKey();
+  const assemblyEntry = peekAssemblyRedoHistory(projectKey);
+  if (assemblyEntry) {
+    await restoreAssemblyHistoryDocument(
+      projectKey,
+      assemblyEntry.after,
+      () => commitAssemblyRedoHistory(projectKey, assemblyEntry),
+    );
+    return;
+  }
   const current = state.document.rollback_index;
   if (current < state.document.features.length) {
     await setTimelineRollback(current + 1);
     return;
   }
 
-  const projectKey = currentHistoryProjectKey();
   const entry = takeSolidRedoSnapshot(projectKey);
   if (!entry) return;
   const finishHistoryMutation = beginHistoryMutation();
@@ -316,6 +351,56 @@ export async function redoApplicationHistory(): Promise<void> {
     state.setConstraintDialog({
       titleKey: 'constraints.invalidTitle',
       message: error instanceof Error ? error.message : 'Redo failed',
+    });
+  } finally {
+    state.setSolidBusy(false);
+    finishHistoryMutation();
+  }
+}
+
+async function restoreAssemblyHistoryDocument(
+  projectKey: string,
+  document: import('./types').AssemblyDocumentDto,
+  commit: () => boolean,
+): Promise<void> {
+  const finishHistoryMutation = beginHistoryMutation();
+  const state = useAppStore.getState();
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setAssemblyDocument(structuredClone(document));
+    const assemblySolution = await engine.assemblySolution();
+    const occurrenceIds = new Set(
+      assemblyDocument.component_structure.occurrences.map((occurrence) => occurrence.id),
+    );
+    const jointIds = new Set(assemblyDocument.joints.map((joint) => joint.id));
+    useAppStore.setState((current) => ({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId: current.selectedOccurrenceId !== null
+        && occurrenceIds.has(current.selectedOccurrenceId)
+        ? current.selectedOccurrenceId
+        : null,
+      hoveredOccurrenceId: null,
+      selectedJointId: current.selectedJointId !== null
+        && jointIds.has(current.selectedJointId)
+        ? current.selectedJointId
+        : null,
+      jointEditingId: null,
+      jointDialogOpen: false,
+      jointConnectorPicks: [],
+      jointConnectorHover: null,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      motionStudyPreview: null,
+      dirty: true,
+    }));
+    commit();
+  } catch (error) {
+    state.setConstraintDialog({
+      titleKey: 'constraints.invalidTitle',
+      message: error instanceof Error ? error.message : 'Assembly history replay failed',
     });
   } finally {
     state.setSolidBusy(false);
@@ -438,6 +523,7 @@ export async function submitConstructionPlane(
         planes: await engine.datumPlaneDefinitions(),
       });
     }
+    state.clearSolidSelection();
     state.closeConstructionPlaneDialog();
     const folder = update.document.browser.find(
       (node) => node.kind === 'construction_folder',
@@ -461,7 +547,6 @@ export async function submitBodyFeature(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -469,18 +554,7 @@ export async function submitBodyFeature(
       ? await engine.editBodyFeature(featureId, request)
       : await engine.bodyFeature(request);
     state.applySolidUpdate(update);
-    const added = update.scene.bodies.find((body) => !previousBodies.has(body.id));
-    const requestBody =
-      request.type === 'shell' || request.type === 'split_body'
-        ? request.request.body_id
-        : request.type === 'combine'
-          ? request.request.target_body_id
-          : request.type === 'import_step'
-            ? undefined
-            : request.request.body_ids[0];
-    state.setSelectedBody(added?.id ?? requestBody ?? null);
-    state.setSelectedFace(null);
-    state.setSelectedEdges([]);
+    state.clearSolidSelection();
     state.closeBodyFeatureDialog();
     const bodies = update.document.browser.find(
       (node) => node.kind === 'bodies_folder',
@@ -551,7 +625,6 @@ export async function submitExtrude(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -560,16 +633,7 @@ export async function submitExtrude(
         ? await engine.editExtrude(featureId, request)
         : await engine.extrude(request);
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     state.closeExtrudeDialog();
     const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
@@ -590,7 +654,6 @@ export async function submitRevolve(
   featureId?: number,
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -599,16 +662,7 @@ export async function submitRevolve(
         ? await engine.editRevolve(featureId, request)
         : await engine.revolve(request);
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     state.closeRevolveDialog();
     const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
@@ -630,7 +684,6 @@ async function submitAdvancedSolid(
   kind: 'sweep' | 'loft' | 'rib',
 ): Promise<void> {
   const state = useAppStore.getState();
-  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
@@ -649,16 +702,7 @@ async function submitAdvancedSolid(
         : await engine.rib(request as RibRequest);
     }
     state.applySolidUpdate(update);
-    const focusBody =
-      request.operation === 'new_body'
-        ? update.scene.bodies.find((body) => !previousBodies.has(body.id))?.id
-        : request.target_body_ids.find((id) =>
-            update.scene.bodies.some((body) => body.id === id),
-          );
-    if (focusBody !== undefined) {
-      state.setSelectedBody(focusBody);
-      state.setSelectedFace(null);
-    }
+    state.clearSolidSelection();
     if (kind === 'sweep') state.closeSweepDialog();
     else if (kind === 'loft') state.closeLoftDialog();
     else state.closeRibDialog();
@@ -727,9 +771,7 @@ async function submitRefinement(
           ? await engine.editHole(featureId, request as HoleRequest)
           : await engine.hole(request as HoleRequest);
     state.applySolidUpdate(update);
-    state.setSelectedBody(request.body_id);
-    state.setSelectedFace(null);
-    state.setSelectedEdges([]);
+    state.clearSolidSelection();
     if (kind === 'fillet') state.closeFilletDialog();
     else if (kind === 'chamfer') state.closeChamferDialog();
     else state.closeHoleDialog();

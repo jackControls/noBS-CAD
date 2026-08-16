@@ -122,8 +122,8 @@ try {
       app.solidScene.bodies[0].faces.some((face) => face.plane === null),
   );
   check(
-    'Body1 is selected and present in the browser tree',
-    app.selectedBody === bodyId &&
+    'Body1 is present without forcing a post-command selection',
+    app.selectedBody === null &&
       (await page.getByRole('treeitem').filter({ hasText: /^Body1/ }).isVisible()),
   );
   check(

@@ -12,4 +12,7 @@ mod stable;
 
 pub use dto::*;
 pub use history::{SolidDocument, SolidError};
-pub use profile::{extract_closed_loops, extract_closed_loops_allow_open, ProfileError, Segment2};
+pub use profile::{
+    canonicalize_profile_curves, extract_closed_loops, extract_closed_loops_allow_open,
+    ProfileError, Segment2,
+};

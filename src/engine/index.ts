@@ -10,6 +10,8 @@
 import type {
   AddConstraintResult,
   AddLineResult,
+  AssemblyDocumentDto,
+  AssemblySolutionDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -21,6 +23,38 @@ import type {
   SketchCircularPatternRequest,
   CircleRequest,
   ConstraintPayload,
+  ComponentDefinitionDto,
+  ComponentOccurrenceDto,
+  CreateComponentRequestDto,
+  CreateJointRequestDto,
+  CreateOccurrenceRequestDto,
+  DuplicateOccurrenceRequestDto,
+  UpdateJointRequestDto,
+  SetJointEnabledRequestDto,
+  SetJointCoordinatesRequestDto,
+  ApplyJointMotionsRequestDto,
+  AssemblyPositionDto,
+  ContactSetDto,
+  CreateAssemblyPositionRequestDto,
+  CreateContactSetRequestDto,
+  CreateMotionStudyRequestDto,
+  EvaluateMotionStudyRequestDto,
+  InterferenceCheckRequestDto,
+  InterferenceReportDto,
+  MechanismDragRequestDto,
+  MechanismPreviewDto,
+  MotionPathRequestDto,
+  MotionStudyDto,
+  MotionStudyEvaluationDto,
+  MotionStudySampleDto,
+  SampleMotionStudyRequestDto,
+  SetJointMotionRequestDto,
+  SetOccurrenceGroundedRequestDto,
+  SetOccurrencePoseRequestDto,
+  SweptCollisionReportDto,
+  SweptCollisionRequestDto,
+  UpdateComponentRequestDto,
+  UpdateOccurrenceRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -47,6 +81,7 @@ import type {
   SolidChamferRequest,
   HoleDefinitionDto,
   HoleRequest,
+  JointDefinitionDto,
   EvalExpressionResult,
   ExtendRequest,
   FilletPreviewDto,
@@ -105,6 +140,44 @@ export interface Engine {
   setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
   drawingDocument(): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
+  assemblyDocument(): Promise<AssemblyDocumentDto>;
+  setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto>;
+  assemblySolution(): Promise<AssemblySolutionDto>;
+  createComponent(request: CreateComponentRequestDto): Promise<ComponentDefinitionDto>;
+  updateComponent(request: UpdateComponentRequestDto): Promise<ComponentDefinitionDto>;
+  createOccurrence(request: CreateOccurrenceRequestDto): Promise<ComponentOccurrenceDto>;
+  updateOccurrence(request: UpdateOccurrenceRequestDto): Promise<ComponentOccurrenceDto>;
+  duplicateOccurrence(request: DuplicateOccurrenceRequestDto): Promise<ComponentOccurrenceDto>;
+  setOccurrenceGrounded(request: SetOccurrenceGroundedRequestDto): Promise<AssemblyDocumentDto>;
+  setOccurrencePose(request: SetOccurrencePoseRequestDto): Promise<AssemblyDocumentDto>;
+  previewJoint(request: CreateJointRequestDto): Promise<AssemblySolutionDto>;
+  createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto>;
+  updateJoint(request: UpdateJointRequestDto): Promise<JointDefinitionDto>;
+  previewJointUpdate(request: UpdateJointRequestDto): Promise<AssemblySolutionDto>;
+  deleteJoint(id: number): Promise<AssemblyDocumentDto>;
+  setJointEnabled(request: SetJointEnabledRequestDto): Promise<AssemblyDocumentDto>;
+  setJointMotion(request: SetJointMotionRequestDto): Promise<AssemblyDocumentDto>;
+  previewJointMotion(request: SetJointMotionRequestDto): Promise<AssemblySolutionDto>;
+  setJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblyDocumentDto>;
+  previewJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblySolutionDto>;
+  previewMechanismDrag(request: MechanismDragRequestDto): Promise<MechanismPreviewDto>;
+  applyJointMotions(request: ApplyJointMotionsRequestDto): Promise<AssemblyDocumentDto>;
+  createAssemblyPosition(request: CreateAssemblyPositionRequestDto): Promise<AssemblyPositionDto>;
+  updateAssemblyPosition(position: AssemblyPositionDto): Promise<AssemblyPositionDto>;
+  deleteAssemblyPosition(id: number): Promise<AssemblyDocumentDto>;
+  applyAssemblyPosition(id: number): Promise<AssemblyDocumentDto>;
+  createMotionStudy(request: CreateMotionStudyRequestDto): Promise<MotionStudyDto>;
+  updateMotionStudy(study: MotionStudyDto): Promise<MotionStudyDto>;
+  deleteMotionStudy(id: number): Promise<AssemblyDocumentDto>;
+  sampleMotionStudy(request: SampleMotionStudyRequestDto): Promise<MotionStudySampleDto>;
+  evaluateMotionStudy(request: EvaluateMotionStudyRequestDto): Promise<MotionStudyEvaluationDto>;
+  exportMotionPathCsv(request: MotionPathRequestDto): Promise<string>;
+  createContactSet(request: CreateContactSetRequestDto): Promise<ContactSetDto>;
+  updateContactSet(contact: ContactSetDto): Promise<ContactSetDto>;
+  deleteContactSet(id: number): Promise<AssemblyDocumentDto>;
+  interferenceCheck(request: InterferenceCheckRequestDto): Promise<InterferenceReportDto>;
+  sweptCollisionCheck(request: SweptCollisionRequestDto): Promise<SweptCollisionReportDto>;
+  setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;

@@ -1,7 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore } from '../../store/appStore';
-import type { ProfileRefDto } from '../../engine/types';
+import type {
+  BodyPoseDto,
+  InstanceBodyPoseDto,
+  ProfileRefDto,
+} from '../../engine/types';
+import type { MoveCopyCommandPreview } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
 
 export interface NativeCameraState {
@@ -31,9 +36,17 @@ interface NativeViewportMetrics {
 
 export interface NativeViewportPick {
   bodyId: number;
+  occurrenceId: number | null;
   faceId: number;
+  edgeId: number | null;
   point: [number, number, number];
   distance: number;
+  connectorKind: 'planar_face' | 'cylindrical_face' | 'virtual_circular_face' | 'circular_edge' | null;
+  /** Connector frame remains body-local even when the displayed body is posed. */
+  connectorOrigin: [number, number, number] | null;
+  connectorPrimaryAxis: [number, number, number] | null;
+  connectorSecondaryAxis: [number, number, number] | null;
+  connectorRadius: number | null;
 }
 
 export interface NativeRect {
@@ -102,6 +115,8 @@ interface NativePresentation {
   hoveredOriginPlane: 'xy' | 'xz' | 'yz' | null;
   hoveredDatumPlaneId: number | null;
   selectedBodyIds: number[];
+  selectedOccurrenceId: number | null;
+  hoveredOccurrenceId: number | null;
   hoveredBodyId: number | null;
   selectedFaceIds: number[];
   hoveredFaceId: number | null;
@@ -116,6 +131,8 @@ interface NativePresentation {
   candidateProfiles: ProfileRefDto[];
   selectedProfiles: ProfileRefDto[];
   hoveredProfile: ProfileRefDto | null;
+  bodyPoses: import('../../engine/types').BodyPoseDto[];
+  instanceBodyPoses: import('../../engine/types').InstanceBodyPoseDto[];
 }
 
 export interface NativeViewportLineLayer {
@@ -581,9 +598,136 @@ function hiddenNames(
   return names;
 }
 
+function quaternionMultiply(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+): [number, number, number, number] {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+}
+
+function rotateByQuaternion(
+  value: [number, number, number],
+  quaternion: [number, number, number, number],
+): [number, number, number] {
+  const [x, y, z, w] = quaternion;
+  const [vx, vy, vz] = value;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [
+    vx + w * tx + (y * tz - z * ty),
+    vy + w * ty + (z * tx - x * tz),
+    vz + w * tz + (x * ty - y * tx),
+  ];
+}
+
+function samePose(
+  translation: [number, number, number],
+  rotation: [number, number, number, number],
+  target: MoveCopyCommandPreview['targets'][number],
+): boolean {
+  return translation.every((value, index) =>
+    Math.abs(value - target.baseTranslation[index]) <= 1e-7)
+    && rotation.every((value, index) =>
+      Math.abs(value - target.baseRotation[index]) <= 1e-7);
+}
+
+function movedPreviewPose(
+  target: MoveCopyCommandPreview['targets'][number],
+  preview: MoveCopyCommandPreview,
+): {
+  translation: [number, number, number];
+  rotation: [number, number, number, number];
+} {
+  const pivot: [number, number, number] = [
+    preview.pivot.x,
+    preview.pivot.y,
+    preview.pivot.z,
+  ];
+  const delta: [number, number, number] = [
+    preview.translation.x,
+    preview.translation.y,
+    preview.translation.z,
+  ];
+  if (preview.transformInBodySpace) {
+    const rotatedNegativePivot = rotateByQuaternion(
+      [-pivot[0], -pivot[1], -pivot[2]],
+      preview.rotation,
+    );
+    const localOffset: [number, number, number] = [
+      pivot[0] + delta[0] + rotatedNegativePivot[0],
+      pivot[1] + delta[1] + rotatedNegativePivot[1],
+      pivot[2] + delta[2] + rotatedNegativePivot[2],
+    ];
+    const worldOffset = rotateByQuaternion(localOffset, target.baseRotation);
+    return {
+      translation: [
+        target.baseTranslation[0] + worldOffset[0],
+        target.baseTranslation[1] + worldOffset[1],
+        target.baseTranslation[2] + worldOffset[2],
+      ],
+      rotation: quaternionMultiply(target.baseRotation, preview.rotation),
+    };
+  }
+  const rotatedBase = rotateByQuaternion(
+    [
+      target.baseTranslation[0] - pivot[0],
+      target.baseTranslation[1] - pivot[1],
+      target.baseTranslation[2] - pivot[2],
+    ],
+    preview.rotation,
+  );
+  return {
+    translation: [
+      pivot[0] + delta[0] + rotatedBase[0],
+      pivot[1] + delta[1] + rotatedBase[1],
+      pivot[2] + delta[2] + rotatedBase[2],
+    ],
+    rotation: quaternionMultiply(preview.rotation, target.baseRotation),
+  };
+}
+
+function moveCopyPresentationPoses(
+  bodyPoses: BodyPoseDto[],
+  instanceBodyPoses: InstanceBodyPoseDto[],
+  preview: MoveCopyCommandPreview | null,
+): [BodyPoseDto[], InstanceBodyPoseDto[]] {
+  if (!preview || preview.copy) return [bodyPoses, instanceBodyPoses];
+  const targetFor = (
+    bodyId: number,
+    occurrenceId: number | null,
+    translation: [number, number, number],
+    rotation: [number, number, number, number],
+  ) => preview.targets.find((target) =>
+    target.bodyId === bodyId
+      && target.occurrenceId === occurrenceId
+      && samePose(translation, rotation, target));
+  return [
+    bodyPoses.map((pose) => {
+      const target = targetFor(pose.body_id, null, pose.translation, pose.rotation);
+      return target ? { ...pose, ...movedPreviewPose(target, preview) } : pose;
+    }),
+    instanceBodyPoses.map((pose) => {
+      const target = targetFor(
+        pose.body_id,
+        pose.occurrence_id,
+        pose.translation,
+        pose.rotation,
+      );
+      return target ? { ...pose, ...movedPreviewPose(target, preview) } : pose;
+    }),
+  ];
+}
+
 export function collectNativeViewportPresentation(): NativePresentation {
   const state = useAppStore.getState();
   const bodyHoverKinds = new Set([
+    'move_copy',
     'combine',
     'mirror',
     'rectangular_pattern',
@@ -606,6 +750,19 @@ export function collectNativeViewportPresentation(): NativePresentation {
     selectedSketchEntityIds.push(state.selectedEntity);
   }
   const browser = state.document?.browser ?? [];
+  const solved = state.jointDialogOpen && state.jointPreviewSolution
+    ? state.jointPreviewSolution
+    : state.mechanismPreview?.solution
+      ?? state.jointMotionPreview?.solution
+      ?? state.assemblySolution;
+  const movePreview = state.solidCommandPreview?.kind === 'move_copy'
+    ? state.solidCommandPreview
+    : null;
+  const [bodyPoses, instanceBodyPoses] = moveCopyPresentationPoses(
+    solved.body_poses,
+    solved.instance_body_poses,
+    movePreview,
+  );
 
   return {
     mode:
@@ -617,6 +774,8 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredOriginPlane: state.hoveredPlane,
     hoveredDatumPlaneId: state.hoveredDatumPlane,
     selectedBodyIds: state.selectedBodies,
+    selectedOccurrenceId: state.selectedOccurrenceId,
+    hoveredOccurrenceId: state.hoveredOccurrenceId,
     hoveredBodyId,
     selectedFaceIds: state.selectedFaces,
     hoveredFaceId: state.hoveredFace,
@@ -643,6 +802,8 @@ export function collectNativeViewportPresentation(): NativePresentation {
       ) ?? [],
     selectedProfiles: state.profilePicker?.selected ?? [],
     hoveredProfile: state.profilePicker?.hovered ?? null,
+    bodyPoses,
+    instanceBodyPoses,
   };
 }
 
@@ -1158,6 +1319,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     layoutRequested = true;
     void flushLayout();
   };
+  const onImmediateLayoutRequest = () => flushResizeLayout();
   const onHudPointerOver = (event: PointerEvent) => {
     const next = nativeHudControl(event.target);
     if (next === hoveredHudControl) return;
@@ -1200,7 +1362,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
 
   const observedLayoutElements = new Set<Element>();
   const viewportResize = new ResizeObserver(flushResizeLayout);
-  const overlayResize = new ResizeObserver(scheduleLayout);
+  const overlayResize = new ResizeObserver(flushResizeLayout);
   viewportResize.observe(container);
   const refreshObservedLayoutElements = () => {
     const next = new Set(
@@ -1223,7 +1385,10 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   refreshObservedLayoutElements();
   const mutation = new MutationObserver(() => {
     refreshObservedLayoutElements();
-    scheduleLayout();
+    // Native viewport cutouts are part of the platform view hierarchy, not
+    // the DOM stacking context. A deferred frame leaves newly-mounted menus
+    // behind the child view long enough to flash or consume the first click.
+    flushResizeLayout();
   });
   mutation.observe(document.documentElement, {
     subtree: true,
@@ -1244,6 +1409,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
   window.addEventListener('resize', settleLayout);
   window.visualViewport?.addEventListener('resize', settleLayout);
   document.addEventListener('fullscreenchange', settleLayout);
+  document.addEventListener('nbcad:native-viewport-layout', onImmediateLayoutRequest);
   document.addEventListener('input', scheduleLayout, true);
   document.addEventListener('change', scheduleLayout, true);
   document.addEventListener('transitionend', scheduleLayout, true);
@@ -1371,6 +1537,7 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     window.removeEventListener('resize', settleLayout);
     window.visualViewport?.removeEventListener('resize', settleLayout);
     document.removeEventListener('fullscreenchange', settleLayout);
+    document.removeEventListener('nbcad:native-viewport-layout', onImmediateLayoutRequest);
     document.removeEventListener('input', scheduleLayout, true);
     document.removeEventListener('change', scheduleLayout, true);
     document.removeEventListener('transitionend', scheduleLayout, true);
@@ -1389,6 +1556,13 @@ export function attachNativeViewport(container: HTMLElement): () => void {
     delete document.documentElement.dataset.nativeViewport;
     delete container.dataset.nativeViewport;
   };
+}
+
+/** Request a synchronous platform cutout refresh after a React layout effect
+ * mounts or repositions a transient DOM island above the native viewport. */
+export function requestNativeViewportLayout(): void {
+  if (typeof document === 'undefined') return;
+  document.dispatchEvent(new Event('nbcad:native-viewport-layout'));
 }
 
 function previewKey(preview: NativeViewportTransient): string {

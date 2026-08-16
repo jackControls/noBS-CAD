@@ -65,7 +65,7 @@ export function Ribbon() {
       >
         <span className="mb-1.5 mr-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-mute/70">Workspace</span>
         <WorkspaceButton
-          active={activeTab !== 'drawing'}
+          active={activeTab === 'solid' || activeTab === 'sketch'}
           disabled={!documentOpen}
           icon={<Box size={13} />}
           label={t('ribbon.tabs.solidModeling')}

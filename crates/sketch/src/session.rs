@@ -16,10 +16,10 @@ use nbcad_core::{DimensionStyle, EdgeId};
 use crate::constraint::{Constraint, ConstraintId};
 use crate::dto::{
     AddConstraintResult, AddLineResult, CircleMode, ConstraintDesc, ConstraintDto,
-    DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference, LockedCircleRequest,
-    LockedRectangleRequest, LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto,
-    RectangleMode, ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget,
-    SplineRequest, ToolResult, UndoResult,
+    DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference, LineTrackingRequest,
+    LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest, MovePointRequest,
+    MovePointResult, PreviewDto, RectangleMode, ReferenceMidpointDto, SketchDto, SlotMode,
+    SlotRequest, SnapTarget, SplineRequest, ToolResult, TrackingAxis, TrackingGuideDto, UndoResult,
 };
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
@@ -138,6 +138,15 @@ impl fmt::Display for SessionError {
                     .map(|e| e.label.as_str())
                     .collect::<Vec<_>>()
                     .join(" and ");
+                if conflicts_with.len() > 4 {
+                    return write!(
+                        f,
+                        "Cannot add {} between {}: conflicts with the existing constrained geometry ({} related constraints)",
+                        rejected.kind,
+                        ents,
+                        conflicts_with.len()
+                    );
+                }
                 let conflicts = conflicts_with
                     .iter()
                     .map(|c| {
@@ -211,6 +220,7 @@ pub(crate) struct LockedInput {
     pub angle_deg: Option<f64>,
     pub length_text: Option<String>,
     pub angle_text: Option<String>,
+    pub tracking: Option<LineTrackingRequest>,
 }
 
 /// Resolved placement of one segment endpoint: the point id to use
@@ -357,24 +367,56 @@ impl SketchSession {
     /// tolerance > line midpoint (`allow_midpoint`, line flow only) > grid
     /// intersection (when grid snap on) > raw. Point, origin, and midpoint
     /// snaps are governed by `point_snap`, grid rounding by `grid_snap`.
-    fn snap_inner(&self, raw: Vec2, allow_midpoint: bool) -> (Vec2, SnapTarget) {
+    fn snap_inner(
+        &self,
+        raw: Vec2,
+        allow_midpoint: bool,
+        exclude_position: Option<Vec2>,
+    ) -> (Vec2, SnapTarget) {
         if self.point_snap {
-            if let Some((id, _)) = self.sketch.nearest_point(raw, self.snap_tolerance) {
+            if let Some((id, _)) = self
+                .sketch
+                .entities()
+                .filter_map(|(id, entity)| {
+                    let Entity::Point { position } = entity else {
+                        return None;
+                    };
+                    if exclude_position
+                        .is_some_and(|excluded| position.distance(excluded) <= MERGE_EPS)
+                    {
+                        return None;
+                    }
+                    let distance = position.distance(raw);
+                    (distance <= self.snap_tolerance).then_some((id, distance))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+            {
                 let position = self.sketch.point_position(id).unwrap_or(raw);
                 return (position, SnapTarget::Point { entity: id });
             }
-            if raw.distance(Vec2::ZERO) <= self.snap_tolerance {
+            if raw.distance(Vec2::ZERO) <= self.snap_tolerance
+                && !exclude_position
+                    .is_some_and(|excluded| excluded.distance(Vec2::ZERO) <= MERGE_EPS)
+            {
                 return (Vec2::ZERO, SnapTarget::Origin);
             }
             if allow_midpoint {
                 if let Some((id, mid)) = self.sketch.nearest_line_midpoint(raw, self.snap_tolerance)
                 {
-                    return (mid, SnapTarget::Midpoint { entity: id });
+                    if !exclude_position.is_some_and(|excluded| mid.distance(excluded) <= MERGE_EPS)
+                    {
+                        return (mid, SnapTarget::Midpoint { entity: id });
+                    }
                 }
                 if let Some((edge, midpoint, _)) = self
                     .reference_midpoints
                     .iter()
                     .filter_map(|(edge, midpoint)| {
+                        if exclude_position
+                            .is_some_and(|excluded| midpoint.distance(excluded) <= MERGE_EPS)
+                        {
+                            return None;
+                        }
                         let distance = midpoint.distance(raw);
                         (distance <= self.snap_tolerance).then_some((*edge, *midpoint, distance))
                     })
@@ -387,13 +429,16 @@ impl SketchSession {
         if self.grid_snap {
             let step = self.grid_step;
             let snapped = Vec2::new((raw.x / step).round() * step, (raw.y / step).round() * step);
+            if exclude_position.is_some_and(|excluded| snapped.distance(excluded) <= MERGE_EPS) {
+                return (raw, SnapTarget::None);
+            }
             return (snapped, SnapTarget::Grid);
         }
         (raw, SnapTarget::None)
     }
 
     fn snap(&self, raw: Vec2) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, false)
+        self.snap_inner(raw, false, None)
     }
 
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
@@ -401,7 +446,13 @@ impl SketchSession {
     /// constraint on commit (D4.1 parity). Holding Ctrl suppresses the
     /// midpoint inference (Ctrl disables inferences).
     fn snap_line_flow(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held)
+        self.snap_inner(raw, !ctrl_held, None)
+    }
+
+    /// Endpoint acquisition must not magnetize a short segment back onto its
+    /// own start point. Other coincident candidates retain normal priority.
+    fn snap_line_endpoint(&self, raw: Vec2, from: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        self.snap_inner(raw, !ctrl_held, Some(from))
     }
 
     /// Shared pipeline for `preview_segment` and `add_line`: snap, then
@@ -409,7 +460,7 @@ impl SketchSession {
     /// within `INFERENCE_ANGLE_TOL_DEG` of the u/v axes and project the
     /// endpoint onto the inferred direction.
     fn snap_and_infer(&self, from: Vec2, to_raw: Vec2, ctrl_held: bool) -> PreviewDto {
-        let (mut snapped, target) = self.snap_line_flow(to_raw, ctrl_held);
+        let (mut snapped, target) = self.snap_line_endpoint(to_raw, from, ctrl_held);
         let mut inferences = Vec::new();
 
         match target {
@@ -445,6 +496,7 @@ impl SketchSession {
             snapped_to: snapped,
             snap: target,
             inferences,
+            tracking: None,
         }
     }
 
@@ -459,8 +511,14 @@ impl SketchSession {
         angle_deg: Option<f64>,
         to_hint: Vec2,
         ctrl_held: bool,
+        tracking: Option<LineTrackingRequest>,
     ) -> PreviewDto {
         if length_mm.is_none() && angle_deg.is_none() {
+            if !ctrl_held {
+                if let Some(preview) = self.tracking_preview(from, None, None, to_hint, tracking) {
+                    return preview;
+                }
+            }
             return self.snap_and_infer(from, to_hint, ctrl_held);
         }
         let angle = angle_deg.map(|a| a.to_radians());
@@ -469,7 +527,7 @@ impl SketchSession {
         // Both locked → exact point; only coincident merging still applies.
         if let (Some(l), Some(a)) = (length_mm, angle) {
             let exact = from + Vec2::new(a.cos() * l, a.sin() * l);
-            return self.coincident_or_exact(exact, inferences);
+            return self.coincident_or_exact(from, exact, inferences);
         }
 
         let endpoint = if let Some(l) = length_mm {
@@ -480,7 +538,14 @@ impl SketchSession {
                     snapped_to: pos,
                     snap: SnapTarget::Point { entity: id },
                     inferences,
+                    tracking: None,
                 };
+            }
+            if !ctrl_held {
+                if let Some(preview) = self.tracking_preview(from, Some(l), None, to_hint, tracking)
+                {
+                    return preview;
+                }
             }
             // 2. Axis inference on the remaining freedom.
             let d = to_hint - from;
@@ -492,7 +557,17 @@ impl SketchSession {
                 inferences.push(Inference::Vertical);
                 Vec2::new(from.x, from.y + l * d.y.signum())
             } else {
-                // 3. Circle in the cursor's direction.
+                // 3. Snap the remaining angular freedom to the active
+                // engineering grid when the locked circle crosses it.
+                if let Some(grid) = self.point_on_circle_grid(from, l, to_hint) {
+                    return PreviewDto {
+                        snapped_to: grid,
+                        snap: SnapTarget::Grid,
+                        inferences,
+                        tracking: None,
+                    };
+                }
+                // 4. Circle in the cursor's direction.
                 let len = d.length();
                 if len < MERGE_EPS {
                     from + Vec2::new(l, 0.0)
@@ -509,41 +584,270 @@ impl SketchSession {
                     snapped_to: pos,
                     snap: SnapTarget::Point { entity: id },
                     inferences,
+                    tracking: None,
                 };
             }
-            // 2. Project the cursor onto the ray.
+            if !ctrl_held {
+                if let Some(preview) = self.tracking_preview(from, None, Some(a), to_hint, tracking)
+                {
+                    return preview;
+                }
+            }
+            // 2. Intersect the locked ray with the nearest active grid line.
+            if let Some(grid) = self.point_on_ray_grid(from, dir, to_hint) {
+                return PreviewDto {
+                    snapped_to: grid,
+                    snap: SnapTarget::Grid,
+                    inferences,
+                    tracking: None,
+                };
+            }
+            // 3. Project the cursor onto the ray.
             let t = (to_hint - from).dot(dir).max(0.0);
             from + dir * t
         } else {
             unreachable!()
         };
 
-        self.coincident_or_exact(endpoint, inferences)
+        self.coincident_or_exact(from, endpoint, inferences)
+    }
+
+    /// Resolve a viewport-acquired horizontal/vertical tracking reference
+    /// against the segment's remaining degrees of freedom. The viewport
+    /// decides *which* point is close in screen space; this engine function
+    /// performs the exact intersection and reports the guide that will become
+    /// a persistent point-pair relation on commit.
+    fn tracking_preview(
+        &self,
+        from: Vec2,
+        length_mm: Option<f64>,
+        angle_rad: Option<f64>,
+        cursor: Vec2,
+        request: Option<LineTrackingRequest>,
+    ) -> Option<PreviewDto> {
+        let request = request?;
+        let source = self.sketch.point_position(request.point)?;
+        if length_mm.is_some() && angle_rad.is_some() {
+            return None;
+        }
+
+        let snapped = match (length_mm, angle_rad, request.axis) {
+            (None, None, TrackingAxis::Horizontal) => Vec2::new(
+                if self.grid_snap {
+                    (cursor.x / self.grid_step).round() * self.grid_step
+                } else {
+                    cursor.x
+                },
+                source.y,
+            ),
+            (None, None, TrackingAxis::Vertical) => Vec2::new(
+                source.x,
+                if self.grid_snap {
+                    (cursor.y / self.grid_step).round() * self.grid_step
+                } else {
+                    cursor.y
+                },
+            ),
+            (None, Some(angle), axis) => {
+                let direction = Vec2::new(angle.cos(), angle.sin());
+                self.ray_axis_intersection(from, direction, source, axis)?
+            }
+            (Some(length), None, axis) => {
+                self.circle_axis_intersection(from, length, source, axis, cursor)?
+            }
+            (Some(_), Some(_), _) => return None,
+        };
+        if !snapped.x.is_finite()
+            || !snapped.y.is_finite()
+            || snapped.distance(from) < MIN_LINE_LENGTH_MM
+        {
+            return None;
+        }
+        Some(PreviewDto {
+            snapped_to: snapped,
+            snap: if self.grid_snap {
+                SnapTarget::Grid
+            } else {
+                SnapTarget::None
+            },
+            inferences: Vec::new(),
+            tracking: Some(TrackingGuideDto {
+                point: request.point,
+                axis: request.axis,
+                source,
+                snapped_to: snapped,
+            }),
+        })
+    }
+
+    fn ray_axis_intersection(
+        &self,
+        from: Vec2,
+        direction: Vec2,
+        source: Vec2,
+        axis: TrackingAxis,
+    ) -> Option<Vec2> {
+        let t = match axis {
+            TrackingAxis::Horizontal if direction.y.abs() > MERGE_EPS => {
+                (source.y - from.y) / direction.y
+            }
+            TrackingAxis::Vertical if direction.x.abs() > MERGE_EPS => {
+                (source.x - from.x) / direction.x
+            }
+            _ => return None,
+        };
+        (t >= -MERGE_EPS).then_some(from + direction * t.max(0.0))
+    }
+
+    fn circle_axis_intersection(
+        &self,
+        from: Vec2,
+        radius: f64,
+        source: Vec2,
+        axis: TrackingAxis,
+        cursor: Vec2,
+    ) -> Option<Vec2> {
+        let (fixed_delta, first, second) = match axis {
+            TrackingAxis::Horizontal => {
+                let dy = source.y - from.y;
+                let free = (radius * radius - dy * dy).max(0.0).sqrt();
+                if dy.abs() > radius + MERGE_EPS {
+                    return None;
+                }
+                (
+                    dy,
+                    Vec2::new(from.x + free, source.y),
+                    Vec2::new(from.x - free, source.y),
+                )
+            }
+            TrackingAxis::Vertical => {
+                let dx = source.x - from.x;
+                let free = (radius * radius - dx * dx).max(0.0).sqrt();
+                if dx.abs() > radius + MERGE_EPS {
+                    return None;
+                }
+                (
+                    dx,
+                    Vec2::new(source.x, from.y + free),
+                    Vec2::new(source.x, from.y - free),
+                )
+            }
+        };
+        if !fixed_delta.is_finite() {
+            return None;
+        }
+        Some(if first.distance(cursor) <= second.distance(cursor) {
+            first
+        } else {
+            second
+        })
+    }
+
+    /// Nearest intersection of a locked ray and either family of active grid
+    /// lines. This preserves the typed angle exactly while snapping its one
+    /// remaining degree of freedom to engineering increments.
+    fn point_on_ray_grid(&self, from: Vec2, direction: Vec2, cursor: Vec2) -> Option<Vec2> {
+        if !self.grid_snap {
+            return None;
+        }
+        let step = self.grid_step;
+        let mut candidates = Vec::with_capacity(2);
+        if direction.x.abs() > MERGE_EPS {
+            let x = (cursor.x / step).round() * step;
+            let t = (x - from.x) / direction.x;
+            if t >= -MERGE_EPS {
+                candidates.push(from + direction * t.max(0.0));
+            }
+        }
+        if direction.y.abs() > MERGE_EPS {
+            let y = (cursor.y / step).round() * step;
+            let t = (y - from.y) / direction.y;
+            if t >= -MERGE_EPS {
+                candidates.push(from + direction * t.max(0.0));
+            }
+        }
+        candidates
+            .into_iter()
+            .min_by(|a, b| a.distance(cursor).total_cmp(&b.distance(cursor)))
+    }
+
+    /// Nearest intersection of a locked-length circle and the active grid.
+    /// Sampling the nearest grid line plus its neighbours handles cursors
+    /// outside the circle without dropping a valid nearby crossing.
+    fn point_on_circle_grid(&self, from: Vec2, radius: f64, cursor: Vec2) -> Option<Vec2> {
+        if !self.grid_snap || radius <= MIN_LINE_LENGTH_MM {
+            return None;
+        }
+        let step = self.grid_step;
+        let mut candidates = Vec::with_capacity(12);
+        for offset in -1..=1 {
+            let x = (cursor.x / step).round() * step + f64::from(offset) * step;
+            let dx = x - from.x;
+            if dx.abs() <= radius + MERGE_EPS {
+                let dy = (radius * radius - dx * dx).max(0.0).sqrt();
+                candidates.push(Vec2::new(x, from.y + dy));
+                candidates.push(Vec2::new(x, from.y - dy));
+            }
+            let y = (cursor.y / step).round() * step + f64::from(offset) * step;
+            let dy = y - from.y;
+            if dy.abs() <= radius + MERGE_EPS {
+                let dx = (radius * radius - dy * dy).max(0.0).sqrt();
+                candidates.push(Vec2::new(from.x + dx, y));
+                candidates.push(Vec2::new(from.x - dx, y));
+            }
+        }
+        candidates
+            .into_iter()
+            .min_by(|a, b| a.distance(cursor).total_cmp(&b.distance(cursor)))
     }
 
     /// Coincident-merge check for a computed endpoint (point entities,
     /// then the origin), else the point itself as a free snap.
-    fn coincident_or_exact(&self, exact: Vec2, mut inferences: Vec<Inference>) -> PreviewDto {
-        if let Some((id, _)) = self.sketch.nearest_point(exact, self.snap_tolerance) {
+    fn coincident_or_exact(
+        &self,
+        from: Vec2,
+        exact: Vec2,
+        mut inferences: Vec<Inference>,
+    ) -> PreviewDto {
+        if let Some((id, _)) = self
+            .sketch
+            .entities()
+            .filter_map(|(id, entity)| {
+                let Entity::Point { position } = entity else {
+                    return None;
+                };
+                if position.distance(from) <= MERGE_EPS {
+                    return None;
+                }
+                let distance = position.distance(exact);
+                (distance <= self.snap_tolerance).then_some((id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
             inferences.push(Inference::Coincident);
             return PreviewDto {
                 snapped_to: self.sketch.point_position(id).unwrap_or(exact),
                 snap: SnapTarget::Point { entity: id },
                 inferences,
+                tracking: None,
             };
         }
-        if exact.distance(Vec2::ZERO) <= self.snap_tolerance {
+        if exact.distance(Vec2::ZERO) <= self.snap_tolerance
+            && from.distance(Vec2::ZERO) > MERGE_EPS
+        {
             inferences.push(Inference::Coincident);
             return PreviewDto {
                 snapped_to: Vec2::ZERO,
                 snap: SnapTarget::Origin,
                 inferences,
+                tracking: None,
             };
         }
         PreviewDto {
             snapped_to: exact,
             snap: SnapTarget::None,
             inferences,
+            tracking: None,
         }
     }
 
@@ -558,6 +862,9 @@ impl SketchSession {
             let Entity::Point { position } = e else {
                 continue;
             };
+            if position.distance(from) <= MERGE_EPS {
+                continue;
+            }
             if (position.distance(from) - l).abs() > self.snap_tolerance {
                 continue;
             }
@@ -583,6 +890,9 @@ impl SketchSession {
             let Entity::Point { position } = e else {
                 continue;
             };
+            if position.distance(from) <= MERGE_EPS {
+                continue;
+            }
             let rel = *position - from;
             if (rel.x * dir.y - rel.y * dir.x).abs() > self.snap_tolerance {
                 continue;
@@ -640,6 +950,90 @@ impl SketchSession {
         Some(ConstraintDto { id, constraint })
     }
 
+    /// Find the best already-connected line at each endpoint that is within
+    /// the normal inference cone of perpendicular to `line_id`.
+    fn perpendicular_candidates(
+        &self,
+        line_id: EntityId,
+        endpoint_ids: [EntityId; 2],
+    ) -> Vec<Constraint> {
+        let Some((start, end)) = self.sketch.resolved_line(line_id) else {
+            return Vec::new();
+        };
+        let direction = end - start;
+        let length = direction.length();
+        if length < MIN_LINE_LENGTH_MM {
+            return Vec::new();
+        }
+        let perpendicular_cos_limit = INFERENCE_ANGLE_TOL_DEG.to_radians().sin();
+        let mut candidates = Vec::with_capacity(2);
+
+        for endpoint_id in endpoint_ids {
+            let best = self
+                .sketch
+                .lines_connected_to(endpoint_id)
+                .into_iter()
+                .filter(|candidate| *candidate != line_id)
+                .filter_map(|candidate| {
+                    let (a, b) = self.sketch.resolved_line(candidate)?;
+                    let other = b - a;
+                    let other_length = other.length();
+                    if other_length < MIN_LINE_LENGTH_MM {
+                        return None;
+                    }
+                    let absolute_cosine = direction.dot(other).abs() / (length * other_length);
+                    (absolute_cosine <= perpendicular_cos_limit)
+                        .then_some((candidate, absolute_cosine))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+
+            if let Some((candidate, _)) = best {
+                let constraint = Constraint::Perpendicular {
+                    a: candidate,
+                    b: line_id,
+                };
+                if !candidates.contains(&constraint) {
+                    candidates.push(constraint);
+                }
+            }
+        }
+        candidates
+    }
+
+    /// Automatic relations are opportunistic: keep only constraints that
+    /// are consistent and remove at least one independent degree of freedom.
+    /// This avoids filling a closed profile with redundant relations.
+    fn try_add_independent_auto_constraint(
+        &mut self,
+        constraint: Constraint,
+    ) -> Option<ConstraintDto> {
+        let already_present = self.sketch.constraints().any(|(_, existing)| {
+            *existing == constraint
+                || matches!(
+                    (*existing, constraint),
+                    (
+                        Constraint::Perpendicular { a: ea, b: eb },
+                        Constraint::Perpendicular { a, b }
+                    ) if ea == b && eb == a
+                )
+        });
+        if already_present {
+            return None;
+        }
+
+        let before = self.sketch.snapshot();
+        let before_rank = solver::analyze(&self.sketch).rank;
+        let id = self.sketch.add_constraint(constraint);
+        let analysis = solver::solve(&mut self.sketch, &[]);
+        let residual = solver::constraint_residual(&self.sketch, id);
+        if !analysis.converged || residual > INCONSISTENT_EPS || analysis.rank <= before_rank {
+            self.sketch.restore(before);
+            return None;
+        }
+        self.analysis = Some(analysis);
+        Some(ConstraintDto { id, constraint })
+    }
+
     // --- Drawing ops ---
 
     /// Preview of a segment from `from` to the raw cursor position: snapped
@@ -678,6 +1072,7 @@ impl SketchSession {
             angle_deg,
             length_text: request.length_text.clone(),
             angle_text: request.angle_text.clone(),
+            tracking: request.tracking,
         };
         self.add_line_impl(
             request.from,
@@ -702,6 +1097,7 @@ impl SketchSession {
                 locks.angle_deg,
                 to_raw,
                 ctrl_held,
+                locks.tracking,
             ),
             None => self.snap_and_infer(from_coords, to_raw, ctrl_held),
         };
@@ -755,10 +1151,30 @@ impl SketchSession {
             .add_entity(Entity::line(start_point_id, end_point_id));
 
         let mut created = Vec::new();
+        let perpendicular_created = if ctrl_held {
+            false
+        } else {
+            let candidates = self.perpendicular_candidates(line_id, [start_point_id, end_point_id]);
+            let mut accepted = false;
+            for constraint in candidates {
+                if let Some(created_constraint) =
+                    self.try_add_independent_auto_constraint(constraint)
+                {
+                    created.push(created_constraint);
+                    accepted = true;
+                }
+            }
+            accepted
+        };
         for inference in &preview.inferences {
             let constraint = match inference {
-                Inference::Horizontal => Some(Constraint::Horizontal { entity: line_id }),
-                Inference::Vertical => Some(Constraint::Vertical { entity: line_id }),
+                Inference::Horizontal if !perpendicular_created => {
+                    Some(Constraint::Horizontal { entity: line_id })
+                }
+                Inference::Vertical if !perpendicular_created => {
+                    Some(Constraint::Vertical { entity: line_id })
+                }
+                Inference::Horizontal | Inference::Vertical => None,
                 // Structural: merged shared points, no constraint record.
                 Inference::Coincident => None,
             };
@@ -770,6 +1186,25 @@ impl SketchSession {
         for point_id in [start_point_id, end_point_id] {
             if let Some(constraint) = self.ground_origin_point(point_id) {
                 created.push(constraint);
+            }
+        }
+
+        // Object-snap tracking is associative: moving the acquired reference
+        // later keeps this endpoint on the same horizontal/vertical axis.
+        if let Some(guide) = preview.tracking {
+            if guide.point != end_point_id {
+                let constraint = match guide.axis {
+                    TrackingAxis::Horizontal => Constraint::HorizontalPoints {
+                        a: guide.point,
+                        b: end_point_id,
+                    },
+                    TrackingAxis::Vertical => Constraint::VerticalPoints {
+                        a: guide.point,
+                        b: end_point_id,
+                    },
+                };
+                let id = self.sketch.add_constraint(constraint);
+                created.push(ConstraintDto { id, constraint });
             }
         }
 
@@ -1740,7 +2175,9 @@ impl SketchSession {
         let invalid = |msg: &str| SessionError::InvalidConstraint(msg.to_string());
 
         match *constraint {
-            Constraint::ArcEndpointCoincident { .. } | Constraint::EqualDistance { .. } => {
+            Constraint::ArcEndpointCoincident { .. }
+            | Constraint::EqualDistance { .. }
+            | Constraint::SpanMidpoint { .. } => {
                 return Err(invalid(
                     "This relation is internal and is created by its sketch tool",
                 ));
@@ -1748,6 +2185,11 @@ impl SketchSession {
             Constraint::Horizontal { entity: e } | Constraint::Vertical { entity: e } => {
                 if !matches!(entity(e), Some(Entity::Line { .. })) {
                     return Err(invalid("Horizontal/Vertical applies to a line"));
+                }
+            }
+            Constraint::HorizontalPoints { a, b } | Constraint::VerticalPoints { a, b } => {
+                if kinds_of(&[a, b]) != ["point", "point"] {
+                    return Err(invalid("Point alignment needs two points"));
                 }
             }
             Constraint::Fix { entity: e } => {
@@ -2201,6 +2643,7 @@ impl SketchSession {
                         start: a,
                         end: b,
                         fully_defined: fd(id),
+                        consumed: crate::solver::line_is_consumed_trim_carrier(&self.sketch, id),
                     })
                 }
                 Entity::Arc {

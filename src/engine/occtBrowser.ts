@@ -1500,7 +1500,7 @@ function makeTransform(oc: Oc, transform: KernelTransformDto) {
     plane.delete();
     normal.delete();
     origin.delete();
-  } else {
+  } else if (transform.kind === 'rotate') {
     const origin = new oc.gp_Pnt_3(
       transform.origin.x,
       transform.origin.y,
@@ -1516,6 +1516,33 @@ function makeTransform(oc: Oc, transform: KernelTransformDto) {
     axis.delete();
     direction.delete();
     origin.delete();
+  } else {
+    const [rawX, rawY, rawZ, rawW] = transform.rotation;
+    const magnitude = Math.hypot(rawX, rawY, rawZ, rawW);
+    if (!Number.isFinite(magnitude) || magnitude <= 1e-12) {
+      value.delete();
+      throw new Error('Move/Copy rotation is degenerate');
+    }
+    const x = rawX / magnitude;
+    const y = rawY / magnitude;
+    const z = rawZ / magnitude;
+    const w = rawW / magnitude;
+    const r00 = 1 - 2 * (y * y + z * z);
+    const r01 = 2 * (x * y - z * w);
+    const r02 = 2 * (x * z + y * w);
+    const r10 = 2 * (x * y + z * w);
+    const r11 = 1 - 2 * (x * x + z * z);
+    const r12 = 2 * (y * z - x * w);
+    const r20 = 2 * (x * z - y * w);
+    const r21 = 2 * (y * z + x * w);
+    const r22 = 1 - 2 * (x * x + y * y);
+    const { x: px, y: py, z: pz } = transform.pivot;
+    const { x: tx, y: ty, z: tz } = transform.translation;
+    value.SetValues(
+      r00, r01, r02, px + tx - (r00 * px + r01 * py + r02 * pz),
+      r10, r11, r12, py + ty - (r10 * px + r11 * py + r12 * pz),
+      r20, r21, r22, pz + tz - (r20 * px + r21 * py + r22 * pz),
+    );
   }
   return value;
 }
@@ -1960,10 +1987,11 @@ export class BrowserOcctKernel {
             for (const sourceId of job.source_body_ids) {
               const source = this.bodies.get(sourceId);
               if (!source) throw new Error(`Body transform source ${sourceId} is missing`);
-              this.bodies.set(
-                job.result_body_ids[outputIndex],
-                applyBodyTransform(this.oc, source, transform),
-              );
+              const resultId = job.result_body_ids[outputIndex];
+              const result = applyBodyTransform(this.oc, source, transform);
+              const previous = this.bodies.get(resultId);
+              if (previous) previous.delete();
+              this.bodies.set(resultId, result);
               outputIndex += 1;
             }
           }
@@ -2091,13 +2119,12 @@ export class BrowserOcctKernel {
     const ids = request.body_ids.length > 0
       ? [...new Set(request.body_ids)]
       : [...this.bodies.keys()].sort((a, b) => a - b);
+    const occurrences = request.occurrences ?? [];
     const writer = new this.oc.STEPControl_Writer_1();
     const path = `/nbcad-${Date.now()}-${Math.random().toString(36).slice(2)}.step`;
     try {
       this.oc.Interface_Static.SetCVal('write.step.schema', 'AP242DIS');
-      for (const bodyId of ids) {
-        const shape = this.bodies.get(bodyId);
-        if (!shape) throw new Error(`Selected body ${bodyId} is not active.`);
+      const transfer = (shape: TopoDS_Shape, label: string) => {
         const progress = new this.oc.Message_ProgressRange_1();
         const status = writer.Transfer(
           shape,
@@ -2107,7 +2134,57 @@ export class BrowserOcctKernel {
         );
         progress.delete();
         if (status !== this.oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
-          throw new Error(`OCCT could not transfer Body${bodyId} to STEP.`);
+          throw new Error(`OCCT could not transfer ${label} to STEP.`);
+        }
+      };
+      if (occurrences.length > 0) {
+        for (const occurrence of occurrences) {
+          const source = this.bodies.get(occurrence.body_id);
+          if (!source) {
+            throw new Error(
+              `Assembly occurrence ${occurrence.occurrence_id} references inactive Body${occurrence.body_id}.`,
+            );
+          }
+          const [rawX, rawY, rawZ, rawW] = occurrence.rotation;
+          const magnitude = Math.hypot(rawX, rawY, rawZ, rawW);
+          if (!Number.isFinite(magnitude) || magnitude <= 1e-12) {
+            throw new Error(`Assembly occurrence ${occurrence.occurrence_id} has an invalid rotation.`);
+          }
+          const x = rawX / magnitude;
+          const y = rawY / magnitude;
+          const z = rawZ / magnitude;
+          const w = rawW / magnitude;
+          const [tx, ty, tz] = occurrence.translation;
+          const transform = new this.oc.gp_Trsf_1();
+          transform.SetValues(
+            1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), tx,
+            2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), ty,
+            2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y), tz,
+          );
+          const maker = new this.oc.BRepBuilderAPI_Transform_2(source, transform, true);
+          try {
+            if (!maker.IsDone()) {
+              throw new Error(`OCCT could not place assembly occurrence ${occurrence.occurrence_id}.`);
+            }
+            const placed = maker.Shape();
+            try {
+              if (placed.IsNull()) {
+                throw new Error(`Assembly occurrence ${occurrence.occurrence_id} produced null geometry.`);
+              }
+              transfer(placed, occurrence.name || `Occurrence ${occurrence.occurrence_id}`);
+            } finally {
+              placed.delete();
+            }
+          } finally {
+            maker.delete();
+            transform.delete();
+          }
+        }
+      } else {
+        for (const bodyId of ids) {
+          const shape = this.bodies.get(bodyId);
+          if (!shape) throw new Error(`Selected body ${bodyId} is not active.`);
+          transfer(shape, `Body${bodyId}`);
         }
       }
       if (writer.Write(path) !== this.oc.IFSelect_ReturnStatus.IFSelect_RetDone) {

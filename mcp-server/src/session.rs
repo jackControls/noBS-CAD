@@ -4,7 +4,7 @@
 //! publish → attach. It is **not** a live UI co-link: MCP never writes
 //! model/focus back after attach.
 //!
-//! Layout: `<session_dir>/<uuid>/{model.json,focus.json,heartbeat.json}`.
+//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`.
 //! Session ids must be UUID v4 strings.
 
 use std::fs;

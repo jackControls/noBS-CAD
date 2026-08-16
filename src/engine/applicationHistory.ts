@@ -8,7 +8,7 @@
  * written to disk, and a normal mutation after Undo invalidates that branch.
  */
 import { useAppStore } from '../store/appStore';
-import type { DrawingDocumentDto } from './types';
+import type { AssemblyDocumentDto, DrawingDocumentDto } from './types';
 
 export type SolidRedoSnapshot = {
   modelJson: string;
@@ -19,6 +19,13 @@ export type SolidRedoSnapshot = {
 export type DrawingHistoryEntry = {
   before: DrawingDocumentDto;
   after: DrawingDocumentDto;
+};
+
+export type AssemblyHistoryEntry = {
+  before: AssemblyDocumentDto;
+  after: AssemblyDocumentDto;
+  /** Solid state this assembly command belongs to. */
+  solidFingerprint: string;
 };
 
 type ObservedModel = {
@@ -33,10 +40,13 @@ type ObservedModel = {
 
 const SOLID_REDO_LIMIT = 32;
 const DRAWING_HISTORY_LIMIT = 64;
+const ASSEMBLY_HISTORY_LIMIT = 64;
 const solidRedoByProject = new Map<string, SolidRedoSnapshot[]>();
 const solidGenerationByProject = new Map<string, number>();
 const drawingUndoByProject = new Map<string, DrawingHistoryEntry[]>();
 const drawingRedoByProject = new Map<string, DrawingHistoryEntry[]>();
+const assemblyUndoByProject = new Map<string, AssemblyHistoryEntry[]>();
+const assemblyRedoByProject = new Map<string, AssemblyHistoryEntry[]>();
 const listeners = new Set<() => void>();
 let historyMutationDepth = 0;
 let reconcileQueued = false;
@@ -92,6 +102,23 @@ function drawingStack(
     stacks.set(projectKey, value);
   }
   return value;
+}
+
+function assemblyStack(
+  stacks: Map<string, AssemblyHistoryEntry[]>,
+  projectKey = currentHistoryProjectKey(),
+): AssemblyHistoryEntry[] {
+  let value = stacks.get(projectKey);
+  if (!value) {
+    value = [];
+    stacks.set(projectKey, value);
+  }
+  return value;
+}
+
+function solidFingerprint(): string {
+  const document = useAppStore.getState().document;
+  return document ? JSON.stringify(document) : 'no-document';
 }
 
 function notify(): void {
@@ -159,12 +186,70 @@ export function dropApplicationHistory(projectKey: string): void {
   const removedGeneration = solidGenerationByProject.delete(projectKey);
   const removedDrawingUndo = drawingUndoByProject.delete(projectKey);
   const removedDrawingRedo = drawingRedoByProject.delete(projectKey);
+  const removedAssemblyUndo = assemblyUndoByProject.delete(projectKey);
+  const removedAssemblyRedo = assemblyRedoByProject.delete(projectKey);
   if (
     removedRedo
     || removedGeneration
     || removedDrawingUndo
     || removedDrawingRedo
+    || removedAssemblyUndo
+    || removedAssemblyRedo
   ) notify();
+}
+
+export function canUndoAssemblyHistory(
+  projectKey = currentHistoryProjectKey(),
+): boolean {
+  const undo = assemblyStack(assemblyUndoByProject, projectKey);
+  return undo[undo.length - 1]?.solidFingerprint === solidFingerprint();
+}
+
+export function canRedoAssemblyHistory(
+  projectKey = currentHistoryProjectKey(),
+): boolean {
+  const redo = assemblyStack(assemblyRedoByProject, projectKey);
+  return redo[redo.length - 1]?.solidFingerprint === solidFingerprint();
+}
+
+export function peekAssemblyUndoHistory(
+  projectKey: string,
+): AssemblyHistoryEntry | null {
+  if (!canUndoAssemblyHistory(projectKey)) return null;
+  const undo = assemblyStack(assemblyUndoByProject, projectKey);
+  return undo[undo.length - 1] ?? null;
+}
+
+export function commitAssemblyUndoHistory(
+  projectKey: string,
+  entry: AssemblyHistoryEntry,
+): boolean {
+  const undo = assemblyStack(assemblyUndoByProject, projectKey);
+  if (undo[undo.length - 1] !== entry) return false;
+  undo.pop();
+  assemblyStack(assemblyRedoByProject, projectKey).push(entry);
+  notify();
+  return true;
+}
+
+export function peekAssemblyRedoHistory(
+  projectKey: string,
+): AssemblyHistoryEntry | null {
+  if (!canRedoAssemblyHistory(projectKey)) return null;
+  const redo = assemblyStack(assemblyRedoByProject, projectKey);
+  return redo[redo.length - 1] ?? null;
+}
+
+export function commitAssemblyRedoHistory(
+  projectKey: string,
+  entry: AssemblyHistoryEntry,
+): boolean {
+  const redo = assemblyStack(assemblyRedoByProject, projectKey);
+  if (redo[redo.length - 1] !== entry) return false;
+  redo.pop();
+  assemblyStack(assemblyUndoByProject, projectKey).push(entry);
+  notify();
+  return true;
 }
 
 /** After one Redo, the next older snapshot is now valid against the restored
@@ -249,6 +334,37 @@ export function commitDrawingRedoHistory(
 
 let observedModel = observeModel();
 useAppStore.subscribe((state, previous) => {
+  const projectKey = state.activeProjectTabId ?? '__bootstrap__';
+  const previousProjectKey = previous.activeProjectTabId ?? '__bootstrap__';
+  if (
+    projectKey === previousProjectKey
+    && state.assemblyDocument !== previous.assemblyDocument
+  ) {
+    const solidOwnedHydration =
+      state.assemblySolidSyncRevision !== previous.assemblySolidSyncRevision;
+    if (
+      !solidOwnedHydration
+      && historyMutationDepth === 0
+      && state.document === previous.document
+    ) {
+      const beforeJson = JSON.stringify(previous.assemblyDocument);
+      const afterJson = JSON.stringify(state.assemblyDocument);
+      if (beforeJson !== afterJson) {
+        const undo = assemblyStack(assemblyUndoByProject, projectKey);
+        undo.push({
+          before: structuredClone(previous.assemblyDocument),
+          after: structuredClone(state.assemblyDocument),
+          solidFingerprint: solidFingerprint(),
+        });
+        if (undo.length > ASSEMBLY_HISTORY_LIMIT) {
+          undo.splice(0, undo.length - ASSEMBLY_HISTORY_LIMIT);
+        }
+        assemblyStack(assemblyRedoByProject, projectKey).length = 0;
+        notify();
+      }
+    }
+  }
+
   const mayAffectHistory =
     state.activeProjectTabId !== previous.activeProjectTabId ||
     state.document !== previous.document ||
@@ -270,6 +386,9 @@ useAppStore.subscribe((state, previous) => {
         next.projectKey,
         generation(next.projectKey) + 1,
       );
+      if (historyMutationDepth === 0) {
+        assemblyStack(assemblyRedoByProject, next.projectKey).length = 0;
+      }
       if (historyMutationDepth === 0) notify();
     }
     // Project-tab hydration changes the model and active id in adjacent store

@@ -171,6 +171,27 @@ impl SolidDocument {
         &self.body_features
     }
 
+    /// Stable bodies owned by one history feature, including identities that
+    /// are currently rolled back. Assembly cleanup calls this only for an
+    /// explicit deletion; moving the build cursor must preserve references.
+    pub fn owned_body_ids_for_feature(&self, feature_id: FeatureId) -> Vec<BodyId> {
+        body_owners(
+            &self.extrudes,
+            &self.revolves,
+            &self.sweeps,
+            &self.lofts,
+            &self.ribs,
+            &self.fillets,
+            &self.chamfers,
+            &self.holes,
+            &self.body_features,
+            &self.feature_order,
+        )
+        .into_iter()
+        .filter_map(|(body_id, owner)| (owner == feature_id).then_some(body_id))
+        .collect()
+    }
+
     pub fn scene(&self) -> &SolidSceneDto {
         &self.scene
     }
@@ -303,6 +324,12 @@ impl SolidDocument {
                 )));
             }
             let reserved: &[BodyId] = match definition {
+                BodyFeatureDefinitionDto::MoveCopy {
+                    copy,
+                    result_body_ids,
+                    ..
+                } if *copy => result_body_ids,
+                BodyFeatureDefinitionDto::MoveCopy { .. } => &[],
                 BodyFeatureDefinitionDto::Mirror { new_body_ids, .. }
                 | BodyFeatureDefinitionDto::RectangularPattern { new_body_ids, .. }
                 | BodyFeatureDefinitionDto::CircularPattern { new_body_ids, .. } => new_body_ids,
@@ -1229,6 +1256,9 @@ impl SolidDocument {
     ) -> Result<BodyFeatureDefinitionDto, SolidError> {
         let mut reuse_or_allocate = |count: usize| {
             let mut ids = match existing {
+                Some(BodyFeatureDefinitionDto::MoveCopy {
+                    result_body_ids, ..
+                }) => result_body_ids.clone(),
                 Some(BodyFeatureDefinitionDto::Mirror { new_body_ids, .. })
                 | Some(BodyFeatureDefinitionDto::RectangularPattern { new_body_ids, .. })
                 | Some(BodyFeatureDefinitionDto::CircularPattern { new_body_ids, .. }) => {
@@ -1264,6 +1294,48 @@ impl SolidDocument {
                     face_keys,
                     thickness: request.thickness.abs(),
                     inward: request.inward,
+                }
+            }
+            BodyFeatureRequestDto::MoveCopy(request) => {
+                if request.body_ids.is_empty() {
+                    return Err(SolidError::EmptySelection);
+                }
+                validate_vector_finite(request.translation, "move translation")?;
+                validate_vector_finite(request.pivot, "move pivot")?;
+                let rotation = normalized_quaternion(request.rotation)?;
+                // A move is a placement feature on the selected body's stable
+                // identity. Only Copy creates new body identities. Keeping the
+                // IDs stable is essential for components, joints, visibility,
+                // and downstream feature references.
+                let result_body_ids = if request.copy {
+                    match existing {
+                        Some(BodyFeatureDefinitionDto::MoveCopy {
+                            copy: true,
+                            result_body_ids,
+                            ..
+                        }) if result_body_ids.len() == request.body_ids.len()
+                            && result_body_ids
+                                .iter()
+                                .all(|id| !request.body_ids.contains(id)) =>
+                        {
+                            result_body_ids.clone()
+                        }
+                        _ => (0..request.body_ids.len())
+                            .map(|_| self.alloc_body_id())
+                            .collect(),
+                    }
+                } else {
+                    request.body_ids.clone()
+                };
+                BodyFeatureDefinitionDto::MoveCopy {
+                    feature_id,
+                    name,
+                    body_ids: request.body_ids,
+                    translation: request.translation,
+                    rotation,
+                    pivot: request.pivot,
+                    copy: request.copy,
+                    result_body_ids,
                 }
             }
             BodyFeatureRequestDto::Mirror(request) => {
@@ -1576,6 +1648,7 @@ impl SolidDocument {
                     index_count: face.index_count,
                     plane: face.plane,
                     signature: face.signature,
+                    cylinder: face.cylinder,
                 })
                 .collect();
             let edges = raw
@@ -1585,6 +1658,7 @@ impl SolidDocument {
                     id: stable::edge_id(raw.body_id, &edge.key),
                     key: edge.key,
                     points: edge.points,
+                    circle: edge.circle,
                     refinable: edge.refinable,
                 })
                 .collect();
@@ -1917,6 +1991,18 @@ fn body_owners(
                     ..
                 } => {
                     owners.entry(*body_id).or_insert(*feature_id);
+                }
+                BodyFeatureDefinitionDto::MoveCopy {
+                    feature_id,
+                    copy,
+                    result_body_ids,
+                    ..
+                } => {
+                    if *copy {
+                        for body_id in result_body_ids {
+                            owners.insert(*body_id, *feature_id);
+                        }
+                    }
                 }
                 BodyFeatureDefinitionDto::Mirror {
                     feature_id,
@@ -2634,6 +2720,35 @@ fn make_jobs(
                         thickness: *thickness,
                         inward: *inward,
                     }));
+                }
+                BodyFeatureDefinitionDto::MoveCopy {
+                    feature_id,
+                    body_ids,
+                    translation,
+                    rotation,
+                    pivot,
+                    copy: _,
+                    result_body_ids,
+                    ..
+                } => {
+                    ensure_body_inputs(&available_bodies, body_ids)?;
+                    if result_body_ids.len() != body_ids.len() {
+                        return Err(SolidError::InvalidHistory(
+                            "Move/Copy output count does not match its source bodies".to_string(),
+                        ));
+                    }
+                    jobs.push(KernelJobDto::Transform(KernelTransformJobDto {
+                        feature_id: *feature_id,
+                        source_body_ids: body_ids.clone(),
+                        transforms: vec![KernelTransformDto::Rigid {
+                            translation: *translation,
+                            rotation: *rotation,
+                            pivot: *pivot,
+                        }],
+                        result_body_ids: result_body_ids.clone(),
+                    }));
+                    // Move overwrites each stable source id; Copy writes new ids.
+                    available_bodies.extend(result_body_ids.iter().copied());
                 }
                 BodyFeatureDefinitionDto::Mirror {
                     feature_id,
@@ -3445,6 +3560,7 @@ fn kernel_curve(curve: &ProfileCurveDto, basis: PlaneBasis) -> KernelCurveDto {
             entity_id,
             start,
             end,
+            ..
         } => KernelCurveDto::Line {
             entity_id: *entity_id,
             start: point(*start),
@@ -3455,6 +3571,7 @@ fn kernel_curve(curve: &ProfileCurveDto, basis: PlaneBasis) -> KernelCurveDto {
             start,
             mid,
             end,
+            ..
         } => KernelCurveDto::Arc {
             entity_id: *entity_id,
             start: point(*start),
@@ -3465,13 +3582,16 @@ fn kernel_curve(curve: &ProfileCurveDto, basis: PlaneBasis) -> KernelCurveDto {
             entity_id,
             center,
             radius,
+            ..
         } => KernelCurveDto::Circle {
             entity_id: *entity_id,
             center: point(*center),
             axis_point: point(Point2Dto::new(center.x + radius, center.y)),
             normal: basis.normal.into(),
         },
-        ProfileCurveDto::Polyline { entity_id, points } => KernelCurveDto::Polyline {
+        ProfileCurveDto::Polyline {
+            entity_id, points, ..
+        } => KernelCurveDto::Polyline {
             entity_id: *entity_id,
             points: points.iter().copied().map(point).collect(),
         },
@@ -3611,6 +3731,24 @@ fn validate_pattern_count(count: u32, label: &str) -> Result<(), SolidError> {
 
 fn validate_vector(value: Point3Dto, label: &str) -> Result<(), SolidError> {
     unit_point(value, label).map(|_| ())
+}
+
+fn validate_vector_finite(value: Point3Dto, label: &str) -> Result<(), SolidError> {
+    if value.x.is_finite() && value.y.is_finite() && value.z.is_finite() {
+        Ok(())
+    } else {
+        Err(SolidError::InvalidAxis(format!("{label} must be finite")))
+    }
+}
+
+fn normalized_quaternion(value: [f64; 4]) -> Result<[f64; 4], SolidError> {
+    let length = value.iter().map(|entry| entry * entry).sum::<f64>().sqrt();
+    if !length.is_finite() || length <= EPS {
+        return Err(SolidError::InvalidAxis(
+            "move rotation must be a finite, non-zero quaternion".to_string(),
+        ));
+    }
+    Ok(value.map(|entry| entry / length))
 }
 
 fn unit_point(value: Point3Dto, label: &str) -> Result<[f64; 3], SolidError> {
@@ -4165,6 +4303,7 @@ mod tests {
                     curves: Vec::new(),
                 },
             ],
+            profile_error: None,
             lines: vec![SketchLineDto {
                 entity_id: 99,
                 start: Point2Dto::new(0.0, 0.0),
@@ -4667,6 +4806,7 @@ mod tests {
                     wire_count: 1,
                     edge_count: 3,
                 }),
+                cylinder: None,
             }],
             edges: vec![],
         }
@@ -5223,6 +5363,105 @@ mod tests {
                 inward: true,
                 ..
             })) if *target_body_id == shell_bodies[0]
+        ));
+
+        let (mut move_document, move_bodies) = two_body_document();
+        let moved = move_document
+            .prepare_add_body_feature(
+                feature_id,
+                "MoveCopy1",
+                BodyFeatureRequestDto::MoveCopy(MoveCopyBodyRequest {
+                    body_ids: vec![move_bodies[0]],
+                    translation: Point3Dto::from([12.0, -4.0, 2.0]),
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    pivot: Point3Dto::from([5.0, 5.0, 5.0]),
+                    copy: false,
+                }),
+                &catalog(),
+                &active_features,
+            )
+            .unwrap();
+        assert!(matches!(
+            move_document.pending.as_ref().unwrap().body_features.last(),
+            Some(BodyFeatureDefinitionDto::MoveCopy {
+                body_ids,
+                copy: false,
+                result_body_ids,
+                ..
+            }) if body_ids == &[move_bodies[0]] && result_body_ids == body_ids
+        ));
+        assert!(matches!(
+            moved.jobs.last(),
+            Some(KernelJobDto::Transform(KernelTransformJobDto {
+                source_body_ids,
+                transforms,
+                result_body_ids,
+                ..
+            })) if source_body_ids == &[move_bodies[0]]
+                && result_body_ids == source_body_ids
+                && matches!(transforms.as_slice(), [KernelTransformDto::Rigid { .. }])
+        ));
+        move_document
+            .commit(
+                moved.transaction_id,
+                KernelSceneDto {
+                    bodies: move_bodies.iter().copied().map(raw_body).collect(),
+                    errors: Vec::new(),
+                },
+            )
+            .unwrap();
+        let saved_move = serde_json::to_string(move_document.body_feature_definitions()).unwrap();
+        let restored_move_features: Vec<BodyFeatureDefinitionDto> =
+            serde_json::from_str(&saved_move).unwrap();
+        let mut restored_move = SolidDocument::restore_feature_definitions(
+            move_document.definitions().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            restored_move_features,
+        )
+        .unwrap();
+        let replayed_move = restored_move
+            .prepare_recompute(&catalog(), &active_features)
+            .unwrap();
+        assert!(matches!(
+            replayed_move.jobs.last(),
+            Some(KernelJobDto::Transform(KernelTransformJobDto {
+                source_body_ids,
+                result_body_ids,
+                ..
+            })) if source_body_ids == result_body_ids && source_body_ids == &[move_bodies[0]]
+        ));
+
+        let (mut copy_document, copy_bodies) = two_body_document();
+        let copied = copy_document
+            .prepare_add_body_feature(
+                feature_id,
+                "MoveCopy1",
+                BodyFeatureRequestDto::MoveCopy(MoveCopyBodyRequest {
+                    body_ids: vec![copy_bodies[0]],
+                    translation: Point3Dto::from([12.0, 0.0, 0.0]),
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    pivot: Point3Dto::from([0.0, 0.0, 0.0]),
+                    copy: true,
+                }),
+                &catalog(),
+                &active_features,
+            )
+            .unwrap();
+        assert!(matches!(
+            copied.jobs.last(),
+            Some(KernelJobDto::Transform(KernelTransformJobDto {
+                source_body_ids,
+                result_body_ids,
+                ..
+            })) if source_body_ids == &[copy_bodies[0]]
+                && result_body_ids.len() == 1
+                && result_body_ids[0] != copy_bodies[0]
         ));
 
         let (mut mirror_document, mirror_bodies) = two_body_document();

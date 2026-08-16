@@ -18,6 +18,7 @@ pub enum FeatureKind {
     Chamfer,
     Hole,
     Shell,
+    MoveCopy,
     Mirror,
     RectangularPattern,
     CircularPattern,

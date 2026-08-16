@@ -36,6 +36,7 @@ import {
 import { useAppStore } from '../store/appStore';
 import { switchProjectTab } from '../files/projectTabs';
 import { exportActiveDrawingDxf } from '../drawing/export';
+import { requestNativeViewportLayout } from './viewport/nativeViewportBridge';
 
 const FILE_MENU_VIEWPORT_MARGIN = 6;
 const FILE_MENU_FALLBACK_WIDTH = 256;
@@ -132,6 +133,9 @@ export function AppMenuControls() {
   useLayoutEffect(() => {
     if (!menuOpen) return;
     updateMenuPosition();
+    // The Bevy surface is a native sibling beneath WebKit. Cut the freshly
+    // mounted menu out of that surface before the browser paints it.
+    requestNativeViewportLayout();
     const frame = window.requestAnimationFrame(updateMenuPosition);
     const observer = typeof ResizeObserver === 'undefined'
       ? null
@@ -147,6 +151,10 @@ export function AppMenuControls() {
       window.removeEventListener('scroll', updateMenuPosition, true);
     };
   }, [menuOpen, updateMenuPosition]);
+
+  useLayoutEffect(() => {
+    if (menuOpen && menuPosition) requestNativeViewportLayout();
+  }, [menuOpen, menuPosition]);
 
   const run = (action: () => Promise<unknown>) => {
     if (useAppStore.getState().projectBusy) return;

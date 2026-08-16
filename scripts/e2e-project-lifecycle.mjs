@@ -55,15 +55,14 @@ const waitForFreshDocument = () =>
       !app.dirty
     );
   });
-const nextConfirmation = (accept) =>
-  new Promise((resolve) => {
-    page.once('dialog', async (dialog) => {
-      const message = dialog.message();
-      if (accept) await dialog.accept();
-      else await dialog.dismiss();
-      resolve(message);
-    });
-  });
+const resolveUnsavedPrompt = async (decision) => {
+  const dialog = page.getByTestId('unsaved-changes-dialog');
+  await dialog.waitFor({ state: 'visible' });
+  const message = await dialog.getByText(/Do you want to save/i).innerText();
+  await dialog.getByRole('button', { name: decision, exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  return message;
+};
 const renameThroughMenu = async (name) => {
   const prompt = new Promise((resolve) => {
     page.once('dialog', async (dialog) => {
@@ -140,17 +139,34 @@ try {
     ['First Design', 'Second Design'],
     'crash recovery retains every dirty document tab',
   );
-  const cancelConfirmation = nextConfirmation(false);
   await closeButton().click();
-  assert.match(await cancelConfirmation, /discard its unsaved changes/i);
+  assert.match(await resolveUnsavedPrompt('Cancel'), /save the changes/i);
   app = await state();
   assert.equal(app.document.name, 'Second Design', 'Cancel keeps the tab open');
   assert.equal(app.dirty, true, 'Cancel preserves unsaved state');
   assert.equal(app.projectTabs.length, 2);
 
-  const discardConfirmation = nextConfirmation(true);
   await closeButton().click();
-  assert.match(await discardConfirmation, /discard its unsaved changes/i);
+  assert.match(await resolveUnsavedPrompt('Save'), /save the changes/i);
+  await page.waitForFunction(
+    () =>
+      window.__appStore.getState().document?.name === 'First Design' &&
+      window.__appStore.getState().projectTabs.length === 1,
+  );
+  app = await state();
+  assert.equal(app.document.name, 'First Design', 'Save closes only after persisting the tab');
+  assert.equal(app.dirty, true);
+  assert.deepEqual(
+    await page.evaluate(() => window.__savePickerCalls),
+    ['Second Design.nbcad'],
+    'Save from the close warning uses the normal project save path',
+  );
+
+  await newButton.click();
+  await waitForFreshDocument();
+  await renameThroughMenu('Discard Me');
+  await closeButton().click();
+  assert.match(await resolveUnsavedPrompt("Don't Save"), /save the changes/i);
   await page.waitForFunction(
     () =>
       window.__appStore.getState().document?.name === 'First Design' &&
@@ -161,9 +177,8 @@ try {
   assert.equal(app.dirty, true);
   assert.equal(await closeButton().count(), 1);
 
-  const closeLastConfirmation = nextConfirmation(true);
   await closeButton().click();
-  assert.match(await closeLastConfirmation, /discard its unsaved changes/i);
+  assert.match(await resolveUnsavedPrompt("Don't Save"), /save the changes/i);
   await waitForFreshDocument();
   app = await state();
   assert.equal(app.projectTabs.length, 1, 'closing the last tab leaves one fresh design');
@@ -262,7 +277,7 @@ try {
   );
   assert.deepEqual(
     await page.evaluate(() => window.__savePickerCalls),
-    ['Bench Bracket.nbcad'],
+    ['Second Design.nbcad', 'Bench Bracket.nbcad'],
     'Rename Project drives the next Save As suggestion',
   );
   let bytes = Uint8Array.from(
@@ -285,7 +300,7 @@ try {
   );
   assert.equal(
     await page.evaluate(() => window.__savePickerCalls.length),
-    1,
+    2,
     'ordinary Save reuses the current target',
   );
   bytes = Uint8Array.from(
@@ -339,7 +354,7 @@ try {
   await page.waitForFunction(() => !window.__appStore.getState().dirty);
   assert.equal(
     await page.evaluate(() => window.__savePickerCalls.length),
-    2,
+    3,
     'switching tabs restores each document\'s own reusable Save target',
   );
   bytes = Uint8Array.from(

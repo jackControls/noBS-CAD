@@ -67,12 +67,16 @@ try {
     'choosing a reference from the field ends viewport selection',
   );
   const distance = planeDialog.getByLabel('Offset distance (mm)');
-  await distance.click();
+  await page.waitForFunction(
+    () => document.activeElement instanceof HTMLInputElement
+      && document.activeElement.type === 'number'
+      && document.activeElement.closest('[data-testid="construction-plane-dialog"]') !== null,
+  );
   await page.keyboard.type('25');
   assert.equal(
     await distance.inputValue(),
     '25',
-    'mouse focus replaces the complete numeric value',
+    'choosing required geometry focuses and replaces the complete measurement',
   );
 
   await reference.click();

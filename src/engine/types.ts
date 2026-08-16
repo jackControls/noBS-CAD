@@ -38,7 +38,7 @@ export interface BeginSketchRequest {
 
 export type EntityDto =
   | { kind: 'point'; id: number; position: Vec2; fully_defined: boolean }
-  | { kind: 'line'; id: number; start_id: number; end_id: number; start: Vec2; end: Vec2; fully_defined: boolean }
+  | { kind: 'line'; id: number; start_id: number; end_id: number; start: Vec2; end: Vec2; fully_defined: boolean; consumed: boolean }
   | { kind: 'arc'; id: number; center: Vec2; radius: number; start_angle: number; end_angle: number; fully_defined: boolean }
   | { kind: 'circle'; id: number; center: Vec2; radius: number; fully_defined: boolean }
   | { kind: 'spline'; id: number; points: Vec2[]; tessellation: Vec2[]; fully_defined: boolean };
@@ -50,6 +50,9 @@ export interface ConstraintDto {
   entity?: number;
   a?: number;
   b?: number;
+  point?: number;
+  start?: number;
+  end?: number;
   axis?: number;
   from?: number;
   to?: number | null;
@@ -229,6 +232,17 @@ export type SnapTarget =
   | { kind: 'reference_midpoint'; edge: number };
 
 export type Inference = 'horizontal' | 'vertical' | 'coincident';
+export type TrackingAxis = 'horizontal' | 'vertical';
+
+export interface LineTrackingRequest {
+  point: number;
+  axis: TrackingAxis;
+}
+
+export interface TrackingGuideDto extends LineTrackingRequest {
+  source: Vec2;
+  snapped_to: Vec2;
+}
 
 export interface SegmentRequest {
   from: Vec2;
@@ -249,6 +263,7 @@ export interface PreviewDto {
   snapped_to: Vec2;
   snap: SnapTarget;
   inferences: Inference[];
+  tracking?: TrackingGuideDto | null;
 }
 
 export interface AddLineResult {
@@ -294,16 +309,18 @@ export interface ProfileLoopDto {
 }
 
 export type ProfileCurveDto =
-  | { kind: 'line'; entity_id: number; start: Vec2; end: Vec2 }
-  | { kind: 'arc'; entity_id: number; start: Vec2; mid: Vec2; end: Vec2 }
-  | { kind: 'circle'; entity_id: number; center: Vec2; radius: number }
-  | { kind: 'polyline'; entity_id: number; points: Vec2[] };
+  | { kind: 'line'; entity_id: number; source_entity_ids: number[]; start: Vec2; end: Vec2 }
+  | { kind: 'arc'; entity_id: number; source_entity_ids: number[]; start: Vec2; mid: Vec2; end: Vec2 }
+  | { kind: 'circle'; entity_id: number; source_entity_ids: number[]; center: Vec2; radius: number }
+  | { kind: 'polyline'; entity_id: number; source_entity_ids: number[]; points: Vec2[] };
 
 export interface ProfileCatalogItemDto {
   sketch_name: string;
   feature_id: number;
   basis: PlaneBasis;
   profiles: ProfileLoopDto[];
+  /** Specific topology diagnostic when no bounded profile could be recovered. */
+  profile_error: string | null;
   lines: SketchLineDto[];
   path_curves: SketchPathCurveDto[];
   reference_points: SketchReferencePointDto[];
@@ -589,6 +606,15 @@ export interface SolidMirrorRequest {
   plane_basis?: PlaneBasis | null;
 }
 
+export interface MoveCopyBodyRequest {
+  body_ids: number[];
+  translation: Point3Dto;
+  /** Unit quaternion in [x, y, z, w] order. */
+  rotation: [number, number, number, number];
+  pivot: Point3Dto;
+  copy: boolean;
+}
+
 export interface RectangularPatternRequest {
   body_ids: number[];
   direction: Point3Dto;
@@ -629,6 +655,7 @@ export interface ImportStepRequest {
 
 export type BodyFeatureRequestDto =
   | { type: 'shell'; request: ShellRequest }
+  | { type: 'move_copy'; request: MoveCopyBodyRequest }
   | { type: 'mirror'; request: SolidMirrorRequest }
   | { type: 'rectangular_pattern'; request: RectangularPatternRequest }
   | { type: 'circular_pattern'; request: CircularPatternRequest }
@@ -637,6 +664,17 @@ export type BodyFeatureRequestDto =
   | { type: 'import_step'; request: ImportStepRequest };
 
 export type BodyFeatureDefinitionDto =
+  | {
+      type: 'move_copy';
+      feature_id: number;
+      name: string;
+      body_ids: number[];
+      translation: Point3Dto;
+      rotation: [number, number, number, number];
+      pivot: Point3Dto;
+      copy: boolean;
+      result_body_ids: number[];
+    }
   | {
       type: 'shell';
       feature_id: number;
@@ -827,7 +865,13 @@ export interface KernelHoleJobDto {
 export type KernelTransformDto =
   | { kind: 'mirror'; origin: Point3Dto; normal: Point3Dto }
   | { kind: 'translate'; vector: Point3Dto }
-  | { kind: 'rotate'; origin: Point3Dto; axis: Point3Dto; angle_rad: number };
+  | { kind: 'rotate'; origin: Point3Dto; axis: Point3Dto; angle_rad: number }
+  | {
+      kind: 'rigid';
+      translation: Point3Dto;
+      rotation: [number, number, number, number];
+      pivot: Point3Dto;
+    };
 
 export interface KernelTransformJobDto {
   feature_id: number;
@@ -893,6 +937,8 @@ export interface KernelFaceDto {
   index_count: number;
   plane: PlaneBasis | null;
   signature?: PlanarFaceSignatureDto | null;
+  /** Exact OCCT cylinder metadata when this is an analytic cylindrical face. */
+  cylinder?: CylindricalSurfaceDto | null;
 }
 
 export interface PlanarFaceSignatureDto {
@@ -904,11 +950,31 @@ export interface PlanarFaceSignatureDto {
   edge_count: number;
 }
 
+export interface CylindricalSurfaceDto {
+  /** A stable point on the cylinder axis in body-local model coordinates. */
+  origin: Point3Dto;
+  /** Unit cylinder axis in body-local model coordinates. */
+  axis: Point3Dto;
+  /** Stable in-plane reference direction supplied by OCCT. */
+  reference: Point3Dto;
+  radius: number;
+}
+
 export interface KernelEdgeDto {
   key: string;
   points: Point3Dto[];
+  /** Exact OCCT circle metadata when this edge is analytically circular. */
+  circle?: CircularCurveDto | null;
   /** Cached kernel topology classification for fillet/chamfer selection. */
   refinable: boolean;
+}
+
+export interface CircularCurveDto {
+  center: Point3Dto;
+  normal: Point3Dto;
+  reference: Point3Dto;
+  radius: number;
+  closed: boolean;
 }
 
 export interface KernelBodyDto {
@@ -959,6 +1025,467 @@ export interface SolidSceneDto {
 export interface SolidUpdateDto {
   document: DocumentDto;
   scene: SolidSceneDto;
+}
+
+export type JointKindDto =
+  | 'rigid'
+  | 'revolute'
+  | 'slider'
+  | 'cylindrical'
+  | 'planar'
+  | 'ball'
+  | 'pin_slot'
+  | 'screw'
+  | 'universal';
+
+export type JointConnectorKindDto =
+  | 'planar_face'
+  | 'cylindrical_face'
+  | 'virtual_circular_face'
+  | 'circular_edge';
+
+export interface JointFrameDto {
+  origin: [number, number, number];
+  primary_axis: [number, number, number];
+  secondary_axis: [number, number, number];
+}
+
+export interface JointConnectorDto {
+  /** Frontend pick identity for a reusable instance; connector topology stays part-local. */
+  occurrence_id?: number | null;
+  body_id: number;
+  face_id: number;
+  face_key: string;
+  edge_id?: number | null;
+  edge_key?: string | null;
+  kind: JointConnectorKindDto;
+  radius?: number | null;
+  /** Analytic cylinder frame captured with cylindrical/opening connectors. */
+  source_surface_frame?: JointFrameDto | null;
+  frame: JointFrameDto;
+}
+
+export interface JointLimitsDto {
+  min: number;
+  max: number;
+}
+
+export interface JointAdvancedDto {
+  connector_a_occurrence_id: number | null;
+  connector_b_occurrence_id: number | null;
+  secondary_angle_offset_deg: number;
+  tertiary_angle_offset_deg: number;
+  secondary_linear_offset_mm: number;
+  screw_pitch_mm_per_revolution: number;
+  connector_a_twist_deg: number;
+  connector_b_twist_deg: number;
+  secondary_angle_limits: JointLimitsDto | null;
+  tertiary_angle_limits: JointLimitsDto | null;
+  secondary_linear_limits: JointLimitsDto | null;
+}
+
+export const DEFAULT_JOINT_ADVANCED: JointAdvancedDto = {
+  connector_a_occurrence_id: null,
+  connector_b_occurrence_id: null,
+  secondary_angle_offset_deg: 0,
+  tertiary_angle_offset_deg: 0,
+  secondary_linear_offset_mm: 0,
+  screw_pitch_mm_per_revolution: 1,
+  connector_a_twist_deg: 0,
+  connector_b_twist_deg: 0,
+  secondary_angle_limits: null,
+  tertiary_angle_limits: null,
+  secondary_linear_limits: null,
+};
+
+export interface JointDefinitionDto {
+  id: number;
+  name: string;
+  kind: JointKindDto;
+  connector_a: JointConnectorDto;
+  connector_b: JointConnectorDto;
+  flipped: boolean;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+  limits: JointLimitsDto | null;
+  angle_limits: JointLimitsDto | null;
+  linear_limits: JointLimitsDto | null;
+  advanced: JointAdvancedDto;
+  enabled: boolean;
+}
+
+export interface CreateJointRequestDto {
+  name: string;
+  kind: JointKindDto;
+  connector_a: JointConnectorDto;
+  connector_b: JointConnectorDto;
+  flipped: boolean;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+  limits: JointLimitsDto | null;
+  angle_limits: JointLimitsDto | null;
+  linear_limits: JointLimitsDto | null;
+  advanced: JointAdvancedDto;
+  grounded_body_id: number | null;
+  grounded_occurrence_id: number | null;
+}
+
+export interface UpdateJointRequestDto {
+  joint: JointDefinitionDto;
+  grounded_body_id: number | null;
+  grounded_occurrence_id: number | null;
+}
+
+export interface AssemblyTransformDto {
+  translation: [number, number, number];
+  /** Unit quaternion in x, y, z, w order. */
+  rotation: [number, number, number, number];
+}
+
+export interface ComponentDefinitionDto {
+  id: number;
+  name: string;
+  /** Stable source bodies owned by the part feature history. */
+  body_ids: number[];
+  /** Component-local coordinate system expressed in part-model coordinates. */
+  local_coordinate_system: AssemblyTransformDto;
+  promoted: boolean;
+}
+
+export interface ComponentOccurrenceDto {
+  id: number;
+  name: string;
+  component_id: number;
+  parent_occurrence_id: number | null;
+  /** Placement relative to the parent occurrence. */
+  local_pose: AssemblyTransformDto;
+  visible: boolean;
+  grounded: boolean;
+}
+
+export interface ComponentStructureDto {
+  definitions: ComponentDefinitionDto[];
+  occurrences: ComponentOccurrenceDto[];
+  next_component_id: number;
+  next_occurrence_id: number;
+}
+
+export interface CreateComponentRequestDto {
+  name: string;
+  body_ids: number[];
+  local_coordinate_system: AssemblyTransformDto;
+  absorb_promoted_bodies: boolean;
+}
+
+export interface UpdateComponentRequestDto {
+  component: ComponentDefinitionDto;
+}
+
+export interface CreateOccurrenceRequestDto {
+  component_id: number;
+  name: string;
+  parent_occurrence_id: number | null;
+  local_pose: AssemblyTransformDto;
+}
+
+export interface UpdateOccurrenceRequestDto {
+  occurrence: ComponentOccurrenceDto;
+}
+
+export interface DuplicateOccurrenceRequestDto {
+  occurrence_id: number;
+  parent_occurrence_id: number | null;
+  /** Optional atomic placement for the duplicated root occurrence. */
+  local_pose?: AssemblyTransformDto | null;
+}
+
+export interface SetOccurrenceGroundedRequestDto {
+  occurrence_id: number;
+  grounded: boolean;
+}
+
+export interface SetOccurrencePoseRequestDto {
+  occurrence_id: number;
+  local_pose: AssemblyTransformDto;
+}
+
+export interface AssemblyPositionDto {
+  id: number;
+  name: string;
+  motions: JointMotionStateDto[];
+}
+
+export type MotionCoordinateDto =
+  | 'primary_angle'
+  | 'secondary_angle'
+  | 'tertiary_angle'
+  | 'primary_linear'
+  | 'secondary_linear';
+
+export type MotionInterpolationDto = 'step' | 'linear' | 'smooth';
+
+export interface MotionKeyframeDto {
+  time_seconds: number;
+  value: number;
+  interpolation: MotionInterpolationDto;
+}
+
+export type MotionDriverLawDto =
+  | { kind: 'keyframes'; keyframes: MotionKeyframeDto[] }
+  | {
+      kind: 'motor';
+      initial_value: number;
+      velocity_per_second: number;
+      acceleration_per_second2: number;
+    };
+
+export interface MotionDriverDto {
+  id: number;
+  name: string;
+  joint_id: number;
+  coordinate: MotionCoordinateDto;
+  law: MotionDriverLawDto;
+  enabled: boolean;
+}
+
+export interface MotionStudyDto {
+  id: number;
+  name: string;
+  duration_seconds: number;
+  playback_speed: number;
+  looped: boolean;
+  drivers: MotionDriverDto[];
+  next_driver_id: number;
+}
+
+export interface ContactSetDto {
+  id: number;
+  name: string;
+  occurrence_a: number;
+  body_a: number;
+  occurrence_b: number;
+  body_b: number;
+  clearance_mm: number;
+  stop_motion: boolean;
+  enabled: boolean;
+}
+
+export interface CreateAssemblyPositionRequestDto {
+  name: string;
+  motions: JointMotionStateDto[];
+}
+
+export interface CreateMotionStudyRequestDto {
+  name: string;
+  duration_seconds: number;
+}
+
+export interface CreateContactSetRequestDto {
+  name: string;
+  occurrence_a: number;
+  body_a: number;
+  occurrence_b: number;
+  body_b: number;
+  clearance_mm: number;
+  stop_motion: boolean;
+}
+
+export interface AssemblyDocumentDto {
+  joints: JointDefinitionDto[];
+  next_joint_id: number;
+  grounded_body_id: number | null;
+  component_structure: ComponentStructureDto;
+  positions: AssemblyPositionDto[];
+  next_position_id: number;
+  motion_studies: MotionStudyDto[];
+  next_motion_study_id: number;
+  contact_sets: ContactSetDto[];
+  next_contact_set_id: number;
+}
+
+export interface BodyPoseDto {
+  body_id: number;
+  translation: [number, number, number];
+  /** Unit quaternion in x, y, z, w order. */
+  rotation: [number, number, number, number];
+}
+
+export interface OccurrencePoseDto {
+  occurrence_id: number;
+  component_id: number;
+  translation: [number, number, number];
+  rotation: [number, number, number, number];
+}
+
+export interface InstanceBodyPoseDto {
+  occurrence_id: number;
+  component_id: number;
+  body_id: number;
+  translation: [number, number, number];
+  rotation: [number, number, number, number];
+  visible: boolean;
+}
+
+export type AssemblyDiagnosticKindDto =
+  | 'broken_reference'
+  | 'invalid_ground'
+  | 'free_component'
+  | 'limit_violation'
+  | 'cycle_conflict'
+  | 'kinematic_unreachable'
+  | 'over_constrained';
+
+export interface AssemblyDiagnosticDto {
+  kind: AssemblyDiagnosticKindDto;
+  message: string;
+  joint_id: number | null;
+  body_id: number | null;
+}
+
+export interface AssemblySolutionDto {
+  body_poses: BodyPoseDto[];
+  occurrence_poses: OccurrencePoseDto[];
+  instance_body_poses: InstanceBodyPoseDto[];
+  diagnostics: AssemblyDiagnosticDto[];
+  solved: boolean;
+}
+
+export interface SetJointMotionRequestDto {
+  joint_id: number;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+}
+
+export interface JointMotionStateDto {
+  joint_id: number;
+  angle_offset_deg: number;
+  linear_offset_mm: number;
+  secondary_angle_offset_deg: number;
+  tertiary_angle_offset_deg: number;
+  secondary_linear_offset_mm: number;
+}
+
+export interface SetJointCoordinatesRequestDto {
+  motion: JointMotionStateDto;
+}
+
+export interface SetJointEnabledRequestDto {
+  joint_id: number;
+  enabled: boolean;
+}
+
+export interface ApplyJointMotionsRequestDto {
+  motions: JointMotionStateDto[];
+}
+
+export interface MechanismDragRequestDto {
+  body_id: number;
+  occurrence_id?: number | null;
+  target_pose: BodyPoseDto;
+  grab_point_local?: [number, number, number] | null;
+  target_point_world?: [number, number, number] | null;
+  /** Current on-screen joint coordinates used as the next IK seed. */
+  initial_joint_motions?: JointMotionStateDto[];
+  solve_orientation?: boolean;
+  maximum_iterations?: number;
+}
+
+export interface MechanismPreviewDto {
+  solution: AssemblySolutionDto;
+  joint_motions: JointMotionStateDto[];
+  converged: boolean;
+  iterations: number;
+  position_error_mm: number;
+  orientation_error_deg: number;
+}
+
+export interface MotionDriverSampleDto {
+  driver_id: number;
+  joint_id: number;
+  coordinate: MotionCoordinateDto;
+  value: number;
+  velocity_per_second: number;
+  acceleration_per_second2: number;
+}
+
+export interface MotionStudySampleDto {
+  study_id: number;
+  time_seconds: number;
+  driver_samples: MotionDriverSampleDto[];
+  joint_motions: JointMotionStateDto[];
+  solution: AssemblySolutionDto;
+}
+
+export interface SampleMotionStudyRequestDto {
+  study_id: number;
+  time_seconds: number;
+}
+
+export interface MotionPathRequestDto {
+  study_id: number;
+  sample_rate_hz: number;
+  occurrence_ids: number[];
+}
+
+export interface InterferenceCheckRequestDto {
+  occurrence_ids: number[];
+  clearance_threshold_mm: number;
+}
+
+export interface InterferencePairResultDto {
+  occurrence_a: number;
+  body_a: number;
+  occurrence_b: number;
+  body_b: number;
+  minimum_clearance_mm: number;
+  overlap_volume_mm3: number;
+  closest_point_a: [number, number, number];
+  closest_point_b: [number, number, number];
+  interfering: boolean;
+  below_clearance: boolean;
+}
+
+export interface InterferenceReportDto {
+  exact: boolean;
+  pairs: InterferencePairResultDto[];
+}
+
+export interface EvaluateMotionStudyRequestDto {
+  study_id: number;
+  time_seconds: number;
+  previous_time_seconds: number | null;
+  enforce_contacts: boolean;
+}
+
+export interface MotionStudyEvaluationDto {
+  sample: MotionStudySampleDto;
+  contacts: InterferenceReportDto;
+  stopped_by_contact: number | null;
+  stop_time_seconds: number | null;
+}
+
+export interface SweptCollisionRequestDto {
+  study_id: number;
+  sample_rate_hz: number;
+  clearance_threshold_mm: number;
+  stop_at_first: boolean;
+}
+
+export interface SweptCollisionEventDto {
+  occurrence_a: number;
+  body_a: number;
+  occurrence_b: number;
+  body_b: number;
+  first_time_seconds: number;
+  last_time_seconds: number;
+  minimum_clearance_mm: number;
+  maximum_overlap_volume_mm3: number;
+}
+
+export interface SweptCollisionReportDto {
+  exact: boolean;
+  sample_count: number;
+  events: SweptCollisionEventDto[];
 }
 
 export type DrawingSheetFormat =
@@ -1583,10 +2110,22 @@ export interface StepThreadMetadataDto {
   thread: HoleThreadDto;
 }
 
+export interface StepOccurrencePlacementDto {
+  occurrence_id: number;
+  component_id: number;
+  body_id: number;
+  name: string;
+  translation: [number, number, number];
+  /** Unit quaternion in x, y, z, w order. */
+  rotation: [number, number, number, number];
+}
+
 /** Empty body_ids exports every active body. */
 export interface StepExportRequest {
   body_ids: number[];
   thread_metadata: StepThreadMetadataDto[];
+  /** Omit or leave empty for a raw part export. */
+  occurrences?: StepOccurrencePlacementDto[];
 }
 
 /** 8-bit RGBA. Alpha is kept for UI; 3MF export flattens to opaque RGB. */
@@ -1647,6 +2186,7 @@ export interface LockedSegmentRequest {
   length_text?: string | null;
   angle_text?: string | null;
   ctrl_held: boolean;
+  tracking?: LineTrackingRequest | null;
 }
 
 export type RectangleMode = 'two_point' | 'center';

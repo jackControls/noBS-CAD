@@ -21,7 +21,7 @@ pub mod ui;
 pub mod ui_lab;
 
 use nbcad_core::BodyAppearance;
-use nbcad_sketch::SketchDto;
+use nbcad_sketch::{BodyPoseDto, InstanceBodyPoseDto, SketchDto};
 use nbcad_solid::{DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
@@ -141,6 +141,8 @@ pub struct ViewportPresentation {
     pub hovered_datum_plane_id: Option<u64>,
     #[serde(default)]
     pub selected_body_ids: Vec<u64>,
+    pub selected_occurrence_id: Option<u64>,
+    pub hovered_occurrence_id: Option<u64>,
     pub hovered_body_id: Option<u64>,
     #[serde(default)]
     pub selected_face_ids: Vec<u64>,
@@ -164,6 +166,13 @@ pub struct ViewportPresentation {
     #[serde(default)]
     pub candidate_profiles: Vec<ProfileRefDto>,
     pub hovered_profile: Option<ProfileRefDto>,
+    /// Host-neutral rigid poses. Kept with the small presentation stream so
+    /// live motion never clones or retessellates the OCCT scene.
+    #[serde(default)]
+    pub body_poses: Vec<BodyPoseDto>,
+    /// Per-occurrence display rows; several rows may reuse one source body.
+    #[serde(default)]
+    pub instance_body_poses: Vec<InstanceBodyPoseDto>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -392,9 +401,16 @@ impl Default for ViewportCamera {
 #[serde(rename_all = "camelCase")]
 pub struct NativePick {
     pub body_id: u64,
+    pub occurrence_id: Option<u64>,
     pub face_id: u64,
+    pub edge_id: Option<u64>,
     pub point: [f32; 3],
     pub distance: f32,
+    pub connector_kind: Option<String>,
+    pub connector_origin: Option<[f32; 3]>,
+    pub connector_primary_axis: Option<[f32; 3]>,
+    pub connector_secondary_axis: Option<[f32; 3]>,
+    pub connector_radius: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -427,6 +443,8 @@ pub(crate) struct ViewportModel {
     pub datum_planes: Vec<DatumPlaneDefinitionDto>,
     pub profile_catalog: Vec<ProfileCatalogItemDto>,
     pub body_appearances: Vec<BodyAppearance>,
+    pub body_poses: Vec<BodyPoseDto>,
+    pub instance_body_poses: Vec<InstanceBodyPoseDto>,
 }
 
 pub struct NativeViewport {
@@ -457,6 +475,19 @@ impl NativeViewport {
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app, layout);
+            Err("the embedded native viewport is unavailable on this platform".to_string())
+        }
+    }
+
+    pub fn set_suspended(&self, app: &AppHandle, suspended: bool) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            self.inner.set_suspended(app, suspended)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = (app, suspended);
             Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }

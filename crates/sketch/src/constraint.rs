@@ -39,6 +39,18 @@ pub enum Constraint {
     Vertical {
         entity: EntityId,
     },
+    /// Keep two point entities on the same sketch-horizontal axis. This is
+    /// the persistent form of temporary horizontal object-snap tracking.
+    HorizontalPoints {
+        a: EntityId,
+        b: EntityId,
+    },
+    /// Keep two point entities on the same sketch-vertical axis. This is the
+    /// persistent form of temporary vertical object-snap tracking.
+    VerticalPoints {
+        a: EntityId,
+        b: EntityId,
+    },
     Coincident {
         a: EntityId,
         b: EntityId,
@@ -65,6 +77,16 @@ pub enum Constraint {
     Midpoint {
         a: EntityId,
         b: EntityId,
+    },
+    /// Midpoint of an edge's original corner-to-corner span after a corner
+    /// modifier trims one or both finite endpoints. `start` and `end` are
+    /// the persistent corner reference points retained by Fillet/Chamfer.
+    /// This keeps construction datums attached to the overall part envelope
+    /// instead of silently shifting to the shortened carrier segment.
+    SpanMidpoint {
+        point: EntityId,
+        start: EntityId,
+        end: EntityId,
     },
     Concentric {
         a: EntityId,
@@ -129,6 +151,8 @@ impl Constraint {
         match self {
             Constraint::Horizontal { .. } => "horizontal",
             Constraint::Vertical { .. } => "vertical",
+            Constraint::HorizontalPoints { .. } => "horizontal_points",
+            Constraint::VerticalPoints { .. } => "vertical_points",
             Constraint::Coincident { .. } => "coincident",
             Constraint::Tangent { .. } => "tangent",
             Constraint::Equal { .. } => "equal",
@@ -136,6 +160,7 @@ impl Constraint {
             Constraint::Perpendicular { .. } => "perpendicular",
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
+            Constraint::SpanMidpoint { .. } => "span_midpoint",
             Constraint::Concentric { .. } => "concentric",
             Constraint::Collinear { .. } => "collinear",
             Constraint::Symmetry { .. } => "symmetry",
@@ -167,6 +192,8 @@ impl Constraint {
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
             Constraint::Coincident { a, b }
+            | Constraint::HorizontalPoints { a, b }
+            | Constraint::VerticalPoints { a, b }
             | Constraint::Tangent { a, b }
             | Constraint::Equal { a, b }
             | Constraint::Parallel { a, b }
@@ -176,6 +203,7 @@ impl Constraint {
             | Constraint::Collinear { a, b }
             | Constraint::Angle { a, b, .. } => vec![a, b],
             Constraint::ArcEndpointCoincident { point, arc, .. } => vec![point, arc],
+            Constraint::SpanMidpoint { point, start, end } => vec![point, start, end],
             Constraint::EqualDistance { origin, a, b } => vec![origin, a, b],
             Constraint::Symmetry { a, b, axis } => vec![a, b, axis],
             Constraint::Distance { from, to, .. } => match to {

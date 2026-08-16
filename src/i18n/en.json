@@ -19,6 +19,8 @@
     "working": "Working…",
     "open": "Open Project…",
     "save": "Save",
+    "cancel": "Cancel",
+    "discard": "Don't Save",
     "saveAs": "Save As…",
     "rename": "Rename Project…",
     "renamePrompt": "Project name",
@@ -45,10 +47,16 @@
     "tabUnavailable": "This document tab is no longer available.",
     "discardConfirm": "Open another project and discard the current unsaved changes?",
     "closeDiscardConfirm": "Close this design and discard its unsaved changes?",
+    "quitDiscardConfirm": "Quit noBS CAD and discard unsaved changes in all open designs?",
+    "closeSaveConfirm": "Do you want to save the changes to this design before closing it?",
+    "quitSaveConfirm": "Do you want to save changes before quitting noBS CAD?",
+    "replaceSaveConfirm": "Do you want to save this design before opening another project in its tab?",
     "finishBeforeStep": "Finish the active sketch before exporting STEP.",
     "finishBeforeMesh": "Finish the active sketch before exporting mesh files.",
     "finishBeforeStepImport": "Finish the active sketch before importing STEP.",
     "stepImportTooLarge": "STEP import is limited to 96 MB in this build.",
+    "bodyClipboardEmpty": "Copy a body before pasting into this project.",
+    "bodyPasteFailed": "The copied body could not be added to this project.",
     "resolveErrors": "Resolve timeline errors before exporting.",
     "selectBody": "Select a body before using Export Selected Body.",
     "noBodies": "There are no active bodies to export.",
@@ -103,7 +111,9 @@
       "solidModeling": "Solid Modeling",
       "sketch": "SKETCH",
       "drawing": "DRAWING",
-      "drawingWorkspace": "Drawing"
+      "drawingWorkspace": "Drawing",
+      "assembly": "ASSEMBLY",
+      "assemblyWorkspace": "Assembly"
     },
     "panels": {
       "profile": "PROFILE",
@@ -125,7 +135,8 @@
       "annotate": "ANNOTATE",
       "symbols": "SYMBOLS",
       "output": "OUTPUT",
-      "sheet": "SHEET"
+      "sheet": "SHEET",
+      "joints": "JOINTS"
     },
     "finishSketch": "FINISH SKETCH",
     "solid": {
@@ -145,6 +156,7 @@
       "shell": "Shell",
       "draft": "Draft",
       "scale": "Scale",
+      "moveCopy": "Move/Copy",
       "combine": "Combine",
       "splitBody": "Split Body",
       "offsetPlane": "Offset Plane",
@@ -156,6 +168,9 @@
       "sectionAnalysis": "Section Analysis",
       "interference": "Interference",
       "select": "Select"
+    },
+    "assembly": {
+      "joint": "Joint"
     },
     "drawing": {
       "open": "Drawing",
@@ -286,6 +301,11 @@
     "sketches": "Sketches",
     "construction": "Construction",
     "constructionPlane": "Construction Plane",
+    "joints": "Joints",
+    "editJoint": "Edit joint",
+    "suppressJoint": "Suppress joint",
+    "unsuppressJoint": "Unsuppress joint",
+    "deleteJoint": "Delete joint",
     "contextMenu": "Browser item actions",
     "select": "Select",
     "show": "Show",
@@ -296,6 +316,11 @@
     "toggleVisibility": "Toggle visibility",
     "fullyDefined": "Fully defined",
     "editSketch": "Edit sketch",
+    "copyBody": "Copy body",
+    "pasteBody": "Paste copied body",
+    "exportBodyStep": "Export selected body as STEP…",
+    "fixComponent": "Fix component in place",
+    "releaseComponent": "Release fixed component",
     "deleteItem": "Delete {name}…",
     "deleteOwningFeature": "Delete owning feature {name}…"
   },
@@ -336,7 +361,7 @@
     "sixDofConnect": "Connect a compatible 3D mouse. In a browser, the optional 3Dconnexion driver bridge loads only after you click."
   },
   "timeline": {
-    "historyTitle": "Build history",
+    "historyTitle": "Design history",
     "goToStart": "Beginning",
     "stepBack": "Previous feature",
     "stepForward": "Next feature",
@@ -357,7 +382,14 @@
     "deleteConfirm": "Delete",
     "deleteCancel": "Cancel",
     "deleteFailed": "Could not delete feature",
-    "reorderFailed": "Could not reorder feature"
+    "reorderFailed": "Could not reorder feature",
+    "assemblyHistory": "Assembly joints",
+    "joints": "joints",
+    "jointContextMenu": "Joint history actions",
+    "editJoint": "Edit joint",
+    "suppressJoint": "Suppress joint",
+    "unsuppressJoint": "Unsuppress joint",
+    "deleteJoint": "Delete joint"
   },
   "extrude": {
     "title": "Extrude",
@@ -366,6 +398,7 @@
     "loadFailed": "Could not load Extrude data",
     "errorTitle": "Extrude failed",
     "noProfiles": "Create a solid planar face or finish a sketch with at least one closed profile before using Extrude.",
+    "profileDiagnostics": "Profile diagnostics",
     "sketch": "Sketch",
     "anyVisibleSketch": "Any visible sketch — pick in viewport",
     "profiles": "Profiles",

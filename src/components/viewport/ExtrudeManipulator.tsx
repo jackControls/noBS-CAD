@@ -97,6 +97,12 @@ export function ExtrudeManipulator({
   const { t } = useTranslation();
   const handleRef = useRef<HTMLButtonElement>(null);
   const fieldRef = useRef<HTMLLabelElement>(null);
+  const sourceKey = useMemo(
+    () => profiles
+      .map((profile) => `${profile.index}:${profile.points.length}`)
+      .join(','),
+    [profiles],
+  );
   const projectionRef = useRef<Projection | null>(null);
   const dragRef = useRef<{
     pointerId: number;
@@ -291,6 +297,7 @@ export function ExtrudeManipulator({
           {t('extrude.distance')}
         </span>
         <DimensionInput
+          autoSelectKey={sourceKey || null}
           data-testid="extrude-canvas-distance"
           aria-label={t('extrude.canvasDistance')}
           step="any"

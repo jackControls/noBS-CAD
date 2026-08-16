@@ -11,6 +11,8 @@ import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import type {
   AddConstraintResult,
   AddLineResult,
+  AssemblyDocumentDto,
+  AssemblySolutionDto,
   Arc3PointRequest,
   ArcCenterRequest,
   BreakRequest,
@@ -20,7 +22,39 @@ import type {
   ChamferRequest,
   SketchCircularPatternRequest,
   CircleRequest,
+  ComponentDefinitionDto,
+  ComponentOccurrenceDto,
   ConstraintPayload,
+  CreateComponentRequestDto,
+  CreateJointRequestDto,
+  CreateOccurrenceRequestDto,
+  DuplicateOccurrenceRequestDto,
+  UpdateJointRequestDto,
+  SetJointEnabledRequestDto,
+  SetJointCoordinatesRequestDto,
+  ApplyJointMotionsRequestDto,
+  AssemblyPositionDto,
+  ContactSetDto,
+  CreateAssemblyPositionRequestDto,
+  CreateContactSetRequestDto,
+  CreateMotionStudyRequestDto,
+  EvaluateMotionStudyRequestDto,
+  InterferenceCheckRequestDto,
+  InterferenceReportDto,
+  MechanismDragRequestDto,
+  MechanismPreviewDto,
+  MotionPathRequestDto,
+  MotionStudyDto,
+  MotionStudyEvaluationDto,
+  MotionStudySampleDto,
+  SampleMotionStudyRequestDto,
+  SetJointMotionRequestDto,
+  SetOccurrenceGroundedRequestDto,
+  SetOccurrencePoseRequestDto,
+  SweptCollisionReportDto,
+  SweptCollisionRequestDto,
+  UpdateComponentRequestDto,
+  UpdateOccurrenceRequestDto,
   DeleteEntityResult,
   DimensionRequest,
   DimensionStyle,
@@ -49,6 +83,7 @@ import type {
   SolidChamferRequest,
   HoleDefinitionDto,
   HoleRequest,
+  JointDefinitionDto,
   ExtendRequest,
   FilletPreviewDto,
   FilletRequest,
@@ -152,6 +187,158 @@ export class TauriEngine implements Engine {
 
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
     return this.call('engine_drawing_set_document', document);
+  }
+
+  async assemblyDocument(): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_document');
+  }
+
+  async setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_document', document);
+  }
+
+  async assemblySolution(): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_solution');
+  }
+
+  async createComponent(request: CreateComponentRequestDto): Promise<ComponentDefinitionDto> {
+    return this.call('engine_assembly_create_component', request);
+  }
+
+  async updateComponent(request: UpdateComponentRequestDto): Promise<ComponentDefinitionDto> {
+    return this.call('engine_assembly_update_component', request);
+  }
+
+  async createOccurrence(request: CreateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return this.call('engine_assembly_create_occurrence', request);
+  }
+
+  async updateOccurrence(request: UpdateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return this.call('engine_assembly_update_occurrence', request);
+  }
+
+  async duplicateOccurrence(request: DuplicateOccurrenceRequestDto): Promise<ComponentOccurrenceDto> {
+    return this.call('engine_assembly_duplicate_occurrence', request);
+  }
+
+  async setOccurrenceGrounded(request: SetOccurrenceGroundedRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_occurrence_grounded', request);
+  }
+
+  async setOccurrencePose(request: SetOccurrencePoseRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_occurrence_pose', request);
+  }
+
+  async previewJoint(request: CreateJointRequestDto): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_preview_joint', request);
+  }
+
+  async createJoint(request: CreateJointRequestDto): Promise<JointDefinitionDto> {
+    return this.call('engine_assembly_create_joint', request);
+  }
+
+  async updateJoint(request: UpdateJointRequestDto): Promise<JointDefinitionDto> {
+    return this.call('engine_assembly_update_joint', request);
+  }
+
+  async previewJointUpdate(request: UpdateJointRequestDto): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_preview_joint_update', request);
+  }
+
+  async deleteJoint(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_delete_joint', id);
+  }
+
+  async setJointEnabled(request: SetJointEnabledRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_joint_enabled', request);
+  }
+
+  async setJointMotion(request: SetJointMotionRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_joint_motion', request);
+  }
+
+  async previewJointMotion(request: SetJointMotionRequestDto): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_preview_joint_motion', request);
+  }
+
+  async setJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_joint_coordinates', request);
+  }
+
+  async previewJointCoordinates(request: SetJointCoordinatesRequestDto): Promise<AssemblySolutionDto> {
+    return this.call('engine_assembly_preview_joint_coordinates', request);
+  }
+
+  async previewMechanismDrag(request: MechanismDragRequestDto): Promise<MechanismPreviewDto> {
+    return this.call('engine_assembly_preview_mechanism_drag', request);
+  }
+
+  async applyJointMotions(request: ApplyJointMotionsRequestDto): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_apply_joint_motions', request);
+  }
+
+  async createAssemblyPosition(request: CreateAssemblyPositionRequestDto): Promise<AssemblyPositionDto> {
+    return this.call('engine_assembly_create_position', request);
+  }
+
+  async updateAssemblyPosition(position: AssemblyPositionDto): Promise<AssemblyPositionDto> {
+    return this.call('engine_assembly_update_position', position);
+  }
+
+  async deleteAssemblyPosition(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_delete_position', id);
+  }
+
+  async applyAssemblyPosition(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_apply_position', id);
+  }
+
+  async createMotionStudy(request: CreateMotionStudyRequestDto): Promise<MotionStudyDto> {
+    return this.call('engine_assembly_create_motion_study', request);
+  }
+
+  async updateMotionStudy(study: MotionStudyDto): Promise<MotionStudyDto> {
+    return this.call('engine_assembly_update_motion_study', study);
+  }
+
+  async deleteMotionStudy(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_delete_motion_study', id);
+  }
+
+  async sampleMotionStudy(request: SampleMotionStudyRequestDto): Promise<MotionStudySampleDto> {
+    return this.call('engine_assembly_sample_motion_study', request);
+  }
+
+  async evaluateMotionStudy(request: EvaluateMotionStudyRequestDto): Promise<MotionStudyEvaluationDto> {
+    return this.call('engine_assembly_evaluate_motion_study', request);
+  }
+
+  async exportMotionPathCsv(request: MotionPathRequestDto): Promise<string> {
+    return this.call('engine_assembly_export_motion_path_csv', request);
+  }
+
+  async createContactSet(request: CreateContactSetRequestDto): Promise<ContactSetDto> {
+    return this.call('engine_assembly_create_contact_set', request);
+  }
+
+  async updateContactSet(contact: ContactSetDto): Promise<ContactSetDto> {
+    return this.call('engine_assembly_update_contact_set', contact);
+  }
+
+  async deleteContactSet(id: number): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_delete_contact_set', id);
+  }
+
+  async interferenceCheck(request: InterferenceCheckRequestDto): Promise<InterferenceReportDto> {
+    return this.call('engine_assembly_interference_check', request);
+  }
+
+  async sweptCollisionCheck(request: SweptCollisionRequestDto): Promise<SweptCollisionReportDto> {
+    return this.call('engine_assembly_swept_collision_check', request);
+  }
+
+  async setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto> {
+    return this.call('engine_assembly_set_grounded_body', bodyId);
   }
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {

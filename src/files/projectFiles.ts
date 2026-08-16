@@ -1,4 +1,5 @@
 import { getEngine } from '../engine';
+import type { BodyAppearance } from '../engine/types';
 import { translate } from '../i18n';
 import {
   exportProjectModelWithVisibility,
@@ -26,8 +27,10 @@ import {
   recordActiveProjectOpen,
   recordActiveProjectSave,
   restoreProjectTabs,
+  switchProjectTab,
   type RecoverableProjectTab,
 } from './projectTabs';
+import { requestUnsavedDecision } from './unsavedChanges';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -54,6 +57,17 @@ const THREEMF_TYPE: SaveType = {
 const MAX_STEP_IMPORT_BYTES = 96 * 1024 * 1024;
 const AUTOSAVE_KEY = 'nbcad:recovery:v1';
 const LEGACY_AUTOSAVE_KEYS = ['tfcad:recovery:v1'] as const;
+
+interface BodyClipboardEntry {
+  bytes: Uint8Array;
+  name: string;
+  appearance: BodyAppearance | null;
+}
+
+// Deliberately application-scoped rather than project-scoped: retained tabs
+// use isolated engine sessions, while this clipboard lets a final B-rep body
+// cross that boundary without coupling the two project histories.
+let bodyClipboard: BodyClipboardEntry | null = null;
 
 function recoveryEntry(): { key: string; value: string } | null {
   const current = localStorage.getItem(AUTOSAVE_KEY);
@@ -159,29 +173,82 @@ export function newProject(): Promise<boolean> {
 
 /** Close one document tab; the last tab is replaced with a fresh Untitled. */
 export async function closeProject(tabId?: string): Promise<boolean> {
-  const closed = await closeProjectTab(tabId);
+  let state = useAppStore.getState();
+  const id = tabId ?? state.activeProjectTabId;
+  if (!id) return false;
+  const tab = state.projectTabs.find((candidate) => candidate.id === id);
+  if (!tab) return false;
+  const dirty = id === state.activeProjectTabId ? state.dirty : tab.dirty;
+  let discardUnsaved = false;
+  const previouslyActiveId = state.activeProjectTabId;
+  if (dirty) {
+    const decision = await requestUnsavedDecision('close', tab.name);
+    if (decision === 'cancel') return false;
+    if (decision === 'save') {
+      if (id !== state.activeProjectTabId && !(await switchProjectTab(id))) return false;
+      if (!(await saveProject(false))) return false;
+    } else {
+      discardUnsaved = true;
+    }
+  }
+
+  const closed = await closeProjectTab(id, discardUnsaved);
+  state = useAppStore.getState();
+  if (
+    closed
+    && previouslyActiveId
+    && previouslyActiveId !== id
+    && state.projectTabs.some((candidate) => candidate.id === previouslyActiveId)
+    && state.activeProjectTabId !== previouslyActiveId
+  ) {
+    await switchProjectTab(previouslyActiveId);
+  }
   if (closed && !hasUnsavedProjects()) clearProjectRecovery();
   return closed;
 }
 
+/** Save every dirty retained tab before application quit. A cancelled native
+ * file picker aborts quitting without silently discarding any later tab. */
+export async function saveAllUnsavedProjects(): Promise<boolean> {
+  const initialState = useAppStore.getState();
+  const dirtyIds = initialState.projectTabs
+    .filter((tab) => (
+      tab.id === initialState.activeProjectTabId
+        ? initialState.dirty
+        : tab.dirty
+    ))
+    .map((tab) => tab.id);
+  for (const id of dirtyIds) {
+    if (useAppStore.getState().activeProjectTabId !== id) {
+      if (!(await switchProjectTab(id))) return false;
+    }
+    if (!(await saveProject(false))) return false;
+  }
+  return !hasUnsavedProjects();
+}
+
 export async function openProject(): Promise<boolean> {
   const state = useAppStore.getState();
-  if (
-    state.dirty &&
-    !window.confirm(translate('file.discardConfirm'))
-  ) {
-    return false;
+  if (state.dirty) {
+    const decision = await requestUnsavedDecision(
+      'replace',
+      state.document?.name ?? null,
+    );
+    if (decision === 'cancel') return false;
+    if (decision === 'save' && !(await saveProject(false))) return false;
   }
   const opened = await chooseOpenFile(PROJECT_TYPE);
   if (!opened) return false;
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
     engine.drawingDocument(),
+    engine.assemblyDocument(),
+    engine.assemblySolution(),
     engine.projectVisibility(),
   ]);
   // A legacy project is readable, but the next Save must choose a new
@@ -198,7 +265,9 @@ export async function openProject(): Promise<boolean> {
       opened.name,
       bodyAppearances,
       drawingDocument,
+      assemblyDocument,
       projectVisibility,
+      assemblySolution,
     );
   await recordActiveProjectOpen(modelJson, reusableTarget);
   if (!hasUnsavedProjects()) clearProjectRecovery();
@@ -254,6 +323,27 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
   const bytes = await engine.exportStep({
     body_ids: bodyIds,
     thread_metadata: threadMetadata,
+    occurrences: state.assemblySolution.instance_body_poses
+      .filter((pose) => pose.visible)
+      .filter((pose) => bodyIds.includes(pose.body_id))
+      .filter((pose) => (
+        !selectedOnly
+        || state.selectedOccurrenceId === null
+        || pose.occurrence_id === state.selectedOccurrenceId
+      ))
+      .map((pose) => {
+        const occurrence = state.assemblyDocument.component_structure.occurrences.find(
+          (candidate) => candidate.id === pose.occurrence_id,
+        );
+        return {
+          occurrence_id: pose.occurrence_id,
+          component_id: pose.component_id,
+          body_id: pose.body_id,
+          name: occurrence?.name ?? `Occurrence ${pose.occurrence_id}`,
+          translation: pose.translation,
+          rotation: pose.rotation,
+        };
+      }),
   });
   await writeSaveTarget(target, bytes);
   return true;
@@ -334,6 +424,100 @@ function bytesToBase64(bytes: Uint8Array): string {
     chunks.push(btoa(binary));
   }
   return chunks.join('');
+}
+
+function assertBodyTransferAllowed(): void {
+  const state = useAppStore.getState();
+  if (state.activeSketch) {
+    throw new Error(translate('file.finishBeforeStepImport'));
+  }
+  if (state.solidScene.errors.length > 0) {
+    throw new Error(translate('file.resolveErrors'));
+  }
+}
+
+export function hasBodyClipboard(): boolean {
+  return bodyClipboard !== null;
+}
+
+/** Copy one body's final OCCT B-rep plus its display appearance. Feature
+ * history intentionally remains owned by the source project. */
+export async function copyBodyToClipboard(bodyId: number): Promise<void> {
+  assertBodyTransferAllowed();
+  const state = useAppStore.getState();
+  const body = state.solidScene.bodies.find((candidate) => candidate.id === bodyId);
+  if (!body) throw new Error(translate('file.selectBody'));
+
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const bytes = await engine.exportStep({
+      body_ids: [bodyId],
+      thread_metadata: [],
+      // Clipboard transfer is deliberately part-local; assembly placement is
+      // authored independently in the destination project.
+      occurrences: [],
+    });
+    const appearance = state.bodyAppearances.find((entry) => entry.body_id === bodyId) ?? null;
+    bodyClipboard = {
+      bytes: bytes.slice(),
+      name: body.name || `Body${bodyId}`,
+      appearance: appearance ? structuredClone(appearance) : null,
+    };
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
+/** Paste the copied body as an imported STEP feature in the active project.
+ * This works across retained project tabs and gives the destination its own
+ * stable body/topology ids. */
+export async function pasteBodyFromClipboard(): Promise<void> {
+  assertBodyTransferAllowed();
+  const clipboard = bodyClipboard;
+  if (!clipboard) throw new Error(translate('file.bodyClipboardEmpty'));
+
+  const state = useAppStore.getState();
+  const previousBodies = new Set(state.solidScene.bodies.map((body) => body.id));
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const safeName = clipboard.name.replace(/[^a-zA-Z0-9._ -]+/g, '_').trim() || 'Copied Body';
+    const update = await engine.bodyFeature({
+      type: 'import_step',
+      request: {
+        file_name: `${safeName}.step`,
+        data_base64: bytesToBase64(clipboard.bytes),
+      },
+    });
+    state.applySolidUpdate(update);
+    const imported = update.scene.bodies.find((body) => !previousBodies.has(body.id));
+    if (!imported) throw new Error(translate('file.bodyPasteFailed'));
+
+    state.setSelectedBody(imported.id);
+    state.setSelectedFace(null);
+    state.setSelectedEdges([]);
+    if (clipboard.appearance) {
+      await state.setBodyAppearance({ ...clipboard.appearance, body_id: imported.id });
+    }
+    const bodiesFolder = update.document.browser.find(
+      (node) => node.kind === 'bodies_folder',
+    );
+    if (bodiesFolder && !useAppStore.getState().expanded[bodiesFolder.id]) {
+      state.toggleExpanded(bodiesFolder.id);
+    }
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
+export async function exportBodyAsStep(bodyId: number): Promise<boolean> {
+  const state = useAppStore.getState();
+  if (!state.solidScene.bodies.some((body) => body.id === bodyId)) {
+    throw new Error(translate('file.selectBody'));
+  }
+  state.setSelectedBody(bodyId);
+  return exportStep(true);
 }
 
 /** Add a STEP/STP file to the current parametric history. The original

@@ -1,6 +1,8 @@
 use cxx::UniquePtr;
 use nbcad_core::BodyAppearance;
 use nbcad_export::{self, MeshExportRequest, TriangleMesh};
+#[cfg(test)]
+use nbcad_solid::StepOccurrencePlacementDto;
 use nbcad_solid::{
     CombineOperation, ExtrudeOperation, HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadHand,
     HoleThreadRepresentation, KernelBodyDto, KernelCurveDto, KernelEdgeDto, KernelFaceDto,
@@ -11,7 +13,10 @@ use nbcad_solid::{
 use std::fmt::Write as _;
 
 use crate::OcctError;
-use crate::{DrawingPolylineDto, DrawingProjectionDto, DrawingProjectionRequest};
+use crate::{
+    DrawingPolylineDto, DrawingProjectionDto, DrawingProjectionRequest, ExactInterferenceResultDto,
+    PlacedBodyQueryDto,
+};
 
 #[cxx::bridge(namespace = "nbcad_occt")]
 mod ffi {
@@ -93,12 +98,18 @@ mod ffi {
         face_plane_data: Vec<f64>,
         /// Per face: valid, centroid xyz, area, perimeter, wire count, edge count.
         face_signature_data: Vec<f64>,
+        /// Per face: valid, axis origin xyz, axis direction xyz,
+        /// reference direction xyz, radius (11 f64 values).
+        face_cylinder_data: Vec<f64>,
         /// Prefix offsets into `edge_points`, measured in 3D points.
         edge_point_offsets: Vec<u32>,
         /// Flat xyz edge polyline coordinates.
         edge_points: Vec<f64>,
         /// Per-edge topology classification for refinement tools.
         edge_refinable: Vec<u8>,
+        /// Per edge: valid, center xyz, normal xyz, reference xyz, radius,
+        /// closed flag (12 f64 values).
+        edge_circle_data: Vec<f64>,
     }
 
     struct FfiDrawingProjection {
@@ -108,6 +119,17 @@ mod ffi {
         hidden_points: Vec<f64>,
         section_offsets: Vec<u32>,
         section_points: Vec<f64>,
+    }
+
+    struct FfiInterferenceResult {
+        minimum_clearance_mm: f64,
+        overlap_volume_mm3: f64,
+        closest_point_a_x: f64,
+        closest_point_a_y: f64,
+        closest_point_a_z: f64,
+        closest_point_b_x: f64,
+        closest_point_b_y: f64,
+        closest_point_b_z: f64,
     }
 
     unsafe extern "C++" {
@@ -129,6 +151,7 @@ mod ffi {
             self: &Kernel,
             body_ids: &Vec<u64>,
             thread_metadata_hex: &str,
+            occurrence_placements_hex: &str,
         ) -> Result<Vec<u8>>;
         fn drawing_projection(
             self: &Kernel,
@@ -152,6 +175,25 @@ mod ffi {
             has_section_depth: bool,
             section_depth: f64,
         ) -> Result<FfiDrawingProjection>;
+        fn exact_interference(
+            self: &Kernel,
+            body_a: u64,
+            translation_a_x: f64,
+            translation_a_y: f64,
+            translation_a_z: f64,
+            rotation_a_x: f64,
+            rotation_a_y: f64,
+            rotation_a_z: f64,
+            rotation_a_w: f64,
+            body_b: u64,
+            translation_b_x: f64,
+            translation_b_y: f64,
+            translation_b_z: f64,
+            rotation_b_x: f64,
+            rotation_b_y: f64,
+            rotation_b_z: f64,
+            rotation_b_w: f64,
+        ) -> Result<FfiInterferenceResult>;
     }
 }
 
@@ -235,10 +277,58 @@ impl OcctKernel {
             write!(&mut thread_metadata_hex, "{byte:02x}")
                 .map_err(|error| OcctError(format!("could not encode STEP metadata: {error}")))?;
         }
+        let mut occurrence_placements_hex = String::with_capacity(request.occurrences.len() * 160);
+        for occurrence in &request.occurrences {
+            let values = occurrence
+                .translation
+                .iter()
+                .chain(occurrence.rotation.iter())
+                .copied()
+                .collect::<Vec<_>>();
+            if values.iter().any(|value| !value.is_finite()) {
+                return Err(OcctError(format!(
+                    "STEP occurrence {} has a non-finite placement",
+                    occurrence.occurrence_id
+                )));
+            }
+            let magnitude = occurrence
+                .rotation
+                .iter()
+                .map(|value| value * value)
+                .sum::<f64>();
+            if magnitude <= 1.0e-24 {
+                return Err(OcctError(format!(
+                    "STEP occurrence {} has a degenerate rotation",
+                    occurrence.occurrence_id
+                )));
+            }
+            for value in [
+                occurrence.body_id.0,
+                occurrence.occurrence_id,
+                occurrence.component_id,
+            ] {
+                for byte in value.to_le_bytes() {
+                    write!(&mut occurrence_placements_hex, "{byte:02x}").map_err(|error| {
+                        OcctError(format!("could not encode STEP occurrence id: {error}"))
+                    })?;
+                }
+            }
+            for value in occurrence
+                .translation
+                .iter()
+                .chain(occurrence.rotation.iter())
+            {
+                for byte in value.to_le_bytes() {
+                    write!(&mut occurrence_placements_hex, "{byte:02x}").map_err(|error| {
+                        OcctError(format!("could not encode STEP occurrence pose: {error}"))
+                    })?;
+                }
+            }
+        }
         self.inner
             .as_ref()
             .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
-            .export_step(&body_ids, &thread_metadata_hex)
+            .export_step(&body_ids, &thread_metadata_hex, &occurrence_placements_hex)
             .map_err(|error| OcctError(error.to_string()))
     }
 
@@ -335,6 +425,50 @@ impl OcctKernel {
             )
             .map_err(|error| OcctError(error.to_string()))?;
         projection_from_ffi(raw)
+    }
+
+    pub fn exact_interference(
+        &self,
+        a: PlacedBodyQueryDto,
+        b: PlacedBodyQueryDto,
+    ) -> Result<ExactInterferenceResultDto, OcctError> {
+        let raw = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| OcctError("OCCT kernel was released".to_string()))?
+            .exact_interference(
+                a.body_id.0,
+                a.translation[0],
+                a.translation[1],
+                a.translation[2],
+                a.rotation[0],
+                a.rotation[1],
+                a.rotation[2],
+                a.rotation[3],
+                b.body_id.0,
+                b.translation[0],
+                b.translation[1],
+                b.translation[2],
+                b.rotation[0],
+                b.rotation[1],
+                b.rotation[2],
+                b.rotation[3],
+            )
+            .map_err(|error| OcctError(error.to_string()))?;
+        Ok(ExactInterferenceResultDto {
+            minimum_clearance_mm: raw.minimum_clearance_mm,
+            overlap_volume_mm3: raw.overlap_volume_mm3,
+            closest_point_a: [
+                raw.closest_point_a_x,
+                raw.closest_point_a_y,
+                raw.closest_point_a_z,
+            ],
+            closest_point_b: [
+                raw.closest_point_b_x,
+                raw.closest_point_b_y,
+                raw.closest_point_b_z,
+            ],
+        })
     }
 
     /// Tessellate selected (or all) live bodies with configurable deflection.
@@ -900,13 +1034,15 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                     KernelTransformDto::Mirror { origin, normal } => {
                         job.transform_kinds.push(0);
                         job.transform_values.extend([
-                            origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, 0.0,
+                            origin.x, origin.y, origin.z, normal.x, normal.y, normal.z, 0.0, 0.0,
+                            0.0, 0.0,
                         ]);
                     }
                     KernelTransformDto::Translate { vector } => {
                         job.transform_kinds.push(1);
-                        job.transform_values
-                            .extend([vector.x, vector.y, vector.z, 0.0, 0.0, 0.0, 0.0]);
+                        job.transform_values.extend([
+                            vector.x, vector.y, vector.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                        ]);
                     }
                     KernelTransformDto::Rotate {
                         origin,
@@ -915,7 +1051,27 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                     } => {
                         job.transform_kinds.push(2);
                         job.transform_values.extend([
-                            origin.x, origin.y, origin.z, axis.x, axis.y, axis.z, *angle_rad,
+                            origin.x, origin.y, origin.z, axis.x, axis.y, axis.z, *angle_rad, 0.0,
+                            0.0, 0.0,
+                        ]);
+                    }
+                    KernelTransformDto::Rigid {
+                        translation,
+                        rotation,
+                        pivot,
+                    } => {
+                        job.transform_kinds.push(3);
+                        job.transform_values.extend([
+                            translation.x,
+                            translation.y,
+                            translation.z,
+                            rotation[0],
+                            rotation[1],
+                            rotation[2],
+                            rotation[3],
+                            pivot.x,
+                            pivot.y,
+                            pivot.z,
                         ]);
                     }
                 }
@@ -1057,6 +1213,7 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
     if raw.face_first_indices.len() != raw.face_index_counts.len()
         || raw.face_plane_data.len() != raw.face_first_indices.len() * 13
         || raw.face_signature_data.len() != raw.face_first_indices.len() * 8
+        || raw.face_cylinder_data.len() != raw.face_first_indices.len() * 11
     {
         return Err(OcctError(
             "OCCT bridge returned malformed face metadata".to_string(),
@@ -1070,6 +1227,7 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
         .map(|(index, (first_index, index_count))| {
             let data = &raw.face_plane_data[index * 13..(index + 1) * 13];
             let signature = &raw.face_signature_data[index * 8..(index + 1) * 8];
+            let cylinder = &raw.face_cylinder_data[index * 11..(index + 1) * 11];
             let point = |offset: usize| [data[offset], data[offset + 1], data[offset + 2]];
             let signature_point = |offset: usize| Point3Dto {
                 x: signature[offset],
@@ -1095,6 +1253,24 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
                     wire_count: signature[6].round().max(0.0) as u32,
                     edge_count: signature[7].round().max(0.0) as u32,
                 }),
+                cylinder: (cylinder[0] != 0.0).then(|| nbcad_solid::CylindricalSurfaceDto {
+                    origin: Point3Dto {
+                        x: cylinder[1],
+                        y: cylinder[2],
+                        z: cylinder[3],
+                    },
+                    axis: Point3Dto {
+                        x: cylinder[4],
+                        y: cylinder[5],
+                        z: cylinder[6],
+                    },
+                    reference: Point3Dto {
+                        x: cylinder[7],
+                        y: cylinder[8],
+                        z: cylinder[9],
+                    },
+                    radius: cylinder[10],
+                }),
             }
         })
         .collect();
@@ -1106,6 +1282,7 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
             .last()
             .is_none_or(|offset| *offset as usize * 3 != raw.edge_points.len())
         || raw.edge_refinable.len() + 1 != raw.edge_point_offsets.len()
+        || raw.edge_circle_data.len() != raw.edge_refinable.len() * 12
     {
         return Err(OcctError(
             "OCCT bridge returned malformed edge metadata".to_string(),
@@ -1116,6 +1293,7 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
         .windows(2)
         .enumerate()
         .map(|(index, offsets)| {
+            let circle = &raw.edge_circle_data[index * 12..(index + 1) * 12];
             let points = (offsets[0] as usize..offsets[1] as usize)
                 .map(|point_index| {
                     let offset = point_index * 3;
@@ -1129,6 +1307,25 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
             KernelEdgeDto {
                 key: format!("edge:{index}"),
                 points,
+                circle: (circle[0] != 0.0).then(|| nbcad_solid::CircularCurveDto {
+                    center: Point3Dto {
+                        x: circle[1],
+                        y: circle[2],
+                        z: circle[3],
+                    },
+                    normal: Point3Dto {
+                        x: circle[4],
+                        y: circle[5],
+                        z: circle[6],
+                    },
+                    reference: Point3Dto {
+                        x: circle[7],
+                        y: circle[8],
+                        z: circle[9],
+                    },
+                    radius: circle[10],
+                    closed: circle[11] != 0.0,
+                }),
                 refinable: raw.edge_refinable[index] != 0,
             }
         })
@@ -1339,6 +1536,39 @@ mod tests {
         assert!(text.contains("MANIFOLD_SOLID_BREP"));
         assert!(text.ends_with("END-ISO-10303-21;\n"));
 
+        let placed_step = kernel
+            .export_step(&StepExportRequest {
+                body_ids: Vec::new(),
+                thread_metadata: Vec::new(),
+                occurrences: vec![StepOccurrencePlacementDto {
+                    occurrence_id: 7,
+                    component_id: 3,
+                    body_id: BodyId(1),
+                    name: "Placed box".to_string(),
+                    translation: [125.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                }],
+            })
+            .unwrap();
+        let mut placed_kernel = OcctKernel::new().unwrap();
+        let placed_scene = placed_kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 99,
+                errors: Vec::new(),
+                jobs: vec![KernelJobDto::ImportStep(KernelImportStepJobDto {
+                    feature_id: FeatureId(99),
+                    data_base64: encode_base64(&placed_step),
+                    result_body_id: BodyId(99),
+                })],
+            })
+            .unwrap();
+        let minimum_x = placed_scene.bodies[0]
+            .positions
+            .chunks_exact(3)
+            .map(|point| point[0])
+            .fold(f32::INFINITY, f32::min);
+        assert!((minimum_x - 125.0).abs() < 1.0e-3);
+
         let metadata_step = kernel
             .export_step(&StepExportRequest {
                 body_ids: Vec::new(),
@@ -1362,6 +1592,7 @@ mod tests {
                         tap_drill_designation: Some("5 mm".to_string()),
                     },
                 }],
+                occurrences: Vec::new(),
             })
             .unwrap();
         let metadata_text = String::from_utf8(metadata_step.clone()).unwrap();
@@ -1414,6 +1645,47 @@ mod tests {
         assert!((projection.bounds[1] + 10.0).abs() < 1.0e-6);
         assert!((projection.bounds[2] - 10.0).abs() < 1.0e-6);
         assert!((projection.bounds[3] - 10.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn exact_interference_uses_placed_retained_breps() {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![box_job(1, 1), box_job(2, 2)],
+            })
+            .unwrap();
+        let identity = |body_id| PlacedBodyQueryDto {
+            body_id: BodyId(body_id),
+            translation: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        let separated = kernel
+            .exact_interference(
+                identity(1),
+                PlacedBodyQueryDto {
+                    translation: [22.0, 0.0, 0.0],
+                    ..identity(2)
+                },
+            )
+            .unwrap();
+        assert!((separated.minimum_clearance_mm - 2.0).abs() < 1.0e-7);
+        assert!(separated.overlap_volume_mm3.abs() < 1.0e-7);
+
+        let overlapping = kernel
+            .exact_interference(
+                identity(1),
+                PlacedBodyQueryDto {
+                    translation: [15.0, 0.0, 0.0],
+                    ..identity(2)
+                },
+            )
+            .unwrap();
+        assert!(overlapping.minimum_clearance_mm.abs() < 1.0e-7);
+        assert!((overlapping.overlap_volume_mm3 - 1_000.0).abs() < 1.0e-5);
     }
 
     #[test]
@@ -1745,6 +2017,162 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn occt_extrudes_an_arch_profile_with_an_analytic_circular_hole() {
+        let p = |x, y| Point3Dto { x, y, z: 0.0 };
+        let mut outer = KernelProfileDto {
+            profile_index: 0,
+            points: vec![
+                p(-10.0, 0.0),
+                p(10.0, 0.0),
+                p(10.0, 30.0),
+                p(0.0, 40.0),
+                p(-10.0, 30.0),
+            ],
+            curves: vec![
+                KernelCurveDto::Line {
+                    entity_id: 1,
+                    start: p(-10.0, 0.0),
+                    end: p(10.0, 0.0),
+                },
+                KernelCurveDto::Line {
+                    entity_id: 2,
+                    start: p(10.0, 0.0),
+                    end: p(10.0, 30.0),
+                },
+                KernelCurveDto::Arc {
+                    entity_id: 3,
+                    start: p(10.0, 30.0),
+                    mid: p(0.0, 40.0),
+                    end: p(-10.0, 30.0),
+                },
+                KernelCurveDto::Line {
+                    entity_id: 4,
+                    start: p(-10.0, 30.0),
+                    end: p(-10.0, 0.0),
+                },
+            ],
+            holes: Vec::new(),
+        };
+        outer.holes.push(KernelProfileDto {
+            profile_index: 1,
+            points: (0..64)
+                .map(|index| {
+                    let angle = std::f64::consts::TAU * index as f64 / 64.0;
+                    p(5.0 * angle.cos(), 30.0 + 5.0 * angle.sin())
+                })
+                .collect(),
+            curves: vec![KernelCurveDto::Circle {
+                entity_id: 5,
+                center: p(0.0, 30.0),
+                axis_point: p(5.0, 30.0),
+                normal: Point3Dto {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+            }],
+            holes: Vec::new(),
+        });
+
+        let mut kernel = OcctKernel::new().unwrap();
+        let scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 1,
+                errors: Vec::new(),
+                jobs: vec![KernelJobDto::Extrude(KernelExtrudeJobDto {
+                    feature_id: FeatureId(2),
+                    operation: ExtrudeOperation::NewBody,
+                    source_face: None,
+                    profiles: vec![outer],
+                    normal: Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                    start_offset: 0.0,
+                    end_offset: 10.0,
+                    taper_angle_deg: 0.0,
+                    target_body_ids: Vec::new(),
+                    result_body_ids: vec![BodyId(1)],
+                })],
+            })
+            .unwrap();
+
+        assert!(scene.errors.is_empty(), "{:?}", scene.errors);
+        assert_eq!(scene.bodies.len(), 1);
+        assert!(scene.bodies[0].faces.iter().any(|face| face
+            .cylinder
+            .is_some_and(|cylinder| (cylinder.radius - 5.0).abs() < 1e-6)));
+    }
+
+    #[test]
+    fn occt_exposes_exact_cylinder_and_both_countersink_rims() {
+        let mut kernel = OcctKernel::new().unwrap();
+        let scene = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 2,
+                errors: Vec::new(),
+                jobs: vec![
+                    box_job(2, 1),
+                    KernelJobDto::Hole(KernelHoleJobDto {
+                        feature_id: FeatureId(3),
+                        target_body_id: BodyId(1),
+                        center: Point3Dto {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 10.0,
+                        },
+                        direction: Point3Dto {
+                            x: 0.0,
+                            y: 0.0,
+                            z: -1.0,
+                        },
+                        diameter: 4.0,
+                        extent: HoleExtent::ThroughAll,
+                        style: HoleStyle::Countersink,
+                        counterbore_diameter: 0.0,
+                        counterbore_depth: 0.0,
+                        countersink_diameter: 8.0,
+                        countersink_angle_deg: 90.0,
+                        bottom_style: HoleBottomStyle::Flat,
+                        drill_point_angle_deg: 118.0,
+                        thread: None,
+                    }),
+                ],
+            })
+            .unwrap();
+
+        assert!(scene.errors.is_empty(), "{:?}", scene.errors);
+        let cylinder = scene.bodies[0]
+            .faces
+            .iter()
+            .find_map(|face| face.cylinder.as_ref())
+            .expect("the through-hole wall must retain its exact OCCT cylinder");
+        assert!((cylinder.radius - 2.0).abs() < 1e-8);
+        assert!((cylinder.axis.x.abs() + cylinder.axis.y.abs()) < 1e-8);
+        assert!((cylinder.axis.z.abs() - 1.0).abs() < 1e-8);
+        assert!((cylinder.reference.x.hypot(cylinder.reference.y) - 1.0).abs() < 1e-8);
+
+        let mut closed_radii = scene.bodies[0]
+            .edges
+            .iter()
+            .filter_map(|edge| edge.circle.filter(|circle| circle.closed))
+            .map(|circle| circle.radius)
+            .collect::<Vec<_>>();
+        closed_radii.sort_by(f64::total_cmp);
+        assert!(
+            closed_radii
+                .iter()
+                .any(|radius| (*radius - 2.0).abs() < 1e-8),
+            "the inner hole rim must remain an exact selectable OCCT circle: {closed_radii:?}"
+        );
+        assert!(
+            closed_radii.iter().any(|radius| (*radius - 4.0).abs() < 2e-4),
+            "the outer countersink rim must remain an exact selectable OCCT circle: {closed_radii:?}"
+        );
     }
 
     #[test]

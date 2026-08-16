@@ -77,7 +77,9 @@ export function ContextMenu({
       y: Math.max(VIEWPORT_MARGIN, Math.min(point.y, maxTop)),
     });
 
-    itemRefs.current.find((item) => item && !item.disabled)?.focus({ preventScroll: true });
+    // Keep pointer-opened menus visually neutral. The container receives
+    // focus; ArrowUp/ArrowDown then moves focus to an item for keyboard users.
+    menu.focus({ preventScroll: true });
   }, [point.x, point.y]);
 
   useEffect(() => {
@@ -131,9 +133,11 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
+      tabIndex={-1}
       aria-label={ariaLabel}
       data-context-menu
-      className="fixed z-[100] min-w-52 max-w-72 rounded border border-edge bg-header py-1 shadow-xl shadow-black/50"
+      data-native-viewport-overlay
+      className="fixed z-[100] min-w-52 max-w-72 rounded border border-edge bg-header py-1 shadow-xl shadow-black/25 outline-none"
       style={{ left: position.x, top: position.y }}
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={onKeyDown}
@@ -163,10 +167,10 @@ export function ContextMenu({
             className={cx(
               'flex h-8 w-full items-center gap-2 px-3 text-left text-[11px] outline-none transition-colors',
               entry.disabled
-                ? 'cursor-default text-mute/40'
+                ? 'cursor-default text-mute'
                 : entry.danger
-                  ? 'cursor-pointer text-red-300 hover:bg-red-500/20 focus:bg-red-500/20'
-                  : 'cursor-pointer text-ink hover:bg-accent/50 focus:bg-accent/50',
+                  ? 'cursor-pointer text-warn hover:bg-[rgb(var(--warn-rgb)/0.12)] focus-visible:bg-[rgb(var(--warn-rgb)/0.12)]'
+                  : 'cursor-pointer text-ink hover:bg-edge focus-visible:bg-accent focus-visible:text-white',
             )}
           >
             <span className="flex h-4 w-4 shrink-0 items-center justify-center text-current">

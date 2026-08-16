@@ -74,6 +74,19 @@ try {
     { timeout: 60_000 },
   );
   assert.equal((await page.evaluate(() => window.__appStore.getState().solidScene.bodies.length)), 1);
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const state = window.__appStore.getState();
+      return {
+        body: state.selectedBody,
+        bodies: state.selectedBodies,
+        face: state.selectedFace,
+        edges: state.selectedEdges,
+      };
+    }),
+    { body: null, bodies: [], face: null, edges: [] },
+    'successful modeling commands leave the new result unselected',
+  );
 
   console.log('2. Reopening an already-open Extrude is idempotent and canvas picking remains active');
   await createFinishedRectangle();

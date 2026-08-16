@@ -11,16 +11,14 @@ use bevy::{
     },
 };
 use nbcad_core::{BodyAppearance, PlaneBasis};
-use nbcad_sketch::{EntityDto, SketchDto, Vec2 as SketchVec2};
+use nbcad_sketch::{BodyPoseDto, EntityDto, InstanceBodyPoseDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{
     BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto, SolidSceneDto,
 };
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSView, NSWindow, NSWindowOrderingMode,
-};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindow, NSWindowOrderingMode};
 #[cfg(target_os = "macos")]
 use objc2_core_graphics::CGMutablePath;
 #[cfg(target_os = "macos")]
@@ -43,7 +41,7 @@ use std::{
     num::NonZeroU32,
     panic::AssertUnwindSafe,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Instant,
@@ -97,6 +95,10 @@ const INITIAL_PHYSICAL_SIZE: u32 = 32;
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
 const SKETCH_LINE_WIDTH: f32 = 1.25;
+/// Below this projected radius, per-edge gizmos cost more CPU/GPU bandwidth
+/// than the outline information they can convey. Bevy still renders the
+/// retained shaded mesh and selected/hovered geometry always bypasses LOD.
+const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
 const SKETCH_DEPTH_BIAS: f32 = -1.0;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.999;
@@ -178,6 +180,8 @@ struct MainThreadRenderRuntime {
 
 struct PickState {
     scene: SolidSceneDto,
+    body_poses: Vec<BodyPoseDto>,
+    instance_body_poses: Vec<InstanceBodyPoseDto>,
     camera: ViewportCamera,
     logical_size: (f32, f32),
     hidden_body_ids: Vec<u64>,
@@ -187,6 +191,8 @@ impl Default for PickState {
     fn default() -> Self {
         Self {
             scene: SolidSceneDto::default(),
+            body_poses: Vec::new(),
+            instance_body_poses: Vec::new(),
             camera: ViewportCamera::default(),
             logical_size: (1.0, 1.0),
             hidden_body_ids: Vec::new(),
@@ -200,6 +206,8 @@ pub struct PlatformNativeViewport {
     pending: Arc<Mutex<PendingRenderCommands>>,
     pick_state: Arc<Mutex<PickState>>,
     layout_revision: Arc<AtomicU64>,
+    last_layout: Arc<Mutex<Option<ViewportLayout>>>,
+    suspended: Arc<AtomicBool>,
     pointers: Arc<NativePointers>,
     metrics: Arc<Mutex<MetricsState>>,
 }
@@ -214,6 +222,8 @@ impl PlatformNativeViewport {
         let pending = Arc::new(Mutex::new(PendingRenderCommands::default()));
         let pick_state = Arc::new(Mutex::new(PickState::default()));
         let layout_revision = Arc::new(AtomicU64::new(0));
+        let last_layout = Arc::new(Mutex::new(None));
+        let suspended = Arc::new(AtomicBool::new(false));
         let pointers = Arc::new(NativePointers::default());
         let metrics = Arc::new(Mutex::new(MetricsState::default()));
         let install_pointers = pointers.clone();
@@ -286,6 +296,8 @@ impl PlatformNativeViewport {
                             datum_planes: Vec::new(),
                             profile_catalog: Vec::new(),
                             body_appearances: Vec::new(),
+                            body_poses: Vec::new(),
+                            instance_body_poses: Vec::new(),
                         },
                         camera: ViewportCamera::default(),
                         logical_size: (1.0, 1.0),
@@ -338,6 +350,8 @@ impl PlatformNativeViewport {
             pending,
             pick_state,
             layout_revision,
+            last_layout,
+            suspended,
             pointers,
             metrics,
         })
@@ -357,6 +371,12 @@ impl PlatformNativeViewport {
                 layout.viewport.width.max(1.0) as f32,
                 layout.viewport.height.max(1.0) as f32,
             );
+        }
+        if let Ok(mut last_layout) = self.last_layout.lock() {
+            *last_layout = Some(layout.clone());
+        }
+        if self.suspended.load(Ordering::Acquire) {
+            return Ok(());
         }
         let pointers = self.pointers.clone();
         let runtime = self.runtime.clone();
@@ -388,9 +408,39 @@ impl PlatformNativeViewport {
         .map_err(|error| format!("could not schedule native viewport layout: {error}"))
     }
 
+    pub fn set_suspended(&self, app: &tauri::AppHandle, suspended: bool) -> Result<(), String> {
+        self.suspended.store(suspended, Ordering::Release);
+        let pointers = self.pointers.clone();
+        let layout = self
+            .last_layout
+            .lock()
+            .map_err(|_| "native viewport layout lock poisoned".to_string())?
+            .clone();
+        app.run_on_main_thread(move || {
+            let webview_pointer = pointers.webview.load(Ordering::Acquire);
+            let viewport_pointer = pointers.viewport.load(Ordering::Acquire);
+            let window_pointer = pointers.window.load(Ordering::Acquire);
+            if webview_pointer == 0 || viewport_pointer == 0 || window_pointer == 0 {
+                return;
+            }
+            unsafe {
+                set_native_viewport_suspended(
+                    webview_pointer,
+                    viewport_pointer,
+                    window_pointer,
+                    suspended,
+                    layout.as_ref(),
+                );
+            }
+        })
+        .map_err(|error| format!("could not suspend native viewport: {error}"))
+    }
+
     pub fn sync_model(&self, model: ViewportModel) -> Result<(), String> {
         if let Ok(mut state) = self.pick_state.lock() {
             state.scene = model.scene.clone();
+            state.body_poses = model.body_poses.clone();
+            state.instance_body_poses = model.instance_body_poses.clone();
         }
         self.enqueue(RenderCommand::Model(model))
     }
@@ -452,6 +502,8 @@ impl PlatformNativeViewport {
     pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
         if let Ok(mut state) = self.pick_state.lock() {
             state.hidden_body_ids = presentation.hidden_body_ids.clone();
+            state.body_poses = presentation.body_poses.clone();
+            state.instance_body_poses = presentation.instance_body_poses.clone();
         }
         self.enqueue(RenderCommand::Presentation(presentation))
     }
@@ -476,6 +528,8 @@ impl PlatformNativeViewport {
                 x,
                 y,
                 &state.hidden_body_ids,
+                &state.body_poses,
+                &state.instance_body_poses,
             )
         };
         if let Ok(mut current) = self.metrics.lock() {
@@ -624,8 +678,8 @@ unsafe fn install_native_views(
     // whose default mask only anchors the top edge. The CAD host requires the
     // WebView and its container to follow every live resize and native
     // full-screen transition, including while the Bevy viewport is unmounted.
-    let flexible = NSAutoresizingMaskOptions::ViewWidthSizable
-        | NSAutoresizingMaskOptions::ViewHeightSizable;
+    let flexible =
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
     parent.setAutoresizingMask(parent.autoresizingMask() | flexible);
     webview.setAutoresizingMask(webview.autoresizingMask() | flexible);
     webview.setWantsLayer(true);
@@ -744,6 +798,33 @@ unsafe fn apply_native_layout(
     }
 
     ns_window.backingScaleFactor()
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn set_native_viewport_suspended(
+    webview_pointer: usize,
+    viewport_pointer: usize,
+    window_pointer: usize,
+    suspended: bool,
+    layout: Option<&ViewportLayout>,
+) {
+    let webview = unsafe { &*(webview_pointer as *const NSView) };
+    let viewport = unsafe { &*(viewport_pointer as *const NSView) };
+    if suspended {
+        viewport.setHidden(true);
+        if let Some(layer) = webview.layer() {
+            layer.setMask(None);
+        }
+    } else if let Some(layout) = layout {
+        let _ = unsafe {
+            apply_native_layout(
+                webview_pointer,
+                viewport_pointer,
+                window_pointer,
+                layout,
+            )
+        };
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1212,6 +1293,31 @@ unsafe fn apply_native_layout(
 }
 
 #[cfg(target_os = "windows")]
+unsafe fn set_native_viewport_suspended(
+    webview_pointer: usize,
+    viewport_pointer: usize,
+    window_pointer: usize,
+    suspended: bool,
+    layout: Option<&ViewportLayout>,
+) {
+    let viewport = viewport_pointer as HWND;
+    if suspended {
+        unsafe {
+            ShowWindow(viewport, SW_HIDE);
+        }
+    } else if let Some(layout) = layout {
+        let _ = unsafe {
+            apply_native_layout(
+                webview_pointer,
+                viewport_pointer,
+                window_pointer,
+                layout,
+            )
+        };
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn apply_windows_viewport_region(
     viewport: HWND,
     layout: &ViewportLayout,
@@ -1345,11 +1451,14 @@ struct ModelResource {
     datum_planes: Vec<DatumPlaneDefinitionDto>,
     profile_catalog: Vec<ProfileCatalogItemDto>,
     body_appearances: Vec<BodyAppearance>,
+    body_poses: Vec<BodyPoseDto>,
+    instance_body_poses: Vec<InstanceBodyPoseDto>,
+    instance_revision: u64,
     revision: u64,
 }
 
 #[derive(Resource, Default)]
-struct ModelGeometryCache(HashMap<String, u64>);
+struct ModelGeometryCache(HashMap<String, (u64, u64)>);
 
 #[derive(Resource)]
 struct CameraResource {
@@ -1424,22 +1533,28 @@ struct RenderedRevisions {
 #[derive(Component)]
 struct NativeCadBody {
     body_id: u64,
+    occurrence_id: Option<u64>,
 }
 
 #[derive(Component)]
 struct NativeCadFace {
     body_id: u64,
+    occurrence_id: Option<u64>,
     face_id: u64,
     boundary: Vec<(Vec3, Vec3)>,
 }
 
 #[derive(Component)]
-struct NativeCadFaceOverlay;
+struct NativeCadFaceOverlay {
+    body_id: u64,
+    occurrence_id: Option<u64>,
+}
 
 #[derive(Component)]
 struct NativeModelGeometry {
     session_id: String,
     geometry_revision: u64,
+    instance_revision: u64,
 }
 
 #[derive(Component)]
@@ -1584,6 +1699,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
                 resize_reference_planes,
                 apply_native_presentation_styles,
                 rebuild_native_face_overlays,
+                apply_body_poses,
                 rebuild_native_preview_meshes,
                 update_native_preview_arrows,
                 rebuild_native_annotations,
@@ -1727,7 +1843,9 @@ fn rebuild_occt_meshes(
 
     for (entity, geometry, mut visibility, mesh, material) in &mut existing {
         if geometry.session_id == model.session_id {
-            if geometry.geometry_revision != model.geometry_revision {
+            if geometry.geometry_revision != model.geometry_revision
+                || geometry.instance_revision != model.instance_revision
+            {
                 if let Some(mesh) = mesh {
                     meshes.remove(&mesh.0);
                 }
@@ -1741,49 +1859,81 @@ fn rebuild_occt_meshes(
         }
     }
 
-    if cache.0.get(&model.session_id) == Some(&model.geometry_revision) {
+    let cache_key = (model.geometry_revision, model.instance_revision);
+    if cache.0.get(&model.session_id) == Some(&cache_key) {
         return;
     }
-    cache
-        .0
-        .insert(model.session_id.clone(), model.geometry_revision);
+    cache.0.insert(model.session_id.clone(), cache_key);
 
     for body in &model.scene.bodies {
-        if let Some(mesh) = body_mesh(body) {
-            commands.spawn((
-                Name::new(format!("OCCT body {} ({})", body.id.0, body.name)),
-                NativeCadBody { body_id: body.id.0 },
-                NativeModelGeometry {
-                    session_id: model.session_id.clone(),
-                    geometry_revision: model.geometry_revision,
-                },
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: body_appearance_color(&model, body.id.0, palette.0.body),
-                    metallic: 0.0,
-                    perceptual_roughness: 0.86,
-                    cull_mode: None,
-                    ..default()
-                })),
-            ));
+        let instances = if model.instance_body_poses.is_empty() {
+            vec![None]
+        } else {
+            model
+                .instance_body_poses
+                .iter()
+                .filter(|instance| instance.body_id == body.id && instance.visible)
+                .map(|instance| Some(instance.occurrence_id.0))
+                .collect::<Vec<_>>()
+        };
+        if instances.is_empty() {
+            continue;
         }
-        for face in &body.faces {
-            commands.spawn((
-                Name::new(format!(
-                    "OCCT face metadata {} on {} ({})",
-                    face.id.0, body.id.0, body.name
-                )),
-                NativeCadFace {
-                    body_id: body.id.0,
-                    face_id: face.id.0,
-                    boundary: face_boundary_segments(body, face),
-                },
-                NativeModelGeometry {
-                    session_id: model.session_id.clone(),
-                    geometry_revision: model.geometry_revision,
-                },
-                Visibility::Inherited,
-            ));
+        let mesh_handle = body_mesh(body).map(|mesh| meshes.add(mesh));
+        for occurrence_id in instances {
+            let transform = instance_body_pose_transform(
+                &model.instance_body_poses,
+                &model.body_poses,
+                body.id.0,
+                occurrence_id,
+            );
+            if let Some(mesh_handle) = &mesh_handle {
+                commands.spawn((
+                    Name::new(format!(
+                        "OCCT body {} occurrence {:?} ({})",
+                        body.id.0, occurrence_id, body.name
+                    )),
+                    NativeCadBody {
+                        body_id: body.id.0,
+                        occurrence_id,
+                    },
+                    NativeModelGeometry {
+                        session_id: model.session_id.clone(),
+                        geometry_revision: model.geometry_revision,
+                        instance_revision: model.instance_revision,
+                    },
+                    Mesh3d(mesh_handle.clone()),
+                    MeshMaterial3d(materials.add(StandardMaterial {
+                        base_color: body_appearance_color(&model, body.id.0, palette.0.body),
+                        metallic: 0.0,
+                        perceptual_roughness: 0.86,
+                        cull_mode: None,
+                        ..default()
+                    })),
+                    transform,
+                ));
+            }
+            for face in &body.faces {
+                commands.spawn((
+                    Name::new(format!(
+                        "OCCT face metadata {} on {} occurrence {:?} ({})",
+                        face.id.0, body.id.0, occurrence_id, body.name
+                    )),
+                    NativeCadFace {
+                        body_id: body.id.0,
+                        occurrence_id,
+                        face_id: face.id.0,
+                        boundary: face_boundary_segments(body, face),
+                    },
+                    NativeModelGeometry {
+                        session_id: model.session_id.clone(),
+                        geometry_revision: model.geometry_revision,
+                        instance_revision: model.instance_revision,
+                    },
+                    Visibility::Inherited,
+                    transform,
+                ));
+            }
         }
     }
 
@@ -1796,6 +1946,7 @@ fn rebuild_occt_meshes(
             NativeModelGeometry {
                 session_id: model.session_id.clone(),
                 geometry_revision: model.geometry_revision,
+                instance_revision: model.instance_revision,
             },
             Mesh3d(meshes.add(reference_plane_mesh(
                 &plane.basis,
@@ -1914,6 +2065,59 @@ fn reference_plane_transform(origin: Vec3, half_size: f32) -> Transform {
     Transform::from_translation(origin * (1.0 - scale)).with_scale(Vec3::splat(scale))
 }
 
+fn body_local_bounding_sphere(body: &BodyDto) -> Option<(Vec3, f32)> {
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let mut count = 0usize;
+    for point in body.mesh.positions.chunks_exact(3) {
+        let point = Vec3::new(point[0], point[1], point[2]);
+        minimum = minimum.min(point);
+        maximum = maximum.max(point);
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    let center = (minimum + maximum) * 0.5;
+    let radius = (maximum - center).length().max(1.0e-5);
+    Some((center, radius))
+}
+
+fn occurrence_edges_are_visible(
+    local_bounds: Option<(Vec3, f32)>,
+    transform: &Transform,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+) -> bool {
+    let Some((local_center, local_radius)) = local_bounds else {
+        return true;
+    };
+    let center = transform.transform_point(local_center);
+    let radius = local_radius * transform.scale.max_element().abs().max(1.0e-6);
+    let eye = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - eye).normalize_or_zero();
+    let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
+    let right = forward.cross(up_hint).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    if forward == Vec3::ZERO || right == Vec3::ZERO || up == Vec3::ZERO {
+        return true;
+    }
+    let delta = center - eye;
+    let depth = delta.dot(forward);
+    if depth + radius <= 0.0 {
+        return false;
+    }
+    let tangent = (camera.vertical_fov_degrees.to_radians() * 0.5).tan();
+    let aspect = viewport.logical_width.max(1.0) / viewport.logical_height.max(1.0);
+    if delta.dot(right).abs() > depth.max(0.0) * tangent * aspect + radius
+        || delta.dot(up).abs() > depth.max(0.0) * tangent + radius
+    {
+        return false;
+    }
+    radius / world_per_pixel_at(camera, viewport, center)
+        >= OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX
+}
+
 fn resize_reference_planes(
     camera: Res<CameraResource>,
     viewport: Res<ViewportSizeResource>,
@@ -1998,10 +2202,17 @@ fn apply_native_presentation_styles(
         let Some(mut material) = materials.get_mut(&handle.0) else {
             continue;
         };
-        let selected_body_index = state
-            .selected_body_ids
-            .iter()
-            .position(|body_id| *body_id == body.body_id);
+        let occurrence_is_selected = state
+            .selected_occurrence_id
+            .is_none_or(|occurrence_id| body.occurrence_id == Some(occurrence_id));
+        let selected_body_index = occurrence_is_selected
+            .then(|| {
+                state
+                    .selected_body_ids
+                    .iter()
+                    .position(|body_id| *body_id == body.body_id)
+            })
+            .flatten();
         let color = if selected_body_index == Some(0) {
             rgb(palette.0.body_selected)
         } else if selected_body_index.is_some() {
@@ -2070,9 +2281,18 @@ fn rebuild_native_face_overlays(
         (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
         With<NativeCadFaceOverlay>,
     >,
-    mut last: Local<Option<(u64, ViewportPresentation, ViewportPalette)>>,
+    mut last: Local<Option<(String, u64, u64, ViewportPresentation, ViewportPalette)>>,
 ) {
-    let next = (model.revision, presentation.0.clone(), palette.0);
+    let mut overlay_presentation = presentation.0.clone();
+    overlay_presentation.body_poses.clear();
+    overlay_presentation.instance_body_poses.clear();
+    let next = (
+        model.session_id.clone(),
+        model.geometry_revision,
+        model.instance_revision,
+        overlay_presentation,
+        palette.0,
+    );
     if last.as_ref() == Some(&next) {
         return;
     }
@@ -2112,31 +2332,95 @@ fn rebuild_native_face_overlays(
         let Some(mesh) = face_mesh(body, face) else {
             continue;
         };
+        let mesh_handle = meshes.add(mesh);
         let color = rgb(if selected {
             palette.0.face_selected
         } else {
             palette.0.face_hover
         });
-        commands.spawn((
-            Name::new(format!("OCCT face highlight {face_id}")),
-            NativeCadFaceOverlay,
-            NativeModelGeometry {
-                session_id: model.session_id.clone(),
-                geometry_revision: model.geometry_revision,
-            },
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color,
-                emissive: color.to_linear() * 0.32,
-                metallic: 0.0,
-                perceptual_roughness: 0.86,
-                cull_mode: None,
-                depth_bias: 1.0,
-                ..default()
-            })),
-            NotShadowCaster,
-            NotShadowReceiver,
-        ));
+        let material_handle = materials.add(StandardMaterial {
+            base_color: color,
+            emissive: color.to_linear() * 0.32,
+            metallic: 0.0,
+            perceptual_roughness: 0.86,
+            cull_mode: None,
+            depth_bias: 1.0,
+            ..default()
+        });
+        let occurrences = if model.instance_body_poses.is_empty() {
+            vec![None]
+        } else {
+            model
+                .instance_body_poses
+                .iter()
+                .filter(|instance| {
+                    instance.body_id == body.id
+                        && instance.visible
+                        && if selected {
+                            state.selected_occurrence_id.is_none()
+                                || state.selected_occurrence_id == Some(instance.occurrence_id.0)
+                        } else {
+                            state.hovered_occurrence_id.is_none()
+                                || state.hovered_occurrence_id == Some(instance.occurrence_id.0)
+                        }
+                })
+                .map(|instance| Some(instance.occurrence_id.0))
+                .collect::<Vec<_>>()
+        };
+        for occurrence_id in occurrences {
+            commands.spawn((
+                Name::new(format!(
+                    "OCCT face highlight {face_id} occurrence {occurrence_id:?}"
+                )),
+                NativeCadFaceOverlay {
+                    body_id: body.id.0,
+                    occurrence_id,
+                },
+                NativeModelGeometry {
+                    session_id: model.session_id.clone(),
+                    geometry_revision: model.geometry_revision,
+                    instance_revision: model.instance_revision,
+                },
+                Mesh3d(mesh_handle.clone()),
+                MeshMaterial3d(material_handle.clone()),
+                NotShadowCaster,
+                NotShadowReceiver,
+                instance_body_pose_transform(
+                    &model.instance_body_poses,
+                    &model.body_poses,
+                    body.id.0,
+                    occurrence_id,
+                ),
+            ));
+        }
+    }
+}
+
+fn apply_body_poses(
+    model: Res<ModelResource>,
+    mut entities: Query<(
+        Option<&NativeCadBody>,
+        Option<&NativeCadFace>,
+        Option<&NativeCadFaceOverlay>,
+        &mut Transform,
+    )>,
+) {
+    if !model.is_changed() {
+        return;
+    }
+    for (body, face, overlay, mut transform) in &mut entities {
+        let identity = body
+            .map(|body| (body.body_id, body.occurrence_id))
+            .or_else(|| face.map(|face| (face.body_id, face.occurrence_id)))
+            .or_else(|| overlay.map(|overlay| (overlay.body_id, overlay.occurrence_id)));
+        if let Some((body_id, occurrence_id)) = identity {
+            *transform = instance_body_pose_transform(
+                &model.instance_body_poses,
+                &model.body_poses,
+                body_id,
+                occurrence_id,
+            );
+        }
     }
 }
 
@@ -2594,6 +2878,76 @@ fn body_appearance_color(model: &ModelResource, body_id: u64, fallback: [f32; 3]
     )
 }
 
+fn body_pose_transform(poses: &[BodyPoseDto], body_id: u64) -> Transform {
+    let Some(pose) = poses.iter().find(|pose| pose.body_id.0 == body_id) else {
+        return Transform::IDENTITY;
+    };
+    let rotation = Quat::from_xyzw(
+        pose.rotation[0] as f32,
+        pose.rotation[1] as f32,
+        pose.rotation[2] as f32,
+        pose.rotation[3] as f32,
+    )
+    .normalize();
+    Transform::from_translation(Vec3::new(
+        pose.translation[0] as f32,
+        pose.translation[1] as f32,
+        pose.translation[2] as f32,
+    ))
+    .with_rotation(rotation)
+}
+
+fn same_instance_layout(a: &[InstanceBodyPoseDto], b: &[InstanceBodyPoseDto]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.occurrence_id == b.occurrence_id
+                && a.component_id == b.component_id
+                && a.body_id == b.body_id
+                && a.visible == b.visible
+        })
+}
+
+fn instance_body_pose_transform(
+    instances: &[InstanceBodyPoseDto],
+    legacy: &[BodyPoseDto],
+    body_id: u64,
+    occurrence_id: Option<u64>,
+) -> Transform {
+    let pose = occurrence_id.and_then(|occurrence_id| {
+        instances
+            .iter()
+            .find(|pose| pose.body_id.0 == body_id && pose.occurrence_id.0 == occurrence_id)
+    });
+    let Some(pose) = pose else {
+        return body_pose_transform(legacy, body_id);
+    };
+    let rotation = Quat::from_xyzw(
+        pose.rotation[0] as f32,
+        pose.rotation[1] as f32,
+        pose.rotation[2] as f32,
+        pose.rotation[3] as f32,
+    )
+    .normalize();
+    Transform::from_translation(Vec3::new(
+        pose.translation[0] as f32,
+        pose.translation[1] as f32,
+        pose.translation[2] as f32,
+    ))
+    .with_rotation(rotation)
+}
+
+fn visible_body_occurrences(model: &ModelResource, body_id: u64) -> Vec<Option<u64>> {
+    if model.instance_body_poses.is_empty() {
+        return vec![None];
+    }
+    model
+        .instance_body_poses
+        .iter()
+        .filter(|instance| instance.body_id.0 == body_id && instance.visible)
+        .map(|instance| Some(instance.occurrence_id.0))
+        .collect()
+}
+
 fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
     let start = face.first_index as usize;
     let end = start
@@ -2730,48 +3084,86 @@ fn draw_cad_gizmos(
         if state.hidden_body_ids.contains(&body.id.0) {
             continue;
         }
-        let selected_body_index = state
-            .selected_body_ids
-            .iter()
-            .position(|body_id| *body_id == body.id.0);
-        let hovered_body = state.hovered_body_id == Some(body.id.0);
+        let local_bounds = body_local_bounding_sphere(body);
+        for occurrence_id in visible_body_occurrences(&model, body.id.0) {
+            let occurrence_is_selected = state
+                .selected_occurrence_id
+                .is_none_or(|selected| occurrence_id == Some(selected));
+            let selected_body_index = occurrence_is_selected
+                .then(|| {
+                    state
+                        .selected_body_ids
+                        .iter()
+                        .position(|body_id| *body_id == body.id.0)
+                })
+                .flatten();
+            let hovered_body = state.hovered_body_id == Some(body.id.0)
+                && state
+                    .hovered_occurrence_id
+                    .is_none_or(|hovered| occurrence_id == Some(hovered));
+            let body_transform = instance_body_pose_transform(
+                &model.instance_body_poses,
+                &model.body_poses,
+                body.id.0,
+                occurrence_id,
+            );
+            let draw_default_edges = occurrence_edges_are_visible(
+                local_bounds,
+                &body_transform,
+                camera.camera,
+                *viewport,
+            );
 
-        if selected_body_index.is_some() || hovered_body {
-            let color = if selected_body_index == Some(0) {
-                rgb(palette.0.face_selected)
-            } else if selected_body_index.is_some() {
-                rgb(palette.0.edge_selected)
-            } else {
-                rgb(palette.0.edge_hover)
-            };
-            for edge in &body.edges {
-                draw_edge_segments(&mut highlights, edge, color);
+            if selected_body_index.is_some() || hovered_body {
+                let color = if selected_body_index == Some(0) {
+                    rgb(palette.0.face_selected)
+                } else if selected_body_index.is_some() {
+                    rgb(palette.0.edge_selected)
+                } else {
+                    rgb(palette.0.edge_hover)
+                };
+                for edge in &body.edges {
+                    draw_edge_segments(&mut highlights, edge, color, &body_transform);
+                }
             }
-        }
 
-        for edge in &body.edges {
-            let selected = state.selected_edge_ids.contains(&edge.id.0);
-            let hovered = state.hovered_edge_id == Some(edge.id.0);
-            let color = if selected {
-                palette.0.edge_selected
-            } else if hovered {
-                palette.0.edge_hover
-            } else if selected_body_index.is_some() {
-                palette.0.body_selected_edge
-            } else {
-                palette.0.edge
-            };
-            draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92));
-            if selected || hovered {
-                draw_edge_segments(
-                    &mut highlights,
-                    edge,
-                    rgb(if selected {
-                        palette.0.edge_selected
-                    } else {
-                        palette.0.edge_hover
-                    }),
-                );
+            for edge in &body.edges {
+                let selected =
+                    occurrence_is_selected && state.selected_edge_ids.contains(&edge.id.0);
+                let hovered = state.hovered_edge_id == Some(edge.id.0)
+                    && state
+                        .hovered_occurrence_id
+                        .is_none_or(|hovered| occurrence_id == Some(hovered));
+                if !draw_default_edges
+                    && !selected
+                    && !hovered
+                    && selected_body_index.is_none()
+                    && !hovered_body
+                {
+                    continue;
+                }
+                let color = if selected {
+                    palette.0.edge_selected
+                } else if hovered {
+                    palette.0.edge_hover
+                } else if selected_body_index.is_some() {
+                    palette.0.body_selected_edge
+                } else {
+                    palette.0.edge
+                };
+                draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                if selected || hovered {
+                    draw_edge_segments(
+                        &mut highlights,
+                        edge,
+                        rgb(if selected {
+                            palette.0.edge_selected
+                        } else {
+                            palette.0.edge_hover
+                        }),
+                        &body_transform,
+                    );
+                }
             }
         }
     }
@@ -2781,8 +3173,14 @@ fn draw_cad_gizmos(
         {
             continue;
         }
-        let selected = state.selected_face_ids.contains(&face.face_id);
-        let hovered = state.hovered_face_id == Some(face.face_id);
+        let occurrence_is_selected = state
+            .selected_occurrence_id
+            .is_none_or(|selected| face.occurrence_id == Some(selected));
+        let selected = occurrence_is_selected && state.selected_face_ids.contains(&face.face_id);
+        let hovered = state.hovered_face_id == Some(face.face_id)
+            && state
+                .hovered_occurrence_id
+                .is_none_or(|hovered| face.occurrence_id == Some(hovered));
         if !selected && !hovered {
             continue;
         }
@@ -2791,8 +3189,18 @@ fn draw_cad_gizmos(
         } else {
             palette.0.edge_hover
         });
+        let transform = instance_body_pose_transform(
+            &model.instance_body_poses,
+            &model.body_poses,
+            face.body_id,
+            face.occurrence_id,
+        );
         for (start, end) in &face.boundary {
-            highlights.line(*start, *end, color);
+            highlights.line(
+                transform.transform_point(*start),
+                transform.transform_point(*end),
+                color,
+            );
         }
     }
 
@@ -3108,11 +3516,20 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     edge: &nbcad_solid::EdgeDto,
     color: Color,
+    transform: &Transform,
 ) {
     for pair in edge.points.windows(2) {
         gizmos.line(
-            Vec3::new(pair[0].x as f32, pair[0].y as f32, pair[0].z as f32),
-            Vec3::new(pair[1].x as f32, pair[1].y as f32, pair[1].z as f32),
+            transform.transform_point(Vec3::new(
+                pair[0].x as f32,
+                pair[0].y as f32,
+                pair[0].z as f32,
+            )),
+            transform.transform_point(Vec3::new(
+                pair[1].x as f32,
+                pair[1].y as f32,
+                pair[1].z as f32,
+            )),
             color,
         );
     }
@@ -3622,6 +4039,14 @@ fn apply_render_command(
             resource.datum_planes = runtime.model.datum_planes.clone();
             resource.profile_catalog = runtime.model.profile_catalog.clone();
             resource.body_appearances = runtime.model.body_appearances.clone();
+            resource.body_poses = runtime.model.body_poses.clone();
+            if !same_instance_layout(
+                &resource.instance_body_poses,
+                &runtime.model.instance_body_poses,
+            ) {
+                resource.instance_revision = resource.instance_revision.wrapping_add(1);
+            }
+            resource.instance_body_poses = runtime.model.instance_body_poses.clone();
             resource.revision = resource.revision.wrapping_add(1);
             if let Ok(mut current) = metrics.lock() {
                 current.body_count = runtime.model.scene.bodies.len();
@@ -3673,6 +4098,23 @@ fn apply_render_command(
             *dirty = true;
         }
         RenderCommand::Presentation(next) => {
+            if runtime.model.body_poses != next.body_poses
+                || runtime.model.instance_body_poses != next.instance_body_poses
+            {
+                let layout_changed = !same_instance_layout(
+                    &runtime.model.instance_body_poses,
+                    &next.instance_body_poses,
+                );
+                runtime.model.body_poses = next.body_poses.clone();
+                runtime.model.instance_body_poses = next.instance_body_poses.clone();
+                let mut model = runtime.app.world_mut().resource_mut::<ModelResource>();
+                model.body_poses = next.body_poses.clone();
+                model.instance_body_poses = next.instance_body_poses.clone();
+                if layout_changed {
+                    model.instance_revision = model.instance_revision.wrapping_add(1);
+                }
+                model.revision = model.revision.wrapping_add(1);
+            }
             let mut resource = runtime
                 .app
                 .world_mut()
@@ -3816,6 +4258,8 @@ fn pick_occt_scene(
     x: f32,
     y: f32,
     hidden_body_ids: &[u64],
+    body_poses: &[BodyPoseDto],
+    instance_body_poses: &[InstanceBodyPoseDto],
 ) -> Option<NativePick> {
     if viewport.0 <= 1.0 || viewport.1 <= 1.0 {
         return None;
@@ -3834,50 +4278,394 @@ fn pick_occt_scene(
     let tangent = (camera.vertical_fov_degrees.to_radians() * 0.5).tan();
     let aspect = viewport.0 / viewport.1;
     let direction = (forward + right * ndc_x * tangent * aspect + up * ndc_y * tangent).normalize();
+    let world_per_pixel_factor = 2.0 * tangent / viewport.1;
 
     let mut best: Option<NativePick> = None;
     for body in &scene.bodies {
         if hidden_body_ids.contains(&body.id.0) {
             continue;
         }
-        pick_body(body, origin, direction, &mut best);
+        let instances = if instance_body_poses.is_empty() {
+            vec![(None, body_pose_transform(body_poses, body.id.0))]
+        } else {
+            instance_body_poses
+                .iter()
+                .filter(|instance| instance.body_id == body.id && instance.visible)
+                .map(|instance| {
+                    (
+                        Some(instance.occurrence_id.0),
+                        instance_body_pose_transform(
+                            instance_body_poses,
+                            body_poses,
+                            body.id.0,
+                            Some(instance.occurrence_id.0),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        for (occurrence_id, transform) in instances {
+            pick_body(
+                body,
+                occurrence_id,
+                transform,
+                origin,
+                direction,
+                world_per_pixel_factor,
+                &mut best,
+            );
+        }
     }
     best
 }
 
-fn pick_body(body: &BodyDto, origin: Vec3, direction: Vec3, best: &mut Option<NativePick>) {
+fn pick_body(
+    body: &BodyDto,
+    occurrence_id: Option<u64>,
+    transform: Transform,
+    origin: Vec3,
+    direction: Vec3,
+    world_per_pixel_factor: f32,
+    best: &mut Option<NativePick>,
+) {
+    let inverse_rotation = transform.rotation.inverse();
     for face in &body.faces {
         let start = face.first_index as usize;
         let end = start
             .saturating_add(face.index_count as usize)
             .min(body.mesh.indices.len());
         for triangle in body.mesh.indices[start..end].chunks_exact(3) {
-            let Some(a) = mesh_position(body, triangle[0]) else {
+            let Some(a) =
+                mesh_position(body, triangle[0]).map(|point| transform.transform_point(point))
+            else {
                 continue;
             };
-            let Some(b) = mesh_position(body, triangle[1]) else {
+            let Some(b) =
+                mesh_position(body, triangle[1]).map(|point| transform.transform_point(point))
+            else {
                 continue;
             };
-            let Some(c) = mesh_position(body, triangle[2]) else {
+            let Some(c) =
+                mesh_position(body, triangle[2]).map(|point| transform.transform_point(point))
+            else {
                 continue;
             };
             let Some(distance) = ray_triangle(origin, direction, a, b, c) else {
                 continue;
             };
-            if best
-                .as_ref()
-                .is_some_and(|current| current.distance <= distance)
-            {
+            let world_point = origin + direction * distance;
+            let local_point = inverse_rotation * (world_point - transform.translation);
+            let connector = connector_for_face(face, local_point);
+            if !pick_should_replace(
+                best.as_ref(),
+                distance,
+                connector.as_ref().map(|value| value.kind),
+            ) {
                 continue;
             }
             *best = Some(NativePick {
                 body_id: body.id.0,
+                occurrence_id,
                 face_id: face.id.0,
+                edge_id: None,
+                point: world_point.to_array(),
+                distance,
+                connector_kind: connector.as_ref().map(|value| value.kind.to_string()),
+                connector_origin: connector.as_ref().map(|value| value.origin.to_array()),
+                connector_primary_axis: connector
+                    .as_ref()
+                    .map(|value| value.primary_axis.to_array()),
+                connector_secondary_axis: connector
+                    .as_ref()
+                    .map(|value| value.secondary_axis.to_array()),
+                connector_radius: connector.as_ref().and_then(|value| value.radius),
+            });
+        }
+
+        let Some(cylinder) = face.cylinder else {
+            continue;
+        };
+        let axis = Vec3::new(
+            cylinder.axis.x as f32,
+            cylinder.axis.y as f32,
+            cylinder.axis.z as f32,
+        )
+        .normalize_or_zero();
+        if axis == Vec3::ZERO || !cylinder.radius.is_finite() || cylinder.radius <= 0.0 {
+            continue;
+        }
+        let axis_origin = Vec3::new(
+            cylinder.origin.x as f32,
+            cylinder.origin.y as f32,
+            cylinder.origin.z as f32,
+        );
+        let mut min_axial = f32::INFINITY;
+        let mut max_axial = f32::NEG_INFINITY;
+        for index in &body.mesh.indices[start..end] {
+            let Some(point) = mesh_position(body, *index) else {
+                continue;
+            };
+            let axial = (point - axis_origin).dot(axis);
+            min_axial = min_axial.min(axial);
+            max_axial = max_axial.max(axial);
+        }
+        if !min_axial.is_finite() || !max_axial.is_finite() || max_axial - min_axial <= 1.0e-5 {
+            continue;
+        }
+        let reference = Vec3::new(
+            cylinder.reference.x as f32,
+            cylinder.reference.y as f32,
+            cylinder.reference.z as f32,
+        );
+        for (axial, sign) in [(min_axial, -1.0_f32), (max_axial, 1.0_f32)] {
+            let local_center = axis_origin + axis * axial;
+            let local_primary = axis * sign;
+            let world_center = transform.transform_point(local_center);
+            let world_normal = (transform.rotation * local_primary).normalize_or_zero();
+            let Some(distance) = ray_plane_disk(
+                origin,
+                direction,
+                world_center,
+                world_normal,
+                cylinder.radius as f32,
+            ) else {
+                continue;
+            };
+            if !pick_should_replace(best.as_ref(), distance, Some("virtual_circular_face")) {
+                continue;
+            }
+            let secondary = orthogonal_reference(axis, reference);
+            *best = Some(NativePick {
+                body_id: body.id.0,
+                occurrence_id,
+                face_id: face.id.0,
+                edge_id: None,
                 point: (origin + direction * distance).to_array(),
                 distance,
+                connector_kind: Some("virtual_circular_face".to_string()),
+                connector_origin: Some(local_center.to_array()),
+                connector_primary_axis: Some(local_primary.to_array()),
+                connector_secondary_axis: Some(secondary.to_array()),
+                connector_radius: Some(cylinder.radius as f32),
             });
         }
     }
+
+    for edge in &body.edges {
+        let Some(circle) = edge.circle.filter(|circle| circle.closed) else {
+            continue;
+        };
+        if !circle.radius.is_finite() || circle.radius <= 0.0 {
+            continue;
+        }
+        let local_center = Vec3::new(
+            circle.center.x as f32,
+            circle.center.y as f32,
+            circle.center.z as f32,
+        );
+        let local_normal = Vec3::new(
+            circle.normal.x as f32,
+            circle.normal.y as f32,
+            circle.normal.z as f32,
+        )
+        .normalize_or_zero();
+        let local_reference = Vec3::new(
+            circle.reference.x as f32,
+            circle.reference.y as f32,
+            circle.reference.z as f32,
+        );
+        if local_normal == Vec3::ZERO {
+            continue;
+        }
+        let world_center = transform.transform_point(local_center);
+        let world_normal = (transform.rotation * local_normal).normalize_or_zero();
+        let Some(distance) = ray_plane_ring(
+            origin,
+            direction,
+            world_center,
+            world_normal,
+            circle.radius as f32,
+            world_per_pixel_factor,
+        ) else {
+            continue;
+        };
+        if !pick_should_replace(best.as_ref(), distance, Some("circular_edge")) {
+            continue;
+        }
+        *best = Some(NativePick {
+            body_id: body.id.0,
+            occurrence_id,
+            face_id: 0,
+            edge_id: Some(edge.id.0),
+            point: (origin + direction * distance).to_array(),
+            distance,
+            connector_kind: Some("circular_edge".to_string()),
+            connector_origin: Some(local_center.to_array()),
+            connector_primary_axis: Some(local_normal.to_array()),
+            connector_secondary_axis: Some(
+                orthogonal_reference(local_normal, local_reference).to_array(),
+            ),
+            connector_radius: Some(circle.radius as f32),
+        });
+    }
+}
+
+struct PickConnectorFrame {
+    kind: &'static str,
+    origin: Vec3,
+    primary_axis: Vec3,
+    secondary_axis: Vec3,
+    radius: Option<f32>,
+}
+
+fn connector_for_face(
+    face: &nbcad_solid::FaceDto,
+    local_point: Vec3,
+) -> Option<PickConnectorFrame> {
+    if let Some(plane) = face.plane {
+        let origin = face.signature.map_or_else(
+            || {
+                Vec3::new(
+                    plane.origin[0] as f32,
+                    plane.origin[1] as f32,
+                    plane.origin[2] as f32,
+                )
+            },
+            |signature| {
+                Vec3::new(
+                    signature.centroid.x as f32,
+                    signature.centroid.y as f32,
+                    signature.centroid.z as f32,
+                )
+            },
+        );
+        return Some(PickConnectorFrame {
+            kind: "planar_face",
+            origin,
+            primary_axis: Vec3::new(
+                plane.normal[0] as f32,
+                plane.normal[1] as f32,
+                plane.normal[2] as f32,
+            )
+            .normalize_or_zero(),
+            secondary_axis: Vec3::new(plane.u[0] as f32, plane.u[1] as f32, plane.u[2] as f32)
+                .normalize_or_zero(),
+            radius: None,
+        });
+    }
+    let cylinder = face.cylinder?;
+    let axis_origin = Vec3::new(
+        cylinder.origin.x as f32,
+        cylinder.origin.y as f32,
+        cylinder.origin.z as f32,
+    );
+    let axis = Vec3::new(
+        cylinder.axis.x as f32,
+        cylinder.axis.y as f32,
+        cylinder.axis.z as f32,
+    )
+    .normalize_or_zero();
+    if axis == Vec3::ZERO {
+        return None;
+    }
+    let origin = axis_origin + axis * (local_point - axis_origin).dot(axis);
+    let reference = Vec3::new(
+        cylinder.reference.x as f32,
+        cylinder.reference.y as f32,
+        cylinder.reference.z as f32,
+    );
+    let radial = local_point - origin;
+    Some(PickConnectorFrame {
+        kind: "cylindrical_face",
+        origin,
+        primary_axis: axis,
+        secondary_axis: if radial.length_squared() > 1.0e-10 {
+            radial.normalize()
+        } else {
+            orthogonal_reference(axis, reference)
+        },
+        radius: Some(cylinder.radius as f32),
+    })
+}
+
+fn orthogonal_reference(axis: Vec3, candidate: Vec3) -> Vec3 {
+    let projected = candidate - axis * candidate.dot(axis);
+    if projected.length_squared() > 1.0e-10 {
+        projected.normalize()
+    } else {
+        let fallback = if axis.cross(Vec3::X).length_squared() > 1.0e-10 {
+            Vec3::X
+        } else {
+            Vec3::Y
+        };
+        (fallback - axis * fallback.dot(axis)).normalize_or_zero()
+    }
+}
+
+fn pick_should_replace(
+    current: Option<&NativePick>,
+    distance: f32,
+    candidate_kind: Option<&str>,
+) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    const TIE_EPSILON: f32 = 1.0e-4;
+    if distance < current.distance - TIE_EPSILON {
+        return true;
+    }
+    if (distance - current.distance).abs() > TIE_EPSILON {
+        return false;
+    }
+    let priority = |kind: Option<&str>| match kind {
+        Some("circular_edge") => 2,
+        Some("virtual_circular_face") => 0,
+        _ => 1,
+    };
+    priority(candidate_kind) > priority(current.connector_kind.as_deref())
+}
+
+fn ray_plane_disk(
+    origin: Vec3,
+    direction: Vec3,
+    center: Vec3,
+    normal: Vec3,
+    radius: f32,
+) -> Option<f32> {
+    let denominator = direction.dot(normal);
+    if denominator.abs() <= 1.0e-7 {
+        return None;
+    }
+    let distance = (center - origin).dot(normal) / denominator;
+    if distance <= 1.0e-5 {
+        return None;
+    }
+    let point = origin + direction * distance;
+    ((point - center).length_squared() <= (radius * 1.025).powi(2)).then_some(distance)
+}
+
+fn ray_plane_ring(
+    origin: Vec3,
+    direction: Vec3,
+    center: Vec3,
+    normal: Vec3,
+    radius: f32,
+    world_per_pixel_factor: f32,
+) -> Option<f32> {
+    let denominator = direction.dot(normal);
+    if denominator.abs() <= 1.0e-7 {
+        return None;
+    }
+    let distance = (center - origin).dot(normal) / denominator;
+    if distance <= 1.0e-5 {
+        return None;
+    }
+    let point = origin + direction * distance;
+    let radial_distance = (point - center).length();
+    let tolerance = (distance * world_per_pixel_factor * 6.0)
+        .max(radius * 0.01)
+        .max(0.025);
+    ((radial_distance - radius).abs() <= tolerance).then_some(distance)
 }
 
 fn mesh_position(body: &BodyDto, index: u32) -> Option<Vec3> {
@@ -4024,7 +4812,7 @@ mod tests {
         ));
         assert_engine_ok(state.engine_call("end_sketch", ""));
 
-        let (_, _, scene, _, _, datum_planes, profile_catalog, _) = state.viewport_snapshot();
+        let (_, _, scene, _, _, datum_planes, profile_catalog, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(datum_planes.len(), 2);
         assert!((datum_planes[1].basis.origin[2] - 10.0).abs() < 1.0e-9);
@@ -4384,7 +5172,7 @@ mod tests {
             }"#,
         );
 
-        let (_, _, scene, _, _, _, _, _) = state.viewport_snapshot();
+        let (_, _, scene, _, _, _, _, _, _, _) = state.viewport_snapshot();
         assert_eq!(scene.bodies.len(), 1);
         assert_eq!(scene.bodies[0].mesh.indices.len(), 36);
         let hit = pick_occt_scene(
@@ -4398,6 +5186,8 @@ mod tests {
             (800.0, 600.0),
             400.0,
             300.0,
+            &[],
+            &[],
             &[],
         )
         .expect("center ray should hit the OCCT box");
@@ -4416,10 +5206,34 @@ mod tests {
                 400.0,
                 300.0,
                 &[scene.bodies[0].id.0],
+                &[],
+                &[],
             )
             .is_none(),
             "browser-hidden bodies must not remain pickable"
         );
+        let translated = BodyPoseDto {
+            body_id: scene.bodies[0].id,
+            translation: [40.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let moved_hit = pick_occt_scene(
+            &scene,
+            ViewportCamera {
+                position: [40.0, 0.0, 100.0],
+                target: [40.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                vertical_fov_degrees: 45.0,
+            },
+            (800.0, 600.0),
+            400.0,
+            300.0,
+            &[],
+            &[translated],
+            &[],
+        )
+        .expect("native picking must follow the solved body pose");
+        assert!((moved_hit.point[0] - 40.0).abs() < 1.0e-4);
         let mesh = body_mesh(&scene.bodies[0])
             .expect("committed OCCT geometry should become one indexed Bevy mesh per body");
         assert_eq!(
@@ -4489,6 +5303,8 @@ mod tests {
                 400.0,
                 300.0,
                 &[],
+                &[],
+                &[],
             ));
         }
         let average_micros = started.elapsed().as_secs_f64() * 100.0;
@@ -4497,6 +5313,238 @@ mod tests {
             average_micros < 5_000.0,
             "native picking exceeded the demo's 5 ms CPU budget"
         );
+    }
+
+    #[test]
+    fn native_occurrences_share_meshes_and_pick_the_exact_instance() {
+        let state = crate::state::AppState::new();
+        state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#);
+        state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-10.0,"y":-10.0},
+                "p2":{"x":10.0,"y":10.0},
+                "ctrl_held":false
+            }"#,
+        );
+        state.engine_call("end_sketch", "");
+        state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "operation":"new_body",
+                "extent":{"type":"distance","distance":10.0},
+                "taper_angle_deg":0.0,
+                "flip":false,
+                "target_body_ids":[]
+            }"#,
+        );
+        let (_, _, scene, _, _, _, _, _, _, _) = state.viewport_snapshot();
+        let body_id = scene.bodies[0].id;
+        let instances = vec![
+            InstanceBodyPoseDto {
+                occurrence_id: nbcad_sketch::OccurrenceId(41),
+                component_id: nbcad_sketch::ComponentId(7),
+                body_id,
+                translation: [-30.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                visible: true,
+            },
+            InstanceBodyPoseDto {
+                occurrence_id: nbcad_sketch::OccurrenceId(42),
+                component_id: nbcad_sketch::ComponentId(7),
+                body_id,
+                translation: [30.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                visible: true,
+            },
+        ];
+        for (x, occurrence_id) in [(-30.0, 41), (30.0, 42)] {
+            let hit = pick_occt_scene(
+                &scene,
+                ViewportCamera {
+                    position: [x, 0.0, 100.0],
+                    target: [x, 0.0, 0.0],
+                    up: [0.0, 1.0, 0.0],
+                    vertical_fov_degrees: 45.0,
+                },
+                (800.0, 600.0),
+                400.0,
+                300.0,
+                &[],
+                &[],
+                &instances,
+            )
+            .expect("each visible occurrence should be independently pickable");
+            assert_eq!(hit.body_id, body_id.0);
+            assert_eq!(hit.occurrence_id, Some(occurrence_id));
+        }
+
+        let mut render_app = App::new();
+        render_app
+            .init_resource::<ModelResource>()
+            .init_resource::<ModelGeometryCache>()
+            .init_resource::<RenderedRevisions>()
+            .init_resource::<PaletteResource>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, rebuild_occt_meshes);
+        {
+            let mut model = render_app.world_mut().resource_mut::<ModelResource>();
+            model.session_id = "instance-mesh-test".to_string();
+            model.geometry_revision = 1;
+            model.instance_revision = 1;
+            model.scene = scene;
+            model.instance_body_poses = instances;
+            model.revision = 1;
+        }
+        render_app.update();
+        let mesh_ids = {
+            let world = render_app.world_mut();
+            let mut query = world.query::<(&NativeCadBody, &Mesh3d)>();
+            query
+                .iter(world)
+                .map(|(body, mesh)| (body.occurrence_id, mesh.0.id()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(mesh_ids.len(), 2);
+        assert_ne!(mesh_ids[0].0, mesh_ids[1].0);
+        assert_eq!(
+            mesh_ids[0].1, mesh_ids[1].1,
+            "reusable occurrences must retain one shared GPU mesh asset",
+        );
+    }
+
+    #[test]
+    fn native_picker_exposes_a_virtual_circular_connector_at_a_cylinder_opening() {
+        let body = nbcad_solid::BodyDto {
+            id: nbcad_core::BodyId(7),
+            name: "Holed component".to_string(),
+            feature_id: nbcad_core::FeatureId(3),
+            mesh: nbcad_solid::MeshDto {
+                positions: vec![5.0, 0.0, 0.0, 5.0, 0.0, 10.0, 0.0, 5.0, 0.0, 0.0, 5.0, 10.0],
+                normals: vec![0.0; 12],
+                indices: vec![0, 1, 2, 2, 1, 3],
+            },
+            faces: vec![nbcad_solid::FaceDto {
+                id: nbcad_core::FaceId(70),
+                key: "cylindrical-wall".to_string(),
+                first_index: 0,
+                index_count: 6,
+                plane: None,
+                signature: None,
+                cylinder: Some(nbcad_solid::CylindricalSurfaceDto {
+                    origin: nbcad_solid::Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    axis: nbcad_solid::Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                    reference: nbcad_solid::Point3Dto {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    radius: 5.0,
+                }),
+            }],
+            edges: vec![nbcad_solid::EdgeDto {
+                id: nbcad_core::EdgeId(71),
+                key: "outer-chamfer-rim".to_string(),
+                points: vec![],
+                circle: Some(nbcad_solid::CircularCurveDto {
+                    center: nbcad_solid::Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 10.0,
+                    },
+                    normal: nbcad_solid::Point3Dto {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                    reference: nbcad_solid::Point3Dto {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    radius: 8.0,
+                    closed: true,
+                }),
+                refinable: true,
+            }],
+        };
+        let scene = SolidSceneDto {
+            bodies: vec![body],
+            errors: vec![],
+        };
+        let hit = pick_occt_scene(
+            &scene,
+            ViewportCamera {
+                position: [0.0, 0.0, 50.0],
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                vertical_fov_degrees: 45.0,
+            },
+            (800.0, 600.0),
+            400.0,
+            300.0,
+            &[],
+            &[],
+            &[],
+        )
+        .expect("the otherwise empty cylinder opening should be pickable");
+        assert_eq!(hit.connector_kind.as_deref(), Some("virtual_circular_face"));
+        assert_eq!(hit.connector_origin, Some([0.0, 0.0, 10.0]));
+        assert_eq!(hit.connector_primary_axis, Some([0.0, 0.0, 1.0]));
+
+        let rim_hit = pick_occt_scene(
+            &scene,
+            ViewportCamera {
+                position: [8.0, 0.0, 50.0],
+                target: [8.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                vertical_fov_degrees: 45.0,
+            },
+            (800.0, 600.0),
+            400.0,
+            300.0,
+            &[],
+            &[],
+            &[],
+        )
+        .expect("the exact outer chamfer rim should be pickable");
+        assert_eq!(rim_hit.connector_kind.as_deref(), Some("circular_edge"));
+        assert_eq!(rim_hit.edge_id, Some(71));
+        assert_eq!(rim_hit.connector_origin, Some([0.0, 0.0, 10.0]));
+        assert_eq!(rim_hit.connector_primary_axis, Some([0.0, 0.0, 1.0]));
+        assert_eq!(rim_hit.connector_radius, Some(8.0));
+
+        let wall_hit = pick_occt_scene(
+            &scene,
+            ViewportCamera {
+                position: [50.0, 0.0, 5.0],
+                target: [0.0, 0.0, 5.0],
+                up: [0.0, 0.0, 1.0],
+                vertical_fov_degrees: 45.0,
+            },
+            (800.0, 600.0),
+            400.0,
+            300.0,
+            &[],
+            &[],
+            &[],
+        )
+        .expect("the physical internal cylinder wall should remain pickable");
+        assert_eq!(wall_hit.connector_kind.as_deref(), Some("cylindrical_face"));
+        assert_eq!(wall_hit.connector_origin, Some([0.0, 0.0, 5.0]));
+        assert_eq!(wall_hit.connector_primary_axis, Some([0.0, 0.0, 1.0]));
+        assert_eq!(wall_hit.connector_secondary_axis, Some([1.0, 0.0, 0.0]));
     }
 
     #[test]
@@ -4550,6 +5598,8 @@ mod tests {
             datum_planes,
             profile_catalog,
             body_appearances,
+            body_poses,
+            instance_body_poses,
         ) = state.viewport_snapshot();
         assert_eq!(session_id, BOOTSTRAP_SESSION_ID);
         let face_count = scene
@@ -4571,6 +5621,8 @@ mod tests {
             datum_planes,
             profile_catalog,
             body_appearances,
+            body_poses,
+            instance_body_poses,
         };
         let mut app = App::new();
         app.init_resource::<ModelResource>()
@@ -4580,22 +5632,25 @@ mod tests {
             model.session_id = session_id.clone();
             model.geometry_revision = geometry_revision;
             model.scene = bootstrap_model.scene.clone();
+            model.instance_body_poses = bootstrap_model.instance_body_poses.clone();
         }
         app.world_mut()
             .resource_mut::<ModelGeometryCache>()
             .0
-            .insert(session_id.clone(), geometry_revision);
+            .insert(session_id.clone(), (geometry_revision, 0));
         for body in &bootstrap_model.scene.bodies {
             for face in &body.faces {
                 app.world_mut().spawn((
                     NativeCadFace {
                         body_id: body.id.0,
+                        occurrence_id: None,
                         face_id: face.id.0,
                         boundary: face_boundary_segments(body, face),
                     },
                     NativeModelGeometry {
                         session_id: session_id.clone(),
                         geometry_revision,
+                        instance_revision: 0,
                     },
                     Visibility::Inherited,
                 ));
@@ -4629,7 +5684,7 @@ mod tests {
             "recovered-tab"
         );
         let cache = &runtime.app.world().resource::<ModelGeometryCache>().0;
-        assert_eq!(cache.get("recovered-tab"), Some(&geometry_revision));
+        assert_eq!(cache.get("recovered-tab"), Some(&(geometry_revision, 0)));
         assert!(!cache.contains_key(&session_id));
         let retained_faces = {
             let world = runtime.app.world_mut();

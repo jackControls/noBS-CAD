@@ -16,6 +16,7 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -74,6 +75,7 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
@@ -81,6 +83,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1219,6 +1222,52 @@ void append_plane(rust::Vec<double>& output, const TopoDS_Face& face) {
   output.push_back(normal.Z());
 }
 
+void append_cylinder(rust::Vec<double>& output, const TopoDS_Face& face) {
+  BRepAdaptor_Surface surface(face, true);
+  if (surface.GetType() != GeomAbs_Cylinder) {
+    for (int index = 0; index < 11; ++index) {
+      output.push_back(0.0);
+    }
+    return;
+  }
+  const gp_Cylinder cylinder = surface.Cylinder();
+  const gp_Ax3 axes = cylinder.Position();
+  output.push_back(1.0);
+  append_point(output, axes.Location());
+  output.push_back(axes.Direction().X());
+  output.push_back(axes.Direction().Y());
+  output.push_back(axes.Direction().Z());
+  output.push_back(axes.XDirection().X());
+  output.push_back(axes.XDirection().Y());
+  output.push_back(axes.XDirection().Z());
+  output.push_back(cylinder.Radius());
+}
+
+void append_circle(rust::Vec<double>& output, const TopoDS_Edge& edge,
+                   const BRepAdaptor_Curve& curve) {
+  if (curve.GetType() != GeomAbs_Circle) {
+    for (int index = 0; index < 12; ++index) {
+      output.push_back(0.0);
+    }
+    return;
+  }
+  const gp_Circ circle = curve.Circle();
+  const gp_Ax2 axes = circle.Position();
+  const double parameter_span =
+      std::abs(curve.LastParameter() - curve.FirstParameter());
+  const bool closed = edge.Closed() || std::abs(parameter_span - kTau) <= 1.0e-7;
+  output.push_back(1.0);
+  append_point(output, axes.Location());
+  output.push_back(axes.Direction().X());
+  output.push_back(axes.Direction().Y());
+  output.push_back(axes.Direction().Z());
+  output.push_back(axes.XDirection().X());
+  output.push_back(axes.XDirection().Y());
+  output.push_back(axes.XDirection().Z());
+  output.push_back(circle.Radius());
+  output.push_back(closed ? 1.0 : 0.0);
+}
+
 struct PlanarFaceSignature {
   bool valid = false;
   gp_Pnt centroid;
@@ -1569,7 +1618,7 @@ void Kernel::apply_job(const FfiJob& job) {
   }
   if (job.kind == 9) {
     if (job.target_body_ids.empty() || job.transform_kinds.empty() ||
-        job.transform_values.size() != job.transform_kinds.size() * 7 ||
+        job.transform_values.size() != job.transform_kinds.size() * 10 ||
         job.result_body_ids.size() !=
             job.target_body_ids.size() * job.transform_kinds.size()) {
       throw std::runtime_error("body transform buffers are malformed");
@@ -1577,7 +1626,7 @@ void Kernel::apply_job(const FfiJob& job) {
     std::size_t output_index = 0;
     for (std::size_t transform_index = 0;
          transform_index < job.transform_kinds.size(); ++transform_index) {
-      const std::size_t offset = transform_index * 7;
+      const std::size_t offset = transform_index * 10;
       gp_Trsf transform;
       if (job.transform_kinds[transform_index] == 0) {
         const gp_Vec normal(job.transform_values[offset + 3],
@@ -1609,6 +1658,39 @@ void Kernel::apply_job(const FfiJob& job) {
                           job.transform_values[offset + 2]),
                    gp_Dir(axis)),
             job.transform_values[offset + 6]);
+      } else if (job.transform_kinds[transform_index] == 3) {
+        const double qx = job.transform_values[offset + 3];
+        const double qy = job.transform_values[offset + 4];
+        const double qz = job.transform_values[offset + 5];
+        const double qw = job.transform_values[offset + 6];
+        const double magnitude =
+            std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+        if (!std::isfinite(magnitude) || magnitude <= 1.0e-12) {
+          throw std::runtime_error("Move/Copy rotation is degenerate");
+        }
+        const double x = qx / magnitude;
+        const double y = qy / magnitude;
+        const double z = qz / magnitude;
+        const double w = qw / magnitude;
+        const double px = job.transform_values[offset + 7];
+        const double py = job.transform_values[offset + 8];
+        const double pz = job.transform_values[offset + 9];
+        const double tx = job.transform_values[offset];
+        const double ty = job.transform_values[offset + 1];
+        const double tz = job.transform_values[offset + 2];
+        const double r00 = 1.0 - 2.0 * (y * y + z * z);
+        const double r01 = 2.0 * (x * y - z * w);
+        const double r02 = 2.0 * (x * z + y * w);
+        const double r10 = 2.0 * (x * y + z * w);
+        const double r11 = 1.0 - 2.0 * (x * x + z * z);
+        const double r12 = 2.0 * (y * z - x * w);
+        const double r20 = 2.0 * (x * z - y * w);
+        const double r21 = 2.0 * (y * z + x * w);
+        const double r22 = 1.0 - 2.0 * (x * x + y * y);
+        transform.SetValues(
+            r00, r01, r02, px + tx - (r00 * px + r01 * py + r02 * pz),
+            r10, r11, r12, py + ty - (r10 * px + r11 * py + r12 * pz),
+            r20, r21, r22, pz + tz - (r20 * px + r21 * py + r22 * pz));
       } else {
         throw std::runtime_error("unknown body transform kind");
       }
@@ -1895,6 +1977,7 @@ FfiMesh Kernel::mesh_with_deflection(
         output.face_first_indices.back());
     append_plane(output.face_plane_data, face);
     append_face_signature(output.face_signature_data, face);
+    append_cylinder(output.face_cylinder_data, face);
   }
 
   output.edge_point_offsets.push_back(0);
@@ -1920,6 +2003,7 @@ FfiMesh Kernel::mesh_with_deflection(
     }
     output.edge_refinable.push_back(refinable ? 1 : 0);
     BRepAdaptor_Curve curve(edge);
+    append_circle(output.edge_circle_data, edge, curve);
     if (curve.GetType() == GeomAbs_Line) {
       append_point(output.edge_points, curve.Value(curve.FirstParameter()));
       append_point(output.edge_points, curve.Value(curve.LastParameter()));
@@ -1944,6 +2028,89 @@ FfiMesh Kernel::mesh_with_deflection(
     }
     output.edge_point_offsets.push_back(
         static_cast<std::uint32_t>(output.edge_points.size() / 3));
+  }
+  return output;
+}
+
+FfiInterferenceResult Kernel::exact_interference(
+    std::uint64_t body_a,
+    double translation_a_x,
+    double translation_a_y,
+    double translation_a_z,
+    double rotation_a_x,
+    double rotation_a_y,
+    double rotation_a_z,
+    double rotation_a_w,
+    std::uint64_t body_b,
+    double translation_b_x,
+    double translation_b_y,
+    double translation_b_z,
+    double rotation_b_x,
+    double rotation_b_y,
+    double rotation_b_z,
+    double rotation_b_w) const {
+  const auto found_a = impl_->bodies.find(body_a);
+  const auto found_b = impl_->bodies.find(body_b);
+  if (found_a == impl_->bodies.end() || found_b == impl_->bodies.end()) {
+    throw std::runtime_error("interference query references a missing body");
+  }
+  const std::array<double, 14> values = {
+      translation_a_x, translation_a_y, translation_a_z,
+      rotation_a_x, rotation_a_y, rotation_a_z, rotation_a_w,
+      translation_b_x, translation_b_y, translation_b_z,
+      rotation_b_x, rotation_b_y, rotation_b_z, rotation_b_w};
+  if (std::any_of(values.begin(), values.end(),
+                  [](double value) { return !std::isfinite(value); })) {
+    throw std::runtime_error("interference query transform is not finite");
+  }
+  auto placed = [](const TopoDS_Shape& shape,
+                   double tx, double ty, double tz,
+                   double qx, double qy, double qz, double qw) {
+    const double magnitude = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+    if (magnitude <= 1.0e-12) {
+      throw std::runtime_error("interference query quaternion is degenerate");
+    }
+    gp_Trsf transform;
+    transform.SetRotation(gp_Quaternion(
+        qx / magnitude, qy / magnitude, qz / magnitude, qw / magnitude));
+    transform.SetTranslationPart(gp_Vec(tx, ty, tz));
+    return BRepBuilderAPI_Transform(shape, transform, true).Shape();
+  };
+  const TopoDS_Shape a = placed(found_a->second,
+      translation_a_x, translation_a_y, translation_a_z,
+      rotation_a_x, rotation_a_y, rotation_a_z, rotation_a_w);
+  const TopoDS_Shape b = placed(found_b->second,
+      translation_b_x, translation_b_y, translation_b_z,
+      rotation_b_x, rotation_b_y, rotation_b_z, rotation_b_w);
+
+  BRepExtrema_DistShapeShape distance(a, b);
+  distance.Perform();
+  if (!distance.IsDone()) {
+    throw std::runtime_error("OCCT could not evaluate exact body clearance");
+  }
+  FfiInterferenceResult output{};
+  output.minimum_clearance_mm = distance.Value();
+  if (distance.NbSolution() > 0) {
+    const gp_Pnt point_a = distance.PointOnShape1(1);
+    const gp_Pnt point_b = distance.PointOnShape2(1);
+    output.closest_point_a_x = point_a.X();
+    output.closest_point_a_y = point_a.Y();
+    output.closest_point_a_z = point_a.Z();
+    output.closest_point_b_x = point_b.X();
+    output.closest_point_b_y = point_b.Y();
+    output.closest_point_b_z = point_b.Z();
+  }
+
+  BRepAlgoAPI_Common common(a, b, Message_ProgressRange());
+  common.Build(Message_ProgressRange());
+  if (!common.IsDone()) {
+    throw std::runtime_error("OCCT could not evaluate exact body overlap");
+  }
+  const TopoDS_Shape overlap = common.Shape();
+  if (!overlap.IsNull()) {
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(overlap, properties);
+    output.overlap_volume_mm3 = std::abs(properties.Mass());
   }
   return output;
 }
@@ -2117,7 +2284,8 @@ FfiDrawingProjection Kernel::drawing_projection(
 
 rust::Vec<std::uint8_t> Kernel::export_step(
     const rust::Vec<std::uint64_t>& requested_body_ids,
-    rust::Str thread_metadata_hex) const {
+    rust::Str thread_metadata_hex,
+    rust::Str occurrence_placements_hex) const {
   if (impl_->bodies.empty()) {
     throw std::runtime_error("there are no active bodies to export");
   }
@@ -2136,7 +2304,77 @@ rust::Vec<std::uint8_t> Kernel::export_step(
       throw std::runtime_error("OCCT could not transfer a body to STEP");
     }
   };
-  if (requested_body_ids.empty()) {
+  constexpr std::size_t kOccurrenceRecordBytes = 3 * sizeof(std::uint64_t) +
+                                                  7 * sizeof(double);
+  auto decode_hex = [](rust::Str input) {
+    if (input.size() % 2 != 0) {
+      throw std::runtime_error("STEP occurrence placement payload has odd hex length");
+    }
+    auto nibble = [](char value) -> std::uint8_t {
+      if (value >= '0' && value <= '9') return value - '0';
+      if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+      if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+      throw std::runtime_error("STEP occurrence placement payload is not hexadecimal");
+    };
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(input.size() / 2);
+    const char* data = input.data();
+    for (std::size_t index = 0; index < input.size(); index += 2) {
+      bytes.push_back(static_cast<std::uint8_t>(
+          (nibble(data[index]) << 4) | nibble(data[index + 1])));
+    }
+    return bytes;
+  };
+  const auto placement_bytes = decode_hex(occurrence_placements_hex);
+  if (placement_bytes.size() % kOccurrenceRecordBytes != 0) {
+    throw std::runtime_error("STEP occurrence placement payload is truncated");
+  }
+  auto read_u64 = [&](std::size_t offset) {
+    std::uint64_t value = 0;
+    for (std::size_t index = 0; index < sizeof(value); ++index) {
+      value |= static_cast<std::uint64_t>(placement_bytes[offset + index]) << (index * 8);
+    }
+    return value;
+  };
+  auto read_f64 = [&](std::size_t offset) {
+    const std::uint64_t bits = read_u64(offset);
+    double value = 0.0;
+    static_assert(sizeof(value) == sizeof(bits));
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+  };
+
+  if (!placement_bytes.empty()) {
+    for (std::size_t offset = 0; offset < placement_bytes.size();
+         offset += kOccurrenceRecordBytes) {
+      const std::uint64_t body_id = read_u64(offset);
+      // Occurrence and component ids are retained in the transport record for
+      // the AP242/XCAF hierarchy boundary; this first production slice emits
+      // exact placed roots, which preserves geometry for CAM immediately.
+      (void)read_u64(offset + 8);
+      (void)read_u64(offset + 16);
+      const double tx = read_f64(offset + 24);
+      const double ty = read_f64(offset + 32);
+      const double tz = read_f64(offset + 40);
+      const double qx = read_f64(offset + 48);
+      const double qy = read_f64(offset + 56);
+      const double qz = read_f64(offset + 64);
+      const double qw = read_f64(offset + 72);
+      const auto found = impl_->bodies.find(body_id);
+      if (found == impl_->bodies.end()) {
+        throw std::runtime_error("assembly STEP occurrence references a missing body");
+      }
+      const double magnitude = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+      if (magnitude <= 1.0e-12 || !std::isfinite(magnitude)) {
+        throw std::runtime_error("assembly STEP occurrence rotation is degenerate");
+      }
+      gp_Trsf transform;
+      transform.SetRotation(gp_Quaternion(
+          qx / magnitude, qy / magnitude, qz / magnitude, qw / magnitude));
+      transform.SetTranslationPart(gp_Vec(tx, ty, tz));
+      transfer(BRepBuilderAPI_Transform(found->second, transform, true).Shape());
+    }
+  } else if (requested_body_ids.empty()) {
     for (const auto& [body_id, shape] : impl_->bodies) {
       (void)body_id;
       transfer(shape);

@@ -47,6 +47,10 @@ pub enum EntityDto {
         start: Vec2,
         end: Vec2,
         fully_defined: bool,
+        /// Retained for parametric editability after fillet/chamfer trims
+        /// consume the complete visible span.
+        #[serde(default)]
+        consumed: bool,
     },
     Arc {
         id: EntityId,
@@ -218,6 +222,32 @@ pub enum Inference {
     Coincident,
 }
 
+/// Axis followed by temporary point tracking while a line endpoint is free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackingAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// A point acquired by the viewport for horizontal/vertical object-snap
+/// tracking. Acquisition is screen-space; the engine owns the exact math and
+/// creates the persistent relation when the line is committed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LineTrackingRequest {
+    pub point: EntityId,
+    pub axis: TrackingAxis,
+}
+
+/// Exact guide returned with a line preview for native/browser rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TrackingGuideDto {
+    pub point: EntityId,
+    pub axis: TrackingAxis,
+    pub source: Vec2,
+    pub snapped_to: Vec2,
+}
+
 // --- Requests ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -302,6 +332,8 @@ pub struct LockedSegmentRequest {
     pub angle_text: Option<String>,
     #[serde(default)]
     pub ctrl_held: bool,
+    #[serde(default)]
+    pub tracking: Option<LineTrackingRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -635,6 +667,9 @@ pub struct PreviewDto {
     pub snap: SnapTarget,
     /// Constraints that WOULD be created by `add_line` with the same input.
     pub inferences: Vec<Inference>,
+    /// Temporary horizontal/vertical alignment to another sketch point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<TrackingGuideDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

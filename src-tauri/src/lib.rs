@@ -16,6 +16,7 @@ mod state;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use native_viewport::{
     NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
@@ -25,7 +26,7 @@ use nbcad_core::DocumentDto;
 use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
 use state::{AppState, BOOTSTRAP_SESSION_ID};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Health-check command used by the frontend IPC wrapper.
 #[tauri::command]
@@ -39,6 +40,27 @@ struct SystemMemoryStatus {
     total_bytes: u64,
     available_bytes: u64,
     pressure: &'static str,
+}
+
+/// Native authority for the application-wide unsaved-work guard. Window
+/// close requests are handled by the frontend so it can show the platform
+/// confirmation dialog; `ExitRequested` additionally covers application-menu
+/// Quit and Cmd/Ctrl+Q, which can bypass a webview's close callback.
+#[derive(Default)]
+struct NativeQuitState {
+    unsaved: AtomicBool,
+    approved: AtomicBool,
+}
+
+#[tauri::command]
+fn native_unsaved_set(state: tauri::State<'_, NativeQuitState>, unsaved: bool) {
+    state.unsaved.store(unsaved, Ordering::Release);
+}
+
+#[tauri::command]
+fn native_force_quit(app: tauri::AppHandle, state: tauri::State<'_, NativeQuitState>) {
+    state.approved.store(true, Ordering::Release);
+    app.exit(0);
 }
 
 /// Portable physical-memory pressure estimate used by the tab retention
@@ -82,6 +104,15 @@ fn native_viewport_set_layout(
 }
 
 #[tauri::command]
+fn native_viewport_set_suspended(
+    app: tauri::AppHandle,
+    viewport: tauri::State<'_, NativeViewport>,
+    suspended: bool,
+) -> Result<(), String> {
+    viewport.set_suspended(&app, suspended)
+}
+
+#[tauri::command]
 async fn native_viewport_sync_model(
     engine: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
@@ -95,6 +126,8 @@ async fn native_viewport_sync_model(
         datum_planes,
         profile_catalog,
         body_appearances,
+        body_poses,
+        instance_body_poses,
     ) = engine.viewport_snapshot();
     viewport.sync_model(ViewportModel {
         session_id,
@@ -105,6 +138,8 @@ async fn native_viewport_sync_model(
         datum_planes,
         profile_catalog,
         body_appearances,
+        body_poses,
+        instance_body_poses,
     })
 }
 
@@ -185,6 +220,134 @@ engine_command!(engine_project_visibility, "project_visibility", no_payload);
 engine_command!(engine_project_set_visibility, "project_set_visibility");
 engine_command!(engine_drawing_document, "drawing_document", no_payload);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
+engine_command!(engine_assembly_document, "assembly_document", no_payload);
+engine_command!(engine_assembly_set_document, "assembly_set_document");
+engine_command!(engine_assembly_solution, "assembly_solution", no_payload);
+engine_command!(
+    engine_assembly_create_component,
+    "assembly_create_component"
+);
+engine_command!(
+    engine_assembly_update_component,
+    "assembly_update_component"
+);
+engine_command!(
+    engine_assembly_create_occurrence,
+    "assembly_create_occurrence"
+);
+engine_command!(
+    engine_assembly_update_occurrence,
+    "assembly_update_occurrence"
+);
+engine_command!(
+    engine_assembly_duplicate_occurrence,
+    "assembly_duplicate_occurrence"
+);
+engine_command!(
+    engine_assembly_set_occurrence_grounded,
+    "assembly_set_occurrence_grounded"
+);
+engine_command!(
+    engine_assembly_set_occurrence_pose,
+    "assembly_set_occurrence_pose"
+);
+engine_command!(engine_assembly_preview_joint, "assembly_preview_joint");
+engine_command!(engine_assembly_create_joint, "assembly_create_joint");
+engine_command!(engine_assembly_update_joint, "assembly_update_joint");
+engine_command!(
+    engine_assembly_preview_joint_update,
+    "assembly_preview_joint_update"
+);
+engine_command!(engine_assembly_delete_joint, "assembly_delete_joint");
+engine_command!(
+    engine_assembly_set_joint_enabled,
+    "assembly_set_joint_enabled"
+);
+engine_command!(
+    engine_assembly_set_joint_motion,
+    "assembly_set_joint_motion"
+);
+engine_command!(
+    engine_assembly_preview_joint_motion,
+    "assembly_preview_joint_motion"
+);
+engine_command!(
+    engine_assembly_set_grounded_body,
+    "assembly_set_grounded_body"
+);
+engine_command!(
+    engine_assembly_set_joint_coordinates,
+    "assembly_set_joint_coordinates"
+);
+engine_command!(
+    engine_assembly_preview_joint_coordinates,
+    "assembly_preview_joint_coordinates"
+);
+engine_command!(
+    engine_assembly_preview_mechanism_drag,
+    "assembly_preview_mechanism_drag"
+);
+engine_command!(
+    engine_assembly_apply_joint_motions,
+    "assembly_apply_joint_motions"
+);
+engine_command!(engine_assembly_create_position, "assembly_create_position");
+engine_command!(engine_assembly_update_position, "assembly_update_position");
+engine_command!(engine_assembly_delete_position, "assembly_delete_position");
+engine_command!(engine_assembly_apply_position, "assembly_apply_position");
+engine_command!(
+    engine_assembly_create_motion_study,
+    "assembly_create_motion_study"
+);
+engine_command!(
+    engine_assembly_update_motion_study,
+    "assembly_update_motion_study"
+);
+engine_command!(
+    engine_assembly_delete_motion_study,
+    "assembly_delete_motion_study"
+);
+engine_command!(
+    engine_assembly_sample_motion_study,
+    "assembly_sample_motion_study"
+);
+engine_command!(
+    engine_assembly_export_motion_path_csv,
+    "assembly_export_motion_path_csv"
+);
+engine_command!(
+    engine_assembly_create_contact_set,
+    "assembly_create_contact_set"
+);
+engine_command!(
+    engine_assembly_update_contact_set,
+    "assembly_update_contact_set"
+);
+engine_command!(
+    engine_assembly_delete_contact_set,
+    "assembly_delete_contact_set"
+);
+
+#[tauri::command]
+fn engine_assembly_interference_check(state: tauri::State<'_, AppState>, payload: &str) -> String {
+    state.assembly_interference_check(payload)
+}
+
+#[tauri::command]
+fn engine_assembly_evaluate_motion_study(
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    state.assembly_evaluate_motion_study(payload)
+}
+
+#[tauri::command]
+fn engine_assembly_swept_collision_check(
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    state.assembly_swept_collision_check(payload)
+}
 engine_command!(engine_set_body_appearance, "set_body_appearance");
 
 #[tauri::command]
@@ -507,6 +670,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(NativeQuitState::default())
         .manage(native_menu::NativeEditMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
         .manage(SixDofMouseState::default());
@@ -526,6 +690,8 @@ pub fn run() {
                 datum_planes,
                 profile_catalog,
                 body_appearances,
+                body_poses,
+                instance_body_poses,
             ) = app.state::<AppState>().viewport_snapshot();
             let _ = viewport.sync_model(ViewportModel {
                 session_id,
@@ -536,6 +702,8 @@ pub fn run() {
                 datum_planes,
                 profile_catalog,
                 body_appearances,
+                body_poses,
+                instance_body_poses,
             });
             app.manage(viewport);
             Ok(())
@@ -543,8 +711,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             system_memory_status,
+            native_unsaved_set,
+            native_force_quit,
             get_document,
             native_viewport_set_layout,
+            native_viewport_set_suspended,
             native_viewport_sync_model,
             native_viewport_set_camera,
             native_viewport_set_preview,
@@ -583,6 +754,44 @@ pub fn run() {
             engine_project_set_visibility,
             engine_drawing_document,
             engine_drawing_set_document,
+            engine_assembly_document,
+            engine_assembly_set_document,
+            engine_assembly_solution,
+            engine_assembly_create_component,
+            engine_assembly_update_component,
+            engine_assembly_create_occurrence,
+            engine_assembly_update_occurrence,
+            engine_assembly_duplicate_occurrence,
+            engine_assembly_set_occurrence_grounded,
+            engine_assembly_set_occurrence_pose,
+            engine_assembly_preview_joint,
+            engine_assembly_create_joint,
+            engine_assembly_update_joint,
+            engine_assembly_preview_joint_update,
+            engine_assembly_delete_joint,
+            engine_assembly_set_joint_enabled,
+            engine_assembly_set_joint_motion,
+            engine_assembly_preview_joint_motion,
+            engine_assembly_set_grounded_body,
+            engine_assembly_set_joint_coordinates,
+            engine_assembly_preview_joint_coordinates,
+            engine_assembly_preview_mechanism_drag,
+            engine_assembly_apply_joint_motions,
+            engine_assembly_create_position,
+            engine_assembly_update_position,
+            engine_assembly_delete_position,
+            engine_assembly_apply_position,
+            engine_assembly_create_motion_study,
+            engine_assembly_update_motion_study,
+            engine_assembly_delete_motion_study,
+            engine_assembly_sample_motion_study,
+            engine_assembly_export_motion_path_csv,
+            engine_assembly_create_contact_set,
+            engine_assembly_update_contact_set,
+            engine_assembly_delete_contact_set,
+            engine_assembly_interference_check,
+            engine_assembly_evaluate_motion_study,
+            engine_assembly_swept_collision_check,
             engine_drawing_projection,
             engine_set_body_appearance,
             engine_extrude_definitions,
@@ -666,6 +875,18 @@ pub fn run() {
             engine_solid_delete_feature,
             engine_solid_reorder_feature,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running noBS CAD");
+        .build(tauri::generate_context!())
+        .expect("error while building noBS CAD")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let state = app.state::<NativeQuitState>();
+                if state.approved.swap(false, Ordering::AcqRel) {
+                    return;
+                }
+                if state.unsaved.load(Ordering::Acquire) {
+                    api.prevent_exit();
+                    let _ = app.emit("native-quit-request", ());
+                }
+            }
+        });
 }

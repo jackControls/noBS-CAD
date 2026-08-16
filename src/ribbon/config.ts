@@ -30,7 +30,9 @@ export type RibbonAction =
   | 'sketchTool'
   | 'applyConstraint'
   | 'drawingWorkspace'
+  | 'assemblyWorkspace'
   | 'modelWorkspace'
+  | 'joint'
   | 'drawingNewSheet'
   | 'drawingAutoLayout'
   | 'drawingAddView'
@@ -155,6 +157,12 @@ const MODEL_REPEAT_MENU: MenuEntry[] = [
 ];
 
 const MODEL_BODY_MENU: MenuEntry[] = [
+  item('moveCopy', 'ribbon.solid.moveCopy', 'moveCopy', {
+    enabled: true,
+    action: 'bodyFeature',
+    payload: 'move_copy',
+  }),
+  sep,
   item('combine', 'ribbon.solid.combine', 'combine', {
     enabled: true,
     action: 'bodyFeature',
@@ -504,6 +512,7 @@ export const SOLID_TAB: RibbonTab = {
       labelKey: 'ribbon.panels.body',
       menu: MODEL_BODY_MENU,
       buttons: [
+        { id: 'moveCopy', labelKey: 'ribbon.solid.moveCopy', icon: 'moveCopy', enabled: true, action: 'bodyFeature', payload: 'move_copy' },
         { id: 'combine', labelKey: 'ribbon.solid.combine', icon: 'combine', enabled: true, action: 'bodyFeature', payload: 'combine' },
         { id: 'splitBody', labelKey: 'ribbon.solid.splitBody', icon: 'splitBody', enabled: true, action: 'bodyFeature', payload: 'split_body' },
       ],
@@ -524,6 +533,26 @@ export const SOLID_TAB: RibbonTab = {
       buttons: [
         { id: 'measure', labelKey: 'ribbon.solid.measure', icon: 'measure' },
         { id: 'sectionAnalysis', labelKey: 'ribbon.solid.sectionAnalysis', icon: 'section' },
+      ],
+    },
+    {
+      id: 'assembly',
+      labelKey: 'ribbon.tabs.assembly',
+      buttons: [
+        {
+          id: 'assemblyBrowser',
+          labelKey: 'ribbon.tabs.assembly',
+          icon: 'combine',
+          enabled: true,
+          action: 'assemblyWorkspace',
+        },
+        {
+          id: 'createJoint',
+          labelKey: 'ribbon.assembly.joint',
+          icon: 'combine',
+          enabled: true,
+          action: 'joint',
+        },
       ],
     },
     {
@@ -758,11 +787,38 @@ export const DRAWING_TAB: RibbonTab = {
   ],
 };
 
+export const ASSEMBLY_TAB: RibbonTab = {
+  id: 'assembly',
+  labelKey: 'ribbon.tabs.assembly',
+  enabled: true,
+  panels: [
+    {
+      id: 'joints',
+      labelKey: 'ribbon.panels.joints',
+      buttons: [
+        {
+          id: 'createJoint',
+          labelKey: 'ribbon.assembly.joint',
+          icon: 'combine',
+          enabled: true,
+          action: 'joint',
+        },
+      ],
+    },
+  ],
+};
+
 /** Only real workspaces are shown; planned work lives in the roadmap, not disabled tabs. */
 export const SOLID_WORKSPACE_TABS: Array<{ id: string; labelKey: string; enabled: boolean }> = [
   { id: 'solid', labelKey: 'ribbon.tabs.model', enabled: true },
 ];
 
 export function ribbonTabById(id: string): RibbonTab {
-  return id === 'sketch' ? SKETCH_TAB : id === 'drawing' ? DRAWING_TAB : SOLID_TAB;
+  return id === 'sketch'
+    ? SKETCH_TAB
+    : id === 'drawing'
+      ? DRAWING_TAB
+      : id === 'assembly'
+        ? ASSEMBLY_TAB
+        : SOLID_TAB;
 }

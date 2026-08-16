@@ -324,9 +324,10 @@ try {
   console.log('10. debounce typing preview');
   await page.click('button[title="Fillet"]');
   await page.waitForTimeout(150);
-  // The corrected corner acquisition selects both incident lines in one
-  // click; a second geometry click would intentionally commit the default.
-  await clickSketch(40, 0);
+  // Hover alone supplies the complete magnetic-corner preview. Keep this
+  // scenario pointer-move-only so it exercises live value editing without
+  // the confirming click that now (correctly) commits the visible preview.
+  await moveSketch(40, 0);
   await page.waitForTimeout(400);
   // Type progressively: the preview should update as we type WITHOUT Enter.
   await page.keyboard.type('=4');

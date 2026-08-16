@@ -3,8 +3,10 @@ import { Crosshair, Layers3, LoaderCircle, MousePointer2, X } from 'lucide-react
 import { getEngine } from '../engine';
 import { submitConstructionPlane } from '../engine/controller';
 import type {
+  BodyDto,
   DatumPlaneDefinitionDto,
   DatumPlaneSourceDto,
+  PlaneBasis,
   PlaneRef,
 } from '../engine/types';
 import { isStraightSolidEdge } from '../solidEdgeEligibility';
@@ -13,6 +15,7 @@ import {
   type ConstructionPlanePickTarget,
 } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
+import { OffsetPlaneManipulator } from './viewport/OffsetPlaneManipulator';
 
 const INPUT =
   'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
@@ -38,6 +41,78 @@ function optionReference(options: PlaneOption[], value: string): PlaneRef {
       plane: 'xy',
     }
   );
+}
+
+const ORIGIN_BASES: Record<'xy' | 'xz' | 'yz', PlaneBasis> = {
+  xy: {
+    origin: [0, 0, 0],
+    u: [1, 0, 0],
+    v: [0, 1, 0],
+    normal: [0, 0, 1],
+  },
+  xz: {
+    origin: [0, 0, 0],
+    u: [1, 0, 0],
+    v: [0, 0, 1],
+    normal: [0, -1, 0],
+  },
+  yz: {
+    origin: [0, 0, 0],
+    u: [0, 1, 0],
+    v: [0, 0, 1],
+    normal: [1, 0, 0],
+  },
+};
+
+function basisForReference(
+  reference: PlaneRef,
+  bodies: BodyDto[],
+  planes: DatumPlaneDefinitionDto[],
+): PlaneBasis | null {
+  if (reference.type === 'origin_plane') return ORIGIN_BASES[reference.plane];
+  if (reference.type === 'datum_plane') {
+    return planes.find((plane) => plane.datum_id === reference.datum_id)?.basis ?? null;
+  }
+  return bodies
+    .flatMap((body) => body.faces)
+    .find((face) => face.id === reference.face_id)?.plane ?? null;
+}
+
+function previewHalfSize(
+  reference: PlaneRef,
+  basis: PlaneBasis,
+  bodies: BodyDto[],
+): [number, number] {
+  if (reference.type !== 'planar_face') return [40, 40];
+  const body = bodies.find((candidate) =>
+    candidate.faces.some((face) => face.id === reference.face_id),
+  );
+  const face = body?.faces.find((candidate) => candidate.id === reference.face_id);
+  if (!body || !face) return [40, 40];
+  let extentU = 0;
+  let extentV = 0;
+  for (
+    let index = face.first_index;
+    index < face.first_index + face.index_count;
+    index += 1
+  ) {
+    const vertex = body.mesh.indices[index];
+    const x = body.mesh.positions[vertex * 3] - basis.origin[0];
+    const y = body.mesh.positions[vertex * 3 + 1] - basis.origin[1];
+    const z = body.mesh.positions[vertex * 3 + 2] - basis.origin[2];
+    extentU = Math.max(
+      extentU,
+      Math.abs(x * basis.u[0] + y * basis.u[1] + z * basis.u[2]),
+    );
+    extentV = Math.max(
+      extentV,
+      Math.abs(x * basis.v[0] + y * basis.v[1] + z * basis.v[2]),
+    );
+  }
+  return [
+    Math.min(250, Math.max(8, extentU * 1.15)),
+    Math.min(250, Math.max(8, extentV * 1.15)),
+  ];
 }
 
 export function ConstructionPlaneDialog() {
@@ -109,6 +184,15 @@ export function ConstructionPlaneDialog() {
     }
     return result;
   }, [bodies, dialog?.featureId, knownPlanes]);
+
+  const offsetPreview = useMemo(() => {
+    if (dialog?.kind !== 'offset') return null;
+    const reference = optionReference(options, first);
+    const basis = basisForReference(reference, bodies, knownPlanes);
+    return basis
+      ? { basis, halfSize: previewHalfSize(reference, basis, bodies) }
+      : null;
+  }, [bodies, dialog?.kind, first, knownPlanes, options]);
 
   useEffect(() => {
     if (!dialog) return;
@@ -307,8 +391,7 @@ export function ConstructionPlaneDialog() {
           ? 'Selecting rotation axis — click a straight model edge'
           : null;
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const commit = () => {
     if (!valid) return;
     let source: DatumPlaneSourceDto;
     if (dialog.kind === 'offset') {
@@ -340,6 +423,11 @@ export function ConstructionPlaneDialog() {
     );
   };
 
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    commit();
+  };
+
   const title =
     dialog.kind === 'offset'
       ? 'Offset Plane'
@@ -354,6 +442,16 @@ export function ConstructionPlaneDialog() {
         pickTarget ? 'bg-black/[0.04]' : 'bg-black/15'
       }`}
     >
+      {dialog.kind === 'offset' && offsetPreview && (
+        <OffsetPlaneManipulator
+          basis={offsetPreview.basis}
+          halfSize={offsetPreview.halfSize}
+          distance={distance}
+          disabled={!valid}
+          onDistanceChange={setDistance}
+          onCommit={commit}
+        />
+      )}
       <form
         data-testid="construction-plane-dialog"
         onSubmit={submit}
@@ -444,6 +542,7 @@ export function ConstructionPlaneDialog() {
                 <label>
                   <span className={LABEL}>Offset distance (mm)</span>
                   <DimensionInput
+                    autoSelectKey={pickTarget === null ? first : null}
                     step="any"
                     value={distance}
                     onValueChange={setDistance}
@@ -549,6 +648,9 @@ export function ConstructionPlaneDialog() {
                   <label>
                     <span className={LABEL}>Angle (degrees)</span>
                     <DimensionInput
+                      autoSelectKey={pickTarget === null && edgeId > 0
+                        ? `${bodyId}:${edgeId}:${first}`
+                        : null}
                       step="any"
                       value={angle}
                       onValueChange={setAngle}

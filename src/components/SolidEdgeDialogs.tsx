@@ -167,7 +167,7 @@ function SolidEdgeDialog({ kind }: { kind: 'fillet' | 'chamfer' }) {
                       <p className="mt-1 text-[10px] leading-4 text-mute">{t('solidEdge.selectionHint')}</p>
                     </div>
                   </fieldset>
-                  <label><span className={LABEL_CLASS}>{t(kind === 'fillet' ? 'solidEdge.radius' : 'solidEdge.distance')}</span><DimensionInput data-testid={`solid-${kind}-size`} min="0.000001" step="any" value={size} onValueChange={setSize} /></label>
+                  <label><span className={LABEL_CLASS}>{t(kind === 'fillet' ? 'solidEdge.radius' : 'solidEdge.distance')}</span><DimensionInput autoSelectKey={edgeIds.length > 0 ? `${bodyId}:${edgeIds.join(',')}` : null} data-testid={`solid-${kind}-size`} min="0.000001" step="any" value={size} onValueChange={setSize} /></label>
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={tangentChain} onChange={(event) => setTangentChain(event.target.checked)} className="accent-accent" />{t('solidEdge.tangentChain')}</label>
                 </>}
         </div>

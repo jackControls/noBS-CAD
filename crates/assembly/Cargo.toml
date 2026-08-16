@@ -1,0 +1,15 @@
+[package]
+name = "nbcad-assembly"
+version = "0.1.0"
+edition = "2021"
+description = "noBS CAD host-neutral assembly and joint intent model"
+license = "LGPL-2.0-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+nbcad-core = { path = "../core" }
+nbcad-solid = { path = "../solid" }
+
+[dev-dependencies]
+serde_json = "1"

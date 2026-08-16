@@ -89,6 +89,12 @@ page.on('pageerror', (error) => {
 
 const state = () => page.evaluate(() => window.__appStore.getState());
 const shot = (name) => page.screenshot({ path: path.join(shots, `${name}.png`) });
+const discardUnsavedChanges = async () => {
+  const dialog = page.getByTestId('unsaved-changes-dialog');
+  await dialog.waitFor({ state: 'visible' });
+  await dialog.getByRole('button', { name: "Don't Save", exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+};
 const clickSketch = async (x, y) => {
   const point = await page.evaluate(
     ([sx, sy]) => window.__sketchToScreen(sx, sy),
@@ -240,9 +246,13 @@ try {
     `triangles=${body.mesh.indices.length / 3} faces=${body.faces.length} edges=${body.edges.length}`,
   );
   check(
-    'stable body selected after creation',
-    app.selectedBody === body.id && Number.isSafeInteger(body.id),
-    `selected=${app.selectedBody} body=${body.id}`,
+    'new body creation leaves viewport selection neutral',
+    app.selectedBody === null &&
+      app.selectedBodies.length === 0 &&
+      app.selectedFace === null &&
+      app.selectedFaces.length === 0 &&
+      Number.isSafeInteger(body.id),
+    `selectedBody=${app.selectedBody} selectedBodies=${app.selectedBodies.join(',')} body=${body.id}`,
   );
   await page.waitForTimeout(100);
   const stableOrbitCenter = await page.evaluate(async () => {
@@ -312,17 +322,15 @@ try {
     JSON.stringify(stableOrbitCenter),
   );
   await page.waitForTimeout(350);
-  const selectedBodyVisual = await page.evaluate(
+  const neutralBodyVisual = await page.evaluate(
     (bodyId) => window.__solidBodyVisualState(bodyId),
     body.id,
   );
   check(
-    'selected body keeps a visible target-role outline',
-    selectedBodyVisual.overlayKinds.includes('target') &&
-      selectedBodyVisual.overlayWidths.every(
-        (width) => Math.abs(width - 1.5) < 1e-6,
-      ),
-    JSON.stringify(selectedBodyVisual),
+    'new body has no stale selection-role outline',
+    !neutralBodyVisual.overlayKinds.includes('target') &&
+      !neutralBodyVisual.overlayKinds.includes('selected'),
+    JSON.stringify(neutralBodyVisual),
   );
   check(
     'Body1 appears in the browser tree',
@@ -500,9 +508,9 @@ try {
   // recomputes the archive rather than reusing the old display mesh.
   await page.locator('button[title="Previous feature"]').click();
   await page.waitForFunction(() => window.__appStore.getState().document.rollback_index === 2);
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByTestId('file-menu-button').click();
   await page.getByRole('menuitem', { name: /Open Project/ }).click();
+  await discardUnsavedChanges();
   await page.waitForFunction(
     () =>
       window.__appStore.getState().document.rollback_index === 3 &&

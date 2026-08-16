@@ -94,12 +94,22 @@ async function publishNow(): Promise<void> {
     // Tauri owns this counter across WebView reloads and scopes it per window.
     const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
     const engine = await getEngine();
-    const model = await exportProjectModelWithVisibility(engine);
-    const modelJson = typeof model === 'string' ? model : JSON.stringify(model);
+    const activeSketch = await engine.activeSketch();
+    let modelJson: string | null = null;
+    try {
+      const model = await exportProjectModelWithVisibility(engine);
+      modelJson = typeof model === 'string' ? model : JSON.stringify(model);
+    } catch (error) {
+      // A half-finished sketch must not enter the persisted project format,
+      // but diagnostics still need the live entity/constraint snapshot. The
+      // native bridge keeps its previous completed model.json beside it.
+      if (activeSketch === null) throw error;
+    }
     await invoke('mcp_session_bridge_write', {
       payload: JSON.stringify({
         focus,
         model_json: modelJson,
+        active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
         generation: reservation.generation,
       }),
     });
@@ -134,6 +144,7 @@ export function startSessionBridge(): void {
     if (
       state.document !== prev.document ||
       state.solidScene !== prev.solidScene ||
+      state.activeSketch !== prev.activeSketch ||
       state.mode !== prev.mode ||
       state.activeTool !== prev.activeTool ||
       activeSolidDialog(state) !== activeSolidDialog(prev)

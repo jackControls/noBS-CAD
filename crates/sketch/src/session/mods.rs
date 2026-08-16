@@ -19,6 +19,7 @@ use crate::params::ParamKind;
 use crate::session::{SessionError, SketchSession};
 
 const EPS: f64 = 1e-9;
+const CORNER_EPS: f64 = 1e-6;
 const TAU: f64 = std::f64::consts::TAU;
 
 #[derive(Debug)]
@@ -124,6 +125,107 @@ impl SketchSession {
         }
     }
 
+    fn endpoint_at(&self, line: EntityId, position: Vec2) -> Option<EntityId> {
+        let (start, end) = self.sketch.line_endpoint_ids(line)?;
+        [start, end].into_iter().find(|point| {
+            self.sketch
+                .point_position(*point)
+                .is_some_and(|candidate| candidate.distance(position) <= CORNER_EPS)
+        })
+    }
+
+    fn shared_corner_reference(
+        &self,
+        l1: EntityId,
+        l2: EntityId,
+        position: Vec2,
+    ) -> Option<EntityId> {
+        let c1 = self.endpoint_at(l1, position)?;
+        let c2 = self.endpoint_at(l2, position)?;
+        if c1 == c2 {
+            return Some(c1);
+        }
+        self.sketch
+            .constraints()
+            .any(|(_, constraint)| {
+                matches!(
+                    constraint,
+                    Constraint::Coincident { a, b }
+                        if (*a == c1 && *b == c2) || (*a == c2 && *b == c1)
+                )
+            })
+            .then_some(c1)
+    }
+
+    fn collinear_overlap(&self, selected: EntityId, candidate: EntityId) -> Option<f64> {
+        let (a, b) = self.sketch.resolved_line(selected)?;
+        let (c, d) = self.sketch.resolved_line(candidate)?;
+        let direction = b - a;
+        let length = direction.length();
+        if length <= CORNER_EPS {
+            return None;
+        }
+        let unit = direction * (1.0 / length);
+        let cross = |value: Vec2| direction.x * value.y - direction.y * value.x;
+        if cross(c - a).abs() > CORNER_EPS * length || cross(d - a).abs() > CORNER_EPS * length {
+            return None;
+        }
+        let tc = (c - a).dot(unit);
+        let td = (d - a).dot(unit);
+        let overlap = length.min(tc.max(td)) - 0.0_f64.max(tc.min(td));
+        (overlap > CORNER_EPS).then_some(overlap)
+    }
+
+    /// A click can land on a shorter line that overlaps the visible outline.
+    /// When that support does not own the selected corner, prefer the unique
+    /// collinear carrier that overlaps it and structurally shares the corner
+    /// point with the other selected line. This keeps pick ambiguity from
+    /// turning into a false persistent-corner constraint at commit time.
+    fn resolve_adjacent_carrier(
+        &self,
+        selected: EntityId,
+        other: EntityId,
+        intersection: Vec2,
+    ) -> EntityId {
+        if self.endpoint_at(selected, intersection).is_some() {
+            return selected;
+        }
+        let Some(other_corner) = self.endpoint_at(other, intersection) else {
+            return selected;
+        };
+        self.sketch
+            .entities()
+            .filter_map(|(candidate, entity)| {
+                if candidate == selected || candidate == other {
+                    return None;
+                }
+                if !matches!(entity, Entity::Line { .. })
+                    || self.endpoint_at(candidate, intersection) != Some(other_corner)
+                {
+                    return None;
+                }
+                self.collinear_overlap(selected, candidate)
+                    .map(|overlap| (candidate, overlap))
+            })
+            .max_by(|(a_id, a_overlap), (b_id, b_overlap)| {
+                a_overlap.total_cmp(b_overlap).then_with(|| b_id.cmp(a_id))
+            })
+            .map(|(candidate, _)| candidate)
+            .unwrap_or(selected)
+    }
+
+    fn resolve_corner_lines(&self, l1: EntityId, l2: EntityId) -> (EntityId, EntityId) {
+        let (Ok(first), Ok(second)) = (self.line_seg(l1), self.line_seg(l2)) else {
+            return (l1, l2);
+        };
+        let Some(intersection) = line_vertex(&first, &second) else {
+            return (l1, l2);
+        };
+        let l1 = self.resolve_adjacent_carrier(l1, l2, intersection);
+        let l2 = self.resolve_adjacent_carrier(l2, l1, intersection);
+        (l1, l2)
+    }
+
     /// Anchor a persistent corner point at the intersection of its two
     /// original edges via Coincident incidences (idempotent for re-ops).
     fn anchor_corner_reference(&mut self, corner: EntityId, l1: EntityId, l2: EntityId) {
@@ -144,6 +246,40 @@ impl SketchSession {
         if !has(corner, l2) {
             self.sketch
                 .add_constraint(Constraint::Coincident { a: corner, b: l2 });
+        }
+    }
+
+    /// A midpoint attached to a finite carrier must retain the original
+    /// corner-to-corner span when a corner operation shortens that carrier.
+    /// Capture and retarget those relations before the line endpoint changes.
+    fn preserve_midpoint_span(&mut self, line: EntityId, corner: EntityId) {
+        let Some((start, end)) = self.sketch.line_endpoint_ids(line) else {
+            return;
+        };
+        let opposite = if start == corner {
+            end
+        } else if end == corner {
+            start
+        } else {
+            return;
+        };
+        let midpoint_constraints = self
+            .sketch
+            .constraints()
+            .filter_map(|(id, constraint)| match *constraint {
+                Constraint::Midpoint { a, b } if b == line => Some((id, a)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (id, point) in midpoint_constraints {
+            self.sketch.replace_constraint(
+                id,
+                Constraint::SpanMidpoint {
+                    point,
+                    start: corner,
+                    end: opposite,
+                },
+            );
         }
     }
 
@@ -183,7 +319,7 @@ impl SketchSession {
         &self,
         request: &FilletRequest,
     ) -> Result<FilletPreviewDto, SessionError> {
-        let (arc, t1, t2) = self.compute_fillet(request)?;
+        let (_, _, arc, t1, t2) = self.compute_fillet(request)?;
         Ok(FilletPreviewDto {
             center: arc.center,
             radius: arc.radius,
@@ -198,35 +334,50 @@ impl SketchSession {
     fn compute_fillet(
         &self,
         request: &FilletRequest,
-    ) -> Result<(fillet::ArcSeg, Vec2, Vec2), SessionError> {
+    ) -> Result<(EntityId, EntityId, fillet::ArcSeg, Vec2, Vec2), SessionError> {
         if !self.is_line_id(request.l1) || !self.is_line_id(request.l2) {
             return Err(SessionError::InvalidConstraint(
                 "Fillet needs two lines".to_string(),
             ));
         }
+        let (l1_id, l2_id) = self.resolve_corner_lines(request.l1, request.l2);
         let radius = self.eval_text(&request.radius_text)?;
-        let l1 = self.line_seg(request.l1)?;
-        let l2 = self.line_seg(request.l2)?;
+        let l1 = self.line_seg(l1_id)?;
+        let l2 = self.line_seg(l2_id)?;
         let result = fillet::fillet_lines(&l1, &l2, radius).map_err(|e| {
             SessionError::InvalidConstraint(format!("fillet: {e:?}").to_lowercase())
         })?;
         let v = line_vertex(&l1, &l2).unwrap_or(result.arc.center);
         let _ = v;
-        Ok((result.arc, result.tangent_on_l1, result.tangent_on_l2))
+        Ok((
+            l1_id,
+            l2_id,
+            result.arc,
+            result.tangent_on_l1,
+            result.tangent_on_l2,
+        ))
     }
 
     pub fn fillet_lines(&mut self, request: &FilletRequest) -> Result<ToolResult, SessionError> {
-        let (arc, t1, t2) = self.compute_fillet(request)?;
-        let (l1, l2) = (request.l1, request.l2);
+        let (l1, l2, arc, t1, t2) = self.compute_fillet(request)?;
         let radius_text = request.radius_text.clone();
         self.mutate_with_undo(move |s| {
             // Retarget each line's vertex-side endpoint to its tangent point.
             let v = line_vertex(&s.line_seg(l1)?, &s.line_seg(l2)?).unwrap();
-            let corner = s.vertex_endpoint(l1, v); // shared by both lines
+            let corner1 = s.vertex_endpoint(l1, v);
+            let corner2 = s.vertex_endpoint(l2, v);
+            let shared_corner = s.shared_corner_reference(l1, l2, v);
+            s.preserve_midpoint_span(l1, corner1);
+            s.preserve_midpoint_span(l2, corner2);
             let p1 = s.retarget_line_end(l1, v, t1);
             let p2 = s.retarget_line_end(l2, v, t2);
             // Keep the original corner as a persistent constraint reference,
-            // anchored at the two edges' intersection.
+            // anchored at the two edges' intersection. Lines that meet only
+            // on their finite/infinite supports get a real virtual-corner
+            // point instead of misusing whichever endpoint happened to be
+            // nearest the intersection.
+            let corner =
+                shared_corner.unwrap_or_else(|| s.sketch.add_entity(Entity::Point { position: v }));
             s.anchor_corner_reference(corner, l1, l2);
             let (a0, a1) = geom_sweep_to_entity(arc.start_angle, arc.end_angle, arc.ccw);
             let arc_id = s.sketch.add_entity(Entity::Arc {
@@ -293,23 +444,35 @@ impl SketchSession {
                 "Chamfer needs two lines".to_string(),
             ));
         }
+        let (l1, l2) = self.resolve_corner_lines(request.l1, request.l2);
         let distance = self.eval_text(&request.distance_text)?;
-        let l1 = self.line_seg(request.l1)?;
-        let l2 = self.line_seg(request.l2)?;
+        let l1_geom = self.line_seg(l1)?;
+        let l2_geom = self.line_seg(l2)?;
         let result = chamfer::chamfer_lines(
-            &chamfer::LineSeg { a: l1.a, b: l1.b },
-            &chamfer::LineSeg { a: l2.a, b: l2.b },
+            &chamfer::LineSeg {
+                a: l1_geom.a,
+                b: l1_geom.b,
+            },
+            &chamfer::LineSeg {
+                a: l2_geom.a,
+                b: l2_geom.b,
+            },
             distance,
             distance,
         )
         .map_err(|e| SessionError::InvalidConstraint(format!("chamfer: {e:?}").to_lowercase()))?;
         let (p1, p2) = (result.point_on_l1, result.point_on_l2);
-        let (l1, l2) = (request.l1, request.l2);
         self.mutate_with_undo(move |s| {
             let v = line_vertex(&s.line_seg(l1)?, &s.line_seg(l2)?).unwrap();
-            let corner = s.vertex_endpoint(l1, v); // shared by both lines
+            let corner1 = s.vertex_endpoint(l1, v);
+            let corner2 = s.vertex_endpoint(l2, v);
+            let shared_corner = s.shared_corner_reference(l1, l2, v);
+            s.preserve_midpoint_span(l1, corner1);
+            s.preserve_midpoint_span(l2, corner2);
             let t1 = s.retarget_line_end(l1, v, p1);
             let t2 = s.retarget_line_end(l2, v, p2);
+            let corner =
+                shared_corner.unwrap_or_else(|| s.sketch.add_entity(Entity::Point { position: v }));
             s.anchor_corner_reference(corner, l1, l2);
             let line_id = s.sketch.add_entity(Entity::line(t1, t2));
             // One driving cutback plus an equal-distance relation keeps both

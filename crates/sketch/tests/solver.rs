@@ -4,9 +4,9 @@
 //! drag-with-constraints cases.
 
 use nbcad_sketch::{
-    CircleMode, Constraint, DragPhase, EntityDto, EntityId, LockedCircleRequest,
-    LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef, RectangleMode, SketchSession,
-    Vec2,
+    CircleMode, Constraint, DragPhase, EntityDto, EntityId, LineTrackingRequest,
+    LockedCircleRequest, LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef,
+    RectangleMode, SketchSession, SnapTarget, TrackingAxis, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -27,6 +27,7 @@ fn locked_seg(
         length_text: None,
         angle_text: None,
         ctrl_held: false,
+        tracking: None,
     }
 }
 
@@ -830,4 +831,65 @@ fn undo_restores_pre_constraint_state_including_solver_motion() {
         "undo restores pre-solve geometry"
     );
     assert_eq!(undone.sketch.constraints.len(), 0);
+}
+
+#[test]
+fn typed_angle_snaps_its_free_distance_to_the_active_grid() {
+    let mut s = SketchSession::new("Sketch1", XY, XY.basis().unwrap(), true);
+    s.set_grid_step(5.0).unwrap();
+    let preview = s.preview_segment_locked(
+        v(5.0, 10.0),
+        None,
+        Some(-45.0),
+        v(15.16, -0.16),
+        false,
+        None,
+    );
+    assert_eq!(preview.snap, SnapTarget::Grid);
+    assert!(close(preview.snapped_to, v(15.0, 0.0)));
+    let delta = preview.snapped_to - v(5.0, 10.0);
+    assert!((delta.y / delta.x + 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn line_tracking_is_exact_and_persists_as_a_point_relation() {
+    let mut s = session();
+    let reference = s.add_point(v(0.0, 5.0)).unwrap().entities[0];
+    let result = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: v(5.0, 15.0),
+            to_hint: v(15.1, 4.9),
+            length_mm: None,
+            angle_deg: Some(-45.0),
+            length_text: None,
+            angle_text: None,
+            ctrl_held: false,
+            tracking: Some(LineTrackingRequest {
+                point: reference,
+                axis: TrackingAxis::Horizontal,
+            }),
+        })
+        .unwrap();
+    let (_, endpoint) = line(&result.sketch, result.entity_id);
+    assert!(close(endpoint, v(15.0, 5.0)));
+    assert!(result.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::HorizontalPoints { a, b }
+            if a == reference && b == result.end_point_id
+    )));
+
+    let moved = s
+        .move_point(move_req(reference, v(0.0, 7.0)))
+        .unwrap()
+        .sketch;
+    let reference_position = moved
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Point { id, position, .. } if *id == reference => Some(*position),
+            _ => None,
+        })
+        .unwrap();
+    let (_, moved_endpoint) = line(&moved, result.entity_id);
+    assert!((moved_endpoint.y - reference_position.y).abs() < 1e-7);
 }

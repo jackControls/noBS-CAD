@@ -8,6 +8,8 @@
  */
 import { getEngine, isTauriRuntime } from '../engine';
 import type {
+  AssemblyDocumentDto,
+  AssemblySolutionDto,
   BodyAppearance,
   DatumPlaneDefinitionDto,
   DrawingDocumentDto,
@@ -42,6 +44,8 @@ interface ProjectTabViewState {
   datumPlanes: DatumPlaneDefinitionDto[];
   bodyAppearances: BodyAppearance[];
   drawingDocument: DrawingDocumentDto;
+  assemblyDocument: AssemblyDocumentDto;
+  assemblySolution: AssemblySolutionDto;
   projectVisibility: ProjectVisibilityDto;
 }
 
@@ -78,6 +82,36 @@ function emptyDrawingDocument(): DrawingDocumentDto {
   };
 }
 
+function emptyAssemblyDocument(): AssemblyDocumentDto {
+  return {
+    joints: [],
+    next_joint_id: 1,
+    grounded_body_id: null,
+    component_structure: {
+      definitions: [],
+      occurrences: [],
+      next_component_id: 1,
+      next_occurrence_id: 1,
+    },
+    positions: [],
+    next_position_id: 1,
+    motion_studies: [],
+    next_motion_study_id: 1,
+    contact_sets: [],
+    next_contact_set_id: 1,
+  };
+}
+
+function emptyAssemblySolution(): AssemblySolutionDto {
+  return {
+    body_poses: [],
+    occurrence_poses: [],
+    instance_body_poses: [],
+    diagnostics: [],
+    solved: true,
+  };
+}
+
 function createTabId(): string {
   const randomId = globalThis.crypto?.randomUUID?.();
   const id = randomId ?? `project-${Date.now()}-${nextTabId}`;
@@ -104,6 +138,8 @@ function activeViewState(): ProjectTabViewState | null {
     datumPlanes: state.datumPlanes,
     bodyAppearances: state.bodyAppearances,
     drawingDocument: state.drawingDocument,
+    assemblyDocument: state.assemblyDocument,
+    assemblySolution: state.assemblySolution,
     projectVisibility: state.projectVisibility,
   };
 }
@@ -121,6 +157,8 @@ function sameViewState(
     left.datumPlanes === right.datumPlanes &&
     left.bodyAppearances === right.bodyAppearances &&
     left.drawingDocument === right.drawingDocument &&
+    left.assemblyDocument === right.assemblyDocument &&
+    left.assemblySolution === right.assemblySolution &&
     left.projectVisibility === right.projectVisibility
   );
 }
@@ -190,19 +228,21 @@ async function loadModelState(
 ): Promise<ProjectTabViewState> {
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
+  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
     engine.drawingDocument(),
+    engine.assemblyDocument(),
+    engine.assemblySolution(),
     engine.projectVisibility(),
   ]);
-  return { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility };
+  return { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility };
 }
 
 async function currentModelState(): Promise<ProjectTabViewState> {
   const engine = await getEngine();
-  const [document, scene, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] =
+  const [document, scene, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] =
     await Promise.all([
       engine.getDocument(),
       engine.solidScene(),
@@ -210,6 +250,8 @@ async function currentModelState(): Promise<ProjectTabViewState> {
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
       engine.drawingDocument(),
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
       engine.projectVisibility(),
     ]);
   return {
@@ -218,6 +260,8 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     datumPlanes,
     bodyAppearances,
     drawingDocument,
+    assemblyDocument,
+    assemblySolution,
     projectVisibility,
   };
 }
@@ -261,7 +305,9 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
         tab.fileName,
         projectState.bodyAppearances,
         projectState.drawingDocument,
+        projectState.assemblyDocument,
         projectState.projectVisibility,
+        projectState.assemblySolution,
       );
     useAppStore.setState({
       activeProjectTabId: tabId,
@@ -332,6 +378,8 @@ export function createProjectTab(): Promise<boolean> {
         datumPlanes: [],
         bodyAppearances: [],
         drawingDocument: emptyDrawingDocument(),
+        assemblyDocument: emptyAssemblyDocument(),
+        assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
       },
     });
@@ -356,8 +404,12 @@ export function switchProjectTab(tabId: string): Promise<boolean> {
   });
 }
 
-/** Close one tab. Closing the last document leaves one fresh Untitled tab. */
-export function closeProjectTab(tabId?: string): Promise<boolean> {
+/** Close one tab after its caller has resolved any unsaved-work decision.
+ * A dirty tab remains protected unless `discardUnsaved` is explicit. */
+export function closeProjectTab(
+  tabId?: string,
+  discardUnsaved = false,
+): Promise<boolean> {
   return withProjectTransition(async () => {
     const state = useAppStore.getState();
     const id = tabId ?? state.activeProjectTabId;
@@ -366,9 +418,7 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
     if (index < 0) return false;
     const tab = state.projectTabs[index];
     const dirty = id === state.activeProjectTabId ? state.dirty : tab.dirty;
-    if (dirty && !window.confirm(translate('file.closeDiscardConfirm'))) {
-      return false;
-    }
+    if (dirty && !discardUnsaved) return false;
 
     if (id !== state.activeProjectTabId) {
       const runtime = runtimes.get(id);
@@ -417,6 +467,8 @@ export function closeProjectTab(tabId?: string): Promise<boolean> {
         datumPlanes: [],
         bodyAppearances: [],
         drawingDocument: emptyDrawingDocument(),
+        assemblyDocument: emptyAssemblyDocument(),
+        assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
       },
     });
@@ -542,7 +594,7 @@ export async function restoreProjectTabs(
   if (recovered.length === 0) return false;
   const active =
     recovered.find((tab) => tab.id === requestedActiveId) ?? recovered[0];
-  const { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility } =
+  const { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility } =
     await loadModelState(active.modelJson);
 
   runtimes.clear();
@@ -554,7 +606,7 @@ export async function restoreProjectTabs(
       lastUsedAt: Date.now(),
       viewState:
         tab.id === active.id
-          ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, projectVisibility }
+          ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility }
           : null,
     });
   }
@@ -568,7 +620,9 @@ export async function restoreProjectTabs(
       active.fileName,
       bodyAppearances,
       drawingDocument,
+      assemblyDocument,
       projectVisibility,
+      assemblySolution,
     );
   useAppStore.setState({
     activeProjectTabId: active.id,

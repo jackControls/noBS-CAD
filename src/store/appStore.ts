@@ -10,12 +10,24 @@
  */
 import { create } from 'zustand';
 import type {
+  AssemblyDocumentDto,
+  AssemblySolutionDto,
+  AssemblyTransformDto,
+  BodyPoseDto,
   BodyAppearance,
+  ComponentDefinitionDto,
+  ComponentOccurrenceDto,
+  CreateJointRequestDto,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   DrawingDocumentDto,
   DrawingViewKind,
   ExtrudeOperation,
+  JointConnectorDto,
+  JointDefinitionDto,
+  JointMotionStateDto,
+  MechanismPreviewDto,
+  MotionStudyEvaluationDto,
   OriginPlane,
   PlanarFaceSourceDto,
   PlaneBasis,
@@ -29,6 +41,7 @@ import type {
   SketchPointRefDto,
   SolidSceneDto,
   SolidUpdateDto,
+  UpdateJointRequestDto,
 } from '../engine/types';
 import { getEngine, type Engine } from '../engine';
 import {
@@ -132,6 +145,66 @@ function emptyDrawingDocument(): DrawingDocumentDto {
     templates: [],
     next_template_id: 1,
   };
+}
+
+function emptyAssemblyDocument(): AssemblyDocumentDto {
+  return {
+    joints: [],
+    next_joint_id: 1,
+    grounded_body_id: null,
+    component_structure: {
+      definitions: [],
+      occurrences: [],
+      next_component_id: 1,
+      next_occurrence_id: 1,
+    },
+    positions: [],
+    next_position_id: 1,
+    motion_studies: [],
+    next_motion_study_id: 1,
+    contact_sets: [],
+    next_contact_set_id: 1,
+  };
+}
+
+function emptyAssemblySolution(): AssemblySolutionDto {
+  return {
+    body_poses: [],
+    occurrence_poses: [],
+    instance_body_poses: [],
+    diagnostics: [],
+    solved: true,
+  };
+}
+
+const IDENTITY_ASSEMBLY_TRANSFORM: AssemblyTransformDto = {
+  translation: [0, 0, 0],
+  rotation: [0, 0, 0, 1],
+};
+
+function jointMotionState(joint: JointDefinitionDto): JointMotionStateDto {
+  return {
+    joint_id: joint.id,
+    angle_offset_deg: joint.angle_offset_deg,
+    linear_offset_mm: joint.linear_offset_mm,
+    secondary_angle_offset_deg: joint.advanced.secondary_angle_offset_deg,
+    tertiary_angle_offset_deg: joint.advanced.tertiary_angle_offset_deg,
+    secondary_linear_offset_mm: joint.advanced.secondary_linear_offset_mm,
+  };
+}
+
+function jointConnectorIsLive(
+  connector: JointConnectorDto,
+  scene: SolidSceneDto,
+): boolean {
+  const body = scene.bodies.find((candidate) => candidate.id === connector.body_id);
+  if (!body) return false;
+  if (connector.kind === 'circular_edge') {
+    const edge = body.edges.find((candidate) => candidate.id === connector.edge_id);
+    return Boolean(edge?.circle?.closed && edge.key === connector.edge_key);
+  }
+  const face = body.faces.find((candidate) => candidate.id === connector.face_id);
+  return Boolean((face?.plane || face?.cylinder) && face.key === connector.face_key);
 }
 
 function appearanceFor(
@@ -365,7 +438,56 @@ export interface ExtrudeCommandPreview {
   operation: ExtrudeOperation;
 }
 
-export type SolidCommandPreview = ExtrudeCommandPreview;
+/** Presentation-only construction plane used while editing an offset. */
+export interface OffsetPlaneCommandPreview {
+  kind: 'offset_plane';
+  basis: PlaneBasis;
+  distance: number;
+  /** Half width/height in the basis u/v directions, in millimetres. */
+  halfSize: [number, number];
+}
+
+export interface MoveCopyPreviewTarget {
+  bodyId: number;
+  /** Disambiguates reusable instances that share one source body. */
+  occurrenceId: number | null;
+  /** Existing display pose before the command delta is applied. */
+  baseTranslation: [number, number, number];
+  baseRotation: [number, number, number, number];
+}
+
+export interface MoveCopyGizmoInteraction {
+  kind: 'translate' | 'rotate';
+  axis: 0 | 1 | 2;
+  active: boolean;
+}
+
+/** Rigid-transform ghost and original six-axis viewport manipulator. */
+export interface MoveCopyCommandPreview {
+  kind: 'move_copy';
+  targets: MoveCopyPreviewTarget[];
+  pivot: Point3Dto;
+  translation: Point3Dto;
+  rotation: [number, number, number, number];
+  copy: boolean;
+  /** Body features transform model geometry before occurrence placement;
+   * component moves transform the already placed occurrence. */
+  transformInBodySpace: boolean;
+  /** The full six-axis control belongs to Free Move only. */
+  showSixAxisGizmo: boolean;
+  /** Display-space origin and orientation of the same coordinate frame the
+   * command transform uses. These keep the visible rings, pointer targets,
+   * and actual rotation axis coincident for already-placed bodies. */
+  gizmoPivot: Point3Dto;
+  gizmoOrientation: [number, number, number, number];
+  /** Hover/drag state is presentation-only and never enters feature history. */
+  gizmoInteraction: MoveCopyGizmoInteraction | null;
+}
+
+export type SolidCommandPreview =
+  | ExtrudeCommandPreview
+  | OffsetPlaneCommandPreview
+  | MoveCopyCommandPreview;
 
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
 export type ConstructionPlanePickTarget =
@@ -378,6 +500,7 @@ export interface ConstructionPlanePickedEdge {
   edgeId: number;
 }
 export type BodyFeatureKind =
+  | 'move_copy'
   | 'shell'
   | 'mirror'
   | 'rectangular_pattern'
@@ -475,6 +598,44 @@ interface AppState {
   bodyAppearances: BodyAppearance[];
   /** Persistent technical drawing sheets and projected-view definitions. */
   drawingDocument: DrawingDocumentDto;
+  /** Persistent face-referenced assembly/joint intent. */
+  assemblyDocument: AssemblyDocumentDto;
+  /** Monotonic marker for assembly snapshots hydrated as part of a solid
+   * recompute. Application history uses it to keep that synchronization in
+   * the owning solid command instead of creating a second assembly command. */
+  assemblySolidSyncRevision: number;
+  /** Derived rigid poses; never baked into OCCT or project feature history. */
+  assemblySolution: AssemblySolutionDto;
+  /** Non-persistent alignment preview for the open joint command. */
+  jointPreviewSolution: AssemblySolutionDto | null;
+  /** Non-persistent solved pose from animation/direct joint manipulation. */
+  jointMotionPreview: {
+    jointId: number;
+    angleOffsetDeg: number;
+    linearOffsetMm: number;
+    secondaryAngleOffsetDeg: number;
+    tertiaryAngleOffsetDeg: number;
+    secondaryLinearOffsetMm: number;
+    motion: JointMotionStateDto;
+    solution: AssemblySolutionDto;
+  } | null;
+  /** Transient multi-joint inverse-kinematics result during component drag. */
+  mechanismPreview: MechanismPreviewDto | null;
+  /** Transient solved timeline sample; never mutates joint design positions. */
+  motionStudyPreview: MotionStudyEvaluationDto | null;
+  /** Active assembly instance. Bodies remain part-definition selections. */
+  selectedOccurrenceId: number | null;
+  /** Exact reusable instance under the pointer; topology ids repeat by definition. */
+  hoveredOccurrenceId: number | null;
+  selectedJointId: number | null;
+  /** Joint being edited; null means the dialog is creating a new joint. */
+  jointEditingId: number | null;
+  jointDialogOpen: boolean;
+  /** Model-local connector frames captured by the joint picker. */
+  jointConnectorPicks: JointConnectorDto[];
+  jointConnectorHover: JointConnectorDto | null;
+  /** Assembly is a Solid Modeling sub-function, not a top-level workspace. */
+  solidSidebarMode: 'model' | 'assembly';
   selectedDrawingViewId: number | null;
   selectedDrawingAnnotationId: number | null;
   drawingTool: DrawingTool;
@@ -536,6 +697,66 @@ interface AppState {
   setBodyAppearances: (appearances: BodyAppearance[]) => void;
   setBodyAppearance: (appearance: BodyAppearance) => Promise<void>;
   setDrawingDocument: (drawing: DrawingDocumentDto) => Promise<void>;
+  createComponent: (name: string, bodyIds: number[]) => Promise<void>;
+  updateComponent: (component: ComponentDefinitionDto) => Promise<void>;
+  createOccurrence: (
+    componentId: number,
+    parentOccurrenceId?: number | null,
+    name?: string,
+  ) => Promise<void>;
+  updateOccurrence: (occurrence: ComponentOccurrenceDto) => Promise<void>;
+  duplicateOccurrence: (
+    occurrenceId: number,
+    parentOccurrenceId?: number | null,
+  ) => Promise<void>;
+  moveCopyOccurrence: (
+    occurrenceId: number,
+    localPose: AssemblyTransformDto,
+    copy: boolean,
+  ) => Promise<void>;
+  setOccurrenceGrounded: (occurrenceId: number, grounded: boolean) => Promise<void>;
+  setOccurrencePose: (occurrenceId: number, localPose: AssemblyTransformDto) => Promise<void>;
+  setSelectedOccurrenceId: (occurrenceId: number | null) => void;
+  setHoveredOccurrenceId: (occurrenceId: number | null) => void;
+  createJoint: (request: CreateJointRequestDto) => Promise<void>;
+  updateJoint: (request: UpdateJointRequestDto) => Promise<void>;
+  previewJoint: (request: CreateJointRequestDto) => Promise<void>;
+  previewJointUpdate: (request: UpdateJointRequestDto) => Promise<void>;
+  clearJointPreview: () => void;
+  deleteJoint: (id: number) => Promise<void>;
+  setJointMotion: (
+    jointId: number,
+    angleOffsetDeg: number,
+    linearOffsetMm: number,
+  ) => Promise<void>;
+  previewJointMotion: (
+    jointId: number,
+    angleOffsetDeg: number,
+    linearOffsetMm: number,
+  ) => Promise<void>;
+  previewJointCoordinates: (motion: JointMotionStateDto) => Promise<void>;
+  clearJointMotionPreview: () => void;
+  captureJointPosition: () => Promise<void>;
+  setJointEnabled: (jointId: number, enabled: boolean) => Promise<void>;
+  previewMechanismDrag: (
+    bodyId: number,
+    targetPose: BodyPoseDto,
+    occurrenceId?: number | null,
+    grabPointLocal?: [number, number, number] | null,
+    targetPointWorld?: [number, number, number] | null,
+    initialJointMotions?: JointMotionStateDto[],
+    maximumIterations?: number,
+  ) => Promise<void>;
+  clearMechanismPreview: () => void;
+  captureMechanismPosition: () => Promise<void>;
+  setGroundedBody: (bodyId: number | null) => Promise<void>;
+  setSelectedJointId: (id: number | null) => void;
+  setJointDialogOpen: (open: boolean) => void;
+  openJointEditor: (jointId: number) => void;
+  toggleJointConnectorPick: (pick: JointConnectorDto) => void;
+  clearJointConnectorPicks: () => void;
+  setJointConnectorHover: (pick: JointConnectorDto | null) => void;
+  setSolidSidebarMode: (mode: 'model' | 'assembly') => void;
   setSelectedDrawingViewId: (viewId: number | null) => void;
   setSelectedDrawingAnnotationId: (annotationId: number | null) => void;
   setDrawingTool: (tool: DrawingTool) => void;
@@ -549,7 +770,9 @@ interface AppState {
     fileName: string | null,
     bodyAppearances?: BodyAppearance[],
     drawingDocument?: DrawingDocumentDto,
+    assemblyDocument?: AssemblyDocumentDto,
     projectVisibility?: ProjectVisibilityDto,
+    assemblySolution?: AssemblySolutionDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -704,6 +927,21 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedBodies: [],
     bodyAppearances: [],
     drawingDocument: emptyDrawingDocument(),
+    assemblyDocument: emptyAssemblyDocument(),
+    assemblySolidSyncRevision: 0,
+    assemblySolution: emptyAssemblySolution(),
+    jointPreviewSolution: null,
+    jointMotionPreview: null,
+    mechanismPreview: null,
+    motionStudyPreview: null,
+    selectedOccurrenceId: null,
+    hoveredOccurrenceId: null,
+    selectedJointId: null,
+    jointEditingId: null,
+    jointDialogOpen: false,
+    jointConnectorPicks: [],
+    jointConnectorHover: null,
+    solidSidebarMode: 'model',
     selectedDrawingViewId: null,
     selectedDrawingAnnotationId: null,
     drawingTool: null,
@@ -741,6 +979,27 @@ function resetDocumentUiState(): Partial<AppState> {
     solidBusy: false,
   };
 }
+
+let jointPreviewGeneration = 0;
+let jointMotionPreviewGeneration = 0;
+let mechanismPreviewGeneration = 0;
+interface MechanismPreviewJob {
+  generation: number;
+  bodyId: number;
+  occurrenceId: number | null;
+  targetPose: BodyPoseDto;
+  grabPointLocal: [number, number, number] | null;
+  targetPointWorld: [number, number, number] | null;
+  initialJointMotions: JointMotionStateDto[];
+  maximumIterations: number;
+}
+let pendingMechanismPreview: MechanismPreviewJob | null = null;
+let mechanismPreviewPump: Promise<void> | null = null;
+
+// Async engine work can be superseded while it is awaited. Reading through a
+// function prevents TypeScript from incorrectly treating the shared queue as
+// permanently null after the assignment immediately before that await.
+const queuedMechanismPreview = () => pendingMechanismPreview;
 
 export const useAppStore = create<AppState>()((set) => ({
   mode: 'solid',
@@ -780,6 +1039,21 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedBodies: [],
   bodyAppearances: [],
   drawingDocument: emptyDrawingDocument(),
+  assemblyDocument: emptyAssemblyDocument(),
+  assemblySolidSyncRevision: 0,
+  assemblySolution: emptyAssemblySolution(),
+  jointPreviewSolution: null,
+  jointMotionPreview: null,
+  mechanismPreview: null,
+  motionStudyPreview: null,
+  selectedOccurrenceId: null,
+  hoveredOccurrenceId: null,
+  selectedJointId: null,
+  jointEditingId: null,
+  jointDialogOpen: false,
+  jointConnectorPicks: [],
+  jointConnectorHover: null,
+  solidSidebarMode: 'model',
   selectedDrawingViewId: null,
   selectedDrawingAnnotationId: null,
   drawingTool: null,
@@ -818,24 +1092,38 @@ export const useAppStore = create<AppState>()((set) => ({
   solidBusy: false,
   palette: { ...DEFAULT_PALETTE },
 
-  setMode: (mode) =>
+  setMode: (mode) => {
+    if (mode !== 'solid') {
+      jointPreviewGeneration += 1;
+      jointMotionPreviewGeneration += 1;
+      mechanismPreviewGeneration += 1;
+    }
     set((s) => ({
       mode,
       // In sketch mode the tab strip collapses to a single SKETCH tab.
       activeTab: mode === 'sketch' ? 'sketch' : s.activeTab === 'sketch' ? 'solid' : s.activeTab,
-    })),
+      jointPreviewSolution: mode === 'solid' ? s.jointPreviewSolution : null,
+      jointMotionPreview: mode === 'solid' ? s.jointMotionPreview : null,
+      mechanismPreview: mode === 'solid' ? s.mechanismPreview : null,
+    }));
+  },
 
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => set({
+    activeTab: tab === 'assembly' ? 'solid' : tab,
+    ...(tab === 'assembly' ? { solidSidebarMode: 'assembly' as const } : {}),
+  }),
 
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, projectVisibility] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
       engine.drawingDocument(),
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
       engine.projectVisibility(),
     ]);
     set({
@@ -846,6 +1134,8 @@ export const useAppStore = create<AppState>()((set) => ({
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       drawingDocument,
+      assemblyDocument,
+      assemblySolution,
       hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
       projectVisibility,
       dirty: false,
@@ -856,13 +1146,37 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setFinishedSketches: (sketches) => set({ finishedSketches: sketches }),
 
-  setSolidScene: (solidScene) =>
+  setSolidScene: (solidScene) => {
+    jointPreviewGeneration += 1;
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
     set((state) => ({
       solidScene,
       bodyAppearances: scrubAppearances(state.bodyAppearances, solidScene.bodies),
-    })),
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+    }));
+    void getEngine()
+      .then((engine) => Promise.all([engine.assemblyDocument(), engine.assemblySolution()]))
+      .then(([assemblyDocument, assemblySolution]) =>
+        set((state) => (
+          state.solidScene === solidScene
+            ? {
+                assemblyDocument,
+                assemblySolution,
+                assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
+              }
+            : {}
+        )),
+      )
+      .catch(() => undefined);
+  },
 
-  applySolidUpdate: (update) =>
+  applySolidUpdate: (update) => {
+    jointPreviewGeneration += 1;
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
     set((state) => ({
       document: update.document,
       solidScene: update.scene,
@@ -889,7 +1203,37 @@ export const useAppStore = create<AppState>()((set) => ({
         update.scene.bodies.some((body) => body.edges.some((edge) => edge.id === edgeId)),
       ),
       hoveredEdge: null,
-    })),
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+    }));
+    void getEngine()
+      .then((engine) => Promise.all([engine.assemblyDocument(), engine.assemblySolution()]))
+      .then(([assemblyDocument, assemblySolution]) =>
+        set((state) => {
+          if (state.solidScene !== update.scene) return {};
+          const jointStillExists = (jointId: number | null) =>
+            jointId !== null && assemblyDocument.joints.some((joint) => joint.id === jointId);
+          const selectedJointId = jointStillExists(state.selectedJointId)
+            ? state.selectedJointId
+            : null;
+          const jointEditingId = jointStillExists(state.jointEditingId)
+            ? state.jointEditingId
+            : null;
+          return {
+            assemblyDocument,
+            assemblySolution,
+            assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
+            selectedJointId,
+            jointEditingId,
+            jointDialogOpen: state.jointEditingId !== null && jointEditingId === null
+              ? false
+              : state.jointDialogOpen,
+          };
+        }),
+      )
+      .catch(() => undefined);
+  },
 
   applyDatumPlaneUpdate: (update) =>
     set({
@@ -914,6 +1258,644 @@ export const useAppStore = create<AppState>()((set) => ({
     set({ drawingDocument, dirty: true });
   },
 
+  createComponent: async (name, bodyIds) => {
+    jointPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const component = await engine.createComponent({
+      name,
+      body_ids: bodyIds,
+      local_coordinate_system: IDENTITY_ASSEMBLY_TRANSFORM,
+      absorb_promoted_bodies: true,
+    });
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    const selectedOccurrenceId = assemblyDocument.component_structure.occurrences.find(
+      (occurrence) => occurrence.component_id === component.id,
+    )?.id ?? null;
+    set({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId,
+      jointPreviewSolution: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  updateComponent: async (component) => {
+    const engine = await getEngine();
+    await engine.updateComponent({ component });
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({ assemblyDocument, assemblySolution, dirty: true });
+  },
+
+  createOccurrence: async (componentId, parentOccurrenceId = null, name = '') => {
+    const engine = await getEngine();
+    const occurrence = await engine.createOccurrence({
+      component_id: componentId,
+      name,
+      parent_occurrence_id: parentOccurrenceId,
+      local_pose: IDENTITY_ASSEMBLY_TRANSFORM,
+    });
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId: occurrence.id,
+      dirty: true,
+    });
+  },
+
+  updateOccurrence: async (occurrence) => {
+    const engine = await getEngine();
+    const updated = await engine.updateOccurrence({ occurrence });
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId: updated.id,
+      dirty: true,
+    });
+  },
+
+  duplicateOccurrence: async (occurrenceId, parentOccurrenceId = null) => {
+    const engine = await getEngine();
+    const occurrence = await engine.duplicateOccurrence({
+      occurrence_id: occurrenceId,
+      parent_occurrence_id: parentOccurrenceId,
+      local_pose: null,
+    });
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({
+      assemblyDocument,
+      assemblySolution,
+      selectedOccurrenceId: occurrence.id,
+      dirty: true,
+    });
+  },
+
+  setOccurrenceGrounded: async (occurrenceId, grounded) => {
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setOccurrenceGrounded({
+      occurrence_id: occurrenceId,
+      grounded,
+    });
+    const assemblySolution = await engine.assemblySolution();
+    set({ assemblyDocument, assemblySolution, selectedOccurrenceId: occurrenceId, dirty: true });
+  },
+
+  setOccurrencePose: async (occurrenceId, localPose) => {
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setOccurrencePose({
+      occurrence_id: occurrenceId,
+      local_pose: localPose,
+    });
+    const assemblySolution = await engine.assemblySolution();
+    set({ assemblyDocument, assemblySolution, selectedOccurrenceId: occurrenceId, dirty: true });
+  },
+
+  moveCopyOccurrence: async (occurrenceId, localPose, copy) => {
+    const engine = await getEngine();
+    let selectedOccurrenceId = occurrenceId;
+    if (copy) {
+      const source = useAppStore.getState().assemblyDocument.component_structure.occurrences.find(
+        (occurrence) => occurrence.id === occurrenceId,
+      );
+      if (!source) throw new Error(`Occurrence ${occurrenceId} does not exist`);
+      const duplicate = await engine.duplicateOccurrence({
+        occurrence_id: occurrenceId,
+        parent_occurrence_id: source.parent_occurrence_id,
+        local_pose: localPose,
+      });
+      selectedOccurrenceId = duplicate.id;
+    } else {
+      await engine.setOccurrencePose({ occurrence_id: occurrenceId, local_pose: localPose });
+    }
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({ assemblyDocument, assemblySolution, selectedOccurrenceId, dirty: true });
+  },
+
+  setSelectedOccurrenceId: (selectedOccurrenceId) => set({ selectedOccurrenceId }),
+  setHoveredOccurrenceId: (hoveredOccurrenceId) => set({ hoveredOccurrenceId }),
+
+  createJoint: async (request) => {
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const createdJoint = await engine.createJoint(request);
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({
+      assemblyDocument,
+      assemblySolution,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      selectedJointId: createdJoint.id,
+      jointEditingId: null,
+      dirty: true,
+      jointDialogOpen: false,
+    });
+  },
+
+  updateJoint: async (request) => {
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const updatedJoint = await engine.updateJoint(request);
+    const [assemblyDocument, assemblySolution] = await Promise.all([
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+    ]);
+    set({
+      assemblyDocument,
+      assemblySolution,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      selectedJointId: updatedJoint.id,
+      jointEditingId: null,
+      dirty: true,
+      jointDialogOpen: false,
+    });
+  },
+
+  previewJoint: async (request) => {
+    const generation = ++jointPreviewGeneration;
+    const engine = await getEngine();
+    const jointPreviewSolution = await engine.previewJoint(request);
+    set((state) => (
+      generation === jointPreviewGeneration && state.jointDialogOpen
+        ? { jointPreviewSolution }
+        : {}
+    ));
+  },
+
+  previewJointUpdate: async (request) => {
+    const generation = ++jointPreviewGeneration;
+    const engine = await getEngine();
+    const jointPreviewSolution = await engine.previewJointUpdate(request);
+    set((state) => (
+      generation === jointPreviewGeneration
+      && state.jointDialogOpen
+      && state.jointEditingId === request.joint.id
+        ? { jointPreviewSolution }
+        : {}
+    ));
+  },
+
+  clearJointPreview: () => {
+    jointPreviewGeneration += 1;
+    set({ jointPreviewSolution: null });
+  },
+
+  deleteJoint: async (id) => {
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const assemblyDocument = await engine.deleteJoint(id);
+    const assemblySolution = await engine.assemblySolution();
+    set((state) => ({
+      assemblyDocument,
+      assemblySolution,
+      dirty: true,
+      selectedJointId: state.selectedJointId === id ? null : state.selectedJointId,
+      jointEditingId: state.jointEditingId === id ? null : state.jointEditingId,
+      jointMotionPreview:
+        state.jointMotionPreview?.jointId === id ? null : state.jointMotionPreview,
+      mechanismPreview: null,
+    }));
+  },
+
+  setJointMotion: async (jointId, angleOffsetDeg, linearOffsetMm) => {
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setJointMotion({
+      joint_id: jointId,
+      angle_offset_deg: angleOffsetDeg,
+      linear_offset_mm: linearOffsetMm,
+    });
+    const assemblySolution = await engine.assemblySolution();
+    set({
+      assemblyDocument,
+      assemblySolution,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  previewJointMotion: async (jointId, angleOffsetDeg, linearOffsetMm) => {
+    const joint = useAppStore.getState().assemblyDocument.joints.find(
+      (candidate) => candidate.id === jointId,
+    );
+    if (!joint) return;
+    const motion = jointMotionState(joint);
+    motion.angle_offset_deg = angleOffsetDeg;
+    motion.linear_offset_mm = linearOffsetMm;
+    await useAppStore.getState().previewJointCoordinates(motion);
+  },
+
+  previewJointCoordinates: async (motion) => {
+    const generation = ++jointMotionPreviewGeneration;
+    const engine = await getEngine();
+    const solution = await engine.previewJointCoordinates({ motion });
+    set((state) => (
+      generation === jointMotionPreviewGeneration
+      && state.assemblyDocument.joints.some((joint) => joint.id === motion.joint_id)
+        ? {
+            jointMotionPreview: {
+              jointId: motion.joint_id,
+              angleOffsetDeg: motion.angle_offset_deg,
+              linearOffsetMm: motion.linear_offset_mm,
+              secondaryAngleOffsetDeg: motion.secondary_angle_offset_deg,
+              tertiaryAngleOffsetDeg: motion.tertiary_angle_offset_deg,
+              secondaryLinearOffsetMm: motion.secondary_linear_offset_mm,
+              motion,
+              solution,
+            },
+            mechanismPreview: null,
+          }
+        : {}
+    ));
+  },
+
+  clearJointMotionPreview: () => {
+    jointMotionPreviewGeneration += 1;
+    set({ jointMotionPreview: null });
+  },
+
+  captureJointPosition: async () => {
+    const state = useAppStore.getState();
+    const preview = state.jointMotionPreview;
+    if (!preview) return;
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const motions = state.assemblyDocument.joints.map((joint) => (
+      joint.id === preview.motion.joint_id ? preview.motion : jointMotionState(joint)
+    ));
+    await engine.createAssemblyPosition({
+      name: `Position ${state.assemblyDocument.next_position_id}`,
+      motions,
+    });
+    const assemblyDocument = await engine.assemblyDocument();
+    set({
+      assemblyDocument,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  setJointEnabled: async (jointId, enabled) => {
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setJointEnabled({ joint_id: jointId, enabled });
+    const assemblySolution = await engine.assemblySolution();
+    set({
+      assemblyDocument,
+      assemblySolution,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  previewMechanismDrag: async (
+    bodyId,
+    targetPose,
+    occurrenceId = null,
+    grabPointLocal = null,
+    targetPointWorld = null,
+    initialJointMotions = [],
+    maximumIterations = 12,
+  ) => {
+    const generation = ++mechanismPreviewGeneration;
+    pendingMechanismPreview = {
+      generation,
+      bodyId,
+      occurrenceId,
+      targetPose,
+      grabPointLocal,
+      targetPointWorld,
+      initialJointMotions,
+      maximumIterations: Math.max(1, Math.min(96, Math.round(maximumIterations))),
+    };
+
+    const startPump = () => {
+      if (mechanismPreviewPump) return;
+      const running = (async () => {
+        const engine = await getEngine();
+        while (pendingMechanismPreview) {
+          const job = pendingMechanismPreview;
+          pendingMechanismPreview = null;
+          try {
+            const mechanismPreview = await engine.previewMechanismDrag({
+              body_id: job.bodyId,
+              occurrence_id: job.occurrenceId,
+              target_pose: job.targetPose,
+              grab_point_local: job.grabPointLocal,
+              target_point_world: job.targetPointWorld,
+              initial_joint_motions: job.initialJointMotions,
+              solve_orientation: false,
+              maximum_iterations: job.maximumIterations,
+            });
+            // Pointer targets are deliberately coalesced, but every completed
+            // intermediate solve is still the best continuity seed for the
+            // newer target waiting behind it. Without carrying that pose
+            // forward, a busy multi-joint mechanism repeatedly restarts from
+            // the last rendered frame and can appear to freeze until the
+            // pointer is released and grabbed again.
+            const nextJob = queuedMechanismPreview();
+            if (
+              nextJob
+              && nextJob.generation > job.generation
+              && nextJob.bodyId === job.bodyId
+              && nextJob.occurrenceId === job.occurrenceId
+            ) {
+              nextJob.initialJointMotions =
+                mechanismPreview.joint_motions.map((motion) => ({ ...motion }));
+            }
+            const publishAsProgress = nextJob
+              && nextJob.generation === mechanismPreviewGeneration
+              && nextJob.bodyId === job.bodyId
+              && nextJob.occurrenceId === job.occurrenceId;
+            set((state) => (
+              (job.generation === mechanismPreviewGeneration || publishAsProgress)
+              && state.solidScene.bodies.some((body) => body.id === job.bodyId)
+                ? { mechanismPreview, jointMotionPreview: null }
+                : {}
+            ));
+          } catch (error) {
+            // A slower superseded solve must not abort the pump or surface an
+            // error after a newer pointer target is already waiting. Only the
+            // newest request owns user-visible failure reporting.
+            if (
+              job.generation === mechanismPreviewGeneration
+              && pendingMechanismPreview === null
+            ) {
+              throw error;
+            }
+          }
+        }
+      })();
+      mechanismPreviewPump = running;
+      // Register reset before any caller awaits `running`. A target queued as
+      // the previous loop drains will then see a null pump and immediately
+      // start another pass instead of remaining stranded until the next grab.
+      void running.then(
+        () => {
+          if (mechanismPreviewPump === running) mechanismPreviewPump = null;
+        },
+        () => {
+          if (mechanismPreviewPump === running) mechanismPreviewPump = null;
+        },
+      );
+    };
+
+    // A drag may enqueue while the previous pump is completing. Keep the
+    // newest caller responsible for restarting until its target has either
+    // been processed or superseded by a newer pointer position.
+    while (generation === mechanismPreviewGeneration) {
+      startPump();
+      const running = mechanismPreviewPump;
+      if (!running) break;
+      try {
+        await running;
+      } catch (error) {
+        if (generation === mechanismPreviewGeneration) throw error;
+        return;
+      }
+      if (pendingMechanismPreview === null) break;
+    }
+  },
+
+  clearMechanismPreview: () => {
+    mechanismPreviewGeneration += 1;
+    pendingMechanismPreview = null;
+    set({ mechanismPreview: null });
+  },
+
+  captureMechanismPosition: async () => {
+    const state = useAppStore.getState();
+    const preview = state.mechanismPreview;
+    if (!preview) return;
+    mechanismPreviewGeneration += 1;
+    pendingMechanismPreview = null;
+    jointMotionPreviewGeneration += 1;
+    const engine = await getEngine();
+    const solvedById = new Map(preview.joint_motions.map((motion) => [motion.joint_id, motion]));
+    const liveBodyIds = new Set(state.solidScene.bodies.map((body) => body.id));
+    const activeJoints = state.assemblyDocument.joints.filter((joint) =>
+      liveBodyIds.has(joint.connector_a.body_id)
+      && liveBodyIds.has(joint.connector_b.body_id));
+    await engine.createAssemblyPosition({
+      name: `Position ${state.assemblyDocument.next_position_id}`,
+      motions: activeJoints.map((joint) => (
+        solvedById.get(joint.id) ?? jointMotionState(joint)
+      )),
+    });
+    const assemblyDocument = await engine.assemblyDocument();
+    set({
+      assemblyDocument,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  setGroundedBody: async (bodyId) => {
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    const engine = await getEngine();
+    const assemblyDocument = await engine.setGroundedBody(bodyId);
+    const assemblySolution = await engine.assemblySolution();
+    set({
+      assemblyDocument,
+      assemblySolution,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      dirty: true,
+    });
+  },
+
+  setSelectedJointId: (selectedJointId) => {
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    set({ selectedJointId, jointMotionPreview: null, mechanismPreview: null });
+  },
+
+  setJointDialogOpen: (jointDialogOpen) => {
+    jointPreviewGeneration += 1;
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    set((state) => ({
+      jointDialogOpen,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      jointEditingId: null,
+      jointConnectorPicks: [],
+      jointConnectorHover: null,
+      solidSidebarMode: jointDialogOpen ? 'assembly' : state.solidSidebarMode,
+      selectedBody: null,
+      selectedBodies: [],
+      selectedFace: null,
+      selectedFaces: [],
+      selectedFacePoint: null,
+      selectedEdges: [],
+      selectedOccurrenceId: null,
+    }));
+  },
+
+  openJointEditor: (jointId) => {
+    const state = useAppStore.getState();
+    const joint = state.assemblyDocument.joints.find((candidate) => candidate.id === jointId);
+    if (!joint) return;
+    jointPreviewGeneration += 1;
+    jointMotionPreviewGeneration += 1;
+    mechanismPreviewGeneration += 1;
+    set({
+      jointDialogOpen: true,
+      jointEditingId: jointId,
+      selectedJointId: jointId,
+      jointPreviewSolution: null,
+      jointMotionPreview: null,
+      mechanismPreview: null,
+      jointConnectorPicks: [
+        {
+          ...joint.connector_a,
+          occurrence_id: joint.advanced.connector_a_occurrence_id,
+        },
+        {
+          ...joint.connector_b,
+          occurrence_id: joint.advanced.connector_b_occurrence_id,
+        },
+      ],
+      jointConnectorHover: null,
+      solidSidebarMode: 'assembly',
+      selectedBody: joint.connector_b.body_id,
+      selectedBodies: [joint.connector_a.body_id, joint.connector_b.body_id],
+      selectedFace: joint.connector_b.face_id || null,
+      selectedFaces: [joint.connector_a.face_id, joint.connector_b.face_id]
+        .filter((faceId) => faceId !== 0),
+      selectedFacePoint: {
+        x: joint.connector_b.frame.origin[0],
+        y: joint.connector_b.frame.origin[1],
+        z: joint.connector_b.frame.origin[2],
+      },
+      selectedEdges: [joint.connector_a.edge_id, joint.connector_b.edge_id]
+        .filter((edgeId): edgeId is number => Boolean(edgeId)),
+    });
+  },
+
+  toggleJointConnectorPick: (pick) => set((state) => {
+    const identity = (candidate: JointConnectorDto) =>
+      `${candidate.occurrence_id ?? 0}:${candidate.body_id}:${candidate.face_id}:${candidate.edge_id ?? 0}:${candidate.kind}:${candidate.frame.origin.join(',')}`;
+    const key = identity(pick);
+    const existing = state.jointConnectorPicks.findIndex(
+      (candidate) => identity(candidate) === key,
+    );
+    let jointConnectorPicks = [...state.jointConnectorPicks];
+    if (existing >= 0) jointConnectorPicks.splice(existing, 1);
+    else if (jointConnectorPicks.length < 2) jointConnectorPicks.push(pick);
+    else {
+      const brokenIndex = jointConnectorPicks.findIndex(
+        (candidate) => !jointConnectorIsLive(candidate, state.solidScene),
+      );
+      const replaceIndex = brokenIndex >= 0 ? brokenIndex : 1;
+      jointConnectorPicks[replaceIndex] = pick;
+    }
+    const active = jointConnectorPicks[jointConnectorPicks.length - 1] ?? null;
+    return {
+      jointConnectorPicks,
+      jointPreviewSolution:
+        jointConnectorPicks.length === 2 ? state.jointPreviewSolution : null,
+      selectedBody: active?.body_id ?? null,
+      selectedBodies: [...new Set(jointConnectorPicks.map((candidate) => candidate.body_id))],
+      selectedFace: active && active.face_id !== 0 ? active.face_id : null,
+      selectedFaces: [...new Set(jointConnectorPicks
+        .map((candidate) => candidate.face_id)
+        .filter((faceId) => faceId !== 0))],
+      selectedFacePoint: active
+        ? {
+            x: active.frame.origin[0],
+            y: active.frame.origin[1],
+            z: active.frame.origin[2],
+          }
+        : null,
+      selectedEdges: [...new Set(jointConnectorPicks.flatMap((candidate) =>
+        candidate.edge_id ? [candidate.edge_id] : []))],
+      selectedNode: bodyBrowserNode(state.document, active?.body_id ?? null),
+    };
+  }),
+
+  clearJointConnectorPicks: () => set({
+    jointConnectorPicks: [],
+    jointPreviewSolution: null,
+    selectedNode: null,
+    selectedBody: null,
+    selectedBodies: [],
+    selectedFace: null,
+    selectedFaces: [],
+    selectedFacePoint: null,
+    selectedEdges: [],
+  }),
+
+  setJointConnectorHover: (jointConnectorHover) => set((state) => ({
+    jointConnectorHover,
+    hoveredOccurrenceId: jointConnectorHover?.occurrence_id ?? (
+      state.jointDialogOpen ? null : state.hoveredOccurrenceId
+    ),
+    hoveredFace: jointConnectorHover && jointConnectorHover.face_id !== 0
+      ? jointConnectorHover.face_id
+      : (
+      state.jointDialogOpen ? null : state.hoveredFace
+    ),
+    hoveredEdge: jointConnectorHover?.edge_id ?? (
+      state.jointDialogOpen ? null : state.hoveredEdge
+    ),
+  })),
+
+  setSolidSidebarMode: (solidSidebarMode) => {
+    if (solidSidebarMode === 'model') {
+      jointMotionPreviewGeneration += 1;
+      mechanismPreviewGeneration += 1;
+    }
+    set({
+      solidSidebarMode,
+      selectedOccurrenceId:
+        solidSidebarMode === 'model' ? null : useAppStore.getState().selectedOccurrenceId,
+      hoveredOccurrenceId:
+        solidSidebarMode === 'model' ? null : useAppStore.getState().hoveredOccurrenceId,
+      jointMotionPreview:
+        solidSidebarMode === 'model' ? null : useAppStore.getState().jointMotionPreview,
+      mechanismPreview:
+        solidSidebarMode === 'model' ? null : useAppStore.getState().mechanismPreview,
+    });
+  },
+
   setSelectedDrawingViewId: (selectedDrawingViewId) => set({ selectedDrawingViewId }),
 
   setSelectedDrawingAnnotationId: (selectedDrawingAnnotationId) =>
@@ -934,7 +1916,9 @@ export const useAppStore = create<AppState>()((set) => ({
     fileName,
     bodyAppearances = [],
     drawingDocument = emptyDrawingDocument(),
+    assemblyDocument = emptyAssemblyDocument(),
     projectVisibility = emptyProjectVisibility(),
+    assemblySolution = emptyAssemblySolution(),
   ) =>
     set({
       ...resetDocumentUiState(),
@@ -944,6 +1928,8 @@ export const useAppStore = create<AppState>()((set) => ({
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
       drawingDocument: normalizeDrawingDocument(drawingDocument),
+      assemblyDocument,
+      assemblySolution,
       hidden: hiddenFromPersistedVisibility(update.document, projectVisibility),
       projectVisibility,
       dirty: false,
@@ -1284,6 +2270,12 @@ export const useAppStore = create<AppState>()((set) => ({
       selectedFaces: [],
       selectedFacePoint: null,
       selectedEdges: [],
+      hoveredFace: null,
+      hoveredEdge: null,
+      hoveredPlane: null,
+      hoveredDatumPlane: null,
+      selectedOccurrenceId: null,
+      hoveredOccurrenceId: null,
     }),
 
   setHoveredEdge: (id) => set((state) => (state.hoveredEdge === id ? state : { hoveredEdge: id })),
@@ -1698,6 +2690,7 @@ export const useAppStore = create<AppState>()((set) => ({
         holeDialogFeature: null,
         profilePicker: null,
         curvePicker: null,
+        solidCommandPreview: null,
       };
     }),
 
@@ -1707,6 +2700,7 @@ export const useAppStore = create<AppState>()((set) => ({
       constructionPlanePickTarget: null,
       constructionPlanePickedReference: null,
       constructionPlanePickedEdge: null,
+      solidCommandPreview: null,
     }),
 
   setConstructionPlanePickTarget: (target) =>
@@ -1739,9 +2733,11 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      solidCommandPreview: null,
     }),
 
-  closeBodyFeatureDialog: () => set({ bodyFeatureDialog: null }),
+  closeBodyFeatureDialog: () =>
+    set({ bodyFeatureDialog: null, solidCommandPreview: null }),
 
   openSketchPatternDialog: (kind) =>
     set({

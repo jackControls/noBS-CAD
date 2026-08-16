@@ -49,6 +49,7 @@ export function ExtrudeDialog() {
   const setSolidCommandPreview = useAppStore((s) => s.setSolidCommandPreview);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
+  const [profileDiagnostics, setProfileDiagnostics] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [operation, setOperation] = useState<ExtrudeOperation>('new_body');
@@ -96,6 +97,13 @@ export function ExtrudeDialog() {
         if (cancelled) return;
         const usable = nextCatalog.filter((entry) => entry.profiles.some((profile) => profile.nesting_depth % 2 === 0));
         setCatalog(usable);
+        setProfileDiagnostics(
+          nextCatalog.flatMap((entry) =>
+            entry.profile_error === null || entry.profile_error === undefined
+              ? []
+              : [`${entry.sketch_name}: ${entry.profile_error}`],
+          ),
+        );
 
         const edit = openFeature > 0
           ? definitions.find((definition) => definition.feature_id === openFeature)
@@ -233,6 +241,11 @@ export function ExtrudeDialog() {
   const secondDistanceNumber = Number(secondDistance);
   const taperNumber = Number(taper);
   const profileSelectionKey = profileIndices.join(',');
+  const sourceSelectionKey = sourceFace
+    ? `face:${sourceFace.body_id}:${sourceFace.face_id}`
+    : profileSelectionKey.length > 0
+      ? `profiles:${sketchName}:${profileSelectionKey}`
+      : null;
   const automaticInference = useMemo(() => {
     if (
       openFeature !== 0 ||
@@ -302,7 +315,7 @@ export function ExtrudeDialog() {
       distanceInputRef.current?.select();
     });
     return () => cancelAnimationFrame(frame);
-  }, [extentType, loadError, loading, openFeature]);
+  }, [extentType, loadError, loading, openFeature, sourceSelectionKey]);
 
   const booleanOperation = operation !== 'new_body';
   const extentValid = (() => {
@@ -736,9 +749,19 @@ export function ExtrudeDialog() {
               {loadError}
             </p>
           ) : catalog.length === 0 && planarFaces.length === 0 ? (
-            <p className="rounded border border-edge bg-header p-2 text-xs leading-5 text-mute">
-              {t('extrude.noProfiles')}
-            </p>
+            <div className="space-y-2 rounded border border-edge bg-header p-2 text-xs leading-5 text-mute">
+              <p>{t('extrude.noProfiles')}</p>
+              {profileDiagnostics.length > 0 ? (
+                <div className="border-t border-edge pt-2">
+                  <p className="font-semibold text-ink">{t('extrude.profileDiagnostics')}</p>
+                  <ul className="list-disc pl-4">
+                    {profileDiagnostics.map((diagnostic) => (
+                      <li key={diagnostic}>{diagnostic}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
           ) : (
             <>
               <label>
@@ -969,6 +992,7 @@ export function ExtrudeDialog() {
                     </span>
                     <DimensionInput
                       ref={distanceInputRef}
+                      autoSelectKey={sourceSelectionKey}
                       data-testid="extrude-distance"
                       min={extentType === 'distance' ? undefined : '0.000001'}
                       step="any"

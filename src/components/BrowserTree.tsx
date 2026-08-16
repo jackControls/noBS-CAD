@@ -4,16 +4,21 @@
  * eye-visibility toggles, hover states, and selection highlight.
  */
 import {
+  Anchor,
   Bookmark,
   Box,
   ChevronDown,
   ChevronRight,
   CircleDot,
+  ClipboardPaste,
+  Copy,
   Crosshair,
+  Download,
   Eye,
   EyeOff,
   Globe,
   Layers3,
+  Link2,
   Lock,
   MousePointer2,
   PenLine,
@@ -21,6 +26,7 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
+  Unlock,
   type LucideIcon,
 } from 'lucide-react';
 import { useState, type KeyboardEvent, type MouseEvent } from 'react';
@@ -29,13 +35,21 @@ import { cx } from '../lib/cx';
 import {
   deleteTimelineFeature,
   editSketch,
+  openBodyFeature,
   openConstructionPlane,
   pickDatumPlane,
   pickPlane,
 } from '../engine/controller';
 import { useAppStore } from '../store/appStore';
+import {
+  copyBodyToClipboard,
+  exportBodyAsStep,
+  hasBodyClipboard,
+  pasteBodyFromClipboard,
+} from '../files/projectFiles';
 import type { BrowserNode, BrowserNodeKind } from '../types/document';
 import type { FeatureDto } from '../types/document';
+import type { JointDefinitionDto } from '../engine/types';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
@@ -85,12 +99,20 @@ interface BrowserContextTarget {
   y: number;
 }
 
+interface JointContextTarget {
+  jointId: number;
+  label: string;
+  x: number;
+  y: number;
+}
+
 function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 }
 
 function selectBrowserNode(node: BrowserNode, additive = false) {
   const state = useAppStore.getState();
+  state.setSelectedJointId(null);
   if (node.kind === 'body' && node.reference_id !== null) {
     state.selectSolidFeature(
       'body',
@@ -105,6 +127,19 @@ function selectBrowserNode(node: BrowserNode, additive = false) {
   }
 }
 
+function selectBrowserJoint(joint: JointDefinitionDto) {
+  const state = useAppStore.getState();
+  state.clearSolidSelection();
+  for (const connector of [joint.connector_a, joint.connector_b]) {
+    if (connector.kind === 'circular_edge' && connector.edge_id) {
+      state.selectSolidFeature('edge', connector.body_id, connector.edge_id, null, true);
+    } else if (connector.face_id !== 0) {
+      state.selectSolidFeature('face', connector.body_id, connector.face_id, null, true);
+    }
+  }
+  state.setSelectedJointId(joint.id);
+}
+
 export function BrowserTree() {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
@@ -114,8 +149,10 @@ export function BrowserTree() {
   const hidden = useAppStore((s) => s.hidden);
   const solidScene = useAppStore((s) => s.solidScene);
   const datumPlanes = useAppStore((s) => s.datumPlanes);
+  const assemblyDocument = useAppStore((s) => s.assemblyDocument);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const [contextTarget, setContextTarget] = useState<BrowserContextTarget | null>(null);
+  const [jointContextTarget, setJointContextTarget] = useState<JointContextTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FeatureDto | null>(null);
 
   const featureForNode = (node: BrowserNode): FeatureDto | null => {
@@ -150,6 +187,7 @@ export function BrowserTree() {
     const isActiveSketch =
       node.kind === 'sketch' && node.name !== null && node.name === activeSketchName;
     const deleteFeature = featureForNode(node);
+    const bodyId = node.kind === 'body' ? node.reference_id : null;
 
     if (plane) {
       primary.push({
@@ -196,6 +234,68 @@ export function BrowserTree() {
         icon: <Pencil size={14} />,
         disabled: isActiveSketch || mode !== 'solid' || busy,
         onSelect: () => void editSketch(node.name!),
+      });
+    }
+    if (bodyId !== null) {
+      primary.push(
+        {
+          type: 'item',
+          id: 'move-copy-body',
+          label: t('ribbon.solid.moveCopy'),
+          icon: <Crosshair size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () => {
+            selectBrowserNode(node);
+            openBodyFeature('move_copy');
+          },
+        },
+        {
+          type: 'item',
+          id: 'copy-body',
+          label: t('browser.copyBody'),
+          icon: <Copy size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () => void copyBodyToClipboard(bodyId).catch(showBrowserActionError),
+        },
+        {
+          type: 'item',
+          id: 'export-body-step',
+          label: t('browser.exportBodyStep'),
+          icon: <Download size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () => void exportBodyAsStep(bodyId).catch(showBrowserActionError),
+        },
+        {
+          type: 'item',
+          id: assemblyDocument.grounded_body_id === bodyId ? 'release-component' : 'fix-component',
+          label: t(
+            assemblyDocument.grounded_body_id === bodyId
+              ? 'browser.releaseComponent'
+              : 'browser.fixComponent',
+          ),
+          icon:
+            assemblyDocument.grounded_body_id === bodyId
+              ? <Unlock size={14} />
+              : <Anchor size={14} />,
+          disabled: mode !== 'solid' || busy,
+          onSelect: () =>
+            void useAppStore
+              .getState()
+              .setGroundedBody(
+                assemblyDocument.grounded_body_id === bodyId ? null : bodyId,
+              )
+              .catch(showBrowserActionError),
+        },
+      );
+    }
+    if (node.kind === 'bodies_folder' || bodyId !== null) {
+      primary.push({
+        type: 'item',
+        id: 'paste-body',
+        label: t('browser.pasteBody'),
+        icon: <ClipboardPaste size={14} />,
+        disabled: mode !== 'solid' || busy || !hasBodyClipboard(),
+        onSelect: () => void pasteBodyFromClipboard().catch(showBrowserActionError),
       });
     }
     if (
@@ -253,6 +353,43 @@ export function BrowserTree() {
     return entries;
   };
 
+  const jointContextEntries = (): ContextMenuEntry[] => {
+    if (!jointContextTarget) return [];
+    const joint = assemblyDocument.joints.find(
+      (candidate) => candidate.id === jointContextTarget.jointId,
+    );
+    if (!joint) return [];
+    return [
+      {
+        type: 'item',
+        id: 'edit-joint',
+        label: t('browser.editJoint'),
+        icon: <Pencil size={14} />,
+        onSelect: () => useAppStore.getState().openJointEditor(joint.id),
+      },
+      {
+        type: 'item',
+        id: 'toggle-joint',
+        label: t(joint.enabled ? 'browser.suppressJoint' : 'browser.unsuppressJoint'),
+        icon: joint.enabled ? <EyeOff size={14} /> : <Eye size={14} />,
+        onSelect: () => void useAppStore.getState()
+          .setJointEnabled(joint.id, !joint.enabled)
+          .catch(showBrowserActionError),
+      },
+      { type: 'separator', id: 'joint-delete-separator' },
+      {
+        type: 'item',
+        id: 'delete-joint',
+        label: t('browser.deleteJoint'),
+        icon: <Trash2 size={14} />,
+        danger: true,
+        onSelect: () => void useAppStore.getState()
+          .deleteJoint(joint.id)
+          .catch(showBrowserActionError),
+      },
+    ];
+  };
+
   return (
     <aside
       data-testid="browser-panel"
@@ -267,8 +404,15 @@ export function BrowserTree() {
         {document ? (
           <RootRow
             onOpenContext={(node, label, x, y) =>
-              setContextTarget({ node, label, x, y })
+              {
+                setJointContextTarget(null);
+                setContextTarget({ node, label, x, y });
+              }
             }
+            onOpenJointContext={(jointId, label, x, y) => {
+              setContextTarget(null);
+              setJointContextTarget({ jointId, label, x, y });
+            }}
           />
         ) : null}
       </div>
@@ -278,6 +422,14 @@ export function BrowserTree() {
           entries={contextEntries()}
           ariaLabel={`${contextTarget.label} — ${t('browser.contextMenu')}`}
           onClose={() => setContextTarget(null)}
+        />
+      )}
+      {jointContextTarget && (
+        <ContextMenu
+          point={jointContextTarget}
+          entries={jointContextEntries()}
+          ariaLabel={`${jointContextTarget.label} — ${t('browser.contextMenu')}`}
+          onClose={() => setJointContextTarget(null)}
         />
       )}
       {deleteTarget && (
@@ -296,13 +448,25 @@ export function BrowserTree() {
   );
 }
 
+function showBrowserActionError(error: unknown): void {
+  useAppStore.getState().setConstraintDialog({
+    titleKey: 'file.errorTitle',
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function RootRow({
   onOpenContext,
+  onOpenJointContext,
 }: {
   onOpenContext: (node: BrowserNode, label: string, x: number, y: number) => void;
+  onOpenJointContext: (jointId: number, label: string, x: number, y: number) => void;
 }) {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document)!;
+  const joints = useAppStore((s) => s.assemblyDocument.joints);
+  const selectedJointId = useAppStore((s) => s.selectedJointId);
+  const [jointsExpanded, setJointsExpanded] = useState(true);
 
   const units = document.settings.units;
   const unitsLabel = t(`browser.units.${units}`);
@@ -320,6 +484,64 @@ function RootRow({
         {document.browser.map((node) => (
           <NodeRow key={node.id} node={node} depth={1} onOpenContext={onOpenContext} />
         ))}
+        <div>
+          <div
+            role="treeitem"
+            aria-expanded={jointsExpanded}
+            data-browser-joints-folder
+            className="group flex h-6 cursor-pointer items-center gap-0.5 pr-1 text-xs text-ink hover:bg-header"
+            style={{ paddingLeft: 18 }}
+            onClick={() => setJointsExpanded((expanded) => !expanded)}
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-mute">
+              {jointsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </span>
+            <Link2 size={13} className="shrink-0 text-mute" />
+            <span className="min-w-0 flex-1 truncate">{t('browser.joints')}</span>
+            <span className="rounded bg-header px-1 text-[8px] text-mute">{joints.length}</span>
+          </div>
+          {jointsExpanded && joints.map((joint) => (
+            <div
+              key={joint.id}
+              role="treeitem"
+              tabIndex={0}
+              data-browser-joint-id={joint.id}
+              aria-selected={selectedJointId === joint.id}
+              className={cx(
+                'group flex h-6 cursor-pointer items-center gap-1 pr-1 text-xs hover:bg-header',
+                selectedJointId === joint.id && 'bg-accent/20 hover:bg-accent/25',
+                !joint.enabled && 'opacity-55',
+              )}
+              style={{ paddingLeft: 36 }}
+              onClick={() => selectBrowserJoint(joint)}
+              onDoubleClick={() => useAppStore.getState().openJointEditor(joint.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                selectBrowserJoint(joint);
+                onOpenJointContext(
+                  joint.id,
+                  joint.name,
+                  event.clientX,
+                  event.clientY,
+                );
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  selectBrowserJoint(joint);
+                }
+              }}
+            >
+              <span className="h-4 w-4 shrink-0" />
+              <Link2 size={13} className="shrink-0 text-accent" />
+              <span className={cx('min-w-0 flex-1 truncate', !joint.enabled && 'line-through')}>
+                {joint.name}
+              </span>
+              <span className="text-[8px] uppercase text-mute">{joint.kind}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -354,6 +576,7 @@ function NodeRow({
   const setHoveredDatumPlane = useAppStore((s) => s.setHoveredDatumPlane);
   const activeSketchName = useAppStore((s) => s.activeSketch?.name ?? null);
   const activeFullyDefined = useAppStore((s) => s.activeSketch?.dof.fully_defined ?? false);
+  const groundedBodyId = useAppStore((s) => s.assemblyDocument.grounded_body_id);
 
   const hasChildren = node.children.length > 0;
   const Icon = KIND_ICONS[node.kind];
@@ -379,6 +602,8 @@ function NodeRow({
     node.kind === 'body' ||
     node.kind === 'sketch' ||
     node.kind === 'construction_plane';
+  const isGroundedBody =
+    node.kind === 'body' && node.reference_id !== null && node.reference_id === groundedBodyId;
 
   const openPointerContext = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -478,6 +703,13 @@ function NodeRow({
         <span className={cx('min-w-0 flex-1 truncate', isActiveSketch ? 'font-semibold text-accent' : 'text-ink')}>
           {label}
         </span>
+        {isGroundedBody && (
+          <Anchor
+            size={11}
+            className="shrink-0 text-accent"
+            aria-label={t('browser.fixComponent')}
+          />
+        )}
         {isActiveSketch && activeFullyDefined && (
           <Lock size={11} className="shrink-0 text-mute" aria-label={t('browser.fullyDefined')} />
         )}

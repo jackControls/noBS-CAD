@@ -18,7 +18,7 @@ use nbcad_solid::{
 use serde::{Deserialize, Serialize};
 
 use crate::sketch::SketchSnapshot;
-use crate::{DrawingDocumentDto, ProjectVisibilityDto};
+use crate::{AssemblyDocumentDto, DrawingDocumentDto, ProjectVisibilityDto};
 
 pub const PROJECT_FORMAT: &str = "nbcad-project";
 pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
@@ -57,6 +57,10 @@ pub(crate) struct ProjectModelV2 {
     /// omitted and rebuilt from the current solid model.
     #[serde(default)]
     pub drawings: DrawingDocumentDto,
+    /// Assembly intent references stable body/face topology. Display poses and
+    /// solver caches are rebuilt and deliberately excluded.
+    #[serde(default)]
+    pub assembly: AssemblyDocumentDto,
     /// Browser eye-toggle choices. Additive so older projects remain valid.
     #[serde(default)]
     pub visibility: ProjectVisibilityDto,
@@ -189,6 +193,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
         return Err("rollback index is beyond the feature history".to_string());
     }
     model.drawings.validate()?;
+    model.assembly.validate()?;
 
     let mut feature_ids = HashSet::new();
     for feature in &model.document.history.features {
@@ -441,6 +446,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
             return Err(format!("duplicate saved body feature {}", feature_id.0));
         }
         let (kind, label) = match definition {
+            BodyFeatureDefinitionDto::MoveCopy { .. } => (FeatureKind::MoveCopy, "Move/Copy"),
             BodyFeatureDefinitionDto::Shell { .. } => (FeatureKind::Shell, "Shell"),
             BodyFeatureDefinitionDto::Mirror { .. } => (FeatureKind::Mirror, "Mirror"),
             BodyFeatureDefinitionDto::RectangularPattern { .. } => {
@@ -455,6 +461,12 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
         };
         validate_feature_entry(model, feature_id, definition.name(), kind, label)?;
         let reserved: &[nbcad_core::BodyId] = match definition {
+            BodyFeatureDefinitionDto::MoveCopy {
+                copy: true,
+                result_body_ids,
+                ..
+            } => result_body_ids,
+            BodyFeatureDefinitionDto::MoveCopy { .. } => &[],
             BodyFeatureDefinitionDto::Mirror { new_body_ids, .. }
             | BodyFeatureDefinitionDto::RectangularPattern { new_body_ids, .. }
             | BodyFeatureDefinitionDto::CircularPattern { new_body_ids, .. } => new_body_ids,

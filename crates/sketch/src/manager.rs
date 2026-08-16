@@ -2,26 +2,43 @@
 //! (`begin_sketch` / `end_sketch`) and routes drawing ops to the active
 //! session. This is the object both engine hosts (Tauri, WASM) hold.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f64::consts::TAU;
 
+use nbcad_assembly::{
+    approximate_interference_report, approximate_pair_result, contact_violation_score,
+    ApplyJointMotionsRequestDto, AssemblyDocumentDto, AssemblyPositionDto, AssemblyPositionId,
+    AssemblySolutionDto, ComponentDefinitionDto, ComponentOccurrenceDto, ContactSetDto,
+    ContactSetId, CreateAssemblyPositionRequestDto, CreateComponentRequestDto,
+    CreateContactSetRequestDto, CreateJointRequestDto, CreateMotionStudyRequestDto,
+    CreateOccurrenceRequestDto, DuplicateOccurrenceRequestDto, EvaluateMotionStudyRequestDto,
+    InterferenceCheckRequestDto, InterferenceReportDto, JointDefinitionDto, JointId,
+    MechanismDragRequestDto, MechanismPreviewDto, MotionPathRequestDto, MotionStudyDto,
+    MotionStudyEvaluationDto, MotionStudyId, MotionStudySampleDto, SampleMotionStudyRequestDto,
+    SetJointCoordinatesRequestDto, SetJointEnabledRequestDto, SetJointMotionRequestDto,
+    SetOccurrenceGroundedRequestDto, SetOccurrencePoseRequestDto, SweptCollisionEventDto,
+    SweptCollisionReportDto, SweptCollisionRequestDto, UpdateComponentRequestDto,
+    UpdateJointRequestDto, UpdateOccurrenceRequestDto,
+};
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
 };
 use nbcad_solid::{
-    extract_closed_loops_allow_open, BodyFeatureDefinitionDto, BodyFeatureRequestDto,
-    CommitKernelRequest, DatumPlaneDefinitionDto, DatumPlaneRequest, DatumPlaneSourceDto,
-    DatumPlaneUpdateDto, DeleteFeatureRequest, EditBodyFeatureRequest, EditDatumPlaneRequest,
-    EditExtrudeRequest, EditHoleRequest, EditLoftRequest, EditRevolveRequest, EditRibRequest,
-    EditSolidChamferRequest, EditSolidFilletRequest, EditSweepRequest, ExtrudeDefinitionDto,
-    ExtrudeExtent, ExtrudeOperation, ExtrudeRequest, HoleDefinitionDto, HoleRequest,
-    LoftDefinitionDto, LoftRequest, Point2Dto, Point3Dto, ProfileCatalogItemDto, ProfileCurveDto,
-    ProfileLoopDto, RecomputePlanDto, ReorderFeatureRequest, RevolveDefinitionDto, RevolveRequest,
-    RibDefinitionDto, RibExtent, RibRequest, Segment2, SetRollbackRequest, SketchLineDto,
-    SketchPathCurveDto, SketchPointKindDto, SketchReferencePointDto, SolidChamferDefinitionDto,
-    SolidChamferRequest, SolidDocument, SolidFilletDefinitionDto, SolidFilletRequest,
-    SolidSceneDto, SolidUpdateDto, SweepDefinitionDto, SweepRequest,
+    canonicalize_profile_curves, extract_closed_loops_allow_open, BodyFeatureDefinitionDto,
+    BodyFeatureRequestDto, CommitKernelRequest, DatumPlaneDefinitionDto, DatumPlaneRequest,
+    DatumPlaneSourceDto, DatumPlaneUpdateDto, DeleteFeatureRequest, EditBodyFeatureRequest,
+    EditDatumPlaneRequest, EditExtrudeRequest, EditHoleRequest, EditLoftRequest,
+    EditRevolveRequest, EditRibRequest, EditSolidChamferRequest, EditSolidFilletRequest,
+    EditSweepRequest, ExtrudeDefinitionDto, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest,
+    HoleDefinitionDto, HoleRequest, LoftDefinitionDto, LoftRequest, Point2Dto, Point3Dto,
+    ProfileCatalogItemDto, ProfileCurveDto, ProfileLoopDto, RecomputePlanDto,
+    ReorderFeatureRequest, RevolveDefinitionDto, RevolveRequest, RibDefinitionDto, RibExtent,
+    RibRequest, Segment2, SetRollbackRequest, SketchLineDto, SketchPathCurveDto,
+    SketchPointKindDto, SketchReferencePointDto, SolidChamferDefinitionDto, SolidChamferRequest,
+    SolidDocument, SolidFilletDefinitionDto, SolidFilletRequest, SolidSceneDto, SolidUpdateDto,
+    SweepDefinitionDto, SweepRequest,
 };
 
 use crate::constraint::{Constraint, ConstraintId};
@@ -87,11 +104,21 @@ pub struct SketchManager {
     body_appearances: Vec<BodyAppearance>,
     /// Persistent technical-drawing sheets and view definitions.
     drawings: DrawingDocumentDto,
+    /// Persistent assembly/joint intent. Kinematic display poses are derived
+    /// by the assembly solver at runtime and never baked into solid history.
+    assembly: AssemblyDocumentDto,
+    /// Solving a large occurrence graph is deterministic but not free. The
+    /// authoritative result is retained until assembly intent or source
+    /// geometry changes; render snapshots and UI reads then share one solve.
+    assembly_solution_cache: RefCell<Option<AssemblySolutionDto>>,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
+    /// Armed only for an explicit history deletion. Rollback and ordinary
+    /// recompute can hide a body temporarily and must retain assembly joints.
+    pending_joint_body_deletion: Option<(u64, BTreeSet<BodyId>)>,
 }
 
 #[derive(Debug)]
@@ -123,8 +150,11 @@ impl SketchManager {
             grid_step: GRID_STEP_MM,
             body_appearances: Vec::new(),
             drawings: DrawingDocumentDto::default(),
+            assembly: AssemblyDocumentDto::default(),
+            assembly_solution_cache: RefCell::new(None),
             project_visibility: ProjectVisibilityDto::default(),
             pending_project: None,
+            pending_joint_body_deletion: None,
         }
     }
 
@@ -180,6 +210,7 @@ impl SketchManager {
             body_features: self.solids.body_feature_definitions().to_vec(),
             body_appearances: self.scrubbed_body_appearances(),
             drawings: self.drawings.clone(),
+            assembly: self.assembly.clone(),
             visibility: self.scrubbed_project_visibility(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
@@ -292,8 +323,11 @@ impl SketchManager {
             grid_step: GRID_STEP_MM,
             body_appearances: model.body_appearances,
             drawings: model.drawings,
+            assembly: model.assembly,
+            assembly_solution_cache: RefCell::new(None),
             project_visibility: model.visibility,
             pending_project: None,
+            pending_joint_body_deletion: None,
         };
         candidate.sketch_count = candidate
             .sketch_count
@@ -505,6 +539,645 @@ impl SketchManager {
 
     pub fn drawing_document(&self) -> DrawingDocumentDto {
         self.drawings.clone()
+    }
+
+    pub fn assembly_document(&self) -> AssemblyDocumentDto {
+        self.assembly.clone()
+    }
+
+    pub fn set_assembly_document(
+        &mut self,
+        document: AssemblyDocumentDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        document.validate().map_err(SessionError::Solid)?;
+        self.assembly = document;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn assembly_solution(&self) -> AssemblySolutionDto {
+        if let Some(solution) = self.assembly_solution_cache.borrow().as_ref() {
+            return solution.clone();
+        }
+        let solution = self.assembly.solve(self.solids.scene());
+        *self.assembly_solution_cache.borrow_mut() = Some(solution.clone());
+        solution
+    }
+
+    fn invalidate_assembly_solution(&mut self) {
+        *self.assembly_solution_cache.get_mut() = None;
+    }
+
+    pub fn create_component(
+        &mut self,
+        request: CreateComponentRequestDto,
+    ) -> Result<ComponentDefinitionDto, SessionError> {
+        let component = self
+            .assembly
+            .create_component(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(component)
+    }
+
+    pub fn update_component(
+        &mut self,
+        request: UpdateComponentRequestDto,
+    ) -> Result<ComponentDefinitionDto, SessionError> {
+        let component = self
+            .assembly
+            .update_component(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(component)
+    }
+
+    pub fn create_occurrence(
+        &mut self,
+        request: CreateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .create_occurrence(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn update_occurrence(
+        &mut self,
+        request: UpdateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .update_occurrence(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn duplicate_occurrence(
+        &mut self,
+        request: DuplicateOccurrenceRequestDto,
+    ) -> Result<ComponentOccurrenceDto, SessionError> {
+        let occurrence = self
+            .assembly
+            .duplicate_occurrence_subtree(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(occurrence)
+    }
+
+    pub fn set_occurrence_grounded(
+        &mut self,
+        request: SetOccurrenceGroundedRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_occurrence_grounded(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_occurrence_pose(
+        &mut self,
+        request: SetOccurrencePoseRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_occurrence_pose(request)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn preview_joint(
+        &self,
+        request: CreateJointRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .create(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn create_joint(
+        &mut self,
+        request: CreateJointRequestDto,
+    ) -> Result<JointDefinitionDto, SessionError> {
+        let joint = self
+            .assembly
+            .create(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(joint)
+    }
+
+    pub fn delete_joint(&mut self, id: JointId) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly.delete(id).map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn update_joint(
+        &mut self,
+        request: UpdateJointRequestDto,
+    ) -> Result<JointDefinitionDto, SessionError> {
+        let joint = self
+            .assembly
+            .update(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(joint)
+    }
+
+    pub fn preview_joint_update(
+        &self,
+        request: UpdateJointRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .update(request, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn set_joint_enabled(
+        &mut self,
+        request: SetJointEnabledRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_enabled(request.joint_id, request.enabled)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn set_joint_motion(
+        &mut self,
+        request: SetJointMotionRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_motion(
+                request.joint_id,
+                request.angle_offset_deg,
+                request.linear_offset_mm,
+            )
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    /// Solve a candidate joint position without mutating the saved assembly.
+    /// Viewport animation and direct manipulation must cross this boundary so
+    /// a preview can never dirty the project or silently become a design pose.
+    pub fn preview_joint_motion(
+        &self,
+        request: SetJointMotionRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .set_joint_motion(
+                request.joint_id,
+                request.angle_offset_deg,
+                request.linear_offset_mm,
+            )
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn set_joint_coordinates(
+        &mut self,
+        request: SetJointCoordinatesRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_joint_coordinates(request.motion.joint_id, request.motion)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    /// Solve a complete (possibly multi-axis) joint coordinate state without
+    /// mutating the saved assembly document.
+    pub fn preview_joint_coordinates(
+        &self,
+        request: SetJointCoordinatesRequestDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        let mut preview = self.assembly.clone();
+        preview
+            .set_joint_coordinates(request.motion.joint_id, request.motion)
+            .map_err(SessionError::Solid)?;
+        Ok(preview.solve(self.solids.scene()))
+    }
+
+    pub fn preview_mechanism_drag(
+        &self,
+        request: MechanismDragRequestDto,
+    ) -> Result<MechanismPreviewDto, SessionError> {
+        self.assembly
+            .preview_mechanism_drag(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn apply_joint_motions(
+        &mut self,
+        request: ApplyJointMotionsRequestDto,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .apply_joint_motions(&request.motions)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn create_assembly_position(
+        &mut self,
+        request: CreateAssemblyPositionRequestDto,
+    ) -> Result<AssemblyPositionDto, SessionError> {
+        self.assembly
+            .create_position(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_assembly_position(
+        &mut self,
+        position: AssemblyPositionDto,
+    ) -> Result<AssemblyPositionDto, SessionError> {
+        self.assembly
+            .update_position(position)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_assembly_position(
+        &mut self,
+        id: AssemblyPositionId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_position(id)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn apply_assembly_position(
+        &mut self,
+        id: AssemblyPositionId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .apply_position(id)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
+    }
+
+    pub fn create_motion_study(
+        &mut self,
+        request: CreateMotionStudyRequestDto,
+    ) -> Result<MotionStudyDto, SessionError> {
+        self.assembly
+            .create_motion_study(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_motion_study(
+        &mut self,
+        study: MotionStudyDto,
+    ) -> Result<MotionStudyDto, SessionError> {
+        self.assembly
+            .update_motion_study(study)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_motion_study(
+        &mut self,
+        id: MotionStudyId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_motion_study(id)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn sample_motion_study(
+        &self,
+        request: SampleMotionStudyRequestDto,
+    ) -> Result<MotionStudySampleDto, SessionError> {
+        self.assembly
+            .sample_motion_study(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn export_motion_path_csv(
+        &self,
+        request: MotionPathRequestDto,
+    ) -> Result<String, SessionError> {
+        self.assembly
+            .export_motion_path_csv(request, self.solids.scene())
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn create_contact_set(
+        &mut self,
+        request: CreateContactSetRequestDto,
+    ) -> Result<ContactSetDto, SessionError> {
+        self.assembly
+            .create_contact_set(request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn update_contact_set(
+        &mut self,
+        contact: ContactSetDto,
+    ) -> Result<ContactSetDto, SessionError> {
+        self.assembly
+            .update_contact_set(contact)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn delete_contact_set(
+        &mut self,
+        id: ContactSetId,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .delete_contact_set(id)
+            .map_err(SessionError::Solid)?;
+        Ok(self.assembly.clone())
+    }
+
+    pub fn approximate_interference_check(
+        &self,
+        request: InterferenceCheckRequestDto,
+    ) -> Result<InterferenceReportDto, SessionError> {
+        approximate_interference_report(
+            self.solids.scene(),
+            &self.assembly_solution().instance_body_poses,
+            &request,
+        )
+        .map_err(SessionError::Solid)
+    }
+
+    pub fn approximate_motion_study_evaluation(
+        &self,
+        request: EvaluateMotionStudyRequestDto,
+    ) -> Result<MotionStudyEvaluationDto, SessionError> {
+        let mut sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+            study_id: request.study_id,
+            time_seconds: request.time_seconds,
+        })?;
+        let mut stopped_by_contact = None;
+        let mut stop_time_seconds = None;
+        if request.enforce_contacts {
+            let start = self.sample_motion_study(SampleMotionStudyRequestDto {
+                study_id: request.study_id,
+                time_seconds: request.previous_time_seconds.unwrap_or(0.0),
+            })?;
+            for contact in self
+                .assembly
+                .contact_sets
+                .iter()
+                .filter(|contact| contact.enabled && contact.stop_motion)
+            {
+                let violation = |candidate: &MotionStudySampleDto| -> Result<f64, SessionError> {
+                    let a = candidate
+                        .solution
+                        .instance_body_poses
+                        .iter()
+                        .find(|pose| {
+                            pose.occurrence_id == contact.occurrence_a
+                                && pose.body_id == contact.body_a
+                        })
+                        .ok_or_else(|| {
+                            SessionError::Solid(format!(
+                                "contact '{}' first body is missing",
+                                contact.name
+                            ))
+                        })?;
+                    let b = candidate
+                        .solution
+                        .instance_body_poses
+                        .iter()
+                        .find(|pose| {
+                            pose.occurrence_id == contact.occurrence_b
+                                && pose.body_id == contact.body_b
+                        })
+                        .ok_or_else(|| {
+                            SessionError::Solid(format!(
+                                "contact '{}' second body is missing",
+                                contact.name
+                            ))
+                        })?;
+                    let pair =
+                        approximate_pair_result(self.solids.scene(), a, b, contact.clearance_mm)
+                            .map_err(SessionError::Solid)?;
+                    Ok(contact_violation_score(&pair, contact.clearance_mm))
+                };
+                let start_violation = violation(&start)?;
+                let end_violation = violation(&sample)?;
+                if start_violation > 1.0e-7 && end_violation >= start_violation {
+                    sample = start;
+                    stopped_by_contact = Some(contact.id);
+                    stop_time_seconds = Some(sample.time_seconds);
+                    break;
+                }
+                if start_violation <= 1.0e-7 {
+                    const PROBE_STEPS: usize = 8;
+                    let end = sample.clone();
+                    let mut safe_time = start.time_seconds;
+                    let mut crossing = None;
+                    for step in 1..=PROBE_STEPS {
+                        let fraction = step as f64 / PROBE_STEPS as f64;
+                        let time =
+                            start.time_seconds + (end.time_seconds - start.time_seconds) * fraction;
+                        let candidate = if step == PROBE_STEPS {
+                            end.clone()
+                        } else {
+                            self.sample_motion_study(SampleMotionStudyRequestDto {
+                                study_id: request.study_id,
+                                time_seconds: time,
+                            })?
+                        };
+                        let candidate_violation = if step == PROBE_STEPS {
+                            end_violation
+                        } else {
+                            violation(&candidate)?
+                        };
+                        if candidate_violation <= 1.0e-7 {
+                            safe_time = candidate.time_seconds;
+                            continue;
+                        }
+                        let mut safe = safe_time;
+                        let mut blocked = candidate.time_seconds;
+                        for _ in 0..16 {
+                            let middle = (safe + blocked) * 0.5;
+                            let middle_sample =
+                                self.sample_motion_study(SampleMotionStudyRequestDto {
+                                    study_id: request.study_id,
+                                    time_seconds: middle,
+                                })?;
+                            if violation(&middle_sample)? > 1.0e-7 {
+                                blocked = middle;
+                            } else {
+                                safe = middle;
+                            }
+                        }
+                        crossing = Some(blocked);
+                        break;
+                    }
+                    if let Some(blocked) = crossing {
+                        sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+                            study_id: request.study_id,
+                            time_seconds: blocked,
+                        })?;
+                        stopped_by_contact = Some(contact.id);
+                        stop_time_seconds = Some(blocked);
+                        break;
+                    }
+                }
+            }
+        }
+        let mut contact_pairs = Vec::new();
+        for contact in self
+            .assembly
+            .contact_sets
+            .iter()
+            .filter(|contact| contact.enabled)
+        {
+            let a = sample
+                .solution
+                .instance_body_poses
+                .iter()
+                .find(|pose| {
+                    pose.occurrence_id == contact.occurrence_a && pose.body_id == contact.body_a
+                })
+                .ok_or_else(|| {
+                    SessionError::Solid(format!("contact '{}' first body is missing", contact.name))
+                })?;
+            let b = sample
+                .solution
+                .instance_body_poses
+                .iter()
+                .find(|pose| {
+                    pose.occurrence_id == contact.occurrence_b && pose.body_id == contact.body_b
+                })
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "contact '{}' second body is missing",
+                        contact.name
+                    ))
+                })?;
+            contact_pairs.push(
+                approximate_pair_result(self.solids.scene(), a, b, contact.clearance_mm)
+                    .map_err(SessionError::Solid)?,
+            );
+        }
+        let contacts = InterferenceReportDto {
+            exact: false,
+            pairs: contact_pairs,
+        };
+        Ok(MotionStudyEvaluationDto {
+            sample,
+            contacts,
+            stopped_by_contact,
+            stop_time_seconds,
+        })
+    }
+
+    pub fn approximate_swept_collision_check(
+        &self,
+        request: SweptCollisionRequestDto,
+    ) -> Result<SweptCollisionReportDto, SessionError> {
+        if !request.sample_rate_hz.is_finite() || !(1.0..=240.0).contains(&request.sample_rate_hz) {
+            return Err(SessionError::Solid(
+                "swept collision sample rate must be between 1 and 240 Hz".to_string(),
+            ));
+        }
+        let study = self
+            .assembly
+            .motion_studies
+            .iter()
+            .find(|study| study.id == request.study_id)
+            .ok_or_else(|| {
+                SessionError::Solid(format!(
+                    "motion study {} does not exist",
+                    request.study_id.0
+                ))
+            })?;
+        let count = (study.duration_seconds * request.sample_rate_hz).ceil() as u32 + 1;
+        let mut events = HashMap::<(u64, u64, u64, u64), SweptCollisionEventDto>::new();
+        for index in 0..count {
+            let time = (index as f64 / request.sample_rate_hz).min(study.duration_seconds);
+            let sample = self.sample_motion_study(SampleMotionStudyRequestDto {
+                study_id: request.study_id,
+                time_seconds: time,
+            })?;
+            let report = approximate_interference_report(
+                self.solids.scene(),
+                &sample.solution.instance_body_poses,
+                &InterferenceCheckRequestDto {
+                    occurrence_ids: Vec::new(),
+                    clearance_threshold_mm: request.clearance_threshold_mm,
+                },
+            )
+            .map_err(SessionError::Solid)?;
+            for pair in report
+                .pairs
+                .into_iter()
+                .filter(|pair| pair.interfering || pair.below_clearance)
+            {
+                let key = (
+                    pair.occurrence_a.0,
+                    pair.body_a.0,
+                    pair.occurrence_b.0,
+                    pair.body_b.0,
+                );
+                events
+                    .entry(key)
+                    .and_modify(|event| {
+                        event.last_time_seconds = time;
+                        event.minimum_clearance_mm =
+                            event.minimum_clearance_mm.min(pair.minimum_clearance_mm);
+                        event.maximum_overlap_volume_mm3 = event
+                            .maximum_overlap_volume_mm3
+                            .max(pair.overlap_volume_mm3);
+                    })
+                    .or_insert(SweptCollisionEventDto {
+                        occurrence_a: pair.occurrence_a,
+                        body_a: pair.body_a,
+                        occurrence_b: pair.occurrence_b,
+                        body_b: pair.body_b,
+                        first_time_seconds: time,
+                        last_time_seconds: time,
+                        minimum_clearance_mm: pair.minimum_clearance_mm,
+                        maximum_overlap_volume_mm3: pair.overlap_volume_mm3,
+                    });
+            }
+            if request.stop_at_first && !events.is_empty() {
+                let mut result = events.into_values().collect::<Vec<_>>();
+                result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+                return Ok(SweptCollisionReportDto {
+                    exact: false,
+                    sample_count: index + 1,
+                    events: result,
+                });
+            }
+        }
+        let mut result = events.into_values().collect::<Vec<_>>();
+        result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
+        Ok(SweptCollisionReportDto {
+            exact: false,
+            sample_count: count,
+            events: result,
+        })
+    }
+
+    pub fn set_grounded_body(
+        &mut self,
+        body_id: Option<nbcad_core::BodyId>,
+    ) -> Result<AssemblyDocumentDto, SessionError> {
+        self.assembly
+            .set_grounded_body(body_id, self.solids.scene())
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
+        Ok(self.assembly.clone())
     }
 
     pub fn project_visibility(&self) -> ProjectVisibilityDto {
@@ -1326,6 +1999,13 @@ impl SketchManager {
             .solids
             .prepare_delete_feature(request.feature_id, &catalog, &active)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
+        self.pending_joint_body_deletion = Some((
+            plan.transaction_id,
+            self.solids
+                .owned_body_ids_for_feature(request.feature_id)
+                .into_iter()
+                .collect(),
+        ));
 
         self.document.features_mut().remove(request.feature_id);
         match feature.kind {
@@ -1451,6 +2131,13 @@ impl SketchManager {
             return;
         }
         self.solids.cancel_pending(transaction_id);
+        if self
+            .pending_joint_body_deletion
+            .as_ref()
+            .is_some_and(|(pending_id, _)| *pending_id == transaction_id)
+        {
+            self.pending_joint_body_deletion = None;
+        }
     }
 
     pub fn commit_solid(
@@ -1474,6 +2161,16 @@ impl SketchManager {
             .commit(request.transaction_id, request.scene)
             .map_err(|error| SessionError::Solid(error.to_string()))?
             .clone();
+        if let Some((pending_id, deleted_body_ids)) = self.pending_joint_body_deletion.take() {
+            if pending_id == request.transaction_id {
+                let deleted_body_ids = deleted_body_ids
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>();
+                self.assembly
+                    .remove_joints_for_deleted_bodies(&deleted_body_ids)
+                    .map_err(SessionError::Solid)?;
+            }
+        }
 
         let body_ids = scene
             .bodies
@@ -1487,6 +2184,10 @@ impl SketchManager {
                 self.document.add_body_node(body.id.0, &body.name);
             }
         }
+        self.assembly
+            .synchronize_components(&scene)
+            .map_err(SessionError::Solid)?;
+        self.invalidate_assembly_solution();
         self.scrub_body_appearances();
         self.scrub_project_visibility();
 
@@ -1773,6 +2474,21 @@ impl SketchManager {
         }
         for definition in self.solids.body_feature_definitions() {
             match definition {
+                BodyFeatureDefinitionDto::MoveCopy {
+                    feature_id,
+                    body_ids,
+                    copy,
+                    result_body_ids,
+                    ..
+                } => {
+                    let access = body_access.entry(*feature_id).or_default();
+                    access.inputs.extend(body_ids.iter().copied());
+                    if *copy {
+                        access.outputs.extend(result_body_ids.iter().copied());
+                    } else {
+                        access.writes.extend(body_ids.iter().copied());
+                    }
+                }
                 BodyFeatureDefinitionDto::Shell {
                     feature_id,
                     body_id,
@@ -2185,6 +2901,7 @@ impl SketchManager {
             angle_deg,
             request.to_hint,
             request.ctrl_held,
+            request.tracking,
         ))
     }
 
@@ -2487,6 +3204,7 @@ fn support_edge_midpoints(
 fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static str) {
     match request {
         BodyFeatureRequestDto::Shell(_) => (FeatureKind::Shell, "Shell"),
+        BodyFeatureRequestDto::MoveCopy(_) => (FeatureKind::MoveCopy, "MoveCopy"),
         BodyFeatureRequestDto::Mirror(_) => (FeatureKind::Mirror, "Mirror"),
         BodyFeatureRequestDto::RectangularPattern(_) => {
             (FeatureKind::RectangularPattern, "RectangularPattern")
@@ -2725,6 +3443,7 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
     let mut lines = Vec::new();
     let mut path_curves = Vec::new();
     let mut reference_points = Vec::new();
+    let consumed_trim_carriers = consumed_trim_carrier_ids(sketch, CONSUMED_LINE_TOLERANCE);
     for entity in &sketch.entities {
         match entity {
             crate::dto::EntityDto::Line { id, start, end, .. } => {
@@ -2754,7 +3473,7 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
                 // An exact fillet boundary intentionally leaves a zero-span
                 // carrier line. It remains addressable in the sketch but is
                 // not part of the closed profile boundary.
-                if point2_distance(a, b) > CONSUMED_LINE_TOLERANCE {
+                if !consumed_trim_carriers.contains(&id.0) {
                     segments.push(Segment2 {
                         id: id.0 * 1_000,
                         a,
@@ -2878,10 +3597,13 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
         }
     }
 
-    let loops = if segments.is_empty() {
-        Vec::new()
+    let (loops, profile_error) = if segments.is_empty() {
+        (Vec::new(), None)
     } else {
-        extract_closed_loops_allow_open(&segments, PROFILE_TOLERANCE).unwrap_or_default()
+        match extract_closed_loops_allow_open(&segments, PROFILE_TOLERANCE) {
+            Ok(loops) => (loops, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        }
     };
     let mut profiles = loops
         .into_iter()
@@ -2891,7 +3613,10 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
             area: polygon_area(&points).abs(),
             parent_index: None,
             nesting_depth: 0,
-            curves: ordered_profile_curves(sketch, &segments, &points, PROFILE_TOLERANCE),
+            curves: canonicalize_profile_curves(
+                &ordered_profile_curves(sketch, &segments, &points, PROFILE_TOLERANCE),
+                PROFILE_TOLERANCE,
+            ),
             points,
         })
         .collect::<Vec<_>>();
@@ -2901,10 +3626,61 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
         feature_id,
         basis: sketch.basis,
         profiles,
+        profile_error,
         lines,
         path_curves,
         reference_points,
     }
+}
+
+/// A sub-micron line is not automatically disposable: users can deliberately
+/// model tiny geometry. Suppress it only when both endpoints are owned by
+/// corner modifiers and the line has actually reached the limiting condition.
+fn consumed_trim_carrier_ids(sketch: &SketchDto, tolerance: f64) -> BTreeSet<u64> {
+    let arc_tangencies = sketch
+        .constraints
+        .iter()
+        .filter_map(|constraint| match constraint.constraint {
+            Constraint::Tangent { a, b } => Some((a.0, b.0)),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    sketch
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            let crate::dto::EntityDto::Line {
+                id,
+                start_id,
+                end_id,
+                start,
+                end,
+                ..
+            } = entity
+            else {
+                return None;
+            };
+            if start.distance(*end) > tolerance {
+                return None;
+            }
+            let endpoint_is_trimmed = |point: EntityId| {
+                sketch
+                    .constraints
+                    .iter()
+                    .any(|constraint| match constraint.constraint {
+                        Constraint::ArcEndpointCoincident {
+                            point: owner, arc, ..
+                        } if owner == point => {
+                            arc_tangencies.contains(&(id.0, arc.0))
+                                || arc_tangencies.contains(&(arc.0, id.0))
+                        }
+                        Constraint::EqualDistance { a, b, .. } => a == point || b == point,
+                        _ => false,
+                    })
+            };
+            (endpoint_is_trimmed(*start_id) && endpoint_is_trimmed(*end_id)).then_some(id.0)
+        })
+        .collect()
 }
 
 fn classify_profile_nesting(profiles: &mut [ProfileLoopDto], tolerance: f64) {
@@ -3115,6 +3891,7 @@ fn ordered_profile_curves(
             Some(match entity {
                 crate::dto::EntityDto::Line { .. } => ProfileCurveDto::Line {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     start,
                     end,
                 },
@@ -3123,23 +3900,43 @@ fn ordered_profile_curves(
                 {
                     ProfileCurveDto::Circle {
                         entity_id,
+                        source_entity_ids: vec![entity_id],
                         center: Point2Dto::new(center.x, center.y),
                         radius: *radius,
                     }
                 }
                 crate::dto::EntityDto::Arc { .. } => ProfileCurveDto::Arc {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     start,
                     mid: path[path.len() / 2],
                     end,
                 },
-                crate::dto::EntityDto::Circle { center, radius, .. } => ProfileCurveDto::Circle {
+                crate::dto::EntityDto::Circle { center, radius, .. }
+                    if point2_distance(start, end) <= tolerance =>
+                {
+                    ProfileCurveDto::Circle {
+                        entity_id,
+                        source_entity_ids: vec![entity_id],
+                        center: Point2Dto::new(center.x, center.y),
+                        radius: *radius,
+                    }
+                }
+                // A line, arc, spline, or another circle may divide a circle
+                // into multiple selectable regions. Preserve just this
+                // boundary fragment as an analytic arc; emitting the source
+                // entity's full circle would create a kernel wire unrelated
+                // to the profile the user selected.
+                crate::dto::EntityDto::Circle { .. } => ProfileCurveDto::Arc {
                     entity_id,
-                    center: Point2Dto::new(center.x, center.y),
-                    radius: *radius,
+                    source_entity_ids: vec![entity_id],
+                    start,
+                    mid: path[path.len() / 2],
+                    end,
                 },
                 crate::dto::EntityDto::Spline { .. } => ProfileCurveDto::Polyline {
                     entity_id,
+                    source_entity_ids: vec![entity_id],
                     points: path,
                 },
                 crate::dto::EntityDto::Point { .. } => return None,
@@ -3189,6 +3986,7 @@ mod project_tests {
                     wire_count: 1,
                     edge_count: 3,
                 }),
+                cylinder: None,
             }],
             edges: vec![
                 KernelEdgeDto {
@@ -3197,6 +3995,7 @@ mod project_tests {
                         Point3Dto::from([0.0, 0.0, 0.0]),
                         Point3Dto::from([20.0, 0.0, 0.0]),
                     ],
+                    circle: None,
                     refinable: true,
                 },
                 KernelEdgeDto {
@@ -3205,6 +4004,7 @@ mod project_tests {
                         Point3Dto::from([20.0, 0.0, 0.0]),
                         Point3Dto::from([0.0, 10.0, 0.0]),
                     ],
+                    circle: None,
                     refinable: true,
                 },
             ],
@@ -3321,6 +4121,146 @@ mod project_tests {
             .export_project_model()
             .unwrap()
             .contains("\"Sketch1\""));
+    }
+
+    #[test]
+    fn assembly_document_restore_rejects_invalid_snapshots_transactionally() {
+        let mut manager = SketchManager::new();
+        let before = manager.assembly_document();
+        let mut invalid = before.clone();
+        invalid.next_joint_id = 0;
+
+        assert!(manager.set_assembly_document(invalid).is_err());
+        assert_eq!(manager.assembly_document(), before);
+    }
+
+    #[test]
+    fn component_occurrences_roundtrip_without_mutating_part_history() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        let basis = plane.origin_basis().unwrap();
+        manager.begin_sketch(plane).unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(0.0, 0.0),
+                p2: crate::Vec2::new(20.0, 10.0),
+                ctrl_held: false,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".to_string(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 15.0 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: Vec::new(),
+            })
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        let history_before = manager.document.features().clone();
+        let extrudes_before = manager.solids.definitions().to_vec();
+        let promoted = manager
+            .assembly_document()
+            .component_structure
+            .definitions
+            .into_iter()
+            .find(|definition| definition.body_ids == vec![body_id])
+            .unwrap();
+        manager
+            .update_component(UpdateComponentRequestDto {
+                component: nbcad_assembly::ComponentDefinitionDto {
+                    local_coordinate_system: nbcad_assembly::AssemblyTransformDto {
+                        translation: [2.0, 0.0, 0.0],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    ..promoted.clone()
+                },
+            })
+            .unwrap();
+        let subassembly = manager
+            .create_component(CreateComponentRequestDto {
+                name: "Nested fixture".to_string(),
+                body_ids: Vec::new(),
+                local_coordinate_system: nbcad_assembly::AssemblyTransformDto::default(),
+                absorb_promoted_bodies: false,
+            })
+            .unwrap();
+        let subassembly_occurrence = manager
+            .assembly_document()
+            .component_structure
+            .occurrences
+            .into_iter()
+            .find(|occurrence| occurrence.component_id == subassembly.id)
+            .unwrap();
+        manager
+            .create_occurrence(CreateOccurrenceRequestDto {
+                component_id: promoted.id,
+                name: "Nested part".to_string(),
+                parent_occurrence_id: Some(subassembly_occurrence.id),
+                local_pose: nbcad_assembly::AssemblyTransformDto {
+                    translation: [15.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                },
+            })
+            .unwrap();
+        let duplicate = manager
+            .duplicate_occurrence(DuplicateOccurrenceRequestDto {
+                occurrence_id: subassembly_occurrence.id,
+                parent_occurrence_id: None,
+                local_pose: None,
+            })
+            .unwrap();
+        manager
+            .set_occurrence_pose(SetOccurrencePoseRequestDto {
+                occurrence_id: duplicate.id,
+                local_pose: nbcad_assembly::AssemblyTransformDto {
+                    translation: [50.0, 0.0, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                },
+            })
+            .unwrap();
+
+        assert_eq!(manager.document.features(), &history_before);
+        assert_eq!(manager.solids.definitions(), extrudes_before.as_slice());
+        assert_eq!(manager.solid_scene().bodies.len(), 1);
+        assert_eq!(manager.assembly_solution().instance_body_poses.len(), 3);
+        let assembly_before = manager.assembly_document();
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(body_id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.assembly_document(), assembly_before);
+        assert_eq!(loaded.document.features(), &history_before);
+        assert_eq!(loaded.solids.definitions(), extrudes_before.as_slice());
+        assert_eq!(loaded.solid_scene().bodies.len(), 1);
+        assert_eq!(loaded.assembly_solution().instance_body_poses.len(), 3);
     }
 
     #[test]
@@ -3733,6 +4673,175 @@ mod project_tests {
     }
 
     #[test]
+    fn project_roundtrip_preserves_host_neutral_joint_intent() {
+        let connector = |body_id, face_id, key: &str, origin| nbcad_assembly::JointConnectorDto {
+            body_id: BodyId(body_id),
+            face_id: FaceId(face_id),
+            face_key: key.to_string(),
+            edge_id: None,
+            edge_key: None,
+            kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
+            radius: None,
+            source_surface_frame: None,
+            frame: nbcad_assembly::JointFrameDto {
+                origin,
+                primary_axis: [0.0, 0.0, 1.0],
+                secondary_axis: [1.0, 0.0, 0.0],
+            },
+        };
+        let assembly = AssemblyDocumentDto {
+            joints: vec![nbcad_assembly::JointDefinitionDto {
+                id: JointId(7),
+                name: "Hinge".to_string(),
+                kind: nbcad_assembly::JointKindDto::Revolute,
+                connector_a: connector(1, 11, "body-1:face-a", [0.0, 0.0, 0.0]),
+                connector_b: connector(2, 22, "body-2:face-b", [0.0, 0.0, 10.0]),
+                flipped: true,
+                angle_offset_deg: 15.0,
+                linear_offset_mm: 0.0,
+                limits: Some(nbcad_assembly::JointLimitsDto {
+                    min: -90.0,
+                    max: 90.0,
+                }),
+                angle_limits: None,
+                linear_limits: None,
+                advanced: nbcad_assembly::JointAdvancedDto::default(),
+                enabled: true,
+            }],
+            next_joint_id: 8,
+            grounded_body_id: Some(BodyId(1)),
+            component_structure: nbcad_assembly::ComponentStructureDto::default(),
+            ..AssemblyDocumentDto::default()
+        };
+
+        let mut manager = SketchManager::new();
+        manager.assembly = assembly.clone();
+        let preview = manager
+            .preview_joint_motion(SetJointMotionRequestDto {
+                joint_id: JointId(7),
+                angle_offset_deg: 45.0,
+                linear_offset_mm: 0.0,
+            })
+            .unwrap();
+        assert!(preview.solved);
+        assert!(preview.body_poses.is_empty());
+        assert!(preview.diagnostics.is_empty());
+        // Host-neutral assembly intent can legitimately outlive the current
+        // feature-history marker. Its absent bodies are inactive here, not a
+        // damaged reference, and the persisted document remains untouched.
+        assert_eq!(manager.assembly_document(), assembly);
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto::default(),
+            })
+            .unwrap();
+        assert_eq!(loaded.assembly_document(), assembly);
+    }
+
+    #[test]
+    fn committed_feature_deletion_removes_joints_that_reference_its_body() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        let basis = plane.origin_basis().unwrap();
+
+        for expected_name in ["Sketch1", "Sketch2"] {
+            manager.begin_sketch(plane).unwrap();
+            manager
+                .add_rectangle(RectangleRequest {
+                    mode: crate::dto::RectangleMode::TwoPoint,
+                    p1: crate::Vec2::new(0.0, 0.0),
+                    p2: crate::Vec2::new(20.0, 10.0),
+                    ctrl_held: false,
+                })
+                .unwrap();
+            manager.end_sketch().unwrap();
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: expected_name.to_string(),
+                    profile_indices: vec![0],
+                    operation: ExtrudeOperation::NewBody,
+                    extent: ExtrudeExtent::Distance { distance: 15.0 },
+                    taper_angle_deg: 0.0,
+                    flip: false,
+                    target_body_ids: Vec::new(),
+                })
+                .unwrap();
+            commit_plan(&mut manager, plan, basis);
+        }
+
+        let scene = manager.solid_scene();
+        assert_eq!(scene.bodies.len(), 2);
+        let connector = |body: &nbcad_solid::BodyDto| {
+            let face = &body.faces[0];
+            let face_basis = face.plane.unwrap();
+            nbcad_assembly::JointConnectorDto {
+                body_id: body.id,
+                face_id: face.id,
+                face_key: face.key.clone(),
+                edge_id: None,
+                edge_key: None,
+                kind: nbcad_assembly::JointConnectorKindDto::PlanarFace,
+                radius: None,
+                source_surface_frame: None,
+                frame: nbcad_assembly::JointFrameDto {
+                    origin: face_basis.origin,
+                    primary_axis: face_basis.normal,
+                    secondary_axis: face_basis.u,
+                },
+            }
+        };
+        manager
+            .create_joint(CreateJointRequestDto {
+                name: "Disposable mate".to_string(),
+                kind: nbcad_assembly::JointKindDto::Rigid,
+                connector_a: connector(&scene.bodies[0]),
+                connector_b: connector(&scene.bodies[1]),
+                flipped: true,
+                angle_offset_deg: 0.0,
+                linear_offset_mm: 0.0,
+                limits: None,
+                angle_limits: None,
+                linear_limits: None,
+                advanced: nbcad_assembly::JointAdvancedDto::default(),
+                grounded_body_id: Some(scene.bodies[1].id),
+                grounded_occurrence_id: None,
+            })
+            .unwrap();
+        assert_eq!(manager.assembly_document().joints.len(), 1);
+
+        let deleted_body = &scene.bodies[0];
+        let retained_body = &scene.bodies[1];
+        let plan = manager
+            .prepare_delete_feature(DeleteFeatureRequest {
+                feature_id: deleted_body.feature_id,
+            })
+            .unwrap();
+        assert_eq!(
+            manager.assembly_document().joints.len(),
+            1,
+            "joint intent must remain intact until the kernel transaction commits"
+        );
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![raw_body(retained_body.id, basis)],
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+        assert!(manager.assembly_document().joints.is_empty());
+    }
+
+    #[test]
     fn nested_sketch_loops_plan_one_material_region_with_an_inner_wire() {
         let mut manager = SketchManager::new();
         manager
@@ -3795,6 +4904,188 @@ mod project_tests {
         assert_eq!(job.result_body_ids.len(), 1);
     }
 
+    /// Live desktop regression from 2026-08-12: two R10 fillets consume the
+    /// entire top edge of a 20 mm-wide rectangle. A centerline runs from the
+    /// now-shared arc endpoint into a concentric circle. Profile discovery
+    /// must ignore that graph bridge and expose one outer material region
+    /// with one hole to Extrude.
+    #[test]
+    fn fully_consumed_edge_arch_with_centerline_and_circle_is_extrudable() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(-10.0, 0.0),
+                p2: crate::Vec2::new(10.0, 40.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        let lines = manager.active_snapshot().unwrap();
+        let line = |horizontal: bool, ordinate: f64| {
+            lines
+                .entities
+                .iter()
+                .find_map(|entity| match entity {
+                    crate::dto::EntityDto::Line { id, start, end, .. }
+                        if if horizontal {
+                            (start.y - ordinate).abs() < 1e-8 && (end.y - ordinate).abs() < 1e-8
+                        } else {
+                            (start.x - ordinate).abs() < 1e-8 && (end.x - ordinate).abs() < 1e-8
+                        } =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let top = line(true, 40.0);
+        let right = line(false, 10.0);
+        let left = line(false, -10.0);
+        manager
+            .fillet_lines(FilletRequest {
+                l1: top,
+                l2: right,
+                radius_text: "10".to_string(),
+            })
+            .unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: top,
+                l2: left,
+                radius_text: "10".to_string(),
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(0.0, 40.0),
+                to_raw: crate::Vec2::new(0.0, 30.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager
+            .add_circle_locked(LockedCircleRequest {
+                mode: crate::dto::CircleMode::CenterDiameter,
+                anchor: crate::Vec2::new(0.0, 30.0),
+                diameter_mm: Some(10.0),
+                diameter_text: None,
+                edge_hint: crate::Vec2::new(5.0, 30.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let catalog = manager.profile_catalog();
+        assert_eq!(catalog[0].profiles.len(), 2, "outer boundary plus hole");
+        let outer = catalog[0]
+            .profiles
+            .iter()
+            .find(|profile| profile.nesting_depth == 0)
+            .unwrap();
+        let hole = catalog[0]
+            .profiles
+            .iter()
+            .find(|profile| profile.nesting_depth == 1)
+            .unwrap();
+        assert_eq!(hole.parent_index, Some(outer.index));
+        assert_eq!(
+            outer.curves.len(),
+            4,
+            "three straight edges and one canonical semicircle form the outer wire"
+        );
+        assert!(matches!(
+            outer.curves.iter().find(|curve| matches!(curve, ProfileCurveDto::Arc { .. })),
+            Some(ProfileCurveDto::Arc { source_entity_ids, .. }) if source_entity_ids.len() == 2
+        ));
+
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".to_string(),
+                profile_indices: vec![outer.index],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 10.0 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: Vec::new(),
+            })
+            .unwrap();
+        let KernelJobDto::Extrude(job) = &plan.jobs[0] else {
+            panic!("arch profile should plan an Extrude job");
+        };
+        assert_eq!(job.profiles.len(), 1);
+        assert_eq!(job.profiles[0].holes.len(), 1);
+        assert_eq!(job.profiles[0].curves.len(), 4);
+        assert_eq!(job.profiles[0].holes[0].curves.len(), 1);
+    }
+
+    #[test]
+    fn circle_divided_by_a_crossing_line_uses_partial_analytic_arcs() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_circle_locked(LockedCircleRequest {
+                mode: crate::dto::CircleMode::CenterDiameter,
+                anchor: crate::Vec2::new(0.0, 0.0),
+                diameter_mm: Some(20.0),
+                diameter_text: None,
+                edge_hint: crate::Vec2::new(10.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(-12.0, 0.0),
+                to_raw: crate::Vec2::new(12.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let catalog = manager.profile_catalog();
+        assert_eq!(catalog[0].profiles.len(), 2);
+        assert!(catalog[0].profiles.iter().all(|profile| {
+            profile.curves.len() == 2
+                && profile
+                    .curves
+                    .iter()
+                    .any(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
+                && profile
+                    .curves
+                    .iter()
+                    .any(|curve| matches!(curve, ProfileCurveDto::Line { .. }))
+        }));
+
+        for profile in &catalog[0].profiles {
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: "Sketch1".to_string(),
+                    profile_indices: vec![profile.index],
+                    operation: ExtrudeOperation::NewBody,
+                    extent: ExtrudeExtent::Distance { distance: 4.0 },
+                    taper_angle_deg: 0.0,
+                    flip: false,
+                    target_body_ids: Vec::new(),
+                })
+                .unwrap();
+            let KernelJobDto::Extrude(job) = &plan.jobs[0] else {
+                panic!("semicircular region should plan an Extrude job");
+            };
+            assert_eq!(job.profiles[0].curves.len(), 2);
+            manager.cancel_solid_recompute(plan.transaction_id);
+        }
+    }
+
     #[test]
     fn dimensioned_chain_with_an_attached_rectangle_keeps_its_closed_profile() {
         let mut manager = SketchManager::new();
@@ -3813,6 +5104,7 @@ mod project_tests {
                 length_text: Some("15".to_string()),
                 angle_text: None,
                 ctrl_held: false,
+                tracking: None,
             })
             .unwrap();
         let vertical = manager
@@ -3824,6 +5116,7 @@ mod project_tests {
                 length_text: Some("7.5".to_string()),
                 angle_text: None,
                 ctrl_held: false,
+                tracking: None,
             })
             .unwrap();
         assert_eq!(vertical.sketch.dimensions.len(), 2);
@@ -4436,14 +5729,14 @@ mod project_tests {
 
         let catalog = manager.profile_catalog();
         let profile = &catalog[0].profiles[0];
-        assert_eq!(profile.curves.len(), 5, "top + two sides + two arcs");
+        assert_eq!(profile.curves.len(), 4, "top + two sides + one semicircle");
         assert_eq!(
             profile
                 .curves
                 .iter()
                 .filter(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
                 .count(),
-            2
+            1
         );
         assert!(profile.curves.iter().all(|curve| match curve {
             ProfileCurveDto::Line { start, end, .. } => point2_distance(*start, *end) > 1e-3,
@@ -4471,8 +5764,147 @@ mod project_tests {
                 .iter()
                 .filter(|curve| matches!(curve, KernelCurveDto::Arc { .. }))
                 .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn adjacent_fillets_below_the_limit_keep_their_real_carrier() {
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(RectangleRequest {
+                mode: crate::dto::RectangleMode::TwoPoint,
+                p1: crate::Vec2::new(0.0, 0.0),
+                p2: crate::Vec2::new(30.0, 30.0),
+                ctrl_held: false,
+            })
+            .unwrap();
+        let dto = manager.active_snapshot().unwrap();
+        let horizontal = |y: f64| {
+            dto.entities.iter().find_map(|entity| match entity {
+                crate::dto::EntityDto::Line { id, start, end, .. }
+                    if (start.y - y).abs() < 1e-8 && (end.y - y).abs() < 1e-8 =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+        };
+        let vertical = |x: f64| {
+            dto.entities.iter().find_map(|entity| match entity {
+                crate::dto::EntityDto::Line { id, start, end, .. }
+                    if (start.x - x).abs() < 1e-8 && (end.x - x).abs() < 1e-8 =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+        };
+        let bottom = horizontal(0.0).unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: bottom,
+                l2: vertical(0.0).unwrap(),
+                radius_text: "14".to_string(),
+            })
+            .unwrap();
+        manager
+            .fillet_lines(FilletRequest {
+                l1: bottom,
+                l2: vertical(30.0).unwrap(),
+                radius_text: "14".to_string(),
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+
+        let profile = &manager.profile_catalog()[0].profiles[0];
+        assert_eq!(profile.curves.len(), 6);
+        assert_eq!(
+            profile
+                .curves
+                .iter()
+                .filter(|curve| matches!(curve, ProfileCurveDto::Arc { .. }))
+                .count(),
             2
         );
+        assert!(profile.curves.iter().any(|curve| matches!(
+            curve,
+            ProfileCurveDto::Line { start, end, .. }
+                if (point2_distance(*start, *end) - 2.0).abs() < 1e-3
+        )));
+    }
+
+    #[test]
+    fn intentional_tiny_untrimmed_edges_are_not_classified_as_consumed() {
+        let sketch = SketchDto {
+            name: "Tiny".to_string(),
+            plane: PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            },
+            basis: PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            }
+            .origin_basis()
+            .unwrap(),
+            entities: vec![
+                crate::dto::EntityDto::Line {
+                    id: EntityId(1),
+                    start_id: EntityId(10),
+                    end_id: EntityId(11),
+                    start: crate::Vec2::new(0.0, 0.0),
+                    end: crate::Vec2::new(0.0005, 0.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(2),
+                    start_id: EntityId(11),
+                    end_id: EntityId(12),
+                    start: crate::Vec2::new(0.0005, 0.0),
+                    end: crate::Vec2::new(0.0005, 1.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(3),
+                    start_id: EntityId(12),
+                    end_id: EntityId(13),
+                    start: crate::Vec2::new(0.0005, 1.0),
+                    end: crate::Vec2::new(0.0, 1.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+                crate::dto::EntityDto::Line {
+                    id: EntityId(4),
+                    start_id: EntityId(13),
+                    end_id: EntityId(10),
+                    start: crate::Vec2::new(0.0, 1.0),
+                    end: crate::Vec2::new(0.0, 0.0),
+                    fully_defined: true,
+                    consumed: false,
+                },
+            ],
+            constraints: Vec::new(),
+            reference_midpoints: Vec::new(),
+            dimensions: Vec::new(),
+            dimension_style: DimensionStyle::Aligned,
+            dof: crate::dto::DofDto {
+                value: 0,
+                fully_defined: true,
+            },
+            can_undo: false,
+            can_redo: false,
+        };
+
+        assert!(consumed_trim_carrier_ids(&sketch, 1e-3).is_empty());
+        let catalog = profile_catalog_item(&sketch, FeatureId(1));
+        assert_eq!(catalog.profiles.len(), 1);
+        assert!(catalog.profiles[0].area > 0.00049);
     }
 
     #[test]

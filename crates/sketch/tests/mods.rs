@@ -456,6 +456,7 @@ fn fillet_with_formula_radius_evaluates() {
         length_text: Some("20".to_string()),
         angle_text: None,
         ctrl_held: false,
+        tracking: None,
     })
     .unwrap();
     let r = s

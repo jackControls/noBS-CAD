@@ -16,9 +16,10 @@
 
 use std::collections::HashMap;
 
-use crate::constraint::{Constraint, ConstraintId};
+use crate::constraint::{ArcEndpoint, Constraint, ConstraintId};
 use crate::entity::{Entity, EntityId, AXIS_SENTINEL};
 use crate::geometry::Vec2;
+use crate::geomops::fillet;
 use crate::sketch::Sketch;
 
 /// Convergence tolerance on max |residual| (mm / rad mixed residuals).
@@ -622,6 +623,16 @@ fn build_equations(
                     push_lin(&mut eqs, cid, vec![(d.x2, 1.0), (d.x1, -1.0)], 0.0);
                 }
             }
+            Constraint::HorizontalPoints { a, b } => {
+                if let (Some(a), Some(b)) = (map.pt(sketch, a), map.pt(sketch, b)) {
+                    push_lin(&mut eqs, cid, vec![(b.1, 1.0), (a.1, -1.0)], 0.0);
+                }
+            }
+            Constraint::VerticalPoints { a, b } => {
+                if let (Some(a), Some(b)) = (map.pt(sketch, a), map.pt(sketch, b)) {
+                    push_lin(&mut eqs, cid, vec![(b.0, 1.0), (a.0, -1.0)], 0.0);
+                }
+            }
             Constraint::Fix { entity } => {
                 if let Some(targets) = sketch.fix_targets(&cid) {
                     let mut vars: Vec<usize> = Vec::new();
@@ -743,6 +754,26 @@ fn build_equations(
                         &mut eqs,
                         cid,
                         vec![(p.1, 1.0), (d.y1, -0.5), (d.y2, -0.5)],
+                        0.0,
+                    );
+                }
+            }
+            Constraint::SpanMidpoint { point, start, end } => {
+                if let (Some(p), Some(a), Some(b)) = (
+                    map.pt(sketch, point),
+                    map.pt(sketch, start),
+                    map.pt(sketch, end),
+                ) {
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(p.0, 1.0), (a.0, -0.5), (b.0, -0.5)],
+                        0.0,
+                    );
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(p.1, 1.0), (a.1, -0.5), (b.1, -0.5)],
                         0.0,
                     );
                 }
@@ -1224,8 +1255,14 @@ fn trim_origin_for_endpoint(
 /// orientations when a zero-span carrier later reopens.
 fn trimmed_carrier_direction(sketch: &Sketch, line: EntityId) -> Option<Vec2> {
     let (start, end) = sketch.line_endpoint_ids(line)?;
-    let start_origin = trim_origin_for_endpoint(sketch, line, start)?;
-    let end_origin = trim_origin_for_endpoint(sketch, line, end)?;
+    // A carrier can be consumed by one trim exactly at its opposite endpoint
+    // just as legitimately as by two opposing trims.  For an untrimmed end,
+    // its current point is still the original support reference; a trimmed
+    // end recovers its pre-trim corner from the persistent topology.
+    let start_origin =
+        trim_origin_for_endpoint(sketch, line, start).or_else(|| sketch.point_position(start))?;
+    let end_origin =
+        trim_origin_for_endpoint(sketch, line, end).or_else(|| sketch.point_position(end))?;
     let direction = end_origin - start_origin;
     (direction.length() >= DEGENERATE_LINE_EPS).then_some(direction)
 }
@@ -1489,6 +1526,110 @@ fn rank_of(jac: &[Vec<(usize, f64)>], n: usize) -> (usize, Vec<bool>) {
     (rank, pivot_col)
 }
 
+fn trim_reference_segment(sketch: &Sketch, line: EntityId) -> Option<fillet::LineSeg> {
+    let (start, end) = sketch.line_endpoint_ids(line)?;
+    let a =
+        trim_origin_for_endpoint(sketch, line, start).or_else(|| sketch.point_position(start))?;
+    let b = trim_origin_for_endpoint(sketch, line, end).or_else(|| sketch.point_position(end))?;
+    (a.distance(b) >= DEGENERATE_LINE_EPS).then_some(fillet::LineSeg { a, b })
+}
+
+/// A consumed fillet carrier starts from a singular zero-span configuration.
+/// When its radius changes, reconstruct the exact local fillet from the
+/// persistent pre-trim corners before LM begins. This is only an initial
+/// guess; the complete constraint system still determines the final geometry
+/// and the crossed-carrier guard rejects values beyond the topology boundary.
+fn seed_consumed_radius_edit(sketch: &Sketch, map: &VarMap, x: &mut [f64]) {
+    let radius_edits = sketch
+        .constraints()
+        .filter_map(|(cid, constraint)| match *constraint {
+            Constraint::Radius { entity, value } => {
+                let radius_var = map.radius_var(sketch, entity)?;
+                let current = x[radius_var].abs();
+                let target = sketch.dim_value(&cid, value).abs();
+                ((current - target).abs() > TOL).then_some((entity, radius_var, target))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for (arc, radius_var, target) in radius_edits {
+        let mut tangent_lines = sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::Tangent { a, b }
+                    if a == arc && matches!(sketch.entity(b), Some(Entity::Line { .. })) =>
+                {
+                    Some(b)
+                }
+                Constraint::Tangent { a, b }
+                    if b == arc && matches!(sketch.entity(a), Some(Entity::Line { .. })) =>
+                {
+                    Some(a)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        tangent_lines.sort_unstable();
+        tangent_lines.dedup();
+        if tangent_lines.len() != 2
+            || !tangent_lines
+                .iter()
+                .any(|line| line_is_degenerate(sketch, *line))
+        {
+            continue;
+        }
+
+        let (Some(first), Some(second)) = (
+            trim_reference_segment(sketch, tangent_lines[0]),
+            trim_reference_segment(sketch, tangent_lines[1]),
+        ) else {
+            continue;
+        };
+        let Ok(result) = fillet::fillet_lines(&first, &second, target) else {
+            continue;
+        };
+        let Some(&(center, _, start_angle, end_angle)) = map.arcs.get(&arc) else {
+            continue;
+        };
+        x[center.0] = result.arc.center.x;
+        x[center.1] = result.arc.center.y;
+        x[radius_var] = target;
+
+        for (line, tangent) in tangent_lines
+            .into_iter()
+            .zip([result.tangent_on_l1, result.tangent_on_l2])
+        {
+            let endpoint = sketch.constraints().find_map(|(_, constraint)| {
+                let Constraint::ArcEndpointCoincident {
+                    point,
+                    arc: owner,
+                    end,
+                } = *constraint
+                else {
+                    return None;
+                };
+                (owner == arc
+                    && sketch
+                        .line_endpoint_ids(line)
+                        .is_some_and(|(start, finish)| point == start || point == finish))
+                .then_some((point, end))
+            });
+            let Some((point, end)) = endpoint else {
+                continue;
+            };
+            let point_vars = map.points[&point];
+            x[point_vars.0] = tangent.x;
+            x[point_vars.1] = tangent.y;
+            let angle = (tangent.y - result.arc.center.y).atan2(tangent.x - result.arc.center.x);
+            match end {
+                ArcEndpoint::Start => x[start_angle] = angle,
+                ArcEndpoint::End => x[end_angle] = angle,
+            }
+        }
+    }
+}
+
 /// Damped Newton (LM) solve; writes the solution back into the sketch.
 pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     let map = build_var_map(sketch);
@@ -1510,6 +1651,7 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     }
 
     let mut x = read_values(sketch, &map);
+    seed_consumed_radius_edit(sketch, &map, &mut x);
     let (mut f, mut jac) = eval_all(&eqs, &x, n);
     let mut residual = max_abs(&f);
     // Pre-solve line lengths + radii for the collapse guard (see below).
@@ -1525,7 +1667,7 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
                     b.0,
                     b.1,
                     a2dist(&x, a, b),
-                    line_is_trimmed_at_both_ends(sketch, id, *start, *end),
+                    line_has_trimmed_endpoint(sketch, id, *start, *end),
                 ))
             }
             _ => None,
@@ -1625,15 +1767,16 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     // points to satisfy e.g. Parallel+Perpendicular. That is not a valid
     // CAD outcome; treat a collapse (>99% shrinkage, capped at 0.1 mm) as
     // non-convergence so callers reject/revert. The intentional exception
-    // is a carrier trimmed at BOTH ends by fillet/chamfer operations: at
-    // R1 + R2 == L its visible span is exactly zero while its support line
-    // and two independently anchored endpoints remain meaningful. Keeping
-    // that carrier also makes a later dimension edit reopen the span.
+    // is a carrier intentionally trimmed by a fillet/chamfer operation. Two
+    // opposing trims may consume it at R1 + R2 == L; one trim may consume it
+    // when its cutback equals the complete carrier length. In either case its
+    // persistent corner topology preserves the support direction and makes a
+    // later dimension edit reopen the span.
     let crossed_trimmed_carrier = sketch.entities().any(|(id, entity)| {
         let Entity::Line { start, end } = *entity else {
             return false;
         };
-        if !line_is_trimmed_at_both_ends(sketch, id, start, end) {
+        if !line_has_trimmed_endpoint(sketch, id, start, end) {
             return false;
         }
         let Some(support) = trimmed_carrier_direction(sketch, id) else {
@@ -1648,9 +1791,9 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     let invalid_geometry = crossed_trimmed_carrier
         || pre_line_len
             .iter()
-            .any(|&(x1, y1, x2, y2, pre, trimmed_both_ends)| {
+            .any(|&(x1, y1, x2, y2, pre, intentional_trim)| {
                 let post = ((x[x2] - x[x1]).powi(2) + (x[y2] - x[y1]).powi(2)).sqrt();
-                !trimmed_both_ends && (post < (pre * 0.01).min(0.1) || post < 1e-9)
+                !intentional_trim && (post < (pre * 0.01).min(0.1) || post < 1e-9)
             })
         || pre_radius
             .iter()
@@ -1665,36 +1808,49 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     )
 }
 
-/// Whether a line endpoint is owned by a modify-tool trim. Fillets mark the
+/// Whether one endpoint is owned by a modify-tool trim. Fillets mark the
 /// endpoint with `ArcEndpointCoincident`; chamfers mark it as one of the two
-/// `EqualDistance` targets. These internal relations distinguish a valid
-/// fully-consumed carrier from an accidental solver collapse of an ordinary
-/// line or rectangle edge.
-fn line_is_trimmed_at_both_ends(
+/// `EqualDistance` targets.
+fn endpoint_is_trimmed(sketch: &Sketch, line: EntityId, point: EntityId) -> bool {
+    sketch
+        .constraints()
+        .any(|(_, constraint)| match *constraint {
+            Constraint::ArcEndpointCoincident { point: p, arc, .. } if p == point => {
+                sketch.constraints().any(|(_, tangent)| {
+                    matches!(
+                        tangent,
+                        Constraint::Tangent { a, b }
+                            if (*a == line && *b == arc) || (*a == arc && *b == line)
+                    )
+                })
+            }
+            Constraint::EqualDistance { a, b, .. } => a == point || b == point,
+            _ => false,
+        })
+}
+
+/// Internal trim ownership distinguishes a valid topology transition from an
+/// accidental solver collapse of an ordinary line. One owned endpoint is
+/// sufficient: an exact one-sided fillet/chamfer can consume the full edge.
+fn line_has_trimmed_endpoint(
     sketch: &Sketch,
     line: EntityId,
     start: EntityId,
     end: EntityId,
 ) -> bool {
-    let endpoint_is_trimmed = |point: EntityId| {
-        sketch
-            .constraints()
-            .any(|(_, constraint)| match *constraint {
-                Constraint::ArcEndpointCoincident { point: p, arc, .. } if p == point => {
-                    sketch.constraints().any(|(_, tangent)| {
-                        matches!(
-                            tangent,
-                            Constraint::Tangent { a, b }
-                                if (*a == line && *b == arc) || (*a == arc && *b == line)
-                        )
-                    })
-                }
-                Constraint::EqualDistance { a, b, .. } => a == point || b == point,
-                _ => false,
-            })
-    };
+    endpoint_is_trimmed(sketch, line, start) || endpoint_is_trimmed(sketch, line, end)
+}
 
-    endpoint_is_trimmed(start) && endpoint_is_trimmed(end)
+/// Presentation predicate for a stable carrier whose visible span is fully
+/// consumed. Keeping the entity lets later dimension edits reopen it.
+pub(crate) fn line_is_consumed_trim_carrier(sketch: &Sketch, line: EntityId) -> bool {
+    let Some((start, end)) = sketch.line_endpoint_ids(line) else {
+        return false;
+    };
+    line_has_trimmed_endpoint(sketch, line, start, end)
+        && sketch
+            .resolved_line(line)
+            .is_some_and(|(a, b)| a.distance(b) < CONSUMED_CARRIER_EPS)
 }
 
 /// Analysis without mutation (residual at the current state).

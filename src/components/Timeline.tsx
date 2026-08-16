@@ -12,6 +12,8 @@ import {
   CircleAlert,
   History,
   Layers3,
+  Link2,
+  Move3d,
   MoveRight,
   PanelTop,
   Pencil,
@@ -57,6 +59,7 @@ import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import { useAppStore } from '../store/appStore';
 import type { FeatureDto } from '../types/document';
+import type { JointDefinitionDto } from '../engine/types';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
@@ -70,6 +73,7 @@ function editTimelineFeature(feature: FeatureDto) {
   if (feature.kind === 'fillet') openSolidFillet(feature.id);
   if (feature.kind === 'chamfer') openSolidChamfer(feature.id);
   if (feature.kind === 'hole') openHole(feature.id);
+  if (feature.kind === 'move_copy') openBodyFeature('move_copy', feature.id);
   if (feature.kind === 'construction_plane') {
     const definition = useAppStore
       .getState()
@@ -104,6 +108,12 @@ interface TimelineContextTarget {
   y: number;
 }
 
+interface JointContextTarget {
+  joint: JointDefinitionDto;
+  x: number;
+  y: number;
+}
+
 interface FeatureDrag {
   pointerId: number;
   featureId: number;
@@ -118,9 +128,17 @@ export function Timeline() {
   const document = useAppStore((s) => s.document);
   const busy = useAppStore((s) => s.solidBusy);
   const mode = useAppStore((s) => s.mode);
+  const joints = useAppStore((s) => s.assemblyDocument.joints);
+  const selectedJointId = useAppStore((s) => s.selectedJointId);
+  const setSelectedJointId = useAppStore((s) => s.setSelectedJointId);
+  const setSolidSidebarMode = useAppStore((s) => s.setSolidSidebarMode);
+  const openJointEditor = useAppStore((s) => s.openJointEditor);
+  const deleteJoint = useAppStore((s) => s.deleteJoint);
+  const setJointEnabled = useAppStore((s) => s.setJointEnabled);
   const features = document?.features ?? [];
   const rollback = document?.rollback_index ?? 0;
   const [contextTarget, setContextTarget] = useState<TimelineContextTarget | null>(null);
+  const [jointContextTarget, setJointContextTarget] = useState<JointContextTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FeatureDto | null>(null);
   const [requestedRollback, setRequestedRollback] = useState<number | null>(null);
   const [drag, setDrag] = useState<{ pointerId: number; index: number } | null>(null);
@@ -391,6 +409,39 @@ export function Timeline() {
     ];
   };
 
+  const jointContextEntries = (): ContextMenuEntry[] => {
+    if (!jointContextTarget) return [];
+    const { joint } = jointContextTarget;
+    return [
+      {
+        type: 'item',
+        id: 'edit-joint',
+        label: t('timeline.editJoint'),
+        icon: <Pencil size={14} />,
+        disabled: mode !== 'solid' || busy,
+        onSelect: () => openJointEditor(joint.id),
+      },
+      {
+        type: 'item',
+        id: 'toggle-joint',
+        label: joint.enabled ? t('timeline.suppressJoint') : t('timeline.unsuppressJoint'),
+        icon: <Link2 size={14} />,
+        disabled: mode !== 'solid' || busy,
+        onSelect: () => void setJointEnabled(joint.id, !joint.enabled),
+      },
+      { type: 'separator', id: 'delete-joint-separator' },
+      {
+        type: 'item',
+        id: 'delete-joint',
+        label: t('timeline.deleteJoint'),
+        icon: <Trash2 size={14} />,
+        danger: true,
+        disabled: mode !== 'solid' || busy,
+        onSelect: () => void deleteJoint(joint.id),
+      },
+    ];
+  };
+
   return (
     <footer className="flex h-12 shrink-0 items-center gap-2 border-t border-edge bg-panel px-3">
       <div className="flex h-8 shrink-0 items-center gap-2 rounded-lg border border-edge/70 bg-header/55 px-2.5">
@@ -404,6 +455,14 @@ export function Timeline() {
         >
           {displayedRollback}/{features.length}
         </span>
+        {joints.length > 0 && (
+          <span
+            className="rounded-md bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-accent"
+            aria-label={`${joints.length} ${t('timeline.joints')}`}
+          >
+            {joints.length}J
+          </span>
+        )}
       </div>
 
       <div
@@ -486,7 +545,27 @@ export function Timeline() {
             onMove={move}
           />
         )}
-        {features.length === 0 && (
+        {joints.length > 0 && (
+          <div className="relative z-10 mx-0.5 h-5 w-px shrink-0 bg-edge" title={t('timeline.assemblyHistory')} />
+        )}
+        {joints.map((joint) => (
+          <TimelineJoint
+            key={joint.id}
+            joint={joint}
+            selected={joint.id === selectedJointId}
+            busy={busy}
+            onSelect={() => {
+              setSolidSidebarMode('assembly');
+              setSelectedJointId(joint.id);
+            }}
+            onEdit={() => openJointEditor(joint.id)}
+            onOpenContext={(x, y) => {
+              setContextTarget(null);
+              setJointContextTarget({ joint, x, y });
+            }}
+          />
+        ))}
+        {features.length === 0 && joints.length === 0 && (
           <div className="relative z-10 h-1 flex-1 rounded-full bg-edge" />
         )}
       </div>
@@ -496,6 +575,14 @@ export function Timeline() {
           entries={contextEntries()}
           ariaLabel={`${contextTarget.feature.name} — ${t('timeline.contextMenu')}`}
           onClose={() => setContextTarget(null)}
+        />
+      )}
+      {jointContextTarget && (
+        <ContextMenu
+          point={jointContextTarget}
+          entries={jointContextEntries()}
+          ariaLabel={`${jointContextTarget.joint.name} — ${t('timeline.jointContextMenu')}`}
+          onClose={() => setJointContextTarget(null)}
         />
       )}
       {deleteTarget && (
@@ -511,6 +598,59 @@ export function Timeline() {
         />
       )}
     </footer>
+  );
+}
+
+function TimelineJoint({
+  joint,
+  selected,
+  busy,
+  onSelect,
+  onEdit,
+  onOpenContext,
+}: {
+  joint: JointDefinitionDto;
+  selected: boolean;
+  busy: boolean;
+  onSelect: () => void;
+  onEdit: () => void;
+  onOpenContext: (x: number, y: number) => void;
+}) {
+  const { t } = useTranslation();
+  const openPointerContext = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.focus({ preventScroll: true });
+    onOpenContext(event.clientX, event.clientY);
+  };
+  const onJointKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    onOpenContext(rect.left + Math.min(36, rect.width / 2), rect.bottom);
+  };
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      data-joint-id={joint.id}
+      aria-haspopup="menu"
+      title={`${joint.name} · ${joint.kind} — ${t('timeline.editJoint')}`}
+      onClick={onSelect}
+      onDoubleClick={onEdit}
+      onContextMenu={openPointerContext}
+      onKeyDown={onJointKeyDown}
+      className={cx(
+        'relative z-10 flex h-7 min-w-9 shrink-0 items-center justify-center rounded-md border px-2 text-[10px] shadow-sm shadow-black/15 transition-colors',
+        selected
+          ? 'border-accent bg-accent/15 text-accent'
+          : 'border-edge bg-panel text-ink hover:border-accent/70 hover:bg-header',
+        !joint.enabled && 'line-through opacity-50',
+      )}
+    >
+      <Link2 size={13} />
+      <span className="ml-1 max-w-20 truncate">{joint.name}</span>
+    </button>
   );
 }
 
@@ -558,6 +698,8 @@ function TimelineFeature({
                   ? CircleDot
                   : feature.kind === 'construction_plane'
                     ? Layers3
+                    : feature.kind === 'move_copy'
+                      ? Move3d
                     : feature.kind === 'shell'
                       ? Shell
                       : feature.kind === 'mirror'

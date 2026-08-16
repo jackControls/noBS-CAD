@@ -29,6 +29,20 @@ fn lines_of(dto: &nbcad_sketch::SketchDto) -> Vec<(nbcad_sketch::EntityId, Vec2,
         .collect()
 }
 
+fn line_is_consumed(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> bool {
+    dto.entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Line {
+                id: line_id,
+                consumed,
+                ..
+            } if *line_id == id => Some(*consumed),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn close(a: Vec2, b: Vec2) -> bool {
     a.distance(b) < 1e-7
 }
@@ -273,6 +287,287 @@ fn second_fillet_on_dimensioned_rect_is_accepted() {
     assert_eq!(arcs, 4, "all four corners filleted");
 }
 
+/// Regression from the owner's 2026-08-13 live sketch. A short horizontal
+/// setup line overlapped the lower edge of a closed outline. Picking that
+/// visible overlap and the right wall produced the correct R10 preview, but
+/// commit anchored the setup line's nearest endpoint to the remote wall and
+/// rejected the radius as `coincident(Point1, Line8)`.
+///
+/// The modify tool must resolve the collinear carrier that actually owns the
+/// wall corner instead of inventing a persistent corner incidence between
+/// geometrically remote entities.
+#[test]
+fn fillet_resolves_overlapping_line_to_the_adjacent_corner_carrier() {
+    let mut s = session();
+    let setup = s
+        .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
+        .expect("overlapping setup line");
+    s.add_constraint(nbcad_sketch::Constraint::Fix {
+        entity: setup.start_point_id,
+    })
+    .expect("origin anchor");
+
+    let bottom = s
+        .add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
+        .unwrap()
+        .entity_id;
+    let right = s
+        .add_line(v(10.0, 0.0), v(10.0, 60.0), false)
+        .unwrap()
+        .entity_id;
+    let top = s
+        .add_line(v(10.0, 60.0), v(-10.0, 60.0), false)
+        .unwrap()
+        .entity_id;
+    let left = s
+        .add_line(v(-10.0, 60.0), v(-10.0, 0.0), false)
+        .unwrap()
+        .entity_id;
+
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "10".to_string(),
+    })
+    .expect("top-left R10");
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: right,
+        radius_text: "10".to_string(),
+    })
+    .expect("top-right R10");
+
+    let result = s.fillet_lines(&FilletRequest {
+        l1: setup.entity_id,
+        l2: right,
+        radius_text: "10".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "overlap pick must resolve to the adjacent bottom carrier: {result:?}"
+    );
+
+    let dto = s.dto();
+    let (_, bottom_a, bottom_b) = lines_of(&dto)
+        .into_iter()
+        .find(|(id, _, _)| *id == bottom)
+        .expect("bottom carrier remains addressable");
+    assert!(
+        bottom_a.distance(v(0.0, 0.0)) < 1e-4 || bottom_b.distance(v(0.0, 0.0)) < 1e-4,
+        "R10 trims the 20 mm bottom carrier to its midpoint: {bottom_a:?} -> {bottom_b:?}"
+    );
+    let (_, right_a, right_b) = lines_of(&dto)
+        .into_iter()
+        .find(|(id, _, _)| *id == right)
+        .expect("right carrier remains addressable");
+    assert!(
+        right_a.distance(v(10.0, 10.0)) < 1e-4 || right_b.distance(v(10.0, 10.0)) < 1e-4,
+        "R10 trims the right wall to y=10: {right_a:?} -> {right_b:?}"
+    );
+}
+
+/// Same live sketch as the overlap regression above, but selecting the
+/// corner actually owned by the short overlapping segment.  At R10 the
+/// fillet consumes that 10 mm segment exactly.  This is a valid topology
+/// boundary (the trimmed carrier remains as a zero-span parametric entity),
+/// not an accidental solver collapse.
+#[test]
+fn one_fillet_may_exactly_consume_a_short_overlapping_carrier() {
+    let mut s = session();
+    let setup = s
+        .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
+        .expect("overlapping setup line");
+    s.add_constraint(nbcad_sketch::Constraint::Fix {
+        entity: setup.start_point_id,
+    })
+    .expect("origin anchor");
+
+    s.add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
+        .expect("bottom outline");
+    let right = s
+        .add_line(v(10.0, 0.0), v(10.0, 60.0), false)
+        .expect("right outline")
+        .entity_id;
+    let top = s
+        .add_line(v(10.0, 60.0), v(-10.0, 60.0), false)
+        .unwrap()
+        .entity_id;
+    let left = s
+        .add_line(v(-10.0, 60.0), v(-10.0, 0.0), false)
+        .unwrap()
+        .entity_id;
+
+    // Match the live state: the two upper R10 fillets are already present.
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: left,
+        radius_text: "10".to_string(),
+    })
+    .expect("top-left R10");
+    s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: right,
+        radius_text: "10".to_string(),
+    })
+    .expect("top-right R10");
+
+    let result = s.fillet_lines(&FilletRequest {
+        l1: setup.entity_id,
+        l2: left,
+        radius_text: "10".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "an exact one-ended trim may consume its carrier: {result:?}"
+    );
+    let result = result.unwrap();
+    assert!(
+        line_is_consumed(&s.dto(), setup.entity_id),
+        "the zero-span setup carrier remains editable but is not presented"
+    );
+
+    let radius_dimension = result
+        .sketch
+        .dimensions
+        .iter()
+        .max_by_key(|dimension| dimension.entities[0].0)
+        .expect("new fillet radius dimension");
+    let over_limit = s.edit_dimension(EditDimensionRequest {
+        constraint_id: radius_dimension.constraint_id,
+        text: "10.1".to_string(),
+    });
+    assert!(
+        over_limit.is_err(),
+        "a one-ended trim must not cross beyond its opposite endpoint"
+    );
+    let message = over_limit.unwrap_err().to_string();
+    assert!(
+        message.len() < 300,
+        "user-facing conflicts must stay concise: {message}"
+    );
+
+    let reopened = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: radius_dimension.constraint_id,
+            text: "9".to_string(),
+        })
+        .expect("reducing the radius reopens the one-ended carrier");
+    let (_, a, b) = lines_of(&reopened.sketch)
+        .into_iter()
+        .find(|(id, _, _)| *id == setup.entity_id)
+        .expect("setup carrier remains addressable");
+    assert!((a.distance(b) - 1.0).abs() < 1e-4, "reopened={a:?}->{b:?}");
+    assert!(!line_is_consumed(&reopened.sketch, setup.entity_id));
+}
+
+#[test]
+fn chamfer_resolves_overlapping_line_to_the_adjacent_corner_carrier() {
+    let mut s = session();
+    let setup = s
+        .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
+        .expect("overlapping setup line");
+    s.add_constraint(nbcad_sketch::Constraint::Fix {
+        entity: setup.start_point_id,
+    })
+    .expect("origin anchor");
+    let bottom = s
+        .add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
+        .unwrap()
+        .entity_id;
+    let right = s
+        .add_line(v(10.0, 0.0), v(10.0, 30.0), false)
+        .unwrap()
+        .entity_id;
+
+    s.chamfer_lines(&ChamferRequest {
+        l1: setup.entity_id,
+        l2: right,
+        distance_text: "4".to_string(),
+    })
+    .expect("overlap pick resolves to the adjacent bottom carrier");
+
+    let dto = s.dto();
+    let (_, bottom_a, bottom_b) = lines_of(&dto)
+        .into_iter()
+        .find(|(id, _, _)| *id == bottom)
+        .expect("bottom carrier remains addressable");
+    assert!(
+        bottom_a.distance(v(6.0, 0.0)) < 1e-4 || bottom_b.distance(v(6.0, 0.0)) < 1e-4,
+        "4 mm chamfer trims the bottom carrier to x=6: {bottom_a:?} -> {bottom_b:?}"
+    );
+    let (_, right_a, right_b) = lines_of(&dto)
+        .into_iter()
+        .find(|(id, _, _)| *id == right)
+        .expect("right carrier remains addressable");
+    assert!(
+        right_a.distance(v(10.0, 4.0)) < 1e-4 || right_b.distance(v(10.0, 4.0)) < 1e-4,
+        "4 mm chamfer trims the right carrier to y=4: {right_a:?} -> {right_b:?}"
+    );
+}
+
+/// Regression from the owner's 2026-08-12 report. A construction line tied
+/// between the midpoints of opposite rectangle edges is an overall-part
+/// datum. Filleting one end of an edge must not reinterpret that datum as the
+/// midpoint of only the shortened carrier and reject the radius dimension.
+#[test]
+fn fillet_preserves_midpoint_datum_across_original_corner_span() {
+    let mut s = session();
+    let lines = typed_40_square(&mut s);
+    let (bottom, top, right) = (
+        edge(&lines, 'y', 0.0),
+        edge(&lines, 'y', 40.0),
+        edge(&lines, 'x', 40.0),
+    );
+
+    let centerline = s
+        .add_line(v(20.0, 40.0), v(20.0, 0.0), false)
+        .expect("midpoint-to-midpoint construction line");
+    assert!(centerline.sketch.constraints.iter().any(|constraint| {
+        matches!(
+            constraint.constraint,
+            nbcad_sketch::Constraint::Midpoint { a, b }
+                if a == centerline.start_point_id && b == top
+        )
+    }));
+    assert!(centerline.sketch.constraints.iter().any(|constraint| {
+        matches!(
+            constraint.constraint,
+            nbcad_sketch::Constraint::Midpoint { a, b }
+                if a == centerline.end_point_id && b == bottom
+        )
+    }));
+    s.add_constraint(nbcad_sketch::Constraint::Vertical {
+        entity: centerline.entity_id,
+    })
+    .expect("construction line stays vertical");
+
+    let result = s.fillet_lines(&FilletRequest {
+        l1: top,
+        l2: right,
+        radius_text: "10".to_string(),
+    });
+    assert!(
+        result.is_ok(),
+        "corner fillet must preserve the overall-edge midpoint datum: {result:?}"
+    );
+
+    let dto = s.dto();
+    let top_midpoint = dto
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Point { id, position, .. } if *id == centerline.start_point_id => {
+                Some(*position)
+            }
+            _ => None,
+        })
+        .expect("construction-line top datum remains");
+    assert!(
+        top_midpoint.distance(v(20.0, 40.0)) < 1e-3,
+        "overall top midpoint stays at the original span center: {top_midpoint:?}"
+    );
+}
+
 /// Boundary regression from the owner's 2026-07-20 report: two fillets on
 /// the ends of one 30 mm edge may each be R15. The remaining straight edge
 /// is a valid zero-length carrier at exactly R1 + R2 == L; only values above
@@ -311,6 +606,10 @@ fn adjacent_r15_fillets_fit_exactly_on_a_30_mm_edge() {
     assert!(
         a.distance(b) < 1e-6,
         "shared edge must close exactly: {a:?} -> {b:?}"
+    );
+    assert!(
+        line_is_consumed(&dto, bottom),
+        "the parametric carrier stays addressable but is marked non-presentational"
     );
 }
 
@@ -446,6 +745,7 @@ fn editing_adjacent_fillet_to_exact_sum_is_accepted_and_reversible() {
         a.distance(b) < 5e-4,
         "edge closes at equality: {a:?} -> {b:?}"
     );
+    assert!(line_is_consumed(&equal.sketch, bottom));
 
     let over_limit = s.edit_dimension(EditDimensionRequest {
         constraint_id: radius_dimension.constraint_id,
@@ -470,6 +770,10 @@ fn editing_adjacent_fillet_to_exact_sum_is_accepted_and_reversible() {
         (a.distance(b) - 5.0).abs() < 5e-4,
         "reopened edge length: {}",
         a.distance(b)
+    );
+    assert!(
+        !line_is_consumed(&reopened.sketch, bottom),
+        "reducing either fillet restores the carrier to rendering and picking"
     );
 }
 
