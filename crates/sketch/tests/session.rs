@@ -5,8 +5,9 @@
 
 use nbcad_sketch::host;
 use nbcad_sketch::{
-    DimensionRequest, DragPhase, EditDimensionRequest, EntityDto, Inference, MovePointRequest,
-    OriginPlane, PlaneRef, SegmentRequest, SketchManager, SketchSession, SnapTarget, Vec2,
+    Constraint, DimensionRequest, DragPhase, EditDimensionRequest, EntityDto, Inference,
+    LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef, SegmentRequest, SketchManager,
+    SketchSession, SnapTarget, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -391,6 +392,80 @@ fn add_line_creates_hv_constraints_from_inference() {
 }
 
 #[test]
+fn a_short_line_does_not_snap_its_endpoint_back_to_its_own_start() {
+    let mut s = session_on_grid();
+    let line = s.add_line(v(0.0, 0.0), v(0.5, 0.0), false).unwrap();
+    let (start, end) = line_endpoints(&s, line.entity_id);
+    assert_eq!(start, v(0.0, 0.0));
+    assert!((end.distance(start) - 0.5).abs() < 1e-9, "end={end:?}");
+}
+
+#[test]
+fn a_locked_half_millimeter_line_stays_valid_with_point_snap_enabled() {
+    for angle_text in [None, Some("-45")] {
+        let mut s = session_on_grid();
+        let line = s
+            .add_line_locked(&LockedSegmentRequest {
+                from: v(0.0, 0.0),
+                to_hint: v(1.0, -1.0),
+                length_mm: None,
+                angle_deg: None,
+                length_text: Some("0.5".to_string()),
+                angle_text: angle_text.map(str::to_string),
+                ctrl_held: false,
+                tracking: None,
+            })
+            .unwrap();
+        let (start, end) = line_endpoints(&s, line.entity_id);
+        assert!((end.distance(start) - 0.5).abs() < 1e-8, "end={end:?}");
+    }
+}
+
+#[test]
+fn connected_right_angles_prefer_relational_perpendicular_constraints() {
+    let mut s = session_off_grid();
+    let left = s.add_line(v(0.0, 0.0), v(0.0, 10.0), false).unwrap();
+    let top = s.add_line(v(0.0, 10.0), v(17.0, 10.0), false).unwrap();
+    let diagonal = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: v(17.0, 10.0),
+            to_hint: v(27.0, 0.0),
+            length_mm: None,
+            angle_deg: None,
+            length_text: None,
+            angle_text: Some("-45".to_string()),
+            ctrl_held: false,
+            tracking: None,
+        })
+        .unwrap();
+    let bottom = s.add_line(v(27.0, 0.0), v(0.0, 0.0), false).unwrap();
+
+    let dto = s.dto();
+    let has_perpendicular = |other| {
+        dto.constraints.iter().any(|constraint| {
+            matches!(
+                constraint.constraint,
+                Constraint::Perpendicular { a, b }
+                    if (a == left.entity_id && b == other)
+                        || (a == other && b == left.entity_id)
+            )
+        })
+    };
+    assert!(has_perpendicular(top.entity_id));
+    assert!(has_perpendicular(bottom.entity_id));
+    assert!(!dto.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Horizontal { entity }
+            if entity == top.entity_id || entity == bottom.entity_id
+    )));
+    assert!(dto.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Angle { a, b, value }
+            if a == diagonal.entity_id && b.0 == 0 && (value + 45.0).abs() < 1e-7
+    )));
+}
+
+#[test]
 fn add_line_with_ctrl_creates_no_constraints() {
     let mut s = session_off_grid();
     let r = s.add_line(v(0.0, 0.0), v(50.0, 1.0), true).unwrap();
@@ -404,7 +479,7 @@ fn degenerate_segments_are_rejected_without_mutating() {
     let first = s.add_line(v(10.0, 10.0), v(30.0, 10.0), false).unwrap();
     let before = first.sketch.entities.len();
     // Clicking the same existing point twice → degenerate.
-    let err = s.add_line(v(10.0, 10.0), v(10.2, 10.1), false).unwrap_err();
+    let err = s.add_line(v(10.0, 10.0), v(10.0, 10.0), false).unwrap_err();
     assert!(err.to_string().contains("zero length"));
     assert_eq!(s.dto().entities.len(), before);
 }

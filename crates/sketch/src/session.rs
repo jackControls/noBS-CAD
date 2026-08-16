@@ -367,24 +367,56 @@ impl SketchSession {
     /// tolerance > line midpoint (`allow_midpoint`, line flow only) > grid
     /// intersection (when grid snap on) > raw. Point, origin, and midpoint
     /// snaps are governed by `point_snap`, grid rounding by `grid_snap`.
-    fn snap_inner(&self, raw: Vec2, allow_midpoint: bool) -> (Vec2, SnapTarget) {
+    fn snap_inner(
+        &self,
+        raw: Vec2,
+        allow_midpoint: bool,
+        exclude_position: Option<Vec2>,
+    ) -> (Vec2, SnapTarget) {
         if self.point_snap {
-            if let Some((id, _)) = self.sketch.nearest_point(raw, self.snap_tolerance) {
+            if let Some((id, _)) = self
+                .sketch
+                .entities()
+                .filter_map(|(id, entity)| {
+                    let Entity::Point { position } = entity else {
+                        return None;
+                    };
+                    if exclude_position
+                        .is_some_and(|excluded| position.distance(excluded) <= MERGE_EPS)
+                    {
+                        return None;
+                    }
+                    let distance = position.distance(raw);
+                    (distance <= self.snap_tolerance).then_some((id, distance))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+            {
                 let position = self.sketch.point_position(id).unwrap_or(raw);
                 return (position, SnapTarget::Point { entity: id });
             }
-            if raw.distance(Vec2::ZERO) <= self.snap_tolerance {
+            if raw.distance(Vec2::ZERO) <= self.snap_tolerance
+                && !exclude_position
+                    .is_some_and(|excluded| excluded.distance(Vec2::ZERO) <= MERGE_EPS)
+            {
                 return (Vec2::ZERO, SnapTarget::Origin);
             }
             if allow_midpoint {
                 if let Some((id, mid)) = self.sketch.nearest_line_midpoint(raw, self.snap_tolerance)
                 {
-                    return (mid, SnapTarget::Midpoint { entity: id });
+                    if !exclude_position.is_some_and(|excluded| mid.distance(excluded) <= MERGE_EPS)
+                    {
+                        return (mid, SnapTarget::Midpoint { entity: id });
+                    }
                 }
                 if let Some((edge, midpoint, _)) = self
                     .reference_midpoints
                     .iter()
                     .filter_map(|(edge, midpoint)| {
+                        if exclude_position
+                            .is_some_and(|excluded| midpoint.distance(excluded) <= MERGE_EPS)
+                        {
+                            return None;
+                        }
                         let distance = midpoint.distance(raw);
                         (distance <= self.snap_tolerance).then_some((*edge, *midpoint, distance))
                     })
@@ -397,13 +429,16 @@ impl SketchSession {
         if self.grid_snap {
             let step = self.grid_step;
             let snapped = Vec2::new((raw.x / step).round() * step, (raw.y / step).round() * step);
+            if exclude_position.is_some_and(|excluded| snapped.distance(excluded) <= MERGE_EPS) {
+                return (raw, SnapTarget::None);
+            }
             return (snapped, SnapTarget::Grid);
         }
         (raw, SnapTarget::None)
     }
 
     fn snap(&self, raw: Vec2) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, false)
+        self.snap_inner(raw, false, None)
     }
 
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
@@ -411,7 +446,13 @@ impl SketchSession {
     /// constraint on commit (D4.1 parity). Holding Ctrl suppresses the
     /// midpoint inference (Ctrl disables inferences).
     fn snap_line_flow(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held)
+        self.snap_inner(raw, !ctrl_held, None)
+    }
+
+    /// Endpoint acquisition must not magnetize a short segment back onto its
+    /// own start point. Other coincident candidates retain normal priority.
+    fn snap_line_endpoint(&self, raw: Vec2, from: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        self.snap_inner(raw, !ctrl_held, Some(from))
     }
 
     /// Shared pipeline for `preview_segment` and `add_line`: snap, then
@@ -419,7 +460,7 @@ impl SketchSession {
     /// within `INFERENCE_ANGLE_TOL_DEG` of the u/v axes and project the
     /// endpoint onto the inferred direction.
     fn snap_and_infer(&self, from: Vec2, to_raw: Vec2, ctrl_held: bool) -> PreviewDto {
-        let (mut snapped, target) = self.snap_line_flow(to_raw, ctrl_held);
+        let (mut snapped, target) = self.snap_line_endpoint(to_raw, from, ctrl_held);
         let mut inferences = Vec::new();
 
         match target {
@@ -486,7 +527,7 @@ impl SketchSession {
         // Both locked → exact point; only coincident merging still applies.
         if let (Some(l), Some(a)) = (length_mm, angle) {
             let exact = from + Vec2::new(a.cos() * l, a.sin() * l);
-            return self.coincident_or_exact(exact, inferences);
+            return self.coincident_or_exact(from, exact, inferences);
         }
 
         let endpoint = if let Some(l) = length_mm {
@@ -568,7 +609,7 @@ impl SketchSession {
             unreachable!()
         };
 
-        self.coincident_or_exact(endpoint, inferences)
+        self.coincident_or_exact(from, endpoint, inferences)
     }
 
     /// Resolve a viewport-acquired horizontal/vertical tracking reference
@@ -762,8 +803,27 @@ impl SketchSession {
 
     /// Coincident-merge check for a computed endpoint (point entities,
     /// then the origin), else the point itself as a free snap.
-    fn coincident_or_exact(&self, exact: Vec2, mut inferences: Vec<Inference>) -> PreviewDto {
-        if let Some((id, _)) = self.sketch.nearest_point(exact, self.snap_tolerance) {
+    fn coincident_or_exact(
+        &self,
+        from: Vec2,
+        exact: Vec2,
+        mut inferences: Vec<Inference>,
+    ) -> PreviewDto {
+        if let Some((id, _)) = self
+            .sketch
+            .entities()
+            .filter_map(|(id, entity)| {
+                let Entity::Point { position } = entity else {
+                    return None;
+                };
+                if position.distance(from) <= MERGE_EPS {
+                    return None;
+                }
+                let distance = position.distance(exact);
+                (distance <= self.snap_tolerance).then_some((id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
             inferences.push(Inference::Coincident);
             return PreviewDto {
                 snapped_to: self.sketch.point_position(id).unwrap_or(exact),
@@ -772,7 +832,9 @@ impl SketchSession {
                 tracking: None,
             };
         }
-        if exact.distance(Vec2::ZERO) <= self.snap_tolerance {
+        if exact.distance(Vec2::ZERO) <= self.snap_tolerance
+            && from.distance(Vec2::ZERO) > MERGE_EPS
+        {
             inferences.push(Inference::Coincident);
             return PreviewDto {
                 snapped_to: Vec2::ZERO,
@@ -800,6 +862,9 @@ impl SketchSession {
             let Entity::Point { position } = e else {
                 continue;
             };
+            if position.distance(from) <= MERGE_EPS {
+                continue;
+            }
             if (position.distance(from) - l).abs() > self.snap_tolerance {
                 continue;
             }
@@ -825,6 +890,9 @@ impl SketchSession {
             let Entity::Point { position } = e else {
                 continue;
             };
+            if position.distance(from) <= MERGE_EPS {
+                continue;
+            }
             let rel = *position - from;
             if (rel.x * dir.y - rel.y * dir.x).abs() > self.snap_tolerance {
                 continue;
@@ -879,6 +947,90 @@ impl SketchSession {
         let id = self.sketch.add_constraint(constraint);
         let targets = self.unknown_values(point_id);
         self.sketch.set_fix_targets(id, targets);
+        Some(ConstraintDto { id, constraint })
+    }
+
+    /// Find the best already-connected line at each endpoint that is within
+    /// the normal inference cone of perpendicular to `line_id`.
+    fn perpendicular_candidates(
+        &self,
+        line_id: EntityId,
+        endpoint_ids: [EntityId; 2],
+    ) -> Vec<Constraint> {
+        let Some((start, end)) = self.sketch.resolved_line(line_id) else {
+            return Vec::new();
+        };
+        let direction = end - start;
+        let length = direction.length();
+        if length < MIN_LINE_LENGTH_MM {
+            return Vec::new();
+        }
+        let perpendicular_cos_limit = INFERENCE_ANGLE_TOL_DEG.to_radians().sin();
+        let mut candidates = Vec::with_capacity(2);
+
+        for endpoint_id in endpoint_ids {
+            let best = self
+                .sketch
+                .lines_connected_to(endpoint_id)
+                .into_iter()
+                .filter(|candidate| *candidate != line_id)
+                .filter_map(|candidate| {
+                    let (a, b) = self.sketch.resolved_line(candidate)?;
+                    let other = b - a;
+                    let other_length = other.length();
+                    if other_length < MIN_LINE_LENGTH_MM {
+                        return None;
+                    }
+                    let absolute_cosine = direction.dot(other).abs() / (length * other_length);
+                    (absolute_cosine <= perpendicular_cos_limit)
+                        .then_some((candidate, absolute_cosine))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+
+            if let Some((candidate, _)) = best {
+                let constraint = Constraint::Perpendicular {
+                    a: candidate,
+                    b: line_id,
+                };
+                if !candidates.contains(&constraint) {
+                    candidates.push(constraint);
+                }
+            }
+        }
+        candidates
+    }
+
+    /// Automatic relations are opportunistic: keep only constraints that
+    /// are consistent and remove at least one independent degree of freedom.
+    /// This avoids filling a closed profile with redundant relations.
+    fn try_add_independent_auto_constraint(
+        &mut self,
+        constraint: Constraint,
+    ) -> Option<ConstraintDto> {
+        let already_present = self.sketch.constraints().any(|(_, existing)| {
+            *existing == constraint
+                || matches!(
+                    (*existing, constraint),
+                    (
+                        Constraint::Perpendicular { a: ea, b: eb },
+                        Constraint::Perpendicular { a, b }
+                    ) if ea == b && eb == a
+                )
+        });
+        if already_present {
+            return None;
+        }
+
+        let before = self.sketch.snapshot();
+        let before_rank = solver::analyze(&self.sketch).rank;
+        let id = self.sketch.add_constraint(constraint);
+        let analysis = solver::solve(&mut self.sketch, &[]);
+        let residual = solver::constraint_residual(&self.sketch, id);
+        if !analysis.converged || residual > INCONSISTENT_EPS || analysis.rank <= before_rank {
+            self.sketch.restore(before);
+            return None;
+        }
+        self.analysis = Some(analysis);
         Some(ConstraintDto { id, constraint })
     }
 
@@ -999,10 +1151,30 @@ impl SketchSession {
             .add_entity(Entity::line(start_point_id, end_point_id));
 
         let mut created = Vec::new();
+        let perpendicular_created = if ctrl_held {
+            false
+        } else {
+            let candidates = self.perpendicular_candidates(line_id, [start_point_id, end_point_id]);
+            let mut accepted = false;
+            for constraint in candidates {
+                if let Some(created_constraint) =
+                    self.try_add_independent_auto_constraint(constraint)
+                {
+                    created.push(created_constraint);
+                    accepted = true;
+                }
+            }
+            accepted
+        };
         for inference in &preview.inferences {
             let constraint = match inference {
-                Inference::Horizontal => Some(Constraint::Horizontal { entity: line_id }),
-                Inference::Vertical => Some(Constraint::Vertical { entity: line_id }),
+                Inference::Horizontal if !perpendicular_created => {
+                    Some(Constraint::Horizontal { entity: line_id })
+                }
+                Inference::Vertical if !perpendicular_created => {
+                    Some(Constraint::Vertical { entity: line_id })
+                }
+                Inference::Horizontal | Inference::Vertical => None,
                 // Structural: merged shared points, no constraint record.
                 Inference::Coincident => None,
             };
