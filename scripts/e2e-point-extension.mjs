@@ -65,6 +65,13 @@ try {
     'none',
     'unique virtual extension shows coincidence acquisition feedback',
   );
+  const extensionTransient = await page.evaluate(
+    () => window.__nativeViewportTransient(),
+  );
+  assert.ok(
+    extensionTransient.lines.some((layer) => layer.pattern === 'dotted'),
+    'virtual point-to-line extension must use the shared dotted alignment-guide style',
+  );
   const pointIdsBefore = new Set(
     active.entities
       .filter((entity) => entity.kind === 'point')

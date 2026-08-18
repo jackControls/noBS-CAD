@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use nbcad_core::EdgeId;
+
 use crate::entity::EntityId;
+use crate::geometry::Vec2;
 
 /// Stable identifier of a constraint within a sketch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -77,6 +80,15 @@ pub enum Constraint {
     Midpoint {
         a: EntityId,
         b: EntityId,
+    },
+    /// Keep a sketch point at the exact midpoint of a stable support-face
+    /// edge. Unlike a one-time object snap, this external reference remains
+    /// authoritative when dimensions are edited and is refreshed from the
+    /// edge id whenever the face-hosted sketch is reopened.
+    ReferenceMidpoint {
+        point: EntityId,
+        edge: EdgeId,
+        position: Vec2,
     },
     /// Midpoint of an edge's original corner-to-corner span after a corner
     /// modifier trims one or both finite endpoints. `start` and `end` are
@@ -160,6 +172,7 @@ impl Constraint {
             Constraint::Perpendicular { .. } => "perpendicular",
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
+            Constraint::ReferenceMidpoint { .. } => "reference_midpoint",
             Constraint::SpanMidpoint { .. } => "span_midpoint",
             Constraint::Concentric { .. } => "concentric",
             Constraint::Collinear { .. } => "collinear",
@@ -191,6 +204,7 @@ impl Constraint {
             | Constraint::Fix { entity }
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
+            Constraint::ReferenceMidpoint { point, .. } => vec![point],
             Constraint::Coincident { a, b }
             | Constraint::HorizontalPoints { a, b }
             | Constraint::VerticalPoints { a, b }

@@ -144,9 +144,22 @@ try {
   console.log('3. double-click edit d1 → 60');
   const d1pos = s.dimensions[0].text_pos;
   const d1screen = await sketchToScreen(d1pos.x, d1pos.y);
-  await page.mouse.dblclick(d1screen.x, d1screen.y);
+  const d1labelEdge = {
+    x: d1screen.x + 12,
+    y: d1screen.y,
+  };
+  await page.keyboard.press('l');
+  await page.waitForFunction(() => window.__appStore.getState().activeTool === 'line');
+  await page.mouse.dblclick(d1labelEdge.x, d1labelEdge.y);
   await page.waitForTimeout(400);
-  check('editor opens on double-click', await page.locator('input[title*="Edit dimension"]').isVisible());
+  check(
+    'full dimension label opens on double-click while a tool is armed',
+    await page.locator('input[title*="Edit dimension"]').isVisible(),
+  );
+  check(
+    'dimension interaction retires the armed geometry tool',
+    (await state()).activeTool === null,
+  );
   await shot('04a-dim-editor-open');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(100);

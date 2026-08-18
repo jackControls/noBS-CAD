@@ -398,7 +398,7 @@ impl SketchSession {
         };
         let mid = self.line_mid(line);
         let dir = self.line_dir(line).unwrap_or(Vec2::new(1.0, 0.0));
-        let pos = mid + perp_unit(dir) * 15.0;
+        let pos = mid + perp_unit(dir) * default_linear_dimension_offset(len);
         let Ok(param) = self.param_from_text(ParamKind::Length, Some(text), len) else {
             return; // best effort: geometry commits without the dim
         };
@@ -421,7 +421,7 @@ impl SketchSession {
         };
         let deg = dir.y.atan2(dir.x).to_degrees();
         let mid = self.line_mid(line);
-        let pos = mid + perp_unit(dir) * 18.0;
+        let pos = mid + perp_unit(dir) * default_angular_dimension_offset(dir.length());
         let Ok(param) = self.param_from_text(ParamKind::Angle, Some(text), deg) else {
             return;
         };
@@ -465,7 +465,7 @@ impl SketchSession {
                             value: len,
                         },
                         param,
-                        mid + Vec2::new(0.0, -15.0),
+                        mid + Vec2::new(0.0, -default_linear_dimension_offset(len)),
                         false,
                     );
                 }
@@ -486,7 +486,7 @@ impl SketchSession {
                             value: len,
                         },
                         param,
-                        mid + Vec2::new(-15.0, 0.0),
+                        mid + Vec2::new(-default_linear_dimension_offset(len), 0.0),
                         false,
                     );
                 }
@@ -509,7 +509,11 @@ impl SketchSession {
                 value: d,
             },
             param,
-            center + Vec2::new(r + 12.0, r + 12.0),
+            center
+                + Vec2::new(
+                    r + default_radial_dimension_gap(d),
+                    r + default_radial_dimension_gap(d),
+                ),
             false,
         );
     }
@@ -546,6 +550,23 @@ impl SketchSession {
             })
             .collect()
     }
+}
+
+/// Dimension annotations are born near the geometry they describe. A fixed
+/// 15 mm offset overwhelms sub-millimetre details and creates unnecessarily
+/// long extension lines, while a pure percentage can land on top of very
+/// small geometry. These bounded, span-aware defaults remain user-adjustable
+/// through `move_dimension`.
+fn default_linear_dimension_offset(span: f64) -> f64 {
+    (span.abs() * 0.35).clamp(1.5, 10.0)
+}
+
+fn default_angular_dimension_offset(span: f64) -> f64 {
+    (span.abs() * 0.40).clamp(2.0, 12.0)
+}
+
+fn default_radial_dimension_gap(diameter: f64) -> f64 {
+    (diameter.abs() * 0.25).clamp(2.0, 8.0)
 }
 
 fn angle_between(a: Vec2, b: Vec2) -> f64 {

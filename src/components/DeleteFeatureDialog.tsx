@@ -4,18 +4,23 @@ import type { FeatureDto } from '../types/document';
 
 /** Shared dependency-aware feature deletion confirmation for tree and history. */
 export function DeleteFeatureDialog({
-  feature,
+  features,
   busy,
   onCancel,
   onConfirm,
 }: {
-  feature: FeatureDto;
+  features: FeatureDto[];
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const { t } = useTranslation();
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const message = features.length === 1
+    ? t('timeline.deleteMessage').replace('{name}', features[0].name)
+    : t('timeline.deleteMultipleMessage')
+      .replace('{count}', String(features.length))
+      .replace('{names}', features.map((feature) => feature.name).join(', '));
 
   useEffect(() => {
     confirmRef.current?.focus({ preventScroll: true });
@@ -51,7 +56,7 @@ export function DeleteFeatureDialog({
           id="delete-feature-message"
           className="px-4 py-4 text-xs leading-relaxed text-ink/90"
         >
-          {t('timeline.deleteMessage').replace('{name}', feature.name)}
+          {message}
         </div>
         <div className="flex justify-end gap-2 border-t border-edge px-4 py-3">
           <button

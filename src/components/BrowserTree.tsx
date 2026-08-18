@@ -434,7 +434,7 @@ export function BrowserTree() {
       )}
       {deleteTarget && (
         <DeleteFeatureDialog
-          feature={deleteTarget}
+          features={[deleteTarget]}
           busy={busy}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => {

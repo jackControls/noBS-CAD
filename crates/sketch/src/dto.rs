@@ -187,10 +187,13 @@ pub struct DimensionDto {
     pub text_pos: Vec2,
 }
 
-/// What the cursor snapped to, in priority order (point > origin > line
-/// midpoint > grid > raw). `Point`/`Origin` snaps imply a coincident
-/// inference; `Midpoint` implies an auto-created Midpoint constraint on
-/// commit (M1d, D4.1 parity) and is suppressed while Ctrl is held.
+/// What the cursor snapped to, in priority order (point > origin > exact
+/// curve crossing > line midpoint > grid > raw). `Point`/`Origin` snaps
+/// imply a coincident inference; `Intersection` is recomputed from its two
+/// authoritative carriers and remains constrained to both after commit;
+/// `Midpoint` and `ReferenceMidpoint` imply auto-created persistent midpoint
+/// constraints on commit (M1d, D4.1 parity) and are suppressed while Ctrl is
+/// held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SnapTarget {
@@ -205,10 +208,23 @@ pub enum SnapTarget {
         entity: EntityId,
     },
     /// Cursor snapped to the midpoint of a coplanar support-face edge.
-    /// This is an external reference, so it does not create a sketch
-    /// Midpoint constraint until projected-geometry constraints exist.
+    /// Commit binds the point to this stable edge id so future dimension
+    /// edits and support-geometry refreshes preserve the exact midpoint.
     ReferenceMidpoint {
         edge: EdgeId,
+    },
+    /// Exact intersection with a sketch curve acquired by the viewport.
+    /// The endpoint remains a distinct point and commit adds its persistent
+    /// point-on-curve relation.
+    Curve {
+        entity: EntityId,
+    },
+    /// Exact finite-curve crossing acquired in screen space. Coordinates are
+    /// never trusted across the UI/engine boundary: the engine recomputes the
+    /// analytic intersection from both stable entity ids.
+    Intersection {
+        first: EntityId,
+        second: EntityId,
     },
 }
 
@@ -237,6 +253,24 @@ pub enum TrackingAxis {
 pub struct LineTrackingRequest {
     pub point: EntityId,
     pub axis: TrackingAxis,
+}
+
+/// A horizontal/vertical endpoint intent intersected with an existing
+/// line, circle, or arc. Screen-space acquisition belongs to the viewport;
+/// the engine recomputes the exact intersection and owns the relation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LineIntersectionRequest {
+    pub curve: EntityId,
+    pub axis: TrackingAxis,
+}
+
+/// Exact crossing between two finite sketch curves. This is separate from
+/// [`LineIntersectionRequest`], which means a new line's inferred H/V axis
+/// intersecting one carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurveCrossingRequest {
+    pub first: EntityId,
+    pub second: EntityId,
 }
 
 /// Exact guide returned with a line preview for native/browser rendering.
@@ -322,6 +356,13 @@ pub struct SetGridStepRequest {
 pub struct LockedSegmentRequest {
     pub from: Vec2,
     pub to_hint: Vec2,
+    /// Optional exact topological identity for the chain start. The viewport
+    /// supplies ids; the engine recomputes the crossing coordinate.
+    #[serde(default)]
+    pub from_crossing: Option<CurveCrossingRequest>,
+    /// Optional exact topological identity for the segment endpoint.
+    #[serde(default)]
+    pub to_crossing: Option<CurveCrossingRequest>,
     #[serde(default)]
     pub length_mm: Option<f64>,
     #[serde(default)]
@@ -334,6 +375,8 @@ pub struct LockedSegmentRequest {
     pub ctrl_held: bool,
     #[serde(default)]
     pub tracking: Option<LineTrackingRequest>,
+    #[serde(default)]
+    pub intersection: Option<LineIntersectionRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

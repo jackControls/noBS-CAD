@@ -2,6 +2,7 @@
 //! re-solve on edit, conflict rejection, auto-dimension on typed input,
 //! formula-driven dimensions, lock/snap composition.
 
+use nbcad_core::EdgeId;
 use nbcad_sketch::{
     Constraint, DimensionRequest, EditDimensionRequest, LockedRectangleRequest,
     LockedSegmentRequest, MoveDimensionRequest, OriginPlane, PlaneRef, RectangleMode,
@@ -29,12 +30,15 @@ fn locked_seg_text(
     LockedSegmentRequest {
         from,
         to_hint,
+        from_crossing: None,
+        to_crossing: None,
         length_mm: None,
         angle_deg: None,
         length_text: length_text.map(|t| t.to_string()),
         angle_text: angle_text.map(|t| t.to_string()),
         ctrl_held: false,
         tracking: None,
+        intersection: None,
     }
 }
 
@@ -54,6 +58,56 @@ fn point(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> Vec2 {
         Some(nbcad_sketch::EntityDto::Point { position, .. }) => *position,
         other => panic!("expected point, got {other:?}"),
     }
+}
+
+#[test]
+fn support_edge_midpoint_remains_exact_through_dimension_edits_and_history() {
+    let mut s = session();
+    let edge = EdgeId(77);
+    s.set_reference_midpoints(vec![(edge, v(10.0, 0.0))]);
+
+    let line = s.add_line(v(10.2, 0.2), v(20.0, 0.0), false).unwrap();
+    assert!(close(
+        point(&line.sketch, line.start_point_id),
+        v(10.0, 0.0)
+    ));
+    assert!(s.sketch().constraints().any(|(_, constraint)| matches!(
+        constraint,
+        Constraint::ReferenceMidpoint {
+            point,
+            edge: constrained_edge,
+            position,
+        } if *point == line.start_point_id
+            && *constrained_edge == edge
+            && close(*position, v(10.0, 0.0))
+    )));
+
+    let dimension = s
+        .add_dimension(DimensionRequest {
+            entities: vec![line.entity_id],
+            text_pos: v(15.0, 5.0),
+            value_text: None,
+        })
+        .unwrap();
+    let edited = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: dimension.sketch.dimensions[0].constraint_id,
+            text: "15".to_string(),
+        })
+        .unwrap()
+        .sketch;
+    assert!(close(point(&edited, line.start_point_id), v(10.0, 0.0)));
+    assert!(close(point(&edited, line.end_point_id), v(25.0, 0.0)));
+
+    // A recomputed support edge refreshes the authoritative target by its
+    // stable id. Undo/redo must retain that new target rather than restoring
+    // the old sampled coordinate from a command snapshot.
+    s.set_reference_midpoints(vec![(edge, v(12.0, 3.0))]);
+    assert!(close(point(&s.dto(), line.start_point_id), v(12.0, 3.0)));
+    let undone = s.undo().unwrap().sketch;
+    assert!(close(point(&undone, line.start_point_id), v(12.0, 3.0)));
+    let redone = s.redo().unwrap().sketch;
+    assert!(close(point(&redone, line.start_point_id), v(12.0, 3.0)));
 }
 
 // --- Dimensional solver equations + DOF ------------------------------------
@@ -560,4 +614,45 @@ fn dimension_move_and_delete() {
     let undone = s.undo().unwrap();
     assert_eq!(undone.sketch.dimensions.len(), 1);
     assert_eq!(undone.sketch.dimensions[0].text_pos, v(5.0, 40.0));
+}
+
+#[test]
+fn typed_dimension_default_offset_scales_with_the_measured_feature() {
+    let mut small = session();
+    let small_line = small
+        .add_line_locked(&locked_seg_text(
+            v(0.0, 0.0),
+            v(0.5, 0.0),
+            Some("0.5"),
+            None,
+        ))
+        .unwrap();
+    let small_dim = small_line
+        .sketch
+        .dimensions
+        .first()
+        .expect("typed length should create a dimension");
+    assert!(
+        (small_dim.text_pos.y - 1.5).abs() < 1e-9,
+        "sub-millimetre geometry should receive a compact readable offset"
+    );
+
+    let mut large = session();
+    let large_line = large
+        .add_line_locked(&locked_seg_text(
+            v(0.0, 0.0),
+            v(100.0, 0.0),
+            Some("100"),
+            None,
+        ))
+        .unwrap();
+    let large_dim = large_line
+        .sketch
+        .dimensions
+        .first()
+        .expect("typed length should create a dimension");
+    assert!(
+        (large_dim.text_pos.y - 10.0).abs() < 1e-9,
+        "large geometry should cap the initial extension-line offset"
+    );
 }

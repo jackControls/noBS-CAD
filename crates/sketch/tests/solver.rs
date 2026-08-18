@@ -4,9 +4,10 @@
 //! drag-with-constraints cases.
 
 use nbcad_sketch::{
-    CircleMode, Constraint, DragPhase, EntityDto, EntityId, LineTrackingRequest,
-    LockedCircleRequest, LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef,
-    RectangleMode, SketchSession, SnapTarget, TrackingAxis, Vec2,
+    CircleMode, Constraint, CurveCrossingRequest, DragPhase, EntityDto, EntityId,
+    LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest, LockedSegmentRequest,
+    MovePointRequest, OriginPlane, PlaneRef, RectangleMode, SketchSession, SnapTarget,
+    TrackingAxis, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -22,12 +23,15 @@ fn locked_seg(
     LockedSegmentRequest {
         from,
         to_hint,
+        from_crossing: None,
+        to_crossing: None,
         length_mm,
         angle_deg,
         length_text: None,
         angle_text: None,
         ctrl_held: false,
         tracking: None,
+        intersection: None,
     }
 }
 
@@ -844,6 +848,9 @@ fn typed_angle_snaps_its_free_distance_to_the_active_grid() {
         v(15.16, -0.16),
         false,
         None,
+        None,
+        None,
+        None,
     );
     assert_eq!(preview.snap, SnapTarget::Grid);
     assert!(close(preview.snapped_to, v(15.0, 0.0)));
@@ -859,6 +866,8 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .add_line_locked(&LockedSegmentRequest {
             from: v(5.0, 15.0),
             to_hint: v(15.1, 4.9),
+            from_crossing: None,
+            to_crossing: None,
             length_mm: None,
             angle_deg: Some(-45.0),
             length_text: None,
@@ -868,6 +877,7 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
                 point: reference,
                 axis: TrackingAxis::Horizontal,
             }),
+            intersection: None,
         })
         .unwrap();
     let (_, endpoint) = line(&result.sketch, result.entity_id);
@@ -892,4 +902,180 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .unwrap();
     let (_, moved_endpoint) = line(&moved, result.entity_id);
     assert!((moved_endpoint.y - reference_position.y).abs() < 1e-7);
+}
+
+#[test]
+fn vertical_curve_intersection_beats_grid_and_persists_on_the_carrier() {
+    let mut s = session();
+    let diagonal = s.add_line(v(17.0, 8.0), v(25.0, 0.0), true).unwrap();
+    s.set_grid_step(2.5).unwrap();
+    s.set_grid_snap(true);
+    let short_bottom = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: v(25.0, 0.0),
+            to_hint: v(24.5, 0.0),
+            from_crossing: None,
+            to_crossing: None,
+            length_mm: None,
+            angle_deg: None,
+            length_text: Some("0.5".to_string()),
+            angle_text: Some("180".to_string()),
+            ctrl_held: false,
+            tracking: None,
+            intersection: None,
+        })
+        .unwrap();
+    let (_, anchor) = line(&short_bottom.sketch, short_bottom.entity_id);
+    assert!(close(anchor, v(24.5, 0.0)));
+
+    let request = LineIntersectionRequest {
+        curve: diagonal.entity_id,
+        axis: TrackingAxis::Vertical,
+    };
+    let preview = s.preview_segment_locked(
+        v(24.5, 0.0),
+        None,
+        None,
+        v(24.48, 0.54),
+        false,
+        None,
+        Some(request),
+        None,
+        None,
+    );
+    assert_eq!(
+        preview.snap,
+        SnapTarget::Curve {
+            entity: diagonal.entity_id
+        }
+    );
+    assert!(close(preview.snapped_to, v(24.5, 0.5)));
+    assert!(preview
+        .inferences
+        .contains(&nbcad_sketch::Inference::Vertical));
+    assert!(preview
+        .inferences
+        .contains(&nbcad_sketch::Inference::Coincident));
+
+    let result = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: v(24.5, 0.0),
+            to_hint: v(24.48, 0.54),
+            from_crossing: None,
+            to_crossing: None,
+            length_mm: None,
+            angle_deg: None,
+            length_text: None,
+            angle_text: None,
+            ctrl_held: false,
+            tracking: None,
+            intersection: Some(request),
+        })
+        .unwrap();
+    let (start, end) = line(&result.sketch, result.entity_id);
+    assert!(close(start, v(24.5, 0.0)), "start={start:?}, end={end:?}");
+    assert!(close(end, v(24.5, 0.5)), "start={start:?}, end={end:?}");
+    assert!((end.x - start.x).abs() < 1e-7);
+    assert!(result.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Vertical { entity } if entity == result.entity_id
+    ) || matches!(
+        constraint.constraint,
+        Constraint::Perpendicular { a, b }
+            if (a == result.entity_id && b == short_bottom.entity_id)
+                || (b == result.entity_id && a == short_bottom.entity_id)
+    )));
+    assert!(result.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Coincident { a, b }
+            if a == result.end_point_id && b == diagonal.entity_id
+    )));
+}
+
+#[test]
+fn exact_crossing_start_survives_a_half_mm_chain_and_vertical_turn() {
+    let mut s = session();
+    let horizontal = s.add_line(v(0.0, 0.0), v(30.0, 0.0), true).unwrap();
+    let diagonal = s.add_line(v(15.0, -5.0), v(25.0, 5.0), true).unwrap();
+    let crossing = CurveCrossingRequest {
+        first: horizontal.entity_id,
+        second: diagonal.entity_id,
+    };
+    s.set_grid_step(10.0).unwrap();
+    s.set_grid_snap(true);
+
+    let short = s
+        .add_line_locked(&LockedSegmentRequest {
+            // Both hints are deliberately off the exact crossing/grid. The
+            // stable carrier ids, not either approximate coordinate, own the
+            // start location.
+            from: v(20.17, -0.13),
+            to_hint: v(19.4, 0.2),
+            from_crossing: Some(crossing),
+            to_crossing: None,
+            length_mm: None,
+            angle_deg: None,
+            length_text: Some("0.5".to_string()),
+            angle_text: Some("180".to_string()),
+            ctrl_held: false,
+            tracking: None,
+            intersection: None,
+        })
+        .unwrap();
+    let (start, end) = line(&short.sketch, short.entity_id);
+    assert!(close(start, v(20.0, 0.0)), "start={start:?}");
+    assert!(close(end, v(19.5, 0.0)), "end={end:?}");
+    assert!((start.distance(end) - 0.5).abs() < 1e-9);
+
+    for carrier in [horizontal.entity_id, diagonal.entity_id] {
+        assert!(
+            short.sketch.constraints.iter().any(|constraint| matches!(
+                constraint.constraint,
+                Constraint::Coincident { a, b }
+                    if a == short.start_point_id && b == carrier
+            )),
+            "crossing point should remain attached to {carrier:?}"
+        );
+    }
+
+    let vertical_preview = s.preview_segment_locked(
+        end,
+        None,
+        None,
+        v(19.53, 4.7),
+        false,
+        None,
+        None,
+        None,
+        None,
+    );
+    assert!(vertical_preview
+        .inferences
+        .contains(&nbcad_sketch::Inference::Vertical));
+    assert!((vertical_preview.snapped_to.x - 19.5).abs() < 1e-9);
+
+    let upright = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: end,
+            to_hint: v(19.53, 4.7),
+            from_crossing: None,
+            to_crossing: None,
+            length_mm: None,
+            angle_deg: None,
+            length_text: None,
+            angle_text: None,
+            ctrl_held: false,
+            tracking: None,
+            intersection: None,
+        })
+        .unwrap();
+    let (turn_start, turn_end) = line(&upright.sketch, upright.entity_id);
+    assert!(close(turn_start, end));
+    assert!((turn_end.x - turn_start.x).abs() < 1e-9);
+    assert!(upright.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Perpendicular { a, b }
+            if (a == short.entity_id && b == upright.entity_id)
+                || (a == upright.entity_id && b == short.entity_id)
+    )));
 }

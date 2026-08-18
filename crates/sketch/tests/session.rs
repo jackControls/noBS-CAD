@@ -408,12 +408,15 @@ fn a_locked_half_millimeter_line_stays_valid_with_point_snap_enabled() {
             .add_line_locked(&LockedSegmentRequest {
                 from: v(0.0, 0.0),
                 to_hint: v(1.0, -1.0),
+                from_crossing: None,
+                to_crossing: None,
                 length_mm: None,
                 angle_deg: None,
                 length_text: Some("0.5".to_string()),
                 angle_text: angle_text.map(str::to_string),
                 ctrl_held: false,
                 tracking: None,
+                intersection: None,
             })
             .unwrap();
         let (start, end) = line_endpoints(&s, line.entity_id);
@@ -430,12 +433,15 @@ fn connected_right_angles_prefer_relational_perpendicular_constraints() {
         .add_line_locked(&LockedSegmentRequest {
             from: v(17.0, 10.0),
             to_hint: v(27.0, 0.0),
+            from_crossing: None,
+            to_crossing: None,
             length_mm: None,
             angle_deg: None,
             length_text: None,
             angle_text: Some("-45".to_string()),
             ctrl_held: false,
             tracking: None,
+            intersection: None,
         })
         .unwrap();
     let bottom = s.add_line(v(27.0, 0.0), v(0.0, 0.0), false).unwrap();

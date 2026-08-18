@@ -1,6 +1,8 @@
 /**
- * Numeric input selection regression:
- * - ordinary dimension inputs select all on mouse focus and Tab focus;
+ * Numeric input editing regression:
+ * - command activation and Tab focus select all for fast replacement;
+ * - first activation selects all, a later single click places a native caret,
+ *   and a double-click selects all again;
  * - sketch dynamic-input fields visibly select and replace on Tab/click.
  */
 import assert from 'node:assert/strict';
@@ -114,12 +116,63 @@ try {
   );
   const expressionInput = page.locator('[data-dimension-input][type="text"]');
   await expressionInput.waitFor({ state: 'visible' });
-  await expressionInput.click();
+  await page.waitForFunction(() => {
+    const input = document.querySelector('[data-dimension-input][type="text"]');
+    return input === document.activeElement && input?.value === '=50/2';
+  });
   await page.keyboard.type('30');
   assert.equal(
     await expressionInput.inputValue(),
     '30',
-    'expression-mode dimension input shares replacement behavior',
+    'a newly opened expression dimension is ready for direct replacement',
+  );
+  await expressionInput.fill('12.34');
+  await expressionInput.evaluate((element) => element.blur());
+  await expressionInput.click({ position: { x: 30, y: 14 } });
+  const activationSelection = await expressionInput.evaluate((element) => ({
+    start: element.selectionStart,
+    end: element.selectionEnd,
+    length: element.value.length,
+  }));
+  assert.deepEqual(
+    activationSelection,
+    { start: 0, end: activationSelection.length, length: activationSelection.length },
+    'the first click that activates a dimension selects the complete value',
+  );
+  await expressionInput.click({ position: { x: 30, y: 14 } });
+  const caretBeforeArrow = await expressionInput.evaluate((element) => ({
+    start: element.selectionStart,
+    end: element.selectionEnd,
+    length: element.value.length,
+  }));
+  assert.equal(
+    caretBeforeArrow.start,
+    caretBeforeArrow.end,
+    'clicking an existing dimension places a caret instead of selecting all',
+  );
+  assert.ok(
+    caretBeforeArrow.start > 0 && caretBeforeArrow.start < caretBeforeArrow.length,
+    `pointer caret should land inside the numeric string: ${JSON.stringify(caretBeforeArrow)}`,
+  );
+  await page.keyboard.press('ArrowRight');
+  const caretAfterArrow = await expressionInput.evaluate(
+    (element) => element.selectionStart,
+  );
+  assert.equal(
+    caretAfterArrow,
+    caretBeforeArrow.start + 1,
+    'Left/Right arrow keys move the inline dimension caret normally',
+  );
+  await expressionInput.dblclick({ position: { x: 30, y: 14 } });
+  const doubleClickSelection = await expressionInput.evaluate((element) => ({
+    start: element.selectionStart,
+    end: element.selectionEnd,
+    length: element.value.length,
+  }));
+  assert.deepEqual(
+    doubleClickSelection,
+    { start: 0, end: doubleClickSelection.length, length: doubleClickSelection.length },
+    'double-clicking a dimension selects the complete value',
   );
   await expressionInput.press('Escape');
 
@@ -169,7 +222,7 @@ try {
   );
   assert.deepEqual(pageErrors, []);
 
-  console.log('  [ok] dimension inputs select all on Tab and mouse focus');
+  console.log('  [ok] dimension inputs support fast replacement and precise caret editing');
 } finally {
   await browser.close();
 }

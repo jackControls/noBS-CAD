@@ -758,6 +758,14 @@ fn build_equations(
                     );
                 }
             }
+            Constraint::ReferenceMidpoint {
+                point, position, ..
+            } => {
+                if let Some(p) = map.pt(sketch, point) {
+                    push_lin(&mut eqs, cid, vec![(p.0, 1.0)], -position.x);
+                    push_lin(&mut eqs, cid, vec![(p.1, 1.0)], -position.y);
+                }
+            }
             Constraint::SpanMidpoint { point, start, end } => {
                 if let (Some(p), Some(a), Some(b)) = (
                     map.pt(sketch, point),

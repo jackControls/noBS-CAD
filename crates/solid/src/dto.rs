@@ -510,13 +510,12 @@ pub enum HoleThreadRepresentation {
     Simplified,
 }
 
-/// Manufacturing and geometry data for an internal screw thread.
+/// Manufacturing and geometry data for a screw thread.
 ///
-/// `HoleRequest::diameter` remains the actual predrill cylinder diameter. The
-/// thread adds the helical groove out to `nominal_diameter`. Keeping these
-/// values separate reflects shop practice: ISO/ASME define the thread form
-/// and tolerance, while the preferred tap drill can vary with material and
-/// tapping process.
+/// For a threaded hole, `HoleRequest::diameter` remains the actual predrill
+/// cylinder diameter while the thread grows to `nominal_diameter`. For an
+/// external thread, `nominal_diameter` is the selected cylinder's major
+/// diameter and the modeled groove cuts inward from that surface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HoleThreadDto {
     pub standard: HoleThreadStandard,
@@ -606,6 +605,21 @@ pub struct EditHoleRequest {
     pub hole: HoleRequest,
 }
 
+/// Create a male screw thread on an existing cylindrical solid face.
+///
+/// The exact analytic face is captured when the feature is authored so the
+/// feature remains stable after a modeled thread replaces that cylinder with
+/// helical topology. `flip` selects which axial end of the cylinder is the
+/// thread start when a finite depth is requested.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExternalThreadRequest {
+    pub body_id: BodyId,
+    pub face_id: FaceId,
+    pub thread: HoleThreadDto,
+    #[serde(default)]
+    pub flip: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetRollbackRequest {
     pub rollback_index: usize,
@@ -629,7 +643,11 @@ pub struct StepThreadMetadataDto {
     pub feature_id: FeatureId,
     pub feature_name: String,
     pub position_count: u32,
-    /// Actual modeled or simplified predrill diameter in millimetres.
+    /// True for a male thread on an exterior cylindrical surface. Missing in
+    /// older V1 metadata means an internal threaded hole.
+    #[serde(default)]
+    pub external: bool,
+    /// Internal predrill or external shaft diameter in millimetres.
     pub predrill_diameter: f64,
     pub thread: HoleThreadDto,
 }
@@ -993,6 +1011,7 @@ pub struct ImportStepRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "request", rename_all = "snake_case")]
 pub enum BodyFeatureRequestDto {
+    ExternalThread(ExternalThreadRequest),
     Shell(ShellRequest),
     MoveCopy(MoveCopyBodyRequest),
     Mirror(SolidMirrorRequest),
@@ -1012,6 +1031,16 @@ pub struct EditBodyFeatureRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BodyFeatureDefinitionDto {
+    ExternalThread {
+        feature_id: FeatureId,
+        name: String,
+        body_id: BodyId,
+        face_id: FaceId,
+        face_key: String,
+        cylinder: CylindricalSurfaceDto,
+        thread: HoleThreadDto,
+        flip: bool,
+    },
     Shell {
         feature_id: FeatureId,
         name: String,
@@ -1090,7 +1119,8 @@ pub enum BodyFeatureDefinitionDto {
 impl BodyFeatureDefinitionDto {
     pub fn feature_id(&self) -> FeatureId {
         match self {
-            Self::Shell { feature_id, .. }
+            Self::ExternalThread { feature_id, .. }
+            | Self::Shell { feature_id, .. }
             | Self::MoveCopy { feature_id, .. }
             | Self::Mirror { feature_id, .. }
             | Self::RectangularPattern { feature_id, .. }
@@ -1103,7 +1133,8 @@ impl BodyFeatureDefinitionDto {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Shell { name, .. }
+            Self::ExternalThread { name, .. }
+            | Self::Shell { name, .. }
             | Self::MoveCopy { name, .. }
             | Self::Mirror { name, .. }
             | Self::RectangularPattern { name, .. }
@@ -1350,6 +1381,18 @@ pub struct KernelHoleJobDto {
     pub thread: Option<HoleThreadDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KernelExternalThreadJobDto {
+    pub feature_id: FeatureId,
+    pub target_body_id: BodyId,
+    /// Stable OCCT topology lookup captured from the selected face.
+    pub face_key: String,
+    /// Exact analytic fallback used for validation and browser replay.
+    pub cylinder: CylindricalSurfaceDto,
+    pub thread: HoleThreadDto,
+    pub flip: bool,
+}
+
 /// Ordered full-replay kernel operation. The tagged representation keeps the
 /// plan extensible for Sweep/Loft/Rib without weakening individual DTOs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1363,6 +1406,7 @@ pub enum KernelJobDto {
     Fillet(KernelFilletJobDto),
     Chamfer(KernelChamferJobDto),
     Hole(KernelHoleJobDto),
+    ExternalThread(KernelExternalThreadJobDto),
     Shell(KernelShellJobDto),
     Transform(KernelTransformJobDto),
     Combine(KernelCombineJobDto),
@@ -1381,6 +1425,7 @@ impl KernelJobDto {
             Self::Fillet(job) => job.feature_id,
             Self::Chamfer(job) => job.feature_id,
             Self::Hole(job) => job.feature_id,
+            Self::ExternalThread(job) => job.feature_id,
             Self::Shell(job) => job.feature_id,
             Self::Transform(job) => job.feature_id,
             Self::Combine(job) => job.feature_id,

@@ -1503,15 +1503,60 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = max_feature_number(&self.document, prefix) + 1;
         let name = format!("{prefix}{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_body_feature(feature_id, &name, request, &self.profile_catalog(), &active)
+        let feature = Feature::new(feature_id, name.clone(), kind);
+        self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_body_feature(feature_id, &name, request, catalog, active)
+        })
+    }
+
+    /// Prepare a new solid operation at the current build cursor rather than
+    /// unconditionally appending it to the end of history. The solid planner
+    /// needs the proposed order before it creates its pending transaction, so
+    /// update both order models transactionally and restore the prior order if
+    /// request validation fails.
+    fn prepare_new_solid_feature<F>(
+        &mut self,
+        feature: Feature,
+        prepare: F,
+    ) -> Result<RecomputePlanDto, SessionError>
+    where
+        F: FnOnce(
+            &mut SolidDocument,
+            &[ProfileCatalogItemDto],
+            &BTreeSet<FeatureId>,
+        ) -> Result<RecomputePlanDto, nbcad_solid::SolidError>,
+    {
+        let insertion_index = self
+            .document
+            .features()
+            .rollback_index
+            .min(self.document.features().features.len());
+        let previous_order = self
+            .document
+            .features()
+            .features
+            .iter()
+            .map(|existing| existing.id)
+            .collect::<Vec<_>>();
+        let mut proposed_order = previous_order.clone();
+        proposed_order.insert(insertion_index, feature.id);
+        self.solids
+            .set_feature_order(&proposed_order)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
-        self.document
-            .push_feature(Feature::new(feature_id, name, kind));
-        Ok(plan)
+
+        let mut active = self.active_feature_ids_at(insertion_index);
+        active.insert(feature.id);
+        let catalog = self.profile_catalog();
+        match prepare(&mut self.solids, &catalog, &active) {
+            Ok(plan) => {
+                self.document.features_mut().insert_at_rollback(feature);
+                Ok(plan)
+            }
+            Err(error) => {
+                let _ = self.solids.set_feature_order(&previous_order);
+                Err(SessionError::Solid(error.to_string()))
+            }
+        }
     }
 
     pub fn prepare_edit_body_feature(
@@ -1609,15 +1654,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.extrude_count + 1;
         let name = format!("Extrude{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Extrude);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add(feature_id, &name, request, catalog, active)
+        })?;
         self.extrude_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Extrude));
         Ok(plan)
     }
 
@@ -1654,15 +1695,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.revolve_count + 1;
         let name = format!("Revolve{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_revolve(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Revolve);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_revolve(feature_id, &name, request, catalog, active)
+        })?;
         self.revolve_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Revolve));
         Ok(plan)
     }
 
@@ -1699,15 +1736,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.sweep_count + 1;
         let name = format!("Sweep{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_sweep(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Sweep);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_sweep(feature_id, &name, request, catalog, active)
+        })?;
         self.sweep_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Sweep));
         Ok(plan)
     }
 
@@ -1741,15 +1774,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.loft_count + 1;
         let name = format!("Loft{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_loft(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Loft);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_loft(feature_id, &name, request, catalog, active)
+        })?;
         self.loft_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Loft));
         Ok(plan)
     }
 
@@ -1783,15 +1812,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.rib_count + 1;
         let name = format!("Rib{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_rib(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Rib);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_rib(feature_id, &name, request, catalog, active)
+        })?;
         self.rib_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Rib));
         Ok(plan)
     }
 
@@ -1824,15 +1849,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.fillet_count + 1;
         let name = format!("Fillet{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_fillet(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Fillet);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_fillet(feature_id, &name, request, catalog, active)
+        })?;
         self.fillet_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Fillet));
         Ok(plan)
     }
 
@@ -1861,15 +1882,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.chamfer_count + 1;
         let name = format!("Chamfer{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_chamfer(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Chamfer);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_chamfer(feature_id, &name, request, catalog, active)
+        })?;
         self.chamfer_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Chamfer));
         Ok(plan)
     }
 
@@ -1895,15 +1912,11 @@ impl SketchManager {
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.hole_count + 1;
         let name = format!("Hole{next_number}");
-        let mut active = self.active_feature_ids_at(self.document.features().len());
-        active.insert(feature_id);
-        let plan = self
-            .solids
-            .prepare_add_hole(feature_id, &name, request, &self.profile_catalog(), &active)
-            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let feature = Feature::new(feature_id, name.clone(), FeatureKind::Hole);
+        let plan = self.prepare_new_solid_feature(feature, move |solids, catalog, active| {
+            solids.prepare_add_hole(feature_id, &name, request, catalog, active)
+        })?;
         self.hole_count = next_number;
-        self.document
-            .push_feature(Feature::new(feature_id, name, FeatureKind::Hole));
         Ok(plan)
     }
 
@@ -2474,6 +2487,15 @@ impl SketchManager {
         }
         for definition in self.solids.body_feature_definitions() {
             match definition {
+                BodyFeatureDefinitionDto::ExternalThread {
+                    feature_id,
+                    body_id,
+                    ..
+                } => {
+                    let access = body_access.entry(*feature_id).or_default();
+                    access.inputs.insert(*body_id);
+                    access.writes.insert(*body_id);
+                }
                 BodyFeatureDefinitionDto::MoveCopy {
                     feature_id,
                     body_ids,
@@ -2902,6 +2924,9 @@ impl SketchManager {
             request.to_hint,
             request.ctrl_held,
             request.tracking,
+            request.intersection,
+            request.from_crossing,
+            request.to_crossing,
         ))
     }
 
@@ -3203,6 +3228,7 @@ fn support_edge_midpoints(
 
 fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static str) {
     match request {
+        BodyFeatureRequestDto::ExternalThread(_) => (FeatureKind::ExternalThread, "ExternalThread"),
         BodyFeatureRequestDto::Shell(_) => (FeatureKind::Shell, "Shell"),
         BodyFeatureRequestDto::MoveCopy(_) => (FeatureKind::MoveCopy, "MoveCopy"),
         BodyFeatureRequestDto::Mirror(_) => (FeatureKind::Mirror, "Mirror"),
@@ -4021,6 +4047,7 @@ mod project_tests {
             KernelJobDto::Fillet(job) => std::slice::from_ref(&job.target_body_id),
             KernelJobDto::Chamfer(job) => std::slice::from_ref(&job.target_body_id),
             KernelJobDto::Hole(job) => std::slice::from_ref(&job.target_body_id),
+            KernelJobDto::ExternalThread(job) => std::slice::from_ref(&job.target_body_id),
             KernelJobDto::Shell(job) => std::slice::from_ref(&job.target_body_id),
             KernelJobDto::Transform(job) => &job.result_body_ids,
             KernelJobDto::Combine(job) => std::slice::from_ref(&job.target_body_id),
@@ -5099,24 +5126,30 @@ mod project_tests {
             .add_line_locked(LockedSegmentRequest {
                 from: crate::Vec2::new(0.0, 0.0),
                 to_hint: crate::Vec2::new(-15.0, 0.0),
+                from_crossing: None,
+                to_crossing: None,
                 length_mm: None,
                 angle_deg: None,
                 length_text: Some("15".to_string()),
                 angle_text: None,
                 ctrl_held: false,
                 tracking: None,
+                intersection: None,
             })
             .unwrap();
         let vertical = manager
             .add_line_locked(LockedSegmentRequest {
                 from: crate::Vec2::new(-15.0, 0.0),
                 to_hint: crate::Vec2::new(-15.0, -7.5),
+                from_crossing: None,
+                to_crossing: None,
                 length_mm: None,
                 angle_deg: None,
                 length_text: Some("7.5".to_string()),
                 angle_text: None,
                 ctrl_held: false,
                 tracking: None,
+                intersection: None,
             })
             .unwrap();
         assert_eq!(vertical.sketch.dimensions.len(), 2);

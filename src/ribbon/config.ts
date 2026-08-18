@@ -123,6 +123,11 @@ const MODEL_BUILD_MENU: MenuEntry[] = [
 
 const MODEL_REFINE_MENU: MenuEntry[] = [
   item('hole', 'ribbon.solid.hole', 'hole', { shortcut: 'H', enabled: true, action: 'hole' }),
+  item('externalThread', 'ribbon.solid.externalThread', 'externalThread', {
+    enabled: true,
+    action: 'bodyFeature',
+    payload: 'external_thread',
+  }),
   sep,
   item('fillet', 'ribbon.solid.fillet', 'fillet', { enabled: true, action: 'solidFillet' }),
   item('chamfer', 'ribbon.solid.chamfer', 'chamfer', { enabled: true, action: 'solidChamfer' }),
@@ -492,6 +497,7 @@ export const SOLID_TAB: RibbonTab = {
       menu: MODEL_REFINE_MENU,
       buttons: [
         { id: 'hole', labelKey: 'ribbon.solid.hole', icon: 'hole', enabled: true, action: 'hole' },
+        { id: 'externalThread', labelKey: 'ribbon.solid.externalThread', icon: 'externalThread', enabled: true, action: 'bodyFeature', payload: 'external_thread' },
         { id: 'fillet', labelKey: 'ribbon.solid.fillet', icon: 'fillet', enabled: true, action: 'solidFillet' },
         { id: 'chamfer', labelKey: 'ribbon.solid.chamfer', icon: 'chamfer', enabled: true, action: 'solidChamfer' },
         { id: 'shell', labelKey: 'ribbon.solid.shell', icon: 'shell', enabled: true, action: 'bodyFeature', payload: 'shell' },

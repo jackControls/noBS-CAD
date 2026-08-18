@@ -7,16 +7,19 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepFill.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -32,10 +35,13 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
+#include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom_CylindricalSurface.hxx>
 #include <GCPnts_UniformDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
@@ -50,6 +56,8 @@
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Reader.hxx>
 #include <STEPControl_Writer.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeFix_Solid.hxx>
 #include <StepData_StepModel.hxx>
 #include <TCollection_HAsciiString.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -64,7 +72,9 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
@@ -73,8 +83,10 @@
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Dir2d.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -150,135 +162,333 @@ double bounded_directional_depth(
   return depth;
 }
 
-TopoDS_Wire make_thread_profile(
+gp_Pnt helical_point(
     const gp_Ax2& axis,
+    double radius,
     double center,
-    double inner_radius,
-    double outer_radius,
-    double inner_half_width,
-    double outer_half_width,
-    double angle = 0.0) {
-  const gp_Pnt origin = axis.Location();
+    double angle) {
   const gp_Vec radial =
       gp_Vec(axis.XDirection())
           .Multiplied(std::cos(angle))
           .Added(gp_Vec(axis.YDirection()).Multiplied(std::sin(angle)));
-  const gp_Vec axial(axis.Direction());
-  const auto point = [&](double radius, double offset) {
-    return origin.Translated(
-        radial.Multiplied(radius).Added(axial.Multiplied(center + offset)));
-  };
-  BRepBuilderAPI_MakePolygon polygon;
-  polygon.Add(point(inner_radius, -inner_half_width));
-  polygon.Add(point(outer_radius, -outer_half_width));
-  polygon.Add(point(outer_radius, outer_half_width));
-  polygon.Add(point(inner_radius, inner_half_width));
-  polygon.Close();
-  if (!polygon.IsDone()) {
-    throw std::runtime_error("OCCT could not close the thread cutter profile");
-  }
-  return polygon.Wire();
+  return axis.Location().Translated(
+      radial.Multiplied(radius).Added(
+          gp_Vec(axis.Direction()).Multiplied(center)));
 }
 
-std::vector<TopoDS_Shape> make_internal_thread_cutters(
+TopoDS_Edge make_helical_edge(
+    double center_start,
+    double center_end,
+    double pitch,
+    bool left_hand,
+    const Handle(Geom_CylindricalSurface)& surface) {
+  const double angle_span = kTau * (center_end - center_start) / pitch;
+  const double axial_per_radian = pitch / kTau;
+  const double handedness = left_hand ? -1.0 : 1.0;
+  const double parameter_span =
+      angle_span * std::hypot(1.0, axial_per_radian);
+  Handle(Geom2d_Line) pcurve = new Geom2d_Line(
+      gp_Pnt2d(0.0, center_start),
+      gp_Dir2d(handedness, axial_per_radian));
+  BRepBuilderAPI_MakeEdge builder(pcurve, surface, 0.0, parameter_span);
+  if (!builder.IsDone()) {
+    throw std::runtime_error("OCCT could not build the exact helical edge");
+  }
+  TopoDS_Edge edge = builder.Edge();
+  BRepLib::BuildCurve3d(edge);
+  BRepLib::SameParameter(edge, 1e-7);
+  return edge;
+}
+
+TopoDS_Shape make_continuous_thread_cutter(
     const gp_Ax2& axis,
-    double predrill_diameter,
-    double nominal_diameter,
+    double spine_radius,
+    const std::vector<std::pair<double, double>>& radius_half_widths,
     double pitch,
     double thread_depth,
-    bool through_all,
-    bool left_hand) {
-  const double nominal_radial_depth =
-      (nominal_diameter - predrill_diameter) * 0.5;
-  // The thread tool must penetrate the predrill void instead of merely
-  // touching its cylindrical face. Near-coincident Boolean arguments can
-  // leave that face in the result even when the operation reports success.
-  const double overlap = std::max(
-      2e-3,
-      std::min({predrill_diameter * 5e-3, pitch * 5e-2,
-                nominal_radial_depth * 1e-1}));
-  const double inner_radius = predrill_diameter * 0.5 - overlap;
-  const double outer_radius = nominal_diameter * 0.5;
-  const double radial_depth = outer_radius - inner_radius;
-  // Start with the P/8 basic root flat at the major diameter, then widen the
-  // internal-thread void toward the actual predrill along 60-degree flanks.
-  const double outer_half_width = pitch * 0.0625;
-  const double inner_half_width =
-      outer_half_width + radial_depth * std::tan(kPi / 6.0);
-  if (inner_radius <= 0.0 || outer_radius <= inner_radius ||
-      inner_half_width >= pitch * 0.499) {
-    throw std::runtime_error(
-        "predrill diameter is too small for a non-overlapping 60-degree thread");
-  }
-
-  // Begin one pitch outside the support face so the opening receives a full
-  // thread form. Through threads similarly overrun the far side; blind
-  // threads stop at the requested depth without cutting into the drill point.
+    bool left_hand,
+    const char* label) {
+  // Extend by a full pitch at both ends.  The Boolean target trims the sweep
+  // to the requested thread depth, avoiding partial open grooves and cutter
+  // caps at the model ends.
   const double center_start = -pitch;
-  const double center_end =
-      through_all ? thread_depth + pitch
-                  : std::max(center_start + pitch * 0.25,
-                             thread_depth - inner_half_width);
+  const double center_end = thread_depth + pitch;
   const double turns = (center_end - center_start) / pitch;
-  if (!std::isfinite(turns) || turns > 256.0) {
+  if (!std::isfinite(turns) || turns <= 0.0 || turns > 256.0) {
     throw std::runtime_error(
-        "modeled thread exceeds 256 turns; use simplified representation");
+        std::string(label) +
+        " thread interval is too short or exceeds 256 turns; use simplified representation");
   }
 
-  const int section_count =
-      std::max(2, static_cast<int>(std::ceil(turns * 8.0)));
-  BRepOffsetAPI_ThruSections loft(true, false, 1e-6);
-  for (int index = 0; index <= section_count; ++index) {
-    const double ratio =
-        static_cast<double>(index) / static_cast<double>(section_count);
-    const double center =
-        center_start + (center_end - center_start) * ratio;
-    const double angle =
-        (left_hand ? -1.0 : 1.0) * kTau * turns * ratio;
-    loft.AddWire(make_thread_profile(
-        axis, center, inner_radius, outer_radius, inner_half_width,
-        outer_half_width, angle));
+  const double inner_radius = radius_half_widths.front().first;
+  const double outer_radius = radius_half_widths.back().first;
+  if (!std::isfinite(spine_radius) || spine_radius <= inner_radius ||
+      spine_radius >= outer_radius) {
+    throw std::runtime_error("thread spine must lie inside its radial profile");
   }
-  loft.CheckCompatibility(false);
-  loft.Build(Message_ProgressRange());
-  if (!loft.IsDone() || loft.Shape().IsNull() ||
-      loft.Shape().ShapeType() != TopAbs_SOLID) {
-    throw std::runtime_error("OCCT could not loft the modeled thread cutter");
+  double previous_radius = -1.0;
+  for (const auto& station : radius_half_widths) {
+    if (!std::isfinite(station.first) || !std::isfinite(station.second) ||
+        station.first <= previous_radius || station.second <= 0.0 ||
+        station.second >= pitch * 0.5) {
+      throw std::runtime_error("thread profile radial stations are invalid");
+    }
+    previous_radius = station.first;
   }
-  TopoDS_Solid cutter = TopoDS::Solid(loft.Shape());
+
+  // Build the thread volume from exact helical boundary rails.  A pipe sweep
+  // is deliberately avoided here: its moving trihedron can rotate the ISO
+  // section away from the requested axial widths and, for a closed helix,
+  // can leave OCCT with the complementary solid.  These ruled flanks keep
+  // every radius and axial profile station explicit and deterministic.
+  BRepBuilderAPI_Sewing sewing(1e-7, true, true, true, false);
+  const int segment_count = static_cast<int>(std::ceil(turns - 1e-10));
+  for (int segment_index = 0; segment_index < segment_count;
+       ++segment_index) {
+    const double segment_start = center_start + segment_index * pitch;
+    const double segment_end = std::min(segment_start + pitch, center_end);
+    std::vector<TopoDS_Edge> lower_rails;
+    std::vector<TopoDS_Edge> upper_rails;
+    lower_rails.reserve(radius_half_widths.size());
+    upper_rails.reserve(radius_half_widths.size());
+    for (const auto& station : radius_half_widths) {
+      Handle(Geom_CylindricalSurface) rail_surface =
+          new Geom_CylindricalSurface(gp_Ax3(axis), station.first);
+      lower_rails.push_back(make_helical_edge(
+          segment_start - station.second, segment_end - station.second,
+          pitch, left_hand, rail_surface));
+      upper_rails.push_back(make_helical_edge(
+          segment_start + station.second, segment_end + station.second,
+          pitch, left_hand, rail_surface));
+    }
+    sewing.Add(BRepFill::Face(lower_rails.front(), upper_rails.front()));
+    sewing.Add(BRepFill::Face(lower_rails.back(), upper_rails.back()));
+    for (std::size_t index = 0; index + 1 < lower_rails.size(); ++index) {
+      sewing.Add(BRepFill::Face(lower_rails[index], lower_rails[index + 1]));
+      sewing.Add(BRepFill::Face(upper_rails[index], upper_rails[index + 1]));
+    }
+  }
+
+  const double handedness = left_hand ? -1.0 : 1.0;
+  const double end_angle = handedness * kTau * turns;
+  const auto make_cap = [&](double center, double angle) {
+    BRepBuilderAPI_MakePolygon polygon;
+    for (const auto& station : radius_half_widths) {
+      polygon.Add(helical_point(
+          axis, station.first, center - station.second, angle));
+    }
+    for (auto station = radius_half_widths.rbegin();
+         station != radius_half_widths.rend(); ++station) {
+      polygon.Add(helical_point(
+          axis, station->first, center + station->second, angle));
+    }
+    polygon.Close();
+    if (!polygon.IsDone()) {
+      throw std::runtime_error(
+          std::string("OCCT could not close the continuous ") + label +
+          " thread cutter end");
+    }
+    BRepBuilderAPI_MakeFace face(polygon.Wire(), true);
+    if (!face.IsDone()) {
+      throw std::runtime_error(
+          std::string("OCCT could not cap the continuous ") + label +
+          " thread cutter");
+    }
+    return face.Face();
+  };
+  sewing.Add(make_cap(center_start, 0.0));
+  sewing.Add(make_cap(center_end, end_angle));
+  sewing.Perform(Message_ProgressRange());
+  if (sewing.SewedShape().IsNull() || sewing.NbFreeEdges() != 0 ||
+      sewing.NbMultipleEdges() != 0) {
+    throw std::runtime_error(
+        std::string("OCCT could not sew the continuous ") + label +
+        " thread cutter into a closed shell (free edges=" +
+        std::to_string(sewing.NbFreeEdges()) + ", multiple edges=" +
+        std::to_string(sewing.NbMultipleEdges()) + ")");
+  }
+  TopExp_Explorer shells(sewing.SewedShape(), TopAbs_SHELL);
+  if (!shells.More()) {
+    throw std::runtime_error(
+        std::string("OCCT continuous ") + label +
+        " thread boundary did not produce a shell");
+  }
+  const TopoDS_Shell shell = TopoDS::Shell(shells.Current());
+  shells.Next();
+  if (shells.More()) {
+    throw std::runtime_error(
+        std::string("OCCT continuous ") + label +
+        " thread boundary produced multiple shells");
+  }
+  ShapeFix_Solid solid_fixer;
+  solid_fixer.SetPrecision(1e-7);
+  TopoDS_Solid cutter = solid_fixer.SolidFromShell(shell);
+  if (cutter.IsNull()) {
+    throw std::runtime_error(
+        std::string("OCCT could not solidify the continuous ") + label +
+        " thread boundary");
+  }
   if (!BRepLib::OrientClosedSolid(cutter)) {
-    throw std::runtime_error("OCCT could not orient the thread cutter solid");
+    throw std::runtime_error(
+        std::string("OCCT could not orient the continuous ") + label +
+        " thread cutter solid");
   }
-  cutter.Orientation(TopAbs_FORWARD);
+  BRepLib::SameParameter(cutter, 1e-6, true);
+
+  const double sample_center = (center_start + center_end) * 0.5;
+  const double sample_angle =
+      (left_hand ? -1.0 : 1.0) * kTau *
+      (sample_center - center_start) / pitch;
+  const gp_Pnt sample_point = helical_point(
+      axis, (inner_radius + outer_radius) * 0.5, sample_center,
+      sample_angle);
+  const gp_Pnt inner_probe = helical_point(
+      axis, inner_radius + (outer_radius - inner_radius) * 0.1,
+      sample_center, sample_angle);
+  const gp_Pnt outer_probe = helical_point(
+      axis, outer_radius - (outer_radius - inner_radius) * 0.1,
+      sample_center, sample_angle);
+  const double boundary_probe =
+      std::max(1e-5, (outer_radius - inner_radius) * 1e-3);
+  const gp_Pnt inside_inner_boundary = helical_point(
+      axis, inner_radius + boundary_probe, sample_center, sample_angle);
+  const gp_Pnt outside_inner_boundary = helical_point(
+      axis, inner_radius - boundary_probe, sample_center, sample_angle);
+  const gp_Pnt inside_outer_boundary = helical_point(
+      axis, outer_radius - boundary_probe, sample_center, sample_angle);
+  const gp_Pnt outside_outer_boundary = helical_point(
+      axis, outer_radius + boundary_probe, sample_center, sample_angle);
+  const gp_Pnt axis_probe = axis.Location().Translated(
+      gp_Vec(axis.Direction()).Multiplied(sample_center));
+  const auto is_inside = [&](const gp_Pnt& point) {
+    BRepClass3d_SolidClassifier classifier(cutter, point, 1e-7);
+    return classifier.State() == TopAbs_IN ||
+           classifier.State() == TopAbs_ON;
+  };
+  // A thread cutter must contain its whole radial profile while excluding the
+  // thread axis. Check both boundaries explicitly so a future face-ordering
+  // change cannot silently turn the cutter into its unbounded complement.
+  if (!is_inside(sample_point) || !is_inside(inner_probe) ||
+      !is_inside(outer_probe) || !is_inside(inside_inner_boundary) ||
+      is_inside(outside_inner_boundary) ||
+      !is_inside(inside_outer_boundary) ||
+      is_inside(outside_outer_boundary) || is_inside(axis_probe)) {
+    Bnd_Box bounds;
+    BRepBndLib::Add(cutter, bounds);
+    std::ostringstream details;
+    if (!bounds.IsVoid()) {
+      double x_min = 0.0;
+      double y_min = 0.0;
+      double z_min = 0.0;
+      double x_max = 0.0;
+      double y_max = 0.0;
+      double z_max = 0.0;
+      bounds.Get(x_min, y_min, z_min, x_max, y_max, z_max);
+      details << " bounds=[" << x_min << "," << y_min << "," << z_min
+              << "]-[" << x_max << "," << y_max << "," << z_max << "]";
+    }
+    details << " probes=" << is_inside(sample_point) << ","
+            << is_inside(inner_probe) << "," << is_inside(outer_probe)
+            << ",inner=" << is_inside(outside_inner_boundary) << "/"
+            << is_inside(inside_inner_boundary) << ",outer="
+            << is_inside(inside_outer_boundary) << "/"
+            << is_inside(outside_outer_boundary)
+            << ",axis=" << is_inside(axis_probe);
+    throw std::runtime_error(
+        std::string("OCCT continuous ") + label +
+        " thread cutter is inside-out" + details.str());
+  }
   BRepCheck_Analyzer analyzer(cutter, true, false);
   if (!analyzer.IsValid()) {
-    throw std::runtime_error("OCCT modeled thread cutter is invalid");
+    throw std::runtime_error(
+        std::string("OCCT continuous ") + label +
+        " thread cutter is invalid");
   }
   GProp_GProps properties;
   BRepGProp::VolumeProperties(cutter, properties);
   if (!std::isfinite(properties.Mass()) ||
       std::abs(properties.Mass()) <= 1e-9) {
-    throw std::runtime_error("OCCT modeled thread cutter has no volume");
+    throw std::runtime_error(
+        std::string("OCCT continuous ") + label +
+        " thread cutter has no volume");
   }
-  const double sample_center =
-      std::min(center_end, center_start + pitch * 2.0);
-  const double sample_angle =
-      (left_hand ? -1.0 : 1.0) * kTau *
-      (sample_center - center_start) / pitch;
-  const gp_Vec sample_radial =
-      gp_Vec(axis.XDirection())
-          .Multiplied(std::cos(sample_angle))
-          .Added(gp_Vec(axis.YDirection()).Multiplied(std::sin(sample_angle)));
-  const gp_Pnt sample_point = axis.Location().Translated(
-      sample_radial
-          .Multiplied((inner_radius + outer_radius) * 0.5)
-          .Added(gp_Vec(axis.Direction()).Multiplied(sample_center)));
-  BRepClass3d_SolidClassifier classifier(cutter, sample_point, 1e-7);
-  if (classifier.State() != TopAbs_IN &&
-      classifier.State() != TopAbs_ON) {
-    throw std::runtime_error("OCCT modeled thread cutter is inside-out");
+  return cutter;
+}
+
+std::vector<TopoDS_Shape> make_internal_thread_cutters(
+    const gp_Ax2& axis,
+    double major_diameter,
+    double pitch_diameter,
+    double minor_diameter,
+    double pitch,
+    double thread_depth,
+    bool left_hand) {
+  const double overlap = std::max(
+      2e-3, std::min({minor_diameter * 5e-3, pitch * 2e-2,
+                      (pitch_diameter - minor_diameter) * 2.5e-2}));
+  const double minor_radius = minor_diameter * 0.5;
+  const double inner_radius = minor_radius - overlap;
+  const double pitch_radius = pitch_diameter * 0.5;
+  const double outer_radius = major_diameter * 0.5;
+  const double pitch_half_width = pitch * 0.25;
+  const double outer_half_width =
+      pitch_half_width -
+      (outer_radius - pitch_radius) * std::tan(kPi / 6.0);
+  const double inner_half_width =
+      pitch_half_width +
+      (pitch_radius - minor_radius) * std::tan(kPi / 6.0);
+  if (inner_radius <= 0.0 || pitch_radius <= inner_radius ||
+      outer_radius <= pitch_radius || outer_half_width <= 0.0 ||
+      inner_half_width >= pitch * 0.499) {
+    throw std::runtime_error(
+        "ISO internal thread limits do not form a valid 60-degree profile");
   }
-  return {TopoDS_Shape(cutter)};
+  const std::vector<std::pair<double, double>> profile = {
+      {inner_radius, inner_half_width},
+      {minor_radius, inner_half_width},
+      {outer_radius, outer_half_width},
+  };
+  return {make_continuous_thread_cutter(
+      axis, pitch_radius, profile, pitch, thread_depth, left_hand,
+      "internal")};
+}
+
+std::vector<TopoDS_Shape> make_external_thread_cutters(
+    const gp_Ax2& axis,
+    double major_diameter,
+    double pitch_diameter,
+    double minor_diameter,
+    double pitch,
+    double thread_depth,
+    bool left_hand) {
+  const double overlap = std::max(
+      5e-3, std::min({major_diameter * 3e-2, pitch * 1.5e-1,
+                      (major_diameter - pitch_diameter) * 5e-1}));
+  const double inner_radius = minor_diameter * 0.5;
+  const double pitch_radius = pitch_diameter * 0.5;
+  const double major_radius = major_diameter * 0.5;
+  const double outer_radius = major_radius + overlap;
+  const double pitch_half_width = pitch * 0.25;
+  const double inner_half_width =
+      pitch_half_width -
+      (pitch_radius - inner_radius) * std::tan(kPi / 6.0);
+  const double outer_half_width =
+      pitch_half_width +
+      (major_radius - pitch_radius) * std::tan(kPi / 6.0);
+  if (inner_radius <= 0.0 || pitch_radius <= inner_radius ||
+      outer_radius <= pitch_radius || inner_half_width <= 0.0 ||
+      outer_half_width >= pitch * 0.499) {
+    throw std::runtime_error(
+        "ISO external thread limits do not form a valid 60-degree profile");
+  }
+  const std::vector<std::pair<double, double>> profile = {
+      {inner_radius, inner_half_width},
+      {major_radius, outer_half_width},
+      {outer_radius, outer_half_width},
+  };
+  return {make_continuous_thread_cutter(
+      axis, pitch_radius, profile, pitch, thread_depth, left_hand,
+      "external")};
 }
 
 TopoDS_Shape cut_thread_tools(
@@ -287,15 +497,22 @@ TopoDS_Shape cut_thread_tools(
   if (cutters.empty()) {
     return target;
   }
-  TopoDS_Shape result = target;
+  TopTools_ListOfShape arguments;
+  arguments.Append(target);
+  TopTools_ListOfShape tools;
   for (const TopoDS_Shape& cutter : cutters) {
-    BRepAlgoAPI_Cut cut(result, cutter, Message_ProgressRange());
-    if (!cut.IsDone() || cut.HasErrors() || cut.Shape().IsNull()) {
-      throw std::runtime_error("OCCT modeled thread cut failed");
-    }
-    result = cut.Shape();
+    tools.Append(cutter);
   }
-  return result;
+  BRepAlgoAPI_Cut cut;
+  cut.SetArguments(arguments);
+  cut.SetTools(tools);
+  cut.SetNonDestructive(true);
+  cut.SetRunParallel(true);
+  cut.Build(Message_ProgressRange());
+  if (!cut.IsDone() || cut.HasErrors() || cut.Shape().IsNull()) {
+    throw std::runtime_error("OCCT modeled thread cut failed");
+  }
+  return cut.Shape();
 }
 
 gp_Pnt point_at(const FfiJob& job, std::size_t point_index) {
@@ -1470,6 +1687,13 @@ void Kernel::apply_job(const FfiJob& job) {
          job.thread_pitch <= 0.0 || job.thread_depth < 0.0)) {
       throw std::runtime_error("thread parameters are malformed");
     }
+    if (job.thread_mode == 2 &&
+        (job.thread_major_diameter <= job.thread_pitch_diameter ||
+         job.thread_pitch_diameter <= job.thread_minor_diameter ||
+         job.thread_minor_diameter <= 0.0)) {
+      throw std::runtime_error(
+          "modeled thread tolerance limits are malformed");
+    }
     auto found = impl_->bodies.find(job.target_body_ids[0]);
     if (found == impl_->bodies.end()) {
       throw std::runtime_error("hole target body is missing");
@@ -1489,7 +1713,11 @@ void Kernel::apply_job(const FfiJob& job) {
         job.through_all
             ? bounded_through_depth(found->second, job.thread_pitch * 2.0)
             : job.end_offset;
-    BRepPrimAPI_MakeCylinder main_cylinder(axis, job.diameter * 0.5,
+    // A tap-drill diameter is process guidance, not a finished thread limit.
+    // Modeled threads open the bore to the selected class's GO minor diameter.
+    const double finished_hole_diameter =
+        job.thread_mode == 2 ? job.thread_minor_diameter : job.diameter;
+    BRepPrimAPI_MakeCylinder main_cylinder(axis, finished_hole_diameter * 0.5,
                                            hole_depth + overlap * 2.0);
     TopoDS_Shape cutter = main_cylinder.Shape();
     std::vector<TopoDS_Shape> thread_cutters;
@@ -1505,7 +1733,7 @@ void Kernel::apply_job(const FfiJob& job) {
       cutter = fuse.Shape();
     } else if (job.hole_style == 2) {
       const double large_radius = job.secondary_diameter * 0.5;
-      const double small_radius = job.diameter * 0.5;
+      const double small_radius = finished_hole_diameter * 0.5;
       const double half_angle = job.hole_angle_deg * kPi / 360.0;
       const double sink_depth = (large_radius - small_radius) / std::tan(half_angle);
       if (!std::isfinite(sink_depth) || sink_depth <= 0.0) {
@@ -1534,14 +1762,14 @@ void Kernel::apply_job(const FfiJob& job) {
       // fraction outside only to keep booleans watertight.
       const gp_Ax2 thread_axis(support, gp_Dir(direction), axis.XDirection());
       thread_cutters = make_internal_thread_cutters(
-          thread_axis, job.diameter, job.thread_nominal_diameter,
-          job.thread_pitch, requested_thread_depth,
-          job.through_all && full_thread_depth, job.thread_left_hand);
+          thread_axis, job.thread_major_diameter,
+          job.thread_pitch_diameter, job.thread_minor_diameter,
+          job.thread_pitch, requested_thread_depth, job.thread_left_hand);
     }
     if (!job.through_all && job.hole_bottom_style == 1) {
       const double half_angle = job.drill_point_angle_deg * kPi / 360.0;
       const double tip_depth =
-          (job.diameter * 0.5) / std::tan(half_angle);
+          (finished_hole_diameter * 0.5) / std::tan(half_angle);
       if (!std::isfinite(tip_depth) || tip_depth <= 0.0) {
         throw std::runtime_error("drill point angle is invalid");
       }
@@ -1549,7 +1777,8 @@ void Kernel::apply_job(const FfiJob& job) {
           direction.Multiplied(hole_depth - overlap));
       const gp_Ax2 tip_axis(tip_start, gp_Dir(direction));
       BRepPrimAPI_MakeCone drill_point(
-          tip_axis, job.diameter * 0.5, 0.0, tip_depth + overlap);
+          tip_axis, finished_hole_diameter * 0.5, 0.0,
+          tip_depth + overlap);
       BRepAlgoAPI_Fuse fuse(cutter, drill_point.Shape(),
                             Message_ProgressRange());
       if (!fuse.IsDone()) {
@@ -1584,6 +1813,171 @@ void Kernel::apply_job(const FfiJob& job) {
       }
     }
     found->second = result;
+    return;
+  }
+  if (job.kind == 13) {
+    if (job.target_body_ids.size() != 1 || job.face_indices.size() != 1 ||
+        job.thread_mode == 0 || job.thread_nominal_diameter <= 0.0 ||
+        job.thread_pitch <= 0.0 || job.thread_depth < 0.0) {
+      throw std::runtime_error("external thread parameters are malformed");
+    }
+    if (job.thread_mode == 2 &&
+        (job.thread_major_diameter <= job.thread_pitch_diameter ||
+         job.thread_pitch_diameter <= job.thread_minor_diameter ||
+         job.thread_minor_diameter <= 0.0)) {
+      throw std::runtime_error(
+          "modeled external thread tolerance limits are malformed");
+    }
+    auto found = impl_->bodies.find(job.target_body_ids[0]);
+    if (found == impl_->bodies.end()) {
+      throw std::runtime_error("external thread target body is missing");
+    }
+    TopTools_IndexedMapOfShape face_map;
+    TopExp::MapShapes(found->second, TopAbs_FACE, face_map);
+    const std::uint32_t face_index = job.face_indices[0];
+    if (face_index >= static_cast<std::uint32_t>(face_map.Extent())) {
+      throw std::runtime_error(
+          "referenced external-thread cylinder no longer exists");
+    }
+    const TopoDS_Face face =
+        TopoDS::Face(face_map.FindKey(static_cast<int>(face_index) + 1));
+    BRepAdaptor_Surface surface(face, true);
+    if (surface.GetType() != GeomAbs_Cylinder) {
+      throw std::runtime_error(
+          "External Thread requires a cylindrical face");
+    }
+    const gp_Cylinder cylinder = surface.Cylinder();
+    const double major_diameter = cylinder.Radius() * 2.0;
+    const double diameter_tolerance =
+        std::max(0.01, job.thread_nominal_diameter * 0.002);
+    if (std::abs(major_diameter - job.thread_nominal_diameter) >
+        diameter_tolerance) {
+      throw std::runtime_error(
+          "selected cylinder does not match the thread major diameter");
+    }
+
+    const double first_u = surface.FirstUParameter();
+    const double last_u = surface.LastUParameter();
+    const double first_v = surface.FirstVParameter();
+    const double last_v = surface.LastVParameter();
+    if (!std::isfinite(first_u) || !std::isfinite(last_u) ||
+        !std::isfinite(first_v) || !std::isfinite(last_v) ||
+        std::abs(last_u - first_u) < kTau - 1e-5) {
+      throw std::runtime_error(
+          "External Thread requires a complete 360-degree cylindrical face");
+    }
+    const gp_Ax3 cylinder_axes = cylinder.Position();
+    const gp_Vec base_axis(cylinder_axes.Direction());
+    gp_Pnt sample;
+    gp_Vec du;
+    gp_Vec dv;
+    surface.D1((first_u + last_u) * 0.5, (first_v + last_v) * 0.5,
+               sample, du, dv);
+    gp_Vec normal = du.Crossed(dv);
+    if (face.Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    gp_Vec radial(cylinder_axes.Location(), sample);
+    radial.Subtract(base_axis.Multiplied(radial.Dot(base_axis)));
+    if (normal.SquareMagnitude() <= 1e-18 ||
+        radial.SquareMagnitude() <= 1e-18 || normal.Dot(radial) <= 0.0) {
+      throw std::runtime_error(
+          "External Thread requires an outward-facing cylindrical surface");
+    }
+
+    const gp_Pnt first_point = surface.Value(first_u, first_v);
+    const gp_Pnt last_point = surface.Value(first_u, last_v);
+    const double first_offset =
+        gp_Vec(cylinder_axes.Location(), first_point).Dot(base_axis);
+    const double last_offset =
+        gp_Vec(cylinder_axes.Location(), last_point).Dot(base_axis);
+    const double lower = std::min(first_offset, last_offset);
+    const double upper = std::max(first_offset, last_offset);
+    const double available_depth = upper - lower;
+    if (!std::isfinite(available_depth) || available_depth <= 1e-7) {
+      throw std::runtime_error("external thread cylinder has no axial length");
+    }
+    const bool full_length = job.thread_depth <= 0.0;
+    const double requested_depth =
+        full_length ? available_depth : job.thread_depth;
+    if (requested_depth > available_depth + 1e-6) {
+      throw std::runtime_error(
+          "external thread length exceeds the selected cylindrical face");
+    }
+    gp_Vec direction = base_axis;
+    double start_offset = lower;
+    if (job.inward) {
+      direction.Reverse();
+      start_offset = upper;
+    }
+    const gp_Pnt start = cylinder_axes.Location().Translated(
+        base_axis.Multiplied(start_offset));
+    const gp_Ax2 thread_axis(
+        start, gp_Dir(direction), cylinder_axes.XDirection());
+    if (job.thread_mode == 2) {
+      TopoDS_Shape result = found->second;
+      const double crest_reduction =
+          major_diameter - job.thread_major_diameter;
+      if (crest_reduction > 1e-7) {
+        // ISO external classes carry a negative allowance. Remove the thin
+        // nominal crest sleeve first so the final B-rep is the 6g GO envelope
+        // instead of the basic-size source cylinder.
+        const double trim_overlap = std::max(1e-4, job.thread_pitch * 1e-4);
+        const gp_Pnt trim_start =
+            start.Translated(direction.Multiplied(-trim_overlap));
+        const gp_Ax2 trim_axis(
+            trim_start, gp_Dir(direction), cylinder_axes.XDirection());
+        BRepPrimAPI_MakeCylinder outer_trim(
+            trim_axis, major_diameter * 0.5 + trim_overlap,
+            requested_depth + trim_overlap * 2.0);
+        BRepPrimAPI_MakeCylinder inner_keep(
+            trim_axis, job.thread_major_diameter * 0.5,
+            requested_depth + trim_overlap * 2.0);
+        BRepAlgoAPI_Cut sleeve(
+            outer_trim.Shape(), inner_keep.Shape(), Message_ProgressRange());
+        if (!sleeve.IsDone() || sleeve.HasErrors() ||
+            sleeve.Shape().IsNull()) {
+          throw std::runtime_error(
+              "OCCT could not build the external thread class allowance");
+        }
+        BRepAlgoAPI_Cut trim(result, sleeve.Shape(), Message_ProgressRange());
+        if (!trim.IsDone() || trim.HasErrors() || trim.Shape().IsNull()) {
+          throw std::runtime_error(
+              "OCCT could not apply the external thread class allowance");
+        }
+        result = trim.Shape();
+      }
+      const std::vector<TopoDS_Shape> cutters =
+          make_external_thread_cutters(
+              thread_axis, job.thread_major_diameter,
+              job.thread_pitch_diameter, job.thread_minor_diameter,
+              job.thread_pitch, requested_depth, job.thread_left_hand);
+      GProp_GProps before_thread_properties;
+      BRepGProp::VolumeProperties(result, before_thread_properties);
+      result = cut_thread_tools(result, cutters);
+      BRepCheck_Analyzer result_analyzer(result, true, false);
+      if (!result_analyzer.IsValid()) {
+        throw std::runtime_error("OCCT modeled external thread result is invalid");
+      }
+      GProp_GProps result_properties;
+      BRepGProp::VolumeProperties(result, result_properties);
+      if (!std::isfinite(result_properties.Mass()) ||
+          std::abs(result_properties.Mass()) <= 1e-9) {
+        throw std::runtime_error(
+            "OCCT modeled external thread removed the entire target body");
+      }
+      const double removed_thread_volume =
+          std::abs(before_thread_properties.Mass()) -
+          std::abs(result_properties.Mass());
+      const double minimum_cut_volume =
+          std::max(1e-8, std::abs(before_thread_properties.Mass()) * 1e-8);
+      if (!std::isfinite(removed_thread_volume) ||
+          removed_thread_volume <= minimum_cut_volume) {
+        throw std::runtime_error(
+            "OCCT modeled external thread did not remove material");
+      }
+      found->second = result;
+    }
     return;
   }
   if (job.kind == 8) {
@@ -1784,22 +2178,155 @@ void Kernel::apply_job(const FfiJob& job) {
     if (!plane.IsDone()) {
       throw std::runtime_error("OCCT could not build the splitting plane");
     }
-    const TopoDS_Shape positive_half =
-        BRepPrimAPI_MakeHalfSpace(
-            plane.Face(), origin.Translated(unit.Multiplied(1.0))).Shape();
-    const TopoDS_Shape negative_half =
-        BRepPrimAPI_MakeHalfSpace(
-            plane.Face(), origin.Translated(unit.Multiplied(-1.0))).Shape();
-    BRepAlgoAPI_Common positive(target->second, positive_half,
-                                Message_ProgressRange());
-    BRepAlgoAPI_Common negative(target->second, negative_half,
-                                Message_ProgressRange());
-    if (!positive.IsDone() || !negative.IsDone() ||
-        positive.Shape().IsNull() || negative.Shape().IsNull()) {
+    TopTools_ListOfShape arguments;
+    arguments.Append(target->second);
+    TopTools_ListOfShape tools;
+    tools.Append(plane.Face());
+    BRepAlgoAPI_Splitter splitter;
+    splitter.SetArguments(arguments);
+    splitter.SetTools(tools);
+    splitter.SetNonDestructive(true);
+    splitter.SetRunParallel(true);
+    splitter.Build(Message_ProgressRange());
+    if (!splitter.IsDone() || splitter.HasErrors() ||
+        splitter.Shape().IsNull()) {
       throw std::runtime_error("OCCT Split Body failed");
     }
-    impl_->bodies[job.result_body_ids[0]] = positive.Shape();
-    impl_->bodies[job.result_body_ids[1]] = negative.Shape();
+    splitter.SimplifyResult(true, true, 1.0e-7);
+
+    // One general-fuse pass produces both sides and shares the expensive
+    // intersection graph. The previous pair of Common operations calculated
+    // the same plane/body intersection twice. Classify the resulting solids
+    // by their exact volume centroids to retain the established positive-side
+    // and negative-side output identities.
+    struct SplitSolid {
+      TopoDS_Shape shape;
+      double volume;
+      double bounding_volume;
+    };
+    std::vector<SplitSolid> positive_solids;
+    std::vector<SplitSolid> negative_solids;
+    for (TopExp_Explorer solids(splitter.Shape(), TopAbs_SOLID); solids.More();
+         solids.Next()) {
+      const TopoDS_Shape solid = solids.Current();
+      GProp_GProps properties;
+      BRepGProp::VolumeProperties(solid, properties);
+      const double volume = std::abs(properties.Mass());
+      const gp_Vec offset(origin, properties.CentreOfMass());
+      Bnd_Box solid_bounds;
+      BRepBndLib::Add(solid, solid_bounds);
+      double sx0 = 0.0;
+      double sy0 = 0.0;
+      double sz0 = 0.0;
+      double sx1 = 0.0;
+      double sy1 = 0.0;
+      double sz1 = 0.0;
+      solid_bounds.Get(sx0, sy0, sz0, sx1, sy1, sz1);
+      const double bounding_volume =
+          std::max(0.0, sx1 - sx0) * std::max(0.0, sy1 - sy0) *
+          std::max(0.0, sz1 - sz0);
+      if (!std::isfinite(volume) || volume <= 1e-9) {
+        continue;
+      }
+      const SplitSolid output{solid, volume, bounding_volume};
+      if (offset.Dot(unit) >= 0.0) {
+        positive_solids.push_back(output);
+      } else {
+        negative_solids.push_back(output);
+      }
+    }
+    // General fuse can emit a detached, near-zero-fill sliver where a swept
+    // thread crosses the splitting plane. It spans a large bounding box but
+    // has only a few millionths of the real side's volume. Drop only records
+    // that are both tiny relative to their side and demonstrably sliver-like;
+    // compact small solids and legitimate multi-region split outputs remain.
+    const auto remove_boolean_slivers = [](std::vector<SplitSolid>& solids) {
+      if (solids.size() < 2) {
+        return;
+      }
+      const double largest_volume = std::max_element(
+          solids.begin(), solids.end(),
+          [](const SplitSolid& left, const SplitSolid& right) {
+            return left.volume < right.volume;
+          })->volume;
+      const double relative_limit =
+          std::max(1e-8, largest_volume * 1e-5);
+      solids.erase(
+          std::remove_if(
+              solids.begin(), solids.end(),
+              [&](const SplitSolid& solid) {
+                const double fill_ratio = solid.bounding_volume > 1e-12
+                                              ? solid.volume / solid.bounding_volume
+                                              : 1.0;
+                return solid.volume < relative_limit && fill_ratio < 1e-3;
+              }),
+          solids.end());
+    };
+    remove_boolean_slivers(positive_solids);
+    remove_boolean_slivers(negative_solids);
+    if (positive_solids.empty() || negative_solids.empty()) {
+      throw std::runtime_error(
+          "Split Body plane does not divide the target into two bodies");
+    }
+    const auto grouped_shape = [](const std::vector<SplitSolid>& solids) {
+      if (solids.size() == 1) {
+        return solids.front().shape;
+      }
+      TopoDS_Compound compound;
+      BRep_Builder builder;
+      builder.MakeCompound(compound);
+      for (const SplitSolid& solid : solids) {
+        builder.Add(compound, solid.shape);
+      }
+      return TopoDS_Shape(compound);
+    };
+    TopoDS_Shape positive = grouped_shape(positive_solids);
+    TopoDS_Shape negative = grouped_shape(negative_solids);
+    BRepCheck_Analyzer positive_analyzer(positive, true, false);
+    BRepCheck_Analyzer negative_analyzer(negative, true, false);
+    if (!positive_analyzer.IsValid() || !negative_analyzer.IsValid()) {
+      // A general-fuse plane that intersects a helical face can occasionally
+      // retain duplicated seam pcurves. Shape healing can discard an inner
+      // wire in that case, so regenerate only this exceptional split from two
+      // exact half-space Commons. Ordinary splits remain on the single-pass
+      // fast path above.
+      const auto split_with_halfspace = [&](const gp_Vec& side) {
+        const gp_Pnt reference = origin.Translated(side);
+        BRepPrimAPI_MakeHalfSpace halfspace(plane.Face(), reference);
+        if (!halfspace.IsDone()) {
+          throw std::runtime_error(
+              "OCCT could not build the Split Body fallback half-space");
+        }
+        BRepAlgoAPI_Common common(
+            target->second, halfspace.Solid(), Message_ProgressRange());
+        if (!common.IsDone() || common.HasErrors() ||
+            common.Shape().IsNull()) {
+          throw std::runtime_error(
+              "OCCT Split Body half-space fallback failed");
+        }
+        common.SimplifyResult(true, true, 1.0e-7);
+        TopoDS_Shape result = common.Shape();
+        BRepCheck_Analyzer analyzer(result, true, false);
+        if (!analyzer.IsValid()) {
+          ShapeFix_Shape fixer(result);
+          fixer.SetPrecision(1e-7);
+          fixer.SetMaxTolerance(1e-5);
+          fixer.Perform(Message_ProgressRange());
+          result = fixer.Shape();
+          BRepLib::SameParameter(result, 1e-6, true);
+        }
+        return result;
+      };
+      positive = split_with_halfspace(unit);
+      negative = split_with_halfspace(unit.Reversed());
+      positive_analyzer = BRepCheck_Analyzer(positive, true, false);
+      negative_analyzer = BRepCheck_Analyzer(negative, true, false);
+      if (!positive_analyzer.IsValid() || !negative_analyzer.IsValid()) {
+        throw std::runtime_error("OCCT Split Body produced invalid geometry");
+      }
+    }
+    impl_->bodies[job.result_body_ids[0]] = positive;
+    impl_->bodies[job.result_body_ids[1]] = negative;
     return;
   }
   std::vector<TopoDS_Shape> tools;
@@ -2008,7 +2535,9 @@ FfiMesh Kernel::mesh_with_deflection(
       append_point(output.edge_points, curve.Value(curve.FirstParameter()));
       append_point(output.edge_points, curve.Value(curve.LastParameter()));
     } else {
-      GCPnts_UniformDeflection discretization(curve, 0.05, true);
+      // Helical thread edges need a tighter display chord than ordinary CAD
+      // edges; a coarse chord visibly cuts across the minor-diameter envelope.
+      GCPnts_UniformDeflection discretization(curve, 0.01, true);
       if (discretization.IsDone() && discretization.NbPoints() >= 2) {
         for (int point_index = 1;
              point_index <= discretization.NbPoints(); ++point_index) {

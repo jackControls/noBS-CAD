@@ -801,12 +801,31 @@ export async function setTimelineRollback(rollbackIndex: number): Promise<void> 
   }
 }
 
-export async function deleteTimelineFeature(featureId: number): Promise<boolean> {
+/** Delete a history selection from newest to oldest and refresh derived state once. */
+export async function deleteTimelineFeatures(featureIds: number[]): Promise<boolean> {
   const state = useAppStore.getState();
+  const historyOrder = new Map(
+    (state.document?.features ?? []).map((feature, index) => [feature.id, index]),
+  );
+  const orderedIds = Array.from(new Set(featureIds))
+    .filter((featureId) => historyOrder.has(featureId))
+    .sort(
+      (left, right) =>
+        (historyOrder.get(right) ?? -1) - (historyOrder.get(left) ?? -1),
+    );
+  if (orderedIds.length === 0) return true;
+
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
-    const update = await engine.deleteFeature(featureId);
+    let update = await engine.deleteFeature(orderedIds[0]);
+    state.applySolidUpdate(update);
+    for (const featureId of orderedIds.slice(1)) {
+      update = await engine.deleteFeature(featureId);
+      // Keep the UI document synchronized if a later deletion unexpectedly
+      // fails; expensive sketch/datum refreshes remain batched below.
+      state.applySolidUpdate(update);
+    }
     const [finishedSketches, datumPlanes] = await Promise.all([
       engine.finishedSketches(),
       engine.datumPlaneDefinitions(),
@@ -827,6 +846,10 @@ export async function deleteTimelineFeature(featureId: number): Promise<boolean>
   } finally {
     state.setSolidBusy(false);
   }
+}
+
+export async function deleteTimelineFeature(featureId: number): Promise<boolean> {
+  return deleteTimelineFeatures([featureId]);
 }
 
 export async function reorderTimelineFeature(

@@ -1,7 +1,9 @@
 /**
  * Parametric build history. `rollback_index` is a feature count: entries
  * before the build cursor participate in recompute; entries after it are
- * rolled back. Double-clicking a supported feature opens its definition editor.
+ * rolled back. Clicking feature cards selects them without recomputing;
+ * Cmd/Ctrl and Shift extend that selection. The build cursor moves only through
+ * its deliberate controls. Double-clicking a supported feature opens its editor.
  */
 import {
   ArrowLeft,
@@ -40,7 +42,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
-  deleteTimelineFeature,
+  deleteTimelineFeatures,
   editSketch,
   openExtrude,
   openLoft,
@@ -73,6 +75,9 @@ function editTimelineFeature(feature: FeatureDto) {
   if (feature.kind === 'fillet') openSolidFillet(feature.id);
   if (feature.kind === 'chamfer') openSolidChamfer(feature.id);
   if (feature.kind === 'hole') openHole(feature.id);
+  if (feature.kind === 'external_thread') {
+    openBodyFeature('external_thread', feature.id);
+  }
   if (feature.kind === 'move_copy') openBodyFeature('move_copy', feature.id);
   if (feature.kind === 'construction_plane') {
     const definition = useAppStore
@@ -139,16 +144,79 @@ export function Timeline() {
   const rollback = document?.rollback_index ?? 0;
   const [contextTarget, setContextTarget] = useState<TimelineContextTarget | null>(null);
   const [jointContextTarget, setJointContextTarget] = useState<JointContextTarget | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<FeatureDto | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<FeatureDto[]>([]);
+  const [selectedFeatureIds, setSelectedFeatureIds] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [requestedRollback, setRequestedRollback] = useState<number | null>(null);
   const [drag, setDrag] = useState<{ pointerId: number; index: number } | null>(null);
   const [featureDrag, setFeatureDrag] = useState<FeatureDrag | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const dragIndexRef = useRef(rollback);
   const featureDragRef = useRef<FeatureDrag | null>(null);
-  const suppressFeatureClickRef = useRef<number | null>(null);
+  const suppressFeatureClickRef = useRef<{
+    featureId: number;
+    expiresAt: number;
+  } | null>(null);
+  const selectionAnchorRef = useRef<number | null>(null);
   const displayedRollback = drag?.index ?? requestedRollback ?? rollback;
   const canReorder = mode === 'solid' && !busy && rollback === features.length;
+
+  useEffect(() => {
+    const validIds = new Set(features.map((feature) => feature.id));
+    setSelectedFeatureIds((current) => {
+      const retained = new Set(
+        Array.from(current).filter((featureId) => validIds.has(featureId)),
+      );
+      return retained.size === current.size ? current : retained;
+    });
+    if (
+      selectionAnchorRef.current !== null
+      && !validIds.has(selectionAnchorRef.current)
+    ) {
+      selectionAnchorRef.current = null;
+    }
+  }, [document?.features]);
+
+  const selectFeature = useCallback(
+    (event: MouseEvent<HTMLButtonElement>, featureId: number, index: number) => {
+      const isMacControlClick =
+        event.ctrlKey
+        && !event.metaKey
+        && typeof navigator !== 'undefined'
+        && /Mac|iPhone|iPad/.test(navigator.platform);
+      if (isMacControlClick) return;
+
+      const additive = event.metaKey || event.ctrlKey;
+      const rangeAnchorId = selectionAnchorRef.current;
+      setSelectedFeatureIds((current) => {
+        const next = additive ? new Set(current) : new Set<number>();
+        if (event.shiftKey) {
+          const anchorIndex =
+            rangeAnchorId === null
+              ? -1
+              : features.findIndex((feature) => feature.id === rangeAnchorId);
+          const start = anchorIndex < 0 ? index : Math.min(anchorIndex, index);
+          const end = anchorIndex < 0 ? index : Math.max(anchorIndex, index);
+          for (let candidate = start; candidate <= end; candidate += 1) {
+            const feature = features[candidate];
+            if (feature) next.add(feature.id);
+          }
+        } else if (additive) {
+          if (next.has(featureId)) next.delete(featureId);
+          else next.add(featureId);
+        } else {
+          next.add(featureId);
+        }
+        return next;
+      });
+      if (!event.shiftKey || rangeAnchorId === null) {
+        selectionAnchorRef.current = featureId;
+      }
+      setSelectedJointId(null);
+    },
+    [features, setSelectedJointId],
+  );
 
   const move = useCallback(
     (next: number) => {
@@ -294,7 +362,10 @@ export function Timeline() {
       featureDragRef.current = null;
       setFeatureDrag(null);
       if (!current.moved) return;
-      suppressFeatureClickRef.current = current.featureId;
+      suppressFeatureClickRef.current = {
+        featureId: current.featureId,
+        expiresAt: performance.now() + 250,
+      };
       const insertionIndex =
         current.sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
       if (insertionIndex !== current.sourceIndex) {
@@ -324,7 +395,13 @@ export function Timeline() {
   }, [featureDrag?.pointerId]);
 
   const consumeSuppressedFeatureClick = (featureId: number) => {
-    if (suppressFeatureClickRef.current !== featureId) return false;
+    const suppressed = suppressFeatureClickRef.current;
+    if (!suppressed) return false;
+    if (performance.now() > suppressed.expiresAt) {
+      suppressFeatureClickRef.current = null;
+      return false;
+    }
+    if (suppressed.featureId !== featureId) return false;
     suppressFeatureClickRef.current = null;
     return true;
   };
@@ -404,7 +481,12 @@ export function Timeline() {
         icon: <Trash2 size={14} />,
         danger: true,
         disabled: mode !== 'solid' || busy,
-        onSelect: () => setDeleteTarget(feature),
+        onSelect: () => {
+          const targets = selectedFeatureIds.has(feature.id)
+            ? features.filter((candidate) => selectedFeatureIds.has(candidate.id))
+            : [feature];
+          setDeleteTargets(targets);
+        },
       },
     ];
   };
@@ -520,10 +602,11 @@ export function Timeline() {
               feature={feature}
               index={index}
               active={index < displayedRollback}
+              selected={selectedFeatureIds.has(feature.id)}
               busy={busy}
               reorderEnabled={canReorder}
               reordering={featureDrag?.featureId === feature.id && featureDrag.moved}
-              onSetCursor={() => move(index + 1)}
+              onSelect={(event) => selectFeature(event, feature.id, index)}
               onBeginReorder={(event) => beginFeatureDrag(event, feature.id, index)}
               shouldSuppressClick={() => consumeSuppressedFeatureClick(feature.id)}
               onOpenContext={(x, y) => setContextTarget({ feature, index, x, y })}
@@ -585,15 +668,20 @@ export function Timeline() {
           onClose={() => setJointContextTarget(null)}
         />
       )}
-      {deleteTarget && (
+      {deleteTargets.length > 0 && (
         <DeleteFeatureDialog
-          feature={deleteTarget}
+          features={deleteTargets}
           busy={busy}
-          onCancel={() => setDeleteTarget(null)}
+          onCancel={() => setDeleteTargets([])}
           onConfirm={() => {
-            const featureId = deleteTarget.id;
-            setDeleteTarget(null);
-            void deleteTimelineFeature(featureId);
+            const featureIds = deleteTargets.map((feature) => feature.id);
+            setDeleteTargets([]);
+            void deleteTimelineFeatures(featureIds).then((deleted) => {
+              if (deleted) {
+                setSelectedFeatureIds(new Set());
+                selectionAnchorRef.current = null;
+              }
+            });
           }}
         />
       )}
@@ -658,10 +746,11 @@ function TimelineFeature({
   feature,
   index,
   active,
+  selected,
   busy,
   reorderEnabled,
   reordering,
-  onSetCursor,
+  onSelect,
   onBeginReorder,
   shouldSuppressClick,
   onOpenContext,
@@ -669,10 +758,11 @@ function TimelineFeature({
   feature: FeatureDto;
   index: number;
   active: boolean;
+  selected: boolean;
   busy: boolean;
   reorderEnabled: boolean;
   reordering: boolean;
-  onSetCursor: () => void;
+  onSelect: (event: MouseEvent<HTMLButtonElement>) => void;
   onBeginReorder: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   shouldSuppressClick: () => boolean;
   onOpenContext: (x: number, y: number) => void;
@@ -696,6 +786,8 @@ function TimelineFeature({
                 ? Triangle
                 : feature.kind === 'hole'
                   ? CircleDot
+                  : feature.kind === 'external_thread'
+                    ? RefreshCw
                   : feature.kind === 'construction_plane'
                     ? Layers3
                     : feature.kind === 'move_copy'
@@ -715,25 +807,9 @@ function TimelineFeature({
   const editable = canEditTimelineFeature(feature);
   const editLabel =
     feature.kind === 'sketch' ? t('timeline.editSketch') : t('timeline.editFeature');
-  const singleClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (singleClickTimer.current !== null) clearTimeout(singleClickTimer.current);
-    },
-    [],
-  );
-
-  const cancelPendingRollback = () => {
-    if (singleClickTimer.current === null) return;
-    clearTimeout(singleClickTimer.current);
-    singleClickTimer.current = null;
-  };
-
   const openPointerContext = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    cancelPendingRollback();
     event.currentTarget.focus({ preventScroll: true });
     onOpenContext(event.clientX, event.clientY);
   };
@@ -742,7 +818,6 @@ function TimelineFeature({
     if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelPendingRollback();
     const rect = event.currentTarget.getBoundingClientRect();
     onOpenContext(rect.left + Math.min(36, rect.width / 2), rect.bottom);
   };
@@ -752,6 +827,8 @@ function TimelineFeature({
       type="button"
       disabled={busy}
       data-feature-id={feature.id}
+      data-timeline-selected={selected ? 'true' : 'false'}
+      aria-pressed={selected}
       aria-haspopup="menu"
       title={
         error
@@ -764,29 +841,20 @@ function TimelineFeature({
       onPointerDown={onBeginReorder}
       onClick={(event) => {
         if (shouldSuppressClick()) return;
-        // macOS control-click is a secondary-click gesture and must not
-        // schedule the card's ordinary single-click rollback.
-        if (event.ctrlKey) return;
-        // Delay the single-click rollback just long enough to distinguish
-        // it from a double-click edit. Without this, editing an earlier
-        // Extrude unexpectedly leaves all downstream features rolled back.
-        if (singleClickTimer.current !== null) clearTimeout(singleClickTimer.current);
-        singleClickTimer.current = setTimeout(() => {
-          singleClickTimer.current = null;
-          onSetCursor();
-        }, 220);
+        onSelect(event);
       }}
       onDoubleClick={() => {
-        cancelPendingRollback();
         if (editable) editTimelineFeature(feature);
       }}
       onContextMenu={openPointerContext}
       onKeyDown={onFeatureKeyDown}
       className={cx(
         'relative z-10 flex h-7 min-w-9 items-center justify-center rounded-md border px-2 text-[10px] shadow-sm shadow-black/15 transition-colors',
-        active
-          ? 'border-edge bg-panel text-ink hover:border-accent/70 hover:bg-header'
-          : 'border-edge/40 bg-panel/80 text-mute/45',
+        selected
+          ? 'border-accent bg-accent/15 text-accent ring-1 ring-accent/50'
+          : active
+            ? 'border-edge bg-panel text-ink hover:border-accent/70 hover:bg-header'
+            : 'border-edge/40 bg-panel/80 text-mute/45',
         feature.suppressed && 'line-through opacity-50',
         isError && 'border-red-500/70 bg-red-500/10 text-red-300',
         reorderEnabled && 'touch-none cursor-grab active:cursor-grabbing',

@@ -198,8 +198,9 @@ try {
   );
 
   // Exercise the viewport acquisition and presentation path, not only the
-  // engine DTO. A free endpoint near y=5 should show H plus a second transient
-  // line for the temporary guide, then persist the point-pair relation.
+  // engine DTO. A free endpoint near y=5 should show the unambiguous Y ALIGN
+  // tracking label plus a second transient line for the temporary guide, then
+  // persist the point-pair relation.
   if ((await state()).activeTool !== 'line') {
     await page.click('button[title="Line"]');
   }
@@ -214,12 +215,20 @@ try {
     const chips = document.querySelector('[data-testid="inference-chips"]');
     return chips instanceof HTMLElement
       && chips.style.display === 'flex'
-      && chips.textContent?.includes('H');
+      && chips.textContent?.includes('Y ALIGN');
   });
   const transient = await page.evaluate(() => window.__nativeViewportTransient());
   assert.ok(
     transient.lines.length >= 2,
     'tracked line preview should include its temporary extension guide',
+  );
+  assert.ok(
+    transient.lines.some((layer) => layer.pattern === 'dotted'),
+    'point/line alignment tracking must be visually distinct dotted construction geometry',
+  );
+  assert.ok(
+    transient.lines.some((layer) => layer.pattern === 'solid'),
+    'the line being created must remain solid while only its alignment guide is dotted',
   );
   await page.mouse.click(trackedTarget.x, trackedTarget.y);
   await page.waitForFunction(
@@ -230,10 +239,229 @@ try {
     trackedBefore,
   );
   await page.keyboard.press('Escape');
+
+  // Exact curve acquisition outranks grid fallback. The vertical line starts
+  // at x=21.5 and meets the diagonal at y=18.5, which is intentionally not a
+  // grid coordinate. Commit must preserve both the axis and point-on-curve
+  // relation instead of rounding the endpoint away from the diagonal.
+  const intersectionSetup = await page.evaluate(async () => {
+    const engine = window.__engine;
+    await engine.setGridSnap(false);
+    const diagonal = await engine.addLine({
+      from: { x: 10, y: 30 },
+      to_raw: { x: 40, y: 0 },
+      ctrl_held: true,
+    });
+    await engine.addPoint({ position: { x: 21.5, y: 0 } });
+    const sketch = await engine.setGridSnap(true);
+    window.__appStore.getState().setActiveSketch(sketch);
+    return {
+      diagonal: diagonal.entity_id,
+      beforeLines: sketch.entities.filter((entity) => entity.kind === 'line').length,
+    };
+  });
+  await page.locator('button[title="Line"]').click();
+  await clickSketch(21.5, 0);
+  await page.waitForFunction(() => window.__appStore.getState().dynInput.active);
+  const offGridIntersection = await sketchToScreen(21.48, 18.54);
+  await page.mouse.move(offGridIntersection.x, offGridIntersection.y, { steps: 5 });
+  await page.waitForTimeout(150);
+  const intersectionPreview = await page.evaluate(
+    () => window.__nativeViewportTransient().marker,
+  );
+  assert.equal(
+    intersectionPreview?.kind,
+    'curve',
+    `curve intersection should outrank grid in preview; marker=${JSON.stringify(intersectionPreview)}`,
+  );
+  await page.mouse.click(offGridIntersection.x, offGridIntersection.y);
+  await page.waitForFunction(
+    (before) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'line',
+      ).length > before,
+    intersectionSetup.beforeLines,
+  );
+  await page.keyboard.press('Escape');
+  const curveIntersection = (await state()).activeSketch;
+  const intersectionLine = curveIntersection.entities
+    .filter((entity) => entity.kind === 'line')
+    .find((entity) =>
+      Math.abs(entity.start.x - 21.5) < 1e-7
+      && Math.abs(entity.start.y) < 1e-7
+      && Math.abs(entity.end.x - 21.5) < 1e-7
+      && Math.abs(entity.end.y - 18.5) < 1e-7
+    );
+  assert.ok(
+    intersectionLine,
+    `vertical curve intersection should commit at the exact off-grid coordinate; lines=${JSON.stringify(
+      curveIntersection.entities.filter((entity) => entity.kind === 'line'),
+    )}`,
+  );
+  assert.ok(
+    curveIntersection.constraints.some(
+      (constraint) =>
+        constraint.type === 'coincident'
+        && constraint.a === intersectionLine.end_id
+        && constraint.b === intersectionSetup.diagonal,
+    ),
+    'off-grid intersection endpoint should remain associated with the diagonal',
+  );
+  assert.ok(
+    curveIntersection.constraints.some(
+      (constraint) =>
+        constraint.type === 'vertical' && constraint.entity === intersectionLine.id,
+    ),
+    'off-grid intersection should retain its vertical design intent',
+  );
+
+  // Reproduce the user flow exactly: acquire the visual crossing of two
+  // unconnected carriers, travel 0.5 mm along one carrier, then turn straight
+  // up. The picked screen coordinate is deliberately a little off center;
+  // stable carrier ids must make the committed topology exact. A coarse grid
+  // must neither move the crossing nor collapse the short vertical turn.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  const chainSetup = await page.evaluate(async () => {
+    const engine = window.__engine;
+    await engine.setGridSnap(false);
+    const horizontal = await engine.addLine({
+      from: { x: -35, y: -20 },
+      to_raw: { x: -5, y: -20 },
+      ctrl_held: true,
+    });
+    const diagonal = await engine.addLine({
+      from: { x: -30, y: -30 },
+      to_raw: { x: -10, y: -10 },
+      ctrl_held: true,
+    });
+    await engine.setGridStep(10);
+    const sketch = await engine.setGridSnap(true);
+    window.__appStore.getState().setActiveSketch(sketch);
+    return {
+      horizontal: horizontal.entity_id,
+      diagonal: diagonal.entity_id,
+      beforeLines: sketch.entities.filter((entity) => entity.kind === 'line').length,
+    };
+  });
+  await page.locator('button[title="Line"]').click();
+  await clickSketch(-19.97, -20.04);
+  await page.waitForFunction(() => window.__appStore.getState().dynInput.active);
+  const crossingMarker = await page.evaluate(() => window.__nativeViewportTransient().marker);
+  assert.equal(crossingMarker?.kind, 'point');
+  assert.ok(
+    Math.abs(crossingMarker.position[0] + 20) < 1e-9
+      && Math.abs(crossingMarker.position[1] + 20) < 1e-9,
+    `crossing marker must be dead-center on the analytic crossing; marker=${JSON.stringify(crossingMarker)}`,
+  );
+
+  const halfMillimeterDirection = await sketchToScreen(-23, -20.01);
+  await page.mouse.move(halfMillimeterDirection.x, halfMillimeterDirection.y, { steps: 4 });
+  await page.keyboard.type('0.5');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(
+    (before) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'line',
+      ).length > before,
+    chainSetup.beforeLines,
+  );
+  // The second Enter is intentional: a single visible length field commits
+  // on the first Enter. Repeated confirmation must not immediately create a
+  // reverse segment before the pointer begins the next leg of the chain.
+  await page.waitForTimeout(250);
+  const afterShort = (await state()).activeSketch;
+  assert.equal(
+    afterShort.entities.filter((entity) => entity.kind === 'line').length,
+    chainSetup.beforeLines + 1,
+    'repeated Enter must commit the 0.5 mm segment only once',
+  );
+  const short = afterShort.entities
+    .filter((entity) => entity.kind === 'line')
+    .find((entity) =>
+      Math.abs(entity.start.x + 20) < 1e-9
+      && Math.abs(entity.start.y + 20) < 1e-9
+      && Math.abs(entity.end.x + 20.5) < 1e-9
+      && Math.abs(entity.end.y + 20) < 1e-9
+    );
+  assert.ok(
+    short,
+    `typed 0.5 mm line must overlay its horizontal carrier exactly; lines=${JSON.stringify(
+      afterShort.entities.filter((entity) => entity.kind === 'line'),
+    )}`,
+  );
+  for (const carrier of [chainSetup.horizontal, chainSetup.diagonal]) {
+    assert.ok(
+      afterShort.constraints.some(
+        (constraint) =>
+          constraint.type === 'coincident'
+          && constraint.a === short.start_id
+          && constraint.b === carrier,
+      ),
+      `crossing point should retain an exact relation to carrier ${carrier}`,
+    );
+  }
+
+  // Keep this target clear of the floating dimension entry widget while still
+  // remaining inside the coarse 10 mm grid cell that used to collapse it.
+  const verticalTarget = await sketchToScreen(-20.48, -15.3);
+  await page.mouse.move(verticalTarget.x, verticalTarget.y, { steps: 4 });
+  await page.waitForTimeout(500);
+  const verticalPreview = await page.evaluate(() => ({
+    marker: window.__nativeViewportTransient().marker,
+    chips: document.querySelector('[data-testid="inference-chips"]')?.textContent ?? '',
+    dynInput: window.__appStore.getState().dynInput,
+  }));
+  assert.ok(
+    verticalPreview.chips.includes('V'),
+    `vertical turn should expose a V inference; preview=${JSON.stringify(verticalPreview)}`,
+  );
+  assert.ok(
+    Math.abs(verticalPreview.marker.position[0] + 20.5) < 1e-9,
+    `vertical preview must stay on the 0.5 mm endpoint; preview=${JSON.stringify(verticalPreview)}`,
+  );
+  assert.ok(
+    !verticalPreview.chips.includes('ALIGN'),
+    `straight chained intent must not turn into an unrelated point-tracking triangle; chips=${verticalPreview.chips}`,
+  );
+  await page.mouse.click(verticalTarget.x, verticalTarget.y);
+  await page.waitForFunction(
+    (before) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'line',
+      ).length > before,
+    chainSetup.beforeLines + 1,
+  );
+  const afterTurn = (await state()).activeSketch;
+  const upright = afterTurn.entities
+    .filter((entity) => entity.kind === 'line')
+    .find((entity) =>
+      Math.abs(entity.start.x + 20.5) < 1e-9
+      && Math.abs(entity.start.y + 20) < 1e-9
+      && Math.abs(entity.end.x + 20.5) < 1e-9
+      && entity.end.y > -20 + 1e-6
+    );
+  assert.ok(
+    upright,
+    `the vertical turn must be exact and non-degenerate; lines=${JSON.stringify(
+      afterTurn.entities.filter((entity) => entity.kind === 'line'),
+    )}`,
+  );
+  assert.ok(
+    afterTurn.constraints.some(
+      (constraint) =>
+        constraint.type === 'perpendicular'
+        && ((constraint.a === short.id && constraint.b === upright.id)
+          || (constraint.a === upright.id && constraint.b === short.id)),
+    ),
+    'the chained vertical turn should retain perpendicular design intent',
+  );
+  await page.keyboard.press('Escape');
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
 
   console.log(
-    `  [ok] adaptive grid, locked-angle numeric snap, point tracking, and off-grid H inference (${initialStep} → ${zoomedStep} mm)`,
+    `  [ok] adaptive grid, exact crossings, 0.5 mm chain turns, point tracking, off-grid H inference, and curve-over-grid priority (${initialStep} → ${zoomedStep} mm)`,
   );
 } finally {
   await browser.close();

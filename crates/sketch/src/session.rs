@@ -8,7 +8,7 @@
 //! stays snapshot-based, so every mutation (including solver motion and
 //! cascades) restores exactly.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use nbcad_core::{DimensionStyle, EdgeId};
@@ -16,10 +16,11 @@ use nbcad_core::{DimensionStyle, EdgeId};
 use crate::constraint::{Constraint, ConstraintId};
 use crate::dto::{
     AddConstraintResult, AddLineResult, CircleMode, ConstraintDesc, ConstraintDto,
-    DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference, LineTrackingRequest,
-    LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest, MovePointRequest,
-    MovePointResult, PreviewDto, RectangleMode, ReferenceMidpointDto, SketchDto, SlotMode,
-    SlotRequest, SnapTarget, SplineRequest, ToolResult, TrackingAxis, TrackingGuideDto, UndoResult,
+    CurveCrossingRequest, DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference,
+    LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest, LockedRectangleRequest,
+    LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto, RectangleMode,
+    ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToolResult,
+    TrackingAxis, TrackingGuideDto, UndoResult,
 };
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
@@ -221,6 +222,9 @@ pub(crate) struct LockedInput {
     pub length_text: Option<String>,
     pub angle_text: Option<String>,
     pub tracking: Option<LineTrackingRequest>,
+    pub intersection: Option<LineIntersectionRequest>,
+    pub from_crossing: Option<CurveCrossingRequest>,
+    pub to_crossing: Option<CurveCrossingRequest>,
 }
 
 /// Resolved placement of one segment endpoint: the point id to use
@@ -276,8 +280,57 @@ impl SketchSession {
         self.basis = basis;
     }
 
-    pub(crate) fn set_reference_midpoints(&mut self, midpoints: Vec<(EdgeId, Vec2)>) {
+    /// Install the current support-face edge midpoints and refresh every
+    /// persistent external-midpoint constraint by stable edge id.
+    ///
+    /// Undo/redo snapshots are refreshed too: restoring an older command
+    /// must never restore an obsolete sampled coordinate for the same edge.
+    pub fn set_reference_midpoints(&mut self, midpoints: Vec<(EdgeId, Vec2)>) {
+        let targets = midpoints.iter().copied().collect::<HashMap<_, _>>();
+        let changed = self.sketch.refresh_reference_midpoints(&targets);
+        for command in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            command.before.refresh_reference_midpoints(&targets);
+            command.after.refresh_reference_midpoints(&targets);
+        }
+        if let Some(snapshot) = &mut self.pending_drag {
+            snapshot.refresh_reference_midpoints(&targets);
+        }
+        if let Some(snapshot) = &mut self.last_good_drag {
+            snapshot.refresh_reference_midpoints(&targets);
+        }
         self.reference_midpoints = midpoints;
+        if changed {
+            self.recompute();
+        }
+    }
+
+    /// Convert a midpoint snap into the durable relation committed with the
+    /// new point. Support-face midpoints use the stable OCCT edge id rather
+    /// than a one-time coordinate sample.
+    fn midpoint_constraint_for_target(
+        &self,
+        point: EntityId,
+        target: SnapTarget,
+    ) -> Option<Constraint> {
+        match target {
+            SnapTarget::Midpoint { entity } => Some(Constraint::Midpoint {
+                a: point,
+                b: entity,
+            }),
+            SnapTarget::ReferenceMidpoint { edge } => {
+                let position = self
+                    .reference_midpoints
+                    .iter()
+                    .find_map(|(candidate, position)| (*candidate == edge).then_some(*position))
+                    .or_else(|| self.sketch.point_position(point))?;
+                Some(Constraint::ReferenceMidpoint {
+                    point,
+                    edge,
+                    position,
+                })
+            }
+            _ => None,
+        }
     }
 
     pub fn sketch(&self) -> &Sketch {
@@ -460,7 +513,7 @@ impl SketchSession {
     /// within `INFERENCE_ANGLE_TOL_DEG` of the u/v axes and project the
     /// endpoint onto the inferred direction.
     fn snap_and_infer(&self, from: Vec2, to_raw: Vec2, ctrl_held: bool) -> PreviewDto {
-        let (mut snapped, target) = self.snap_line_endpoint(to_raw, from, ctrl_held);
+        let (mut snapped, mut target) = self.snap_line_endpoint(to_raw, from, ctrl_held);
         let mut inferences = Vec::new();
 
         match target {
@@ -468,10 +521,14 @@ impl SketchSession {
                 // Coincident snap wins over directional inference.
                 inferences.push(Inference::Coincident);
             }
-            SnapTarget::Midpoint { .. } | SnapTarget::ReferenceMidpoint { .. } => {
-                // Exact snap: no directional inference; the triangle snap
-                // marker is the glyph (D4.1), and commit adds the Midpoint
-                // constraint.
+            SnapTarget::Midpoint { .. }
+            | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::Curve { .. }
+            | SnapTarget::Intersection { .. } => {
+                // Exact geometric acquisition wins over directional
+                // inference. Commit persists the corresponding midpoint or
+                // point-on-carrier relation instead of only storing this
+                // sampled coordinate.
             }
             SnapTarget::Grid | SnapTarget::None => {
                 if !ctrl_held {
@@ -483,9 +540,27 @@ impl SketchSession {
                     let tol = INFERENCE_ANGLE_TOL_DEG.to_radians().tan();
                     if d.x.abs() >= d.y.abs() && d.y.abs() <= tol * d.x.abs() {
                         snapped.y = from.y;
+                        // Grid snapping is a fallback, never a reason to erase
+                        // an otherwise valid inferred segment. With an
+                        // off-grid anchor, rounding both coordinates can land
+                        // beside the anchor and H/V projection can then fold
+                        // that point back onto the anchor. Preserve the raw
+                        // free coordinate in that case.
+                        if snapped.distance(from) < MIN_LINE_LENGTH_MM
+                            && d.length() >= MIN_LINE_LENGTH_MM
+                        {
+                            snapped.x = to_raw.x;
+                            target = SnapTarget::None;
+                        }
                         inferences.push(Inference::Horizontal);
                     } else if d.y.abs() > d.x.abs() && d.x.abs() <= tol * d.y.abs() {
                         snapped.x = from.x;
+                        if snapped.distance(from) < MIN_LINE_LENGTH_MM
+                            && d.length() >= MIN_LINE_LENGTH_MM
+                        {
+                            snapped.y = to_raw.y;
+                            target = SnapTarget::None;
+                        }
                         inferences.push(Inference::Vertical);
                     }
                 }
@@ -512,7 +587,29 @@ impl SketchSession {
         to_hint: Vec2,
         ctrl_held: bool,
         tracking: Option<LineTrackingRequest>,
+        intersection: Option<LineIntersectionRequest>,
+        from_crossing: Option<CurveCrossingRequest>,
+        to_crossing: Option<CurveCrossingRequest>,
     ) -> PreviewDto {
+        let from = from_crossing
+            .and_then(|request| self.curve_crossing_point(request, from))
+            .unwrap_or(from);
+        if !ctrl_held {
+            if let Some(preview) = self.curve_crossing_preview(to_hint, to_crossing) {
+                return preview;
+            }
+        }
+        if !ctrl_held {
+            if let Some(preview) = self.curve_axis_preview(
+                from,
+                length_mm,
+                angle_deg.map(f64::to_radians),
+                to_hint,
+                intersection,
+            ) {
+                return preview;
+            }
+        }
         if length_mm.is_none() && angle_deg.is_none() {
             if !ctrl_held {
                 if let Some(preview) = self.tracking_preview(from, None, None, to_hint, tracking) {
@@ -612,6 +709,132 @@ impl SketchSession {
         self.coincident_or_exact(from, endpoint, inferences)
     }
 
+    /// Analytic intersections of two finite sketch curves. Screen-space
+    /// acquisition selects the carrier ids; this engine-side routine is the
+    /// sole source of the committed coordinate. Unsupported spline crossings
+    /// intentionally return no result instead of accepting a tessellation
+    /// approximation as topology.
+    fn curve_crossing_points(&self, request: CurveCrossingRequest) -> Vec<Vec2> {
+        use crate::geomops::trimext::{self, Circle, LineSeg};
+
+        #[derive(Clone, Copy)]
+        enum AnalyticCurve {
+            Line(LineSeg),
+            Circular {
+                circle: Circle,
+                arc: Option<(f64, f64)>,
+            },
+        }
+
+        let analytic = |id: EntityId| -> Option<AnalyticCurve> {
+            match self.sketch.entity(id)? {
+                Entity::Line { .. } => {
+                    let (a, b) = self.sketch.resolved_line(id)?;
+                    Some(AnalyticCurve::Line(LineSeg { a, b }))
+                }
+                Entity::Circle { center, radius } => Some(AnalyticCurve::Circular {
+                    circle: Circle {
+                        center: *center,
+                        radius: *radius,
+                    },
+                    arc: None,
+                }),
+                Entity::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                } => Some(AnalyticCurve::Circular {
+                    circle: Circle {
+                        center: *center,
+                        radius: *radius,
+                    },
+                    arc: Some((*start_angle, *end_angle)),
+                }),
+                Entity::Point { .. } | Entity::Spline { .. } => None,
+            }
+        };
+        let on_arc = |point: Vec2, circle: Circle, arc: Option<(f64, f64)>| {
+            let Some((start, end)) = arc else {
+                return true;
+            };
+            let sweep = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
+            let angle = (point.y - circle.center.y).atan2(point.x - circle.center.x);
+            sweep(start, angle) <= sweep(start, end) + 1.0e-9
+        };
+
+        if request.first == request.second {
+            return Vec::new();
+        }
+        let (Some(first), Some(second)) = (analytic(request.first), analytic(request.second))
+        else {
+            return Vec::new();
+        };
+        let mut points = match (first, second) {
+            (AnalyticCurve::Line(a), AnalyticCurve::Line(b)) => trimext::line_line(&a, &b)
+                .filter(|(_, ta, tb)| {
+                    (-MERGE_EPS..=1.0 + MERGE_EPS).contains(ta)
+                        && (-MERGE_EPS..=1.0 + MERGE_EPS).contains(tb)
+                })
+                .map(|(point, _, _)| vec![point])
+                .unwrap_or_default(),
+            (AnalyticCurve::Line(line), AnalyticCurve::Circular { circle, arc })
+            | (AnalyticCurve::Circular { circle, arc }, AnalyticCurve::Line(line)) => {
+                trimext::line_circle(&line, &circle)
+                    .into_iter()
+                    .filter(|(point, parameter)| {
+                        (-MERGE_EPS..=1.0 + MERGE_EPS).contains(parameter)
+                            && on_arc(*point, circle, arc)
+                    })
+                    .map(|(point, _)| point)
+                    .collect()
+            }
+            (
+                AnalyticCurve::Circular {
+                    circle: first_circle,
+                    arc: first_arc,
+                },
+                AnalyticCurve::Circular {
+                    circle: second_circle,
+                    arc: second_arc,
+                },
+            ) => trimext::circle_circle(&first_circle, &second_circle)
+                .into_iter()
+                .filter(|point| {
+                    on_arc(*point, first_circle, first_arc)
+                        && on_arc(*point, second_circle, second_arc)
+                })
+                .collect(),
+        };
+        points.retain(|point| point.x.is_finite() && point.y.is_finite());
+        points.dedup_by(|a, b| a.distance(*b) <= MERGE_EPS);
+        points
+    }
+
+    fn curve_crossing_point(&self, request: CurveCrossingRequest, hint: Vec2) -> Option<Vec2> {
+        self.curve_crossing_points(request)
+            .into_iter()
+            .min_by(|a, b| a.distance(hint).total_cmp(&b.distance(hint)))
+    }
+
+    fn curve_crossing_preview(
+        &self,
+        hint: Vec2,
+        request: Option<CurveCrossingRequest>,
+    ) -> Option<PreviewDto> {
+        let request = request?;
+        let snapped = self.curve_crossing_point(request, hint)?;
+        Some(PreviewDto {
+            snapped_to: snapped,
+            snap: SnapTarget::Intersection {
+                first: request.first,
+                second: request.second,
+            },
+            inferences: vec![Inference::Coincident],
+            tracking: None,
+        })
+    }
+
     /// Resolve a viewport-acquired horizontal/vertical tracking reference
     /// against the segment's remaining degrees of freedom. The viewport
     /// decides *which* point is close in screen space; this engine function
@@ -677,6 +900,141 @@ impl SketchSession {
                 source,
                 snapped_to: snapped,
             }),
+        })
+    }
+
+    /// Resolve a viewport-acquired H/V intent against an existing curve.
+    /// Curve geometry wins over the grid: the endpoint is recomputed from
+    /// authoritative sketch entities and commit records point-on-curve.
+    fn curve_axis_preview(
+        &self,
+        from: Vec2,
+        length_mm: Option<f64>,
+        angle_rad: Option<f64>,
+        cursor: Vec2,
+        request: Option<LineIntersectionRequest>,
+    ) -> Option<PreviewDto> {
+        let request = request?;
+        if length_mm.is_some() {
+            return None;
+        }
+
+        // A typed angle may participate only when it is exactly the acquired
+        // axis; never replace a user's explicit non-axis angle.
+        if let Some(angle) = angle_rad {
+            let direction = Vec2::new(angle.cos(), angle.sin());
+            let axis_error = match request.axis {
+                TrackingAxis::Horizontal => direction.y.abs(),
+                TrackingAxis::Vertical => direction.x.abs(),
+            };
+            if axis_error > 1.0e-7 {
+                return None;
+            }
+        }
+
+        let cursor_delta = cursor - from;
+        let direction_sign = match request.axis {
+            TrackingAxis::Horizontal => cursor_delta.x.signum(),
+            TrackingAxis::Vertical => cursor_delta.y.signum(),
+        };
+        if direction_sign == 0.0 {
+            return None;
+        }
+
+        let mut candidates = Vec::with_capacity(2);
+        match self.sketch.entity(request.curve)? {
+            Entity::Line { .. } => {
+                let (start, end) = self.sketch.resolved_line(request.curve)?;
+                let delta = end - start;
+                let parameter = match request.axis {
+                    TrackingAxis::Horizontal if delta.y.abs() > MERGE_EPS => {
+                        (from.y - start.y) / delta.y
+                    }
+                    TrackingAxis::Vertical if delta.x.abs() > MERGE_EPS => {
+                        (from.x - start.x) / delta.x
+                    }
+                    _ => return None,
+                };
+                if (-MERGE_EPS..=1.0 + MERGE_EPS).contains(&parameter) {
+                    let point = start + delta * parameter.clamp(0.0, 1.0);
+                    candidates.push(point);
+                }
+            }
+            Entity::Circle { center, radius } | Entity::Arc { center, radius, .. } => {
+                let fixed = match request.axis {
+                    TrackingAxis::Horizontal => from.y - center.y,
+                    TrackingAxis::Vertical => from.x - center.x,
+                };
+                if fixed.abs() > *radius + MERGE_EPS {
+                    return None;
+                }
+                let free = (radius * radius - fixed * fixed).max(0.0).sqrt();
+                match request.axis {
+                    TrackingAxis::Horizontal => {
+                        candidates.push(Vec2::new(center.x + free, from.y));
+                        candidates.push(Vec2::new(center.x - free, from.y));
+                    }
+                    TrackingAxis::Vertical => {
+                        candidates.push(Vec2::new(from.x, center.y + free));
+                        candidates.push(Vec2::new(from.x, center.y - free));
+                    }
+                }
+                if let Entity::Arc {
+                    start_angle,
+                    end_angle,
+                    ..
+                } = self.sketch.entity(request.curve)?
+                {
+                    let sweep =
+                        |start: f64, end: f64| (end - start).rem_euclid(std::f64::consts::TAU);
+                    candidates.retain(|point| {
+                        let angle = (point.y - center.y).atan2(point.x - center.x);
+                        sweep(*start_angle, angle) <= sweep(*start_angle, *end_angle) + 1.0e-9
+                    });
+                }
+            }
+            Entity::Point { .. } | Entity::Spline { .. } => return None,
+        }
+
+        candidates.retain(|point| {
+            if point.distance(from) < MIN_LINE_LENGTH_MM {
+                return false;
+            }
+            let travel = match request.axis {
+                TrackingAxis::Horizontal => point.x - from.x,
+                TrackingAxis::Vertical => point.y - from.y,
+            };
+            travel * direction_sign >= -MERGE_EPS
+        });
+        let snapped = candidates
+            .into_iter()
+            .min_by(|a, b| a.distance(cursor).total_cmp(&b.distance(cursor)))?;
+
+        let mut inferences = Vec::with_capacity(2);
+        if angle_rad.is_none() {
+            inferences.push(match request.axis {
+                TrackingAxis::Horizontal => Inference::Horizontal,
+                TrackingAxis::Vertical => Inference::Vertical,
+            });
+        }
+        inferences.push(Inference::Coincident);
+
+        if let Some((entity, _)) = self.sketch.nearest_point(snapped, MERGE_EPS) {
+            return Some(PreviewDto {
+                snapped_to: self.sketch.point_position(entity).unwrap_or(snapped),
+                snap: SnapTarget::Point { entity },
+                inferences,
+                tracking: None,
+            });
+        }
+
+        Some(PreviewDto {
+            snapped_to: snapped,
+            snap: SnapTarget::Curve {
+                entity: request.curve,
+            },
+            inferences,
+            tracking: None,
         })
     }
 
@@ -925,8 +1283,58 @@ impl SketchSession {
             SnapTarget::Grid
             | SnapTarget::None
             | SnapTarget::Midpoint { .. }
-            | SnapTarget::ReferenceMidpoint { .. } => EndpointResolution::New(coords),
+            | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::Curve { .. } => EndpointResolution::New(coords),
+            SnapTarget::Intersection { .. } => match self.sketch.nearest_point(coords, MERGE_EPS) {
+                Some((id, _)) => EndpointResolution::Existing(id),
+                None => EndpointResolution::New(coords),
+            },
         }
+    }
+
+    fn point_has_carrier_relation(&self, point: EntityId, carrier: EntityId) -> bool {
+        if self
+            .sketch
+            .line_endpoint_ids(carrier)
+            .is_some_and(|(start, end)| start == point || end == point)
+        {
+            return true;
+        }
+        self.sketch.constraints().any(|(_, constraint)| {
+            matches!(
+                constraint,
+                Constraint::Coincident { a, b }
+                    if (*a == point && *b == carrier) || (*a == carrier && *b == point)
+            )
+        })
+    }
+
+    /// Attach a resolved crossing point to both carriers without duplicating
+    /// structural or existing point-on-curve relations. The caller owns the
+    /// surrounding snapshot and rolls back the complete line command if any
+    /// relation is inconsistent.
+    fn attach_crossing_relations(
+        &mut self,
+        point: EntityId,
+        request: CurveCrossingRequest,
+        created: &mut Vec<ConstraintDto>,
+    ) -> Result<(), SessionError> {
+        for carrier in [request.first, request.second] {
+            if self.point_has_carrier_relation(point, carrier) {
+                continue;
+            }
+            let relation = Constraint::Coincident {
+                a: point,
+                b: carrier,
+            };
+            let Some(constraint) = self.try_add_independent_auto_constraint(relation) else {
+                return Err(SessionError::InvalidConstraint(
+                    "Cannot keep the acquired curve crossing exact".to_string(),
+                ));
+            };
+            created.push(constraint);
+        }
+        Ok(())
     }
 
     /// Ground a point that truly lands on the sketch origin while snapping
@@ -1073,6 +1481,9 @@ impl SketchSession {
             length_text: request.length_text.clone(),
             angle_text: request.angle_text.clone(),
             tracking: request.tracking,
+            intersection: request.intersection,
+            from_crossing: request.from_crossing,
+            to_crossing: request.to_crossing,
         };
         self.add_line_impl(
             request.from,
@@ -1089,7 +1500,25 @@ impl SketchSession {
         ctrl_held: bool,
         locks: Option<LockedInput>,
     ) -> Result<AddLineResult, SessionError> {
-        let (from_coords, from_target) = self.snap_line_flow(from_raw, ctrl_held);
+        let (from_coords, from_target) =
+            if let Some(request) = locks.as_ref().and_then(|locks| locks.from_crossing) {
+                let point = self
+                    .curve_crossing_point(request, from_raw)
+                    .ok_or_else(|| {
+                        SessionError::InvalidConstraint(
+                            "The acquired line-start crossing no longer exists".to_string(),
+                        )
+                    })?;
+                (
+                    point,
+                    SnapTarget::Intersection {
+                        first: request.first,
+                        second: request.second,
+                    },
+                )
+            } else {
+                self.snap_line_flow(from_raw, ctrl_held)
+            };
         let preview = match &locks {
             Some(locks) => self.preview_segment_locked(
                 from_coords,
@@ -1098,6 +1527,9 @@ impl SketchSession {
                 to_raw,
                 ctrl_held,
                 locks.tracking,
+                locks.intersection,
+                locks.from_crossing,
+                locks.to_crossing,
             ),
             None => self.snap_and_infer(from_coords, to_raw, ctrl_held),
         };
@@ -1111,7 +1543,11 @@ impl SketchSession {
             SnapTarget::Grid
             | SnapTarget::None
             | SnapTarget::Midpoint { .. }
-            | SnapTarget::ReferenceMidpoint { .. } => EndpointResolution::New(preview.snapped_to),
+            | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::Curve { .. } => EndpointResolution::New(preview.snapped_to),
+            SnapTarget::Intersection { .. } => {
+                self.resolve_endpoint(preview.snapped_to, preview.snap)
+            }
         };
 
         let start_coords = match start {
@@ -1189,6 +1625,21 @@ impl SketchSession {
             }
         }
 
+        for (target, point_id) in [(from_target, start_point_id), (preview.snap, end_point_id)] {
+            let SnapTarget::Intersection { first, second } = target else {
+                continue;
+            };
+            if let Err(error) = self.attach_crossing_relations(
+                point_id,
+                CurveCrossingRequest { first, second },
+                &mut created,
+            ) {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+        }
+
         // Object-snap tracking is associative: moving the acquired reference
         // later keeps this endpoint on the same horizontal/vertical axis.
         if let Some(guide) = preview.tracking {
@@ -1208,15 +1659,30 @@ impl SketchSession {
             }
         }
 
+        // An axis/curve intersection is geometric, not a one-time coordinate
+        // coincidence. Persist the endpoint on its acquired carrier so later
+        // edits keep the profile closed.
+        if let SnapTarget::Curve { entity: carrier } = preview.snap {
+            let constraint = Constraint::Coincident {
+                a: end_point_id,
+                b: carrier,
+            };
+            let Some(created_constraint) = self.try_add_independent_auto_constraint(constraint)
+            else {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(SessionError::InvalidConstraint(
+                    "Cannot attach the line endpoint to the acquired curve".to_string(),
+                ));
+            };
+            created.push(created_constraint);
+        }
+
         // Midpoint auto-constraint (M1d, D4.1 parity): an endpoint snapped to
-        // a host line's midpoint gets a real Midpoint constraint in the same
-        // undo command.
+        // either a sketch line or a stable support-face edge gets a durable
+        // relation in the same undo command.
         for (point_id, target) in [(start_point_id, from_target), (end_point_id, preview.snap)] {
-            if let SnapTarget::Midpoint { entity: host_line } = target {
-                let c = Constraint::Midpoint {
-                    a: point_id,
-                    b: host_line,
-                };
+            if let Some(c) = self.midpoint_constraint_for_target(point_id, target) {
                 let id = self.sketch.add_constraint(c);
                 created.push(ConstraintDto { id, constraint: c });
             }
@@ -1459,15 +1925,11 @@ impl SketchSession {
                 Inference::Coincident => {}
             }
         }
-        if let SnapTarget::Midpoint { entity } = mid_target {
-            self.sketch.add_constraint(Constraint::Midpoint {
-                a: mid_id,
-                b: entity,
-            });
+        if let Some(constraint) = self.midpoint_constraint_for_target(mid_id, mid_target) {
+            self.sketch.add_constraint(constraint);
         }
-        if let SnapTarget::Midpoint { entity } = preview.snap {
-            self.sketch
-                .add_constraint(Constraint::Midpoint { a: b_id, b: entity });
+        if let Some(constraint) = self.midpoint_constraint_for_target(b_id, preview.snap) {
+            self.sketch.add_constraint(constraint);
         }
         for point_id in [mid_id, a_id, b_id] {
             self.ground_origin_point(point_id);
@@ -2177,6 +2639,7 @@ impl SketchSession {
         match *constraint {
             Constraint::ArcEndpointCoincident { .. }
             | Constraint::EqualDistance { .. }
+            | Constraint::ReferenceMidpoint { .. }
             | Constraint::SpanMidpoint { .. } => {
                 return Err(invalid(
                     "This relation is internal and is created by its sketch tool",

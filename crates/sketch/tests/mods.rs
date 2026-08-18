@@ -451,12 +451,15 @@ fn fillet_with_formula_radius_evaluates() {
     s.add_line_locked(&nbcad_sketch::LockedSegmentRequest {
         from: v(100.0, 100.0),
         to_hint: v(120.0, 100.0),
+        from_crossing: None,
+        to_crossing: None,
         length_mm: None,
         angle_deg: None,
         length_text: Some("20".to_string()),
         angle_text: None,
         ctrl_held: false,
         tracking: None,
+        intersection: None,
     })
     .unwrap();
     let r = s

@@ -4,8 +4,9 @@ use nbcad_sketch::{
     SketchManager, Vec2,
 };
 use nbcad_solid::{
-    CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest, KernelBodyDto,
-    KernelFaceDto, KernelJobDto, KernelSceneDto, Point3Dto,
+    BodyFeatureRequestDto, CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest,
+    KernelBodyDto, KernelFaceDto, KernelJobDto, KernelSceneDto, Point3Dto, SetRollbackRequest,
+    SplitBodyRequest,
 };
 
 const XY: PlaneRef = PlaneRef::OriginPlane {
@@ -84,6 +85,7 @@ fn result_body_id(job: &KernelJobDto) -> BodyId {
         KernelJobDto::Fillet(job) => job.target_body_id,
         KernelJobDto::Chamfer(job) => job.target_body_id,
         KernelJobDto::Hole(job) => job.target_body_id,
+        KernelJobDto::ExternalThread(job) => job.target_body_id,
         KernelJobDto::Shell(job) => job.target_body_id,
         KernelJobDto::Transform(job) => job.result_body_ids[0],
         KernelJobDto::Combine(job) => job.target_body_id,
@@ -224,4 +226,80 @@ fn planar_face_sketch_origin_can_use_face_center_or_global_projection() {
         })
         .unwrap();
     assert_eq!(projected.basis.origin, [0.0, 0.0, 10.0]);
+}
+
+#[test]
+fn split_body_is_inserted_at_the_build_cursor() {
+    let mut manager = SketchManager::new();
+    manager.begin_sketch(XY).unwrap();
+    rectangle(&mut manager, Vec2::new(-10.0, -10.0), Vec2::new(10.0, 10.0));
+    manager.end_sketch().unwrap();
+
+    let extrude_plan = manager.prepare_extrude(extrusion("Sketch1")).unwrap();
+    let target_body = result_body_id(&extrude_plan.jobs[0]);
+    manager
+        .commit_solid(CommitKernelRequest {
+            transaction_id: extrude_plan.transaction_id,
+            scene: KernelSceneDto {
+                bodies: vec![planar_body(target_body, "target", 10.0)],
+                errors: Vec::new(),
+            },
+        })
+        .unwrap();
+
+    // This later sketch represents the External Thread/Hole features that
+    // were present after the user's marker in the reported project.
+    manager.begin_sketch(XY).unwrap();
+    manager.end_sketch().unwrap();
+    let rollback_plan = manager
+        .prepare_set_rollback(SetRollbackRequest { rollback_index: 2 })
+        .unwrap();
+    manager
+        .commit_solid(CommitKernelRequest {
+            transaction_id: rollback_plan.transaction_id,
+            scene: KernelSceneDto {
+                bodies: vec![planar_body(target_body, "target", 10.0)],
+                errors: Vec::new(),
+            },
+        })
+        .unwrap();
+
+    let split_plan = manager
+        .prepare_body_feature(BodyFeatureRequestDto::SplitBody(SplitBodyRequest {
+            body_id: target_body,
+            plane: PlaneRef::OriginPlane {
+                plane: OriginPlane::Yz,
+            },
+            plane_basis: None,
+        }))
+        .unwrap();
+    assert_eq!(
+        split_plan.jobs.len(),
+        2,
+        "future history must remain rolled back"
+    );
+    let split_body = result_body_id(split_plan.jobs.last().unwrap());
+    let update = manager
+        .commit_solid(CommitKernelRequest {
+            transaction_id: split_plan.transaction_id,
+            scene: KernelSceneDto {
+                bodies: vec![
+                    planar_body(target_body, "positive", 10.0),
+                    planar_body(split_body, "negative", 10.0),
+                ],
+                errors: Vec::new(),
+            },
+        })
+        .unwrap();
+
+    assert_eq!(
+        update
+            .document
+            .features
+            .iter()
+            .map(|feature| feature.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Sketch1", "Extrude1", "SplitBody1", "Sketch2"]
+    );
+    assert_eq!(update.document.rollback_index, 3);
 }

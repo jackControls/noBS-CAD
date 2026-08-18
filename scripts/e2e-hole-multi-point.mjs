@@ -119,15 +119,53 @@ try {
     null,
     'opening Hole must not require a separate support-face click',
   );
+  const holeControlOrder = await dialog.evaluate((root) => {
+    const positionInputs = Array.from(
+      root.querySelectorAll('[data-dimension-input]'),
+    ).slice(0, 2);
+    const style = root.querySelector('[data-testid="hole-style"]');
+    const threaded = root.querySelector('[data-testid="hole-threaded"]');
+    if (positionInputs.length !== 2 || !style || !threaded) return null;
+    return {
+      positionBottom: Math.max(
+        ...positionInputs.map((input) => input.getBoundingClientRect().bottom),
+      ),
+      styleTop: style.getBoundingClientRect().top,
+      styleBottom: style.getBoundingClientRect().bottom,
+      threadedTop: threaded.getBoundingClientRect().top,
+    };
+  });
+  assert.ok(holeControlOrder, 'Hole positions, style, and threaded controls render');
+  assert.ok(
+    holeControlOrder.styleTop > holeControlOrder.positionBottom,
+    'Hole Style appears immediately after Positions',
+  );
+  assert.ok(
+    holeControlOrder.styleBottom < holeControlOrder.threadedTop,
+    'Hole Style precedes the remaining Hole feature options',
+  );
 
   console.log('2. Pick the support face and a base-sketch point in one click');
   for (let index = 0; index < setup.points.length; index += 1) {
     const point = await screenPoint(setup.points[index]);
     await page.mouse.move(point.x, point.y);
     await page.waitForFunction(
-      () => window.__finishedSketchVisualState().pointCount >= 4,
+      ({ entityId }) => {
+        const hover = window.__appStore.getState().holePositionHover;
+        return window.__finishedSketchVisualState().pointCount >= 4
+          && hover?.entity_id === entityId;
+      },
+      { entityId: setup.referencePointIds[index] },
     );
-    const visuals = await page.evaluate(() => window.__finishedSketchVisualState());
+    const hoverPresentation = await page.evaluate(() => {
+      const visuals = window.__finishedSketchVisualState();
+      const hoverColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--cad-hover')
+        .trim()
+        .replace('#', '');
+      return { visuals, hoverColor };
+    });
+    const { visuals } = hoverPresentation;
     assert.ok(visuals.lineDepthTests.length > 0);
     assert.ok(
       visuals.lineDepthTests.every((depthTest) => !depthTest),
@@ -136,6 +174,27 @@ try {
     assert.ok(
       visuals.pointDepthTests.every((depthTest) => !depthTest),
       'hole snap markers must remain readable through the solid',
+    );
+    const hoverOutlineIndex = visuals.pointRoles.indexOf('hole-hover-outline');
+    const hoverFillIndex = visuals.pointRoles.indexOf('hole-hover-fill');
+    assert.ok(
+      hoverOutlineIndex >= 0,
+      `Hole point ${index + 1} has a visible hover outline`,
+    );
+    assert.ok(
+      hoverFillIndex >= 0,
+      `Hole point ${index + 1} has a visible hover fill`,
+    );
+    assert.equal(visuals.pointSizes[hoverOutlineIndex], 14);
+    assert.equal(visuals.pointSizes[hoverFillIndex], 10);
+    assert.equal(
+      visuals.pointColors[hoverFillIndex],
+      hoverPresentation.hoverColor,
+    );
+    assert.equal(
+      visuals.pointPositionCounts[hoverFillIndex],
+      1,
+      'only the acquired Hole point receives the hover treatment',
     );
     await page.mouse.click(point.x, point.y);
     await page.waitForFunction(
@@ -184,6 +243,35 @@ try {
     ) >= 4,
     'Bevy receives both outlined and filled associative Hole position markers',
   );
+  assert.ok(
+    nativeHolePresentation.triangles.some((layer) => layer.positions.length >= 18),
+    'the selected positions publish translucent cutter geometry to Bevy',
+  );
+  assert.equal(
+    nativeHolePresentation.arrows.length,
+    2,
+    'each selected hole receives a cutting-direction arrow',
+  );
+  const initialDirection = nativeHolePresentation.arrows[0].end.map(
+    (value, index) => value - nativeHolePresentation.arrows[0].start[index],
+  );
+  await page.getByTestId('hole-flip').check();
+  await page.waitForFunction(
+    () => window.__appStore.getState().solidCommandPreview?.kind === 'hole'
+      && window.__appStore.getState().solidCommandPreview.flip,
+  );
+  const flippedDirection = await page.evaluate(() => {
+    const arrow = window.__nativeViewportTransient().arrows[0];
+    return arrow.end.map((value, index) => value - arrow.start[index]);
+  });
+  assert.ok(
+    initialDirection.reduce(
+      (sum, value, index) => sum + value * flippedDirection[index],
+      0,
+    ) < 0,
+    'Flip cutting direction reverses the live preview arrow',
+  );
+  await page.getByTestId('hole-flip').uncheck();
   await page.screenshot({
     path: path.join(qa, 'hole-selection-contrast-light.png'),
   });

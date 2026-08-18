@@ -17,6 +17,7 @@ pub enum FeatureKind {
     Fillet,
     Chamfer,
     Hole,
+    ExternalThread,
     Shell,
     MoveCopy,
     Mirror,
@@ -97,6 +98,16 @@ impl FeatureTree {
         self.rollback_index = self.features.len();
     }
 
+    /// Insert a newly-authored feature at the build cursor. Features at and
+    /// after the cursor remain in history but stay rolled back, matching the
+    /// way a parametric CAD timeline branches when an operation is created in
+    /// the middle of the model.
+    pub fn insert_at_rollback(&mut self, feature: Feature) {
+        let index = self.rollback_index.min(self.features.len());
+        self.features.insert(index, feature);
+        self.rollback_index = index + 1;
+    }
+
     pub fn set_rollback_index(&mut self, index: usize) {
         self.rollback_index = index.min(self.features.len());
     }
@@ -164,6 +175,32 @@ mod tests {
         assert!(!tree.active(FeatureId(2)));
         tree.set_rollback_index(99);
         assert_eq!(tree.rollback_index, 2);
+    }
+
+    #[test]
+    fn inserting_at_rollback_keeps_later_features_rolled_back() {
+        let mut tree = FeatureTree::default();
+        tree.push(Feature::new(FeatureId(1), "Sketch1", FeatureKind::Sketch));
+        tree.push(Feature::new(FeatureId(2), "Extrude1", FeatureKind::Extrude));
+        tree.push(Feature::new(FeatureId(3), "Hole1", FeatureKind::Hole));
+        tree.set_rollback_index(1);
+
+        tree.insert_at_rollback(Feature::new(
+            FeatureId(4),
+            "SplitBody1",
+            FeatureKind::SplitBody,
+        ));
+
+        assert_eq!(
+            tree.features
+                .iter()
+                .map(|feature| feature.id)
+                .collect::<Vec<_>>(),
+            vec![FeatureId(1), FeatureId(4), FeatureId(2), FeatureId(3)],
+        );
+        assert_eq!(tree.rollback_index, 2);
+        assert!(tree.active(FeatureId(4)));
+        assert!(!tree.active(FeatureId(2)));
     }
 
     #[test]

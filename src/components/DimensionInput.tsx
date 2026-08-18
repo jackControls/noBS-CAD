@@ -30,8 +30,10 @@ export interface DimensionInputProps
 
 /**
  * Shared controlled field for CAD measurements, counts, coordinates, and
- * angles. Keyboard focus and mouse clicks select the complete value so the
- * next typed character replaces it.
+ * angles. Keyboard/programmatic focus selects the complete value so a newly
+ * opened command is ready for replacement. The first pointer activation also
+ * selects the complete value; a later single click places a precise native
+ * caret, while a double-click selects the complete value again.
  */
 export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
   function DimensionInput(
@@ -43,13 +45,16 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
       inputMode,
       onFocus,
       onClick,
+      onDoubleClick,
       onMouseDown,
+      onBlur,
       autoSelectKey,
       ...inputProps
     },
     ref,
   ) {
     const inputRef = useRef<HTMLInputElement>(null);
+    const pointerFocusRef = useRef(false);
     useImperativeHandle(ref, () => inputRef.current!, []);
 
     useEffect(() => {
@@ -68,29 +73,33 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
     }, [autoSelectKey]);
 
     const selectOnFocus = (event: FocusEvent<HTMLInputElement>) => {
-      event.currentTarget.select();
+      if (!pointerFocusRef.current) event.currentTarget.select();
       onFocus?.(event);
     };
     const selectOnClick = (event: MouseEvent<HTMLInputElement>) => {
-      const input = event.currentTarget;
-      input.select();
-      // Text inputs can restore the pointer caret as the click's default
-      // action completes. Reapply at the microtask boundary so formula and
-      // numeric modes share the same replacement behavior.
-      queueMicrotask(() => {
-        if (document.activeElement === input) input.select();
-      });
+      pointerFocusRef.current = false;
       onClick?.(event);
     };
-    const preserveTextSelection = (event: MouseEvent<HTMLInputElement>) => {
-      if (allowExpressions) {
-        // Prevent the text input's pointer-default caret placement. Numeric
-        // inputs keep their native spinner behavior and do not need this.
-        event.preventDefault();
-        event.currentTarget.focus();
-        event.currentTarget.select();
-      }
+    const selectOnDoubleClick = (event: MouseEvent<HTMLInputElement>) => {
+      event.preventDefault();
+      event.currentTarget.select();
+      onDoubleClick?.(event);
+    };
+    const handlePointerActivation = (event: MouseEvent<HTMLInputElement>) => {
+      const wasFocused = document.activeElement === event.currentTarget;
+      // A click inside an already active field should retain the browser's
+      // precise native caret placement. The first click that activates a
+      // field selects the whole value for immediate replacement.
+      pointerFocusRef.current = wasFocused;
       onMouseDown?.(event);
+      if (wasFocused || event.defaultPrevented) return;
+      event.preventDefault();
+      event.currentTarget.focus({ preventScroll: true });
+      event.currentTarget.select();
+    };
+    const resetPointerFocus = (event: FocusEvent<HTMLInputElement>) => {
+      pointerFocusRef.current = false;
+      onBlur?.(event);
     };
 
     return (
@@ -103,8 +112,10 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
         value={value}
         onChange={(event) => onValueChange(event.currentTarget.value)}
         onFocus={selectOnFocus}
-        onMouseDown={preserveTextSelection}
+        onBlur={resetPointerFocus}
+        onMouseDown={handlePointerActivation}
         onClick={selectOnClick}
+        onDoubleClick={selectOnDoubleClick}
         className={className ?? DEFAULT_CLASS}
       />
     );

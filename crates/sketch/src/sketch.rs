@@ -3,6 +3,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use nbcad_core::EdgeId;
+
 use crate::constraint::{Constraint, ConstraintId};
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
@@ -60,6 +62,15 @@ pub struct SketchSnapshot {
     next_constraint: u64,
 }
 
+impl SketchSnapshot {
+    /// Refresh saved support-edge midpoint targets without discarding an
+    /// active session's undo/redo history. Every historical state must use
+    /// the same current external reference or Undo could reintroduce drift.
+    pub(crate) fn refresh_reference_midpoints(&mut self, targets: &HashMap<EdgeId, Vec2>) {
+        refresh_reference_midpoint_constraints(&mut self.constraints, targets);
+    }
+}
+
 /// 2D sketch on a plane: entities plus constraints between them.
 ///
 /// Entities and constraints keep insertion order and are addressed by
@@ -86,6 +97,12 @@ pub struct Sketch {
 impl Sketch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Update persistent support-edge midpoint constraints from their stable
+    /// edge ids. Returns true when the live solver target changed.
+    pub(crate) fn refresh_reference_midpoints(&mut self, targets: &HashMap<EdgeId, Vec2>) -> bool {
+        refresh_reference_midpoint_constraints(&mut self.constraints, targets)
     }
 
     // --- Entities ---
@@ -402,6 +419,28 @@ impl Sketch {
             Err(SolveError::NumericalFailure)
         }
     }
+}
+
+fn refresh_reference_midpoint_constraints(
+    constraints: &mut [(ConstraintId, Constraint)],
+    targets: &HashMap<EdgeId, Vec2>,
+) -> bool {
+    let mut changed = false;
+    for (_, constraint) in constraints {
+        let Constraint::ReferenceMidpoint { edge, position, .. } = constraint else {
+            continue;
+        };
+        let Some(target) = targets.get(edge).copied() else {
+            // Preserve the last exact target when an edge is temporarily
+            // unavailable (for example while history is rolled back).
+            continue;
+        };
+        if *position != target {
+            *position = target;
+            changed = true;
+        }
+    }
+    changed
 }
 
 impl SketchSnapshot {
