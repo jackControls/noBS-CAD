@@ -566,7 +566,10 @@ fn dragging_a_chained_right_angle_follows_the_free_axis() {
     let (s2, e2) = line(&dragged.sketch, l2.entity_id);
     assert!((s1.y - e1.y).abs() < 1e-9, "H must hold");
     assert!((s2.x - e2.x).abs() < 1e-6, "right angle must stay vertical");
-    assert!(s1.x.abs() < 1e-6 && s1.y.abs() < 1e-6, "origin must stay fixed");
+    assert!(
+        s1.x.abs() < 1e-6 && s1.y.abs() < 1e-6,
+        "origin must stay fixed"
+    );
     assert!(
         close(e1, v(80.0, 0.0)),
         "corner should follow the free axis, got {e1:?}"
