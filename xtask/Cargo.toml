@@ -3,7 +3,7 @@ name = "xtask"
 version = "0.1.0"
 edition = "2021"
 description = "Repo maintenance tasks (MCP client install, etc.)"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 publish = false
 
 [dependencies]
