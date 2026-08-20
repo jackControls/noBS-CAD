@@ -346,13 +346,9 @@ See [CONTRIBUTING](CONTRIBUTING.md#license--borrow).
 ## License
 
 noBS CAD is free and open-source software licensed under the
-[GNU Library General Public License, version 2 or any later version](LICENSE)
-(`LGPL-2.0-or-later`).
+[GNU Lesser General Public License, version 2.1 or any later version](LICENSE)
+(`LGPL-2.1-or-later`).
 
-GitHub's license API does not list Library GPL v2 (`GET /licenses/lgpl-2.0`
-is 404), so `gh api repos/jackControls/noBS-CAD/license` stays `Other` /
-`NOASSERTION`. That is expected. We are **not** relicensing to LGPL-2.1 or
-LGPL-3.0 just to satisfy the detector.
-
-Third-party components retain their own licenses and notices; see
-[Third-party notices](THIRD_PARTY_NOTICES.md).
+We moved from Library GPL v2 (`LGPL-2.0-or-later`) so GitHub can detect the
+license (it has no `lgpl-2.0` in its catalog). Third-party components retain
+their own licenses and notices; see [Third-party notices](THIRD_PARTY_NOTICES.md).
