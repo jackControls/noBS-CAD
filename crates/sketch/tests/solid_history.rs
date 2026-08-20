@@ -354,4 +354,3 @@ fn new_sketch_is_inserted_at_the_build_cursor() {
         "later history must stay rolled back after a mid-timeline sketch"
     );
 }
-
