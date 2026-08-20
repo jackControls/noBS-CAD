@@ -3,7 +3,7 @@ name = "nbcad-assembly"
 version = "0.1.0"
 edition = "2021"
 description = "noBS CAD host-neutral assembly and joint intent model"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 [dependencies]
