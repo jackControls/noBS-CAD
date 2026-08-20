@@ -539,6 +539,40 @@ fn dragging_a_chain_joint_keeps_both_lines_connected() {
     let _ = d;
 }
 
+/// WASM smoke sequence: chained H then inferred right-angle. #47 prefers a
+/// relational Perpendicular over world-axis Vertical; the shared corner must
+/// still follow the remaining free axis. A raw mm2 Perp residual used to
+/// stall the drag so move_point reverted.
+#[test]
+fn dragging_a_chained_right_angle_follows_the_free_axis() {
+    let mut s = SketchSession::new("Sketch1", XY, XY.basis().unwrap(), true);
+    let l1 = s.add_line(v(0.0, 0.0), v(50.0, 1.0), false).unwrap();
+    let l2 = s.add_line(v(50.0, 0.0), v(51.0, 50.0), false).unwrap();
+    assert!(
+        l2.created_constraints.iter().any(|c| matches!(
+            c.constraint,
+            Constraint::Perpendicular { a, b }
+                if (a == l1.entity_id && b == l2.entity_id)
+                    || (a == l2.entity_id && b == l1.entity_id)
+        )),
+        "chained right angle should persist as Perpendicular: {:?}",
+        l2.created_constraints
+    );
+    let _l3 = s.add_line(v(50.0, 50.0), v(0.5, 0.4), false).unwrap();
+    let dragged = s
+        .move_point(move_req(l2.start_point_id, v(80.0, 0.0)))
+        .unwrap();
+    let (s1, e1) = line(&dragged.sketch, l1.entity_id);
+    let (s2, e2) = line(&dragged.sketch, l2.entity_id);
+    assert!((s1.y - e1.y).abs() < 1e-9, "H must hold");
+    assert!((s2.x - e2.x).abs() < 1e-6, "right angle must stay vertical");
+    assert!(s1.x.abs() < 1e-6 && s1.y.abs() < 1e-6, "origin must stay fixed");
+    assert!(
+        close(e1, v(80.0, 0.0)),
+        "corner should follow the free axis, got {e1:?}"
+    );
+}
+
 // --- New tool ops --------------------------------------------------------------
 
 #[test]

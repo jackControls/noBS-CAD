@@ -200,10 +200,25 @@ impl Eq {
             Eq::Dot { a, b } => {
                 let (ax, ay) = a.val(x);
                 let (bx, by) = b.val(x);
+                let la = (ax * ax + ay * ay).sqrt().max(1e-12);
+                let lb = (bx * bx + by * by).sqrt().max(1e-12);
+                let denom = la * lb;
+                let dot = ax * bx + ay * by;
                 let mut out = Vec::with_capacity(8);
-                a.push_deriv(bx, by, &mut out);
-                b.push_deriv(ax, ay, &mut out);
-                (ax * bx + ay * by, out)
+                // Normalize to cos(angle). Raw mm2 residuals dwarf pin/H/V
+                // (~30 mm) and stall a chained right-angle drag so
+                // move_point reverts. Cross already uses the same shape.
+                a.push_deriv(
+                    bx / denom - dot * ax / (la * la * la * lb),
+                    by / denom - dot * ay / (la * la * la * lb),
+                    &mut out,
+                );
+                b.push_deriv(
+                    ax / denom - dot * bx / (la * lb * lb * lb),
+                    ay / denom - dot * by / (la * lb * lb * lb),
+                    &mut out,
+                );
+                (dot / denom, out)
             }
             Eq::CrossPt {
                 d,
