@@ -4,7 +4,7 @@ default-run = "nbcad"
 version = "0.1.0"
 edition = "2021"
 description = "noBS CAD desktop shell (Tauri 2)"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 # The src-tauri crate is its own workspace so `cargo test` at the repo root
