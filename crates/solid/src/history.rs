@@ -5,6 +5,7 @@ use nbcad_core::{BodyId, EdgeId, FaceId, FeatureId, PlaneBasis};
 
 use crate::dto::*;
 use crate::stable;
+use crate::thread::{iso_metric_thread_envelope, ThreadFit};
 
 const MAX_EXTENT_MM: f64 = 1_000_000.0;
 const MAX_STEP_BASE64_LENGTH: usize = 128 * 1024 * 1024;
@@ -339,7 +340,8 @@ impl SolidDocument {
                 BodyFeatureDefinitionDto::ImportStep { body_id, .. } => {
                     std::slice::from_ref(body_id)
                 }
-                BodyFeatureDefinitionDto::Shell { .. }
+                BodyFeatureDefinitionDto::ExternalThread { .. }
+                | BodyFeatureDefinitionDto::Shell { .. }
                 | BodyFeatureDefinitionDto::Combine { .. } => &[],
             };
             for body_id in reserved {
@@ -1280,6 +1282,35 @@ impl SolidDocument {
         };
 
         Ok(match request {
+            BodyFeatureRequestDto::ExternalThread(request) => {
+                let (face_key, cylinder) = match existing {
+                    Some(BodyFeatureDefinitionDto::ExternalThread {
+                        body_id,
+                        face_id,
+                        face_key,
+                        cylinder,
+                        ..
+                    }) if *body_id == request.body_id && *face_id == request.face_id => {
+                        (face_key.clone(), *cylinder)
+                    }
+                    _ => resolve_cylindrical_face_source(
+                        &self.scene,
+                        request.body_id,
+                        request.face_id,
+                    )?,
+                };
+                validate_external_thread(&request.thread, cylinder.radius * 2.0)?;
+                BodyFeatureDefinitionDto::ExternalThread {
+                    feature_id,
+                    name,
+                    body_id: request.body_id,
+                    face_id: request.face_id,
+                    face_key,
+                    cylinder,
+                    thread: request.thread,
+                    flip: request.flip,
+                }
+            }
             BodyFeatureRequestDto::Shell(request) => {
                 validate_positive(request.thickness.abs(), "shell thickness")?;
                 if request.face_ids.is_empty() {
@@ -1985,6 +2016,13 @@ fn body_owners(
                     .or_insert(definition.feature_id);
             }
             FeatureDefinitionRef::BodyFeature(definition) => match definition {
+                BodyFeatureDefinitionDto::ExternalThread {
+                    feature_id,
+                    body_id,
+                    ..
+                } => {
+                    owners.entry(*body_id).or_insert(*feature_id);
+                }
                 BodyFeatureDefinitionDto::Shell {
                     feature_id,
                     body_id,
@@ -2700,6 +2738,26 @@ fn make_jobs(
                 }
             }
             FeatureDefinitionRef::BodyFeature(definition) => match definition {
+                BodyFeatureDefinitionDto::ExternalThread {
+                    feature_id,
+                    body_id,
+                    face_key,
+                    cylinder,
+                    thread,
+                    flip,
+                    ..
+                } => {
+                    ensure_refinement_target(&available_bodies, *body_id)?;
+                    validate_external_thread(thread, cylinder.radius * 2.0)?;
+                    jobs.push(KernelJobDto::ExternalThread(KernelExternalThreadJobDto {
+                        feature_id: *feature_id,
+                        target_body_id: *body_id,
+                        face_key: face_key.clone(),
+                        cylinder: *cylinder,
+                        thread: thread.clone(),
+                        flip: *flip,
+                    }));
+                }
                 BodyFeatureDefinitionDto::Shell {
                     feature_id,
                     body_id,
@@ -3835,6 +3893,32 @@ fn face_keys_for(
         .collect()
 }
 
+fn resolve_cylindrical_face_source(
+    scene: &SolidSceneDto,
+    body_id: BodyId,
+    face_id: FaceId,
+) -> Result<(String, CylindricalSurfaceDto), SolidError> {
+    let body = scene
+        .bodies
+        .iter()
+        .find(|body| body.id == body_id)
+        .ok_or(SolidError::MissingTarget(body_id))?;
+    let face = body
+        .faces
+        .iter()
+        .find(|face| face.id == face_id)
+        .ok_or(SolidError::MissingFace(face_id))?;
+    let cylinder = face.cylinder.ok_or_else(|| {
+        SolidError::InvalidExtent(
+            "External Thread requires an analytic cylindrical face".to_string(),
+        )
+    })?;
+    validate_vector(cylinder.axis, "thread cylinder axis")?;
+    validate_vector(cylinder.reference, "thread cylinder reference")?;
+    validate_positive(cylinder.radius, "thread cylinder radius")?;
+    Ok((face.key.clone(), cylinder))
+}
+
 fn resolve_planar_face_source(
     scene: &SolidSceneDto,
     source: PlanarFaceSourceDto,
@@ -3999,6 +4083,76 @@ fn validate_hole_thread(
     predrill_diameter: f64,
     hole_extent: HoleExtent,
 ) -> Result<(), SolidError> {
+    validate_thread_spec(thread)?;
+    if thread.nominal_diameter <= predrill_diameter + EPS {
+        return Err(SolidError::InvalidExtent(
+            "thread nominal diameter must exceed the predrill diameter".to_string(),
+        ));
+    }
+    let iso_limits = iso_metric_thread_envelope(thread, ThreadFit::Internal)
+        .map_err(SolidError::InvalidExtent)?;
+    if let Some(limits) = iso_limits {
+        if limits.modeled_major <= limits.modeled_pitch + EPS
+            || limits.modeled_pitch <= limits.modeled_minor + EPS
+        {
+            return Err(SolidError::InvalidExtent(
+                "ISO thread tolerance limits do not form a valid 60° internal profile".to_string(),
+            ));
+        }
+    }
+    if let Some(depth) = thread.depth {
+        if let HoleExtent::Distance { depth: hole_depth } = hole_extent {
+            if depth > hole_depth + EPS {
+                return Err(SolidError::InvalidExtent(
+                    "thread depth cannot exceed the cylindrical hole depth".to_string(),
+                ));
+            }
+        }
+    }
+    if thread.representation == HoleThreadRepresentation::Modeled && iso_limits.is_none() {
+        // Start with the P/8 basic root flat at the major diameter, then
+        // widen toward the actual predrill along 60° flanks. An excessively
+        // small custom predrill would make adjacent turns overlap.
+        let radial_depth = (thread.nominal_diameter - predrill_diameter) * 0.5;
+        let inner_half_width = thread.pitch * 0.0625 + radial_depth * (30.0_f64.to_radians().tan());
+        if inner_half_width >= thread.pitch * 0.499 {
+            return Err(SolidError::InvalidExtent(
+                "predrill diameter is too small for a non-overlapping 60° modeled thread"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_external_thread(
+    thread: &HoleThreadDto,
+    surface_diameter: f64,
+) -> Result<(), SolidError> {
+    validate_thread_spec(thread)?;
+    validate_positive(surface_diameter, "thread cylinder diameter")?;
+    if let Some(limits) = iso_metric_thread_envelope(thread, ThreadFit::External)
+        .map_err(SolidError::InvalidExtent)?
+    {
+        if limits.modeled_major <= limits.modeled_pitch + EPS
+            || limits.modeled_pitch <= limits.modeled_minor + EPS
+        {
+            return Err(SolidError::InvalidExtent(
+                "ISO thread tolerance limits do not form a valid 60° external profile".to_string(),
+            ));
+        }
+    }
+    let tolerance = (thread.nominal_diameter.abs() * 0.002).max(0.01);
+    if (thread.nominal_diameter - surface_diameter).abs() > tolerance {
+        return Err(SolidError::InvalidExtent(format!(
+            "selected cylinder diameter ({surface_diameter:.3} mm) must match the thread major diameter ({:.3} mm)",
+            thread.nominal_diameter
+        )));
+    }
+    Ok(())
+}
+
+fn validate_thread_spec(thread: &HoleThreadDto) -> Result<(), SolidError> {
     validate_positive(thread.nominal_diameter, "thread nominal diameter")?;
     validate_positive(thread.pitch, "thread pitch")?;
     if thread.designation.trim().is_empty() {
@@ -4009,11 +4163,6 @@ fn validate_hole_thread(
     if thread.class.trim().is_empty() {
         return Err(SolidError::InvalidExtent(
             "thread tolerance class cannot be empty".to_string(),
-        ));
-    }
-    if thread.nominal_diameter <= predrill_diameter + EPS {
-        return Err(SolidError::InvalidExtent(
-            "thread nominal diameter must exceed the predrill diameter".to_string(),
         ));
     }
     match (thread.standard, thread.series) {
@@ -4053,26 +4202,6 @@ fn validate_hole_thread(
     }
     if let Some(depth) = thread.depth {
         validate_positive(depth, "thread depth")?;
-        if let HoleExtent::Distance { depth: hole_depth } = hole_extent {
-            if depth > hole_depth + EPS {
-                return Err(SolidError::InvalidExtent(
-                    "thread depth cannot exceed the cylindrical hole depth".to_string(),
-                ));
-            }
-        }
-    }
-    if thread.representation == HoleThreadRepresentation::Modeled {
-        // Start with the P/8 basic root flat at the major diameter, then
-        // widen toward the actual predrill along 60° flanks. An excessively
-        // small custom predrill would make adjacent turns overlap.
-        let radial_depth = (thread.nominal_diameter - predrill_diameter) * 0.5;
-        let inner_half_width = thread.pitch * 0.0625 + radial_depth * (30.0_f64.to_radians().tan());
-        if inner_half_width >= thread.pitch * 0.499 {
-            return Err(SolidError::InvalidExtent(
-                "predrill diameter is too small for a non-overlapping 60° modeled thread"
-                    .to_string(),
-            ));
-        }
     }
     Ok(())
 }
@@ -4444,16 +4573,21 @@ mod tests {
                 if message.contains("cannot exceed")
         ));
 
-        let mut overlapping = metric.clone();
-        overlapping.pitch = 0.5;
+        // The tap drill is manufacturing guidance, not the finished 6H minor
+        // diameter. A smaller custom drill must not distort or reject the
+        // standards-derived finished B-rep.
+        validate_hole_thread(&metric, 4.0, HoleExtent::Distance { depth: 8.0 }).unwrap();
+
+        let mut unsupported_class = metric.clone();
+        unsupported_class.class = "5H".to_string();
         assert!(matches!(
             validate_hole_thread(
-                &overlapping,
-                4.0,
+                &unsupported_class,
+                5.0,
                 HoleExtent::Distance { depth: 8.0 }
             ),
             Err(SolidError::InvalidExtent(message))
-                if message.contains("non-overlapping")
+                if message.contains("supports tolerance class 6H")
         ));
 
         let mut unified = metric;
@@ -4810,6 +4944,21 @@ mod tests {
             }],
             edges: vec![],
         }
+    }
+
+    fn cylindrical_body(id: BodyId, radius: f64) -> KernelBodyDto {
+        let mut body = raw_body(id);
+        let face = &mut body.faces[0];
+        face.key = "cylinder:0".to_string();
+        face.plane = None;
+        face.signature = None;
+        face.cylinder = Some(CylindricalSurfaceDto {
+            origin: Point3Dto::from([0.0, 0.0, 0.0]),
+            axis: Point3Dto::from([0.0, 0.0, 1.0]),
+            reference: Point3Dto::from([1.0, 0.0, 0.0]),
+            radius,
+        });
+        body
     }
 
     fn extrude_job(job: &KernelJobDto) -> &KernelExtrudeJobDto {
@@ -5600,6 +5749,125 @@ mod tests {
                 ..
             })) if *target_body_id == split_bodies[0]
                 && !split_bodies.contains(new_body_id)
+        ));
+    }
+
+    #[test]
+    fn external_thread_requires_and_preserves_an_exact_cylindrical_face() {
+        let mut document = SolidDocument::new();
+        let base = document
+            .prepare_add(
+                FeatureId(2),
+                "Extrude1",
+                request(vec![0]),
+                &catalog(),
+                &active(&[1, 2]),
+            )
+            .unwrap();
+        let body_id = extrude_job(&base.jobs[0]).result_body_ids[0];
+        document
+            .commit(
+                base.transaction_id,
+                KernelSceneDto {
+                    bodies: vec![cylindrical_body(body_id, 3.0)],
+                    errors: Vec::new(),
+                },
+            )
+            .unwrap();
+        let face_id = document.scene().bodies[0].faces[0].id;
+        let mut thread = metric_thread();
+        thread.designation = "M6 x 1 - 6g".to_string();
+        thread.class = "6g".to_string();
+        thread.tap_drill_designation = None;
+        thread.representation = HoleThreadRepresentation::Simplified;
+
+        let plan = document
+            .prepare_add_body_feature(
+                FeatureId(3),
+                "ExternalThread1",
+                BodyFeatureRequestDto::ExternalThread(ExternalThreadRequest {
+                    body_id,
+                    face_id,
+                    thread: thread.clone(),
+                    flip: true,
+                }),
+                &catalog(),
+                &active(&[1, 2, 3]),
+            )
+            .unwrap();
+        assert!(matches!(
+            plan.jobs.last(),
+            Some(KernelJobDto::ExternalThread(KernelExternalThreadJobDto {
+                target_body_id,
+                face_key,
+                cylinder: CylindricalSurfaceDto { radius, .. },
+                thread: planned_thread,
+                flip: true,
+                ..
+            })) if *target_body_id == body_id
+                && face_key == "cylinder:0"
+                && (*radius - 3.0).abs() < EPS
+                && planned_thread == &thread
+        ));
+        let definition = document
+            .pending
+            .as_ref()
+            .unwrap()
+            .body_features
+            .last()
+            .unwrap();
+        assert!(matches!(
+            definition,
+            BodyFeatureDefinitionDto::ExternalThread {
+                face_key,
+                cylinder: CylindricalSurfaceDto { radius, .. },
+                thread: saved_thread,
+                flip: true,
+                ..
+            } if face_key == "cylinder:0"
+                && (*radius - 3.0).abs() < EPS
+                && saved_thread == &thread
+        ));
+        let serialized = serde_json::to_string(definition).unwrap();
+        let restored: BodyFeatureDefinitionDto = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(&restored, definition);
+
+        let mut planar_document = SolidDocument::new();
+        let planar_base = planar_document
+            .prepare_add(
+                FeatureId(2),
+                "Extrude1",
+                request(vec![0]),
+                &catalog(),
+                &active(&[1, 2]),
+            )
+            .unwrap();
+        let planar_body_id = extrude_job(&planar_base.jobs[0]).result_body_ids[0];
+        planar_document
+            .commit(
+                planar_base.transaction_id,
+                KernelSceneDto {
+                    bodies: vec![raw_body(planar_body_id)],
+                    errors: Vec::new(),
+                },
+            )
+            .unwrap();
+        let planar_face_id = planar_document.scene().bodies[0].faces[0].id;
+        assert!(matches!(
+            planar_document.prepare_add_body_feature(
+                FeatureId(3),
+                "ExternalThread1",
+                BodyFeatureRequestDto::ExternalThread(ExternalThreadRequest {
+                    body_id: planar_body_id,
+                    face_id: planar_face_id,
+                    thread,
+                    flip: false,
+                }),
+                &catalog(),
+                &active(&[1, 2, 3]),
+            ),
+            Err(SolidError::InvalidExtent(message))
+                if message.contains("analytic cylindrical face")
         ));
     }
 }

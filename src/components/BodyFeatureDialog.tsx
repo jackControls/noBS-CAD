@@ -17,10 +17,17 @@ import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
   AssemblyTransformDto,
+  BodyDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   CombineOperation,
   ComponentOccurrenceDto,
+  CylindricalSurfaceDto,
+  HoleThreadDto,
+  HoleThreadHand,
+  HoleThreadRepresentation,
+  HoleThreadSeries,
+  HoleThreadStandard,
   PlaneRef,
   Point3Dto,
 } from '../engine/types';
@@ -29,7 +36,14 @@ import {
   type BodyFeatureKind,
   type MoveCopyCommandPreview,
   type MoveCopyGizmoInteraction,
+  type SolidCommandPreview,
 } from '../store/appStore';
+import {
+  THREAD_PRESETS,
+  defaultThreadPreset,
+  presetsForSeries,
+  threadDtoFromPreset,
+} from '../lib/threadStandards';
 import { DimensionInput } from './DimensionInput';
 import { MoveCopyManipulator } from './viewport/MoveCopyManipulator';
 
@@ -77,6 +91,74 @@ type MoveMode = 'free' | 'translate' | 'rotate' | 'point_to_point';
 
 function finiteVector(value: Point3Dto): boolean {
   return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
+}
+
+function faceAxialBounds(
+  body: BodyDto | undefined,
+  faceId: number,
+  cylinder: CylindricalSurfaceDto | null | undefined,
+): { min: number; max: number; length: number } | null {
+  const face = body?.faces.find((candidate) => candidate.id === faceId);
+  if (!body || !face || !cylinder) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  const end = Math.min(
+    body.mesh.indices.length,
+    face.first_index + face.index_count,
+  );
+  for (let index = face.first_index; index < end; index += 1) {
+    const vertex = body.mesh.indices[index] * 3;
+    const x = body.mesh.positions[vertex] - cylinder.origin.x;
+    const y = body.mesh.positions[vertex + 1] - cylinder.origin.y;
+    const z = body.mesh.positions[vertex + 2] - cylinder.origin.z;
+    const axial = x * cylinder.axis.x + y * cylinder.axis.y + z * cylinder.axis.z;
+    min = Math.min(min, axial);
+    max = Math.max(max, axial);
+  }
+  return Number.isFinite(min) && max > min
+    ? { min, max, length: max - min }
+    : null;
+}
+
+/** Positive means the face normals point away from the analytic cylinder
+ * axis, so this is an exterior shaft rather than the wall of a hole. */
+function cylindricalFaceOrientation(
+  body: BodyDto | undefined,
+  faceId: number,
+  cylinder: CylindricalSurfaceDto | null | undefined,
+): number | null {
+  const face = body?.faces.find((candidate) => candidate.id === faceId);
+  if (!body || !face || !cylinder) return null;
+  let score = 0;
+  let samples = 0;
+  const end = Math.min(
+    body.mesh.indices.length,
+    face.first_index + face.index_count,
+  );
+  for (let index = face.first_index; index < end; index += 1) {
+    const vertex = body.mesh.indices[index] * 3;
+    const px = body.mesh.positions[vertex] - cylinder.origin.x;
+    const py = body.mesh.positions[vertex + 1] - cylinder.origin.y;
+    const pz = body.mesh.positions[vertex + 2] - cylinder.origin.z;
+    const axial = px * cylinder.axis.x + py * cylinder.axis.y + pz * cylinder.axis.z;
+    const rx = px - axial * cylinder.axis.x;
+    const ry = py - axial * cylinder.axis.y;
+    const rz = pz - axial * cylinder.axis.z;
+    const radialLength = Math.hypot(rx, ry, rz);
+    const normalLength = Math.hypot(
+      body.mesh.normals[vertex],
+      body.mesh.normals[vertex + 1],
+      body.mesh.normals[vertex + 2],
+    );
+    if (radialLength <= 1e-9 || normalLength <= 1e-9) continue;
+    score += (
+      rx * body.mesh.normals[vertex]
+      + ry * body.mesh.normals[vertex + 1]
+      + rz * body.mesh.normals[vertex + 2]
+    ) / (radialLength * normalLength);
+    samples += 1;
+  }
+  return samples > 0 ? score / samples : null;
 }
 
 function selectionBoundsCenter(
@@ -379,10 +461,10 @@ function VectorFields({
   );
 }
 
-function MoveCopyPreviewPublisher({
+function SolidPreviewPublisher({
   preview,
 }: {
-  preview: MoveCopyCommandPreview | null;
+  preview: SolidCommandPreview | null;
 }) {
   const setPreview = useAppStore((state) => state.setSolidCommandPreview);
   const latestPreview = useRef(preview);
@@ -407,6 +489,7 @@ function MoveCopyPreviewPublisher({
 
 const TITLES: Record<BodyFeatureKind, string> = {
   move_copy: 'Move/Copy',
+  external_thread: 'External Thread',
   shell: 'Shell',
   mirror: 'Mirror',
   rectangular_pattern: 'Rectangular Pattern',
@@ -417,6 +500,7 @@ const TITLES: Record<BodyFeatureKind, string> = {
 
 const ICONS = {
   move_copy: Move3d,
+  external_thread: RotateCw,
   shell: Shell,
   mirror: Copy,
   rectangular_pattern: Boxes,
@@ -449,6 +533,26 @@ export function BodyFeatureDialog() {
   const [bodyId, setBodyId] = useState(0);
   const [bodyIds, setBodyIds] = useState<number[]>([]);
   const [faceIds, setFaceIds] = useState<number[]>([]);
+  const initialThreadPreset = defaultThreadPreset();
+  const [threadStandard, setThreadStandard] =
+    useState<HoleThreadStandard>(initialThreadPreset.standard);
+  const [threadSeries, setThreadSeries] =
+    useState<HoleThreadSeries>(initialThreadPreset.series);
+  const [threadPresetId, setThreadPresetId] = useState(initialThreadPreset.id);
+  const [threadNominalDiameter, setThreadNominalDiameter] = useState(
+    String(initialThreadPreset.nominalDiameterMm),
+  );
+  const [threadPitch, setThreadPitch] = useState(String(initialThreadPreset.pitchMm));
+  const [threadClass, setThreadClass] = useState('6g');
+  const [threadDesignation, setThreadDesignation] = useState(
+    initialThreadPreset.designation.replace(/6H$/, '6g'),
+  );
+  const [threadHand, setThreadHand] = useState<HoleThreadHand>('right');
+  const [threadRepresentation, setThreadRepresentation] =
+    useState<HoleThreadRepresentation>('simplified');
+  const [threadFullLength, setThreadFullLength] = useState(true);
+  const [threadDepth, setThreadDepth] = useState('10');
+  const [threadFlip, setThreadFlip] = useState(false);
   const [thickness, setThickness] = useState('2');
   const [inward, setInward] = useState(true);
   const [plane, setPlane] = useState('origin:yz');
@@ -497,6 +601,7 @@ export function BodyFeatureDialog() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectionDialogKeyRef = useRef<string | null>(null);
+  const threadFaceKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!dialog) selectionDialogKeyRef.current = null;
@@ -611,7 +716,9 @@ export function BodyFeatureDialog() {
         setToolBodyIds(defaultToolBodyIds);
         setFaceIds(
           directlySelectedFaces.length > 0
-            ? directlySelectedFaces
+            ? dialog.kind === 'external_thread'
+              ? directlySelectedFaces.slice(-1)
+              : directlySelectedFaces
             : selectedFace !== null &&
                 bodies
                   .find((body) => body.id === fallbackBody)
@@ -675,6 +782,8 @@ export function BodyFeatureDialog() {
               : selectionBoundsCenter(bodies, centerIds);
             setMovePivot([String(center.x), String(center.y), String(center.z)]);
             syncBodies(occurrence ? centerIds : directlySelectedBodies);
+          } else if (dialog.kind === 'external_thread') {
+            syncFaces(fallbackBody, directlySelectedFaces.slice(-1));
           } else if (dialog.kind === 'shell') {
             syncFaces(fallbackBody, directlySelectedFaces);
           } else if (dialog.kind === 'combine') {
@@ -690,7 +799,30 @@ export function BodyFeatureDialog() {
           return;
         }
         if (!initializeSelection) return;
-        if (edit.type === 'move_copy') {
+        if (edit.type === 'external_thread') {
+          const preset = THREAD_PRESETS.find((candidate) =>
+            candidate.standard === edit.thread.standard
+            && candidate.series === edit.thread.series
+            && Math.abs(candidate.nominalDiameterMm - edit.thread.nominal_diameter) <= 1e-7
+            && Math.abs(candidate.pitchMm - edit.thread.pitch) <= 1e-7,
+          );
+          setBodyId(edit.body_id);
+          setFaceIds([edit.face_id]);
+          setThreadStandard(edit.thread.standard);
+          setThreadSeries(edit.thread.series);
+          setThreadPresetId(preset?.id ?? 'custom');
+          setThreadNominalDiameter(String(edit.thread.nominal_diameter));
+          setThreadPitch(String(edit.thread.pitch));
+          setThreadClass(edit.thread.class);
+          setThreadDesignation(edit.thread.designation);
+          setThreadHand(edit.thread.hand);
+          setThreadRepresentation(edit.thread.representation);
+          setThreadFullLength(edit.thread.depth === null);
+          setThreadDepth(String(edit.thread.depth ?? 10));
+          setThreadFlip(edit.flip);
+          threadFaceKeyRef.current = `${edit.body_id}:${edit.face_id}`;
+          syncFaces(edit.body_id, [edit.face_id]);
+        } else if (edit.type === 'move_copy') {
           setMoveObjectType('bodies');
           setBodyIds(edit.body_ids);
           syncBodies(edit.body_ids);
@@ -788,11 +920,145 @@ export function BodyFeatureDialog() {
     selectedOccurrenceId,
   ]);
 
+  useEffect(() => {
+    if (dialog?.kind !== 'external_thread') {
+      threadFaceKeyRef.current = null;
+      return;
+    }
+    const faceId = faceIds[0];
+    const targetBody = bodies.find((candidate) => candidate.id === bodyId);
+    const face = targetBody?.faces.find((candidate) => candidate.id === faceId);
+    if (!face?.cylinder) return;
+    const key = `${bodyId}:${faceId}`;
+    if (threadFaceKeyRef.current === key) return;
+    threadFaceKeyRef.current = key;
+
+    const diameter = face.cylinder.radius * 2;
+    const tolerance = Math.max(0.01, diameter * 0.002);
+    const matches = THREAD_PRESETS.filter(
+      (preset) => Math.abs(preset.nominalDiameterMm - diameter) <= tolerance,
+    );
+    const preset = matches.find((candidate) => candidate.series === threadSeries)
+      ?? matches.find((candidate) => candidate.series === 'metric_coarse')
+      ?? matches[0];
+    if (preset) {
+      const thread = threadDtoFromPreset(
+        preset,
+        { hand: threadHand, depth: null, representation: threadRepresentation },
+        'external',
+      );
+      setThreadStandard(preset.standard);
+      setThreadSeries(preset.series);
+      setThreadPresetId(preset.id);
+      setThreadNominalDiameter(String(preset.nominalDiameterMm));
+      setThreadPitch(String(preset.pitchMm));
+      setThreadClass(thread.class);
+      setThreadDesignation(thread.designation);
+    } else {
+      const pitch = Number(threadPitch) > 0 ? Number(threadPitch) : 1;
+      setThreadPresetId('custom');
+      setThreadNominalDiameter(String(Number(diameter.toFixed(6))));
+      setThreadClass(threadStandard === 'iso_metric' ? '6g' : '2A');
+      setThreadDesignation(
+        threadStandard === 'iso_metric'
+          ? `Custom M${Number(diameter.toFixed(6))} x ${pitch} - 6g`
+          : `Custom Ø${Number(diameter.toFixed(6))} mm x ${pitch} mm - 2A`,
+      );
+    }
+    const bounds = faceAxialBounds(targetBody, faceId, face.cylinder);
+    if (bounds) setThreadDepth(String(Number(bounds.length.toFixed(6))));
+  }, [
+    bodies,
+    bodyId,
+    dialog?.kind,
+    faceIds,
+    threadHand,
+    threadPitch,
+    threadRepresentation,
+    threadSeries,
+    threadStandard,
+  ]);
+
   if (!dialog) return null;
   const edit = definitions.find(
     (definition) => definition.feature_id === dialog.featureId,
   );
   const body = bodies.find((candidate) => candidate.id === bodyId);
+  const threadFace = body?.faces.find((candidate) => candidate.id === faceIds[0]);
+  const threadCylinder = threadFace?.cylinder ?? null;
+  const threadAxialBounds = faceAxialBounds(body, faceIds[0], threadCylinder);
+  const threadFaceOrientation = cylindricalFaceOrientation(
+    body,
+    faceIds[0],
+    threadCylinder,
+  );
+  const threadPresetOptions = presetsForSeries(threadSeries);
+  const selectedThreadPreset = threadPresetId === 'custom'
+    ? undefined
+    : THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId);
+  const threadNominalValue = Number(threadNominalDiameter);
+  const threadPitchValue = Number(threadPitch);
+  const threadDepthValue = Number(threadDepth);
+  const threadValue: HoleThreadDto = selectedThreadPreset
+    ? threadDtoFromPreset(
+        selectedThreadPreset,
+        {
+          hand: threadHand,
+          depth: threadFullLength ? null : threadDepthValue,
+          representation: threadRepresentation,
+        },
+        'external',
+      )
+    : {
+        standard: threadStandard,
+        series: threadSeries,
+        designation: threadDesignation.trim(),
+        class: threadClass.trim(),
+        nominal_diameter: threadNominalValue,
+        pitch: threadPitchValue,
+        threads_per_inch: threadStandard === 'unified_inch' && threadPitchValue > 0
+          ? 25.4 / threadPitchValue
+          : null,
+        hand: threadHand,
+        depth: threadFullLength ? null : threadDepthValue,
+        representation: threadRepresentation,
+        tap_drill_designation: null,
+      };
+  const threadDiameterTolerance = Number.isFinite(threadNominalValue)
+    ? Math.max(0.01, threadNominalValue * 0.002)
+    : 0.01;
+  const threadDiameterMatches = threadCylinder !== null
+    && Number.isFinite(threadNominalValue)
+    && Math.abs(threadNominalValue - threadCylinder.radius * 2) <= threadDiameterTolerance;
+  const threadSeriesMatchesStandard = threadStandard === 'iso_metric'
+    ? threadSeries === 'metric_coarse' || threadSeries === 'metric_fine'
+    : threadSeries === 'unc' || threadSeries === 'unf';
+  const threadValuesValid = bodyId > 0
+    && faceIds.length === 1
+    && threadCylinder !== null
+    && (threadFaceOrientation === null || threadFaceOrientation > 0.1)
+    && threadDiameterMatches
+    && threadSeriesMatchesStandard
+    && Number.isFinite(threadPitchValue)
+    && threadPitchValue > 0
+    && threadValue.designation.length > 0
+    && threadValue.class.length > 0
+    && (threadFullLength
+      || (Number.isFinite(threadDepthValue)
+        && threadDepthValue > 0
+        && (threadAxialBounds === null
+          || threadDepthValue <= threadAxialBounds.length + 1e-7)));
+  const externalThreadPreview: SolidCommandPreview | null =
+    dialog.kind === 'external_thread' && threadValuesValid && threadCylinder
+      ? {
+          kind: 'external_thread',
+          bodyId,
+          faceId: faceIds[0],
+          cylinder: threadCylinder,
+          thread: threadValue,
+          flip: threadFlip,
+        }
+      : null;
   const directionValue = vector(...direction);
   const secondDirectionValue = vector(...secondDirection);
   const axisOriginValue = vector(...axisOrigin);
@@ -844,6 +1110,8 @@ export function BodyFeatureDialog() {
     !error &&
     (kind === 'move_copy'
       ? moveTargetValid && moveValuesValid
+      : kind === 'external_thread'
+        ? threadValuesValid
       : kind === 'shell'
       ? bodyId > 0 &&
         faceIds.length > 0 &&
@@ -905,6 +1173,68 @@ export function BodyFeatureDialog() {
     setBodyId(id);
     setFaceIds([]);
     replaceSelectedBodies([id]);
+  };
+  const applyThreadPreset = (presetId: string) => {
+    if (presetId === 'custom') {
+      setThreadPresetId('custom');
+      return;
+    }
+    const preset = THREAD_PRESETS.find((candidate) => candidate.id === presetId);
+    if (!preset) return;
+    const next = threadDtoFromPreset(
+      preset,
+      {
+        hand: threadHand,
+        depth: threadFullLength ? null : threadDepthValue,
+        representation: threadRepresentation,
+      },
+      'external',
+    );
+    setThreadStandard(preset.standard);
+    setThreadSeries(preset.series);
+    setThreadPresetId(preset.id);
+    setThreadNominalDiameter(String(preset.nominalDiameterMm));
+    setThreadPitch(String(preset.pitchMm));
+    setThreadClass(next.class);
+    setThreadDesignation(next.designation);
+  };
+  const chooseThreadBody = (id: number) => {
+    threadFaceKeyRef.current = null;
+    setBodyId(id);
+    setFaceIds([]);
+    replaceSelectedBodies([id]);
+  };
+  const chooseThreadFace = (id: number) => {
+    threadFaceKeyRef.current = null;
+    setFaceIds([id]);
+    replaceSelectedFaces(bodyId, [id]);
+  };
+  const chooseThreadStandard = (standard: HoleThreadStandard) => {
+    const series: HoleThreadSeries = standard === 'iso_metric' ? 'metric_coarse' : 'unc';
+    setThreadStandard(standard);
+    setThreadSeries(series);
+    const diameter = threadCylinder?.radius ? threadCylinder.radius * 2 : threadNominalValue;
+    const tolerance = Math.max(0.01, Math.abs(diameter) * 0.002);
+    const preset = THREAD_PRESETS.find(
+      (candidate) => candidate.series === series
+        && Math.abs(candidate.nominalDiameterMm - diameter) <= tolerance,
+    );
+    if (preset) applyThreadPreset(preset.id);
+    else {
+      setThreadPresetId('custom');
+      setThreadClass(standard === 'iso_metric' ? '6g' : '2A');
+    }
+  };
+  const chooseThreadSeries = (series: HoleThreadSeries) => {
+    setThreadSeries(series);
+    const diameter = threadCylinder?.radius ? threadCylinder.radius * 2 : threadNominalValue;
+    const tolerance = Math.max(0.01, Math.abs(diameter) * 0.002);
+    const preset = THREAD_PRESETS.find(
+      (candidate) => candidate.series === series
+        && Math.abs(candidate.nominalDiameterMm - diameter) <= tolerance,
+    );
+    if (preset) applyThreadPreset(preset.id);
+    else setThreadPresetId('custom');
   };
   const chooseTarget = (id: number) => {
     const nextTools = toolBodyIds.filter((candidate) => candidate !== id);
@@ -1093,6 +1423,16 @@ export function BodyFeatureDialog() {
           copy: moveCopy,
         },
       };
+    } else if (kind === 'external_thread') {
+      request = {
+        type: 'external_thread',
+        request: {
+          body_id: bodyId,
+          face_id: faceIds[0],
+          thread: threadValue,
+          flip: threadFlip,
+        },
+      };
     } else if (kind === 'shell') {
       request = {
         type: 'shell',
@@ -1205,7 +1545,10 @@ export function BodyFeatureDialog() {
       className="pointer-events-none fixed inset-0 z-[70] bg-black/15"
     >
       {kind === 'move_copy' && (
-        <MoveCopyPreviewPublisher preview={movePreview} />
+        <SolidPreviewPublisher preview={movePreview} />
+      )}
+      {kind === 'external_thread' && (
+        <SolidPreviewPublisher preview={externalThreadPreview} />
       )}
       {kind === 'move_copy' && moveMode === 'free' && moveValuesValid && (
         <MoveCopyManipulator
@@ -1405,6 +1748,256 @@ export function BodyFeatureDialog() {
                   </span>
                 </span>
               </label>
+            </>
+          ) : kind === 'external_thread' ? (
+            <>
+              <label>
+                <span className={LABEL}>Body</span>
+                <select
+                  data-testid="external-thread-body"
+                  value={bodyId}
+                  onChange={(event) => chooseThreadBody(Number(event.target.value))}
+                  className={INPUT}
+                >
+                  {bodies.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <fieldset>
+                <legend className={LABEL}>Cylindrical surface</legend>
+                <div className="rounded border border-accent/50 bg-accent/10 p-2 text-[10px] leading-4 text-ink">
+                  Select one analytic exterior cylinder in the viewport or list. The
+                  exact OCCT face remains associated with this feature.
+                </div>
+                <div
+                  data-testid="external-thread-faces"
+                  className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2"
+                >
+                  {body?.faces.some((face) => face.cylinder) ? body.faces.map((face, index) => {
+                    if (!face.cylinder) return null;
+                    const orientation = cylindricalFaceOrientation(body, face.id, face.cylinder);
+                    return (
+                      <label
+                        key={face.id}
+                        className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-ink hover:bg-edge"
+                      >
+                        <input
+                          type="radio"
+                          name="external-thread-face"
+                          checked={faceIds[0] === face.id}
+                          onChange={() => chooseThreadFace(face.id)}
+                          className="accent-accent"
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          Face {index + 1} · Ø{(face.cylinder.radius * 2).toFixed(3)} mm
+                        </span>
+                        <span className={`text-[9px] ${orientation !== null && orientation <= 0.1 ? 'text-warn' : 'text-mute'}`}>
+                          {orientation !== null && orientation <= 0.1 ? 'interior' : 'exterior'}
+                        </span>
+                      </label>
+                    );
+                  }) : (
+                    <p className="px-1 py-2 text-[10px] text-mute">
+                      This body has no analytic cylindrical surfaces.
+                    </p>
+                  )}
+                </div>
+              </fieldset>
+
+              {threadCylinder && (
+                <div className="rounded border border-edge bg-header p-2 text-[10px] leading-4 text-mute">
+                  Selected shaft Ø{(threadCylinder.radius * 2).toFixed(3)} mm
+                  {threadAxialBounds ? ` · ${threadAxialBounds.length.toFixed(3)} mm long` : ''}
+                </div>
+              )}
+              {threadFaceOrientation !== null && threadFaceOrientation <= 0.1 && (
+                <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
+                  This is an internal cylinder wall. External threads require an
+                  outward-facing shaft surface; use Hole for internal threads.
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <span className={LABEL}>Standard</span>
+                  <select
+                    data-testid="external-thread-standard"
+                    value={threadStandard}
+                    onChange={(event) => chooseThreadStandard(event.target.value as HoleThreadStandard)}
+                    className={INPUT}
+                  >
+                    <option value="iso_metric">ISO metric</option>
+                    <option value="unified_inch">Unified inch</option>
+                  </select>
+                </label>
+                <label>
+                  <span className={LABEL}>Series</span>
+                  <select
+                    data-testid="external-thread-series"
+                    value={threadSeries}
+                    onChange={(event) => chooseThreadSeries(event.target.value as HoleThreadSeries)}
+                    className={INPUT}
+                  >
+                    {threadStandard === 'iso_metric' ? (
+                      <>
+                        <option value="metric_coarse">Metric coarse</option>
+                        <option value="metric_fine">Metric fine</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="unc">UNC</option>
+                        <option value="unf">UNF</option>
+                      </>
+                    )}
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                <span className={LABEL}>Size and pitch</span>
+                <select
+                  data-testid="external-thread-preset"
+                  value={threadPresetId}
+                  onChange={(event) => applyThreadPreset(event.target.value)}
+                  className={INPUT}
+                >
+                  {threadPresetOptions.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {threadDtoFromPreset(
+                        preset,
+                        { hand: threadHand, depth: null, representation: threadRepresentation },
+                        'external',
+                      ).designation}
+                    </option>
+                  ))}
+                  <option value="custom">Custom shaft diameter and pitch…</option>
+                </select>
+              </label>
+
+              {threadPresetId === 'custom' ? (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label>
+                      <span className={LABEL}>Major diameter (mm)</span>
+                      <DimensionInput
+                        autoSelectKey={faceIds.length === 1 ? `${bodyId}:${faceIds[0]}` : null}
+                        min="0.000001"
+                        step="any"
+                        value={threadNominalDiameter}
+                        onValueChange={setThreadNominalDiameter}
+                      />
+                    </label>
+                    <label>
+                      <span className={LABEL}>Pitch (mm)</span>
+                      <DimensionInput
+                        min="0.000001"
+                        step="any"
+                        value={threadPitch}
+                        onValueChange={setThreadPitch}
+                      />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label>
+                      <span className={LABEL}>Tolerance class</span>
+                      <input
+                        value={threadClass}
+                        onChange={(event) => setThreadClass(event.target.value)}
+                        className={INPUT}
+                      />
+                    </label>
+                    <label>
+                      <span className={LABEL}>Designation</span>
+                      <input
+                        value={threadDesignation}
+                        onChange={(event) => setThreadDesignation(event.target.value)}
+                        className={INPUT}
+                      />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded border border-edge bg-header p-2 text-[10px] leading-4 text-mute">
+                  {threadValue.designation} · class {threadValue.class} · major Ø
+                  {threadValue.nominal_diameter.toFixed(3)} mm · pitch {threadValue.pitch.toFixed(3)} mm
+                </div>
+              )}
+
+              {!threadDiameterMatches && threadCylinder && (
+                <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
+                  Thread major diameter must match the selected shaft Ø
+                  {(threadCylinder.radius * 2).toFixed(3)} mm. Choose a matching
+                  standard size or enter that diameter as a custom thread.
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <span className={LABEL}>Hand</span>
+                  <select
+                    value={threadHand}
+                    onChange={(event) => setThreadHand(event.target.value as HoleThreadHand)}
+                    className={INPUT}
+                  >
+                    <option value="right">Right-hand</option>
+                    <option value="left">Left-hand</option>
+                  </select>
+                </label>
+                <label>
+                  <span className={LABEL}>Representation</span>
+                  <select
+                    data-testid="external-thread-representation"
+                    value={threadRepresentation}
+                    onChange={(event) => setThreadRepresentation(event.target.value as HoleThreadRepresentation)}
+                    className={INPUT}
+                  >
+                    <option value="simplified">Simplified / cosmetic</option>
+                    <option value="modeled">Modeled geometry</option>
+                  </select>
+                </label>
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={threadFullLength}
+                  onChange={(event) => setThreadFullLength(event.target.checked)}
+                  className="accent-accent"
+                />
+                Thread the full cylindrical surface
+              </label>
+              {!threadFullLength && (
+                <label>
+                  <span className={LABEL}>Thread length (mm)</span>
+                  <DimensionInput
+                    min="0.000001"
+                    max={threadAxialBounds ? String(threadAxialBounds.length) : undefined}
+                    step="any"
+                    value={threadDepth}
+                    onValueChange={setThreadDepth}
+                  />
+                </label>
+              )}
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={threadFlip}
+                  onChange={(event) => setThreadFlip(event.target.checked)}
+                  className="accent-accent"
+                />
+                Flip thread start to the opposite end
+              </label>
+              {threadRepresentation === 'modeled' && (
+                <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
+                  Modeled threads cut the exact helical groove and increase recompute,
+                  display, and export cost. Simplified threads retain manufacturing
+                  metadata with a lightweight viewport indication.
+                </p>
+              )}
             </>
           ) : kind === 'shell' ? (
             <>

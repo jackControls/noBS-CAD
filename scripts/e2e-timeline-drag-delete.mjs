@@ -2,6 +2,8 @@
  * Build-history regression:
  *   reorder two independent sketches and reject a dependency inversion
  *   sketch → extrude → chamfer
+ *   select one or multiple feature cards without moving the build cursor
+ *   delete a Cmd/Ctrl/Shift history selection as one action
  *   drag the build cursor backward/forward
  *   delete one refinement from its context menu
  *   delete a source sketch and retain a broken downstream feature
@@ -158,6 +160,32 @@ async function deleteFeature(name) {
         .document.features.some((feature) => feature.name === featureName)
       && !window.__appStore.getState().solidBusy,
     name,
+    { timeout: 60_000 },
+  );
+}
+
+async function deleteSelectedFeatures(contextName, selectedNames) {
+  const card = page
+    .locator('[data-feature-id]')
+    .filter({ hasText: contextName })
+    .first();
+  await card.click({ button: 'right' });
+  await page.locator('[data-context-menu-item="delete-feature"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await dialog.waitFor({ state: 'visible' });
+  const message = await dialog.innerText();
+  assert.match(message, new RegExp(`Delete ${selectedNames.length} selected features`));
+  for (const name of selectedNames) assert.match(message, new RegExp(name));
+  await page.getByTestId('delete-feature-confirm').click();
+  await page.waitForFunction(
+    (featureNames) => {
+      const existing = window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name);
+      return featureNames.every((name) => !existing.includes(name))
+        && !window.__appStore.getState().solidBusy;
+    },
+    selectedNames,
     { timeout: 60_000 },
   );
 }
@@ -322,6 +350,51 @@ try {
   );
 
   // Rebuild the original dependency chain for the cursor/reorder coverage.
+  await buildHistory();
+
+  console.log('1e. Timeline card selection does not move the build cursor');
+  const sketchCard = page.locator('[data-feature-id]').filter({ hasText: 'Sketch1' }).first();
+  const extrudeCard = page.locator('[data-feature-id]').filter({ hasText: 'Extrude1' }).first();
+  const chamferCard = page.locator('[data-feature-id]').filter({ hasText: 'Chamfer1' }).first();
+  const cursorBeforeSelection = await page
+    .getByTestId('timeline-history-cursor')
+    .getAttribute('aria-valuenow');
+  await sketchCard.click();
+  await page.waitForTimeout(300);
+  assert.equal(await sketchCard.getAttribute('aria-pressed'), 'true');
+  assert.equal(await extrudeCard.getAttribute('aria-pressed'), 'false');
+  assert.equal(
+    await page.getByTestId('timeline-history-cursor').getAttribute('aria-valuenow'),
+    cursorBeforeSelection,
+    'an ordinary feature click must not recompute or move the marker',
+  );
+
+  const additiveModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await extrudeCard.click({ modifiers: [additiveModifier] });
+  assert.equal(await sketchCard.getAttribute('aria-pressed'), 'true');
+  assert.equal(await extrudeCard.getAttribute('aria-pressed'), 'true');
+  assert.equal(await chamferCard.getAttribute('aria-pressed'), 'false');
+
+  await chamferCard.click({ modifiers: ['Shift'] });
+  assert.equal(await sketchCard.getAttribute('aria-pressed'), 'false');
+  assert.equal(await extrudeCard.getAttribute('aria-pressed'), 'true');
+  assert.equal(await chamferCard.getAttribute('aria-pressed'), 'true');
+  assert.equal(
+    await page.getByTestId('timeline-history-cursor').getAttribute('aria-valuenow'),
+    cursorBeforeSelection,
+    'modifier selection must leave the marker unchanged',
+  );
+
+  console.log('1f. Right-click deletes the complete modifier selection');
+  await deleteSelectedFeatures('Chamfer1', ['Extrude1', 'Chamfer1']);
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.__appStore.getState().document.features.map((feature) => feature.name),
+    ),
+    ['Sketch1'],
+  );
+
+  // Restore the dependency chain for reorder, cursor, and single-delete coverage.
   await buildHistory();
 
   console.log('2. Reject moving Extrude1 before its source Sketch1');

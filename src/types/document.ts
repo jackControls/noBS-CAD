@@ -49,6 +49,7 @@ export type FeatureKind =
   | 'fillet'
   | 'chamfer'
   | 'hole'
+  | 'external_thread'
   | 'move_copy'
   | 'shell'
   | 'mirror'

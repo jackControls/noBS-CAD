@@ -136,6 +136,7 @@ export function HoleDialog() {
   const selectedPoint = useAppStore((state) => state.selectedFacePoint);
   const pickedSketchPoints = useAppStore((state) => state.holePositionSelections);
   const setPickedSketchPoints = useAppStore((state) => state.setHolePositionSelections);
+  const setSolidCommandPreview = useAppStore((state) => state.setSolidCommandPreview);
   const [bodyId, setBodyId] = useState(0);
   const [faceId, setFaceId] = useState(0);
   const [x, setX] = useState('0');
@@ -326,6 +327,92 @@ export function HoleDialog() {
     setY(String(Number(local.y.toFixed(6))));
   }, [bodyId, faceId, featureId, pickedSketchPoints, planarBodies]);
 
+  useEffect(() => {
+    if (featureId === null || loading) {
+      setSolidCommandPreview(null);
+      return;
+    }
+    const previewBody = planarBodies.find((candidate) => candidate.id === bodyId);
+    const previewFace = previewBody?.faces.find((candidate) => candidate.id === faceId);
+    if (!previewFace?.plane) {
+      setSolidCommandPreview(null);
+      return;
+    }
+    const numeric = {
+      x: Number(x),
+      y: Number(y),
+      diameter: Number(diameter),
+      depth: Number(depth),
+      counterboreDiameter: Number(counterboreDiameter),
+      counterboreDepth: Number(counterboreDepth),
+      countersinkDiameter: Number(countersinkDiameter),
+      countersinkAngleDeg: Number(countersinkAngle),
+      drillPointAngleDeg: Number(drillPointAngle),
+    };
+    const positions = pickedSketchPoints.length > 0
+      ? pickedSketchPoints.map((pick) => localPoint(previewFace.plane!, pick.world))
+      : [{ x: numeric.x, y: numeric.y }];
+    const valid = positions.every((position) =>
+      Number.isFinite(position.x) && Number.isFinite(position.y),
+    )
+      && Number.isFinite(numeric.diameter)
+      && numeric.diameter > 0
+      && (extentType === 'through_all'
+        || Number.isFinite(numeric.depth) && numeric.depth > 0)
+      && (style !== 'counterbore'
+        || Number.isFinite(numeric.counterboreDiameter)
+          && numeric.counterboreDiameter > numeric.diameter
+          && Number.isFinite(numeric.counterboreDepth)
+          && numeric.counterboreDepth > 0)
+      && (style !== 'countersink'
+        || Number.isFinite(numeric.countersinkDiameter)
+          && numeric.countersinkDiameter > numeric.diameter
+          && Number.isFinite(numeric.countersinkAngleDeg)
+          && numeric.countersinkAngleDeg > 0
+          && numeric.countersinkAngleDeg < 180);
+    if (!valid) {
+      setSolidCommandPreview(null);
+      return;
+    }
+    setSolidCommandPreview({
+      kind: 'hole',
+      bodyId,
+      basis: previewFace.plane,
+      positions,
+      diameter: numeric.diameter,
+      depth: extentType === 'distance' ? numeric.depth : null,
+      style,
+      counterboreDiameter: numeric.counterboreDiameter,
+      counterboreDepth: numeric.counterboreDepth,
+      countersinkDiameter: numeric.countersinkDiameter,
+      countersinkAngleDeg: numeric.countersinkAngleDeg,
+      bottomStyle,
+      drillPointAngleDeg: numeric.drillPointAngleDeg,
+      flip,
+    });
+  }, [
+    bodyId,
+    bottomStyle,
+    counterboreDepth,
+    counterboreDiameter,
+    countersinkAngle,
+    countersinkDiameter,
+    depth,
+    diameter,
+    drillPointAngle,
+    extentType,
+    faceId,
+    featureId,
+    flip,
+    loading,
+    pickedSketchPoints,
+    planarBodies,
+    setSolidCommandPreview,
+    style,
+    x,
+    y,
+  ]);
+
   if (featureId === null) return null;
   const body = planarBodies.find((candidate) => candidate.id === bodyId);
   const faces = body?.faces.filter((face) => face.plane !== null) ?? [];
@@ -485,6 +572,19 @@ export function HoleDialog() {
                       </div>
                     </div>
                   )}
+                  <label>
+                    <span className={LABEL_CLASS}>{t('hole.style')}</span>
+                    <select
+                      data-testid="hole-style"
+                      value={style}
+                      onChange={(event) => setStyle(event.target.value as HoleStyle)}
+                      className={INPUT_CLASS}
+                    >
+                      <option value="simple">{t('hole.simple')}</option>
+                      <option value="counterbore">{t('hole.counterbore')}</option>
+                      <option value="countersink">{t('hole.countersink')}</option>
+                    </select>
+                  </label>
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
                     <input
                       data-testid="hole-threaded"
@@ -624,14 +724,13 @@ export function HoleDialog() {
                     </section>
                   )}
                   <label><span className={LABEL_CLASS}>{t(threaded ? 'hole.predrillDiameter' : 'hole.diameter')}</span><DimensionInput autoSelectKey={faceId > 0 ? `${bodyId}:${faceId}` : null} data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>
-                  <label><span className={LABEL_CLASS}>{t('hole.extent')}</span><select data-testid="hole-extent" value={extentType} onChange={(event) => setExtentType(event.target.value as HoleExtent['type'])} className={INPUT_CLASS}><option value="through_all">{t('hole.throughAll')}</option><option value="distance">{t('hole.distance')}</option></select></label>
-                  {extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('hole.depth')}</span><DimensionInput min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}
-                  <label><span className={LABEL_CLASS}>{t('hole.style')}</span><select value={style} onChange={(event) => setStyle(event.target.value as HoleStyle)} className={INPUT_CLASS}><option value="simple">{t('hole.simple')}</option><option value="counterbore">{t('hole.counterbore')}</option><option value="countersink">{t('hole.countersink')}</option></select></label>
                   {style === 'counterbore' && <div className="grid grid-cols-2 gap-2"><label><span className={LABEL_CLASS}>{t('hole.counterboreDiameter')}</span><DimensionInput step="any" value={counterboreDiameter} onValueChange={setCounterboreDiameter} /></label><label><span className={LABEL_CLASS}>{t('hole.counterboreDepth')}</span><DimensionInput step="any" value={counterboreDepth} onValueChange={setCounterboreDepth} /></label></div>}
                   {style === 'countersink' && <div className="grid grid-cols-2 gap-2"><label><span className={LABEL_CLASS}>{t('hole.countersinkDiameter')}</span><DimensionInput step="any" value={countersinkDiameter} onValueChange={setCountersinkDiameter} /></label><label><span className={LABEL_CLASS}>{t('hole.angle')}</span><DimensionInput step="any" value={countersinkAngle} onValueChange={setCountersinkAngle} /></label></div>}
+                  <label><span className={LABEL_CLASS}>{t('hole.extent')}</span><select data-testid="hole-extent" value={extentType} onChange={(event) => setExtentType(event.target.value as HoleExtent['type'])} className={INPUT_CLASS}><option value="through_all">{t('hole.throughAll')}</option><option value="distance">{t('hole.distance')}</option></select></label>
+                  {extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('hole.depth')}</span><DimensionInput min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}
                   <label><span className={LABEL_CLASS}>{t('hole.bottomStyle')}</span><select data-testid="hole-bottom-style" value={bottomStyle} onChange={(event) => setBottomStyle(event.target.value as HoleBottomStyle)} className={INPUT_CLASS}><option value="drill_point">{t('hole.drillPoint')}</option><option value="flat">{t('hole.flatBottom')}</option></select></label>
                   {bottomStyle === 'drill_point' && extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('hole.drillPointAngle')}</span><DimensionInput data-testid="hole-drill-point-angle" min="0.000001" max="179.999999" step="any" value={drillPointAngle} onValueChange={setDrillPointAngle} /></label>}
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={flip} onChange={(event) => setFlip(event.target.checked)} className="accent-accent" />{t('hole.flip')}</label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="hole-flip" type="checkbox" checked={flip} onChange={(event) => setFlip(event.target.checked)} className="accent-accent" />{t('hole.flip')}</label>
                   <p className="text-[10px] text-mute">{t('hole.selectionHint')}</p>
                 </>}
         </div>

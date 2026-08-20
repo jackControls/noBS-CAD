@@ -32,12 +32,16 @@ import { useTranslation } from '../../i18n';
 import { getEngine, EngineError, type Engine } from '../../engine';
 import { pickDatumPlane, pickPlanarFace, pickPlane } from '../../engine/controller';
 import type {
+  BodyFeatureDefinitionDto,
+  CurveCrossingRequest,
   DimensionDto,
   EntityDto,
   FaceDto,
+  HoleDefinitionDto,
   JointConnectorDto,
   JointDefinitionDto,
   JointMotionStateDto,
+  LineIntersectionRequest,
   LineTrackingRequest,
   OriginPlane,
   PlaneBasis,
@@ -96,6 +100,7 @@ import {
   syncNativeViewportCamera,
   syncNativeViewportPreview,
   type NativeViewportPick,
+  type NativeViewportLinePattern,
   type NativeViewportSnapKind,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
@@ -166,6 +171,8 @@ export function referencePlaneHalfSizeForView(
 const SKETCH_FIT_HALF_EXTENT = 75;
 /** Magnetic acquisition radius for valid modify-tool targets. */
 const MODIFY_CAPTURE_PX = 14;
+/** Hole placement points keep a compact glyph but use a forgiving target. */
+const HOLE_POINT_CAPTURE_PX = 18;
 /** Screen-space forgiveness around visible origin-plane fills and outlines. */
 const ORIGIN_PLANE_CAPTURE_PX = 8;
 /** Maximum screen-space reach beyond a line endpoint for Point acquisition. */
@@ -178,10 +185,12 @@ const LINE_TRACKING_CAPTURE_PX = 12;
 const LINE_TRACKING_REACH_PX = 480;
 /** Near-tied tracking candidates remain free instead of choosing randomly. */
 const LINE_TRACKING_AMBIGUITY_PX = 2.5;
+/** Must match the engine's H/V inference cone. */
+const LINE_AXIS_INFERENCE_TOL_DEG = 10;
 const LINE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line']);
 const CURVE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line', 'circle', 'arc']);
 type SolidEdgePickMode = 'any' | 'refinable' | 'straight';
-type BodyFeaturePickMode = 'body-multi' | 'body-single' | 'face-multi';
+type BodyFeaturePickMode = 'body-multi' | 'body-single' | 'face-multi' | 'face-single';
 
 const COLOR_AXIS_Z = 0x4f9dde; // conventional Z-axis blue, not a brand color
 
@@ -295,6 +304,7 @@ export function Viewport() {
     if (s.filletDialogFeature !== null) return 'Select model edges to fillet';
     if (s.chamferDialogFeature !== null) return 'Select model edges to chamfer';
     if (s.holeDialogFeature !== null) return 'Select a planar face, then visible sketch points for holes';
+    if (s.bodyFeatureDialog?.kind === 'external_thread') return 'Select an exterior cylindrical face for External Thread';
     if (s.bodyFeatureDialog?.kind === 'shell') return 'Select faces to remove for Shell';
     if (s.bodyFeatureDialog?.kind === 'split_body') return 'Select the body to split';
     if (s.bodyFeatureDialog?.kind === 'move_copy') return 'Select bodies or a component occurrence to move or copy';
@@ -372,6 +382,10 @@ export function Viewport() {
     const COLOR_EDGE = interactionThemeColor('--cad-edge', '#29333d');
     const COLOR_EDGE_HOVER = interactionThemeColor('--cad-edge-hover', '#58c7ff');
     const COLOR_EDGE_SELECTED = interactionThemeColor('--cad-edge-selected', '#ffc857');
+    const COLOR_THREAD_COSMETIC = interactionThemeColor(
+      '--cad-thread-cosmetic',
+      '#70c4ee',
+    );
     const COLOR_HOLE_POINT_SELECTED = interactionThemeColor(
       '--cad-hole-point-selected',
       '#ffd166',
@@ -1024,7 +1038,7 @@ export function Viewport() {
 
     let snapMarkerKind: NativeViewportSnapKind = 'grid';
     const nativeSnapKind = (kind: SnapTarget['kind']): NativeViewportSnapKind =>
-      kind === 'none' ? 'grid' : kind;
+      kind === 'none' ? 'grid' : kind === 'intersection' ? 'point' : kind;
     const showSnapMarker = (
       point: Vec2,
       kind: NativeViewportSnapKind = 'grid',
@@ -1098,6 +1112,15 @@ export function Viewport() {
     let cachedSolidScene: ViewportState['solidScene'] | undefined;
     let cachedSolidTriangles: NativeViewportTransient['triangles'] = [];
     let cachedSolidArrows: NativeViewportTransient['arrows'] = [];
+    let committedHoleDefinitions: HoleDefinitionDto[] = [];
+    let committedBodyFeatureDefinitions: BodyFeatureDefinitionDto[] = [];
+    let cachedThreadDefinitions: HoleDefinitionDto[] | undefined;
+    let cachedThreadBodyFeatureDefinitions: BodyFeatureDefinitionDto[] | undefined;
+    let cachedThreadScene: ViewportState['solidScene'] | undefined;
+    let cachedThreadHidden: ViewportState['hidden'] | undefined;
+    let cachedThreadAppearances: ViewportState['bodyAppearances'] | undefined;
+    let cachedThreadSolution: ReturnType<typeof effectiveAssemblySolution> | undefined;
+    let cachedThreadLines: NativeViewportTransient['lines'] = [];
 
     /**
      * Convert the CPU interaction scene into a small semantic payload for
@@ -1131,8 +1154,14 @@ export function Viewport() {
       };
       const lineWidthFor = (material: CAD.Material | null) =>
         material instanceof ScreenLineMaterial ? material.linewidth : 1.25;
-      const layerKey = (color: Rgba, width: number) =>
-        `${color.map((value) => value.toFixed(4)).join(',')}|${width.toFixed(2)}`;
+      const linePatternFor = (object: CAD.Object3D): NativeViewportLinePattern =>
+        object.userData.nativeLinePattern === 'dotted' ? 'dotted' : 'solid';
+      const layerKey = (
+        color: Rgba,
+        width: number,
+        pattern: NativeViewportLinePattern,
+      ) =>
+        `${color.map((value) => value.toFixed(4)).join(',')}|${width.toFixed(2)}|${pattern}`;
       const pointKey = (color: Rgba, radius: number) =>
         `${color.map((value) => value.toFixed(4)).join(',')}|${radius.toFixed(4)}`;
       const appendSegment = (
@@ -1140,14 +1169,29 @@ export function Viewport() {
         width: number,
         start: CAD.Vector3,
         end: CAD.Vector3,
+        pattern: NativeViewportLinePattern = 'solid',
       ) => {
-        const key = layerKey(color, width);
+        const key = layerKey(color, width, pattern);
         let layer = lineLayers.get(key);
         if (!layer) {
-          layer = { color, width, segments: [] };
+          layer = { color, width, pattern, segments: [] };
           lineLayers.set(key, layer);
         }
         layer.segments.push(start.x, start.y, start.z, end.x, end.y, end.z);
+      };
+      const appendLineLayer = (source: LineLayer) => {
+        const key = layerKey(source.color, source.width, source.pattern);
+        let target = lineLayers.get(key);
+        if (!target) {
+          target = {
+            color: source.color,
+            width: source.width,
+            pattern: source.pattern,
+            segments: [],
+          };
+          lineLayers.set(key, target);
+        }
+        target.segments.push(...source.segments);
       };
       const appendPoint = (
         color: Rgba,
@@ -1281,6 +1325,7 @@ export function Viewport() {
           if (!options.lines) return;
           const color = rgbaFor(material);
           const width = lineWidthFor(material);
+          const pattern = linePatternFor(object);
           const starts = geometry.getAttribute('instanceStart');
           const ends = geometry.getAttribute('instanceEnd');
           if (starts && ends) {
@@ -1292,7 +1337,7 @@ export function Viewport() {
               transientEnd
                 .set(ends.getX(index), ends.getY(index), ends.getZ(index))
                 .applyMatrix4(object.matrixWorld);
-              appendSegment(color, width, transientStart, transientEnd);
+              appendSegment(color, width, transientStart, transientEnd, pattern);
             }
             return;
           }
@@ -1316,7 +1361,7 @@ export function Viewport() {
                   positions.getZ(index + 1),
                 )
                 .applyMatrix4(object.matrixWorld);
-              appendSegment(color, width, transientStart, transientEnd);
+              appendSegment(color, width, transientStart, transientEnd, pattern);
             }
             return;
           }
@@ -1329,9 +1374,9 @@ export function Viewport() {
                   positions.getZ(index + offset),
                 ).applyMatrix4(object.matrixWorld),
               );
-              appendSegment(color, width, vertices[0], vertices[1]);
-              appendSegment(color, width, vertices[1], vertices[2]);
-              appendSegment(color, width, vertices[2], vertices[0]);
+              appendSegment(color, width, vertices[0], vertices[1], pattern);
+              appendSegment(color, width, vertices[1], vertices[2], pattern);
+              appendSegment(color, width, vertices[2], vertices[0], pattern);
             }
           }
         });
@@ -1422,11 +1467,731 @@ export function Viewport() {
         cachedPickerTriangles = triangles.slice(triangleStart);
       }
 
+      // Simplified threads deliberately keep a cylindrical OCCT hole. Draw
+      // non-pickable, depth-tested helix linework on the *current* analytic
+      // cylinder rather than retaining a second piece of geometry at the
+      // hole's creation plane. The final face is the source of truth after a
+      // Move/Copy or parametric replay, so cosmetic presentation cannot be
+      // stranded at an old transform or leak into STEP/STL export.
+      const threadSolution = effectiveAssemblySolution();
+      if (
+        committedHoleDefinitions === cachedThreadDefinitions
+        && committedBodyFeatureDefinitions === cachedThreadBodyFeatureDefinitions
+        && transientState.solidScene === cachedThreadScene
+        && transientState.hidden === cachedThreadHidden
+        && transientState.bodyAppearances === cachedThreadAppearances
+        && threadSolution === cachedThreadSolution
+      ) {
+        cachedThreadLines.forEach(appendLineLayer);
+      } else {
+        const shadowSegments: number[] = [];
+        const crestSegments: number[] = [];
+        // Keep the native transient comfortably below its IPC validation cap
+        // even for documents containing many repeated threaded occurrences.
+        const maximumFloatsPerLayer = 450_000;
+        const hiddenBodies = hiddenBodyIds();
+        type CosmeticThreadPose = {
+          translation: [number, number, number];
+          rotation: [number, number, number, number];
+        };
+        const identityPose: CosmeticThreadPose = {
+          translation: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+        };
+        const posesForBody = (bodyId: number): CosmeticThreadPose[] => {
+          if (threadSolution.instance_body_poses.length > 0) {
+            return threadSolution.instance_body_poses
+              .filter((pose) => pose.body_id === bodyId && pose.visible)
+              .map((pose) => ({
+                translation: pose.translation,
+                rotation: pose.rotation,
+              }));
+          }
+          const pose = threadSolution.body_poses.find(
+            (candidate) => candidate.body_id === bodyId,
+          );
+          return pose
+            ? [{ translation: pose.translation, rotation: pose.rotation }]
+            : [identityPose];
+        };
+        const applyCosmeticPose = (
+          point: CAD.Vector3,
+          pose: CosmeticThreadPose,
+        ): [number, number, number] => {
+          const rotated = rotateTuple(
+            [point.x, point.y, point.z],
+            pose.rotation,
+          );
+          return [
+            rotated[0] + pose.translation[0],
+            rotated[1] + pose.translation[1],
+            rotated[2] + pose.translation[2],
+          ];
+        };
+
+        type CosmeticBodyPlacement = {
+          bodyId: number;
+          rotation: CAD.Quaternion;
+          offset: CAD.Vector3;
+        };
+        const identityPlacement = (bodyId: number): CosmeticBodyPlacement => ({
+          bodyId,
+          rotation: new CAD.Quaternion(),
+          offset: new CAD.Vector3(),
+        });
+        const transformPlacement = (
+          placement: CosmeticBodyPlacement,
+          definition: Extract<BodyFeatureDefinitionDto, { type: 'move_copy' }>,
+          sourceIndex: number,
+        ): CosmeticBodyPlacement => {
+          const localRotation = new CAD.Quaternion(...definition.rotation).normalize();
+          const pivot = new CAD.Vector3(
+            definition.pivot.x,
+            definition.pivot.y,
+            definition.pivot.z,
+          );
+          const translation = new CAD.Vector3(
+            definition.translation.x,
+            definition.translation.y,
+            definition.translation.z,
+          );
+          // KernelTransformDto::Rigid is R(p - pivot) + pivot + translation.
+          const localOffset = pivot
+            .clone()
+            .add(translation)
+            .sub(pivot.clone().applyQuaternion(localRotation));
+          return {
+            bodyId: definition.result_body_ids[sourceIndex],
+            rotation: localRotation.clone().multiply(placement.rotation).normalize(),
+            offset: placement.offset
+              .clone()
+              .applyQuaternion(localRotation)
+              .add(localOffset),
+          };
+        };
+        const transformPointByPlacement = (
+          point: CAD.Vector3,
+          placement: CosmeticBodyPlacement,
+        ) => point.clone().applyQuaternion(placement.rotation).add(placement.offset);
+        const transformDirectionByPlacement = (
+          direction: CAD.Vector3,
+          placement: CosmeticBodyPlacement,
+        ) => direction.clone().applyQuaternion(placement.rotation).normalize();
+
+        const documentFeatures = transientState.document?.features ?? [];
+        const activeFeatureCount = Math.min(
+          transientState.document?.rollback_index ?? documentFeatures.length,
+          documentFeatures.length,
+        );
+        const activeFeatures = documentFeatures.slice(0, activeFeatureCount);
+        const activeFeatureIds = new Set(
+          activeFeatures
+            .filter((feature) => !feature.suppressed && feature.status.state === 'ok')
+            .map((feature) => feature.id),
+        );
+        const featureOrder = new Map(
+          documentFeatures.map((feature, index) => [feature.id, index]),
+        );
+        const orderedMoveDefinitions = committedBodyFeatureDefinitions
+          .filter(
+            (definition): definition is Extract<
+              BodyFeatureDefinitionDto,
+              { type: 'move_copy' }
+            > => definition.type === 'move_copy'
+              && (documentFeatures.length === 0 || activeFeatureIds.has(definition.feature_id)),
+          )
+          .sort(
+            (a, b) => (featureOrder.get(a.feature_id) ?? Number.MAX_SAFE_INTEGER)
+              - (featureOrder.get(b.feature_id) ?? Number.MAX_SAFE_INTEGER),
+          );
+        const placementsAfterFeature = (bodyId: number, featureId: number) => {
+          let placements = [identityPlacement(bodyId)];
+          const definitionOrder = featureOrder.get(featureId) ?? -1;
+          for (const move of orderedMoveDefinitions) {
+            if ((featureOrder.get(move.feature_id) ?? Number.MAX_SAFE_INTEGER) <= definitionOrder) {
+              continue;
+            }
+            placements = placements.flatMap((placement) => {
+              const sourceIndex = move.body_ids.indexOf(placement.bodyId);
+              if (sourceIndex < 0) return [placement];
+              const transformed = transformPlacement(placement, move, sourceIndex);
+              return move.copy ? [placement, transformed] : [transformed];
+            });
+          }
+          return placements;
+        };
+
+        type CosmeticCylinder = {
+          bodyId: number;
+          faceId: number;
+          key: string;
+          origin: CAD.Vector3;
+          axis: CAD.Vector3;
+          reference: CAD.Vector3;
+          radius: number;
+          axialMinimum: number;
+          axialMaximum: number;
+          inward: boolean | null;
+        };
+        const cylindersByBody = new Map<number, CosmeticCylinder[]>();
+        const cylindersForBody = (bodyId: number) => {
+          const cached = cylindersByBody.get(bodyId);
+          if (cached) return cached;
+          const result: CosmeticCylinder[] = [];
+          const body = transientState.solidScene.bodies.find(
+            (candidate) => candidate.id === bodyId,
+          );
+          if (!body) {
+            cylindersByBody.set(bodyId, result);
+            return result;
+          }
+          for (const face of body.faces) {
+            const cylinder = face.cylinder;
+            if (!cylinder || !Number.isFinite(cylinder.radius) || cylinder.radius <= 1e-8) {
+              continue;
+            }
+            const origin = new CAD.Vector3(
+              cylinder.origin.x,
+              cylinder.origin.y,
+              cylinder.origin.z,
+            );
+            const axis = new CAD.Vector3(
+              cylinder.axis.x,
+              cylinder.axis.y,
+              cylinder.axis.z,
+            ).normalize();
+            const reference = new CAD.Vector3(
+              cylinder.reference.x,
+              cylinder.reference.y,
+              cylinder.reference.z,
+            ).addScaledVector(
+              axis,
+              -new CAD.Vector3(
+                cylinder.reference.x,
+                cylinder.reference.y,
+                cylinder.reference.z,
+              ).dot(axis),
+            );
+            if (axis.lengthSq() <= 1e-12 || reference.lengthSq() <= 1e-12) continue;
+            reference.normalize();
+            let axialMinimum = Infinity;
+            let axialMaximum = -Infinity;
+            let orientation = 0;
+            let orientationSamples = 0;
+            const start = Math.max(0, face.first_index);
+            const end = Math.min(
+              body.mesh.indices.length,
+              start + Math.max(0, face.index_count),
+            );
+            for (let slot = start; slot < end; slot += 1) {
+              const vertexOffset = body.mesh.indices[slot] * 3;
+              if (vertexOffset + 2 >= body.mesh.positions.length) continue;
+              const point = new CAD.Vector3(
+                body.mesh.positions[vertexOffset],
+                body.mesh.positions[vertexOffset + 1],
+                body.mesh.positions[vertexOffset + 2],
+              );
+              const delta = point.clone().sub(origin);
+              const axial = delta.dot(axis);
+              axialMinimum = Math.min(axialMinimum, axial);
+              axialMaximum = Math.max(axialMaximum, axial);
+              if (vertexOffset + 2 < body.mesh.normals.length) {
+                const radial = delta.addScaledVector(axis, -axial);
+                const normal = new CAD.Vector3(
+                  body.mesh.normals[vertexOffset],
+                  body.mesh.normals[vertexOffset + 1],
+                  body.mesh.normals[vertexOffset + 2],
+                );
+                if (radial.lengthSq() > 1e-12 && normal.lengthSq() > 1e-12) {
+                  orientation += normal.normalize().dot(radial.normalize());
+                  orientationSamples += 1;
+                }
+              }
+            }
+            if (!Number.isFinite(axialMinimum) || axialMaximum - axialMinimum <= 1e-6) {
+              continue;
+            }
+            result.push({
+              bodyId,
+              faceId: face.id,
+              key: face.key,
+              origin,
+              axis,
+              reference,
+              radius: cylinder.radius,
+              axialMinimum,
+              axialMaximum,
+              inward: orientationSamples > 0 ? orientation < 0 : null,
+            });
+          }
+          cylindersByBody.set(bodyId, result);
+          return result;
+        };
+        const inferredCylinders = new Map<string, CosmeticCylinder[]>();
+        const inferCylindersForBody = (
+          bodyId: number,
+          expectedRadius: number,
+          expectedAxis: CAD.Vector3,
+          expectedCenter: CAD.Vector3,
+        ) => {
+          const axis = expectedAxis.clone().normalize();
+          const cacheKey = `${bodyId}:${expectedRadius.toFixed(6)}:${axis.x.toFixed(6)}:${axis.y.toFixed(6)}:${axis.z.toFixed(6)}:${expectedCenter.x.toFixed(6)}:${expectedCenter.y.toFixed(6)}:${expectedCenter.z.toFixed(6)}`;
+          const cached = inferredCylinders.get(cacheKey);
+          if (cached) return cached;
+          const result: CosmeticCylinder[] = [];
+          const body = transientState.solidScene.bodies.find(
+            (candidate) => candidate.id === bodyId,
+          );
+          if (!body || axis.lengthSq() <= 1e-12) {
+            inferredCylinders.set(cacheKey, result);
+            return result;
+          }
+          const fitTolerance = Math.max(0.02, expectedRadius * 0.012);
+          for (const face of body.faces) {
+            // Native OCCT metadata always wins. This fallback keeps the WASM
+            // debug renderer equivalent until its tessellator publishes the
+            // same analytic surface record.
+            if (face.cylinder) continue;
+            const start = Math.max(0, face.first_index);
+            const end = Math.min(
+              body.mesh.indices.length,
+              start + Math.max(0, face.index_count),
+            );
+            const samples: Array<{ point: CAD.Vector3; normal: CAD.Vector3 | null }> = [];
+            for (let slot = start; slot < end; slot += 1) {
+              const vertexOffset = body.mesh.indices[slot] * 3;
+              if (vertexOffset + 2 >= body.mesh.positions.length) continue;
+              const point = new CAD.Vector3(
+                body.mesh.positions[vertexOffset],
+                body.mesh.positions[vertexOffset + 1],
+                body.mesh.positions[vertexOffset + 2],
+              );
+              let normal: CAD.Vector3 | null = null;
+              if (vertexOffset + 2 < body.mesh.normals.length) {
+                const candidateNormal = new CAD.Vector3(
+                  body.mesh.normals[vertexOffset],
+                  body.mesh.normals[vertexOffset + 1],
+                  body.mesh.normals[vertexOffset + 2],
+                );
+                if (candidateNormal.lengthSq() > 1e-12) {
+                  normal = candidateNormal.normalize();
+                }
+              }
+              samples.push({ point, normal });
+            }
+            if (samples.length < 6) continue;
+
+            let axialMinimum = Infinity;
+            let axialMaximum = -Infinity;
+            let reference: CAD.Vector3 | null = null;
+            let radialErrorSquared = 0;
+            let orientation = 0;
+            let orientationSamples = 0;
+            for (const { point, normal } of samples) {
+              const delta = point.clone().sub(expectedCenter);
+              const axial = delta.dot(axis);
+              axialMinimum = Math.min(axialMinimum, axial);
+              axialMaximum = Math.max(axialMaximum, axial);
+              const radial = delta.addScaledVector(axis, -axial);
+              const radialLength = radial.length();
+              radialErrorSquared += (radialLength - expectedRadius) ** 2;
+              if (!reference && radialLength > 1e-8) {
+                reference = radial.clone().multiplyScalar(1 / radialLength);
+              }
+              if (
+                normal
+                && radialLength > 1e-8
+                && Math.abs(normal.dot(axis)) <= 0.15
+              ) {
+                orientation += normal.dot(radial.multiplyScalar(1 / radialLength));
+                orientationSamples += 1;
+              }
+            }
+            const radialResidual = Math.sqrt(radialErrorSquared / samples.length);
+            if (
+              !reference
+              || radialResidual > fitTolerance
+              || !Number.isFinite(axialMinimum)
+              || axialMaximum - axialMinimum <= 1e-6
+            ) {
+              continue;
+            }
+            result.push({
+              bodyId,
+              faceId: face.id,
+              key: face.key,
+              origin: expectedCenter.clone(),
+              axis,
+              reference,
+              radius: expectedRadius,
+              axialMinimum,
+              axialMaximum,
+              inward: orientationSamples > 0 ? orientation < 0 : null,
+            });
+          }
+          inferredCylinders.set(cacheKey, result);
+          return result;
+        };
+        const claimedCylinders = new Set<string>();
+
+        for (const definition of committedHoleDefinitions) {
+          const thread = definition.thread;
+          const basis = definition.face_basis;
+          if (
+            thread?.representation !== 'simplified'
+            || !basis
+            || !Number.isFinite(thread.pitch)
+            || thread.pitch <= 1e-6
+            || !Number.isFinite(definition.diameter)
+            || definition.diameter <= 1e-6
+            || hiddenBodies.has(definition.body_id)
+            || (
+              documentFeatures.length > 0
+              && !activeFeatureIds.has(definition.feature_id)
+            )
+          ) {
+            continue;
+          }
+          const basisU = new CAD.Vector3(...basis.u).normalize();
+          const basisV = new CAD.Vector3(...basis.v).normalize();
+          const basisCutDirection = new CAD.Vector3(...basis.normal)
+            .normalize()
+            .multiplyScalar(definition.flip ? 1 : -1);
+          const holePositions = definition.positions.length > 0
+            ? definition.positions.map((entry) => entry.position)
+            : [definition.position];
+          for (const placement of placementsAfterFeature(
+            definition.body_id,
+            definition.feature_id,
+          )) {
+            if (hiddenBodies.has(placement.bodyId)) continue;
+            const bodyPoses = posesForBody(placement.bodyId);
+            for (const position of holePositions) {
+              const creationCenter = new CAD.Vector3(...basis.origin)
+                .addScaledVector(basisU, position.x)
+                .addScaledVector(basisV, position.y);
+              const predictedCenter = transformPointByPlacement(
+                creationCenter,
+                placement,
+              );
+              const predictedDirection = transformDirectionByPlacement(
+                basisCutDirection,
+                placement,
+              );
+              const radiusTolerance = Math.max(1e-4, definition.diameter * 1e-4);
+              const candidate = [
+                ...cylindersForBody(placement.bodyId),
+                ...inferCylindersForBody(
+                  placement.bodyId,
+                  definition.diameter / 2,
+                  predictedDirection,
+                  predictedCenter,
+                ),
+              ]
+                .filter((surface) => {
+                  if (claimedCylinders.has(`${surface.bodyId}:${surface.faceId}`)) return false;
+                  if (surface.inward === false) return false;
+                  if (Math.abs(surface.radius - definition.diameter / 2) > radiusTolerance) {
+                    return false;
+                  }
+                  return Math.abs(surface.axis.dot(predictedDirection)) > 0.9;
+                })
+                .map((surface) => {
+                  const delta = predictedCenter.clone().sub(surface.origin);
+                  const radialDistance = delta
+                    .addScaledVector(surface.axis, -delta.dot(surface.axis))
+                    .length();
+                  const alignmentPenalty = (
+                    1 - Math.abs(surface.axis.dot(predictedDirection))
+                  ) * Math.max(1, definition.diameter * 4);
+                  return { surface, score: radialDistance + alignmentPenalty };
+                })
+                .sort((a, b) => a.score - b.score)[0]?.surface;
+              if (!candidate) continue;
+              claimedCylinders.add(`${candidate.bodyId}:${candidate.faceId}`);
+
+              const firstEnd = candidate.origin
+                .clone()
+                .addScaledVector(candidate.axis, candidate.axialMinimum);
+              const secondEnd = candidate.origin
+                .clone()
+                .addScaledVector(candidate.axis, candidate.axialMaximum);
+              const firstIsEntry = firstEnd.distanceToSquared(predictedCenter)
+                <= secondEnd.distanceToSquared(predictedCenter);
+              const center = (firstIsEntry ? firstEnd : secondEnd).clone();
+              const farEnd = firstIsEntry ? secondEnd : firstEnd;
+              const cutDirection = farEnd.clone().sub(center).normalize();
+              const fullDepth = center.distanceTo(farEnd);
+              const uAxis = candidate.reference
+                .clone()
+                .addScaledVector(
+                  cutDirection,
+                  -candidate.reference.dot(cutDirection),
+                )
+                .normalize();
+              const vAxis = cutDirection.clone().cross(uAxis).normalize();
+              if (uAxis.lengthSq() <= 1e-12 || vAxis.lengthSq() <= 1e-12) continue;
+
+              const entryDepth = Math.min(fullDepth * 0.04, thread.pitch * 0.16);
+              const exitInset = Math.min(fullDepth * 0.02, thread.pitch * 0.12);
+              const threadEnd = Math.min(
+                fullDepth - exitInset,
+                thread.depth === null ? fullDepth : Math.abs(thread.depth),
+              );
+              if (threadEnd - entryDepth < Math.max(0.05, thread.pitch * 0.2)) {
+                continue;
+              }
+              const turns = (threadEnd - entryDepth) / thread.pitch;
+              const segmentCount = Math.max(
+                12,
+                Math.min(1_200, Math.ceil(turns * 20)),
+              );
+              const handedness = thread.hand === 'left' ? -1 : 1;
+              const wallInset = Math.min(
+                0.002,
+                Math.max(0.0002, candidate.radius * 0.0004),
+              );
+              const shadowRadius = Math.max(1e-6, candidate.radius - wallInset);
+              const crestRadius = Math.max(1e-6, candidate.radius - wallInset * 1.55);
+              const pointAt = (axial: number, angle: number, radius: number) => center
+                .clone()
+                .addScaledVector(cutDirection, axial)
+                .addScaledVector(uAxis, Math.cos(angle) * radius)
+                .addScaledVector(vAxis, Math.sin(angle) * radius);
+              const appendHelix = (
+                target: number[],
+                radius: number,
+                axialShift: number,
+                pose: CosmeticThreadPose,
+              ) => {
+                for (let segment = 0; segment < segmentCount; segment += 1) {
+                  if (target.length + 6 > maximumFloatsPerLayer) return;
+                  const firstAxial = entryDepth
+                    + ((threadEnd - entryDepth) * segment) / segmentCount
+                    + axialShift;
+                  const secondAxial = entryDepth
+                    + ((threadEnd - entryDepth) * (segment + 1)) / segmentCount
+                    + axialShift;
+                  if (secondAxial >= threadEnd) break;
+                  const firstAngle = handedness
+                    * Math.PI * 2
+                    * ((firstAxial - entryDepth) / thread.pitch);
+                  const secondAngle = handedness
+                    * Math.PI * 2
+                    * ((secondAxial - entryDepth) / thread.pitch);
+                  target.push(
+                    ...applyCosmeticPose(pointAt(firstAxial, firstAngle, radius), pose),
+                    ...applyCosmeticPose(pointAt(secondAxial, secondAngle, radius), pose),
+                  );
+                }
+              };
+              for (const pose of bodyPoses) {
+                appendHelix(shadowSegments, shadowRadius, 0, pose);
+                appendHelix(
+                  crestSegments,
+                  crestRadius,
+                  Math.min(thread.pitch * 0.10, (threadEnd - entryDepth) * 0.04),
+                  pose,
+                );
+              }
+            }
+          }
+        }
+
+        for (const definition of committedBodyFeatureDefinitions) {
+          if (
+            definition.type !== 'external_thread'
+            || definition.thread.representation !== 'simplified'
+            || !Number.isFinite(definition.thread.pitch)
+            || definition.thread.pitch <= 1e-6
+            || !Number.isFinite(definition.cylinder.radius)
+            || definition.cylinder.radius <= 1e-6
+            || hiddenBodies.has(definition.body_id)
+            || (
+              documentFeatures.length > 0
+              && !activeFeatureIds.has(definition.feature_id)
+            )
+          ) {
+            continue;
+          }
+          const expectedOrigin = new CAD.Vector3(
+            definition.cylinder.origin.x,
+            definition.cylinder.origin.y,
+            definition.cylinder.origin.z,
+          );
+          const expectedAxis = new CAD.Vector3(
+            definition.cylinder.axis.x,
+            definition.cylinder.axis.y,
+            definition.cylinder.axis.z,
+          ).normalize();
+          const expectedReference = new CAD.Vector3(
+            definition.cylinder.reference.x,
+            definition.cylinder.reference.y,
+            definition.cylinder.reference.z,
+          ).normalize();
+          for (const placement of placementsAfterFeature(
+            definition.body_id,
+            definition.feature_id,
+          )) {
+            if (hiddenBodies.has(placement.bodyId)) continue;
+            const predictedOrigin = transformPointByPlacement(
+              expectedOrigin,
+              placement,
+            );
+            const predictedAxis = transformDirectionByPlacement(
+              expectedAxis,
+              placement,
+            );
+            const predictedReference = transformDirectionByPlacement(
+              expectedReference,
+              placement,
+            );
+            const radiusTolerance = Math.max(
+              0.01,
+              definition.cylinder.radius * 0.002,
+            );
+            const candidate = cylindersForBody(placement.bodyId)
+              .filter((surface) => {
+                if (claimedCylinders.has(`${surface.bodyId}:${surface.faceId}`)) return false;
+                if (surface.inward === true) return false;
+                if (Math.abs(surface.radius - definition.cylinder.radius) > radiusTolerance) {
+                  return false;
+                }
+                return Math.abs(surface.axis.dot(predictedAxis)) > 0.98;
+              })
+              .map((surface) => {
+                const delta = predictedOrigin.clone().sub(surface.origin);
+                const radialDistance = delta
+                  .addScaledVector(surface.axis, -delta.dot(surface.axis))
+                  .length();
+                const topologyPenalty =
+                  surface.key === definition.face_key || surface.faceId === definition.face_id
+                    ? 0
+                    : Math.max(0.05, definition.cylinder.radius * 0.05);
+                return { surface, score: radialDistance + topologyPenalty };
+              })
+              .sort((a, b) => a.score - b.score)[0]?.surface;
+            if (!candidate) continue;
+            claimedCylinders.add(`${candidate.bodyId}:${candidate.faceId}`);
+
+            const lowerEnd = candidate.origin
+              .clone()
+              .addScaledVector(candidate.axis, candidate.axialMinimum);
+            const upperEnd = candidate.origin
+              .clone()
+              .addScaledVector(candidate.axis, candidate.axialMaximum);
+            const center = (definition.flip ? upperEnd : lowerEnd).clone();
+            const farEnd = definition.flip ? lowerEnd : upperEnd;
+            const direction = farEnd.clone().sub(center).normalize();
+            const availableLength = center.distanceTo(farEnd);
+            const threadLength = Math.min(
+              availableLength,
+              definition.thread.depth === null
+                ? availableLength
+                : Math.abs(definition.thread.depth),
+            );
+            if (threadLength < Math.max(0.05, definition.thread.pitch * 0.2)) {
+              continue;
+            }
+            const uAxis = predictedReference
+              .clone()
+              .addScaledVector(direction, -predictedReference.dot(direction));
+            if (uAxis.lengthSq() <= 1e-12) {
+              uAxis.copy(candidate.reference)
+                .addScaledVector(direction, -candidate.reference.dot(direction));
+            }
+            if (uAxis.lengthSq() <= 1e-12) continue;
+            uAxis.normalize();
+            const vAxis = direction.clone().cross(uAxis).normalize();
+            if (vAxis.lengthSq() <= 1e-12) continue;
+
+            const turns = threadLength / definition.thread.pitch;
+            const segmentCount = Math.max(
+              12,
+              Math.min(1_200, Math.ceil(turns * 20)),
+            );
+            const handedness = definition.thread.hand === 'left' ? -1 : 1;
+            const surfaceOffset = Math.min(
+              0.03,
+              Math.max(0.012, candidate.radius * 0.0025),
+            );
+            const pointAt = (axial: number, angle: number, radius: number) => center
+              .clone()
+              .addScaledVector(direction, axial)
+              .addScaledVector(uAxis, Math.cos(angle) * radius)
+              .addScaledVector(vAxis, Math.sin(angle) * radius);
+            const appendExternalHelix = (
+              target: number[],
+              radius: number,
+              axialShift: number,
+              pose: CosmeticThreadPose,
+            ) => {
+              for (let segment = 0; segment < segmentCount; segment += 1) {
+                if (target.length + 6 > maximumFloatsPerLayer) return;
+                const firstAxial = (threadLength * segment) / segmentCount + axialShift;
+                const secondAxial = (threadLength * (segment + 1)) / segmentCount + axialShift;
+                if (secondAxial > threadLength) break;
+                const firstAngle = handedness * Math.PI * 2 * firstAxial / definition.thread.pitch;
+                const secondAngle = handedness * Math.PI * 2 * secondAxial / definition.thread.pitch;
+                target.push(
+                  ...applyCosmeticPose(pointAt(firstAxial, firstAngle, radius), pose),
+                  ...applyCosmeticPose(pointAt(secondAxial, secondAngle, radius), pose),
+                );
+              }
+            };
+            for (const pose of posesForBody(placement.bodyId)) {
+              appendExternalHelix(
+                shadowSegments,
+                candidate.radius + surfaceOffset,
+                0,
+                pose,
+              );
+              appendExternalHelix(
+                crestSegments,
+                candidate.radius + surfaceOffset * 1.8,
+                Math.min(definition.thread.pitch * 0.1, threadLength * 0.03),
+                pose,
+              );
+            }
+          }
+        }
+        const generatedThreadLines: NativeViewportTransient['lines'] = [];
+        if (shadowSegments.length >= 6) {
+          generatedThreadLines.push({
+            // A 2 px high-contrast base uses Bevy's biased highlight gizmo
+            // path, avoiding surface z-fighting without turning cosmetic
+            // thread graphics into selectable geometry.
+            color: rgbaFromHex(COLOR_EDGE, 0.92),
+            width: 2,
+            pattern: 'solid',
+            segments: shadowSegments,
+          });
+        }
+        if (crestSegments.length >= 6) {
+          generatedThreadLines.push({
+            color: rgbaFromHex(COLOR_THREAD_COSMETIC, 0.96),
+            width: 1.25,
+            pattern: 'solid',
+            segments: crestSegments,
+          });
+        }
+        generatedThreadLines.forEach(appendLineLayer);
+        cachedThreadDefinitions = committedHoleDefinitions;
+        cachedThreadBodyFeatureDefinitions = committedBodyFeatureDefinitions;
+        cachedThreadScene = transientState.solidScene;
+        cachedThreadHidden = transientState.hidden;
+        cachedThreadAppearances = transientState.bodyAppearances;
+        cachedThreadSolution = threadSolution;
+        cachedThreadLines = generatedThreadLines;
+      }
+
       // Debounced Extrude tool volume. This is presentation-only, but it is
       // generated from the same basis and signed offsets submitted to OCCT.
       const solidPreview = transientState.solidCommandPreview;
       const solidPreviewDependsOnScene =
         solidPreview?.kind === 'move_copy'
+        || solidPreview?.kind === 'hole'
+        || solidPreview?.kind === 'external_thread'
         || (solidPreview?.kind === 'extrude' && solidPreview.sourceFace !== null);
       const solidPreviewCached =
         solidPreview === cachedSolidPreview
@@ -1644,6 +2409,252 @@ export function Viewport() {
               width: 2,
               xray: true,
             });
+          }
+        } else if (solidPreview?.kind === 'hole') {
+          const body = transientState.solidScene.bodies.find(
+            (candidate) => candidate.id === solidPreview.bodyId,
+          );
+          if (body) {
+            const cutDirection = new CAD.Vector3(...solidPreview.basis.normal)
+              .normalize()
+              .multiplyScalar(solidPreview.flip ? 1 : -1);
+            const uAxis = new CAD.Vector3(...solidPreview.basis.u).normalize();
+            const vAxis = new CAD.Vector3(...solidPreview.basis.v).normalize();
+            const cutterPositions: number[] = [];
+            const meshMinimum = new CAD.Vector3(Infinity, Infinity, Infinity);
+            const meshMaximum = new CAD.Vector3(-Infinity, -Infinity, -Infinity);
+            for (let index = 0; index + 2 < body.mesh.positions.length; index += 3) {
+              const px = body.mesh.positions[index];
+              const py = body.mesh.positions[index + 1];
+              const pz = body.mesh.positions[index + 2];
+              meshMinimum.x = Math.min(meshMinimum.x, px);
+              meshMinimum.y = Math.min(meshMinimum.y, py);
+              meshMinimum.z = Math.min(meshMinimum.z, pz);
+              meshMaximum.x = Math.max(meshMaximum.x, px);
+              meshMaximum.y = Math.max(meshMaximum.y, py);
+              meshMaximum.z = Math.max(meshMaximum.z, pz);
+            }
+            const meshDiagonal = Number.isFinite(meshMinimum.x)
+              ? meshMaximum.clone().sub(meshMinimum).length()
+              : 0;
+            const fallbackDepth = Math.max(
+              meshDiagonal,
+              solidPreview.diameter * 2,
+              1,
+            );
+            const appendFrustum = (
+              center: CAD.Vector3,
+              start: number,
+              end: number,
+              startRadius: number,
+              endRadius: number,
+            ) => {
+              const segments = 32;
+              const startCenter = center.clone().addScaledVector(cutDirection, start);
+              const endCenter = center.clone().addScaledVector(cutDirection, end);
+              const ringPoint = (
+                ringCenter: CAD.Vector3,
+                radius: number,
+                angle: number,
+              ) => ringCenter.clone()
+                .addScaledVector(uAxis, Math.cos(angle) * radius)
+                .addScaledVector(vAxis, Math.sin(angle) * radius);
+              for (let index = 0; index < segments; index += 1) {
+                const firstAngle = (index / segments) * Math.PI * 2;
+                const secondAngle = ((index + 1) / segments) * Math.PI * 2;
+                const a = ringPoint(startCenter, startRadius, firstAngle);
+                const b = ringPoint(startCenter, startRadius, secondAngle);
+                const c = ringPoint(endCenter, endRadius, secondAngle);
+                const d = ringPoint(endCenter, endRadius, firstAngle);
+                cutterPositions.push(
+                  ...a.toArray(), ...b.toArray(), ...c.toArray(),
+                  ...a.toArray(), ...c.toArray(), ...d.toArray(),
+                  ...startCenter.toArray(), ...b.toArray(), ...a.toArray(),
+                  ...endCenter.toArray(), ...d.toArray(), ...c.toArray(),
+                );
+              }
+            };
+            for (const position of solidPreview.positions) {
+              const center = new CAD.Vector3(
+                ...pointOnBasis(solidPreview.basis, position),
+              );
+              let cutDepth = solidPreview.depth;
+              if (cutDepth === null) {
+                let farthest = 0;
+                for (
+                  let index = 0;
+                  index + 2 < body.mesh.positions.length;
+                  index += 3
+                ) {
+                  transientPosition.set(
+                    body.mesh.positions[index],
+                    body.mesh.positions[index + 1],
+                    body.mesh.positions[index + 2],
+                  );
+                  farthest = Math.max(
+                    farthest,
+                    transientPosition.clone().sub(center).dot(cutDirection),
+                  );
+                }
+                cutDepth = farthest > 0.05
+                  ? farthest + Math.max(0.5, solidPreview.diameter * 0.25)
+                  : fallbackDepth;
+              }
+              const radius = solidPreview.diameter / 2;
+              const overlap = Math.min(0.15, Math.max(0.02, radius * 0.08));
+              appendFrustum(center, -overlap, cutDepth, radius, radius);
+              if (solidPreview.style === 'counterbore') {
+                appendFrustum(
+                  center,
+                  -overlap,
+                  Math.min(cutDepth, solidPreview.counterboreDepth),
+                  solidPreview.counterboreDiameter / 2,
+                  solidPreview.counterboreDiameter / 2,
+                );
+              } else if (solidPreview.style === 'countersink') {
+                const largeRadius = solidPreview.countersinkDiameter / 2;
+                const sinkDepth = Math.min(
+                  cutDepth,
+                  Math.max(
+                    0.01,
+                    (largeRadius - radius)
+                      / Math.tan((solidPreview.countersinkAngleDeg * Math.PI) / 360),
+                  ),
+                );
+                appendFrustum(center, -overlap, sinkDepth, largeRadius, radius);
+              }
+              if (
+                solidPreview.depth !== null
+                && solidPreview.bottomStyle === 'drill_point'
+                && solidPreview.drillPointAngleDeg > 0
+                && solidPreview.drillPointAngleDeg < 180
+              ) {
+                const tipDepth = radius
+                  / Math.tan((solidPreview.drillPointAngleDeg * Math.PI) / 360);
+                appendFrustum(
+                  center,
+                  cutDepth,
+                  cutDepth + tipDepth,
+                  radius,
+                  0,
+                );
+              }
+              const arrowLength = Math.min(20, Math.max(5, cutDepth * 0.35));
+              const arrowEnd = center.clone().addScaledVector(cutDirection, arrowLength);
+              arrows.push({
+                start: [center.x, center.y, center.z],
+                end: [arrowEnd.x, arrowEnd.y, arrowEnd.z],
+                color: rgbaFromHex(0xff6b5f, 1),
+                width: 2,
+                xray: true,
+              });
+            }
+            if (cutterPositions.length >= 9) {
+              triangles.push({
+                color: rgbaFromHex(0xff6b5f, 0.24),
+                positions: cutterPositions,
+                xray: true,
+              });
+            }
+          }
+        } else if (solidPreview?.kind === 'external_thread') {
+          const body = transientState.solidScene.bodies.find(
+            (candidate) => candidate.id === solidPreview.bodyId,
+          );
+          const face = body?.faces.find(
+            (candidate) => candidate.id === solidPreview.faceId,
+          );
+          if (body && face) {
+            const origin = new CAD.Vector3(
+              solidPreview.cylinder.origin.x,
+              solidPreview.cylinder.origin.y,
+              solidPreview.cylinder.origin.z,
+            );
+            const axis = new CAD.Vector3(
+              solidPreview.cylinder.axis.x,
+              solidPreview.cylinder.axis.y,
+              solidPreview.cylinder.axis.z,
+            ).normalize();
+            const reference = new CAD.Vector3(
+              solidPreview.cylinder.reference.x,
+              solidPreview.cylinder.reference.y,
+              solidPreview.cylinder.reference.z,
+            ).addScaledVector(
+              axis,
+              -new CAD.Vector3(
+                solidPreview.cylinder.reference.x,
+                solidPreview.cylinder.reference.y,
+                solidPreview.cylinder.reference.z,
+              ).dot(axis),
+            ).normalize();
+            const tangent = axis.clone().cross(reference).normalize();
+            let minimum = Infinity;
+            let maximum = -Infinity;
+            const end = Math.min(
+              body.mesh.indices.length,
+              face.first_index + face.index_count,
+            );
+            for (let slot = face.first_index; slot < end; slot += 1) {
+              const vertex = body.mesh.indices[slot] * 3;
+              const point = new CAD.Vector3(
+                body.mesh.positions[vertex],
+                body.mesh.positions[vertex + 1],
+                body.mesh.positions[vertex + 2],
+              );
+              const axial = point.sub(origin).dot(axis);
+              minimum = Math.min(minimum, axial);
+              maximum = Math.max(maximum, axial);
+            }
+            if (
+              Number.isFinite(minimum)
+              && maximum > minimum
+              && reference.lengthSq() > 1e-12
+              && tangent.lengthSq() > 1e-12
+            ) {
+              const available = maximum - minimum;
+              const length = Math.min(
+                available,
+                solidPreview.thread.depth ?? available,
+              );
+              const direction = axis.clone().multiplyScalar(solidPreview.flip ? -1 : 1);
+              const start = origin.clone().addScaledVector(
+                axis,
+                solidPreview.flip ? maximum : minimum,
+              );
+              const finish = start.clone().addScaledVector(direction, length);
+              const shellPositions: number[] = [];
+              const radius = solidPreview.cylinder.radius
+                + Math.max(0.0004, solidPreview.cylinder.radius * 0.0006);
+              const segments = 32;
+              const ringPoint = (center: CAD.Vector3, angle: number) => center
+                .clone()
+                .addScaledVector(reference, Math.cos(angle) * radius)
+                .addScaledVector(tangent, Math.sin(angle) * radius);
+              for (let index = 0; index < segments; index += 1) {
+                const first = (index / segments) * Math.PI * 2;
+                const second = ((index + 1) / segments) * Math.PI * 2;
+                const a = ringPoint(start, first);
+                const b = ringPoint(start, second);
+                const c = ringPoint(finish, second);
+                const d = ringPoint(finish, first);
+                shellPositions.push(
+                  ...a.toArray(), ...b.toArray(), ...c.toArray(),
+                  ...a.toArray(), ...c.toArray(), ...d.toArray(),
+                );
+              }
+              triangles.push({
+                color: rgbaFromHex(COLOR_PREVIEW, 0.14),
+                positions: shellPositions,
+                xray: true,
+              });
+              arrows.push({
+                start: start.toArray() as [number, number, number],
+                end: finish.toArray() as [number, number, number],
+                color: rgbaFromHex(COLOR_PREVIEW, 1),
+                width: 2,
+                xray: true,
+              });
+            }
           }
         } else if (solidPreview?.kind === 'offset_plane') {
           const [halfU, halfV] = solidPreview.halfSize;
@@ -2058,6 +3069,28 @@ export function Viewport() {
       return line;
     };
 
+    /**
+     * Construction-only acquisition feedback. These guides communicate an
+     * inferred alignment or virtual continuation; they must never look like
+     * committed geometry or the solid rubber-band segment being created.
+     */
+    const addAlignmentGuide = (
+      group: CAD.Group,
+      positions: number[],
+    ) => {
+      const line = addScreenPolyline(
+        group,
+        positions,
+        COLOR_PREVIEW,
+        1.15,
+        5,
+        false,
+        0.68,
+      );
+      line.userData.nativeLinePattern = 'dotted';
+      return line;
+    };
+
     /** Independent constant-screen-width segments, used for derived face
      * perimeters and whole-body topology silhouettes. */
     const addScreenSegments = (
@@ -2199,12 +3232,12 @@ export function Viewport() {
         };
         addGripLayer(
           gripPoints.filter((point) => !emphasized(point.id)),
-          7,
+          5,
           5,
         );
         addGripLayer(
           gripPoints.filter((point) => emphasized(point.id)),
-          10,
+          8,
           6,
         );
       }
@@ -2258,6 +3291,24 @@ export function Viewport() {
           const len = Math.hypot(dx, dy) || 1;
           const sprite = makeSprite(midpointTexture, 13, 7);
           sprite.position.set(mid.x + (-dy / len) * 6, mid.y + (dx / len) * 6, 0.2);
+          sprite.userData.nativeAnnotationText = '△';
+          sprite.userData.nativeAnnotationKind = 'constraint';
+          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_FINISH).getHex();
+          glyphGroup.add(sprite);
+          continue;
+        }
+        if (constraint.type === 'reference_midpoint') {
+          // A support-edge midpoint is a persistent external constraint. Its
+          // point stays exactly on the stable OCCT edge midpoint when
+          // dimensions are edited or the supporting face is recomputed.
+          const point = sketch.entities.find(
+            (entity) => entity.kind === 'point' && entity.id === constraint.point,
+          );
+          const position =
+            point?.kind === 'point' ? point.position : constraint.position;
+          if (!position) continue;
+          const sprite = makeSprite(midpointTexture, 13, 7);
+          sprite.position.set(position.x + 5, position.y + 5, 0.2);
           sprite.userData.nativeAnnotationText = '△';
           sprite.userData.nativeAnnotationKind = 'constraint';
           sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_FINISH).getHex();
@@ -2380,6 +3431,7 @@ export function Viewport() {
       sprite.userData.nativeAnnotationColor = opts.selected
         ? COLOR_DIMENSION_SELECTED
         : COLOR_DIMENSION;
+      sprite.userData.dimensionId = opts.dimId;
       dimSprites.push({
         sprite,
         px: 19,
@@ -2411,8 +3463,16 @@ export function Viewport() {
           if (len < 1e-9) return;
           const u = { x: d.x / len, y: d.y / len };
           const n = { x: -u.y, y: u.x };
-          let offset = (textPos.x - a.x) * n.x + (textPos.y - a.y) * n.y;
-          if (Math.abs(offset) < 6) offset = offset >= 0 ? 6 : -6;
+          const rawOffset = (textPos.x - a.x) * n.x + (textPos.y - a.y) * n.y;
+          const minimumScreenOffset = worldPerPixel() * 10;
+          let offset = rawOffset;
+          if (Math.abs(offset) < minimumScreenOffset) {
+            offset = (offset < 0 ? -1 : 1) * minimumScreenOffset;
+          }
+          const displayTextPos = {
+            x: textPos.x + n.x * (offset - rawOffset),
+            y: textPos.y + n.y * (offset - rawOffset),
+          };
           const s = Math.sign(offset);
           const a2 = { x: a.x + n.x * offset, y: a.y + n.y * offset };
           const b2 = { x: b.x + n.x * offset, y: b.y + n.y * offset };
@@ -2423,7 +3483,7 @@ export function Viewport() {
           const uAng = Math.atan2(u.y, u.x);
           makeArrow(group, fits ? uAng : uAng + Math.PI, a2, z, green);
           makeArrow(group, fits ? uAng + Math.PI : uAng, b2, z, green);
-          addDimText(group, dimLike, textPos, new CAD.Vector3(u.x, u.y, 0), {
+          addDimText(group, dimLike, displayTextPos, new CAD.Vector3(u.x, u.y, 0), {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
@@ -2506,6 +3566,67 @@ export function Viewport() {
         if (d <= tol && (!best || d < best.d)) best = { id: dim.constraint_id, d };
       }
       return best?.id ?? null;
+    };
+
+    /** Pick the complete visible dimension label, not only a small radius
+     * around its center. The explicit screen-space rectangle is authoritative
+     * in native mode (where Three's canvas is only an interaction surface),
+     * while sprite raycasting remains a browser-renderer fallback. */
+    const pickDimensionAtPointer = (event: PointerEvent): number | null => {
+      const entries = dimSprites.filter(
+        ({ sprite, dimId }) => dimId >= 0 && sprite.parent !== null,
+      );
+      if (entries.length === 0) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const world = new CAD.Vector3();
+      scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const { sprite, px, dimId } = entries[index];
+        const ndc = sprite.getWorldPosition(world).project(camera);
+        if (ndc.z < -1 || ndc.z > 1) continue;
+        const centerX = rect.left + ((ndc.x + 1) / 2) * rect.width;
+        const centerY = rect.top + ((1 - ndc.y) / 2) * rect.height;
+        const texture = (sprite.material as CAD.SpriteMaterial).map;
+        const aspect = texture
+          ? (texture.image?.width ?? 4) / (texture.image?.height ?? 1)
+          : 4;
+        const dx = event.clientX - centerX;
+        const dy = event.clientY - centerY;
+        // SpriteMaterial rotation is in NDC (Y up); client-space Y points
+        // down, so its visible screen angle has the opposite sign.
+        const screenAngle = -(sprite.material as CAD.SpriteMaterial).rotation;
+        const cosine = Math.cos(screenAngle);
+        const sine = Math.sin(screenAngle);
+        const localX = dx * cosine + dy * sine;
+        const localY = -dx * sine + dy * cosine;
+        const halfWidth = (px * aspect) / 2 + 4;
+        const halfHeight = px / 2 + 4;
+        // Native Bevy annotations are deliberately kept upright even when an
+        // ISO-aligned browser sprite is rotated. Accept the visible, centered
+        // native label rectangle first, then retain the rotated sprite test as
+        // the browser-renderer fallback. This also provides a forgiving hit
+        // target around the number without expanding dimension-line picking.
+        if (Math.abs(dx) <= halfWidth && Math.abs(dy) <= halfHeight) {
+          return dimId;
+        }
+        if (
+          Math.abs(localX) <= halfWidth
+          && Math.abs(localY) <= halfHeight
+        ) {
+          return dimId;
+        }
+      }
+
+      raycaster.setFromCamera(ndcFromEvent(event), camera);
+      const hit = raycaster.intersectObjects(
+        entries.map(({ sprite }) => sprite),
+        false,
+      )[0];
+      const dimensionId = hit?.object.userData.dimensionId;
+      return typeof dimensionId === 'number' && dimensionId >= 0
+        ? dimensionId
+        : null;
     };
     const setupSketchScene = (sketch: SketchDto) => {
       const { basis } = sketch;
@@ -3228,6 +4349,10 @@ export function Viewport() {
             ? chip(t('sketch.inferenceH'))
             : i === 'vertical'
               ? chip(t('sketch.inferenceV'))
+              : i === 'tracking_horizontal'
+                ? chip('Y ALIGN')
+                : i === 'tracking_vertical'
+                  ? chip('X ALIGN')
               : coincident,
         )
         .join('');
@@ -3249,6 +4374,12 @@ export function Viewport() {
     let dragPumpRunning = false;
     let downInfo: { x: number; y: number; candidate: number | null; dimCandidate: number | null } | null =
       null;
+    let lastDimensionClick: {
+      dimId: number;
+      time: number;
+      x: number;
+      y: number;
+    } | null = null;
     let previewSeq = 0;
     /** Last cursor position in sketch coords (commit/drag-end fallback). */
     let lastSketchPoint: Vec2 | null = null;
@@ -3784,6 +4915,16 @@ export function Viewport() {
       tool: ToolId;
       /** Collected snapped points (line: [chain start]). */
       points: Vec2[];
+      /** Exact carrier identity for a line whose first point is a visual
+       * crossing without an existing topological point. */
+      startCrossing?: CurveCrossingRequest | null;
+      /** Prevent repeated Enter/click events from submitting the same async
+       * segment more than once. */
+      committing?: boolean;
+      /** A completed chained segment requires fresh pointer movement or new
+       * typed input before the next commit. This keeps an extra Enter from
+       * immediately backtracking over the segment that just finished. */
+      awaitingPointerMove?: boolean;
     }
     let toolRun: ToolRun | null = null;
 
@@ -3798,6 +4939,151 @@ export function Viewport() {
       if (Math.abs(det) < 1e-12) return null;
       const t = ((l2.start.x - l1.start.x) * d2.y - (l2.start.y - l1.start.y) * d2.x) / det;
       return { x: l1.start.x + t * d1.x, y: l1.start.y + t * d1.y };
+    };
+
+    const curveContainsAngle = (
+      curve: Extract<EntityDto, { kind: 'arc' }>,
+      point: Vec2,
+    ) => {
+      const angle = Math.atan2(point.y - curve.center.y, point.x - curve.center.x);
+      return (
+        ccwSweep(curve.start_angle, angle)
+          <= ccwSweep(curve.start_angle, curve.end_angle) + 1e-9
+      );
+    };
+
+    /** Exact analytic intersections used only for screen-space acquisition.
+     * Commit sends both stable carrier ids to Rust, which recomputes the same
+     * crossing from authoritative geometry. Splines are deliberately omitted
+     * until the engine has an exact spline intersector; tessellation must not
+     * become persistent sketch topology. */
+    const finiteCurveIntersections = (first: EntityDto, second: EntityDto): Vec2[] => {
+      const isLine = (entity: EntityDto): entity is Extract<EntityDto, { kind: 'line' }> =>
+        entity.kind === 'line' && !entity.consumed;
+      const isCircular = (
+        entity: EntityDto,
+      ): entity is Extract<EntityDto, { kind: 'circle' | 'arc' }> =>
+        entity.kind === 'circle' || entity.kind === 'arc';
+      const onCircularSpan = (
+        entity: Extract<EntityDto, { kind: 'circle' | 'arc' }>,
+        point: Vec2,
+      ) => entity.kind === 'circle' || curveContainsAngle(entity, point);
+      const dedupe = (points: Vec2[]) => {
+        const unique: Vec2[] = [];
+        for (const point of points) {
+          if (
+            Number.isFinite(point.x)
+            && Number.isFinite(point.y)
+            && !unique.some((candidate) =>
+              Math.hypot(candidate.x - point.x, candidate.y - point.y) <= 1e-9,
+            )
+          ) {
+            unique.push(point);
+          }
+        }
+        return unique;
+      };
+
+      if (isLine(first) && isLine(second)) {
+        const d1 = {
+          x: first.end.x - first.start.x,
+          y: first.end.y - first.start.y,
+        };
+        const d2 = {
+          x: second.end.x - second.start.x,
+          y: second.end.y - second.start.y,
+        };
+        const determinant = d1.x * d2.y - d1.y * d2.x;
+        if (Math.abs(determinant) <= 1e-12) return [];
+        const offset = {
+          x: second.start.x - first.start.x,
+          y: second.start.y - first.start.y,
+        };
+        const firstParameter = (offset.x * d2.y - offset.y * d2.x) / determinant;
+        const secondParameter = (offset.x * d1.y - offset.y * d1.x) / determinant;
+        if (
+          firstParameter < -1e-9
+          || firstParameter > 1 + 1e-9
+          || secondParameter < -1e-9
+          || secondParameter > 1 + 1e-9
+        ) {
+          return [];
+        }
+        return [{
+          x: first.start.x + firstParameter * d1.x,
+          y: first.start.y + firstParameter * d1.y,
+        }];
+      }
+
+      const lineCircular = (
+        line: Extract<EntityDto, { kind: 'line' }>,
+        circular: Extract<EntityDto, { kind: 'circle' | 'arc' }>,
+      ) => {
+        const direction = {
+          x: line.end.x - line.start.x,
+          y: line.end.y - line.start.y,
+        };
+        const relative = {
+          x: line.start.x - circular.center.x,
+          y: line.start.y - circular.center.y,
+        };
+        const a = direction.x * direction.x + direction.y * direction.y;
+        if (a <= 1e-18) return [];
+        const b = 2 * (relative.x * direction.x + relative.y * direction.y);
+        const c =
+          relative.x * relative.x
+          + relative.y * relative.y
+          - circular.radius * circular.radius;
+        const discriminant = b * b - 4 * a * c;
+        if (discriminant < -1e-9) return [];
+        const root = Math.sqrt(Math.max(0, discriminant));
+        const parameters = [(-b - root) / (2 * a), (-b + root) / (2 * a)];
+        return dedupe(
+          parameters
+            .filter((parameter) => parameter >= -1e-9 && parameter <= 1 + 1e-9)
+            .map((parameter) => ({
+              x: line.start.x + parameter * direction.x,
+              y: line.start.y + parameter * direction.y,
+            }))
+            .filter((point) => onCircularSpan(circular, point)),
+        );
+      };
+      if (isLine(first) && isCircular(second)) return lineCircular(first, second);
+      if (isCircular(first) && isLine(second)) return lineCircular(second, first);
+
+      if (isCircular(first) && isCircular(second)) {
+        const dx = second.center.x - first.center.x;
+        const dy = second.center.y - first.center.y;
+        const centerDistance = Math.hypot(dx, dy);
+        if (
+          centerDistance <= 1e-12
+          || centerDistance > first.radius + second.radius + 1e-9
+          || centerDistance < Math.abs(first.radius - second.radius) - 1e-9
+        ) {
+          return [];
+        }
+        const along =
+          (first.radius * first.radius
+            - second.radius * second.radius
+            + centerDistance * centerDistance)
+          / (2 * centerDistance);
+        const height = Math.sqrt(Math.max(0, first.radius * first.radius - along * along));
+        const base = {
+          x: first.center.x + (along * dx) / centerDistance,
+          y: first.center.y + (along * dy) / centerDistance,
+        };
+        const perpendicular = {
+          x: (-dy * height) / centerDistance,
+          y: (dx * height) / centerDistance,
+        };
+        return dedupe([
+          { x: base.x + perpendicular.x, y: base.y + perpendicular.y },
+          { x: base.x - perpendicular.x, y: base.y - perpendicular.y },
+        ]).filter(
+          (point) => onCircularSpan(first, point) && onCircularSpan(second, point),
+        );
+      }
+      return [];
     };
 
     /** Chamfer cut point: from the vertex toward the FARTHER endpoint (gen
@@ -3937,6 +5223,7 @@ export function Viewport() {
     const acquireCreateSnap = (
       p: Vec2,
       allowMidpoint = false,
+      excludePosition: Vec2 | null = null,
     ): { point: Vec2; target: SnapTarget } => {
       const state = store.getState();
       if (!state.palette.snap) return { point: p, target: { kind: 'none' } };
@@ -3945,6 +5232,15 @@ export function Viewport() {
       let bestPoint: { id: number; point: Vec2; distance: number } | null = null;
       for (const entity of sketch?.entities ?? []) {
         if (entity.kind !== 'point') continue;
+        if (
+          excludePosition
+          && Math.hypot(
+            entity.position.x - excludePosition.x,
+            entity.position.y - excludePosition.y,
+          ) <= 1e-7
+        ) {
+          continue;
+        }
         const distance = Math.hypot(entity.position.x - p.x, entity.position.y - p.y);
         if (distance <= tolerance && (!bestPoint || distance < bestPoint.distance)) {
           bestPoint = { id: entity.id, point: entity.position, distance };
@@ -3956,8 +5252,65 @@ export function Viewport() {
           target: { kind: 'point', entity: bestPoint.id },
         };
       }
-      if (Math.hypot(p.x, p.y) <= tolerance) {
+      if (
+        Math.hypot(p.x, p.y) <= tolerance
+        && (!excludePosition || Math.hypot(excludePosition.x, excludePosition.y) > 1e-7)
+      ) {
         return { point: { x: 0, y: 0 }, target: { kind: 'origin' } };
+      }
+      type CrossingCandidate = {
+        first: number;
+        second: number;
+        point: Vec2;
+        distance: number;
+      };
+      // A crossing under the cursor can only involve carriers that are also
+      // under the cursor. Restricting the pair search here keeps acquisition
+      // local instead of doing O(all-curves²) work on every pointer frame.
+      const curveEntities = (sketch?.entities ?? []).filter((entity) => {
+        if (
+          !((entity.kind === 'line' && !entity.consumed)
+            || entity.kind === 'circle'
+            || entity.kind === 'arc')
+        ) {
+          return false;
+        }
+        const nearest = closestPointOnEntity(entity, p);
+        return !!nearest && Math.hypot(nearest.x - p.x, nearest.y - p.y) <= tolerance;
+      });
+      let bestCrossing: CrossingCandidate | null = null;
+      for (let firstIndex = 0; firstIndex < curveEntities.length; firstIndex += 1) {
+        for (let secondIndex = firstIndex + 1; secondIndex < curveEntities.length; secondIndex += 1) {
+          const first = curveEntities[firstIndex];
+          const second = curveEntities[secondIndex];
+          for (const point of finiteCurveIntersections(first, second)) {
+            if (
+              excludePosition
+              && Math.hypot(point.x - excludePosition.x, point.y - excludePosition.y) <= 1e-7
+            ) {
+              continue;
+            }
+            const distance = Math.hypot(point.x - p.x, point.y - p.y);
+            if (distance <= tolerance && (!bestCrossing || distance < bestCrossing.distance)) {
+              bestCrossing = {
+                first: first.id,
+                second: second.id,
+                point,
+                distance,
+              };
+            }
+          }
+        }
+      }
+      if (bestCrossing) {
+        return {
+          point: { ...bestCrossing.point },
+          target: {
+            kind: 'intersection',
+            first: bestCrossing.first,
+            second: bestCrossing.second,
+          },
+        };
       }
       if (allowMidpoint) {
         let bestMidpoint: { id: number; point: Vec2; distance: number } | null = null;
@@ -3967,6 +5320,12 @@ export function Viewport() {
             x: (entity.start.x + entity.end.x) / 2,
             y: (entity.start.y + entity.end.y) / 2,
           };
+          if (
+            excludePosition
+            && Math.hypot(midpoint.x - excludePosition.x, midpoint.y - excludePosition.y) <= 1e-7
+          ) {
+            continue;
+          }
           const distance = Math.hypot(midpoint.x - p.x, midpoint.y - p.y);
           if (distance <= tolerance && (!bestMidpoint || distance < bestMidpoint.distance)) {
             bestMidpoint = { id: entity.id, point: midpoint, distance };
@@ -3982,6 +5341,15 @@ export function Viewport() {
           | { edge: number; point: Vec2; distance: number }
           | null = null;
         for (const reference of sketch?.reference_midpoints ?? []) {
+          if (
+            excludePosition
+            && Math.hypot(
+              reference.position.x - excludePosition.x,
+              reference.position.y - excludePosition.y,
+            ) <= 1e-7
+          ) {
+            continue;
+          }
           const distance = Math.hypot(
             reference.position.x - p.x,
             reference.position.y - p.y,
@@ -4024,6 +5392,8 @@ export function Viewport() {
     type LineIntent = {
       hint: Vec2;
       tracking: LineTrackingRequest | null;
+      intersection: LineIntersectionRequest | null;
+      crossing: CurveCrossingRequest | null;
     };
 
     /**
@@ -4041,17 +5411,31 @@ export function Viewport() {
       ctrlHeld: boolean,
       allowMidpoint = true,
     ): LineIntent => {
-      const acquired = acquireCreateSnap(p, allowMidpoint);
+      // A chained line must not magnetize back onto its own start point (or a
+      // crossing at that same coordinate). That would manufacture a
+      // degenerate/diagonal preview before H/V intent gets a chance to win.
+      const acquired = acquireCreateSnap(p, allowMidpoint, anchor);
       if (acquired.target.kind !== 'grid') {
-        return { hint: acquired.point, tracking: null };
+        return {
+          hint: acquired.point,
+          tracking: null,
+          intersection: null,
+          crossing:
+            acquired.target.kind === 'intersection'
+              ? {
+                  first: acquired.target.first,
+                  second: acquired.target.second,
+                }
+              : null,
+        };
       }
       const state = store.getState();
       if (ctrlHeld || !state.palette.snap || !state.activeSketch) {
-        return { hint: p, tracking: null };
+        return { hint: p, tracking: null, intersection: null, crossing: null };
       }
       // With both fields locked there is no free DOF for tracking to consume.
       if (locks.length !== undefined && locks.angle !== undefined) {
-        return { hint: p, tracking: null };
+        return { hint: p, tracking: null, intersection: null, crossing: null };
       }
 
       const wpp = worldPerPixel();
@@ -4059,6 +5443,125 @@ export function Viewport() {
       const reach = wpp * LINE_TRACKING_REACH_PX;
       const ambiguity = wpp * LINE_TRACKING_AMBIGUITY_PX;
       const angle = locks.angle === undefined ? undefined : CAD.MathUtils.degToRad(locks.angle);
+
+      // Exact geometry intersections outrank the grid. When the cursor
+      // expresses a horizontal/vertical line, intersect that ray with a
+      // nearby visible curve and let the engine persist point-on-curve.
+      // This leaves the grid as a fallback for otherwise-free coordinates.
+      const axisIntent = (() => {
+        if (locks.length !== undefined) return null;
+        if (angle !== undefined) {
+          if (Math.abs(Math.sin(angle)) <= 1e-7) return 'horizontal' as const;
+          if (Math.abs(Math.cos(angle)) <= 1e-7) return 'vertical' as const;
+          return null;
+        }
+        const delta = { x: p.x - anchor.x, y: p.y - anchor.y };
+        const tolerance = Math.tan(CAD.MathUtils.degToRad(LINE_AXIS_INFERENCE_TOL_DEG));
+        if (Math.abs(delta.x) >= Math.abs(delta.y) && Math.abs(delta.y) <= tolerance * Math.abs(delta.x)) {
+          return 'horizontal' as const;
+        }
+        if (Math.abs(delta.y) > Math.abs(delta.x) && Math.abs(delta.x) <= tolerance * Math.abs(delta.y)) {
+          return 'vertical' as const;
+        }
+        return null;
+      })();
+
+      if (axisIntent) {
+        type CurveCandidate = {
+          curve: number;
+          point: Vec2;
+          cursorDistance: number;
+        };
+        const curveCandidates: CurveCandidate[] = [];
+        const rawTravel = axisIntent === 'horizontal' ? p.x - anchor.x : p.y - anchor.y;
+        const onForwardRay = (point: Vec2) => {
+          const travel = axisIntent === 'horizontal'
+            ? point.x - anchor.x
+            : point.y - anchor.y;
+          return Math.abs(travel) > 1e-7 && travel * rawTravel >= 0;
+        };
+        const consider = (curve: number, point: Vec2) => {
+          if (!onForwardRay(point)) return;
+          const cursorDistance = Math.hypot(point.x - p.x, point.y - p.y);
+          if (cursorDistance <= capture) {
+            curveCandidates.push({ curve, point, cursorDistance });
+          }
+        };
+
+        for (const entity of state.activeSketch.entities) {
+          if (entity.kind === 'line' && !entity.consumed) {
+            const delta = {
+              x: entity.end.x - entity.start.x,
+              y: entity.end.y - entity.start.y,
+            };
+            const parameter = axisIntent === 'horizontal'
+              ? Math.abs(delta.y) > 1e-9
+                ? (anchor.y - entity.start.y) / delta.y
+                : null
+              : Math.abs(delta.x) > 1e-9
+                ? (anchor.x - entity.start.x) / delta.x
+                : null;
+            if (parameter !== null && parameter >= -1e-7 && parameter <= 1 + 1e-7) {
+              consider(entity.id, {
+                x: entity.start.x + delta.x * Math.max(0, Math.min(1, parameter)),
+                y: entity.start.y + delta.y * Math.max(0, Math.min(1, parameter)),
+              });
+            }
+            continue;
+          }
+          if (entity.kind !== 'circle' && entity.kind !== 'arc') continue;
+          const fixed = axisIntent === 'horizontal'
+            ? anchor.y - entity.center.y
+            : anchor.x - entity.center.x;
+          if (Math.abs(fixed) > entity.radius + 1e-7) continue;
+          const free = Math.sqrt(Math.max(0, entity.radius * entity.radius - fixed * fixed));
+          const points = axisIntent === 'horizontal'
+            ? [
+                { x: entity.center.x + free, y: anchor.y },
+                { x: entity.center.x - free, y: anchor.y },
+              ]
+            : [
+                { x: anchor.x, y: entity.center.y + free },
+                { x: anchor.x, y: entity.center.y - free },
+              ];
+          for (const point of points) {
+            if (entity.kind === 'arc') {
+              const pointAngle = Math.atan2(
+                point.y - entity.center.y,
+                point.x - entity.center.x,
+              );
+              if (
+                ccwSweep(entity.start_angle, pointAngle)
+                  > ccwSweep(entity.start_angle, entity.end_angle) + 1e-7
+              ) {
+                continue;
+              }
+            }
+            consider(entity.id, point);
+          }
+        }
+
+        curveCandidates.sort((a, b) => a.cursorDistance - b.cursorDistance);
+        const bestCurve = curveCandidates[0];
+        const nextCurve = curveCandidates[1];
+        if (
+          bestCurve
+          && (!nextCurve || nextCurve.cursorDistance - bestCurve.cursorDistance > ambiguity)
+        ) {
+          return {
+            hint: p,
+            tracking: null,
+            intersection: { curve: bestCurve.curve, axis: axisIntent },
+            crossing: null,
+          };
+        }
+
+        // A new segment's own horizontal/vertical intent is stronger than
+        // alignment tracking to an unrelated point. Falling through here
+        // used to replace a straight chained segment with a diagonal endpoint
+        // plus a vertical guide, producing the misleading “triangle”.
+        return { hint: p, tracking: null, intersection: null, crossing: null };
+      }
 
       const trackedCandidate = (
         source: Vec2,
@@ -4154,14 +5657,30 @@ export function Viewport() {
         !best
         || (next && next.cursorDistance - best.cursorDistance <= ambiguity)
       ) {
-        return { hint: p, tracking: null };
+        return { hint: p, tracking: null, intersection: null, crossing: null };
       }
-      return { hint: p, tracking: best.request };
+      return { hint: p, tracking: best.request, intersection: null, crossing: null };
     };
 
     /** Snap the cursor through the engine (points > origin > grid > raw). */
     const snapCursorInfo = async (p: Vec2, allowMidpoint = false): Promise<PreviewDto> => {
       const acquired = acquireCreateSnap(p, allowMidpoint);
+      // Screen-space acquisition already resolved magnetic geometry using a
+      // zoom-aware tolerance. Sending that exact point through a second
+      // endpoint snap can exclude the point as the segment's own start and
+      // replace it with a nearby grid coordinate. Preserve every non-grid
+      // result; the engine is only needed to resolve the ordinary grid/raw
+      // fallback.
+      if (acquired.target.kind !== 'grid') {
+        return {
+          snapped_to: acquired.point,
+          snap: acquired.target,
+          inferences:
+            acquired.target.kind === 'point' || acquired.target.kind === 'origin'
+              ? ['coincident']
+              : [],
+        };
+      }
       if (!engine) {
         return {
           snapped_to: acquired.point,
@@ -4447,7 +5966,7 @@ export function Viewport() {
       setPreviewPositions([from.x, from.y, 0.12, snapped.x, snapped.y, 0.12]);
       clearGroup(trackingGuideGroup);
       if (tracking) {
-        addScreenPolyline(
+        addAlignmentGuide(
           trackingGuideGroup,
           [
             tracking.source.x,
@@ -4457,17 +5976,12 @@ export function Viewport() {
             tracking.snapped_to.y,
             0.1,
           ],
-          COLOR_PREVIEW,
-          1.15,
-          5,
-          false,
-          0.62,
         );
       }
       showSnapMarker(snapped, nativeSnapKind(snapKind ?? 'grid'));
       const rect = surface.domElement.getBoundingClientRect();
       showChips(
-        tracking ? [...inferences, tracking.axis] : inferences,
+        tracking ? [...inferences, `tracking_${tracking.axis}`] : inferences,
         e.clientX - rect.left,
         e.clientY - rect.top,
       );
@@ -4489,12 +6003,15 @@ export function Viewport() {
             .previewSegmentLocked({
               from: anchor,
               to_hint: intent.hint,
+              from_crossing: run.startCrossing ?? null,
+              to_crossing: intent.crossing,
               length_mm: locks.length ?? null,
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
               ctrl_held: e.ctrlKey,
               tracking: intent.tracking,
+              intersection: intent.intersection,
             })
             .then((preview) => {
               if (seq !== previewSeq) return;
@@ -4730,17 +6247,23 @@ export function Viewport() {
       };
       switch (run.tool) {
         case 'line': {
+          if (run.committing || run.awaitingPointerMove) return;
+          run.committing = true;
+          store.getState().setDynPending(true);
           const intent = acquireLineIntent(p, anchor, locks, ctrlHeld, !ctrlHeld);
           void engine
             .addLineLocked({
               from: anchor,
               to_hint: intent.hint,
+              from_crossing: run.startCrossing ?? null,
+              to_crossing: intent.crossing,
               length_mm: locks.length ?? null,
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
               ctrl_held: ctrlHeld,
               tracking: intent.tracking,
+              intersection: intent.intersection,
             })
             .then((result) => {
               store.getState().setActiveSketch(result.sketch);
@@ -4748,12 +6271,22 @@ export function Viewport() {
               const end = result.sketch.entities.find((en) => en.id === result.end_point_id);
               if (end && end.kind === 'point') {
                 run.points[0] = end.position;
+                // The committed endpoint is now a real topological point,
+                // including when it originated at a curve crossing.
+                run.startCrossing = null;
+                run.committing = false;
+                run.awaitingPointerMove = true;
                 store.getState().clearDynLocks();
+                store.getState().setDynPending(false);
               } else {
                 endToolRun();
               }
             })
-            .catch((error) => reportToolError(error, 'Cannot create line'));
+            .catch((error) => {
+              run.committing = false;
+              store.getState().setDynPending(false);
+              reportToolError(error, 'Cannot create line');
+            });
           break;
         }
         case 'midpointLine': {
@@ -4905,7 +6438,17 @@ export function Viewport() {
           startSnapPending = false;
           if (seq !== startSeq) return;
           const snapped = preview.snapped_to;
-          toolRun = { tool, points: [snapped] };
+          toolRun = {
+            tool,
+            points: [snapped],
+            startCrossing:
+              tool === 'line' && preview.snap.kind === 'intersection'
+                ? {
+                    first: preview.snap.first,
+                    second: preview.snap.second,
+                  }
+                : null,
+          };
           showSnapMarker(snapped, nativeSnapKind(preview.snap.kind));
           const fields = TOOL_FIELDS[tool];
           // Slot arms its width field only after the second center is picked —
@@ -5003,6 +6546,9 @@ export function Viewport() {
       if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
         // Any printable character: digits, operators, and formula
         // identifiers/functions (d1, sin, sqrt, =25*2, …, D9).
+        // Typing is also explicit intent to define the next chained segment,
+        // even if its pointer preview has not moved since the previous one.
+        if (toolRun && !toolRun.committing) toolRun.awaitingPointerMove = false;
         const idx = d.focus ?? 0;
         const f = visible[idx];
         if (!f) return true;
@@ -5015,6 +6561,7 @@ export function Viewport() {
         return true;
       }
       if (e.key === 'Backspace' && d.focus !== null) {
+        if (toolRun && !toolRun.committing) toolRun.awaitingPointerMove = false;
         const f = visible[d.focus];
         const current = d.fields.find((x) => x.key === f.key);
         if (current) {
@@ -5484,6 +7031,7 @@ export function Viewport() {
         const pointColors: number[] = [];
         const emphasisPointPositions: number[] = [];
         const emphasisPointColors: number[] = [];
+        const hoveredHolePointPositions: number[] = [];
         const selectedHolePointPositions: number[] = [];
         const pointColor = new CAD.Color();
         const addFinishedPoint = (
@@ -5581,12 +7129,13 @@ export function Viewport() {
               const localZ = local.dot(n);
               if (selected) {
                 selectedHolePointPositions.push(localX, localY, localZ + 0.06);
+              } else if (hovered) {
+                hoveredHolePointPositions.push(localX, localY, localZ + 0.06);
               } else {
                 addFinishedPoint(
                   { x: localX, y: localY },
                   localZ + 0.06,
-                  hovered ? COLOR_HOVER : COLOR_FINISHED_POINT,
-                  true,
+                  COLOR_FINISHED_POINT,
                 );
               }
             }
@@ -5663,7 +7212,7 @@ export function Viewport() {
             new CAD.Float32BufferAttribute(pointPositions, 3),
           );
           const outlineMaterial = new CAD.PointsMaterial({
-            size: 6,
+            size: 7,
             sizeAttenuation: false,
             color: COLOR_FINISHED_POINT_OUTLINE,
             transparent: true,
@@ -5681,7 +7230,7 @@ export function Viewport() {
           geometry.setAttribute('position', new CAD.Float32BufferAttribute(pointPositions, 3));
           geometry.setAttribute('color', new CAD.Float32BufferAttribute(pointColors, 3));
           const material = new CAD.PointsMaterial({
-            size: 4,
+            size: 5,
             sizeAttenuation: false,
             vertexColors: true,
             transparent: true,
@@ -5717,40 +7266,66 @@ export function Viewport() {
           points.userData.finishedSketchEmphasis = true;
           g.add(points);
         }
+        const addHolePointLayer = (
+          positions: number[],
+          size: number,
+          color: number,
+          renderOrder: number,
+          role:
+            | 'hole-hover-outline'
+            | 'hole-hover-fill'
+            | 'hole-selected-outline'
+            | 'hole-selected-fill',
+        ) => {
+          const geometry = new CAD.BufferGeometry();
+          geometry.setAttribute(
+            'position',
+            new CAD.Float32BufferAttribute(positions, 3),
+          );
+          const material = new CAD.PointsMaterial({
+            size,
+            sizeAttenuation: false,
+            color,
+            depthTest: false,
+            depthWrite: false,
+          });
+          const points = new CAD.Points(geometry, material);
+          points.renderOrder = renderOrder;
+          points.userData.finishedSketchEmphasis = true;
+          points.userData.finishedSketchPointRole = role;
+          g.add(points);
+        };
+        if (hoveredHolePointPositions.length > 0) {
+          // Hover is intentionally larger than the committed marker and uses
+          // the shared CAD hover color. The glyph remains compact while the
+          // independent 18 px picker radius makes acquisition forgiving.
+          addHolePointLayer(
+            hoveredHolePointPositions,
+            14,
+            COLOR_EDGE,
+            17,
+            'hole-hover-outline',
+          );
+          addHolePointLayer(
+            hoveredHolePointPositions,
+            10,
+            COLOR_HOVER,
+            18,
+            'hole-hover-fill',
+          );
+        }
         if (selectedHolePointPositions.length > 0) {
-          const addSelectedHolePointLayer = (
-            size: number,
-            color: number,
-            renderOrder: number,
-            role: 'hole-selected-outline' | 'hole-selected-fill',
-          ) => {
-            const geometry = new CAD.BufferGeometry();
-            geometry.setAttribute(
-              'position',
-              new CAD.Float32BufferAttribute(selectedHolePointPositions, 3),
-            );
-            const material = new CAD.PointsMaterial({
-              size,
-              sizeAttenuation: false,
-              color,
-              depthTest: false,
-              depthWrite: false,
-            });
-            const points = new CAD.Points(geometry, material);
-            points.renderOrder = renderOrder;
-            points.userData.finishedSketchEmphasis = true;
-            points.userData.finishedSketchPointRole = role;
-            g.add(points);
-          };
           // A dark 2 px border keeps the bright committed marker legible on
           // both the blue support face and any exposed light viewport.
-          addSelectedHolePointLayer(
+          addHolePointLayer(
+            selectedHolePointPositions,
             12,
             COLOR_EDGE,
             17,
             'hole-selected-outline',
           );
-          addSelectedHolePointLayer(
+          addHolePointLayer(
+            selectedHolePointPositions,
             8,
             COLOR_HOLE_POINT_SELECTED,
             18,
@@ -6126,6 +7701,7 @@ export function Viewport() {
       state: ReturnType<typeof useAppStore.getState>,
     ): BodyFeaturePickMode | null => {
       const kind = state.bodyFeatureDialog?.kind;
+      if (kind === 'external_thread') return 'face-single';
       if (kind === 'shell') return 'face-multi';
       if (kind === 'split_body') return 'body-single';
       if (
@@ -6734,7 +8310,10 @@ export function Viewport() {
             const screenX = rect.left + ((projected.x + 1) * rect.width) / 2;
             const screenY = rect.top + ((1 - projected.y) * rect.height) / 2;
             const distance = Math.hypot(event.clientX - screenX, event.clientY - screenY);
-            if (distance > MODIFY_CAPTURE_PX || (best && distance >= best.distance)) continue;
+            if (
+              distance > HOLE_POINT_CAPTURE_PX
+              || (best && distance >= best.distance)
+            ) continue;
             best = {
               distance,
               projectedWorld,
@@ -7367,15 +8946,38 @@ export function Viewport() {
           surface.domElement.style.cursor = referenceHit ? 'crosshair' : 'not-allowed';
           return;
         }
+        // Hole placement owns finished-sketch points while its dialog is
+        // open. Resolve it before the generic curve/profile pickers so a line
+        // endpoint cannot be swallowed by its parent line's hover target.
+        if (state.holeDialogFeature !== null) {
+          const point = pickFinishedSketchPoint(e);
+          const face = point ? null : pickSolidFace(e);
+          state.setHolePositionHover(point?.pick ?? null);
+          state.setRevolveAxisHover(null);
+          state.setHoveredCurvePick(null);
+          state.setHoveredProfilePick(null);
+          state.setHoveredEdge(null);
+          state.setHoveredFace(point?.face.faceId ?? (face?.planar ? face.faceId : null));
+          state.setHoveredOccurrenceId(null);
+          surface.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
+          return;
+        }
         const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
         if (bodyFeaturePickMode) {
           const candidate = pickSolidFace(e);
+          const candidateFace = candidate
+            ? state.solidScene.bodies
+                .find((body) => body.id === candidate.bodyId)
+                ?.faces.find((face) => face.id === candidate.faceId)
+            : null;
           const faceHit =
             bodyFeaturePickMode === 'face-multi'
             && state.selectedBody !== null
             && candidate?.bodyId !== state.selectedBody
               ? null
-              : candidate;
+              : bodyFeaturePickMode === 'face-single' && !candidateFace?.cylinder
+                ? null
+                : candidate;
           state.setRevolveAxisHover(null);
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
@@ -7440,15 +9042,6 @@ export function Viewport() {
           state.setHoveredFace(null);
           state.setHoveredOccurrenceId(null);
           surface.domElement.style.cursor = 'not-allowed';
-          return;
-        }
-        if (state.holeDialogFeature !== null) {
-          const point = pickFinishedSketchPoint(e);
-          const face = point ? null : pickSolidFace(e);
-          state.setHolePositionHover(point?.pick ?? null);
-          state.setHoveredEdge(null);
-          state.setHoveredFace(point?.face.faceId ?? (face?.planar ? face.faceId : null));
-          surface.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
           return;
         }
         if (state.jointDialogOpen) {
@@ -7562,6 +9155,11 @@ export function Viewport() {
       }
 
       if (toolRun) {
+        // Only a real pointer move starts the next chained segment. Dynamic
+        // input also asks for previews through a synthetic event; treating
+        // that as motion lets a second Enter commit an unintended segment
+        // back over the one that just finished.
+        if (!toolRun.committing) toolRun.awaitingPointerMove = false;
         previewToolRun(toolRun, p, e);
         return;
       }
@@ -7572,7 +9170,7 @@ export function Viewport() {
           const placement = acquirePointPlacement(p, e.ctrlKey);
           clearGroup(acquireGroup);
           if (placement.extension) {
-            addScreenPolyline(
+            addAlignmentGuide(
               acquireGroup,
               [
                 placement.extension.from.x,
@@ -7582,8 +9180,6 @@ export function Viewport() {
                 placement.extension.to.y,
                 0.13,
               ],
-              COLOR_PREVIEW,
-              1.5,
             );
           }
           const acquired = acquireCreateSnap(p);
@@ -7669,6 +9265,29 @@ export function Viewport() {
       }
 
       if (state.mode === 'solid') {
+        // Like hover, selection gives Hole's point role priority over the
+        // generic finished-sketch line/curve/profile roles. This makes the
+        // entire forgiving endpoint target commit the point the user sees.
+        if (state.holeDialogFeature !== null) {
+          const pointHit = pickFinishedSketchPoint(e);
+          if (pointHit) {
+            state.setSelectedBody(pointHit.face.bodyId);
+            state.setSelectedFace(pointHit.face.faceId);
+            state.setSelectedFacePoint(pointHit.face.point);
+            state.setSelectedEdges([]);
+            state.toggleHolePositionSelection(pointHit.pick);
+            return;
+          }
+          const faceHit = pickSolidFace(e);
+          if (faceHit?.planar) {
+            state.setHolePositionSelections([]);
+            state.setSelectedBody(faceHit.bodyId);
+            state.setSelectedFace(faceHit.faceId);
+            state.setSelectedFacePoint(faceHit.point);
+            state.setSelectedEdges([]);
+          }
+          return;
+        }
         if (state.jointDialogOpen) {
           const generation = ++jointClickPickGeneration;
           if (nativeViewportIsActive()) {
@@ -7793,22 +9412,29 @@ export function Viewport() {
         const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
         if (bodyFeaturePickMode) {
           const candidate = pickSolidFace(e);
+          const candidateFace = candidate
+            ? state.solidScene.bodies
+                .find((body) => body.id === candidate.bodyId)
+                ?.faces.find((face) => face.id === candidate.faceId)
+            : null;
           const faceHit =
             bodyFeaturePickMode === 'face-multi'
             && state.selectedBody !== null
             && candidate?.bodyId !== state.selectedBody
               ? null
-              : candidate;
+              : bodyFeaturePickMode === 'face-single' && !candidateFace?.cylinder
+                ? null
+                : candidate;
           if (!faceHit) return;
           state.setSelectedEdges([]);
-          if (bodyFeaturePickMode === 'face-multi') {
+          if (bodyFeaturePickMode === 'face-multi' || bodyFeaturePickMode === 'face-single') {
             if (state.selectedBody === null) state.setSelectedBody(faceHit.bodyId);
             state.selectSolidFeature(
               'face',
               faceHit.bodyId,
               faceHit.faceId,
               faceHit.point,
-              true,
+              bodyFeaturePickMode === 'face-multi',
             );
           } else {
             state.setSelectedFace(null);
@@ -7894,26 +9520,6 @@ export function Viewport() {
         // through to ordinary body/face selection and leave a misleading blue
         // model highlight when the click was not a valid closed region.
         if (state.profilePicker) return;
-        if (state.holeDialogFeature !== null) {
-          const pointHit = pickFinishedSketchPoint(e);
-          if (pointHit) {
-            state.setSelectedBody(pointHit.face.bodyId);
-            state.setSelectedFace(pointHit.face.faceId);
-            state.setSelectedFacePoint(pointHit.face.point);
-            state.setSelectedEdges([]);
-            state.toggleHolePositionSelection(pointHit.pick);
-            return;
-          }
-          const faceHit = pickSolidFace(e);
-          if (faceHit?.planar) {
-            state.setHolePositionSelections([]);
-            state.setSelectedBody(faceHit.bodyId);
-            state.setSelectedFace(faceHit.faceId);
-            state.setSelectedFacePoint(faceHit.point);
-            state.setSelectedEdges([]);
-          }
-          return;
-        }
         const edgeHit = pickSolidEdge(e);
         if (edgeHit) {
           if (!(e.shiftKey || e.ctrlKey || e.metaKey)) releaseJointSelection(state);
@@ -7979,8 +9585,37 @@ export function Viewport() {
 
       if (state.mode !== 'sketch') return;
       lastPointerClient = { x: e.clientX, y: e.clientY };
+      const annotationScreenHit = pickDimensionAtPointer(e);
       const p = pointerToSketch(e);
-      if (!p) return;
+
+      // Dimension annotations remain interactive while a sketch tool is
+      // armed. This prevents the first click of a double-click from creating
+      // geometry underneath the label.
+      const annotationHit = annotationScreenHit ?? (p ? pickDimension(p) : null);
+      if (
+        annotationHit !== null
+        && state.activeTool !== null
+        && state.activeTool !== 'dimension'
+      ) {
+        state.setSelectedDimension(annotationHit);
+        state.setSelectedEntity(null);
+        state.setSelectedEntities([]);
+        return;
+      }
+      // A dimension label is screen-space UI. Its click remains valid even
+      // when an oblique/re-entered sketch plane cannot provide a ray-plane
+      // coordinate at this exact pixel.
+      if (!p) {
+        if (annotationHit !== null) {
+          downInfo = {
+            x: e.clientX,
+            y: e.clientY,
+            candidate: null,
+            dimCandidate: annotationHit,
+          };
+        }
+        return;
+      }
 
       // A spline must consume its second pointerdown before it appends an
       // extra fit point. Other tools are ended by the dedicated `dblclick`
@@ -8068,7 +9703,64 @@ export function Viewport() {
         return;
       }
 
-      downInfo = { x: e.clientX, y: e.clientY, candidate: pickEntity(p), dimCandidate: pickDimension(p) };
+      downInfo = {
+        x: e.clientX,
+        y: e.clientY,
+        candidate: pickEntity(p),
+        dimCandidate: annotationHit,
+      };
+    };
+
+    const openDimensionEditor = (dimId: number) => {
+      const state = store.getState();
+      if (state.mode !== 'sketch') return;
+      const dim = state.activeSketch?.dimensions.find(
+        (candidate) => candidate.constraint_id === dimId,
+      );
+      if (!dim) return;
+
+      if (toolRun) endToolRun();
+      if (modTool) endModTool();
+      // A create tool may be armed before it has produced a local toolRun.
+      // Dimension editing is a complete mode switch, so retire the store's
+      // active tool as well as any in-progress local transaction.
+      store.getState().setActiveTool(null);
+      const currentState = store.getState();
+      const currentDim = currentState.activeSketch?.dimensions.find(
+        (candidate) => candidate.constraint_id === dimId,
+      );
+      if (!currentDim) return;
+
+      scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const sprite = dimSprites.find((entry) => entry.dimId === dimId)?.sprite;
+      const projected = sprite
+        ? sprite.getWorldPosition(new CAD.Vector3()).project(camera)
+        : new CAD.Vector3(currentDim.text_pos.x, currentDim.text_pos.y, 0)
+            .applyMatrix4(sketchGroup.matrixWorld)
+            .project(camera);
+      const rect = surface.domElement.getBoundingClientRect();
+      // DimensionEditor is absolutely positioned inside the viewport host,
+      // not the browser window. Window coordinates here displaced the editor
+      // by the ribbon/sidebar inset and could place it entirely offscreen.
+      const localX = ((projected.x + 1) / 2) * rect.width;
+      const localY = ((1 - projected.y) / 2) * rect.height;
+      const editorX = Math.max(0, Math.min(Math.max(0, rect.width - 150), localX));
+      const editorY = Math.max(14, Math.min(Math.max(14, rect.height - 28), localY));
+      const initial = currentDim.param_expression
+        ? `=${currentDim.param_expression}`
+        : currentDim.text.replace(/[ØR°]/g, '');
+
+      currentState.setSelectedDimension(dimId);
+      currentState.setSelectedEntity(null);
+      currentState.setSelectedEntities([]);
+      currentState.setDimEditor({
+        dimId,
+        initial,
+        x: editorX,
+        y: editorY,
+      });
+      lastDimensionClick = null;
     };
 
     const onPointerUp = (e: PointerEvent) => {
@@ -8201,11 +9893,33 @@ export function Viewport() {
           const cand = downInfo.candidate;
           const dimCand = downInfo.dimCandidate;
           if (dimCand !== null) {
-            // Dimension click: select the dimension itself (D9).
-            state.setSelectedDimension(dimCand);
-            state.setSelectedEntity(null);
-            state.setSelectedEntities([]);
+            const now = performance.now();
+            const repeated = lastDimensionClick !== null
+              && lastDimensionClick.dimId === dimCand
+              && now - lastDimensionClick.time <= 450
+              && Math.hypot(
+                e.clientX - lastDimensionClick.x,
+                e.clientY - lastDimensionClick.y,
+              ) <= 6;
+            if (repeated) {
+              // Native child views do not consistently synthesize a DOM
+              // `dblclick`, so two completed clicks provide the same editor
+              // gesture without weakening drag-vs-click discrimination.
+              openDimensionEditor(dimCand);
+            } else {
+              // Dimension click: select the dimension itself (D9).
+              state.setSelectedDimension(dimCand);
+              state.setSelectedEntity(null);
+              state.setSelectedEntities([]);
+              lastDimensionClick = {
+                dimId: dimCand,
+                time: now,
+                x: e.clientX,
+                y: e.clientY,
+              };
+            }
           } else if (e.shiftKey || e.ctrlKey || e.metaKey) {
+            lastDimensionClick = null;
             // Multi-select toggle (constraint application, M1b).
             const cur = new Set(state.selectedEntities);
             if (state.selectedEntity !== null) cur.add(state.selectedEntity);
@@ -8226,6 +9940,7 @@ export function Viewport() {
             state.setSelectedEntity(primary);
             state.setSelectedDimension(null);
           } else {
+            lastDimensionClick = null;
             // Click: select entity, or deselect on empty space.
             state.setSelectedEntity(cand);
             state.setSelectedEntities(cand !== null ? [cand] : []);
@@ -8260,32 +9975,19 @@ export function Viewport() {
     };
 
     const onDoubleClick = (e: MouseEvent) => {
-      if (toolRun) {
-        if (toolRun.tool === 'splineFit') commitSpline();
-        else endToolRun();
-        return;
-      }
       // Double-click a dimension → inline formula-capable editor (D9).
       const state = store.getState();
       if (state.mode !== 'sketch') return;
       const p = pointerToSketch(e as unknown as PointerEvent);
-      if (!p) return;
-      const dimId = pickDimension(p);
+      const dimId = pickDimensionAtPointer(e as unknown as PointerEvent)
+        ?? (p ? pickDimension(p) : null);
       if (dimId !== null) {
-        const dim = state.activeSketch?.dimensions.find((d) => d.constraint_id === dimId);
-        if (!dim) return;
-        const initial = dim.param_expression ? `=${dim.param_expression}` : dim.text.replace(/[ØR°]/g, '');
-        const screen = (() => {
-          const v = new CAD.Vector3(dim.text_pos.x, dim.text_pos.y, 0)
-            .applyMatrix4(sketchGroup.matrixWorld)
-            .project(camera);
-          const rect = surface.domElement.getBoundingClientRect();
-          return {
-            x: rect.left + ((v.x + 1) / 2) * rect.width,
-            y: rect.top + ((1 - v.y) / 2) * rect.height,
-          };
-        })();
-        state.setDimEditor({ dimId, initial, x: screen.x, y: screen.y });
+        openDimensionEditor(dimId);
+        return;
+      }
+      if (toolRun) {
+        if (toolRun.tool === 'splineFit') commitSpline();
+        else endToolRun();
       }
     };
 
@@ -9157,6 +10859,48 @@ export function Viewport() {
     let lastSolidHidden = store.getState().hidden;
     let lastSolidDocument = store.getState().document;
     let lastBodyAppearances = store.getState().bodyAppearances;
+    let holeDefinitionsRequest = 0;
+    const refreshCommittedHoleDefinitions = (
+      expectedScene: ViewportState['solidScene'],
+    ) => {
+      const request = ++holeDefinitionsRequest;
+      void getEngine()
+        .then((currentEngine) => Promise.all([
+          currentEngine.holeDefinitions(),
+          currentEngine.bodyFeatureDefinitions(),
+        ]))
+        .then(([definitions, bodyFeatureDefinitions]) => {
+          if (
+            request !== holeDefinitionsRequest
+            || store.getState().solidScene !== expectedScene
+          ) {
+            return;
+          }
+          committedHoleDefinitions = definitions;
+          committedBodyFeatureDefinitions = bodyFeatureDefinitions;
+          cachedThreadDefinitions = undefined;
+          cachedThreadBodyFeatureDefinitions = undefined;
+          nativeTransientDirty = true;
+          wakeControllerFrame();
+        })
+        .catch(() => {
+          if (
+            request !== holeDefinitionsRequest
+            || store.getState().solidScene !== expectedScene
+          ) {
+            return;
+          }
+          // A fresh scene must never inherit cosmetic threads from the prior
+          // document if its definition query fails during a session switch.
+          committedHoleDefinitions = [];
+          committedBodyFeatureDefinitions = [];
+          cachedThreadDefinitions = undefined;
+          cachedThreadBodyFeatureDefinitions = undefined;
+          nativeTransientDirty = true;
+          wakeControllerFrame();
+        });
+    };
+    refreshCommittedHoleDefinitions(lastSolidScene);
     let lastAssemblySolution = effectiveAssemblySolution();
     const assemblyInstanceLayoutKey = (solution: typeof lastAssemblySolution) =>
       solution.instance_body_poses
@@ -9256,12 +11000,14 @@ export function Viewport() {
         s.document !== lastSolidDocument ||
         s.bodyAppearances !== lastBodyAppearances
       ) {
+        const solidSceneChanged = s.solidScene !== lastSolidScene;
         lastSolidScene = s.solidScene;
         lastSolidHidden = s.hidden;
         lastSolidDocument = s.document;
         lastBodyAppearances = s.bodyAppearances;
         rebuildSolids();
         refreshSharedOrbitPivot();
+        if (solidSceneChanged) refreshCommittedHoleDefinitions(s.solidScene);
       }
       const nextAssemblySolution = s.jointDialogOpen && s.jointPreviewSolution
         ? s.jointPreviewSolution
@@ -9559,6 +11305,7 @@ export function Viewport() {
 
     return () => {
       preservedCameraSnapshot = api.getSnapshot();
+      holeDefinitionsRequest += 1;
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
       unsub();

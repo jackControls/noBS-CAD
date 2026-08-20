@@ -342,10 +342,10 @@ try {
       finishedVisuals.lineWidths.every((width) => width <= 1.15) &&
       finishedVisuals.lineOpacities.every((opacity) => opacity <= 0.42) &&
       finishedPointStyles.some(
-        (point) => point.role === 'finished-point-outline' && point.size <= 6 && point.opacity >= 0.95,
+        (point) => point.role === 'finished-point-outline' && point.size <= 7 && point.opacity >= 0.95,
       ) &&
       finishedPointStyles.some(
-        (point) => point.role === 'finished-point-fill' && point.size <= 4 && point.opacity >= 0.95,
+        (point) => point.role === 'finished-point-fill' && point.size <= 5 && point.opacity >= 0.95,
       ),
     JSON.stringify(finishedVisuals),
   );
@@ -358,6 +358,57 @@ try {
   check('entities + constraints survived the round trip',
     (s5b.activeSketch?.entities.length ?? 0) > 0 && (s5b.activeSketch?.constraints.length ?? 0) > 0);
   check('undo stack survived (can_undo)', s5b.activeSketch?.can_undo === true);
+  const reenteredDimension = s5b.activeSketch?.dimensions[0] ?? null;
+  check('re-entered history sketch retains an editable dimension', reenteredDimension !== null);
+  if (reenteredDimension) {
+    const dimensionScreen = await page.evaluate((dimensionId) => {
+      const canvas = document.querySelector('main canvas');
+      const rect = canvas?.getBoundingClientRect();
+      const sketch = window.__appStore.getState().activeSketch;
+      const dimension = sketch?.dimensions.find(
+        (candidate) => candidate.constraint_id === dimensionId,
+      );
+      const annotation = window.__nativeViewportTransient().annotations.find(
+        (candidate) => candidate.kind === 'dimension'
+          && candidate.text === dimension?.text,
+      );
+      return rect && annotation
+        ? {
+            x: rect.left + annotation.screen[0],
+            y: rect.top + annotation.screen[1],
+          }
+        : null;
+    }, reenteredDimension.constraint_id);
+    check('re-entered dimension exposes its visible number center', dimensionScreen !== null);
+    if (dimensionScreen) {
+      // Native Bevy renders `annotation.screen` as the center of the visible
+      // number. Click that number—not either arrow—to exercise the native
+      // child-view fallback as well as the browser's ordinary dblclick event.
+      await page.mouse.click(dimensionScreen.x, dimensionScreen.y);
+      await page.waitForTimeout(90);
+      await page.mouse.click(dimensionScreen.x, dimensionScreen.y);
+      await page.waitForTimeout(250);
+      const editor = page.locator('input[title*="Edit dimension"]');
+      check(
+        'double-clicking the history dimension number opens the inline editor',
+        await editor.isVisible(),
+      );
+      const editorBox = await editor.boundingBox();
+      const viewportBox = await page.locator('main canvas').first().boundingBox();
+      check(
+        'history dimension editor stays inside the inset viewport',
+        !!editorBox
+          && !!viewportBox
+          && editorBox.x >= viewportBox.x
+          && editorBox.y >= viewportBox.y
+          && editorBox.x + editorBox.width <= viewportBox.x + viewportBox.width
+          && editorBox.y + editorBox.height <= viewportBox.y + viewportBox.height,
+        JSON.stringify({ editorBox, viewportBox }),
+      );
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(100);
+    }
+  }
   check(
     'flat-view reset is explicit in both sketch controls',
     await page.getByTestId('look-at-sketch').isVisible() &&

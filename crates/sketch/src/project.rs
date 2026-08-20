@@ -446,6 +446,9 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
             return Err(format!("duplicate saved body feature {}", feature_id.0));
         }
         let (kind, label) = match definition {
+            BodyFeatureDefinitionDto::ExternalThread { .. } => {
+                (FeatureKind::ExternalThread, "External Thread")
+            }
             BodyFeatureDefinitionDto::MoveCopy { .. } => (FeatureKind::MoveCopy, "Move/Copy"),
             BodyFeatureDefinitionDto::Shell { .. } => (FeatureKind::Shell, "Shell"),
             BodyFeatureDefinitionDto::Mirror { .. } => (FeatureKind::Mirror, "Mirror"),
@@ -474,9 +477,9 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
                 std::slice::from_ref(new_body_id)
             }
             BodyFeatureDefinitionDto::ImportStep { body_id, .. } => std::slice::from_ref(body_id),
-            BodyFeatureDefinitionDto::Shell { .. } | BodyFeatureDefinitionDto::Combine { .. } => {
-                &[]
-            }
+            BodyFeatureDefinitionDto::ExternalThread { .. }
+            | BodyFeatureDefinitionDto::Shell { .. }
+            | BodyFeatureDefinitionDto::Combine { .. } => &[],
         };
         for id in reserved {
             if id.0 == 0 || !reserved_body_ids.insert(*id) {
@@ -520,7 +523,8 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
                     feature.name
                 ));
             }
-            FeatureKind::Shell
+            FeatureKind::ExternalThread
+            | FeatureKind::Shell
             | FeatureKind::Mirror
             | FeatureKind::RectangularPattern
             | FeatureKind::CircularPattern

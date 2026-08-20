@@ -8,7 +8,12 @@
  */
 import type {
   gp_Ax2,
+  gp_Ax3,
+  gp_Cylinder,
+  gp_Dir,
+  gp_Pnt,
   OpenCascadeInstance,
+  TopoDS_Edge,
   TopoDS_Face,
   TopoDS_Shape,
   TopoDS_Wire,
@@ -21,6 +26,7 @@ import type {
   KernelFilletJobDto,
   KernelChamferJobDto,
   KernelCombineJobDto,
+  KernelExternalThreadJobDto,
   KernelHoleJobDto,
   KernelFeatureErrorDto,
   KernelJobDto,
@@ -40,8 +46,10 @@ import type {
   StepExportRequest,
   MeshExportRequest,
   PlanarFaceSignatureDto,
+  CylindricalSurfaceDto,
 } from './types';
 import { translate } from '../i18n';
+import { isoMetricThreadEnvelope } from '../lib/threadStandards';
 
 const TAU = Math.PI * 2;
 
@@ -814,6 +822,14 @@ function booleanShape(
   return result;
 }
 
+function shapeVolume(oc: Oc, shape: TopoDS_Shape): number {
+  const properties = new oc.GProp_GProps_1();
+  oc.BRepGProp.VolumeProperties_1(shape, properties, true, false, false);
+  const volume = properties.Mass();
+  properties.delete();
+  return volume;
+}
+
 function cutThreadTools(
   oc: Oc,
   target: TopoDS_Shape,
@@ -822,21 +838,32 @@ function cutThreadTools(
   if (cutters.length === 0) {
     throw new Error('Modeled thread contains no cutter');
   }
-  let result: TopoDS_Shape | null = null;
+  const argumentsList = new oc.TopTools_ListOfShape_1();
+  const tools = new oc.TopTools_ListOfShape_1();
+  const operation = new oc.BRepAlgoAPI_Cut_1();
   try {
-    for (const cutter of cutters) {
-      const next = booleanShape(oc, 'cut', result ?? target, cutter, false);
-      result?.delete();
-      result = next;
+    argumentsList.Append_1(target);
+    for (const cutter of cutters) tools.Append_1(cutter);
+    operation.SetArguments(argumentsList);
+    operation.SetTools(tools);
+    operation.SetNonDestructive(true);
+    operation.SetRunParallel(true);
+    const progress = new oc.Message_ProgressRange_1();
+    operation.Build(progress);
+    progress.delete();
+    if (!operation.IsDone() || operation.HasErrors()) {
+      throw new Error('Modeled thread batch cut failed');
     }
-    if (!result) {
-      throw new Error('Modeled thread cut did not produce a result');
+    const result = operation.Shape();
+    if (result.IsNull()) {
+      result.delete();
+      throw new Error('Modeled thread batch cut produced a null result');
     }
-    const completed = result;
-    result = null;
-    return completed;
+    return result;
   } finally {
-    result?.delete();
+    operation.delete();
+    tools.delete();
+    argumentsList.delete();
   }
 }
 
@@ -973,184 +1000,481 @@ function boundedDirectionalDepth(
   }
 }
 
-function makeLineEdge(
-  oc: Oc,
-  first: readonly [number, number, number],
-  last: readonly [number, number, number],
-) {
-  const start = new oc.gp_Pnt_3(first[0], first[1], first[2]);
-  const end = new oc.gp_Pnt_3(last[0], last[1], last[2]);
-  const maker = new oc.BRepBuilderAPI_MakeEdge_3(start, end);
-  start.delete();
-  end.delete();
-  if (!maker.IsDone()) {
-    maker.delete();
-    throw new Error('OCCT could not build a thread flank edge');
-  }
-  const edge = maker.Edge();
-  maker.delete();
-  return edge;
-}
-
-function makeThreadProfile(
-  oc: Oc,
+function helicalPoint(
   axis: gp_Ax2,
+  radius: number,
   center: number,
-  innerRadius: number,
-  outerRadius: number,
-  innerHalfWidth: number,
-  outerHalfWidth: number,
-  angle = 0,
-) {
+  angle: number,
+): readonly [number, number, number] {
   const location = axis.Location();
   const normal = axis.Direction();
   const xAxis = axis.XDirection();
   const yAxis = axis.YDirection();
-  const origin = [location.X(), location.Y(), location.Z()] as const;
-  const axial = [normal.X(), normal.Y(), normal.Z()] as const;
   const cosine = Math.cos(angle);
   const sine = Math.sin(angle);
-  const radial = [
-    cosine * xAxis.X() + sine * yAxis.X(),
-    cosine * xAxis.Y() + sine * yAxis.Y(),
-    cosine * xAxis.Z() + sine * yAxis.Z(),
+  const result = [
+    location.X() + radius * (cosine * xAxis.X() + sine * yAxis.X())
+      + center * normal.X(),
+    location.Y() + radius * (cosine * xAxis.Y() + sine * yAxis.Y())
+      + center * normal.Y(),
+    location.Z() + radius * (cosine * xAxis.Z() + sine * yAxis.Z())
+      + center * normal.Z(),
   ] as const;
   location.delete();
   normal.delete();
   xAxis.delete();
   yAxis.delete();
-  const pointAt = (radius: number, offset: number) => [
-    origin[0] + radius * radial[0] + (center + offset) * axial[0],
-    origin[1] + radius * radial[1] + (center + offset) * axial[1],
-    origin[2] + radius * radial[2] + (center + offset) * axial[2],
-  ] as const;
-  const points = [
-    pointAt(innerRadius, -innerHalfWidth),
-    pointAt(outerRadius, -outerHalfWidth),
-    pointAt(outerRadius, outerHalfWidth),
-    pointAt(innerRadius, innerHalfWidth),
-  ];
-  const maker = new oc.BRepBuilderAPI_MakeWire_1();
+  return result;
+}
+
+function makeTolerancedHelicalEdge(
+  oc: Oc,
+  axis: gp_Ax2,
+  radius: number,
+  centerStart: number,
+  centerEnd: number,
+  axialOffset: number,
+  pitch: number,
+  leftHand: boolean,
+) {
+  let stage = 'sampling the analytic helix';
   try {
-    for (let index = 0; index < points.length; index += 1) {
-      const edge = makeLineEdge(oc, points[index], points[(index + 1) % points.length]);
-      maker.Add_1(edge);
-      edge.delete();
+    const angleSpan = (TAU * (centerEnd - centerStart)) / pitch;
+    const sampleCount = Math.max(
+      17,
+      Math.ceil(Math.abs(angleSpan) / TAU * 64) + 1,
+    );
+    const points = new oc.TColgp_Array1OfPnt_2(1, sampleCount);
+    const parameters = new oc.TColStd_Array1OfReal_2(1, sampleCount);
+    for (let index = 0; index < sampleCount; index += 1) {
+      const fraction = index / (sampleCount - 1);
+      const center = centerStart + (centerEnd - centerStart) * fraction;
+      const angle = (leftHand ? -1 : 1) * angleSpan * fraction;
+      const value = helicalPoint(
+        axis,
+        radius,
+        center + axialOffset,
+        angle,
+      );
+      const point = new oc.gp_Pnt_3(value[0], value[1], value[2]);
+      points.SetValue(index + 1, point);
+      parameters.SetValue(index + 1, Math.abs(angleSpan) * fraction);
+      point.delete();
     }
+    stage = 'fitting the sub-micron helical curve';
+    const fitter = new oc.GeomAPI_PointsToBSpline_4(
+      points,
+      parameters as never,
+      3,
+      8,
+      oc.GeomAbs_Shape.GeomAbs_C2 as never,
+      1e-7,
+    );
+    parameters.delete();
+    points.delete();
+    if (!fitter.IsDone()) {
+      fitter.delete();
+      throw new Error('OCCT could not fit the helical curve');
+    }
+    const curve = fitter.Curve();
+    const baseCurve = new oc.Handle_Geom_Curve_2(curve.get());
+    stage = 'building the helical edge';
+    const maker = new oc.BRepBuilderAPI_MakeEdge_24(baseCurve);
+    baseCurve.delete();
+    curve.delete();
+    fitter.delete();
     if (!maker.IsDone()) {
-      throw new Error('OCCT could not close the thread cutter profile');
+      maker.delete();
+      throw new Error('OCCT could not build the helical edge');
     }
-    return maker.Wire();
-  } finally {
+    const edge = maker.Edge();
     maker.delete();
+    return edge;
+  } catch (error) {
+    throw new Error(
+      `helical rail failed while ${stage}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function makeContinuousThreadCutter(
+  oc: Oc,
+  axis: gp_Ax2,
+  spineRadius: number,
+  radiusHalfWidths: ReadonlyArray<readonly [radius: number, halfWidth: number]>,
+  pitch: number,
+  threadDepth: number,
+  leftHand: boolean,
+  label: string,
+): TopoDS_Shape {
+  // One full pitch of overrun at each end lets the Boolean target trim the
+  // sweep. This avoids partial end grooves and cap fragments without doing a
+  // Boolean operation for every turn.
+  const centerStart = -pitch;
+  const centerEnd = threadDepth + pitch;
+  const turns = (centerEnd - centerStart) / pitch;
+  if (!Number.isFinite(turns) || turns <= 0 || turns > 256) {
+    throw new Error(
+      `${label} thread interval is too short or exceeds 256 turns; use simplified representation`,
+    );
+  }
+  if (radiusHalfWidths.length < 2) {
+    throw new Error('Thread profile needs at least two radial stations');
+  }
+  const innerRadius = radiusHalfWidths[0][0];
+  const outerRadius = radiusHalfWidths[radiusHalfWidths.length - 1][0];
+  if (!Number.isFinite(spineRadius)
+    || spineRadius <= innerRadius
+    || spineRadius >= outerRadius) {
+    throw new Error('Thread spine must lie inside its radial profile');
+  }
+  let previousRadius = -Infinity;
+  for (const [radius, halfWidth] of radiusHalfWidths) {
+    if (!Number.isFinite(radius)
+      || !Number.isFinite(halfWidth)
+      || radius <= previousRadius
+      || halfWidth <= 0
+      || halfWidth >= pitch * 0.5) {
+      throw new Error('Thread profile radial stations are invalid');
+    }
+    previousRadius = radius;
+  }
+
+  // Construct the volume from analytic helical boundary rails. A moving-frame
+  // pipe can rotate the ISO section away from its specified axial widths and
+  // can classify the complementary solid near a closed helix. Explicit ruled
+  // flanks make every tolerance-class radius and axial station deterministic.
+  // OpenCascade.js cannot reliably invoke BRepLib's p-curve-to-3D converter,
+  // so its rail is fit directly from the analytic helix to 0.1 micrometre;
+  // native OCCT uses the exact cylindrical p-curve for the same boundary.
+  const sewing = new oc.BRepBuilderAPI_Sewing(1e-6, true, true, true, false);
+  const addRuledFace = (first: TopoDS_Edge, second: TopoDS_Edge) => {
+    let face: TopoDS_Face;
+    try {
+      face = oc.BRepFill.Face(first, second);
+    } catch (error) {
+      throw new Error(
+        `OCCT could not construct a ruled ${label} thread face: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    try {
+      if (face.IsNull()) {
+        throw new Error(`OCCT could not build a ruled ${label} thread face`);
+      }
+      try {
+        sewing.Add(face);
+      } catch (error) {
+        throw new Error(
+          `OCCT could not add a ruled ${label} thread face to the sewing operation: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } finally {
+      face.delete();
+    }
+  };
+  const addCap = (center: number, angle: number) => {
+    const polygon = new oc.BRepBuilderAPI_MakePolygon_1();
+    try {
+      for (const [radius, halfWidth] of radiusHalfWidths) {
+        const value = helicalPoint(axis, radius, center - halfWidth, angle);
+        const point = new oc.gp_Pnt_3(value[0], value[1], value[2]);
+        polygon.Add_1(point);
+        point.delete();
+      }
+      for (let index = radiusHalfWidths.length - 1; index >= 0; index -= 1) {
+        const [radius, halfWidth] = radiusHalfWidths[index];
+        const value = helicalPoint(axis, radius, center + halfWidth, angle);
+        const point = new oc.gp_Pnt_3(value[0], value[1], value[2]);
+        polygon.Add_1(point);
+        point.delete();
+      }
+      polygon.Close();
+      if (!polygon.IsDone()) {
+        throw new Error(`OCCT could not close the continuous ${label} thread cutter end`);
+      }
+      const wire = polygon.Wire();
+      try {
+        const faceMaker = new oc.BRepBuilderAPI_MakeFace_15(wire, true);
+        try {
+          if (!faceMaker.IsDone()) {
+            throw new Error(`OCCT could not cap the continuous ${label} thread cutter`);
+          }
+          const face = faceMaker.Face();
+          try {
+            sewing.Add(face);
+          } finally {
+            face.delete();
+          }
+        } finally {
+          faceMaker.delete();
+        }
+      } finally {
+        wire.delete();
+      }
+    } finally {
+      polygon.delete();
+    }
+  };
+
+  let stage = 'building analytic helical faces';
+  try {
+    const segmentCount = Math.ceil(turns - 1e-10);
+    for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+      stage = `building analytic helical face segment ${segmentIndex + 1}`;
+      const segmentStart = centerStart + segmentIndex * pitch;
+      const segmentEnd = Math.min(segmentStart + pitch, centerEnd);
+      const lowerRails: TopoDS_Edge[] = [];
+      const upperRails: TopoDS_Edge[] = [];
+      try {
+        for (const [radius, halfWidth] of radiusHalfWidths) {
+          try {
+            lowerRails.push(makeTolerancedHelicalEdge(
+              oc, axis, radius, segmentStart, segmentEnd,
+              -halfWidth, pitch, leftHand,
+            ));
+          } catch (error) {
+            throw new Error(
+              `OCCT could not build the lower ${label} thread rail: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          try {
+            upperRails.push(makeTolerancedHelicalEdge(
+              oc, axis, radius, segmentStart, segmentEnd,
+              halfWidth, pitch, leftHand,
+            ));
+          } catch (error) {
+            throw new Error(
+              `OCCT could not build the upper ${label} thread rail: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        addRuledFace(lowerRails[0], upperRails[0]);
+        addRuledFace(
+          lowerRails[lowerRails.length - 1],
+          upperRails[upperRails.length - 1],
+        );
+        for (let index = 0; index + 1 < lowerRails.length; index += 1) {
+          addRuledFace(lowerRails[index], lowerRails[index + 1]);
+          addRuledFace(upperRails[index], upperRails[index + 1]);
+        }
+      } finally {
+        lowerRails.forEach((edge) => edge.delete());
+        upperRails.forEach((edge) => edge.delete());
+      }
+    }
+
+    stage = 'capping the thread start';
+    addCap(centerStart, 0);
+    stage = 'capping the thread end';
+    addCap(centerEnd, (leftHand ? -1 : 1) * TAU * turns);
+    stage = 'sewing the exact thread boundary';
+    const progress = new oc.Message_ProgressRange_1();
+    try {
+      try {
+        sewing.Perform(progress);
+      } catch (error) {
+        throw new Error(
+          `OCCT could not sew the continuous ${label} thread boundary: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } finally {
+      progress.delete();
+    }
+    stage = 'reading the sewn thread boundary';
+    const sewed = sewing.SewedShape();
+    if (sewed.IsNull()
+      || sewing.NbFreeEdges() !== 0
+      || sewing.NbMultipleEdges() !== 0) {
+      sewed.delete();
+      throw new Error(
+        `OCCT could not sew the continuous ${label} thread cutter into a closed shell`,
+      );
+    }
+    stage = 'finding the closed thread shell';
+    const shells = new oc.TopTools_IndexedMapOfShape_1();
+    oc.TopExp.MapShapes_1(
+      sewed,
+      oc.TopAbs_ShapeEnum.TopAbs_SHELL as never,
+      shells,
+    );
+    if (shells.Size() !== 1) {
+      shells.delete();
+      sewed.delete();
+      throw new Error(`OCCT continuous ${label} thread boundary did not produce one shell`);
+    }
+    const rawShell = shells.FindKey(1);
+    const shell = oc.TopoDS.Shell_1(rawShell);
+    rawShell.delete();
+    shells.delete();
+    sewed.delete();
+    stage = 'solidifying the closed thread shell';
+    const solidFixer = new oc.ShapeFix_Solid_1();
+    solidFixer.SetPrecision(1e-7);
+    const cutter = solidFixer.SolidFromShell(shell);
+    solidFixer.delete();
+    shell.delete();
+    if (cutter.IsNull()) {
+      cutter.delete();
+      throw new Error(`OCCT could not solidify the continuous ${label} thread boundary`);
+    }
+    stage = 'normalizing the thread topology';
+    oc.BRepLib.SameParameter_3(cutter, 1e-6, true);
+    if (!oc.BRepLib.OrientClosedSolid(cutter)) {
+      cutter.delete();
+      throw new Error(`OCCT could not orient the continuous ${label} thread cutter`);
+    }
+    stage = 'classifying the thread solid orientation';
+    const sampleCenter = (centerStart + centerEnd) * 0.5;
+    const sampleAngle = (leftHand ? -1 : 1) * TAU
+      * (sampleCenter - centerStart) / pitch;
+    const probeRadius = Math.max(1e-5, (outerRadius - innerRadius) * 1e-3);
+    const probeAt = (radius: number) => {
+      const value = helicalPoint(axis, radius, sampleCenter, sampleAngle);
+      return new oc.gp_Pnt_3(value[0], value[1], value[2]);
+    };
+    const samplePoint = probeAt((innerRadius + outerRadius) * 0.5);
+    const innerProbe = probeAt(innerRadius + (outerRadius - innerRadius) * 0.1);
+    const outerProbe = probeAt(outerRadius - (outerRadius - innerRadius) * 0.1);
+    const insideInnerBoundary = probeAt(innerRadius + probeRadius);
+    const outsideInnerBoundary = probeAt(innerRadius - probeRadius);
+    const insideOuterBoundary = probeAt(outerRadius - probeRadius);
+    const outsideOuterBoundary = probeAt(outerRadius + probeRadius);
+    const axisLocation = axis.Location();
+    const axisDirection = axis.Direction();
+    const axisPoint = new oc.gp_Pnt_3(
+      axisLocation.X() + axisDirection.X() * sampleCenter,
+      axisLocation.Y() + axisDirection.Y() * sampleCenter,
+      axisLocation.Z() + axisDirection.Z() * sampleCenter,
+    );
+    axisDirection.delete();
+    axisLocation.delete();
+    const inside = (point: gp_Pnt) => {
+      const classifier = new oc.BRepClass3d_SolidClassifier_3(
+        cutter, point, 1e-7,
+      );
+      const state = classifier.State();
+      classifier.delete();
+      return state === oc.TopAbs_State.TopAbs_IN
+        || state === oc.TopAbs_State.TopAbs_ON;
+    };
+    const correctlyOriented = () => inside(samplePoint)
+      && inside(innerProbe)
+      && inside(outerProbe)
+      && inside(insideInnerBoundary)
+      && !inside(outsideInnerBoundary)
+      && inside(insideOuterBoundary)
+      && !inside(outsideOuterBoundary)
+      && !inside(axisPoint);
+    try {
+      if (!correctlyOriented()) cutter.Reverse();
+      if (!correctlyOriented()) {
+        cutter.delete();
+        throw new Error(`OCCT continuous ${label} thread cutter is inside-out`);
+      }
+    } finally {
+      outsideOuterBoundary.delete();
+      insideOuterBoundary.delete();
+      outsideInnerBoundary.delete();
+      insideInnerBoundary.delete();
+      outerProbe.delete();
+      innerProbe.delete();
+      axisPoint.delete();
+      samplePoint.delete();
+    }
+    stage = 'validating the thread solid';
+    const analyzer = new oc.BRepCheck_Analyzer(cutter, true, false);
+    const valid = analyzer.IsValid_2();
+    analyzer.delete();
+    if (!valid || Math.abs(shapeVolume(oc, cutter)) <= 1e-9) {
+      cutter.delete();
+      throw new Error(`OCCT continuous ${label} thread cutter is invalid`);
+    }
+    return cutter;
+  } catch (error) {
+    throw new Error(
+      `OCCT continuous ${label} thread failed while ${stage}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    sewing.delete();
   }
 }
 
 function makeInternalThreadCutters(
   oc: Oc,
   axis: gp_Ax2,
-  predrillDiameter: number,
-  nominalDiameter: number,
+  majorDiameter: number,
+  pitchDiameter: number,
+  minorDiameter: number,
   pitch: number,
   threadDepth: number,
-  throughAll: boolean,
   leftHand: boolean,
 ): TopoDS_Shape[] {
-  const nominalRadialDepth = (nominalDiameter - predrillDiameter) * 0.5;
-  // Penetrate the predrill void by a real modeling allowance. A tangent or
-  // near-coincident cutter can leave the cylindrical predrill face behind.
-  const overlap = Math.max(
-    2e-3,
-    Math.min(
-      predrillDiameter * 5e-3,
-      pitch * 5e-2,
-      nominalRadialDepth * 1e-1,
-    ),
-  );
-  const innerRadius = predrillDiameter * 0.5 - overlap;
-  const outerRadius = nominalDiameter * 0.5;
-  const radialDepth = outerRadius - innerRadius;
-  // Start with the P/8 basic root flat at the major diameter, then widen the
-  // internal-thread void toward the actual predrill along 60° flanks.
-  const outerHalfWidth = pitch * 0.0625;
-  const innerHalfWidth = outerHalfWidth + radialDepth * Math.tan(Math.PI / 6);
-  if (
-    innerRadius <= 0
-    || outerRadius <= innerRadius
-    || innerHalfWidth >= pitch * 0.499
-  ) {
-    throw new Error('Predrill diameter is too small for a non-overlapping 60° thread');
+  const overlap = Math.max(2e-3, Math.min(
+    minorDiameter * 5e-3,
+    pitch * 2e-2,
+    (pitchDiameter - minorDiameter) * 2.5e-2,
+  ));
+  const minorRadius = minorDiameter * 0.5;
+  const innerRadius = minorRadius - overlap;
+  const pitchRadius = pitchDiameter * 0.5;
+  const outerRadius = majorDiameter * 0.5;
+  const pitchHalfWidth = pitch * 0.25;
+  const outerHalfWidth = pitchHalfWidth
+    - (outerRadius - pitchRadius) * Math.tan(Math.PI / 6);
+  const innerHalfWidth = pitchHalfWidth
+    + (pitchRadius - minorRadius) * Math.tan(Math.PI / 6);
+  if (innerRadius <= 0 || pitchRadius <= innerRadius
+    || outerRadius <= pitchRadius || outerHalfWidth <= 0
+    || innerHalfWidth >= pitch * 0.499) {
+    throw new Error('ISO internal thread limits do not form a valid 60-degree profile');
   }
-  const centerStart = -pitch;
-  const centerEnd = throughAll
-    ? threadDepth + pitch
-    : Math.max(centerStart + pitch * 0.25, threadDepth - innerHalfWidth);
-  const turns = (centerEnd - centerStart) / pitch;
-  if (!Number.isFinite(turns) || turns > 256) {
-    throw new Error(
-      'This modeled thread exceeds 256 turns; use simplified representation',
-    );
-  }
+  return [makeContinuousThreadCutter(
+    oc, axis, pitchRadius, [
+      [innerRadius, innerHalfWidth],
+      [minorRadius, innerHalfWidth],
+      [outerRadius, outerHalfWidth],
+    ],
+    pitch, threadDepth, leftHand, 'internal',
+  )];
+}
 
-  const sectionCount = Math.max(2, Math.ceil(turns * 8));
-  const loft = new oc.BRepOffsetAPI_ThruSections(true, false, 1e-6);
-  try {
-    for (let index = 0; index <= sectionCount; index += 1) {
-      const ratio = index / sectionCount;
-      const center = centerStart + (centerEnd - centerStart) * ratio;
-      const angle = (leftHand ? -1 : 1) * TAU * turns * ratio;
-      const profile = makeThreadProfile(
-        oc,
-        axis,
-        center,
-        innerRadius,
-        outerRadius,
-        innerHalfWidth,
-        outerHalfWidth,
-        angle,
-      );
-      loft.AddWire(profile);
-      profile.delete();
-    }
-    loft.CheckCompatibility(false);
-    const progress = new oc.Message_ProgressRange_1();
-    loft.Build(progress);
-    progress.delete();
-    if (!loft.IsDone()) {
-      throw new Error('OCCT could not loft the modeled thread cutter');
-    }
-    const loftShape = loft.Shape();
-    if (loftShape.IsNull()
-      || loftShape.ShapeType() !== oc.TopAbs_ShapeEnum.TopAbs_SOLID) {
-      loftShape.delete();
-      throw new Error('OCCT modeled thread loft is not a solid');
-    }
-    const cutter = oc.TopoDS.Solid_1(loftShape);
-    loftShape.delete();
-    if (!oc.BRepLib.OrientClosedSolid(cutter)) {
-      cutter.delete();
-      throw new Error('OCCT could not orient the thread cutter solid');
-    }
-    cutter.Orientation_2(oc.TopAbs_Orientation.TopAbs_FORWARD as never);
-    const analyzer = new oc.BRepCheck_Analyzer(cutter, true, false);
-    const isValid = analyzer.IsValid_2();
-    analyzer.delete();
-    if (!isValid) {
-      cutter.delete();
-      throw new Error('OCCT modeled thread cutter is invalid');
-    }
-    const properties = new oc.GProp_GProps_1();
-    oc.BRepGProp.VolumeProperties_1(cutter, properties, true, false, false);
-    const volume = properties.Mass();
-    properties.delete();
-    if (!Number.isFinite(volume) || Math.abs(volume) <= 1e-9) {
-      cutter.delete();
-      throw new Error('OCCT modeled thread cutter has no volume');
-    }
-    return [cutter];
-  } finally {
-    loft.delete();
+function makeExternalThreadCutters(
+  oc: Oc,
+  axis: gp_Ax2,
+  majorDiameter: number,
+  pitchDiameter: number,
+  minorDiameter: number,
+  pitch: number,
+  threadDepth: number,
+  leftHand: boolean,
+): TopoDS_Shape[] {
+  const overlap = Math.max(5e-3, Math.min(
+    majorDiameter * 3e-2,
+    pitch * 1.5e-1,
+    (majorDiameter - pitchDiameter) * 5e-1,
+  ));
+  const innerRadius = minorDiameter * 0.5;
+  const pitchRadius = pitchDiameter * 0.5;
+  const majorRadius = majorDiameter * 0.5;
+  const outerRadius = majorRadius + overlap;
+  const pitchHalfWidth = pitch * 0.25;
+  const innerHalfWidth = pitchHalfWidth
+    - (pitchRadius - innerRadius) * Math.tan(Math.PI / 6);
+  const outerHalfWidth = pitchHalfWidth
+    + (majorRadius - pitchRadius) * Math.tan(Math.PI / 6);
+  if (innerRadius <= 0 || pitchRadius <= innerRadius
+    || outerRadius <= pitchRadius || innerHalfWidth <= 0
+    || outerHalfWidth >= pitch * 0.499) {
+    throw new Error('ISO external thread limits do not form a valid 60-degree profile');
   }
+  return [makeContinuousThreadCutter(
+    oc, axis, pitchRadius, [
+      [innerRadius, innerHalfWidth],
+      [majorRadius, outerHalfWidth],
+      [outerRadius, outerHalfWidth],
+    ],
+    pitch, threadDepth, leftHand, 'external',
+  )];
 }
 
 function addThreadMetadataToStep(
@@ -1194,6 +1518,23 @@ function addThreadMetadataToStep(
 function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_Shape {
   const direction = unit(job.direction);
   const overlap = 1e-4;
+  const threadLimits = job.thread?.representation === 'modeled'
+    ? isoMetricThreadEnvelope(job.thread, 'internal')
+    : null;
+  const modeledThreadMajor = threadLimits?.modeledMajor
+    ?? job.thread?.nominal_diameter
+    ?? 0;
+  const modeledThreadPitch = threadLimits?.modeledPitch
+    ?? (job.thread
+      ? job.thread.nominal_diameter - 0.649519052838329 * job.thread.pitch
+      : 0);
+  const modeledThreadMinor = threadLimits?.modeledMinor ?? job.diameter;
+  // The editable tap-drill diameter is manufacturing guidance. Exact modeled
+  // threads use the selected tolerance class's maximum-material (GO) minor
+  // diameter for the finished B-rep.
+  const finishedHoleDiameter = job.thread?.representation === 'modeled'
+    ? modeledThreadMinor
+    : job.diameter;
   const start = new oc.gp_Pnt_3(
     job.center.x - direction[0] * overlap,
     job.center.y - direction[1] * overlap,
@@ -1208,7 +1549,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
     : job.extent.depth;
   const mainMaker = new oc.BRepPrimAPI_MakeCylinder_3(
     axis,
-    job.diameter * 0.5,
+    finishedHoleDiameter * 0.5,
     depth + overlap * 2,
   );
   let cutter = mainMaker.Shape();
@@ -1229,7 +1570,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       cutter = next;
     } else if (job.style === 'countersink') {
       const largeRadius = job.countersink_diameter * 0.5;
-      const smallRadius = job.diameter * 0.5;
+      const smallRadius = finishedHoleDiameter * 0.5;
       const sinkDepth = (largeRadius - smallRadius) /
         Math.tan(job.countersink_angle_deg * Math.PI / 360);
       const secondary = new oc.BRepPrimAPI_MakeCone_3(
@@ -1263,18 +1604,18 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       threadCutters = makeInternalThreadCutters(
         oc,
         threadAxis,
-        job.diameter,
-        job.thread.nominal_diameter,
+        modeledThreadMajor,
+        modeledThreadPitch,
+        modeledThreadMinor,
         job.thread.pitch,
         requestedThreadDepth,
-        job.extent.type === 'through_all' && fullThreadDepth,
         job.thread.hand === 'left',
       );
       threadAxis.delete();
     }
     if (job.extent.type === 'distance' && job.bottom_style === 'drill_point') {
       const halfAngle = job.drill_point_angle_deg * Math.PI / 360;
-      const tipDepth = (job.diameter * 0.5) / Math.tan(halfAngle);
+      const tipDepth = (finishedHoleDiameter * 0.5) / Math.tan(halfAngle);
       if (!Number.isFinite(tipDepth) || tipDepth <= 0) {
         throw new Error('Drill point angle is invalid');
       }
@@ -1289,7 +1630,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       tipDirection.delete();
       const tipMaker = new oc.BRepPrimAPI_MakeCone_3(
         tipAxis,
-        job.diameter * 0.5,
+        finishedHoleDiameter * 0.5,
         0,
         tipDepth + overlap,
       );
@@ -1305,9 +1646,10 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
     if (threadCutters.length > 0) {
       let threadedResult: TopoDS_Shape | null = null;
       try {
-        // Subtract the helical tool before opening the predrill bore. Passing
-        // both overlapping tools as a compound can preserve the removed thread
-        // volume as a detached second solid, visually filling the groove.
+        // Subtract all overlapping helical chunks in one OCCT Boolean before
+        // opening the predrill bore. A raw compound can retain a detached
+        // cutter solid, while sequential cuts create invalid seams where the
+        // chunks overlap; a true multi-tool Boolean avoids both failure modes.
         threadedResult = cutThreadTools(oc, target, threadCutters);
         result = booleanShape(oc, 'cut', threadedResult, cutter, false);
       } catch (error) {
@@ -1359,6 +1701,251 @@ function selectedFaces(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
     });
   } finally {
     map.delete();
+  }
+}
+
+function applyExternalThread(
+  oc: Oc,
+  target: TopoDS_Shape,
+  job: KernelExternalThreadJobDto,
+): TopoDS_Shape {
+  const [face] = selectedFaces(oc, target, [job.face_key]);
+  if (!face) throw new Error('Referenced external-thread cylinder no longer exists');
+  const surface = new oc.BRepAdaptor_Surface_2(face, true);
+  let cylinder: gp_Cylinder | null = null;
+  let axes: gp_Ax3 | null = null;
+  let location: gp_Pnt | null = null;
+  let axisDirection: gp_Dir | null = null;
+  let xDirection: gp_Dir | null = null;
+  try {
+    if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Cylinder) {
+      throw new Error('External Thread requires a cylindrical face');
+    }
+    const firstU = surface.FirstUParameter();
+    const lastU = surface.LastUParameter();
+    const firstV = surface.FirstVParameter();
+    const lastV = surface.LastVParameter();
+    if (
+      !Number.isFinite(firstU)
+      || !Number.isFinite(lastU)
+      || !Number.isFinite(firstV)
+      || !Number.isFinite(lastV)
+      || Math.abs(lastU - firstU) < TAU - 1e-5
+    ) {
+      throw new Error(
+        'External Thread requires a complete 360-degree cylindrical face',
+      );
+    }
+
+    cylinder = surface.Cylinder();
+    const majorDiameter = cylinder.Radius() * 2;
+    const diameterTolerance = Math.max(0.01, job.thread.nominal_diameter * 0.002);
+    if (Math.abs(majorDiameter - job.thread.nominal_diameter) > diameterTolerance) {
+      throw new Error('Selected cylinder does not match the thread major diameter');
+    }
+    axes = cylinder.Position();
+    location = axes.Location();
+    axisDirection = axes.Direction();
+    xDirection = axes.XDirection();
+    const axis = [axisDirection.X(), axisDirection.Y(), axisDirection.Z()] as const;
+    const origin = [location.X(), location.Y(), location.Z()] as const;
+
+    const sample = new oc.gp_Pnt_1();
+    const du = new oc.gp_Vec_1();
+    const dv = new oc.gp_Vec_1();
+    try {
+      surface.D1(
+        (firstU + lastU) * 0.5,
+        (firstV + lastV) * 0.5,
+        sample,
+        du,
+        dv,
+      );
+      const nx = du.Y() * dv.Z() - du.Z() * dv.Y();
+      const ny = du.Z() * dv.X() - du.X() * dv.Z();
+      const nz = du.X() * dv.Y() - du.Y() * dv.X();
+      const orientation = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED
+        ? -1
+        : 1;
+      const sampleOffset = [
+        sample.X() - origin[0],
+        sample.Y() - origin[1],
+        sample.Z() - origin[2],
+      ] as const;
+      const axialProjection = sampleOffset[0] * axis[0]
+        + sampleOffset[1] * axis[1]
+        + sampleOffset[2] * axis[2];
+      const radial = [
+        sampleOffset[0] - axis[0] * axialProjection,
+        sampleOffset[1] - axis[1] * axialProjection,
+        sampleOffset[2] - axis[2] * axialProjection,
+      ] as const;
+      const normalLength = Math.hypot(nx, ny, nz);
+      const radialLength = Math.hypot(...radial);
+      const facing = orientation * (nx * radial[0] + ny * radial[1] + nz * radial[2]);
+      if (normalLength <= 1e-9 || radialLength <= 1e-9 || facing <= 0) {
+        throw new Error('External Thread requires an outward-facing cylindrical surface');
+      }
+    } finally {
+      dv.delete();
+      du.delete();
+      sample.delete();
+    }
+
+    const firstPoint = surface.Value(firstU, firstV);
+    const lastPoint = surface.Value(firstU, lastV);
+    let firstOffset: number;
+    let lastOffset: number;
+    try {
+      firstOffset = (firstPoint.X() - origin[0]) * axis[0]
+        + (firstPoint.Y() - origin[1]) * axis[1]
+        + (firstPoint.Z() - origin[2]) * axis[2];
+      lastOffset = (lastPoint.X() - origin[0]) * axis[0]
+        + (lastPoint.Y() - origin[1]) * axis[1]
+        + (lastPoint.Z() - origin[2]) * axis[2];
+    } finally {
+      lastPoint.delete();
+      firstPoint.delete();
+    }
+    const lower = Math.min(firstOffset, lastOffset);
+    const upper = Math.max(firstOffset, lastOffset);
+    const availableDepth = upper - lower;
+    if (!Number.isFinite(availableDepth) || availableDepth <= 1e-7) {
+      throw new Error('External thread cylinder has no axial length');
+    }
+    const requestedDepth = job.thread.depth ?? availableDepth;
+    if (requestedDepth > availableDepth + 1e-6) {
+      throw new Error('External thread length exceeds the selected cylindrical face');
+    }
+    const directionSign = job.flip ? -1 : 1;
+    const startOffset = job.flip ? upper : lower;
+    const start = new oc.gp_Pnt_3(
+      origin[0] + axis[0] * startOffset,
+      origin[1] + axis[1] * startOffset,
+      origin[2] + axis[2] * startOffset,
+    );
+    const direction = new oc.gp_Dir_4(
+      axis[0] * directionSign,
+      axis[1] * directionSign,
+      axis[2] * directionSign,
+    );
+    const threadAxis = new oc.gp_Ax2_2(start, direction, xDirection);
+    start.delete();
+    direction.delete();
+    try {
+      const limits = isoMetricThreadEnvelope(job.thread, 'external');
+      const modeledMajor = limits?.modeledMajor ?? job.thread.nominal_diameter;
+      const modeledPitch = limits?.modeledPitch
+        ?? job.thread.nominal_diameter - 0.649519052838329 * job.thread.pitch;
+      const modeledMinor = limits?.modeledMinor
+        ?? job.thread.nominal_diameter - 1.226869322027954 * job.thread.pitch;
+      const cutters = makeExternalThreadCutters(
+        oc,
+        threadAxis,
+        modeledMajor,
+        modeledPitch,
+        modeledMinor,
+        job.thread.pitch,
+        requestedDepth,
+        job.thread.hand === 'left',
+      );
+      try {
+        let ownedResult: TopoDS_Shape | null = null;
+        try {
+          const crestReduction = majorDiameter - modeledMajor;
+          if (crestReduction > 1e-7) {
+            // ISO external classes have a negative fundamental deviation.
+            // Remove the nominal crest sleeve over the threaded interval so
+            // the resulting body is the 6g GO envelope, not a basic-size
+            // cylinder with only its roots cut.
+            const trimOverlap = Math.max(1e-4, job.thread.pitch * 1e-4);
+            const trimOrigin = new oc.gp_Pnt_3(
+              origin[0] + axis[0] * startOffset
+                - axis[0] * directionSign * trimOverlap,
+              origin[1] + axis[1] * startOffset
+                - axis[1] * directionSign * trimOverlap,
+              origin[2] + axis[2] * startOffset
+                - axis[2] * directionSign * trimOverlap,
+            );
+            const trimDirection = new oc.gp_Dir_4(
+              axis[0] * directionSign,
+              axis[1] * directionSign,
+              axis[2] * directionSign,
+            );
+            const trimAxis = new oc.gp_Ax2_2(trimOrigin, trimDirection, xDirection);
+            trimOrigin.delete();
+            trimDirection.delete();
+            const outerMaker = new oc.BRepPrimAPI_MakeCylinder_3(
+              trimAxis,
+              majorDiameter * 0.5 + trimOverlap,
+              requestedDepth + trimOverlap * 2,
+            );
+            const innerMaker = new oc.BRepPrimAPI_MakeCylinder_3(
+              trimAxis,
+              modeledMajor * 0.5,
+              requestedDepth + trimOverlap * 2,
+            );
+            trimAxis.delete();
+            const outer = outerMaker.Shape();
+            const inner = innerMaker.Shape();
+            outerMaker.delete();
+            innerMaker.delete();
+            try {
+              const sleeve = booleanShape(oc, 'cut', outer, inner, false);
+              try {
+                ownedResult = booleanShape(oc, 'cut', target, sleeve, false);
+              } finally {
+                sleeve.delete();
+              }
+            } finally {
+              inner.delete();
+              outer.delete();
+            }
+          }
+          const beforeThread = Math.abs(shapeVolume(oc, ownedResult ?? target));
+          const threaded = cutThreadTools(oc, ownedResult ?? target, cutters);
+          ownedResult?.delete();
+          ownedResult = threaded;
+          const analyzer = new oc.BRepCheck_Analyzer(ownedResult, true, false);
+          const isValid = analyzer.IsValid_2();
+          analyzer.delete();
+          if (!isValid) {
+            throw new Error('OCCT modeled external thread result is invalid');
+          }
+          const volume = shapeVolume(oc, ownedResult);
+          if (!Number.isFinite(volume) || Math.abs(volume) <= 1e-9) {
+            throw new Error(
+              'OCCT modeled external thread removed the entire target body',
+            );
+          }
+          const removedThreadVolume = beforeThread - Math.abs(volume);
+          const minimumCutVolume = Math.max(1e-8, beforeThread * 1e-8);
+          if (!Number.isFinite(removedThreadVolume)
+            || removedThreadVolume <= minimumCutVolume) {
+            throw new Error(
+              'OCCT modeled external thread did not remove material',
+            );
+          }
+          const result = ownedResult;
+          ownedResult = null;
+          return result;
+        } finally {
+          ownedResult?.delete();
+        }
+      } finally {
+        cutters.forEach((cutter) => cutter.delete());
+      }
+    } finally {
+      threadAxis.delete();
+    }
+  } finally {
+    xDirection?.delete();
+    axisDirection?.delete();
+    location?.delete();
+    axes?.delete();
+    cylinder?.delete();
+    surface.delete();
+    face.delete();
   }
 }
 
@@ -1681,6 +2268,37 @@ function facePlane(oc: Oc, face: ReturnType<Oc['TopoDS']['Face_1']>): PlaneBasis
   }
 }
 
+function faceCylinder(
+  oc: Oc,
+  face: ReturnType<Oc['TopoDS']['Face_1']>,
+): CylindricalSurfaceDto | null {
+  const surface = new oc.BRepAdaptor_Surface_2(face, true);
+  try {
+    if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Cylinder) return null;
+    const cylinder = surface.Cylinder();
+    const axes = cylinder.Position();
+    const origin = axes.Location();
+    const axis = axes.Direction();
+    const reference = axes.XDirection();
+    try {
+      return {
+        origin: readPoint(origin),
+        axis: readPoint(axis),
+        reference: readPoint(reference),
+        radius: cylinder.Radius(),
+      };
+    } finally {
+      reference.delete();
+      axis.delete();
+      origin.delete();
+      axes.delete();
+      cylinder.delete();
+    }
+  } finally {
+    surface.delete();
+  }
+}
+
 function planarFaceSignature(
   oc: Oc,
   face: TopoDS_Face,
@@ -1783,6 +2401,7 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
       index_count: indices.length - firstIndex,
       plane,
       signature: planarFaceSignature(oc, face, plane),
+      cylinder: faceCylinder(oc, face),
     });
     face.delete();
   }
@@ -1965,6 +2584,15 @@ export class BrowserOcctKernel {
           const target = this.bodies.get(operation.job.target_body_id);
           if (!target) throw new Error('Hole target body is missing');
           const result = applyHole(this.oc, target, operation.job);
+          target.delete();
+          this.bodies.set(operation.job.target_body_id, result);
+          continue;
+        }
+        if (operation.kind === 'external_thread') {
+          const target = this.bodies.get(operation.job.target_body_id);
+          if (!target) throw new Error('External Thread target body is missing');
+          if (operation.job.thread.representation === 'simplified') continue;
+          const result = applyExternalThread(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, result);
           continue;

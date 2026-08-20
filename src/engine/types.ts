@@ -51,6 +51,8 @@ export interface ConstraintDto {
   a?: number;
   b?: number;
   point?: number;
+  edge?: number;
+  position?: Vec2;
   start?: number;
   end?: number;
   axis?: number;
@@ -229,7 +231,9 @@ export type SnapTarget =
   | { kind: 'origin' }
   | { kind: 'point'; entity: number }
   | { kind: 'midpoint'; entity: number }
-  | { kind: 'reference_midpoint'; edge: number };
+  | { kind: 'reference_midpoint'; edge: number }
+  | { kind: 'curve'; entity: number }
+  | { kind: 'intersection'; first: number; second: number };
 
 export type Inference = 'horizontal' | 'vertical' | 'coincident';
 export type TrackingAxis = 'horizontal' | 'vertical';
@@ -237,6 +241,18 @@ export type TrackingAxis = 'horizontal' | 'vertical';
 export interface LineTrackingRequest {
   point: number;
   axis: TrackingAxis;
+}
+
+export interface LineIntersectionRequest {
+  curve: number;
+  axis: TrackingAxis;
+}
+
+/** Exact crossing of two finite sketch curves. The engine recomputes the
+ * coordinate from these stable ids; the viewport coordinate is only a hint. */
+export interface CurveCrossingRequest {
+  first: number;
+  second: number;
 }
 
 export interface TrackingGuideDto extends LineTrackingRequest {
@@ -559,6 +575,13 @@ export interface HoleRequest {
   flip: boolean;
 }
 
+export interface ExternalThreadRequest {
+  body_id: number;
+  face_id: number;
+  thread: HoleThreadDto;
+  flip: boolean;
+}
+
 export interface HoleDefinitionDto extends HoleRequest {
   feature_id: number;
   name: string;
@@ -654,6 +677,7 @@ export interface ImportStepRequest {
 }
 
 export type BodyFeatureRequestDto =
+  | { type: 'external_thread'; request: ExternalThreadRequest }
   | { type: 'shell'; request: ShellRequest }
   | { type: 'move_copy'; request: MoveCopyBodyRequest }
   | { type: 'mirror'; request: SolidMirrorRequest }
@@ -664,6 +688,17 @@ export type BodyFeatureRequestDto =
   | { type: 'import_step'; request: ImportStepRequest };
 
 export type BodyFeatureDefinitionDto =
+  | {
+      type: 'external_thread';
+      feature_id: number;
+      name: string;
+      body_id: number;
+      face_id: number;
+      face_key: string;
+      cylinder: CylindricalSurfaceDto;
+      thread: HoleThreadDto;
+      flip: boolean;
+    }
   | {
       type: 'move_copy';
       feature_id: number;
@@ -862,6 +897,15 @@ export interface KernelHoleJobDto {
   thread: HoleThreadDto | null;
 }
 
+export interface KernelExternalThreadJobDto {
+  feature_id: number;
+  target_body_id: number;
+  face_key: string;
+  cylinder: CylindricalSurfaceDto;
+  thread: HoleThreadDto;
+  flip: boolean;
+}
+
 export type KernelTransformDto =
   | { kind: 'mirror'; origin: Point3Dto; normal: Point3Dto }
   | { kind: 'translate'; vector: Point3Dto }
@@ -919,6 +963,7 @@ export type KernelJobDto =
   | { kind: 'fillet'; job: KernelFilletJobDto }
   | { kind: 'chamfer'; job: KernelChamferJobDto }
   | { kind: 'hole'; job: KernelHoleJobDto }
+  | { kind: 'external_thread'; job: KernelExternalThreadJobDto }
   | { kind: 'shell'; job: KernelShellJobDto }
   | { kind: 'transform'; job: KernelTransformJobDto }
   | { kind: 'combine'; job: KernelCombineJobDto }
@@ -2106,6 +2151,9 @@ export interface StepThreadMetadataDto {
   feature_id: number;
   feature_name: string;
   position_count: number;
+  /** False for an internal threaded hole; true for an external male thread. */
+  external: boolean;
+  /** Internal predrill or external shaft diameter in millimetres. */
   predrill_diameter: number;
   thread: HoleThreadDto;
 }
@@ -2181,12 +2229,15 @@ export const DEFAULT_MESH_ANGULAR_DEFLECTION = 0.35;
 export interface LockedSegmentRequest {
   from: Vec2;
   to_hint: Vec2;
+  from_crossing?: CurveCrossingRequest | null;
+  to_crossing?: CurveCrossingRequest | null;
   length_mm?: number | null;
   angle_deg?: number | null;
   length_text?: string | null;
   angle_text?: string | null;
   ctrl_held: boolean;
   tracking?: LineTrackingRequest | null;
+  intersection?: LineIntersectionRequest | null;
 }
 
 export type RectangleMode = 'two_point' | 'center';

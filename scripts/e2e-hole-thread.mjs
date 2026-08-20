@@ -12,13 +12,22 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const pageErrors = [];
 page.on('pageerror', (error) => pageErrors.push(String(error)));
 
+const M6_X_1_6H = {
+  majorMin: 6.000,
+  pitchMin: 5.350,
+  pitchMax: 5.500,
+  minorMin: 4.917,
+  minorMax: 5.153,
+};
+const MESH_RADIUS_TOLERANCE = 0.04;
+
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForFunction(
     () => window.__appStore?.getState().document !== null && !!window.__engine,
   );
 
-  const setup = await page.evaluate(async () => {
+  let setup = await page.evaluate(async () => {
     const engine = window.__engine;
     const store = window.__appStore.getState();
     store.applySolidUpdate(await engine.newProject());
@@ -71,6 +80,7 @@ try {
     await page.getByTestId('hole-thread-representation').inputValue(),
     'modeled',
   );
+  await page.getByTestId('hole-thread-representation').selectOption('simplified');
 
   await page.getByTestId('hole-ok').click();
   await page.waitForFunction(
@@ -79,6 +89,186 @@ try {
         .getState()
         .document.features.some((feature) => feature.name === 'Hole1')
       && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  await page.waitForFunction(
+    () => {
+      const cosmeticLayers = window.__nativeViewportTransient().lines.filter(
+        (layer) => layer.pattern === 'solid' && layer.segments.length >= 60,
+      );
+      return cosmeticLayers.length >= 2;
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+  const simplifiedPresentation = await page.evaluate(async () => ({
+    definition: (await window.__engine.holeDefinitions())[0],
+    cosmeticLayers: window.__nativeViewportTransient().lines
+      .filter((layer) => layer.pattern === 'solid' && layer.segments.length >= 60)
+      .map((layer) => {
+        const radii = [];
+        const angularBins = new Set();
+        for (let index = 0; index + 2 < layer.segments.length; index += 3) {
+          const x = layer.segments[index];
+          const y = layer.segments[index + 1];
+          radii.push(Math.hypot(x, y));
+          const angle = (Math.atan2(y, x) + Math.PI * 2) % (Math.PI * 2);
+          angularBins.add(Math.floor(angle / (Math.PI * 2) * 24));
+        }
+        return {
+          color: layer.color,
+          positionCount: layer.segments.length / 3,
+          radialMin: Math.min(...radii),
+          radialMax: Math.max(...radii),
+          angularBinCount: angularBins.size,
+        };
+      }),
+  }));
+  assert.equal(simplifiedPresentation.definition.thread.representation, 'simplified');
+  assert.ok(
+    simplifiedPresentation.cosmeticLayers.every((layer) => layer.positionCount >= 3),
+    'simplified thread publishes native cosmetic helix linework',
+  );
+  assert.ok(
+    simplifiedPresentation.cosmeticLayers.every(
+      (layer) => layer.radialMin > 2.49 && layer.radialMax <= 2.5,
+    ),
+    'cosmetic thread is seated against the 5 mm OCCT bore wall',
+  );
+  assert.ok(
+    simplifiedPresentation.cosmeticLayers.every((layer) => layer.angularBinCount >= 18),
+    'cosmetic thread covers the complete bore circumference',
+  );
+
+  // Move/Copy is intentionally after Hole in history. The hole definition's
+  // cached support basis remains at creation time, while the final OCCT
+  // cylinder is translated and rotated. Cosmetic thread linework must follow
+  // that current analytic face instead of being stranded at the old basis.
+  await page.evaluate(async ({ bodyId }) => {
+    const halfSqrt = Math.SQRT1_2;
+    const update = await window.__engine.bodyFeature({
+      type: 'move_copy',
+      request: {
+        body_ids: [bodyId],
+        translation: { x: 12, y: -7, z: 3 },
+        rotation: [0, halfSqrt, 0, halfSqrt],
+        pivot: { x: 0, y: 0, z: 0 },
+        copy: false,
+      },
+    });
+    window.__appStore.getState().applySolidUpdate(update);
+  }, setup);
+  await page.waitForFunction(
+    () => {
+      if (window.__appStore.getState().solidBusy) return false;
+      return window.__nativeViewportTransient().lines.some((layer) => {
+        if (layer.segments.length < 60) return false;
+        const radii = [];
+        const axial = [];
+        for (let index = 0; index + 2 < layer.segments.length; index += 3) {
+          const x = layer.segments[index];
+          const y = layer.segments[index + 1];
+          const z = layer.segments[index + 2];
+          axial.push(x);
+          radii.push(Math.hypot(y + 7, z - 3));
+        }
+        return Math.min(...radii) > 2.49
+          && Math.max(...radii) <= 2.5
+          && Math.min(...axial) > 12
+          && Math.max(...axial) < 22;
+      });
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+  const movedPresentation = await page.evaluate(() =>
+    window.__nativeViewportTransient().lines
+      .filter((layer) => layer.segments.length >= 60)
+      .map((layer) => {
+        const points = [];
+        for (let index = 0; index + 2 < layer.segments.length; index += 3) {
+          points.push([
+            layer.segments[index],
+            layer.segments[index + 1],
+            layer.segments[index + 2],
+          ]);
+        }
+        return {
+          axialMinimum: Math.min(...points.map((point) => point[0])),
+          axialMaximum: Math.max(...points.map((point) => point[0])),
+          radialMinimum: Math.min(
+            ...points.map((point) => Math.hypot(point[1] + 7, point[2] - 3)),
+          ),
+          radialMaximum: Math.max(
+            ...points.map((point) => Math.hypot(point[1] + 7, point[2] - 3)),
+          ),
+        };
+      }),
+  );
+  assert.ok(
+    movedPresentation.some(
+      (layer) => layer.axialMinimum > 12
+        && layer.axialMaximum < 22
+        && layer.radialMinimum > 2.49
+        && layer.radialMaximum <= 2.5,
+    ),
+    'cosmetic thread follows the moved and rotated analytic OCCT cylinder',
+  );
+
+  // Continue the existing modeled-thread topology/export regression on a
+  // fresh fixture. This keeps the exact-topology assertion independent of
+  // feature-edit replay while still proving that cosmetic presentation is
+  // removed as soon as the document no longer owns a simplified thread.
+  setup = await page.evaluate(async () => {
+    const engine = window.__engine;
+    const store = window.__appStore.getState();
+    store.applySolidUpdate(await engine.newProject());
+    await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
+    await engine.addRectangle({
+      mode: 'two_point',
+      p1: { x: -10, y: -10 },
+      p2: { x: 10, y: 10 },
+      ctrl_held: true,
+    });
+    const ended = await engine.endSketch();
+    store.setDocument(ended.document);
+    store.setFinishedSketches(await engine.finishedSketches());
+    const update = await engine.extrude({
+      sketch_name: 'Sketch1',
+      profile_indices: [0],
+      operation: 'new_body',
+      extent: { type: 'distance', distance: 10 },
+      taper_angle_deg: 0,
+      flip: false,
+      target_body_ids: [],
+    });
+    store.applySolidUpdate(update);
+    const body = update.scene.bodies[0];
+    const face = body.faces
+      .filter((candidate) => candidate.plane)
+      .sort((a, b) => b.plane.origin[2] - a.plane.origin[2])[0];
+    store.setMode('solid');
+    store.setSelectedBody(body.id);
+    store.setSelectedFace(face.id);
+    store.setSelectedFacePoint({ x: 0, y: 0, z: 10 });
+    return { bodyId: body.id };
+  });
+  await page.locator('button[title="Hole"]').first().click();
+  await page.getByTestId('hole-dialog').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => !window.__appStore.getState().solidBusy);
+  await page.getByTestId('hole-threaded').check();
+  await page.getByTestId('hole-ok').click();
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.some((feature) => feature.name === 'Hole1')
+        && !window.__appStore.getState().solidBusy
+        && window.__nativeViewportTransient().lines.every(
+          (layer) => layer.segments.length < 60,
+        ),
     undefined,
     { timeout: 60_000 },
   );
@@ -93,6 +283,7 @@ try {
         feature_id: definitions[0].feature_id,
         feature_name: definitions[0].name,
         position_count: 1,
+        external: false,
         predrill_diameter: definitions[0].diameter,
         thread: definitions[0].thread,
       }];
@@ -317,14 +508,31 @@ try {
   result.threadSectionCounts.forEach(({ material, groove }, angleIndex) => {
     assert.ok(
       material >= 4 && groove >= 4,
-      `thread section ${angleIndex} must alternate between material and an open groove`,
+      `thread section ${angleIndex} must alternate between material and an open groove (${material} material, ${groove} groove)`,
     );
   });
-  assert.ok(result.wallRadiusMin < 2.55, 'thread retains the 5 mm predrill lands');
-  assert.ok(result.wallRadiusMax > 2.9, 'thread grooves reach the 6 mm major diameter');
   assert.ok(
-    result.minimumHoleEdgeChordRadius > 2.4,
-    'displayed thread edges stay on the wall instead of crossing the cavity',
+    result.wallRadiusMin >= M6_X_1_6H.minorMin * 0.5 - MESH_RADIUS_TOLERANCE
+      && result.wallRadiusMin <= M6_X_1_6H.minorMax * 0.5 + MESH_RADIUS_TOLERANCE,
+    `internal 6H minor radius is outside its GO/no-go envelope: ${result.wallRadiusMin}`,
+  );
+  assert.ok(
+    Math.abs(result.wallRadiusMin - M6_X_1_6H.minorMin * 0.5)
+      <= MESH_RADIUS_TOLERANCE,
+    `internal 6H minor radius does not reach the maximum-material GO boundary: ${result.wallRadiusMin}`,
+  );
+  assert.ok(
+    Math.abs(result.wallRadiusMax - M6_X_1_6H.majorMin * 0.5)
+      <= MESH_RADIUS_TOLERANCE,
+    `internal 6H major radius does not reach the maximum-material GO boundary: ${result.wallRadiusMax}`,
+  );
+  assert.ok(
+    M6_X_1_6H.pitchMin <= M6_X_1_6H.pitchMax,
+    'internal 6H pitch-diameter GO/no-go envelope is ordered',
+  );
+  assert.ok(
+    result.minimumHoleEdgeChordRadius > M6_X_1_6H.minorMin * 0.5 - 0.08,
+    `displayed thread edges stay on the wall instead of crossing the cavity: ${result.minimumHoleEdgeChordRadius}`,
   );
   assert.equal(result.definition.thread.designation, 'M6 x 1 - 6H');
   assert.equal(result.definition.thread.representation, 'modeled');
@@ -334,6 +542,7 @@ try {
   assert.deepEqual(result.importErrors, []);
   assert.equal(result.importedBodyCount, 1);
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
+  console.log('  [ok] simplified thread uses visual-only native wall treatment');
   console.log('  [ok] modeled ISO thread persists and exports with metadata');
 } finally {
   await browser.close();

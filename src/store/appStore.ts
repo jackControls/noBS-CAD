@@ -18,11 +18,15 @@ import type {
   ComponentDefinitionDto,
   ComponentOccurrenceDto,
   CreateJointRequestDto,
+  CylindricalSurfaceDto,
   DatumPlaneDefinitionDto,
   DatumPlaneUpdateDto,
   DrawingDocumentDto,
   DrawingViewKind,
   ExtrudeOperation,
+  HoleBottomStyle,
+  HoleStyle,
+  HoleThreadDto,
   JointConnectorDto,
   JointDefinitionDto,
   JointMotionStateDto,
@@ -447,6 +451,37 @@ export interface OffsetPlaneCommandPreview {
   halfSize: [number, number];
 }
 
+/** Presentation-only hole cutter. Positions use the exact support-face basis
+ * submitted to OCCT so flip direction and stepped/countersunk geometry can be
+ * inspected before committing the feature. */
+export interface HoleCommandPreview {
+  kind: 'hole';
+  bodyId: number;
+  basis: PlaneBasis;
+  positions: { x: number; y: number }[];
+  diameter: number;
+  /** Null means Through All and is resolved against the retained body mesh. */
+  depth: number | null;
+  style: HoleStyle;
+  counterboreDiameter: number;
+  counterboreDepth: number;
+  countersinkDiameter: number;
+  countersinkAngleDeg: number;
+  bottomStyle: HoleBottomStyle;
+  drillPointAngleDeg: number;
+  flip: boolean;
+}
+
+/** Presentation-only male thread on an exact analytic cylindrical face. */
+export interface ExternalThreadCommandPreview {
+  kind: 'external_thread';
+  bodyId: number;
+  faceId: number;
+  cylinder: CylindricalSurfaceDto;
+  thread: HoleThreadDto;
+  flip: boolean;
+}
+
 export interface MoveCopyPreviewTarget {
   bodyId: number;
   /** Disambiguates reusable instances that share one source body. */
@@ -486,6 +521,8 @@ export interface MoveCopyCommandPreview {
 
 export type SolidCommandPreview =
   | ExtrudeCommandPreview
+  | HoleCommandPreview
+  | ExternalThreadCommandPreview
   | OffsetPlaneCommandPreview
   | MoveCopyCommandPreview;
 
@@ -501,6 +538,7 @@ export interface ConstructionPlanePickedEdge {
 }
 export type BodyFeatureKind =
   | 'move_copy'
+  | 'external_thread'
   | 'shell'
   | 'mirror'
   | 'rectangular_pattern'
@@ -2607,6 +2645,7 @@ export const useAppStore = create<AppState>()((set) => ({
     ribDialogFeature: null,
     profilePicker: null,
     curvePicker: null,
+    solidCommandPreview: null,
   }),
 
   closeHoleDialog: () => set({
@@ -2614,6 +2653,7 @@ export const useAppStore = create<AppState>()((set) => ({
     holePositionSelections: [],
     holePositionHover: null,
     hoveredFace: null,
+    solidCommandPreview: null,
   }),
 
   setHolePositionSelections: (selections) => set({ holePositionSelections: selections }),

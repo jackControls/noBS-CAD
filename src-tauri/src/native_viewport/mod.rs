@@ -259,6 +259,14 @@ pub struct ViewportCamera {
     pub vertical_fov_degrees: f32,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportLinePattern {
+    #[default]
+    Solid,
+    Dotted,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportLineLayer {
@@ -269,6 +277,10 @@ pub struct ViewportLineLayer {
     /// gizmo pipelines rather than treating it as a world-space measurement.
     #[serde(default = "default_line_width")]
     pub width: f32,
+    /// Semantic construction-guide styling. Older callers deserialize as a
+    /// solid line, while native rendering keeps dotted spacing screen-sized.
+    #[serde(default)]
+    pub pattern: ViewportLinePattern,
     /// World-space line segments, packed as x0, y0, z0, x1, y1, z1.
     #[serde(default)]
     pub segments: Vec<f32>,

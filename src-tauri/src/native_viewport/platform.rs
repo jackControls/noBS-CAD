@@ -5,6 +5,7 @@ use bevy::{
     mesh::Indices,
     prelude::*,
     render::{render_resource::PrimitiveTopology, RenderPlugin},
+    ui::UiTransform,
     window::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
         WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
@@ -86,7 +87,8 @@ use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets
 use super::{
     NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
     ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
-    ViewportPresentation, ViewportPreview, ViewportRect, ViewportSnapKind, ViewportSnapMarker,
+    ViewportLinePattern, ViewportPresentation, ViewportPreview, ViewportRect, ViewportSnapKind,
+    ViewportSnapMarker,
 };
 use crate::state::BOOTSTRAP_SESSION_ID;
 
@@ -2652,6 +2654,16 @@ fn rebuild_native_annotations(
             continue;
         }
         let constraint = annotation.kind == ViewportAnnotationKind::Constraint;
+        // Dimension `screen` coordinates are the projected center of the
+        // browser-side annotation sprite. Keep the native label centered on
+        // that same point so the visible number and its DOM interaction proxy
+        // share one hit target. Constraint glyphs intentionally retain their
+        // small upper-right offset from the referenced sketch geometry.
+        let annotation_transform = if constraint {
+            UiTransform::default()
+        } else {
+            UiTransform::from_translation(Val2::percent(-50.0, -50.0))
+        };
         let foreground = Color::srgba(
             annotation.color[0],
             annotation.color[1],
@@ -2665,8 +2677,8 @@ fn rebuild_native_annotations(
                 UiTargetCamera(camera),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(annotation.screen[0] + 4.0),
-                    top: px(annotation.screen[1] - if constraint { 9.0 } else { 11.0 }),
+                    left: px(annotation.screen[0] + if constraint { 4.0 } else { 0.0 }),
+                    top: px(annotation.screen[1] - if constraint { 9.0 } else { 0.0 }),
                     min_width: px(if constraint { 15.0 } else { 24.0 }),
                     min_height: px(if constraint { 15.0 } else { 18.0 }),
                     padding: UiRect::axes(
@@ -2679,6 +2691,7 @@ fn rebuild_native_annotations(
                     border_radius: BorderRadius::all(px(if constraint { 4.0 } else { 5.0 })),
                     ..default()
                 },
+                annotation_transform,
                 BackgroundColor(rgba(
                     if constraint {
                         palette.0.background
@@ -3328,7 +3341,45 @@ fn draw_cad_gizmos(
         for segment in layer.segments.chunks_exact(6) {
             let start = Vec3::new(segment[0], segment[1], segment[2]);
             let end = Vec3::new(segment[3], segment[4], segment[5]);
-            if layer.width >= 2.0 {
+            if layer.pattern == ViewportLinePattern::Dotted {
+                let delta = end - start;
+                let length = delta.length();
+                if length <= f32::EPSILON {
+                    continue;
+                }
+                let world_per_pixel = world_per_pixel_at(
+                    camera.camera,
+                    *viewport,
+                    start.lerp(end, 0.5),
+                )
+                .max(f32::EPSILON);
+                // Tiny screen-space strokes read as dots without relying on
+                // a renderer-specific dash shader. Cap the subdivision so a
+                // pathological guide cannot degrade pointer latency.
+                let dot_length = world_per_pixel * 1.25;
+                let requested_period = world_per_pixel * 4.25;
+                let direction = delta / length;
+                let requested_count = ((length / requested_period).ceil() as usize).max(1);
+                let dot_count = requested_count.min(512);
+                let period = if requested_count > dot_count {
+                    length / dot_count as f32
+                } else {
+                    requested_period
+                };
+                for dot_index in 0..dot_count {
+                    let distance = dot_index as f32 * period;
+                    if distance >= length {
+                        break;
+                    }
+                    let dot_start = start + direction * distance;
+                    let dot_end = start + direction * (distance + dot_length).min(length);
+                    if layer.width >= 2.0 {
+                        highlights.line(dot_start, dot_end, color);
+                    } else {
+                        gizmos.line(dot_start, dot_end, color);
+                    }
+                }
+            } else if layer.width >= 2.0 {
                 highlights.line(start, end, color);
             } else {
                 gizmos.line(start, end, color);
@@ -3346,9 +3397,14 @@ fn draw_cad_gizmos(
         let radius = layer.radius.clamp(0.08, 4.0);
         for point in layer.positions.chunks_exact(3) {
             let center = Vec3::new(point[0], point[1], point[2]);
-            highlights.line(center - Vec3::X * radius, center + Vec3::X * radius, color);
-            highlights.line(center - Vec3::Y * radius, center + Vec3::Y * radius, color);
-            highlights.line(center - Vec3::Z * radius, center + Vec3::Z * radius, color);
+            let forward = (Vec3::from_array(camera.camera.target)
+                - Vec3::from_array(camera.camera.position))
+                .normalize_or_zero();
+            let up_hint = Vec3::from_array(camera.camera.up).normalize_or_zero();
+            let right = forward.cross(up_hint).normalize_or_zero();
+            let right = if right == Vec3::ZERO { Vec3::X } else { right };
+            let up = right.cross(forward).normalize_or_zero();
+            draw_filled_disc(&mut highlights, center, right, up, radius, color);
         }
     }
 
@@ -3729,10 +3785,45 @@ fn draw_sketch_grip<Config: GizmoConfigGroup>(
 ) {
     let point = sketch_world(basis, position.x, position.y, 0.05);
     let radius = point_radius.max(0.03);
-    let u = basis_vector(basis.u) * radius;
-    let v = basis_vector(basis.v) * radius;
-    gizmos.line(point - u, point + u, color);
-    gizmos.line(point - v, point + v, color);
+    draw_filled_disc(
+        gizmos,
+        point,
+        basis_vector(basis.u),
+        basis_vector(basis.v),
+        radius,
+        color,
+    );
+}
+
+/// Gizmos do not expose a filled world-space disc primitive. A handful of
+/// parallel chords gives sketch points a true round-dot silhouette while
+/// keeping their physical diameter tied to line weight on Retina and
+/// standard-density displays.
+fn draw_filled_disc<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    center: Vec3,
+    u_axis: Vec3,
+    v_axis: Vec3,
+    radius: f32,
+    color: Color,
+) {
+    const HALF_STEPS: i32 = 4;
+    let u = u_axis.normalize_or_zero();
+    let v = v_axis.normalize_or_zero();
+    if u == Vec3::ZERO || v == Vec3::ZERO {
+        return;
+    }
+    for step in -HALF_STEPS..=HALF_STEPS {
+        let ratio = step as f32 / HALF_STEPS as f32;
+        let along_v = ratio * radius;
+        let half_chord = (radius * radius - along_v * along_v).max(0.0).sqrt();
+        let row_center = center + v * along_v;
+        gizmos.line(
+            row_center - u * half_chord,
+            row_center + u * half_chord,
+            color,
+        );
+    }
 }
 
 fn draw_parametric_curve(
@@ -4853,7 +4944,12 @@ mod tests {
     fn native_preview_preserves_endpoint_snap_semantics() {
         let preview: ViewportPreview = serde_json::from_str(
             r#"{
-                "lines": [],
+                "lines": [{
+                    "color": [0.2, 0.7, 1.0, 0.68],
+                    "width": 1.15,
+                    "pattern": "dotted",
+                    "segments": [0.0, 0.0, 0.0, 10.0, 0.0, 0.0]
+                }],
                 "points": [],
                 "triangles": [{
                     "color": [1.0, 0.4, 0.2, 0.25],
@@ -4879,6 +4975,8 @@ mod tests {
         let marker = preview.marker.expect("endpoint marker should be retained");
         assert_eq!(marker.kind, ViewportSnapKind::Point);
         assert_eq!(marker.position, [12.0, -4.0, 0.18]);
+        assert_eq!(preview.lines[0].pattern, ViewportLinePattern::Dotted);
+        assert_eq!(preview.lines[0].segments.len(), 6);
         assert!(preview.triangles[0].xray);
         assert_eq!(preview.triangles[0].positions.len(), 9);
         assert_eq!(preview.arrows[0].end, [0.0, 0.0, 10.0]);

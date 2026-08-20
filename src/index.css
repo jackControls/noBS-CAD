@@ -49,6 +49,7 @@
   --cad-edge: #29333d;
   --cad-edge-hover: #58c7ff;
   --cad-edge-selected: #ffc857;
+  --cad-thread-cosmetic: #70c4ee;
   --cad-hole-point-selected: #ffd166;
   --cad-ground-fine: #3a3f47;
   --cad-ground-major: #4d545f;
@@ -104,6 +105,7 @@
   --cad-edge: #43515e;
   --cad-edge-hover: #007cae;
   --cad-edge-selected: #b85f00;
+  --cad-thread-cosmetic: #155d82;
   --cad-hole-point-selected: #ffd43b;
   --cad-ground-fine: #c5ced7;
   --cad-ground-major: #aab6c2;

@@ -135,9 +135,13 @@ interface NativePresentation {
   instanceBodyPoses: import('../../engine/types').InstanceBodyPoseDto[];
 }
 
+export type NativeViewportLinePattern = 'solid' | 'dotted';
+
 export interface NativeViewportLineLayer {
   color: [number, number, number, number];
   width: number;
+  /** Presentation meaning, kept semantic so Bevy can preserve screen-space spacing. */
+  pattern: NativeViewportLinePattern;
   segments: number[];
 }
 
@@ -1584,6 +1588,7 @@ function previewKey(preview: NativeViewportTransient): string {
   for (const layer of preview.lines) {
     layer.color.forEach(addNumber);
     addNumber(layer.width);
+    addString(layer.pattern);
     layer.segments.forEach(addNumber);
   }
   for (const layer of preview.points) {

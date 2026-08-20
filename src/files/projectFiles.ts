@@ -303,7 +303,11 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
       .filter((feature) => !feature.suppressed)
       .map((feature) => feature.id),
   );
-  const threadMetadata = (await engine.holeDefinitions()).flatMap((definition) => {
+  const [holeDefinitions, bodyFeatureDefinitions] = await Promise.all([
+    engine.holeDefinitions(),
+    engine.bodyFeatureDefinitions(),
+  ]);
+  const internalThreadMetadata = holeDefinitions.flatMap((definition) => {
     if (
       !definition.thread
       || !bodyIds.includes(definition.body_id)
@@ -316,13 +320,32 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
       feature_id: definition.feature_id,
       feature_name: definition.name,
       position_count: Math.max(1, definition.positions.length),
+      external: false,
       predrill_diameter: definition.diameter,
+      thread: definition.thread,
+    }];
+  });
+  const externalThreadMetadata = bodyFeatureDefinitions.flatMap((definition) => {
+    if (
+      definition.type !== 'external_thread'
+      || !bodyIds.includes(definition.body_id)
+      || !activeFeatureIds.has(definition.feature_id)
+    ) {
+      return [];
+    }
+    return [{
+      body_id: definition.body_id,
+      feature_id: definition.feature_id,
+      feature_name: definition.name,
+      position_count: 1,
+      external: true,
+      predrill_diameter: definition.cylinder.radius * 2,
       thread: definition.thread,
     }];
   });
   const bytes = await engine.exportStep({
     body_ids: bodyIds,
-    thread_metadata: threadMetadata,
+    thread_metadata: [...internalThreadMetadata, ...externalThreadMetadata],
     occurrences: state.assemblySolution.instance_body_poses
       .filter((pose) => pose.visible)
       .filter((pose) => bodyIds.includes(pose.body_id))

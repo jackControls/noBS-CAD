@@ -80,6 +80,14 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M12 8v11" strokeDasharray="2 2" />
     </>
   ),
+  externalThread: (
+    <>
+      <path d="M7 4h7c2.2 0 4 1.8 4 4v8c0 2.2-1.8 4-4 4H7" />
+      <path d="M7 4v16" strokeDasharray="2 2" />
+      <path d="M5 7.5l4 2.2-4 2.2 4 2.2-4 2.2 4 2.2" />
+      <path d="M12 6.5h3M12 17.5h3" />
+    </>
+  ),
   fillet: (
     <>
       <path d="M4 20V9h7a9 9 0 0 1 9 9v2" />
