@@ -3,7 +3,7 @@ name = "nbcad-wasm"
 version = "0.1.0"
 edition = "2021"
 description = "wasm-bindgen facade over the noBS CAD engine crates"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 [lib]

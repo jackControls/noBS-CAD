@@ -3,7 +3,7 @@ name = "nbcad-solid"
 version = "0.1.0"
 edition = "2021"
 description = "Host-neutral solid feature history, stable topology ids, and kernel DTOs"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 [dependencies]

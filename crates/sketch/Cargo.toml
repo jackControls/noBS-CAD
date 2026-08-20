@@ -3,7 +3,7 @@ name = "nbcad-sketch"
 version = "0.1.0"
 edition = "2021"
 description = "noBS CAD 2D sketch model: entities, constraints, solver API (pure Rust, no OCCT)"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 [dependencies]

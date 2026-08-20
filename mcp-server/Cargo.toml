@@ -3,7 +3,7 @@ name = "nbcad-mcp"
 version = "0.1.0"
 edition = "2021"
 description = "Headless MCP stdio server for noBS CAD sketch and solid tools"
-license = "LGPL-2.0-or-later"
+license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/noBS-CAD"
 
 # Keep native OCCT out of the host-neutral root workspace.
