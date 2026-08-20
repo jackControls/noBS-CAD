@@ -336,7 +336,7 @@ experience and model behavior before a lot of implementation work begins.
 
 | Project | License | What we borrow |
 |---------|---------|----------------|
-| [Open CAD Studio](https://github.com/Open-CAD-Studio) and other peer CAD tools | GPL-3 (typical) | **Ideas only.** Do not copy source, assets, or unique implementations. |
+| Open CAD Studio and other peer CAD tools | GPL-3 (typical) | **Ideas only.** Do not copy source, assets, or unique implementations. |
 | Open CASCADE Technology | LGPL-2.1 + exception | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
 | Bevy | MIT / Apache-2.0 | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
 
