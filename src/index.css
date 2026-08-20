@@ -218,6 +218,10 @@ body {
   .drawing-input {
     @apply h-8 w-full rounded border border-edge bg-header px-2 text-[11px] text-ink outline-none focus:border-accent focus:ring-1 focus:ring-accent/30;
   }
+
+  .cam-input {
+    @apply min-h-7 w-full rounded border border-edge bg-header px-2 py-1 text-[10px] text-ink outline-none focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
 }
 
 @media print {

@@ -11,6 +11,7 @@ import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
   BodyAppearance,
+  CamDocumentDto,
   DatumPlaneDefinitionDto,
   DrawingDocumentDto,
   ProjectVisibilityDto,
@@ -50,6 +51,7 @@ interface ProjectTabViewState {
   assemblyDocument: AssemblyDocumentDto;
   assemblySolution: AssemblySolutionDto;
   projectVisibility: ProjectVisibilityDto;
+  camDocument: CamDocumentDto;
 }
 
 export interface RecoverableProjectTab {
@@ -115,6 +117,17 @@ function emptyAssemblySolution(): AssemblySolutionDto {
   };
 }
 
+function emptyCamDocument(): CamDocumentDto {
+  return {
+    setups: [],
+    active_setup_id: null,
+    tools: [],
+    next_setup_id: 1,
+    next_operation_id: 1,
+    next_tool_id: 1,
+  };
+}
+
 function createTabId(): string {
   const randomId = globalThis.crypto?.randomUUID?.();
   const id = randomId ?? `project-${Date.now()}-${nextTabId}`;
@@ -152,6 +165,7 @@ function activeViewState(): ProjectTabViewState | null {
     assemblyDocument: state.assemblyDocument,
     assemblySolution: state.assemblySolution,
     projectVisibility: state.projectVisibility,
+    camDocument: state.camDocument,
   };
 }
 
@@ -170,7 +184,8 @@ function sameViewState(
     left.drawingDocument === right.drawingDocument &&
     left.assemblyDocument === right.assemblyDocument &&
     left.assemblySolution === right.assemblySolution &&
-    left.projectVisibility === right.projectVisibility
+    left.projectVisibility === right.projectVisibility &&
+    left.camDocument === right.camDocument
   );
 }
 
@@ -241,7 +256,16 @@ async function loadModelState(
 ): Promise<ProjectTabViewState> {
   const engine = await getEngine();
   const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
+  const [
+    finishedSketches,
+    datumPlanes,
+    bodyAppearances,
+    drawingDocument,
+    assemblyDocument,
+    assemblySolution,
+    projectVisibility,
+    camDocument,
+  ] = await Promise.all([
     engine.finishedSketches(),
     engine.datumPlaneDefinitions(),
     engine.bodyAppearances(),
@@ -249,13 +273,35 @@ async function loadModelState(
     engine.assemblyDocument(),
     engine.assemblySolution(),
     engine.projectVisibility(),
+    engine.camDocument(),
   ]);
-  return { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility };
+  return {
+    update,
+    finishedSketches,
+    datumPlanes,
+    bodyAppearances,
+    drawingDocument,
+    assemblyDocument,
+    assemblySolution,
+    projectVisibility,
+    camDocument,
+  };
 }
 
 async function currentModelState(): Promise<ProjectTabViewState> {
   const engine = await getEngine();
-  const [document, scene, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] =
+  const [
+    document,
+    scene,
+    finishedSketches,
+    datumPlanes,
+    bodyAppearances,
+    drawingDocument,
+    assemblyDocument,
+    assemblySolution,
+    projectVisibility,
+    camDocument,
+  ] =
     await Promise.all([
       engine.getDocument(),
       engine.solidScene(),
@@ -266,6 +312,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
       engine.assemblyDocument(),
       engine.assemblySolution(),
       engine.projectVisibility(),
+      engine.camDocument(),
     ]);
   return {
     update: { document, scene },
@@ -276,6 +323,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     assemblyDocument,
     assemblySolution,
     projectVisibility,
+    camDocument,
   };
 }
 
@@ -321,6 +369,7 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
         projectState.assemblyDocument,
         projectState.projectVisibility,
         projectState.assemblySolution,
+        projectState.camDocument,
       );
     useAppStore.setState({
       activeProjectTabId: tabId,
@@ -403,6 +452,7 @@ export function createProjectTab(): Promise<boolean> {
         assemblyDocument: emptyAssemblyDocument(),
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
+        camDocument: emptyCamDocument(),
       },
     });
     const state = useAppStore.getState();
@@ -493,6 +543,7 @@ export function closeProjectTab(
         assemblyDocument: emptyAssemblyDocument(),
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
+        camDocument: emptyCamDocument(),
       },
     });
     useAppStore.getState().loadProjectState(update, [], [], null);
@@ -620,7 +671,17 @@ export async function restoreProjectTabs(
   if (recovered.length === 0) return false;
   const active =
     recovered.find((tab) => tab.id === requestedActiveId) ?? recovered[0];
-  const { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility } =
+  const {
+    update,
+    finishedSketches,
+    datumPlanes,
+    bodyAppearances,
+    drawingDocument,
+    assemblyDocument,
+    assemblySolution,
+    projectVisibility,
+    camDocument,
+  } =
     await loadModelState(active.modelJson);
 
   runtimes.clear();
@@ -633,7 +694,17 @@ export async function restoreProjectTabs(
       workspaceTab: 'solid',
       viewState:
         tab.id === active.id
-          ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility }
+          ? {
+              update,
+              finishedSketches,
+              datumPlanes,
+              bodyAppearances,
+              drawingDocument,
+              assemblyDocument,
+              assemblySolution,
+              projectVisibility,
+              camDocument,
+            }
           : null,
     });
   }
@@ -650,6 +721,7 @@ export async function restoreProjectTabs(
       assemblyDocument,
       projectVisibility,
       assemblySolution,
+      camDocument,
     );
   useAppStore.setState({
     activeProjectTabId: active.id,

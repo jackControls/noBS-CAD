@@ -39,7 +39,12 @@ export type RibbonAction =
   | 'drawingTool'
   | 'drawingExportDxf'
   | 'drawingExportProfileDxf'
-  | 'drawingPrint';
+  | 'drawingPrint'
+  | 'camWorkspace'
+  | 'camNewSetup'
+  | 'camAddOperation'
+  | 'camPost'
+  | 'camExportEvents';
 
 export type MenuEntry =
   | {
@@ -814,6 +819,39 @@ export const ASSEMBLY_TAB: RibbonTab = {
   ],
 };
 
+export const CAM_TAB: RibbonTab = {
+  id: 'cam',
+  labelKey: 'ribbon.tabs.cam',
+  enabled: true,
+  panels: [
+    {
+      id: 'workspace',
+      labelKey: 'ribbon.panels.workspace',
+      buttons: [
+        { id: 'returnModel', labelKey: 'ribbon.cam.model', icon: 'select', enabled: true, action: 'modelWorkspace' },
+        { id: 'newSetup', labelKey: 'ribbon.cam.newSetup', icon: 'plane', enabled: true, action: 'camNewSetup' },
+      ],
+    },
+    {
+      id: 'toolpaths',
+      labelKey: 'ribbon.panels.toolpaths',
+      buttons: [
+        { id: 'camFace', labelKey: 'ribbon.cam.face', icon: 'section', enabled: true, action: 'camAddOperation', payload: 'face' },
+        { id: 'camContour', labelKey: 'ribbon.cam.contour', icon: 'pathPattern', enabled: true, action: 'camAddOperation', payload: 'contour2d' },
+        { id: 'camDrill', labelKey: 'ribbon.cam.drill', icon: 'hole', enabled: true, action: 'camAddOperation', payload: 'drill' },
+      ],
+    },
+    {
+      id: 'output',
+      labelKey: 'ribbon.panels.output',
+      buttons: [
+        { id: 'postNc', labelKey: 'ribbon.cam.post', icon: 'measure', enabled: true, action: 'camPost' },
+        { id: 'postEvents', labelKey: 'ribbon.cam.events', icon: 'code', enabled: true, action: 'camExportEvents' },
+      ],
+    },
+  ],
+};
+
 /** Only real workspaces are shown; planned work lives in the roadmap, not disabled tabs. */
 export const SOLID_WORKSPACE_TABS: Array<{ id: string; labelKey: string; enabled: boolean }> = [
   { id: 'solid', labelKey: 'ribbon.tabs.model', enabled: true },
@@ -826,5 +864,7 @@ export function ribbonTabById(id: string): RibbonTab {
       ? DRAWING_TAB
       : id === 'assembly'
         ? ASSEMBLY_TAB
+      : id === 'cam'
+        ? CAM_TAB
         : SOLID_TAB;
 }

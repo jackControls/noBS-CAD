@@ -177,6 +177,17 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "assembly_set_grounded_body" => {
             with_payload(payload, |body_id| manager.set_grounded_body(body_id))
         }
+        "cam_document" => ok_json(manager.cam_document()),
+        "cam_set_document" => with_payload(payload, |cam| manager.set_cam_document(cam)),
+        "cam_plan" => with_payload(payload, |setup_id: u64| manager.cam_plan(setup_id)),
+        "cam_post" => with_payload(payload, |request| manager.cam_post(request)),
+        "cam_analyze_nbpost" => {
+            with_payload(payload, |request| manager.cam_analyze_nbpost(request))
+        }
+        "cam_simulate" => with_payload(payload, |request| manager.cam_simulate(request)),
+        "cam_post_events" => {
+            with_payload(payload, |setup_id: u64| manager.cam_post_events(setup_id))
+        }
         "set_body_appearance" => with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
             manager.set_body_appearance(appearance)
         }),

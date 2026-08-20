@@ -35,6 +35,15 @@ const engine = new wasm.WasmEngine();
 const doc = unwrap(engine.document());
 check('document has mm units', doc.settings.units === 'mm');
 
+// `.nbpost` inspection crosses the same host boundary without evaluating the
+// supplied JavaScript.
+const nbpost = unwrap(engine.cam_analyze_nbpost(JSON.stringify({
+  file_name: 'smoke.nbpost',
+  source: 'function onOpen(){} function onSection(){} function onRapid(){} function onClose(){}',
+})));
+check('nbpost analyzer detects supported callbacks', nbpost.source_kind === 'callback_javascript');
+check('nbpost analyzer never executes scripts', nbpost.runnable === false);
+
 // begin_sketch(XY) → Sketch1 registered, Z-up basis.
 const sketch = unwrap(engine.begin_sketch(JSON.stringify({ type: 'origin_plane', plane: 'xy' })));
 check('sketch named Sketch1', sketch.name === 'Sketch1');

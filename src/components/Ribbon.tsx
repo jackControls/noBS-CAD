@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, Check, ChevronDown, FileText } from 'lucide-react';
+import { Box, Check, ChevronDown, FileText, Wrench } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
 import { ribbonTabById, type RibbonAction, type RibbonButton, type RibbonPanel } from '../ribbon/config';
@@ -134,6 +134,7 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
 
   const sketching = mode === 'sketch';
   const drawingActive = activeTab === 'drawing';
+  const camActive = activeTab === 'cam';
   const choose = (action: RibbonAction) => {
     setOpen(false);
     dispatchRibbonAction(action);
@@ -173,11 +174,15 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
           className="flex h-[52px] w-full min-w-0 flex-col items-center justify-center gap-0.5 rounded px-2 text-mute hover:bg-edge hover:text-ink disabled:cursor-default disabled:opacity-50 max-[1400px]:px-1"
         >
           <span className="flex h-6 items-center justify-center text-ink">
-            {drawingActive ? <FileText size={20} /> : <Box size={20} />}
+            {drawingActive ? <FileText size={20} /> : camActive ? <Wrench size={20} /> : <Box size={20} />}
           </span>
           <span className="flex items-center gap-0.5 whitespace-nowrap text-[9px] leading-tight">
             <span className="max-[1400px]:hidden">
-              {drawingActive ? t('ribbon.tabs.drawingWorkspace') : t('ribbon.tabs.solidModeling')}
+              {drawingActive
+                ? t('ribbon.tabs.drawingWorkspace')
+                : camActive
+                  ? t('ribbon.tabs.camWorkspace')
+                  : t('ribbon.tabs.solidModeling')}
             </span>
             {sketching && (
               <span className="rounded bg-accent/15 px-1 text-[8px] font-medium text-accent max-[1400px]:hidden">
@@ -203,7 +208,7 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
           <WorkspaceMenuItem
             icon={<Box size={14} />}
             label={t('ribbon.tabs.solidModeling')}
-            checked={!drawingActive}
+            checked={!drawingActive && !camActive}
             onClick={() => choose('modelWorkspace')}
           />
           <WorkspaceMenuItem
@@ -213,6 +218,14 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
             disabled={sketching}
             title={sketching ? 'Finish the active sketch before opening Drawings' : undefined}
             onClick={() => choose('drawingWorkspace')}
+          />
+          <WorkspaceMenuItem
+            icon={<Wrench size={14} />}
+            label={t('ribbon.tabs.camWorkspace')}
+            checked={camActive}
+            disabled={sketching}
+            title={sketching ? 'Finish the active sketch before opening CAM' : undefined}
+            onClick={() => choose('camWorkspace')}
           />
         </div>,
         window.document.body,

@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use nbcad_cam::CamDocumentDto;
 use nbcad_core::{
     BodyAppearance, DimensionStyle, DocumentSettings, FeatureId, FeatureKind, FeatureTree,
     PlaneBasis, PlaneRef,
@@ -64,6 +65,10 @@ pub(crate) struct ProjectModelV2 {
     /// Browser eye-toggle choices. Additive so older projects remain valid.
     #[serde(default)]
     pub visibility: ProjectVisibilityDto,
+    /// Subtractive-manufacturing intent. Toolpaths and posted NC are derived
+    /// from this model and are deliberately not persisted.
+    #[serde(default)]
+    pub cam: CamDocumentDto,
     pub counters: ProjectCountersV2,
     pub preferences: ProjectPreferencesV2,
 }
@@ -194,6 +199,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
     }
     model.drawings.validate()?;
     model.assembly.validate()?;
+    model.cam.validate()?;
 
     let mut feature_ids = HashSet::new();
     for feature in &model.document.history.features {

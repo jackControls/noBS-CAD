@@ -16,6 +16,14 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   FaceSketchOrigin,
@@ -67,6 +75,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   EditDimensionRequest,
   EndSketchResult,
   ExtrudeDefinitionDto,
@@ -181,6 +190,13 @@ export interface Engine {
   sweptCollisionCheck(request: SweptCollisionRequestDto): Promise<SweptCollisionReportDto>;
   setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
+  camDocument(): Promise<CamDocumentDto>;
+  setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto>;
+  camPlan(setupId: number): Promise<CamProgramDto>;
+  camPost(request: CamPostRequestDto): Promise<CamPostResultDto>;
+  camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto>;
+  camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto>;
+  camPostEvents(setupId: number): Promise<PostEventStreamDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;
   revolveDefinitions(): Promise<RevolveDefinitionDto[]>;

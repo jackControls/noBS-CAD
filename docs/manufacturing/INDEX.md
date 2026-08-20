@@ -1,6 +1,8 @@
 # Manufacturing export — index
 
-Additive manufacturing export (STEP / 3MF / STL), materials, and slicer targets.
+Manufacturing documentation. This directory currently covers additive export
+(STEP / 3MF / STL), materials, and slicer targets. The subtractive 3-axis CAM
+foundation is documented in [../CAM.md](../CAM.md).
 
 | Doc | Purpose |
 |-----|---------|

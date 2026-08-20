@@ -48,7 +48,7 @@ import { drawingProjectionRequestForView } from './projection';
 import { drawingLineStyle, type DrawingLineRole } from './styles';
 
 const DXF_TYPE: SaveType = {
-  description: 'AutoCAD Drawing Interchange',
+  description: 'Drawing Exchange Format',
   extension: '.dxf',
   mime: 'application/dxf',
 };

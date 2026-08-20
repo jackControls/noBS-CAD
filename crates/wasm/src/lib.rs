@@ -267,6 +267,34 @@ impl WasmEngine {
         host::handle(&mut self.manager, "assembly_set_grounded_body", payload)
     }
 
+    pub fn cam_document(&mut self) -> String {
+        host::handle(&mut self.manager, "cam_document", "")
+    }
+
+    pub fn cam_set_document(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_set_document", payload)
+    }
+
+    pub fn cam_plan(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_plan", payload)
+    }
+
+    pub fn cam_post(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_post", payload)
+    }
+
+    pub fn cam_analyze_nbpost(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_analyze_nbpost", payload)
+    }
+
+    pub fn cam_simulate(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_simulate", payload)
+    }
+
+    pub fn cam_post_events(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_post_events", payload)
+    }
+
     pub fn set_body_appearance(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "set_body_appearance", payload)
     }

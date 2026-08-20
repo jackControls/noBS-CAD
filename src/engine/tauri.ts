@@ -17,6 +17,14 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -65,6 +73,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -343,6 +352,34 @@ export class TauriEngine implements Engine {
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
     return this.call('engine_drawing_projection', request);
+  }
+
+  async camDocument(): Promise<CamDocumentDto> {
+    return this.call('engine_cam_document');
+  }
+
+  async setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto> {
+    return this.call('engine_cam_set_document', document);
+  }
+
+  async camPlan(setupId: number): Promise<CamProgramDto> {
+    return this.call('engine_cam_plan', setupId);
+  }
+
+  async camPost(request: CamPostRequestDto): Promise<CamPostResultDto> {
+    return this.call('engine_cam_post', request);
+  }
+
+  async camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto> {
+    return this.call('engine_cam_analyze_nbpost', request);
+  }
+
+  async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
+    return this.call('engine_cam_simulate', request);
+  }
+
+  async camPostEvents(setupId: number): Promise<PostEventStreamDto> {
+    return this.call('engine_cam_post_events', setupId);
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

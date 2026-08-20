@@ -21,6 +21,11 @@ use nbcad_assembly::{
     SweptCollisionReportDto, SweptCollisionRequestDto, UpdateComponentRequestDto,
     UpdateJointRequestDto, UpdateOccurrenceRequestDto,
 };
+use nbcad_cam::{
+    analyze_nbpost, plan_setup, post_event_stream, post_setup, simulate_setup, CamDocumentDto,
+    CamPostRequestDto, CamPostResultDto, CamProgramDto, CamSimulationRequestDto,
+    CamSimulationResultDto, NbPostAnalysisDto, NbPostAnalysisRequestDto, PostEventStreamDto,
+};
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
@@ -113,6 +118,8 @@ pub struct SketchManager {
     assembly_solution_cache: RefCell<Option<AssemblySolutionDto>>,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
+    /// Persistent 3-axis manufacturing setups, tools, and operation intent.
+    cam: CamDocumentDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
@@ -153,6 +160,7 @@ impl SketchManager {
             assembly: AssemblyDocumentDto::default(),
             assembly_solution_cache: RefCell::new(None),
             project_visibility: ProjectVisibilityDto::default(),
+            cam: CamDocumentDto::default(),
             pending_project: None,
             pending_joint_body_deletion: None,
         }
@@ -212,6 +220,7 @@ impl SketchManager {
             drawings: self.drawings.clone(),
             assembly: self.assembly.clone(),
             visibility: self.scrubbed_project_visibility(),
+            cam: self.cam.clone(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
                 extrude: self.extrude_count,
@@ -326,6 +335,7 @@ impl SketchManager {
             assembly: model.assembly,
             assembly_solution_cache: RefCell::new(None),
             project_visibility: model.visibility,
+            cam: model.cam,
             pending_project: None,
             pending_joint_body_deletion: None,
         };
@@ -1222,6 +1232,46 @@ impl SketchManager {
         drawing.validate().map_err(SessionError::Solid)?;
         self.drawings = drawing;
         Ok(self.drawings.clone())
+    }
+
+    pub fn cam_document(&self) -> CamDocumentDto {
+        self.cam.clone()
+    }
+
+    pub fn set_cam_document(
+        &mut self,
+        cam: CamDocumentDto,
+    ) -> Result<CamDocumentDto, SessionError> {
+        cam.validate().map_err(SessionError::Solid)?;
+        self.cam = cam;
+        Ok(self.cam.clone())
+    }
+
+    pub fn cam_plan(&self, setup_id: u64) -> Result<CamProgramDto, SessionError> {
+        plan_setup(&self.cam, setup_id).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_post(&self, request: CamPostRequestDto) -> Result<CamPostResultDto, SessionError> {
+        post_setup(&self.cam, &request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_analyze_nbpost(
+        &self,
+        request: NbPostAnalysisRequestDto,
+    ) -> Result<NbPostAnalysisDto, SessionError> {
+        analyze_nbpost(&request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_simulate(
+        &self,
+        request: CamSimulationRequestDto,
+    ) -> Result<CamSimulationResultDto, SessionError> {
+        simulate_setup(&self.cam, &request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_post_events(&self, setup_id: u64) -> Result<PostEventStreamDto, SessionError> {
+        let program = self.cam_plan(setup_id)?;
+        Ok(post_event_stream(&self.cam, &program))
     }
 
     pub fn set_body_appearance(
@@ -4012,6 +4062,11 @@ mod project_tests {
         DrawingTolerancePreset, DrawingTopologyAnchorRefDto, DrawingViewAlignment, DrawingViewDto,
         DrawingViewKind,
     };
+    use nbcad_cam::{
+        CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CoolantMode,
+        CuttingParametersDto, Point2Dto as CamPoint2Dto, Point3Dto as CamPoint3Dto,
+        Rect2Dto as CamRect2Dto, StockBoxDto, WorkCoordinateSystemDto, WorkOffset,
+    };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
         ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
@@ -4799,6 +4854,90 @@ mod project_tests {
             })
             .unwrap();
         assert_eq!(loaded.assembly_document(), assembly);
+    }
+
+    #[test]
+    fn project_roundtrip_preserves_cam_intent_and_regenerates_motion() {
+        let cam = CamDocumentDto {
+            setups: vec![CamSetupDto {
+                id: 3,
+                name: "Top setup".to_string(),
+                wcs: WorkCoordinateSystemDto::default(),
+                work_offset: WorkOffset::G55,
+                stock: StockBoxDto {
+                    min: CamPoint3Dto::new(0.0, 0.0, -12.0),
+                    max: CamPoint3Dto::new(30.0, 20.0, 0.0),
+                },
+                body_ids: vec![],
+                clearance_z: 8.0,
+                retract_z: 2.0,
+                rapid_feed: 3_000.0,
+                post: CamPostConfigDto::default(),
+                operations: vec![CamOperationDto::Face {
+                    id: 7,
+                    name: "Face stock".to_string(),
+                    enabled: true,
+                    tool_id: 5,
+                    bounds: CamRect2Dto {
+                        min: CamPoint2Dto::new(0.0, 0.0),
+                        max: CamPoint2Dto::new(30.0, 20.0),
+                    },
+                    top_z: 0.0,
+                    target_z: -1.0,
+                    step_over: 3.0,
+                    step_down: 1.0,
+                    cutting: CuttingParametersDto {
+                        spindle_rpm: 12_000,
+                        feed_xy: 800.0,
+                        feed_z: 200.0,
+                        coolant: CoolantMode::Flood,
+                    },
+                }],
+            }],
+            active_setup_id: Some(3),
+            tools: vec![CamToolDto {
+                id: 5,
+                number: 1,
+                name: "6 mm flat end mill".to_string(),
+                kind: CamToolKind::FlatEndMill,
+                diameter: 6.0,
+                flute_length: 20.0,
+                overall_length: 50.0,
+                center_cutting: true,
+            }],
+            next_setup_id: 4,
+            next_operation_id: 8,
+            next_tool_id: 6,
+        };
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam.clone()).unwrap();
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: Vec::new(),
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.cam_document(), cam);
+        let program = loaded.cam_plan(3).unwrap();
+        assert_eq!(program.stats.operation_count, 1);
+        assert!(program.stats.cutting_distance > 0.0);
+        let posted = loaded
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                dialect: None,
+                program_name: None,
+            })
+            .unwrap();
+        assert!(posted.nc.contains("G55"));
     }
 
     #[test]

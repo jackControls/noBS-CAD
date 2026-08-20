@@ -8,6 +8,7 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/assembly",
+    "crates/cam",
     "crates/sketch",
     "crates/solid",
     "crates/occt",

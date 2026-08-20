@@ -35,6 +35,13 @@ import {
 } from '../drawing/document';
 import { exportActiveDrawingDxf, printActiveDrawing } from '../drawing/export';
 import type { DrawingViewKind } from '../engine/types';
+import {
+  addCamOperation,
+  addCamSetup,
+  enterCamWorkspace,
+  leaveCamWorkspace,
+} from '../cam/document';
+import { exportActiveCamProgram, exportPostEvents } from '../cam/export';
 
 function runDrawingAction(action: () => Promise<unknown>): void {
   void action().catch((error) => {
@@ -152,11 +159,14 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       state.setSolidSidebarMode('assembly');
       break;
     }
-    case 'modelWorkspace':
-      useAppStore.getState().setJointDialogOpen(false);
-      useAppStore.getState().setSolidSidebarMode('model');
-      leaveDrawingWorkspace();
+    case 'modelWorkspace': {
+      const state = useAppStore.getState();
+      state.setJointDialogOpen(false);
+      state.setSolidSidebarMode('model');
+      if (state.activeTab === 'cam') leaveCamWorkspace();
+      else leaveDrawingWorkspace();
       break;
+    }
     case 'joint':
       useAppStore.getState().setActiveTab('solid');
       useAppStore.getState().setSolidSidebarMode('assembly');
@@ -203,6 +213,23 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       break;
     case 'drawingPrint':
       printActiveDrawing();
+      break;
+    case 'camWorkspace':
+      runDrawingAction(enterCamWorkspace);
+      break;
+    case 'camNewSetup':
+      runDrawingAction(addCamSetup);
+      break;
+    case 'camAddOperation':
+      runDrawingAction(() => addCamOperation(
+        payload === 'drill' ? 'drill' : payload === 'contour2d' ? 'contour2d' : 'face',
+      ));
+      break;
+    case 'camPost':
+      runDrawingAction(exportActiveCamProgram);
+      break;
+    case 'camExportEvents':
+      runDrawingAction(exportPostEvents);
       break;
   }
 }

@@ -40,6 +40,7 @@ import { switchProjectTab } from '../files/projectTabs';
 import { cx } from '../lib/cx';
 import { exportActiveDrawingDxf } from '../drawing/export';
 import { requestNativeViewportLayout } from './viewport/nativeViewportBridge';
+import { exportActiveCamProgram } from '../cam/export';
 
 const FILE_MENU_VIEWPORT_MARGIN = 6;
 const FILE_MENU_FALLBACK_WIDTH = 256;
@@ -59,6 +60,7 @@ export function ProjectMenuControls() {
   const drawingSheetReady = useAppStore((s) => s.drawingDocument.active_sheet_id !== null
     && s.drawingDocument.sheets.some((sheet) => sheet.id === s.drawingDocument.active_sheet_id)
     && !s.drawingSheetSetupOpen);
+  const camWorkspace = useAppStore((s) => s.activeTab === 'cam');
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
   const setProjectBusy = useAppStore((s) => s.setProjectBusy);
@@ -323,6 +325,13 @@ export function ProjectMenuControls() {
                     }}
                   />
                 </>
+              )}
+              {camWorkspace && (
+                <FileMenuItem
+                  icon={<FileDown size={14} />}
+                  label={t('file.exportCamNc')}
+                  onClick={() => run(exportActiveCamProgram)}
+                />
               )}
               <div className="my-1 border-t border-edge" />
               <FileMenuItem

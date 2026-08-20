@@ -13,7 +13,7 @@ These broaden the original noBS CAD goal; they do not replace it.
 | Direction | Meaning |
 |-----------|---------|
 | **Reliable mechanical CAD** | Dependable sketch / feature / history / project workflows, better UX and performance. |
-| **CAM** | Careful path toward functional, modern **3-axis** CAM, with machining feedback. |
+| **CAM** | Careful path toward functional, modern **3-axis** CAM, with machining feedback. See the [as-built foundation and post strategy](CAM.md). |
 | **Additive manufacturing** | **3MF** (with useful color/material metadata) as a print target; keep **STEP** for CAD interchange. |
 | **Strong local automation** | **MCP** as a serious, fully local control and testing surface. |
 | **Simulation / analysis** | Longer-term module family, **staged** (see below) — not one feature. |

@@ -59,6 +59,13 @@ type WasmEngineMethods = WasmEngineInner & {
   assembly_evaluate_motion_study(payload: string): string;
   assembly_swept_collision_check(payload: string): string;
   assembly_set_grounded_body(payload: string): string;
+  cam_document(): string;
+  cam_set_document(payload: string): string;
+  cam_plan(payload: string): string;
+  cam_post(payload: string): string;
+  cam_analyze_nbpost(payload: string): string;
+  cam_simulate(payload: string): string;
+  cam_post_events(payload: string): string;
 };
 import type {
   AddConstraintResult,
@@ -69,6 +76,14 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -117,6 +132,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -488,6 +504,46 @@ export class WasmEngine implements Engine {
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
     return projectSceneForDrawing(await this.solidScene(), request);
+  }
+
+  async camDocument(): Promise<CamDocumentDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).cam_document());
+  }
+
+  async setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_set_document(JSON.stringify(document)),
+    );
+  }
+
+  async camPlan(setupId: number): Promise<CamProgramDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_plan(JSON.stringify(setupId)),
+    );
+  }
+
+  async camPost(request: CamPostRequestDto): Promise<CamPostResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_post(JSON.stringify(request)),
+    );
+  }
+
+  async camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_analyze_nbpost(JSON.stringify(request)),
+    );
+  }
+
+  async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_simulate(JSON.stringify(request)),
+    );
+  }
+
+  async camPostEvents(setupId: number): Promise<PostEventStreamDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_post_events(JSON.stringify(setupId)),
+    );
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

@@ -2167,6 +2167,263 @@ export interface DrawingProjectionDto {
   bounds: [number, number, number, number];
 }
 
+// --- 3-axis CAM contract -------------------------------------------------
+
+export interface CamPoint2Dto {
+  x: number;
+  y: number;
+}
+
+export interface CamRect2Dto {
+  min: CamPoint2Dto;
+  max: CamPoint2Dto;
+}
+
+export interface CamStockBoxDto {
+  min: Point3Dto;
+  max: Point3Dto;
+}
+
+export interface CamWorkCoordinateSystemDto {
+  /** WCS origin in model coordinates, in model millimetres. */
+  origin: Point3Dto;
+  x_axis: [number, number, number];
+  y_axis: [number, number, number];
+  z_axis: [number, number, number];
+}
+
+export type CamWorkOffset = 'g54' | 'g55' | 'g56' | 'g57' | 'g58' | 'g59';
+export type CamPostDialect = 'grbl' | 'linux_cnc' | 'fanuc' | 'siemens828d';
+export type CamToolKind = 'flat_end_mill' | 'ball_end_mill' | 'drill' | 'chamfer_mill';
+export type CamCoolantMode = 'off' | 'mist' | 'flood';
+export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
+export type CamContourCompensation = 'on' | 'inside' | 'outside';
+
+export type Siemens828dAtcStyle = 'double_arm' | 'umbrella' | 'carousel_chain' | 'other';
+export type Siemens828dToolChangePositioning =
+  | 'supa_z'
+  | 'controller_managed'
+  | 'supa_z_then_xy';
+
+export interface Siemens828dPostConfigDto {
+  /** Informational only; does not select machine motion. */
+  atc_style: Siemens828dAtcStyle;
+  tool_change_positioning: Siemens828dToolChangePositioning;
+  /** Machine-coordinate Z used by G0 SUPA Z... D0. */
+  supa_retract_z: number;
+  station_x: number | null;
+  station_y: number | null;
+  tool_length_offset: number;
+  optional_stop_on_tool_change: boolean;
+  /** May move the magazine; safe-off unless explicitly verified. */
+  preload_next_tool: boolean;
+}
+
+export interface CamPostConfigDto {
+  dialect: CamPostDialect;
+  program_number: number | null;
+  sequence_numbers: boolean;
+  siemens_828d: Siemens828dPostConfigDto | null;
+}
+
+export interface CamToolDto {
+  id: number;
+  number: number;
+  name: string;
+  kind: CamToolKind;
+  diameter: number;
+  flute_length: number;
+  overall_length: number;
+  center_cutting: boolean;
+}
+
+export interface CamCuttingParametersDto {
+  spindle_rpm: number;
+  feed_xy: number;
+  feed_z: number;
+  coolant: CamCoolantMode;
+}
+
+interface CamOperationBase {
+  id: number;
+  name: string;
+  enabled: boolean;
+  tool_id: number;
+  cutting: CamCuttingParametersDto;
+}
+
+export type CamOperationDto =
+  | (CamOperationBase & {
+      kind: 'face';
+      bounds: CamRect2Dto;
+      top_z: number;
+      target_z: number;
+      step_over: number;
+      step_down: number;
+    })
+  | (CamOperationBase & {
+      kind: 'contour2d';
+      path: CamPoint2Dto[];
+      top_z: number;
+      bottom_z: number;
+      step_down: number;
+      compensation: CamContourCompensation;
+    })
+  | (CamOperationBase & {
+      kind: 'drill';
+      points: CamPoint2Dto[];
+      top_z: number;
+      bottom_z: number;
+      retract_z: number;
+      peck_depth: number | null;
+      dwell_seconds: number;
+    });
+
+export interface CamSetupDto {
+  id: number;
+  name: string;
+  wcs: CamWorkCoordinateSystemDto;
+  work_offset: CamWorkOffset;
+  stock: CamStockBoxDto;
+  body_ids: number[];
+  clearance_z: number;
+  retract_z: number;
+  rapid_feed: number;
+  post: CamPostConfigDto;
+  operations: CamOperationDto[];
+}
+
+export interface CamDocumentDto {
+  setups: CamSetupDto[];
+  active_setup_id: number | null;
+  tools: CamToolDto[];
+  next_setup_id: number;
+  next_operation_id: number;
+  next_tool_id: number;
+}
+
+export type CamCommandDto =
+  | { kind: 'program_start'; name: string; work_offset: CamWorkOffset }
+  | { kind: 'section_start'; operation_id: number; name: string; tool_id: number }
+  | { kind: 'tool_change'; tool_id: number; tool_number: number; tool_name: string }
+  | { kind: 'spindle'; direction: CamSpindleDirection; rpm: number }
+  | { kind: 'coolant'; mode: CamCoolantMode }
+  | { kind: 'rapid'; to: Point3Dto }
+  | { kind: 'linear'; to: Point3Dto; feed: number }
+  | { kind: 'circular'; clockwise: boolean; center: Point3Dto; to: Point3Dto; feed: number }
+  | { kind: 'dwell'; seconds: number }
+  | { kind: 'section_end' }
+  | { kind: 'program_end' };
+
+export interface CamProgramStatsDto {
+  rapid_distance: number;
+  cutting_distance: number;
+  estimated_seconds: number;
+  operation_count: number;
+}
+
+export interface CamProgramDto {
+  setup_id: number;
+  name: string;
+  commands: CamCommandDto[];
+  stats: CamProgramStatsDto;
+  warnings: string[];
+}
+
+export interface CamPostRequestDto {
+  setup_id: number;
+  dialect?: CamPostDialect | null;
+  program_name?: string | null;
+}
+
+export interface CamPostResultDto {
+  program: CamProgramDto;
+  dialect: CamPostDialect;
+  extension: string;
+  nc: string;
+  warnings: string[];
+}
+
+export interface NbPostAnalysisRequestDto {
+  file_name: string;
+  source: string;
+}
+
+export type NbPostSourceKind = 'callback_javascript' | 'unknown_javascript';
+export type NbPostCompatibilityLevel = 'analysis_only' | 'not_recognized';
+
+export interface NbPostAnalysisDto {
+  format: 'nbpost';
+  version: number;
+  file_name: string;
+  source_bytes: number;
+  source_kind: NbPostSourceKind;
+  compatibility: NbPostCompatibilityLevel;
+  runnable: boolean;
+  callbacks: string[];
+  callbacks_outside_v1_target: string[];
+  missing_required_callbacks: string[];
+  rights_notice_detected: boolean;
+  warnings: string[];
+}
+
+export interface CamSimulationRequestDto {
+  setup_id: number;
+  voxel_size?: number | null;
+  max_voxels?: number | null;
+}
+
+export type CamSimulationStepKind = 'rapid' | 'linear' | 'circular' | 'dwell';
+
+export interface CamSimulationStepDto {
+  command_index: number;
+  kind: CamSimulationStepKind;
+  from: Point3Dto | null;
+  to: Point3Dto | null;
+  duration_seconds: number;
+  cumulative_seconds: number;
+  removed_voxels: number;
+}
+
+export interface CamSimulationCollisionDto {
+  command_index: number;
+  position: Point3Dto;
+  message: string;
+}
+
+export interface CamSimulationMeshDto {
+  /** Triangle soup in setup coordinates, packed x/y/z. */
+  positions: number[];
+  triangle_count: number;
+}
+
+export interface CamSimulationResultDto {
+  setup_id: number;
+  wcs: CamWorkCoordinateSystemDto;
+  grid_origin: Point3Dto;
+  cell_size: [number, number, number];
+  dimensions: [number, number, number];
+  initial_voxels: number;
+  remaining_voxels: number;
+  removed_voxels: number;
+  remaining_volume_mm3: number;
+  removed_volume_mm3: number;
+  estimated_seconds: number;
+  steps: CamSimulationStepDto[];
+  collisions: CamSimulationCollisionDto[];
+  stock_mesh: CamSimulationMeshDto | null;
+  warnings: string[];
+}
+
+export interface PostEventStreamDto {
+  format: 'nbcad-post-events';
+  version: number;
+  units: 'millimeters';
+  program_name: string;
+  tools: CamToolDto[];
+  events: Array<Record<string, unknown> & { callback: string }>;
+}
+
 export interface StepThreadMetadataDto {
   body_id: number;
   feature_id: number;

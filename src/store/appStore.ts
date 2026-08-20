@@ -15,6 +15,7 @@ import type {
   AssemblyTransformDto,
   BodyPoseDto,
   BodyAppearance,
+  CamDocumentDto,
   ComponentDefinitionDto,
   ComponentOccurrenceDto,
   CreateJointRequestDto,
@@ -209,6 +210,17 @@ function jointConnectorIsLive(
   }
   const face = body.faces.find((candidate) => candidate.id === connector.face_id);
   return Boolean((face?.plane || face?.cylinder) && face.key === connector.face_key);
+}
+
+function emptyCamDocument(): CamDocumentDto {
+  return {
+    setups: [],
+    active_setup_id: null,
+    tools: [],
+    next_setup_id: 1,
+    next_operation_id: 1,
+    next_tool_id: 1,
+  };
 }
 
 function appearanceFor(
@@ -685,6 +697,10 @@ interface AppState {
   drawingPendingViewKind: DrawingViewKind | null;
   drawingSheetSetupOpen: boolean;
   drawingProfileExportOpen: boolean;
+  /** Persistent 3-axis setups, tools, and operation intent. */
+  camDocument: CamDocumentDto;
+  selectedCamSetupId: number | null;
+  selectedCamOperationId: number | null;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -808,6 +824,9 @@ interface AppState {
   setDrawingPendingViewKind: (kind: DrawingViewKind | null) => void;
   setDrawingSheetSetupOpen: (open: boolean) => void;
   setDrawingProfileExportOpen: (open: boolean) => void;
+  setCamDocument: (cam: CamDocumentDto) => Promise<void>;
+  setSelectedCamSetupId: (setupId: number | null) => void;
+  setSelectedCamOperationId: (operationId: number | null) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -818,6 +837,7 @@ interface AppState {
     assemblyDocument?: AssemblyDocumentDto,
     projectVisibility?: ProjectVisibilityDto,
     assemblySolution?: AssemblySolutionDto,
+    camDocument?: CamDocumentDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -995,6 +1015,9 @@ function resetDocumentUiState(): Partial<AppState> {
     drawingPendingViewKind: null,
     drawingSheetSetupOpen: false,
     drawingProfileExportOpen: false,
+    camDocument: emptyCamDocument(),
+    selectedCamSetupId: null,
+    selectedCamOperationId: null,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -1108,6 +1131,9 @@ export const useAppStore = create<AppState>()((set) => ({
   drawingPendingViewKind: null,
   drawingSheetSetupOpen: false,
   drawingProfileExportOpen: false,
+  camDocument: emptyCamDocument(),
+  selectedCamSetupId: null,
+  selectedCamOperationId: null,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -1164,7 +1190,17 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
+    const [
+      finishedSketches,
+      solidScene,
+      datumPlanes,
+      bodyAppearances,
+      drawingDocument,
+      assemblyDocument,
+      assemblySolution,
+      projectVisibility,
+      camDocument,
+    ] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
@@ -1173,6 +1209,7 @@ export const useAppStore = create<AppState>()((set) => ({
       engine.assemblyDocument(),
       engine.assemblySolution(),
       engine.projectVisibility(),
+      engine.camDocument(),
     ]);
     set({
       document: doc,
@@ -1181,11 +1218,12 @@ export const useAppStore = create<AppState>()((set) => ({
       solidScene,
       datumPlanes,
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
-      drawingDocument,
+      drawingDocument: normalizeDrawingDocument(drawingDocument),
       assemblyDocument,
       assemblySolution,
       hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
       projectVisibility,
+      camDocument,
       dirty: false,
     });
   },
@@ -2016,6 +2054,16 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setDrawingProfileExportOpen: (drawingProfileExportOpen) => set({ drawingProfileExportOpen }),
 
+  setCamDocument: async (cam) => {
+    const engine = await getEngine();
+    const camDocument = await engine.setCamDocument(cam);
+    set({ camDocument, dirty: true });
+  },
+
+  setSelectedCamSetupId: (selectedCamSetupId) => set({ selectedCamSetupId }),
+
+  setSelectedCamOperationId: (selectedCamOperationId) => set({ selectedCamOperationId }),
+
   loadProjectState: (
     update,
     finishedSketches,
@@ -2026,6 +2074,7 @@ export const useAppStore = create<AppState>()((set) => ({
     assemblyDocument = emptyAssemblyDocument(),
     projectVisibility = emptyProjectVisibility(),
     assemblySolution = emptyAssemblySolution(),
+    camDocument = emptyCamDocument(),
   ) =>
     set({
       ...resetDocumentUiState(),
@@ -2039,6 +2088,7 @@ export const useAppStore = create<AppState>()((set) => ({
       assemblySolution,
       hidden: hiddenFromPersistedVisibility(update.document, projectVisibility),
       projectVisibility,
+      camDocument,
       dirty: false,
       projectFileName: fileName,
     }),

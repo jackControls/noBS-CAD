@@ -11,6 +11,7 @@
  */
 import type { ReactNode } from 'react';
 import {
+  Code2,
   Crosshair,
   Equal,
   FlipHorizontal2,
@@ -425,6 +426,7 @@ const LUCIDE: Record<string, LucideIcon> = {
   measure: Ruler,
   select: MousePointer2,
   fixLucide: Lock,
+  code: Code2,
 };
 
 /** Glyph ids rendered in the constraint color. */

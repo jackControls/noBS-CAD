@@ -25,10 +25,11 @@
 | [agentic/MAINTENANCE.md](agentic/MAINTENANCE.md) | Agents + CI | Toolchain / test commands |
 | [agentic/UI_OVERLAYS.md](agentic/UI_OVERLAYS.md) | UI agents + maintainers | Overlay or shell-layout changes |
 
-## Manufacturing export
+## Manufacturing
 
 | Doc | Notes |
 |-----|-------|
+| [CAM.md](CAM.md) | As-built 3-axis CAM foundation, safety contract, and post strategy |
 | [manufacturing/INDEX.md](manufacturing/INDEX.md) | 3MF/STL export subsystem |
 | [manufacturing/DRAFT_PR.md](manufacturing/DRAFT_PR.md) | A+ PR summary (humans) |
 

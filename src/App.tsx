@@ -25,6 +25,8 @@ import { DrawingBrowser } from './components/drawing/DrawingBrowser';
 import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
 import { AssemblyBrowser } from './components/assembly/AssemblyBrowser';
 import { JointDialog } from './components/assembly/JointDialog';
+import { CamBrowser } from './components/cam/CamBrowser';
+import { CamWorkspace } from './components/cam/CamWorkspace';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { SketchPalette } from './components/SketchPalette';
@@ -72,6 +74,7 @@ export default function App() {
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);
   const drawingWorkspace = activeTab === 'drawing';
+  const camWorkspace = activeTab === 'cam';
   const solidSidebarMode = useAppStore((s) => s.solidSidebarMode);
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
@@ -380,6 +383,8 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {drawingWorkspace ? (
           <DrawingBrowser />
+        ) : camWorkspace ? (
+          <CamBrowser />
         ) : solidSidebarMode === 'assembly' ? (
           <AssemblyBrowser />
         ) : (
@@ -389,6 +394,8 @@ export default function App() {
           <main className="relative min-h-0 min-w-0 flex-1">
             {drawingWorkspace ? (
               <DrawingWorkspace />
+            ) : camWorkspace ? (
+              <CamWorkspace />
             ) : (
               <>
                 <Viewport key={resolvedTheme} />
@@ -400,7 +407,7 @@ export default function App() {
           </main>
         </div>
       </div>
-      {!drawingWorkspace && <Timeline />}
+      {!drawingWorkspace && !camWorkspace && <Timeline />}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

@@ -385,6 +385,13 @@ fn engine_assembly_swept_collision_check(
 ) -> String {
     state.assembly_swept_collision_check(payload)
 }
+engine_command!(engine_cam_document, "cam_document", no_payload);
+engine_command!(engine_cam_set_document, "cam_set_document");
+engine_command!(engine_cam_plan, "cam_plan");
+engine_command!(engine_cam_post, "cam_post");
+engine_command!(engine_cam_analyze_nbpost, "cam_analyze_nbpost");
+engine_command!(engine_cam_simulate, "cam_simulate");
+engine_command!(engine_cam_post_events, "cam_post_events");
 engine_command!(engine_set_body_appearance, "set_body_appearance");
 
 #[tauri::command]
@@ -983,6 +990,13 @@ pub fn run() {
             engine_assembly_evaluate_motion_study,
             engine_assembly_swept_collision_check,
             engine_drawing_projection,
+            engine_cam_document,
+            engine_cam_set_document,
+            engine_cam_plan,
+            engine_cam_post,
+            engine_cam_analyze_nbpost,
+            engine_cam_simulate,
+            engine_cam_post_events,
             engine_set_body_appearance,
             engine_extrude_definitions,
             engine_revolve_definitions,

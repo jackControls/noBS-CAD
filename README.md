@@ -154,7 +154,7 @@ contribution guide.
 High-level directions (mechanical CAD first) are in
 [docs/goals.md](docs/goals.md): reliable foundation, careful **CAM**, additive
 **3MF** (with useful color/material metadata) alongside STEP, strong **local
-MCP** automation, and **staged** simulation later. Proposed implementation
+MCP** automation, and progressively verified **3D simulation**. Proposed implementation
 ideas stay in [docs/proposed-architecture.md](docs/proposed-architecture.md)
 until prototyped.
 
@@ -174,10 +174,13 @@ In the longer run, we prefer a true native desktop experience. The browser
 build is valuable for development and automated testing, but it is not the
 intended final product experience.
 
-We would also like to explore a functional, modern CAM workflow for 3-axis
-machines. We know that is ambitious and difficult, so we plan to approach it
-carefully: start with research and testable pieces, listen to machinists, and
-earn trust one operation at a time. We would love to hear from CAM experts!
+An early, deliberately conservative CAM foundation now explores a functional,
+modern workflow for 3-axis machines. It starts with setups, tool definitions,
+face/2D-contour/drill paths, bounded volumetric stock simulation, and testable
+built-in posts; it is not yet production-safe CAM. See the
+[CAM safety and post-ecosystem notes](docs/CAM.md).
+We plan to listen to machinists and earn trust one operation at a time. We
+would love to hear from CAM experts!
 
 ## Build locally
 
