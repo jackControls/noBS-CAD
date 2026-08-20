@@ -452,9 +452,14 @@ impl SketchManager {
         session.set_grid_snap(self.grid_snap);
         session.set_grid_step(self.grid_step)?;
         let dto = session.dto();
-        let feature_id = self
-            .document
-            .add_feature(dto.name.clone(), FeatureKind::Sketch);
+        let feature_id = self.document.alloc_feature_id();
+        self.document
+            .features_mut()
+            .insert_at_rollback(Feature::new(
+                feature_id,
+                dto.name.clone(),
+                FeatureKind::Sketch,
+            ));
         self.active_feature_id = Some(feature_id);
         self.active = Some(session);
         Ok(dto)
@@ -1416,11 +1421,13 @@ impl SketchManager {
             basis,
         });
         self.document.add_construction_plane_node(datum_id.0, &name);
-        self.document.push_feature(Feature::new(
-            feature_id,
-            name,
-            FeatureKind::ConstructionPlane,
-        ));
+        self.document
+            .features_mut()
+            .insert_at_rollback(Feature::new(
+                feature_id,
+                name,
+                FeatureKind::ConstructionPlane,
+            ));
         Ok(DatumPlaneUpdateDto {
             document: self.document_dto(),
             planes: self.datum_planes.clone(),
