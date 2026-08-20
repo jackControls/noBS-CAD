@@ -5,6 +5,11 @@ This page separates **what exists today** from **proposed** architecture.
 Proposals: [proposed-architecture.md](proposed-architecture.md).
 Product directions: [goals.md](goals.md).
 
+**Warning:** an MCP process without a live attach is a **fork of truth**.
+It does **not** share the document the user is looking at. Snapshot attach
+(`cad_list_sessions` / `cad_attach`) is read-only and still a copy, not
+in-process co-link ([#11](https://github.com/jackControls/noBS-CAD/issues/11)).
+
 ## Why MCP
 MCP gives coding agents a tool API without turning noBS CAD into a cloud
 service. The goal is a **strong local automation** surface for testing and
@@ -63,8 +68,17 @@ Focus / mode / soft-TTL changes schedule `notifications/tools/list_changed`.
 The server wakes on that deadline even if the client is idle — it does **not**
 require a later `ping` or tool call to flush the notification.
 
+## Today vs target
+
+| Capability | Today | Target | Issue |
+|------------|-------|--------|-------|
+| Agents and UI share one live document | **No.** MCP is a fork of truth (optional read-only snapshot attach, never writes back) | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
+| Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
+| Multi-window agent control | **No.** One MCP process, one document | Broker / `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
+| In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
+
 ## Proposed (not shipped here)
-- Live UI ↔ MCP in-process co-link / writer lock
-- MCP client installer (`install-mcp`) and UI launch/window control
-- Multi-window broker
+- Live UI ↔ MCP in-process co-link / writer lock ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
+- Multi-window broker ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
+- In-the-loop browser+MCP validation ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
 See [proposed-architecture.md](proposed-architecture.md).
