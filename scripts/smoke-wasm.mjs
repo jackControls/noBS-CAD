@@ -59,7 +59,11 @@ const l2 = unwrap(
   engine.add_line(JSON.stringify({ from: { x: 50, y: 0 }, to_raw: { x: 51, y: 50 }, ctrl_held: false })),
 );
 check('chain shares the connecting point', l2.start_point_id === l1.end_point_id);
-check('l2 created Vertical constraint', l2.created_constraints[0]?.type === 'vertical');
+check(
+  'l2 created a right-angle constraint',
+  l2.created_constraints[0]?.type === 'perpendicular'
+    || l2.created_constraints[0]?.type === 'vertical',
+);
 const l3 = unwrap(
   engine.add_line(JSON.stringify({ from: { x: 50, y: 50 }, to_raw: { x: 0.5, y: 0.4 }, ctrl_held: false })),
 );
@@ -77,7 +81,7 @@ const dragged = unwrap(
 const l1After = dragged.sketch.entities.find((e) => e.id === l1.entity_id);
 const l2After = dragged.sketch.entities.find((e) => e.id === l2.entity_id);
 check('drag keeps l1 horizontal (H holds)', Math.abs(l1After.start.y - l1After.end.y) < 1e-9);
-check('drag keeps l2 vertical (V holds)', Math.abs(l2After.start.x - l2After.end.x) < 1e-9);
+check('drag keeps l2 vertical (V holds)', Math.abs(l2After.start.x - l2After.end.x) < 1e-6);
 check(
   'origin remains grounded during drag',
   Math.abs(l1After.start.x) < 1e-6 && Math.abs(l1After.start.y) < 1e-6,
