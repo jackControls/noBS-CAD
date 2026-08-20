@@ -332,11 +332,27 @@ behavior can be automated.
 For a large feature, starting with a discussion will help us agree on the user
 experience and model behavior before a lot of implementation work begins.
 
+## Related projects
+
+| Project | License | What we borrow |
+|---------|---------|----------------|
+| Open CAD Studio and other peer CAD tools | GPL-3 (typical) | **Ideas only.** Do not copy source, assets, or unique implementations. |
+| Open CASCADE Technology | LGPL-2.1 + exception | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
+| Bevy | MIT / Apache-2.0 | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
+
+Peer CAD projects: borrow **ideas**, not code, unless counsel says otherwise.
+See [CONTRIBUTING](CONTRIBUTING.md#license--borrow).
+
 ## License
 
 noBS CAD is free and open-source software licensed under the
 [GNU Library General Public License, version 2 or any later version](LICENSE)
 (`LGPL-2.0-or-later`).
+
+GitHub's license API does not list Library GPL v2 (`GET /licenses/lgpl-2.0`
+is 404), so `gh api repos/jackControls/noBS-CAD/license` stays `Other` /
+`NOASSERTION`. That is expected. We are **not** relicensing to LGPL-2.1 or
+LGPL-3.0 just to satisfy the detector.
 
 Third-party components retain their own licenses and notices; see
 [Third-party notices](THIRD_PARTY_NOTICES.md).

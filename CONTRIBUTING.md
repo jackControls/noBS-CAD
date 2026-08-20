@@ -68,5 +68,9 @@ See [docs/branch-protection.md](docs/branch-protection.md).
 
 ## License / borrow
 
-Project is **LGPL-2.0-or-later**. Peer projects (e.g. Open CAD Studio, **GPL-3**)
-— borrow **ideas**, not code, unless counsel says otherwise.
+Project is **LGPL-2.0-or-later** ([LICENSE](LICENSE)). GitHub will keep showing
+`Other` / `NOASSERTION` because it does not detect Library GPL v2. Do not
+"fix" that by swapping in LGPL-2.1/3.0 text.
+
+Peer projects (e.g. Open CAD Studio, **GPL-3**): borrow **ideas**, not code,
+unless counsel says otherwise. Related-projects table: [README](README.md#related-projects).
