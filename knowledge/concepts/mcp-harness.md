@@ -19,7 +19,7 @@ Proposals: [proposed architecture](../../docs/proposed-architecture.md).
 | Fact | Meaning |
 |------|---------|
 | Soft focus-scoped tools, `listChanged: true` | Guidance, not a jail. Out-of-focus tools stay callable. [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
-| Independent document per MCP process | **Fork of truth** vs the visible UI. Snapshot attach is read-only. [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
+| Independent document per MCP process | **Fork of truth** vs the visible UI. Snapshot attach is inspect-only (mutations rejected); still not live co-link. [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Same Rust planner + native OCCT as desktop | Shared crates; separate instances |
 | No multi-window routing | One process, one document. [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | No in-the-loop UI+MCP on the same doc | Blocked on co-link. [#15](https://github.com/jackControls/noBS-CAD/issues/15) |

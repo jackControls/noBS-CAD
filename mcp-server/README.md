@@ -103,10 +103,12 @@ Body through the same replayable history as the interactive application.
 
 `cad_project_model` returns the authoritative versioned `model.json`,
 `cad_load_project_model` transactionally restores and recomputes it, and
-`cad_new_project` clears to an empty document. The read-only **snapshot bridge**
-uses `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` under
-`NBCAD_SESSION_DIR` (UUID v4 session ids; require valid `model.json`; never write
-back). Desktop Tauri publishes the snapshot files; MCP only reads.
+`cad_new_project` clears to an empty document. The read-only **snapshot bridge** (tutor path) is
+`cad_list_sessions` → `cad_attach` → inspect (`solid_scene` / `cad_project_model`
+/ export) → `cad_refresh` to re-read the UI. `cad_detach` forks the in-memory
+copy so mutations are allowed again. There is **no writeback** (`writeback: true`
+is rejected; live UI co-link is still open). UUID v4 session ids; require valid
+`model.json`. Desktop Tauri publishes the snapshot files; MCP only reads.
 Each MCP process still owns one headless document unless attached.
 Revisioned MCP→UI sync and installer/UI launch remain follow-ups.
 

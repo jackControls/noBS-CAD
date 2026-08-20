@@ -151,6 +151,13 @@ impl CadServer {
         let pack = spec.pack;
         let spine = spec.spine;
 
+        if self.attached_document_id.is_some() && !is_read_safe_while_attached(name) {
+            return Err(session_lock_error(
+                "session_read_only",
+                self.attached_document_id.as_deref(),
+            ));
+        }
+
         if execution == Execution::Control {
             return self.call_control(name, arguments);
         }
@@ -349,7 +356,11 @@ impl CadServer {
         let session_id = arguments
             .get("session_id")
             .or_else(|| arguments.get("document_id"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str);
+        if writeback_requested(arguments) {
+            return Err(session_lock_error("writeback_rejected", session_id));
+        }
+        let session_id = session_id
             .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
         session::require_valid_session_id(session_id)?;
         if !session::list_sessions()?.iter().any(|id| id == session_id) {
@@ -724,6 +735,90 @@ fn entity_ids_schema() -> Value {
         "type": "array",
         "items": { "type": "integer", "minimum": 1 },
         "minItems": 1
+    })
+}
+
+/// Tools allowed while `attached_document_id` is Some.
+///
+/// Default-deny. Allowed:
+/// - every `Execution::Control` tool (focus, disclosure, list/attach/refresh/detach,
+///   cancel_recompute)
+/// - inspect / export / read tools (scene, project model, tessellate, STEP/STL/3MF,
+///   preflight, demo 3MF, material catalog, appearances, document/sketch getters,
+///   previews, feature-definition lists, expression eval)
+///
+/// Mutating sketch/solid/appearance/project/history tools are rejected so a tutor
+/// cannot silently fork the student's in-memory document. `cad_detach` is the
+/// explicit fork; live writeback is #11 future work.
+fn is_read_safe_while_attached(name: &str) -> bool {
+    matches!(
+        name,
+        // Execution::Control
+        "cad_get_focus"
+            | "cad_set_focus"
+            | "cad_list_focus_areas"
+            | "cad_get_tool_disclosure_mode"
+            | "cad_set_tool_disclosure_mode"
+            | "cad_list_all_tools"
+            | "cad_cancel_recompute"
+            | "cad_list_sessions"
+            | "cad_attach"
+            | "cad_refresh"
+            | "cad_detach"
+            // inspect / export / read
+            | "cad_document"
+            | "cad_project_model"
+            | "sketch_active"
+            | "sketch_finished"
+            | "sketch_profiles"
+            | "sketch_preview_line"
+            | "sketch_preview_line_locked"
+            | "sketch_preview_fillet"
+            | "sketch_preview_offset"
+            | "sketch_preview_trim"
+            | "sketch_eval_expression"
+            | "construction_plane_definitions"
+            | "solid_scene"
+            | "solid_tessellate"
+            | "solid_extrude_definitions"
+            | "solid_revolve_definitions"
+            | "solid_sweep_definitions"
+            | "solid_loft_definitions"
+            | "solid_rib_definitions"
+            | "solid_fillet_definitions"
+            | "solid_chamfer_definitions"
+            | "solid_hole_definitions"
+            | "solid_body_feature_definitions"
+            | "solid_export_step"
+            | "solid_export_stl"
+            | "solid_export_3mf"
+            | "solid_export_preflight"
+            | "demo_export_pip_3mf"
+            | "material_catalog"
+            | "body_appearances"
+    )
+}
+
+fn writeback_requested(arguments: &Value) -> bool {
+    match arguments.get("writeback") {
+        None => false,
+        Some(Value::Bool(false)) => false,
+        Some(_) => true,
+    }
+}
+
+fn session_lock_error(code: &str, session_id: Option<&str>) -> String {
+    serde_json::to_string(&json!({
+        "code": code,
+        "writeback": false,
+        "session_mode": "read_only_snapshot",
+        "session_id": session_id,
+        "hint": "cad_refresh to re-read UI; cad_detach to fork; live writeback is #11 future"
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"{code}\",\"writeback\":false,\"session_mode\":\"read_only_snapshot\"}}"
+        )
     })
 }
 
@@ -2514,7 +2609,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. writeback must be omitted or false — writeback:true is rejected (live writeback is #11 future). Never writes back to the session dir. While attached, mutating tools are rejected; inspect/export remain allowed.",
             object_schema(
                 json!({
                     "session_id": {
@@ -2522,6 +2617,16 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "minLength": 36,
                         "maxLength": 36,
                         "description": "UUID v4 session directory name"
+                    },
+                    "document_id": {
+                        "type": "string",
+                        "minLength": 36,
+                        "maxLength": 36,
+                        "description": "Alias for session_id"
+                    },
+                    "writeback": {
+                        "type": "boolean",
+                        "description": "Must be omitted or false. true is rejected; live writeback is #11 future."
                     }
                 }),
                 &["session_id"],
@@ -3176,6 +3281,7 @@ mod tests {
 
         let listed = server.call_tool("cad_list_sessions", json!({})).unwrap();
         assert_eq!(listed["sessions"][0], unique);
+        assert_eq!(listed["writeback"], false);
         assert_eq!(listed["session_details"][0]["heartbeat"]["stale"], false);
 
         let attached = server
@@ -3202,6 +3308,140 @@ mod tests {
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn parse_lock_error(error: &str) -> Value {
+        serde_json::from_str(error).unwrap_or_else(|_| json!({ "raw": error }))
+    }
+
+    fn assert_lock_error(error: &str, expected_code: &str) {
+        let parsed = parse_lock_error(error);
+        let code = parsed["code"].as_str().unwrap_or("");
+        assert!(
+            code == expected_code
+                || code == "writeback_rejected"
+                || code == "session_read_only",
+            "expected {expected_code} (or writeback_rejected/session_read_only), got {error}"
+        );
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "read_only_snapshot");
+        assert!(parsed["hint"].as_str().unwrap_or("").contains("cad_detach"));
+    }
+
+    fn solid_mirror_mutate(server: &mut CadServer, body_id: &Value) -> Result<Value, String> {
+        server.call_tool(
+            "solid_mirror",
+            json!({
+                "body_ids": [body_id],
+                "plane": {"type": "origin_plane", "plane": "xy"}
+            }),
+        )
+    }
+
+    #[test]
+    fn read_only_snapshot_rejects_mutations_until_detach() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-lock-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(!scene["bodies"].as_array().unwrap().is_empty());
+        let project = server.call_tool("cad_project_model", json!({})).unwrap();
+        assert!(
+            project.as_str().is_some() || project.is_object() || project.is_string(),
+            "cad_project_model should succeed while attached: {project}"
+        );
+
+        let body_id = scene["bodies"][0]["id"].clone();
+        let mutate_err = solid_mirror_mutate(&mut server, &body_id).expect_err(
+            "solid mutate must fail while snapshot-attached",
+        );
+        assert_lock_error(&mutate_err, "session_read_only");
+        assert!(server.attached_document_id.is_some());
+
+        let appearance_err = server
+            .call_tool(
+                "set_body_appearance",
+                json!({"body_id": body_id, "preset_id": "generic.pla"}),
+            )
+            .expect_err("appearance write must fail while attached");
+        assert_lock_error(&appearance_err, "session_read_only");
+
+        let writeback_err = server
+            .call_tool(
+                "cad_attach",
+                json!({"session_id": unique, "writeback": true}),
+            )
+            .expect_err("writeback:true attach must fail");
+        assert_lock_error(&writeback_err, "writeback_rejected");
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(unique.as_str()),
+            "failed writeback attach must not change the current attachment"
+        );
+
+        // writeback:true on a fresh server must leave nothing attached.
+        let mut fresh = CadServer::new().unwrap();
+        let fresh_err = fresh
+            .call_tool(
+                "cad_attach",
+                json!({"session_id": unique, "writeback": true}),
+            )
+            .expect_err("writeback:true attach must fail on a fresh server");
+        assert_lock_error(&fresh_err, "writeback_rejected");
+        assert!(fresh.attached_document_id.is_none());
+
+        server.call_tool("cad_detach", json!({})).unwrap();
+        assert!(server.attached_document_id.is_none());
+        solid_mirror_mutate(&mut server, &body_id)
+            .expect("solid mutate must succeed after explicit cad_detach fork");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn headless_goldens_still_mutate_without_attach() {
+        let (mut server, _) = mcp_box();
+        assert!(server.attached_document_id.is_none());
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let body_id = scene["bodies"][0]["id"].clone();
+        solid_mirror_mutate(&mut server, &body_id)
+            .expect("headless CadServer with no attach must still mutate");
+    }
+
+    #[test]
+    fn control_and_inspect_tools_are_read_safe_while_attached() {
+        for tool in tool_specs() {
+            if tool.execution == Execution::Control {
+                assert!(
+                    is_read_safe_while_attached(tool.name),
+                    "Control tool {} must stay callable while attached",
+                    tool.name
+                );
+            }
+        }
+        assert!(is_read_safe_while_attached("solid_scene"));
+        assert!(is_read_safe_while_attached("cad_project_model"));
+        assert!(is_read_safe_while_attached("solid_export_3mf"));
+        assert!(!is_read_safe_while_attached("solid_extrude"));
+        assert!(!is_read_safe_while_attached("solid_mirror"));
+        assert!(!is_read_safe_while_attached("set_body_appearance"));
+        assert!(!is_read_safe_while_attached("cad_new_project"));
+        assert!(!is_read_safe_while_attached("sketch_begin"));
     }
 
     #[test]

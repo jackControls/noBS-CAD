@@ -190,6 +190,7 @@ pub fn sessions_list_json() -> Value {
                 .collect();
             json!({
                 "session_mode": "read_only_snapshot",
+                "writeback": false,
                 "sessions": sessions,
                 "session_details": detailed,
                 "session_dir": session_dir().display().to_string(),
@@ -198,6 +199,7 @@ pub fn sessions_list_json() -> Value {
         }
         Err(error) => json!({
             "session_mode": "read_only_snapshot",
+            "writeback": false,
             "sessions": [],
             "session_details": [],
             "session_dir": session_dir().display().to_string(),
