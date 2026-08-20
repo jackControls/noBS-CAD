@@ -3,7 +3,7 @@ type: Concept
 title: MCP harness
 description: Current local MCP behavior and proposed UI co-link milestones.
 status: stable
-updated: 2026-07-29
+updated: 2026-08-20
 ---
 
 # MCP harness
@@ -18,17 +18,19 @@ Proposals: [proposed architecture](../../docs/proposed-architecture.md).
 
 | Fact | Meaning |
 |------|---------|
-| Static ~100 tools, `listChanged: false` | Focus-scoped tools not shipped |
-| Independent document per MCP process | Fork of truth vs the visible UI |
+| Soft focus-scoped tools, `listChanged: true` | Guidance, not a jail. Out-of-focus tools stay callable. [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
+| Independent document per MCP process | **Fork of truth** vs the visible UI. Snapshot attach is read-only. [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Same Rust planner + native OCCT as desktop | Shared crates; separate instances |
+| No multi-window routing | One process, one document. [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
+| No in-the-loop UI+MCP on the same doc | Blocked on co-link. [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
 
 Use MCP as an engine/automation probe until UI co-link exists.
 
 ## Proposed next
 
-1. Focus-scoped tools + `notifications/tools/list_changed`
-2. Attach MCP to **one** active UI document (first milestone)
-3. Multi-window routing later if needed (not P0)
+1. Attach MCP to **one** live UI document ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
+2. Multi-window routing ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
+3. In-the-loop browser+MCP CI ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
 
 See also the [MCP playbook](../../docs/agent-mcp.md) and
 [server documentation](../../mcp-server/README.md).
