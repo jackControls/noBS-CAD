@@ -1,0 +1,47 @@
+name: Linux engine tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/core/**'
+      - 'crates/sketch/**'
+      - 'crates/assembly/**'
+      - 'crates/solid/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/linux-engine-tests.yml'
+  pull_request:
+    paths:
+      - 'crates/core/**'
+      - 'crates/sketch/**'
+      - 'crates/assembly/**'
+      - 'crates/solid/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/linux-engine-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-engine-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine-tests:
+    name: Ubuntu host-neutral crates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test core, sketch, assembly, and solid
+        run: cargo test --locked -p nbcad-core -p nbcad-sketch -p nbcad-assembly -p nbcad-solid
