@@ -235,8 +235,11 @@
       "open": "CAM",
       "model": "3D Model",
       "newSetup": "New Setup",
+      "toolLibrary": "Tool Library",
       "face": "Face",
       "contour": "2D Contour",
+      "pocket": "2D Pocket",
+      "chamfer": "2D Chamfer",
       "drill": "Drill",
       "post": "Post NC",
       "events": "Post Events"

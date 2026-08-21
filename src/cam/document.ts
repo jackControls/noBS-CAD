@@ -1,15 +1,23 @@
 import type {
   CamDocumentDto,
+  CamDrillCycle,
   CamOperationDto,
-  CamPoint2Dto,
+  CamPostConfigDto,
   CamSetupDto,
+  CamStockSpecDto,
   CamToolDto,
-  CamToolKind,
-  CamWorkCoordinateSystemDto,
-  Point3Dto,
-  SolidSceneDto,
+  CamUnits,
+  CamWcsOriginSpec,
+  CamWorkOffset,
 } from '../engine/types';
 import { useAppStore } from '../store/appStore';
+import {
+  modelBoundsOfBodies,
+  resolveStock,
+  resolveWcsOrigin,
+  stockToSetup,
+  wcsFromOrientation,
+} from './geometry';
 
 type CamOperationKind = CamOperationDto['kind'];
 type MutableCamSetup = CamSetupDto;
@@ -17,28 +25,27 @@ type MutableCamOperation = CamOperationDto;
 
 let writeQueue: Promise<void> = Promise.resolve();
 
+/**
+ * Entering the manufacturing workspace never creates or edits anything. The
+ * operator builds setups, tools, and operations one explicit action at a
+ * time (or drives the same document through the MCP tools).
+ */
 export function enterCamWorkspace(): Promise<void> {
-  return enqueueCamUpdate((cam, state) => {
-    if (state.mode !== 'solid') {
-      throw new Error('Finish the active sketch before opening CAM.');
-    }
-    if (state.solidScene.errors.length > 0) {
-      throw new Error('Resolve timeline errors before creating toolpaths.');
-    }
-    if (state.solidScene.bodies.length === 0) {
-      throw new Error('Create or import a solid body before opening CAM.');
-    }
-    if (cam.setups.length > 0) return cam;
-    return appendDefaultSetup(cam, state.solidScene, selectedBodyIds(state));
-  }).then(() => {
-    const state = useAppStore.getState();
-    const setupId = state.camDocument.active_setup_id;
-    state.setSelectedCamSetupId(setupId);
-    state.setSelectedCamOperationId(
-      state.camDocument.setups.find((setup) => setup.id === setupId)?.operations[0]?.id ?? null,
-    );
-    state.setActiveTab('cam');
-  });
+  const state = useAppStore.getState();
+  if (state.mode !== 'solid') {
+    return Promise.reject(new Error('Finish the active sketch before opening CAM.'));
+  }
+  if (state.solidScene.errors.length > 0) {
+    return Promise.reject(new Error('Resolve timeline errors before creating toolpaths.'));
+  }
+  if (state.solidScene.bodies.length === 0) {
+    return Promise.reject(new Error('Create or import a solid body before opening CAM.'));
+  }
+  const setup = activeCamSetup(state.camDocument);
+  state.setSelectedCamSetupId(setup?.id ?? null);
+  state.setSelectedCamOperationId(setup?.operations[0]?.id ?? null);
+  state.setActiveTab('cam');
+  return Promise.resolve();
 }
 
 export function leaveCamWorkspace(): void {
@@ -48,17 +55,160 @@ export function leaveCamWorkspace(): void {
   state.setActiveTab('solid');
 }
 
-export function addCamSetup(): Promise<void> {
+export function setCamUnits(units: CamUnits): Promise<void> {
+  return enqueueCamUpdate((cam) => {
+    if (cam.units === units) return cam;
+    const next = structuredClone(cam);
+    next.units = units;
+    return next;
+  });
+}
+
+/** Remember the post configuration chosen at the last NC export; it only
+ *  pre-fills the next export dialog. Toolpath planning never reads it. */
+export function setCamPostDefaults(config: CamPostConfigDto): Promise<void> {
+  return enqueueCamUpdate((cam) => {
+    const next = structuredClone(cam);
+    next.post_defaults = structuredClone(config);
+    return next;
+  });
+}
+
+// --- Tool library ----------------------------------------------------------
+
+export type CamToolDraft = Omit<CamToolDto, 'id'>;
+
+/** Add one operator-defined tool to the library. Nothing is created
+ *  implicitly; the library is the only source of tools for operations. */
+export function addCamTool(draft: CamToolDraft): Promise<number> {
+  let createdId = 0;
+  return enqueueCamUpdate((cam) => {
+    const next = structuredClone(cam);
+    const tool: CamToolDto = { ...draft, id: next.next_tool_id };
+    next.tools.push(tool);
+    next.next_tool_id += 1;
+    createdId = tool.id;
+    return next;
+  }).then(() => createdId);
+}
+
+export function deleteCamTool(toolId: number): Promise<void> {
+  return enqueueCamUpdate((cam) => {
+    const referenced = cam.setups
+      .flatMap((setup) => setup.operations)
+      .some((operation) => operation.tool_id === toolId);
+    if (referenced) {
+      throw new Error('This tool is used by an operation; reassign those operations first.');
+    }
+    const next = structuredClone(cam);
+    const before = next.tools.length;
+    next.tools = next.tools.filter((tool) => tool.id !== toolId);
+    return next.tools.length === before ? cam : next;
+  });
+}
+
+// --- Setups ----------------------------------------------------------------
+
+export interface CamSetupDraft {
+  name: string;
+  body_ids: number[];
+  /** First work offset (e.g. G54) the program posts with. */
+  work_offset: CamWorkOffset;
+  /** Duplicate part count: the posted program repeats the toolpaths under
+   *  this many consecutive offsets starting at `work_offset`. */
+  work_offset_count: number;
+  /** Operator's stock definition; resolved against the live scene here. */
+  stock_spec: CamStockSpecDto;
+  wcs_origin: CamWcsOriginSpec;
+  /** Explicit origin used when `wcs_origin.mode === 'explicit'`, model mm. */
+  explicit_origin: { x: number; y: number; z: number };
+  z_down: boolean;
+  z_rotation_deg: 0 | 90 | 180 | 270;
+}
+
+/** Create an empty setup from a fully operator-specified draft. The setup
+ *  starts with zero operations; toolpaths are programmed one by one. */
+export function createCamSetup(draft: CamSetupDraft): Promise<number> {
+  let createdId = 0;
   return enqueueCamUpdate((cam, state) => {
-    if (state.solidScene.bodies.length === 0) {
+    if (draft.body_ids.length === 0) {
       throw new Error('A CAM setup needs at least one solid body.');
     }
-    return appendDefaultSetup(cam, state.solidScene, selectedBodyIds(state));
+    const partBounds = modelBoundsOfBodies(state.solidScene, draft.body_ids);
+    // Modeled-body stock is measured from the stock body's mesh, not the parts.
+    const stockBounds =
+      draft.stock_spec.mode === 'model_body'
+        ? modelBoundsOfBodies(state.solidScene, [draft.stock_spec.body_id])
+        : partBounds;
+    const sourceSetup =
+      draft.stock_spec.mode === 'rest_from_setup'
+        ? cam.setups.find((setup) => setup.id === (draft.stock_spec as { setup_id: number }).setup_id) ?? null
+        : null;
+    const resolved = resolveStock(
+      draft.stock_spec,
+      stockBounds,
+      sourceSetup,
+      draft.z_rotation_deg,
+    );
+    // Rest machining inherits the source setup's WCS: the remaining material
+    // is only meaningful in the frame that produced it.
+    const inheritWcs = draft.stock_spec.mode === 'rest_from_setup' && sourceSetup !== null;
+    const origin =
+      draft.wcs_origin.mode === 'explicit'
+        ? draft.explicit_origin
+        : resolveWcsOrigin(
+            draft.wcs_origin,
+            resolved.modelBox,
+            partBounds,
+            state.finishedSketches,
+          );
+    const wcs = inheritWcs
+      ? sourceSetup.wcs
+      : wcsFromOrientation(origin, draft.z_down, draft.z_rotation_deg);
+    const stock = stockToSetup(resolved.modelBox, wcs);
+    const next = structuredClone(cam);
+    const setup: CamSetupDto = {
+      id: next.next_setup_id,
+      name: draft.name.trim() || `Setup ${next.setups.length + 1}`,
+      wcs,
+      wcs_origin: inheritWcs ? sourceSetup.wcs_origin : draft.wcs_origin,
+      work_offset: draft.work_offset,
+      work_offset_count: Math.max(1, Math.min(6, Math.round(draft.work_offset_count))),
+      stock_spec: draft.stock_spec,
+      resolved_stock: resolved.resolve(wcs),
+      stock,
+      stock_model_box: resolved.modelBox,
+      body_ids: draft.body_ids,
+      operations: [],
+    };
+    next.setups.push(setup);
+    next.active_setup_id = setup.id;
+    next.next_setup_id += 1;
+    createdId = setup.id;
+    return next;
   }).then(() => {
     const state = useAppStore.getState();
-    state.setSelectedCamSetupId(state.camDocument.active_setup_id);
-    const setup = activeCamSetup(state.camDocument);
-    state.setSelectedCamOperationId(setup?.operations[0]?.id ?? null);
+    state.setSelectedCamSetupId(createdId);
+    state.setSelectedCamOperationId(null);
+    return createdId;
+  });
+}
+
+export function deleteCamSetup(setupId: number): Promise<void> {
+  return enqueueCamUpdate((cam) => {
+    const next = structuredClone(cam);
+    const before = next.setups.length;
+    next.setups = next.setups.filter((setup) => setup.id !== setupId);
+    if (next.setups.length === before) return cam;
+    if (next.active_setup_id === setupId) {
+      next.active_setup_id = next.setups[0]?.id ?? null;
+    }
+    queueMicrotask(() => {
+      const state = useAppStore.getState();
+      state.setSelectedCamSetupId(next.active_setup_id);
+      state.setSelectedCamOperationId(null);
+    });
+    return next;
   });
 }
 
@@ -76,28 +226,33 @@ export function setActiveCamSetup(setupId: number): Promise<void> {
   });
 }
 
-export function addCamOperation(kind: CamOperationKind): Promise<void> {
-  return enqueueCamUpdate((cam, state) => {
+// --- Operations ------------------------------------------------------------
+
+/** Operations are appended exactly as the operator programmed them in the
+ *  operation dialog. Geometry, tool, heights, and feeds are all explicit;
+ *  validation in the engine rejects incomplete input. */
+export function addCamOperation(operation: CamOperationInput): Promise<void> {
+  return enqueueCamUpdate((cam) => {
     const next = structuredClone(cam);
     const setup = activeCamSetup(next);
     if (!setup) throw new Error('Create a CAM setup first.');
-    const operation = defaultOperation(
-      kind,
-      next.next_operation_id,
-      setup,
-      next.tools,
-      state.solidScene,
-    );
-    setup.operations.push(operation);
+    const id = next.next_operation_id;
+    setup.operations.push({ ...operation, id } as CamOperationDto);
     next.next_operation_id += 1;
     queueMicrotask(() => {
       const store = useAppStore.getState();
       store.setSelectedCamSetupId(setup.id);
-      store.setSelectedCamOperationId(operation.id);
+      store.setSelectedCamOperationId(id);
     });
     return next;
   });
 }
+
+/** `Omit` does not distribute over unions; this keeps each operation
+ *  variant intact so object literals type-check per kind. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type CamOperationInput = DistributiveOmit<CamOperationDto, 'id'>;
 
 export function deleteCamOperation(operationId: number): Promise<void> {
   return enqueueCamUpdate((cam) => {
@@ -159,18 +314,63 @@ export function activeCamSetup(cam: CamDocumentDto): CamSetupDto | null {
   return cam.setups.find((setup) => setup.id === cam.active_setup_id) ?? null;
 }
 
-export function findCamOperation(cam: CamDocumentDto, operationId: number | null): CamOperationDto | null {
+export function findCamOperation(
+  cam: CamDocumentDto,
+  operationId: number | null,
+): CamOperationDto | null {
   if (operationId === null) return null;
-  return cam.setups
-    .flatMap((setup) => setup.operations)
-    .find((operation) => operation.id === operationId) ?? null;
+  return (
+    cam.setups
+      .flatMap((setup) => setup.operations)
+      .find((operation) => operation.id === operationId) ?? null
+  );
 }
 
 export function camOperationLabel(kind: CamOperationKind): string {
   switch (kind) {
-    case 'face': return 'Face';
-    case 'contour2d': return '2D Contour';
-    case 'drill': return 'Drill';
+    case 'face':
+      return 'Face';
+    case 'contour2d':
+      return '2D Contour';
+    case 'pocket2d':
+      return '2D Pocket';
+    case 'chamfer2d':
+      return '2D Chamfer';
+    case 'drill':
+      return 'Drill';
+  }
+}
+
+/** True when an operation kind can use the given tool kind. Drill operations
+ *  are cycle-aware: tapping needs a tap, reaming a reamer, boring a boring
+ *  bar, and the drilling cycles a drill or any center-cutting tool. */
+export function camToolCompatible(
+  kind: CamOperationKind,
+  tool: CamToolDto,
+  drillCycle?: CamDrillCycle,
+): boolean {
+  switch (kind) {
+    case 'face':
+    case 'pocket2d':
+      return (
+        (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill') && tool.center_cutting
+      );
+    case 'contour2d':
+      return tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill';
+    case 'chamfer2d':
+      return tool.kind === 'chamfer_mill';
+    case 'drill':
+      switch (drillCycle ?? 'drill') {
+        case 'tapping_right':
+        case 'tapping_left':
+          return tool.kind === 'tap';
+        case 'reaming':
+          return tool.kind === 'reamer';
+        case 'boring':
+          return tool.kind === 'boring_bar';
+        default:
+          return tool.kind === 'drill' || tool.center_cutting;
+      }
   }
 }
 
@@ -188,263 +388,4 @@ function enqueueCamUpdate(
   });
   writeQueue = operation.catch(() => undefined);
   return operation;
-}
-
-function appendDefaultSetup(
-  cam: CamDocumentDto,
-  scene: SolidSceneDto,
-  bodyIds: number[],
-): CamDocumentDto {
-  const world = sceneBounds(scene, bodyIds);
-  if (!world) throw new Error('The selected bodies have no machinable mesh.');
-  const next = structuredClone(cam);
-  const flatTool = ensureTool(next, 'flat_end_mill');
-  ensureTool(next, 'drill');
-
-  const margin = 2;
-  const topAllowance = 1;
-  const bottomAllowance = 2;
-  const width = world.max.x - world.min.x;
-  const depth = world.max.y - world.min.y;
-  const height = world.max.z - world.min.z;
-  const setupId = next.next_setup_id;
-  const operationId = next.next_operation_id;
-  const setup: CamSetupDto = {
-    id: setupId,
-    name: `Setup ${next.setups.length + 1}`,
-    wcs: {
-      origin: {
-        x: world.min.x - margin,
-        y: world.min.y - margin,
-        z: world.max.z + topAllowance,
-      },
-      x_axis: [1, 0, 0],
-      y_axis: [0, 1, 0],
-      z_axis: [0, 0, 1],
-    },
-    work_offset: 'g54',
-    stock: {
-      min: { x: 0, y: 0, z: -(height + topAllowance + bottomAllowance) },
-      max: { x: width + margin * 2, y: depth + margin * 2, z: 0 },
-    },
-    body_ids: bodyIds,
-    clearance_z: 10,
-    retract_z: 3,
-    rapid_feed: 3000,
-    post: {
-      dialect: 'grbl',
-      program_number: 1001,
-      sequence_numbers: false,
-      siemens_828d: null,
-    },
-    operations: [{
-      kind: 'face',
-      id: operationId,
-      name: 'Face stock',
-      enabled: true,
-      tool_id: flatTool.id,
-      bounds: {
-        min: { x: 0, y: 0 },
-        max: { x: width + margin * 2, y: depth + margin * 2 },
-      },
-      top_z: 0,
-      target_z: -topAllowance,
-      step_over: flatTool.diameter * 0.6,
-      step_down: Math.min(1, topAllowance),
-      cutting: defaultCutting('face'),
-    }],
-  };
-  next.setups.push(setup);
-  next.active_setup_id = setupId;
-  next.next_setup_id += 1;
-  next.next_operation_id += 1;
-  return next;
-}
-
-function defaultOperation(
-  kind: CamOperationKind,
-  id: number,
-  setup: CamSetupDto,
-  tools: CamToolDto[],
-  scene: SolidSceneDto,
-): CamOperationDto {
-  const part = sceneBoundsInSetup(scene, setup.body_ids, setup.wcs) ?? setup.stock;
-  const topZ = clamp(part.max.z, setup.stock.min.z + 0.1, setup.stock.max.z - 0.001);
-  const bottomZ = Math.max(part.min.z, topZ - (kind === 'drill' ? 5 : 2));
-  if (bottomZ >= topZ - 0.001) {
-    throw new Error('The setup geometry has no usable cutting depth.');
-  }
-  const count = setup.operations.filter((operation) => operation.kind === kind).length + 1;
-  if (kind === 'face') {
-    const tool = firstTool(tools, 'flat_end_mill');
-    return {
-      kind,
-      id,
-      name: `Face ${count}`,
-      enabled: true,
-      tool_id: tool.id,
-      bounds: {
-        min: { x: setup.stock.min.x, y: setup.stock.min.y },
-        max: { x: setup.stock.max.x, y: setup.stock.max.y },
-      },
-      top_z: setup.stock.max.z,
-      target_z: Math.max(setup.stock.min.z, setup.stock.max.z - 1),
-      step_over: tool.diameter * 0.6,
-      step_down: 1,
-      cutting: defaultCutting(kind),
-    };
-  }
-  if (kind === 'contour2d') {
-    const tool = firstTool(tools, 'flat_end_mill');
-    return {
-      kind,
-      id,
-      name: `2D Contour ${count}`,
-      enabled: true,
-      tool_id: tool.id,
-      path: rectanglePath(part.min, part.max),
-      top_z: topZ,
-      bottom_z: bottomZ,
-      step_down: Math.min(2, topZ - bottomZ),
-      compensation: 'outside',
-      cutting: defaultCutting(kind),
-    };
-  }
-  const tool = firstTool(tools, 'drill');
-  return {
-    kind,
-    id,
-    name: `Drill ${count}`,
-    enabled: true,
-    tool_id: tool.id,
-    points: [{
-      x: (part.min.x + part.max.x) * 0.5,
-      y: (part.min.y + part.max.y) * 0.5,
-    }],
-    top_z: topZ,
-    bottom_z: bottomZ,
-    retract_z: Math.min(setup.clearance_z, Math.max(setup.retract_z, topZ + 2)),
-    peck_depth: Math.min(3, topZ - bottomZ),
-    dwell_seconds: 0,
-    cutting: defaultCutting(kind),
-  };
-}
-
-function defaultCutting(kind: CamOperationKind) {
-  return kind === 'drill'
-    ? { spindle_rpm: 5000, feed_xy: 250, feed_z: 150, coolant: 'off' as const }
-    : { spindle_rpm: 12000, feed_xy: 800, feed_z: 220, coolant: 'off' as const };
-}
-
-function ensureTool(cam: CamDocumentDto, kind: CamToolKind): CamToolDto {
-  const existing = cam.tools.find((tool) => tool.kind === kind);
-  if (existing) return existing;
-  const id = cam.next_tool_id;
-  const number = Math.max(0, ...cam.tools.map((tool) => tool.number)) + 1;
-  const drill = kind === 'drill';
-  const tool: CamToolDto = {
-    id,
-    number,
-    name: drill ? '5 mm drill' : '6 mm flat end mill',
-    kind,
-    diameter: drill ? 5 : 6,
-    flute_length: drill ? 30 : 20,
-    overall_length: drill ? 60 : 50,
-    center_cutting: true,
-  };
-  cam.tools.push(tool);
-  cam.next_tool_id += 1;
-  return tool;
-}
-
-function firstTool(tools: CamToolDto[], kind: CamToolKind): CamToolDto {
-  const tool = tools.find((candidate) => candidate.kind === kind);
-  if (!tool) throw new Error(`The CAM tool library has no ${kind.replace(/_/g, ' ')}.`);
-  return tool;
-}
-
-function selectedBodyIds(state: ReturnType<typeof useAppStore.getState>): number[] {
-  const selected = new Set(state.selectedBodies);
-  if (state.selectedBody !== null) selected.add(state.selectedBody);
-  return selected.size > 0
-    ? [...selected]
-    : state.solidScene.bodies.map((body) => body.id);
-}
-
-interface Bounds3 {
-  min: Point3Dto;
-  max: Point3Dto;
-}
-
-function sceneBounds(scene: SolidSceneDto, bodyIds: number[]): Bounds3 | null {
-  const wanted = new Set(bodyIds);
-  const points: Point3Dto[] = [];
-  for (const body of scene.bodies) {
-    if (!wanted.has(body.id)) continue;
-    for (let index = 0; index + 2 < body.mesh.positions.length; index += 3) {
-      points.push({
-        x: body.mesh.positions[index],
-        y: body.mesh.positions[index + 1],
-        z: body.mesh.positions[index + 2],
-      });
-    }
-  }
-  return boundsOf(points);
-}
-
-function sceneBoundsInSetup(
-  scene: SolidSceneDto,
-  bodyIds: number[],
-  wcs: CamWorkCoordinateSystemDto,
-): Bounds3 | null {
-  const world = sceneBounds(scene, bodyIds);
-  if (!world) return null;
-  const corners: Point3Dto[] = [];
-  for (const x of [world.min.x, world.max.x]) {
-    for (const y of [world.min.y, world.max.y]) {
-      for (const z of [world.min.z, world.max.z]) {
-        corners.push(modelPointToSetup({ x, y, z }, wcs));
-      }
-    }
-  }
-  return boundsOf(corners);
-}
-
-function modelPointToSetup(point: Point3Dto, wcs: CamWorkCoordinateSystemDto): Point3Dto {
-  const relative = [
-    point.x - wcs.origin.x,
-    point.y - wcs.origin.y,
-    point.z - wcs.origin.z,
-  ];
-  const project = (axis: [number, number, number]) =>
-    relative[0] * axis[0] + relative[1] * axis[1] + relative[2] * axis[2];
-  return { x: project(wcs.x_axis), y: project(wcs.y_axis), z: project(wcs.z_axis) };
-}
-
-function boundsOf(points: Point3Dto[]): Bounds3 | null {
-  if (points.length === 0) return null;
-  const min = { x: Infinity, y: Infinity, z: Infinity };
-  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-  for (const point of points) {
-    min.x = Math.min(min.x, point.x);
-    min.y = Math.min(min.y, point.y);
-    min.z = Math.min(min.z, point.z);
-    max.x = Math.max(max.x, point.x);
-    max.y = Math.max(max.y, point.y);
-    max.z = Math.max(max.z, point.z);
-  }
-  return { min, max };
-}
-
-function rectanglePath(min: Point3Dto, max: Point3Dto): CamPoint2Dto[] {
-  return [
-    { x: min.x, y: min.y },
-    { x: max.x, y: min.y },
-    { x: max.x, y: max.y },
-    { x: min.x, y: max.y },
-  ];
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }

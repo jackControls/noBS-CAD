@@ -13,29 +13,43 @@ import {
 } from 'lucide-react';
 import {
   activeCamSetup,
+  camOperationLabel,
+  camToolCompatible,
   deleteCamOperation,
   findCamOperation,
+  setCamUnits,
   updateCamOperation,
   updateCamSetup,
   updateCamTool,
 } from '../../cam/document';
-import { exportActiveCamProgram } from '../../cam/export';
 import { inspectNbPostFile } from '../../cam/nbpost';
+import {
+  commitFeed,
+  commitLength,
+  displayFeed,
+  displayLength,
+  feedUnitLabel,
+  lengthDecimals,
+  lengthUnitLabel,
+} from '../../cam/units';
 import { getEngine } from '../../engine';
 import type {
-  CamDocumentDto,
   CamOperationDto,
   CamPoint2Dto,
   CamProgramDto,
   CamSimulationResultDto,
   CamSetupDto,
   CamToolDto,
+  CamUnits,
   NbPostAnalysisDto,
-  Siemens828dPostConfigDto,
 } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
+import { CamOperationDialog } from './CamOperationDialog';
+import { CamPostDialog } from './CamPostDialog';
+import { CamSetupDialog } from './CamSetupDialog';
 import { CamSimulationViewport } from './CamSimulationViewport';
+import { CamToolDialog } from './CamToolDialog';
 
 export function CamWorkspace() {
   const cam = useAppStore((state) => state.camDocument);
@@ -43,6 +57,7 @@ export function CamWorkspace() {
   const selectedOperationId = useAppStore((state) => state.selectedCamOperationId);
   const setup = activeCamSetup(cam);
   const operation = findCamOperation(cam, selectedOperationId);
+  const units = cam.units;
   const [program, setProgram] = useState<CamProgramDto | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -89,8 +104,21 @@ export function CamWorkspace() {
     if (!setup) return;
     let cancelled = false;
     setSimulationBusy(true);
+    // Modeled-body stock is voxelized from the body's live mesh, which the
+    // host owns; every other stock shape is fully described by the setup.
+    const stockMesh =
+      setup.resolved_stock.shape === 'model_body'
+        ? (() => {
+            const body = scene.bodies.find(
+              (candidate) => candidate.id === (setup.resolved_stock as { body_id: number }).body_id,
+            );
+            return body
+              ? { positions: body.mesh.positions, indices: body.mesh.indices }
+              : null;
+          })()
+        : null;
     void getEngine()
-      .then((engine) => engine.camSimulate({ setup_id: setup.id }))
+      .then((engine) => engine.camSimulate({ setup_id: setup.id, stock_mesh: stockMesh }))
       .then((next) => {
         if (cancelled) return;
         setSimulation(next);
@@ -107,34 +135,51 @@ export function CamWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [setup?.id, simulationGeneration]);
+  }, [setup?.id, simulationGeneration, scene]);
 
-  if (!setup) {
-    return (
-      <div className="flex h-full items-center justify-center bg-viewport text-mute">
-        Create a CAM setup to begin.
-      </div>
-    );
-  }
+  // The manufacturing tab opens straight onto the modeled parts, even before
+  // the first setup exists; setups are created from the ribbon or the empty
+  // sidebar panel, never implicitly.
 
   return (
     <div className="flex h-full min-h-0 bg-viewport" data-testid="cam-workspace">
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center justify-between border-b border-edge bg-header px-3">
           <div className="flex min-w-0 items-center gap-2 text-[11px] text-mute">
-            <span className="truncate font-semibold text-ink">{setup.name}</span>
-            <span>·</span>
-            <span className="uppercase">{setup.work_offset}</span>
-            <span>·</span>
-            <span>Fixed Z / 3-axis</span>
-            {program && <ProgramStats program={program} />}
+            {setup ? (
+              <>
+                <span className="truncate font-semibold text-ink">{setup.name}</span>
+                <span>·</span>
+                <span className="uppercase">
+                  {setup.work_offset}
+                  {setup.work_offset_count > 1 && ` → ${WORK_OFFSETS[WORK_OFFSETS.indexOf(setup.work_offset) + setup.work_offset_count - 1]}`}
+                </span>
+                <span>·</span>
+                <span>Fixed Z / 3-axis</span>
+                {program && <ProgramStats program={program} units={units} />}
+              </>
+            ) : (
+              <span className="text-mute">
+                No setup yet — model shown as designed. Create a setup from the ribbon to program toolpaths.
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
+              title="Switch document units — stored geometry stays canonical; display and posted output follow this choice"
+              onClick={() => runCamAction(() => setCamUnits(units === 'millimeters' ? 'inches' : 'millimeters'))}
+              className="flex h-7 items-center rounded border border-edge bg-panel px-2.5 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
+              data-testid="cam-units-toggle"
+            >
+              {units === 'millimeters' ? 'mm' : 'inch'}
+            </button>
+            <button
+              type="button"
+              disabled={!setup}
               title="Regenerate toolpath"
               onClick={() => setGeneration((value) => value + 1)}
-              className="drawing-mini-button"
+              className="drawing-mini-button disabled:cursor-not-allowed disabled:opacity-40"
             >
               <RefreshCw size={14} className={busy ? 'animate-spin' : ''} />
             </button>
@@ -150,7 +195,8 @@ export function CamWorkspace() {
             <button
               type="button"
               disabled={!program || busy}
-              onClick={() => runCamAction(exportActiveCamProgram)}
+              title="Choose post settings and export the NC program"
+              onClick={() => useAppStore.getState().setCamDialog({ type: 'post' })}
               className="flex h-7 items-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-2.5 text-[10px] font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Download size={13} /> Post NC
@@ -187,20 +233,52 @@ export function CamWorkspace() {
       </section>
       <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-edge bg-panel">
         {operation ? (
-          <OperationInspector operation={operation} tools={cam.tools} />
+          <OperationInspector operation={operation} tools={cam.tools} units={units} />
+        ) : setup ? (
+          <SetupInspector setup={setup} units={units} />
         ) : (
-          <SetupInspector setup={setup} />
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-mute" data-testid="cam-sidebar-empty">
+            <p className="max-w-[230px] text-center text-[11px] leading-relaxed">
+              Nothing is created automatically. Add tools to the library, create
+              a setup, then program each operation by hand.
+            </p>
+            <button
+              type="button"
+              onClick={() => useAppStore.getState().setCamDialog({ type: 'setup' })}
+              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-3 text-[11px] font-semibold text-accent hover:bg-accent/20"
+            >
+              <Gauge size={13} /> New setup
+            </button>
+            <button
+              type="button"
+              onClick={() => useAppStore.getState().setCamDialog({ type: 'tool', toolId: null })}
+              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border border-edge bg-panel px-3 text-[11px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
+            >
+              <Wrench size={13} /> New tool
+            </button>
+          </div>
         )}
       </aside>
+      <CamDialogHost />
     </div>
   );
 }
 
-function ProgramStats({ program }: { program: CamProgramDto }) {
+/** Renders the active manufacturing editor dialog, if any. */
+function CamDialogHost() {
+  const dialog = useAppStore((state) => state.camDialog);
+  if (!dialog) return null;
+  if (dialog.type === 'setup') return <CamSetupDialog />;
+  if (dialog.type === 'operation') return <CamOperationDialog kind={dialog.kind} />;
+  if (dialog.type === 'post') return <CamPostDialog />;
+  return <CamToolDialog toolId={dialog.toolId} />;
+}
+
+function ProgramStats({ program, units }: { program: CamProgramDto; units: CamUnits }) {
   return (
     <div className="ml-2 flex items-center gap-2">
       <span className="flex items-center gap-1 rounded bg-edge/50 px-1.5 py-0.5 font-mono text-[9px]">
-        <Route size={10} /> {program.stats.cutting_distance.toFixed(1)} mm
+        <Route size={10} /> {displayLength(program.stats.cutting_distance, units).toFixed(1)} {lengthUnitLabel(units)}
       </span>
       <span className="flex items-center gap-1 rounded bg-edge/50 px-1.5 py-0.5 font-mono text-[9px]">
         <Clock3 size={10} /> {formatDuration(program.stats.estimated_seconds)}
@@ -209,7 +287,44 @@ function ProgramStats({ program }: { program: CamProgramDto }) {
   );
 }
 
-function SetupInspector({ setup }: { setup: CamSetupDto }) {
+const WORK_OFFSETS = ['g54', 'g55', 'g56', 'g57', 'g58', 'g59'] as const;
+
+/** One-line description of the resolved stock shape, with key dimensions. */
+function stockSummary(setup: CamSetupDto, units: CamUnits): string {
+  const stock = setup.resolved_stock;
+  switch (stock.shape) {
+    case 'box':
+      return 'Box stock';
+    case 'cylinder':
+      return `Cylindrical stock · Ø${fmtLength(stock.radius * 2, units)}`;
+    case 'hex':
+      return `Hex bar stock · ${fmtLength(stock.across_flats, units)} across flats`;
+    case 'rest':
+      return `Remaining stock from setup ${stock.source_setup_id}`;
+    case 'model_body':
+      return `Modeled body #${stock.body_id} as stock`;
+  }
+}
+
+/** One-line description of how the operator defined the stock. */
+function stockSpecSummary(setup: CamSetupDto): string {
+  switch (setup.stock_spec.mode) {
+    case 'fixed':
+      return setup.stock_spec.placement.center
+        ? 'Fixed size, model centered inside.'
+        : 'Fixed size, model parked against a face.';
+    case 'from_model':
+      return 'Grown from the model bounding box with per-face allowances.';
+    case 'rest_from_setup':
+      return 'Continues from the earlier setup’s remaining material.';
+    case 'model_body':
+      return 'A modeled body supplies the stock shape.';
+    case 'legacy_box':
+      return 'Legacy stock box; edit the setup to redefine it.';
+  }
+}
+
+function SetupInspector({ setup, units }: { setup: CamSetupDto; units: CamUnits }) {
   const [postAnalysis, setPostAnalysis] = useState<NbPostAnalysisDto | null>(null);
   const [postAnalysisBusy, setPostAnalysisBusy] = useState(false);
 
@@ -229,187 +344,60 @@ function SetupInspector({ setup }: { setup: CamSetupDto }) {
         <CommitText value={setup.name} onCommit={(value) => updateCamSetup(setup.id, (next) => { next.name = value; })} />
       </Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="Work offset">
+        <Field label="First work offset">
           <select
             value={setup.work_offset}
             onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
               next.work_offset = event.target.value as CamSetupDto['work_offset'];
+              // Keep first + count within G54..G59.
+              const index = WORK_OFFSETS.indexOf(next.work_offset);
+              next.work_offset_count = Math.min(next.work_offset_count, WORK_OFFSETS.length - index);
             }))}
             className="cam-input"
           >
-            {['g54', 'g55', 'g56', 'g57', 'g58', 'g59'].map((offset) => (
+            {WORK_OFFSETS.map((offset) => (
               <option key={offset} value={offset}>{offset.toUpperCase()}</option>
             ))}
           </select>
         </Field>
-        <Field label="Post">
-          <select
-            value={setup.post.dialect}
-            onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-              const dialect = event.target.value as CamSetupDto['post']['dialect'];
-              next.post.dialect = dialect;
-              if (dialect === 'siemens828d') {
-                next.post.siemens_828d ??= {
-                  atc_style: 'double_arm',
-                  tool_change_positioning: 'supa_z',
-                  supa_retract_z: 0,
-                  station_x: null,
-                  station_y: null,
-                  tool_length_offset: 1,
-                  optional_stop_on_tool_change: true,
-                  preload_next_tool: false,
-                };
-                next.post.sequence_numbers = true;
-              }
-            }))}
-            className="cam-input"
-          >
-            <option value="grbl">GRBL</option>
-            <option value="linux_cnc">LinuxCNC</option>
-            <option value="fanuc">Generic Fanuc</option>
-            <option value="siemens828d">Siemens 828D native</option>
-          </select>
-        </Field>
+        <NumberField
+          label="Duplicate parts"
+          value={setup.work_offset_count}
+          unit="offsets"
+          integer
+          onCommit={(value) => updateCamSetup(setup.id, (next) => {
+            const index = WORK_OFFSETS.indexOf(next.work_offset);
+            next.work_offset_count = Math.max(1, Math.min(WORK_OFFSETS.length - index, Math.round(value)));
+          })}
+        />
       </div>
-      {setup.post.dialect === 'siemens828d' && setup.post.siemens_828d && (
-        <div className="mt-3 rounded border border-[#d69b45]/35 bg-[#2a2117]/45 p-2.5">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Changer style">
-              <select
-                value={setup.post.siemens_828d.atc_style}
-                onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) {
-                    next.post.siemens_828d.atc_style = event.target.value as Siemens828dPostConfigDto['atc_style'];
-                  }
-                }))}
-                className="cam-input"
-              >
-                <option value="double_arm">Double arm</option>
-                <option value="umbrella">Umbrella / shuttle</option>
-                <option value="carousel_chain">Carousel / chain / wheel</option>
-                <option value="other">Other / custom</option>
-              </select>
-            </Field>
-            <Field label="Positioning before M6">
-              <select
-                value={setup.post.siemens_828d.tool_change_positioning}
-                onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) {
-                    next.post.siemens_828d.tool_change_positioning = event.target.value as Siemens828dPostConfigDto['tool_change_positioning'];
-                  }
-                }))}
-                className="cam-input"
-              >
-                <option value="supa_z">SUPA Z, then M6</option>
-                <option value="controller_managed">M6 / PLC owns motion</option>
-                <option value="supa_z_then_xy">SUPA Z, fixed XY, M6</option>
-              </select>
-            </Field>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <NumberField
-              label="SUPA retract Z"
-              value={setup.post.siemens_828d.supa_retract_z}
-              unit="machine mm"
-              onCommit={(value) => updateCamSetup(setup.id, (next) => {
-                if (next.post.siemens_828d) next.post.siemens_828d.supa_retract_z = value;
-              })}
-            />
-            <NumberField
-              label="Tool edge D"
-              value={setup.post.siemens_828d.tool_length_offset}
-              unit="index"
-              integer
-              onCommit={(value) => updateCamSetup(setup.id, (next) => {
-                if (next.post.siemens_828d) next.post.siemens_828d.tool_length_offset = value;
-              })}
-            />
-          </div>
-          {setup.post.siemens_828d.tool_change_positioning === 'supa_z_then_xy' && (
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <OptionalNumberField
-                label="Station X"
-                value={setup.post.siemens_828d.station_x}
-                unit="machine mm"
-                onCommit={(value) => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) next.post.siemens_828d.station_x = value;
-                })}
-              />
-              <OptionalNumberField
-                label="Station Y"
-                value={setup.post.siemens_828d.station_y}
-                unit="machine mm"
-                onCommit={(value) => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) next.post.siemens_828d.station_y = value;
-                })}
-              />
-            </div>
-          )}
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-mute">
-            <label className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={setup.post.siemens_828d.optional_stop_on_tool_change}
-                onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) {
-                    next.post.siemens_828d.optional_stop_on_tool_change = event.target.checked;
-                  }
-                }))}
-              />
-              M1 between tools
-            </label>
-            <label className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={setup.post.siemens_828d.preload_next_tool}
-                onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-                  if (next.post.siemens_828d) {
-                    next.post.siemens_828d.preload_next_tool = event.target.checked;
-                  }
-                }))}
-              />
-              Allow next-tool T preload
-            </label>
-            <label className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={setup.post.sequence_numbers}
-                onChange={(event) => runCamAction(() => updateCamSetup(setup.id, (next) => {
-                  next.post.sequence_numbers = event.target.checked;
-                }))}
-              />
-              Sequence numbers
-            </label>
-          </div>
-          <p className="mt-2 text-[9px] leading-relaxed text-[#e8c589]">
-            {siemensAtcGuidance(setup.post.siemens_828d)} Physical style is informational; positioning and preload are separate explicit settings. The standard profile emits no custom spindle slowdown macro.
-          </p>
-          <div className="mt-2 rounded border border-edge/80 bg-[#11171c]/75 p-2">
-            <div className="mb-1 text-[8px] font-semibold tracking-[0.12em] text-mute/65">LATER TOOL-CHANGE EXAMPLE · VERIFY, DO NOT COPY BLINDLY</div>
-            <pre className="overflow-x-auto whitespace-pre font-mono text-[9px] leading-4 text-ink">{siemensToolChangeExample(setup.post.siemens_828d)}</pre>
-          </div>
-        </div>
+      {setup.work_offset_count > 1 && (
+        <p className="text-[9px] leading-relaxed text-mute">
+          Posting repeats the toolpaths under {setup.work_offset_count} consecutive offsets:{' '}
+          {WORK_OFFSETS.slice(
+            WORK_OFFSETS.indexOf(setup.work_offset),
+            WORK_OFFSETS.indexOf(setup.work_offset) + setup.work_offset_count,
+          ).map((offset) => offset.toUpperCase()).join(', ')}.
+        </p>
       )}
-      <InspectorSubheading>Safe heights</InspectorSubheading>
-      <div className="grid grid-cols-2 gap-2">
-        <NumberField label="Clearance Z" value={setup.clearance_z} unit="mm" onCommit={(value) => updateCamSetup(setup.id, (next) => { next.clearance_z = value; })} />
-        <NumberField label="Retract Z" value={setup.retract_z} unit="mm" onCommit={(value) => updateCamSetup(setup.id, (next) => { next.retract_z = value; })} />
+      <InspectorSubheading>Stock</InspectorSubheading>
+      <div className="rounded border border-edge bg-header/55 p-2 text-[10px] text-mute">
+        <div className="mb-1 font-semibold text-ink">{stockSummary(setup, units)}</div>
+        <div className="text-[9px] leading-relaxed">{stockSpecSummary(setup)}</div>
       </div>
-      <NumberField label="Rapid estimate" value={setup.rapid_feed} unit="mm/min" onCommit={(value) => updateCamSetup(setup.id, (next) => { next.rapid_feed = value; })} />
-      <InspectorSubheading>Stock in setup coordinates</InspectorSubheading>
       <div className="grid grid-cols-3 gap-2">
-        <Readout label="X" value={setup.stock.max.x - setup.stock.min.x} />
-        <Readout label="Y" value={setup.stock.max.y - setup.stock.min.y} />
-        <Readout label="Z" value={setup.stock.max.z - setup.stock.min.z} />
+        <Readout label="X size" text={fmtLength(setup.stock.max.x - setup.stock.min.x, units)} />
+        <Readout label="Y size" text={fmtLength(setup.stock.max.y - setup.stock.min.y, units)} />
+        <Readout label="Z size" text={fmtLength(setup.stock.max.z - setup.stock.min.z, units)} />
       </div>
       <InspectorSubheading>WCS origin in model</InspectorSubheading>
       <div className="grid grid-cols-3 gap-2">
-        <Readout label="X" value={setup.wcs.origin.x} />
-        <Readout label="Y" value={setup.wcs.origin.y} />
-        <Readout label="Z" value={setup.wcs.origin.z} />
+        <Readout label="X" text={fmtLength(setup.wcs.origin.x, units)} />
+        <Readout label="Y" text={fmtLength(setup.wcs.origin.y, units)} />
+        <Readout label="Z" text={fmtLength(setup.wcs.origin.z, units)} />
       </div>
       <p className="mt-3 text-[10px] leading-relaxed text-mute">
-        Toolpaths use millimetres in this fixed-axis frame. Set the same stock-top origin and work offset on the machine.
+        Toolpaths are planned in this fixed-axis frame and posted in {units === 'millimeters' ? 'millimetres' : 'inches'}. Set the same stock-top origin and work offset on the machine.
       </p>
       <InspectorSubheading>.NBPOST COMPATIBILITY</InspectorSubheading>
       <button
@@ -443,20 +431,20 @@ function SetupInspector({ setup }: { setup: CamSetupDto }) {
   );
 }
 
-function OperationInspector({ operation, tools }: { operation: CamOperationDto; tools: CamToolDto[] }) {
+function OperationInspector({ operation, tools, units }: { operation: CamOperationDto; tools: CamToolDto[]; units: CamUnits }) {
   const tool = tools.find((candidate) => candidate.id === operation.tool_id) ?? null;
   const compatibleTools = tools.filter((candidate) =>
-    operation.kind === 'face'
-      ? candidate.kind === 'flat_end_mill'
-      : operation.kind === 'drill'
-        ? candidate.kind === 'drill' || candidate.center_cutting
-        : candidate.kind !== 'drill',
+    camToolCompatible(
+      operation.kind,
+      candidate,
+      operation.kind === 'drill' ? operation.cycle : undefined,
+    ),
   );
   const update = (mutate: (next: CamOperationDto) => void) =>
     updateCamOperation(operation.id, mutate);
 
   return (
-    <InspectorSection title={operation.kind === 'contour2d' ? '2D CONTOUR' : operation.kind.toUpperCase()} icon={<Wrench size={13} />}>
+    <InspectorSection title={camOperationLabel(operation.kind).toUpperCase()} icon={<Wrench size={13} />}>
       <div className="flex items-end gap-2">
         <div className="min-w-0 flex-1">
           <Field label="Name"><CommitText value={operation.name} onCommit={(value) => update((next) => { next.name = value; })} /></Field>
@@ -468,18 +456,23 @@ function OperationInspector({ operation, tools }: { operation: CamOperationDto; 
       </div>
       <Field label="Tool">
         <select value={operation.tool_id} onChange={(event) => runCamAction(() => update((next) => { next.tool_id = Number(event.target.value); }))} className="cam-input">
-          {compatibleTools.map((candidate) => <option key={candidate.id} value={candidate.id}>T{candidate.number} · {candidate.name}</option>)}
+          {compatibleTools.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.number != null ? `T${candidate.number} · ` : ''}{candidate.name}</option>)}
         </select>
       </Field>
       {tool && (
         <div className="rounded border border-edge bg-header/55 p-2">
           <div className="mb-2 flex items-center gap-2 text-[10px] text-mute"><Wrench size={11} /> TOOL GEOMETRY</div>
           <div className="grid grid-cols-2 gap-2">
-            <NumberField label="Diameter" value={tool.diameter} unit="mm" onCommit={(value) => updateCamTool(tool.id, (next) => { next.diameter = value; })} />
-            <NumberField label="Flute length" value={tool.flute_length} unit="mm" onCommit={(value) => updateCamTool(tool.id, (next) => { next.flute_length = value; })} />
+            <LengthField label="Diameter" valueMm={tool.diameter} units={units} onCommit={(value) => updateCamTool(tool.id, (next) => { next.diameter = value; })} />
+            <LengthField label="Flute length" valueMm={tool.flute_length} units={units} onCommit={(value) => updateCamTool(tool.id, (next) => { next.flute_length = value; })} />
           </div>
         </div>
       )}
+      <InspectorSubheading>Safe heights</InspectorSubheading>
+      <div className="grid grid-cols-2 gap-2">
+        <LengthField label="Clearance Z" valueMm={operation.clearance_z} units={units} onCommit={(value) => update((next) => { next.clearance_z = value; })} />
+        <LengthField label="Retract Z" valueMm={operation.retract_z} units={units} onCommit={(value) => update((next) => { next.retract_z = value; })} />
+      </div>
       <InspectorSubheading>Speeds &amp; feeds</InspectorSubheading>
       <div className="grid grid-cols-2 gap-2">
         <NumberField label="Spindle" value={operation.cutting.spindle_rpm} unit="rpm" integer onCommit={(value) => update((next) => { next.cutting.spindle_rpm = value; })} />
@@ -488,13 +481,15 @@ function OperationInspector({ operation, tools }: { operation: CamOperationDto; 
             <option value="off">Off</option><option value="mist">Mist</option><option value="flood">Flood</option>
           </select>
         </Field>
-        <NumberField label="Cut feed" value={operation.cutting.feed_xy} unit="mm/min" onCommit={(value) => update((next) => { next.cutting.feed_xy = value; })} />
-        <NumberField label="Plunge feed" value={operation.cutting.feed_z} unit="mm/min" onCommit={(value) => update((next) => { next.cutting.feed_z = value; })} />
+        <FeedField label="Cut feed" valueMmPerMin={operation.cutting.feed_xy} units={units} onCommit={(value) => update((next) => { next.cutting.feed_xy = value; })} />
+        <FeedField label="Plunge feed" valueMmPerMin={operation.cutting.feed_z} units={units} onCommit={(value) => update((next) => { next.cutting.feed_z = value; })} />
       </div>
       <InspectorSubheading>Passes</InspectorSubheading>
-      {operation.kind === 'face' && <FaceFields operation={operation} update={update} />}
-      {operation.kind === 'contour2d' && <ContourFields operation={operation} update={update} />}
-      {operation.kind === 'drill' && <DrillFields operation={operation} update={update} />}
+      {operation.kind === 'face' && <FaceFields operation={operation} units={units} update={update} />}
+      {operation.kind === 'contour2d' && <ContourFields operation={operation} units={units} update={update} />}
+      {operation.kind === 'pocket2d' && <PocketFields operation={operation} units={units} update={update} />}
+      {operation.kind === 'chamfer2d' && <ChamferFields operation={operation} units={units} update={update} />}
+      {operation.kind === 'drill' && <DrillFields operation={operation} units={units} update={update} />}
       <button type="button" onClick={() => runCamAction(() => deleteCamOperation(operation.id))} className="mt-5 flex h-7 w-full items-center justify-center gap-1.5 rounded border border-warn/30 text-[10px] text-warn hover:bg-warn/10">
         <Trash2 size={12} /> Delete operation
       </button>
@@ -504,39 +499,110 @@ function OperationInspector({ operation, tools }: { operation: CamOperationDto; 
 
 type FaceOperation = Extract<CamOperationDto, { kind: 'face' }>;
 type ContourOperation = Extract<CamOperationDto, { kind: 'contour2d' }>;
+type PocketOperation = Extract<CamOperationDto, { kind: 'pocket2d' }>;
+type ChamferOperation = Extract<CamOperationDto, { kind: 'chamfer2d' }>;
 type DrillOperation = Extract<CamOperationDto, { kind: 'drill' }>;
+type OperationUpdate = (mutate: (next: CamOperationDto) => void) => Promise<void>;
 
-function FaceFields({ operation, update }: { operation: FaceOperation; update: (mutate: (next: CamOperationDto) => void) => Promise<void> }) {
+function FaceFields({ operation, units, update }: { operation: FaceOperation; units: CamUnits; update: OperationUpdate }) {
   return <div className="grid grid-cols-2 gap-2">
-    <NumberField label="Top Z" value={operation.top_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'face') next.top_z = value; })} />
-    <NumberField label="Target Z" value={operation.target_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'face') next.target_z = value; })} />
-    <NumberField label="Stepover" value={operation.step_over} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_over = value; })} />
-    <NumberField label="Stepdown" value={operation.step_down} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_down = value; })} />
+    <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.top_z = value; })} />
+    <LengthField label="Target Z" valueMm={operation.target_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.target_z = value; })} />
+    <LengthField label="Stepover" valueMm={operation.step_over} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_over = value; })} />
+    <LengthField label="Stepdown" valueMm={operation.step_down} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_down = value; })} />
   </div>;
 }
 
-function ContourFields({ operation, update }: { operation: ContourOperation; update: (mutate: (next: CamOperationDto) => void) => Promise<void> }) {
+function ContourFields({ operation, units, update }: { operation: ContourOperation; units: CamUnits; update: OperationUpdate }) {
   return <>
     <div className="grid grid-cols-2 gap-2">
-      <NumberField label="Top Z" value={operation.top_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.top_z = value; })} />
-      <NumberField label="Bottom Z" value={operation.bottom_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.bottom_z = value; })} />
-      <NumberField label="Stepdown" value={operation.step_down} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.step_down = value; })} />
+      <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.top_z = value; })} />
+      <LengthField label="Bottom Z" valueMm={operation.bottom_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.bottom_z = value; })} />
+      <LengthField label="Stepdown" valueMm={operation.step_down} units={units} onCommit={(value) => update((next) => { if (next.kind === 'contour2d') next.step_down = value; })} />
       <Field label="Tool side"><select value={operation.compensation} onChange={(event) => runCamAction(() => update((next) => { if (next.kind === 'contour2d') next.compensation = event.target.value as ContourOperation['compensation']; }))} className="cam-input"><option value="outside">Outside</option><option value="inside">Inside</option><option value="on">On path</option></select></Field>
     </div>
-    <Field label="Closed path · one X,Y point per line"><CommitPoints value={operation.path} onCommit={(points) => update((next) => { if (next.kind === 'contour2d') next.path = points; })} /></Field>
+    <Field label={`Closed path · one X,Y point per line · ${lengthUnitLabel(units)}`}><CommitPoints value={operation.path} units={units} onCommit={(points) => update((next) => { if (next.kind === 'contour2d') next.path = points; })} /></Field>
   </>;
 }
 
-function DrillFields({ operation, update }: { operation: DrillOperation; update: (mutate: (next: CamOperationDto) => void) => Promise<void> }) {
+function PocketFields({ operation, units, update }: { operation: PocketOperation; units: CamUnits; update: OperationUpdate }) {
   return <>
     <div className="grid grid-cols-2 gap-2">
-      <NumberField label="Top Z" value={operation.top_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.top_z = value; })} />
-      <NumberField label="Bottom Z" value={operation.bottom_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.bottom_z = value; })} />
-      <NumberField label="Retract Z" value={operation.retract_z} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.retract_z = value; })} />
-      <OptionalNumberField label="Peck depth" value={operation.peck_depth} unit="mm" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.peck_depth = value; })} />
-      <NumberField label="Dwell" value={operation.dwell_seconds} unit="sec" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.dwell_seconds = value; })} />
+      <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'pocket2d') next.top_z = value; })} />
+      <LengthField label="Bottom Z" valueMm={operation.bottom_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'pocket2d') next.bottom_z = value; })} />
+      <LengthField label="Stepdown" valueMm={operation.step_down} units={units} onCommit={(value) => update((next) => { if (next.kind === 'pocket2d') next.step_down = value; })} />
+      <LengthField label="Stepover" valueMm={operation.step_over} units={units} onCommit={(value) => update((next) => { if (next.kind === 'pocket2d') next.step_over = value; })} />
     </div>
-    <Field label="Hole centers · one X,Y point per line"><CommitPoints value={operation.points} onCommit={(points) => update((next) => { if (next.kind === 'drill') next.points = points; })} /></Field>
+    <Field label={`Closed outline · one X,Y point per line · ${lengthUnitLabel(units)}`}><CommitPoints value={operation.outline} units={units} onCommit={(points) => update((next) => { if (next.kind === 'pocket2d') next.outline = points; })} /></Field>
+  </>;
+}
+
+function ChamferFields({ operation, units, update }: { operation: ChamferOperation; units: CamUnits; update: OperationUpdate }) {
+  return <>
+    <div className="grid grid-cols-2 gap-2">
+      <LengthField label="Top edge Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'chamfer2d') next.top_z = value; })} />
+      <LengthField label="Chamfer width" valueMm={operation.chamfer_width} units={units} onCommit={(value) => update((next) => { if (next.kind === 'chamfer2d') next.chamfer_width = value; })} />
+      <LengthField label="Tip offset" valueMm={operation.tip_offset} units={units} onCommit={(value) => update((next) => { if (next.kind === 'chamfer2d') next.tip_offset = value; })} />
+      <Field label="Material side"><select value={operation.wall_side} onChange={(event) => runCamAction(() => update((next) => { if (next.kind === 'chamfer2d') next.wall_side = event.target.value as ChamferOperation['wall_side']; }))} className="cam-input"><option value="outside">Outside of path</option><option value="inside">Inside of path</option></select></Field>
+    </div>
+    <Field label={`Edge path · one X,Y point per line · ${lengthUnitLabel(units)}`}><CommitPoints value={operation.path} units={units} onCommit={(points) => update((next) => { if (next.kind === 'chamfer2d') next.path = points; })} /></Field>
+  </>;
+}
+
+const DRILL_CYCLE_LABELS: Record<DrillOperation['cycle'], string> = {
+  drill: 'Drilling — rapid out',
+  chip_breaking: 'Chip breaking — partial retract',
+  deep_hole: 'Deep drilling — full retract',
+  tapping_right: 'Tapping — right hand',
+  tapping_left: 'Tapping — left hand',
+  reaming: 'Reaming — feed out',
+  boring: 'Boring — dwell and feed out',
+};
+
+function DrillFields({ operation, units, update }: { operation: DrillOperation; units: CamUnits; update: OperationUpdate }) {
+  const cycle = operation.cycle;
+  const pecking = cycle === 'chip_breaking' || cycle === 'deep_hole';
+  const tapping = cycle === 'tapping_right' || cycle === 'tapping_left';
+  const feedingOut = cycle === 'reaming' || cycle === 'boring';
+  return <>
+    <div className="grid grid-cols-2 gap-2">
+      <Field label="Cycle"><select value={cycle} onChange={(event) => runCamAction(() => update((next) => {
+        if (next.kind === 'drill') {
+          next.cycle = event.target.value as DrillOperation['cycle'];
+          // Scrub fields that the new cycle rejects so validation cannot fail
+          // on a stale carry-over.
+          const nowPecking = next.cycle === 'chip_breaking' || next.cycle === 'deep_hole';
+          const nowTapping = next.cycle === 'tapping_right' || next.cycle === 'tapping_left';
+          const nowFeedingOut = next.cycle === 'reaming' || next.cycle === 'boring';
+          if (!nowPecking) { next.peck_depth = null; next.peck_retract = null; }
+          if (next.cycle !== 'chip_breaking') next.peck_retract = null;
+          if (!nowTapping) next.thread_pitch = null;
+          if (!nowFeedingOut) next.feed_out = null;
+        }
+      }))} className="cam-input">
+        {(Object.keys(DRILL_CYCLE_LABELS) as DrillOperation['cycle'][]).map((candidate) => (
+          <option key={candidate} value={candidate}>{DRILL_CYCLE_LABELS[candidate]}</option>
+        ))}
+      </select></Field>
+      <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.top_z = value; })} />
+      <LengthField label="Bottom Z" valueMm={operation.bottom_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.bottom_z = value; })} />
+      {pecking && (
+        <OptionalLengthField label="Peck depth" valueMm={operation.peck_depth} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.peck_depth = value; })} />
+      )}
+      {cycle === 'chip_breaking' && (
+        <OptionalLengthField label="Peck retract" valueMm={operation.peck_retract} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.peck_retract = value; })} />
+      )}
+      {tapping && (
+        <OptionalLengthField label="Thread pitch" valueMm={operation.thread_pitch} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.thread_pitch = value; })} />
+      )}
+      {feedingOut && (
+        <OptionalLengthField label="Feed out" valueMm={operation.feed_out} units={units} onCommit={(value) => update((next) => { if (next.kind === 'drill') next.feed_out = value; })} />
+      )}
+      {!tapping && (
+        <NumberField label="Dwell" value={operation.dwell_seconds} unit="sec" onCommit={(value) => update((next) => { if (next.kind === 'drill') next.dwell_seconds = value; })} />
+      )}
+    </div>
+    <Field label={`Hole centers · one X,Y point per line · ${lengthUnitLabel(units)}`}><CommitPoints value={operation.points} units={units} onCommit={(points) => update((next) => { if (next.kind === 'drill') next.points = points; })} /></Field>
   </>;
 }
 
@@ -545,56 +611,6 @@ function InspectorSection({ title, icon, children }: { title: string; icon: Reac
     <div className="mb-3 flex h-6 items-center gap-2 border-b border-edge pb-2 text-[10px] font-semibold tracking-[0.14em] text-mute">{icon}{title}</div>
     <div className="space-y-2.5">{children}</div>
   </div>;
-}
-
-function siemensAtcGuidance(profile: Siemens828dPostConfigDto): string {
-  const style = profile.atc_style === 'double_arm'
-    ? 'Double-arm machines normally have a calibrated tool-change height and spindle orientation.'
-    : profile.atc_style === 'umbrella'
-      ? 'Umbrella machines also use a calibrated tool-change height; the shuttle layout does not prove that an XY move is required.'
-      : profile.atc_style === 'carousel_chain'
-        ? 'Carousel, chain, or wheel storage does not by itself define the spindle-side change station.'
-        : 'Use the machine-builder manual or a proven M6 program to define this custom changer.';
-  const positioning = profile.tool_change_positioning === 'supa_z'
-    ? ` This profile emits G0 SUPA Z${profile.supa_retract_z} D0 before later changes.`
-    : profile.tool_change_positioning === 'controller_managed'
-      ? ' This profile assumes the M6/PLC cycle owns all station motion.'
-      : profile.station_x === null || profile.station_y === null
-        ? ' Enter both verified machine X and Y station coordinates before posting.'
-        : ` This profile retracts Z first, then moves to machine X${profile.station_x} Y${profile.station_y}.`;
-  const preload = profile.preload_next_tool
-    ? profile.atc_style === 'carousel_chain'
-      ? ' Warning: next-tool T preload is enabled even though it may index this carousel/chain/wheel magazine; verify it on this exact machine.'
-      : ' Next-tool T preload is enabled; verify that an early T call safely stages the magazine on this exact machine.'
-    : ' Next-tool T preload is disabled, so every executable T call belongs to the M6 immediately following it.';
-  return `${style}${positioning}${preload}`;
-}
-
-function siemensToolChangeExample(profile: Siemens828dPostConfigDto): string {
-  const style = profile.atc_style === 'double_arm'
-    ? 'DOUBLE-ARM'
-    : profile.atc_style === 'umbrella'
-      ? 'UMBRELLA / SHUTTLE'
-      : profile.atc_style === 'carousel_chain'
-        ? 'CAROUSEL / CHAIN / WHEEL'
-        : 'CUSTOM ATC';
-  const lines = [`; ${style} EXAMPLE - MACHINE MANUAL WINS`, 'M9', 'M5'];
-  if (profile.tool_change_positioning === 'supa_z') {
-    lines.push(`G0 SUPA Z${profile.supa_retract_z} D0`, `D${profile.tool_length_offset}`);
-  } else if (profile.tool_change_positioning === 'controller_managed') {
-    lines.push('; M6/PLC CONTROLS TOOL-CHANGE POSITIONING');
-  } else {
-    lines.push(
-      `G0 SUPA Z${profile.supa_retract_z} D0`,
-      `G0 SUPA X${profile.station_x ?? '<SET>'} Y${profile.station_y ?? '<SET>'}`,
-      `D${profile.tool_length_offset}`,
-    );
-  }
-  lines.push('', 'MSG ("NEXT OPERATION")');
-  if (profile.optional_stop_on_tool_change) lines.push('M1');
-  lines.push('T19', 'M6', `D${profile.tool_length_offset}`);
-  if (profile.preload_next_tool) lines.push('T44');
-  return lines.join('\n');
 }
 
 function InspectorSubheading({ children }: { children: ReactNode }) {
@@ -612,11 +628,30 @@ function CommitText({ value, onCommit }: { value: string; onCommit: (value: stri
   }} />;
 }
 
+/** Plain numeric field for unit-less values (rpm, seconds, indices). */
 function NumberField({ label, value, unit, integer = false, onCommit }: { label: string; value: number; unit: string; integer?: boolean; onCommit: (value: number) => Promise<void> }) {
   return <Field label={label}><div className="relative"><input key={value} type="number" step={integer ? 1 : 'any'} defaultValue={integer ? Math.round(value) : value} className="cam-input pr-14 font-mono" onBlur={(event) => {
     const next = Number(event.target.value);
     if (Number.isFinite(next) && next !== value) runCamAction(() => onCommit(integer ? Math.round(next) : next));
   }} /><span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">{unit}</span></div></Field>;
+}
+
+/** Length field: displays in the document units, commits canonical mm. */
+function LengthField({ label, valueMm, units, onCommit }: { label: string; valueMm: number; units: CamUnits; onCommit: (valueMm: number) => Promise<void> }) {
+  const display = Number(displayLength(valueMm, units).toFixed(lengthDecimals(units)));
+  return <NumberField label={label} value={display} unit={lengthUnitLabel(units)} onCommit={(value) => onCommit(commitLength(value, units))} />;
+}
+
+/** Feed field: displays mm/min or in/min, commits canonical mm/min. */
+function FeedField({ label, valueMmPerMin, units, onCommit }: { label: string; valueMmPerMin: number; units: CamUnits; onCommit: (valueMmPerMin: number) => Promise<void> }) {
+  const display = Number(displayFeed(valueMmPerMin, units).toFixed(units === 'inches' ? 3 : 1));
+  return <NumberField label={label} value={display} unit={feedUnitLabel(units)} onCommit={(value) => onCommit(commitFeed(value, units))} />;
+}
+
+/** Optional length field: blank clears the value, otherwise unit-aware. */
+function OptionalLengthField({ label, valueMm, units, onCommit }: { label: string; valueMm: number | null; units: CamUnits; onCommit: (valueMm: number | null) => Promise<void> }) {
+  const display = valueMm === null ? null : Number(displayLength(valueMm, units).toFixed(lengthDecimals(units)));
+  return <OptionalNumberField label={label} value={display} unit={lengthUnitLabel(units)} onCommit={(value) => onCommit(value === null ? null : commitLength(value, units))} />;
 }
 
 function OptionalNumberField({ label, value, unit, onCommit }: { label: string; value: number | null; unit: string; onCommit: (value: number | null) => Promise<void> }) {
@@ -627,11 +662,16 @@ function OptionalNumberField({ label, value, unit, onCommit }: { label: string; 
   }} /><span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">{unit}</span></div></Field>;
 }
 
-function CommitPoints({ value, onCommit }: { value: CamPoint2Dto[]; onCommit: (value: CamPoint2Dto[]) => Promise<void> }) {
-  const text = value.map((point) => `${point.x}, ${point.y}`).join('\n');
+/** Point-list editor. Points are displayed in document units and committed
+ *  back as canonical mm setup coordinates. */
+function CommitPoints({ value, units, onCommit }: { value: CamPoint2Dto[]; units: CamUnits; onCommit: (value: CamPoint2Dto[]) => Promise<void> }) {
+  const text = value.map((point) => `${displayLength(point.x, units)}, ${displayLength(point.y, units)}`).join('\n');
   return <textarea key={text} defaultValue={text} rows={Math.min(6, Math.max(3, value.length))} className="cam-input min-h-16 resize-y font-mono leading-5" onBlur={(event) => {
     try {
-      const points = parsePoints(event.target.value);
+      const points = parsePoints(event.target.value).map((point) => ({
+        x: commitLength(point.x, units),
+        y: commitLength(point.y, units),
+      }));
       if (JSON.stringify(points) !== JSON.stringify(value)) runCamAction(() => onCommit(points));
     } catch (error) {
       useAppStore.getState().setConstraintDialog({ titleKey: 'file.errorTitle', message: error instanceof Error ? error.message : String(error) });
@@ -640,8 +680,12 @@ function CommitPoints({ value, onCommit }: { value: CamPoint2Dto[]; onCommit: (v
   }} />;
 }
 
-function Readout({ label, value }: { label: string; value: number }) {
-  return <div className="rounded border border-edge bg-header/60 px-2 py-1.5"><div className="text-[8px] text-mute/60">{label}</div><div className="font-mono text-[10px] text-ink">{value.toFixed(3)}</div></div>;
+function Readout({ label, text }: { label: string; text: string }) {
+  return <div className="rounded border border-edge bg-header/60 px-2 py-1.5"><div className="text-[8px] text-mute/60">{label}</div><div className="font-mono text-[10px] text-ink">{text}</div></div>;
+}
+
+function fmtLength(valueMm: number, units: CamUnits): string {
+  return displayLength(valueMm, units).toFixed(lengthDecimals(units));
 }
 
 function parsePoints(text: string): CamPoint2Dto[] {

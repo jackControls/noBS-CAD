@@ -34,14 +34,12 @@ import {
   leaveDrawingWorkspace,
 } from '../drawing/document';
 import { exportActiveDrawingDxf, printActiveDrawing } from '../drawing/export';
-import type { DrawingViewKind } from '../engine/types';
+import type { CamOperationDto, DrawingViewKind } from '../engine/types';
 import {
-  addCamOperation,
-  addCamSetup,
   enterCamWorkspace,
   leaveCamWorkspace,
 } from '../cam/document';
-import { exportActiveCamProgram, exportPostEvents } from '../cam/export';
+import { exportPostEvents } from '../cam/export';
 
 function runDrawingAction(action: () => Promise<unknown>): void {
   void action().catch((error) => {
@@ -218,15 +216,21 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       runDrawingAction(enterCamWorkspace);
       break;
     case 'camNewSetup':
-      runDrawingAction(addCamSetup);
+      useAppStore.getState().setCamDialog({ type: 'setup' });
       break;
-    case 'camAddOperation':
-      runDrawingAction(() => addCamOperation(
-        payload === 'drill' ? 'drill' : payload === 'contour2d' ? 'contour2d' : 'face',
-      ));
+    case 'camToolLibrary':
+      useAppStore.getState().setCamDialog({ type: 'tool', toolId: null });
       break;
+    case 'camAddOperation': {
+      const kind: CamOperationDto['kind'] =
+        payload === 'contour2d' || payload === 'pocket2d' || payload === 'chamfer2d' || payload === 'drill'
+          ? payload
+          : 'face';
+      useAppStore.getState().setCamDialog({ type: 'operation', kind });
+      break;
+    }
     case 'camPost':
-      runDrawingAction(exportActiveCamProgram);
+      useAppStore.getState().setCamDialog({ type: 'post' });
       break;
     case 'camExportEvents':
       runDrawingAction(exportPostEvents);

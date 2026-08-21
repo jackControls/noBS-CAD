@@ -25,7 +25,7 @@ import { DrawingBrowser } from './components/drawing/DrawingBrowser';
 import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
 import { AssemblyBrowser } from './components/assembly/AssemblyBrowser';
 import { JointDialog } from './components/assembly/JointDialog';
-import { CamBrowser } from './components/cam/CamBrowser';
+import { CamSetupsPanel } from './components/cam/CamBrowser';
 import { CamWorkspace } from './components/cam/CamWorkspace';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
@@ -384,7 +384,12 @@ export default function App() {
         {drawingWorkspace ? (
           <DrawingBrowser />
         ) : camWorkspace ? (
-          <CamBrowser />
+          <div className="flex w-60 shrink-0 flex-col border-r border-edge bg-panel">
+            <div className="min-h-0 flex-1">
+              <BrowserTree embedded />
+            </div>
+            <CamSetupsPanel />
+          </div>
         ) : solidSidebarMode === 'assembly' ? (
           <AssemblyBrowser />
         ) : (

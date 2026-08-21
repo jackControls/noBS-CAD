@@ -40,7 +40,6 @@ import { switchProjectTab } from '../files/projectTabs';
 import { cx } from '../lib/cx';
 import { exportActiveDrawingDxf } from '../drawing/export';
 import { requestNativeViewportLayout } from './viewport/nativeViewportBridge';
-import { exportActiveCamProgram } from '../cam/export';
 
 const FILE_MENU_VIEWPORT_MARGIN = 6;
 const FILE_MENU_FALLBACK_WIDTH = 256;
@@ -330,7 +329,10 @@ export function ProjectMenuControls() {
                 <FileMenuItem
                   icon={<FileDown size={14} />}
                   label={t('file.exportCamNc')}
-                  onClick={() => run(exportActiveCamProgram)}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    useAppStore.getState().setCamDialog({ type: 'post' });
+                  }}
                 />
               )}
               <div className="my-1 border-t border-edge" />

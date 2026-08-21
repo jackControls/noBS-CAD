@@ -42,6 +42,7 @@ export type RibbonAction =
   | 'drawingPrint'
   | 'camWorkspace'
   | 'camNewSetup'
+  | 'camToolLibrary'
   | 'camAddOperation'
   | 'camPost'
   | 'camExportEvents';
@@ -830,6 +831,7 @@ export const CAM_TAB: RibbonTab = {
       buttons: [
         { id: 'returnModel', labelKey: 'ribbon.cam.model', icon: 'select', enabled: true, action: 'modelWorkspace' },
         { id: 'newSetup', labelKey: 'ribbon.cam.newSetup', icon: 'plane', enabled: true, action: 'camNewSetup' },
+        { id: 'toolLibrary', labelKey: 'ribbon.cam.toolLibrary', icon: 'hole', enabled: true, action: 'camToolLibrary' },
       ],
     },
     {
@@ -838,6 +840,8 @@ export const CAM_TAB: RibbonTab = {
       buttons: [
         { id: 'camFace', labelKey: 'ribbon.cam.face', icon: 'section', enabled: true, action: 'camAddOperation', payload: 'face' },
         { id: 'camContour', labelKey: 'ribbon.cam.contour', icon: 'pathPattern', enabled: true, action: 'camAddOperation', payload: 'contour2d' },
+        { id: 'camPocket', labelKey: 'ribbon.cam.pocket', icon: 'pathPattern', enabled: true, action: 'camAddOperation', payload: 'pocket2d' },
+        { id: 'camChamfer', labelKey: 'ribbon.cam.chamfer', icon: 'section', enabled: true, action: 'camAddOperation', payload: 'chamfer2d' },
         { id: 'camDrill', labelKey: 'ribbon.cam.drill', icon: 'hole', enabled: true, action: 'camAddOperation', payload: 'drill' },
       ],
     },

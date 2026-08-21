@@ -18,6 +18,7 @@ import type {
   SketchDto,
   SolidUpdateDto,
 } from '../engine/types';
+import { DEFAULT_CAM_POST_CONFIG } from '../engine/types';
 import { translate } from '../i18n';
 import { dropApplicationHistory } from '../engine/applicationHistory';
 import { enterDrawingWorkspace } from '../drawing/document';
@@ -122,6 +123,8 @@ function emptyCamDocument(): CamDocumentDto {
     setups: [],
     active_setup_id: null,
     tools: [],
+    units: 'millimeters',
+    post_defaults: { ...DEFAULT_CAM_POST_CONFIG },
     next_setup_id: 1,
     next_operation_id: 1,
     next_tool_id: 1,

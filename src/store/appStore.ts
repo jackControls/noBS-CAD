@@ -16,6 +16,7 @@ import type {
   BodyPoseDto,
   BodyAppearance,
   CamDocumentDto,
+  CamOperationDto,
   ComponentDefinitionDto,
   ComponentOccurrenceDto,
   CreateJointRequestDto,
@@ -51,6 +52,7 @@ import type {
 import { getEngine, type Engine } from '../engine';
 import {
   DEFAULT_BODY_COLOR,
+  DEFAULT_CAM_POST_CONFIG,
   DEFAULT_MATERIAL_NAME,
 } from '../engine/types';
 import {
@@ -212,11 +214,37 @@ function jointConnectorIsLive(
   return Boolean((face?.plane || face?.cylinder) && face.key === connector.face_key);
 }
 
+/** Manufacturing editor dialogs: manual setup creation, per-operation
+ *  programming, tool-library editing, and post-at-export. */
+export type CamDialogState =
+  | { type: 'setup' }
+  | { type: 'operation'; kind: CamOperationDto['kind'] }
+  | { type: 'tool'; toolId: number | null }
+  | { type: 'post' };
+
+/** One point offered for picking in the CAM viewport: a point the operator
+ *  already drew (sketch point) or a derived geometry handle (box lattice
+ *  point). `payload` is an opaque token handed back to the requester. */
+export interface CamPointPickCandidate {
+  /** Model coordinates, mm. */
+  point: Point3Dto;
+  label: string;
+  payload?: unknown;
+}
+
+/** Active viewport point-picking session; null when none is running. */
+export interface CamPointPickSession {
+  prompt: string;
+  candidates: CamPointPickCandidate[];
+}
+
 function emptyCamDocument(): CamDocumentDto {
   return {
     setups: [],
     active_setup_id: null,
     tools: [],
+    units: 'millimeters',
+    post_defaults: { ...DEFAULT_CAM_POST_CONFIG },
     next_setup_id: 1,
     next_operation_id: 1,
     next_tool_id: 1,
@@ -701,6 +729,10 @@ interface AppState {
   camDocument: CamDocumentDto;
   selectedCamSetupId: number | null;
   selectedCamOperationId: number | null;
+  /** Open manufacturing editor dialog; null when none is open. */
+  camDialog: CamDialogState | null;
+  /** Active viewport point-picking session for CAM inputs; null when idle. */
+  camPointPick: CamPointPickSession | null;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -827,6 +859,8 @@ interface AppState {
   setCamDocument: (cam: CamDocumentDto) => Promise<void>;
   setSelectedCamSetupId: (setupId: number | null) => void;
   setSelectedCamOperationId: (operationId: number | null) => void;
+  setCamDialog: (dialog: CamDialogState | null) => void;
+  setCamPointPick: (session: CamPointPickSession | null) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -1018,6 +1052,8 @@ function resetDocumentUiState(): Partial<AppState> {
     camDocument: emptyCamDocument(),
     selectedCamSetupId: null,
     selectedCamOperationId: null,
+    camDialog: null,
+    camPointPick: null,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -1134,6 +1170,8 @@ export const useAppStore = create<AppState>()((set) => ({
   camDocument: emptyCamDocument(),
   selectedCamSetupId: null,
   selectedCamOperationId: null,
+  camDialog: null,
+  camPointPick: null,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -2063,6 +2101,10 @@ export const useAppStore = create<AppState>()((set) => ({
   setSelectedCamSetupId: (selectedCamSetupId) => set({ selectedCamSetupId }),
 
   setSelectedCamOperationId: (selectedCamOperationId) => set({ selectedCamOperationId }),
+
+  setCamDialog: (camDialog) => set({ camDialog }),
+
+  setCamPointPick: (camPointPick) => set({ camPointPick }),
 
   loadProjectState: (
     update,

@@ -1,0 +1,596 @@
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { CircleDot, X } from 'lucide-react';
+import {
+  activeCamSetup,
+  addCamOperation,
+  camOperationLabel,
+  camToolCompatible,
+  type CamOperationInput,
+} from '../../cam/document';
+import {
+  listSketchLoops,
+  listSketchPointRefs,
+  loopToSetupPath,
+  sketchPointToSetup,
+  type SketchLoop,
+} from '../../cam/geometry';
+import { commitFeed, commitLength, displayFeed, displayLength } from '../../cam/units';
+import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamPoint2Dto } from '../../engine/types';
+import { useAppStore } from '../../store/appStore';
+import { runCamAction } from './CamBrowser';
+import {
+  CAM_DIALOG_INPUT,
+  CAM_DIALOG_LABEL,
+  DialogSection,
+  DraftNumber,
+  feedUnit,
+  lengthUnit,
+  parseDraft,
+} from './camFields';
+
+type OperationKind = CamOperationInput['kind'];
+type GeometrySource = 'sketch' | 'manual';
+
+/** Program one operation end to end: the operator picks the tool from the
+ *  library, picks the driving geometry (sketch loops/points or explicit
+ *  coordinates), and sets heights, passes, and speeds & feeds. */
+export function CamOperationDialog({ kind }: { kind: OperationKind }) {
+  const cam = useAppStore((state) => state.camDocument);
+  const sketches = useAppStore((state) => state.finishedSketches);
+  const close = () => useAppStore.getState().setCamDialog(null);
+  const units = cam.units;
+  const lu = lengthUnit(units);
+  const setup = activeCamSetup(cam);
+  // Drill operations pick the cycle before the tool: the cycle decides which
+  // tool kinds are compatible (tap -> tap, reaming -> reamer, ...).
+  const [drillCycle, setDrillCycle] = useState<CamDrillCycle>('drill');
+  const tools = useMemo(
+    () =>
+      cam.tools.filter((tool) =>
+        camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
+      ),
+    [cam.tools, kind, drillCycle],
+  );
+
+  const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
+  const pointRefs = useMemo(() => listSketchPointRefs(sketches), [sketches]);
+  const existingCount = setup?.operations.filter((operation) => operation.kind === kind).length ?? 0;
+
+  const [name, setName] = useState(`${camOperationLabel(kind)} ${existingCount + 1}`);
+  const [toolId, setToolId] = useState<number | null>(tools[0]?.id ?? null);
+  const [rpm, setRpm] = useState('');
+  const [feedXy, setFeedXy] = useState('');
+  const [feedZ, setFeedZ] = useState('');
+  const [coolant, setCoolant] = useState<CamCoolantMode>('off');
+  const [feedsTouched, setFeedsTouched] = useState(false);
+
+  const [source, setSource] = useState<GeometrySource>(loops.length > 0 ? 'sketch' : 'manual');
+  const [loopKey, setLoopKey] = useState('');
+  const [manualPoints, setManualPoints] = useState('');
+  const [selectedPointKeys, setSelectedPointKeys] = useState<string[]>([]);
+
+  const [topZ, setTopZ] = useState(setup ? displayLength(setup.stock.max.z, units).toFixed(4) : '0');
+  const [bottomZ, setBottomZ] = useState('');
+  const [targetZ, setTargetZ] = useState('');
+  const [stepDown, setStepDown] = useState('');
+  const [stepOver, setStepOver] = useState('');
+  const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
+  const [wallSide, setWallSide] = useState<CamContourCompensation>('inside');
+  const [chamferWidth, setChamferWidth] = useState('');
+  const [tipOffset, setTipOffset] = useState('');
+  // Per-operation safe heights (setup frame): clearance is the travel plane
+  // above the stock, retract the approach/peck-return plane above the cut.
+  const [clearanceZ, setClearanceZ] = useState(
+    setup ? displayLength(setup.stock.max.z + 10, units).toFixed(4) : '10',
+  );
+  const [retractZ, setRetractZ] = useState(
+    setup ? displayLength(setup.stock.max.z + 3, units).toFixed(4) : '3',
+  );
+  const [peckDepth, setPeckDepth] = useState('');
+  const [peckRetract, setPeckRetract] = useState('');
+  const [threadPitch, setThreadPitch] = useState('');
+  const [feedOut, setFeedOut] = useState('');
+  const [dwell, setDwell] = useState('0');
+  const [faceMin, setFaceMin] = useState({ x: '', y: '' });
+  const [faceMax, setFaceMax] = useState({ x: '', y: '' });
+  const [faceFromStock, setFaceFromStock] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!setup) return null;
+
+  const chooseTool = (id: number) => {
+    setToolId(id);
+    const tool = cam.tools.find((candidate) => candidate.id === id);
+    if (tool && !feedsTouched) {
+      setRpm(String(tool.cutting.spindle_rpm));
+      setFeedXy(displayFeed(tool.cutting.feed_xy, units).toFixed(4));
+      setFeedZ(displayFeed(tool.cutting.feed_z, units).toFixed(4));
+      setCoolant(tool.cutting.coolant);
+      if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
+        setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
+      }
+    }
+  };
+
+  /** Switch the drill cycle; keeps the selected tool only when it stays
+   *  compatible, otherwise re-selects the first compatible library tool. */
+  const changeCycle = (cycle: CamDrillCycle) => {
+    setDrillCycle(cycle);
+    const compatible = cam.tools.filter((tool) => camToolCompatible('drill', tool, cycle));
+    if (!compatible.some((tool) => tool.id === toolId)) {
+      setFeedsTouched(false);
+      if (compatible[0]) chooseTool(compatible[0].id);
+      else setToolId(null);
+    }
+  };
+  // Prefill speeds & feeds from the initially selected library tool.
+  useEffect(() => {
+    if (toolId !== null && !feedsTouched && rpm === '') chooseTool(toolId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectedLoop = (): SketchLoop | null => {
+    const loop = loops.find((candidate) => `${candidate.sketch}:${candidate.entityIds.join(',')}` === loopKey);
+    return loop ?? loops[0] ?? null;
+  };
+
+  const pathFromLoop = (): CamPoint2Dto[] => {
+    const loop = selectedLoop();
+    if (!loop) throw new Error('Pick a sketch loop, or switch to manual coordinates.');
+    return loopToSetupPath(loop, sketches, setup.wcs);
+  };
+
+  const parseManualPoints = (label: string): CamPoint2Dto[] => {
+    const points = manualPoints
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line, index) => {
+        const values = line.split(/[\s,;]+/).filter(Boolean).map(Number);
+        if (values.length !== 2 || !values.every(Number.isFinite)) {
+          throw new Error(`${label} line ${index + 1} must contain X,Y numbers.`);
+        }
+        return { x: commitLength(values[0], units), y: commitLength(values[1], units) };
+      });
+    if (points.length === 0) throw new Error(`${label}: enter at least one point or pick sketch geometry.`);
+    return points;
+  };
+
+  const resolvePath = (label: string): CamPoint2Dto[] =>
+    source === 'sketch' ? pathFromLoop() : parseManualPoints(label);
+
+  const resolveDrillPoints = (): CamPoint2Dto[] => {
+    const fromSketches = selectedPointKeys.map((key) => {
+      const ref = pointRefs.find((candidate) => `${candidate.sketch}:${candidate.entityId}` === key);
+      const sketch = sketches.find((candidate) => candidate.name === ref?.sketch);
+      if (!ref || !sketch) throw new Error('A selected sketch point no longer exists.');
+      return sketchPointToSetup(sketch, ref.uv, setup.wcs);
+    });
+    const manual = manualPoints.trim() ? parseManualPoints('Hole centers') : [];
+    const points = [...fromSketches, ...manual];
+    if (points.length === 0) {
+      throw new Error('Pick at least one sketch point or enter hole centers manually.');
+    }
+    return points;
+  };
+
+  const cutting = () => ({
+    spindle_rpm: Math.round(parseDraft(rpm, 'Spindle speed')),
+    feed_xy: commitFeed(parseDraft(feedXy, 'Cutting feed'), units),
+    feed_z: commitFeed(parseDraft(feedZ, 'Plunge feed'), units),
+    coolant,
+  });
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    try {
+      if (toolId === null) throw new Error('Pick a tool from the library first.');
+      const base = {
+        name: name.trim() || camOperationLabel(kind),
+        enabled: true,
+        tool_id: toolId,
+        clearance_z: commitLength(parseDraft(clearanceZ, 'Clearance Z'), units),
+        retract_z: commitLength(parseDraft(retractZ, 'Retract Z'), units),
+      };
+      const top = commitLength(parseDraft(topZ, 'Top Z'), units);
+      let operation: CamOperationInput;
+      switch (kind) {
+        case 'face': {
+          const bounds = faceFromStock
+            ? { min: { x: setup.stock.min.x, y: setup.stock.min.y }, max: { x: setup.stock.max.x, y: setup.stock.max.y } }
+            : {
+                min: {
+                  x: commitLength(parseDraft(faceMin.x, 'Face min X'), units),
+                  y: commitLength(parseDraft(faceMin.y, 'Face min Y'), units),
+                },
+                max: {
+                  x: commitLength(parseDraft(faceMax.x, 'Face max X'), units),
+                  y: commitLength(parseDraft(faceMax.y, 'Face max Y'), units),
+                },
+              };
+          operation = {
+            ...base,
+            kind,
+            bounds,
+            top_z: top,
+            target_z: commitLength(parseDraft(targetZ, 'Target Z'), units),
+            step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
+            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            cutting: cutting(),
+          };
+          break;
+        }
+        case 'contour2d':
+          operation = {
+            ...base,
+            kind,
+            path: resolvePath('Contour path'),
+            top_z: top,
+            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            compensation,
+            cutting: cutting(),
+          };
+          break;
+        case 'pocket2d':
+          operation = {
+            ...base,
+            kind,
+            outline: resolvePath('Pocket outline'),
+            top_z: top,
+            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
+            cutting: cutting(),
+          };
+          break;
+        case 'chamfer2d':
+          operation = {
+            ...base,
+            kind,
+            path: resolvePath('Chamfer path'),
+            top_z: top,
+            chamfer_width: commitLength(parseDraft(chamferWidth, 'Chamfer width'), units),
+            tip_offset: commitLength(parseDraft(tipOffset, 'Tip offset'), units),
+            wall_side: wallSide,
+            cutting: cutting(),
+          };
+          break;
+        case 'drill': {
+          const pecking = drillCycle === 'chip_breaking' || drillCycle === 'deep_hole';
+          const tapping = drillCycle === 'tapping_right' || drillCycle === 'tapping_left';
+          const feedingOut = drillCycle === 'reaming' || drillCycle === 'boring';
+          operation = {
+            ...base,
+            kind,
+            points: resolveDrillPoints(),
+            top_z: top,
+            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            cycle: drillCycle,
+            peck_depth: pecking
+              ? commitLength(parseDraft(peckDepth, 'Peck depth'), units)
+              : null,
+            peck_retract:
+              drillCycle === 'chip_breaking' && peckRetract.trim()
+                ? commitLength(parseDraft(peckRetract, 'Peck retract'), units)
+                : null,
+            thread_pitch: tapping
+              ? commitLength(parseDraft(threadPitch, 'Thread pitch'), units)
+              : null,
+            feed_out:
+              feedingOut && feedOut.trim()
+                ? commitFeed(parseDraft(feedOut, 'Feed out'), units)
+                : null,
+            dwell_seconds: tapping ? 0 : parseDraft(dwell, 'Dwell'),
+            cutting: cutting(),
+          };
+          break;
+        }
+      }
+      runCamAction(() => addCamOperation(operation).then(() => close()));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const geometrySection = () => {
+    if (kind === 'drill') {
+      return (
+        <DialogSection title="HOLE CENTERS · SKETCH POINTS">
+          {pointRefs.length > 0 ? (
+            <div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge/70 p-1.5">
+              {pointRefs.map((ref) => {
+                const key = `${ref.sketch}:${ref.entityId}`;
+                return (
+                  <label key={key} className="flex items-center gap-2 text-[11px] text-ink">
+                    <input
+                      type="checkbox"
+                      checked={selectedPointKeys.includes(key)}
+                      onChange={(event) =>
+                        setSelectedPointKeys((current) =>
+                          event.target.checked
+                            ? [...current, key]
+                            : current.filter((candidate) => candidate !== key),
+                        )
+                      }
+                    />
+                    <span className="truncate">{ref.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[10px] italic text-mute">
+              No sketch points yet — draw points in a sketch to select them here.
+            </p>
+          )}
+          <label className="mt-2 block">
+            <span className={CAM_DIALOG_LABEL}>Manual centers · one X,Y per line ({lu})</span>
+            <textarea
+              value={manualPoints}
+              onChange={(event) => setManualPoints(event.target.value)}
+              rows={3}
+              className={`${CAM_DIALOG_INPUT} h-auto resize-y font-mono leading-5`}
+            />
+          </label>
+        </DialogSection>
+      );
+    }
+    if (kind === 'face') {
+      return (
+        <DialogSection title={`FACE AREA (${lu})`}>
+          <label className="flex items-center gap-2 text-[11px] text-ink">
+            <input
+              type="checkbox"
+              checked={faceFromStock}
+              onChange={(event) => setFaceFromStock(event.target.checked)}
+            />
+            Face the whole stock top
+          </label>
+          {!faceFromStock && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <DraftNumber label="Min X" value={faceMin.x} onChange={(v) => setFaceMin((c) => ({ ...c, x: v }))} unit={lu} />
+              <DraftNumber label="Min Y" value={faceMin.y} onChange={(v) => setFaceMin((c) => ({ ...c, y: v }))} unit={lu} />
+              <DraftNumber label="Max X" value={faceMax.x} onChange={(v) => setFaceMax((c) => ({ ...c, x: v }))} unit={lu} />
+              <DraftNumber label="Max Y" value={faceMax.y} onChange={(v) => setFaceMax((c) => ({ ...c, y: v }))} unit={lu} />
+            </div>
+          )}
+        </DialogSection>
+      );
+    }
+    const pathLabel =
+      kind === 'pocket2d' ? 'Pocket outline' : kind === 'chamfer2d' ? 'Chamfer profile' : 'Contour path';
+    return (
+      <DialogSection title={`${pathLabel.toUpperCase()} · OPERATOR SELECTED`}>
+        <div className="grid grid-cols-2 gap-1.5">
+          {(
+            [
+              ['sketch', `Sketch loop (${loops.length})`],
+              ['manual', 'Manual points'],
+            ] as [GeometrySource, string][]
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSource(value)}
+              className={`h-7 rounded border text-[10px] font-semibold ${
+                source === value
+                  ? 'border-accent/50 bg-accent/15 text-accent'
+                  : 'border-edge bg-header/50 text-mute hover:text-ink'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {source === 'sketch' ? (
+          loops.length > 0 ? (
+            <select
+              value={loopKey || (loops[0] ? `${loops[0].sketch}:${loops[0].entityIds.join(',')}` : '')}
+              onChange={(event) => setLoopKey(event.target.value)}
+              className={`${CAM_DIALOG_INPUT} mt-2`}
+            >
+              {loops.map((loop) => {
+                const key = `${loop.sketch}:${loop.entityIds.join(',')}`;
+                return (
+                  <option key={key} value={key}>
+                    {loop.label}
+                  </option>
+                );
+              })}
+            </select>
+          ) : (
+            <p className="mt-2 text-[10px] italic text-mute">
+              No closed sketch loops found. Sketch a closed profile first, or use manual points.
+            </p>
+          )
+        ) : (
+          <label className="mt-2 block">
+            <span className={CAM_DIALOG_LABEL}>Closed path · one X,Y per line ({lu}, setup frame)</span>
+            <textarea
+              value={manualPoints}
+              onChange={(event) => setManualPoints(event.target.value)}
+              rows={4}
+              className={`${CAM_DIALOG_INPUT} h-auto resize-y font-mono leading-5`}
+            />
+          </label>
+        )}
+      </DialogSection>
+    );
+  };
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+      <form
+        data-testid="cam-operation-dialog"
+        onSubmit={submit}
+        className="pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
+      >
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
+          <CircleDot size={15} className="text-accent" />
+          <span className="flex-1 text-xs font-semibold text-ink">
+            New {camOperationLabel(kind)} operation
+          </span>
+          <button type="button" onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink">
+            <X size={14} />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+          {error && (
+            <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">{error}</p>
+          )}
+          <label className="block">
+            <span className={CAM_DIALOG_LABEL}>Operation name</span>
+            <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
+          </label>
+
+          <DialogSection title="TOOL (FROM LIBRARY)">
+            {tools.length > 0 ? (
+              <select
+                value={toolId ?? ''}
+                onChange={(event) => {
+                  setFeedsTouched(false);
+                  chooseTool(Number(event.target.value));
+                }}
+                className={CAM_DIALOG_INPUT}
+              >
+                {tools.map((tool) => (
+                  <option key={tool.id} value={tool.id}>
+                    {tool.number != null ? `T${tool.number} · ` : ''}{tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)} {lu}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
+                No compatible tool in the library. Add one from the tool library first.
+              </p>
+            )}
+          </DialogSection>
+
+          {geometrySection()}
+
+          <DialogSection title={`HEIGHTS & PASSES (${lu}, setup frame)`}>
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber label="Clearance Z" value={clearanceZ} onChange={setClearanceZ} unit={lu} />
+              <DraftNumber label="Retract Z" value={retractZ} onChange={setRetractZ} unit={lu} />
+              <DraftNumber label="Top Z" value={topZ} onChange={setTopZ} unit={lu} />
+              {kind === 'face' ? (
+                <DraftNumber label="Target Z" value={targetZ} onChange={setTargetZ} unit={lu} />
+              ) : (
+                <DraftNumber label="Bottom Z" value={bottomZ} onChange={setBottomZ} unit={lu} />
+              )}
+              {(kind === 'face' || kind === 'contour2d' || kind === 'pocket2d') && (
+                <DraftNumber label="Stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+              )}
+              {(kind === 'face' || kind === 'pocket2d') && (
+                <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
+              )}
+              {kind === 'contour2d' && (
+                <label className="block">
+                  <span className={CAM_DIALOG_LABEL}>Tool side</span>
+                  <select
+                    value={compensation}
+                    onChange={(event) => setCompensation(event.target.value as CamContourCompensation)}
+                    className={CAM_DIALOG_INPUT}
+                  >
+                    <option value="outside">Outside</option>
+                    <option value="inside">Inside</option>
+                    <option value="on">On path</option>
+                  </select>
+                </label>
+              )}
+              {kind === 'chamfer2d' && (
+                <>
+                  <DraftNumber label="Chamfer width" value={chamferWidth} onChange={setChamferWidth} unit={lu} />
+                  <DraftNumber label="Tip offset" value={tipOffset} onChange={setTipOffset} unit={lu} />
+                  <label className="block">
+                    <span className={CAM_DIALOG_LABEL}>Material side</span>
+                    <select
+                      value={wallSide}
+                      onChange={(event) => setWallSide(event.target.value as CamContourCompensation)}
+                      className={CAM_DIALOG_INPUT}
+                    >
+                      <option value="inside">Inside path (boss edge)</option>
+                      <option value="outside">Outside path (hole edge)</option>
+                    </select>
+                  </label>
+                </>
+              )}
+              {kind === 'drill' && (
+                <>
+                  <label className="block">
+                    <span className={CAM_DIALOG_LABEL}>Cycle</span>
+                    <select
+                      value={drillCycle}
+                      onChange={(event) => changeCycle(event.target.value as CamDrillCycle)}
+                      className={CAM_DIALOG_INPUT}
+                    >
+                      <option value="drill">Drilling — rapid out</option>
+                      <option value="chip_breaking">Chip breaking — partial retract</option>
+                      <option value="deep_hole">Deep drilling — full retract</option>
+                      <option value="tapping_right">Tapping — right hand</option>
+                      <option value="tapping_left">Tapping — left hand</option>
+                      <option value="reaming">Reaming — feed out</option>
+                      <option value="boring">Boring — dwell and feed out</option>
+                    </select>
+                  </label>
+                  {(drillCycle === 'chip_breaking' || drillCycle === 'deep_hole') && (
+                    <DraftNumber label="Peck depth" value={peckDepth} onChange={setPeckDepth} unit={lu} />
+                  )}
+                  {drillCycle === 'chip_breaking' && (
+                    <DraftNumber label="Peck retract (empty = auto)" value={peckRetract} onChange={setPeckRetract} unit={lu} />
+                  )}
+                  {(drillCycle === 'tapping_right' || drillCycle === 'tapping_left') && (
+                    <DraftNumber label="Thread pitch" value={threadPitch} onChange={setThreadPitch} unit={`${lu}/rev`} />
+                  )}
+                  {(drillCycle === 'reaming' || drillCycle === 'boring') && (
+                    <DraftNumber label="Feed out (empty = plunge feed)" value={feedOut} onChange={setFeedOut} unit={feedUnit(units)} />
+                  )}
+                  {drillCycle !== 'tapping_right' && drillCycle !== 'tapping_left' && (
+                    <DraftNumber label="Dwell at bottom" value={dwell} onChange={setDwell} unit="sec" />
+                  )}
+                </>
+              )}
+            </div>
+          </DialogSection>
+
+          <DialogSection title={`SPEEDS & FEEDS (${feedUnit(units)})`}>
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber label="Spindle" value={rpm} onChange={(v) => { setFeedsTouched(true); setRpm(v); }} unit="rpm" integer />
+              <label className="block">
+                <span className={CAM_DIALOG_LABEL}>Coolant</span>
+                <select
+                  value={coolant}
+                  onChange={(event) => { setFeedsTouched(true); setCoolant(event.target.value as CamCoolantMode); }}
+                  className={CAM_DIALOG_INPUT}
+                >
+                  <option value="off">Off</option>
+                  <option value="mist">Mist</option>
+                  <option value="flood">Flood</option>
+                </select>
+              </label>
+              <DraftNumber label="Cutting feed" value={feedXy} onChange={(v) => { setFeedsTouched(true); setFeedXy(v); }} unit={feedUnit(units)} />
+              <DraftNumber label="Plunge feed" value={feedZ} onChange={(v) => { setFeedsTouched(true); setFeedZ(v); }} unit={feedUnit(units)} />
+            </div>
+          </DialogSection>
+        </div>
+        <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
+          <button
+            type="button"
+            onClick={close}
+            className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
+          >
+            Add operation
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}

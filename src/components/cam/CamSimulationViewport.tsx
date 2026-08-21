@@ -7,9 +7,14 @@ import type {
   Point3Dto,
   SolidSceneDto,
 } from '../../engine/types';
+import { modelBoundsOfBodies } from '../../cam/geometry';
+import { cancelCamPointPick, completeCamPointPick } from '../../cam/pointPick';
+import { useAppStore } from '../../store/appStore';
 
 interface Props {
-  setup: CamSetupDto;
+  /** Null before the first setup exists: the viewport then shows the modeled
+   *  parts in model coordinates, without stock/toolpath/WCS overlays. */
+  setup: CamSetupDto | null;
   program: CamProgramDto | null;
   simulation: CamSimulationResultDto | null;
   scene: SolidSceneDto;
@@ -38,6 +43,18 @@ interface ProjectedPoint {
 const MAX_TARGET_TRIANGLES = 30_000;
 const MAX_STOCK_TRIANGLES = 65_536;
 
+// Navigation gesture mapping mirrors the modeling viewport (see
+// src/components/viewport/Viewport.tsx): right-drag or Shift+swipe orbits,
+// middle-drag or a trackpad swipe pans, and a mouse notch / pinch zooms.
+const ORBIT_SPEED = 0.008;
+const MIN_PITCH = -1.45;
+const MAX_PITCH = 1.45;
+const MIN_ZOOM = 0.35;
+const MAX_ZOOM = 4;
+
+const clampPitch = (value: number) => Math.max(MIN_PITCH, Math.min(MAX_PITCH, value));
+const clampZoom = (value: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+
 /**
  * Cross-platform presentation for the headless Rust voxel simulator. Native
  * Bevy can consume the same triangle soup directly; this canvas keeps browser
@@ -52,15 +69,18 @@ export function CamSimulationViewport({
   error,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const dragRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' } | null>(null);
   const [yaw, setYaw] = useState(-0.72);
   const [pitch, setPitch] = useState(0.82);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
+  const pick = useAppStore((state) => state.camPointPick);
+  const [hoverPick, setHoverPick] = useState<number | null>(null);
 
   const targetTriangles = useMemo(
     () => buildTargetTriangles(scene, setup),
-    [scene, setup.body_ids, setup.wcs],
+    [scene, setup],
   );
   const stockTriangles = useMemo(
     () => buildStockTriangles(simulation),
@@ -70,6 +90,111 @@ export function CamSimulationViewport({
     () => buildToolpathSegments(program?.commands ?? []),
     [program],
   );
+
+  // Camera framing: the setup's stock envelope when one exists, otherwise the
+  // modeled parts' bounds in model coordinates.
+  const viewFrame = useMemo(() => {
+    if (setup) {
+      const { min, max } = setup.stock;
+      return {
+        center: {
+          x: (min.x + max.x) * 0.5,
+          y: (min.y + max.y) * 0.5,
+          z: (min.z + max.z) * 0.5,
+        },
+        extent: Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 1),
+      };
+    }
+    const bounds = modelBoundsOfBodies(
+      scene,
+      scene.bodies.map((body) => body.id),
+    );
+    if (!bounds) return { center: { x: 0, y: 0, z: 0 }, extent: 100 };
+    return {
+      center: {
+        x: (bounds.min.x + bounds.max.x) * 0.5,
+        y: (bounds.min.y + bounds.max.y) * 0.5,
+        z: (bounds.min.z + bounds.max.z) * 0.5,
+      },
+      extent: Math.max(
+        bounds.max.x - bounds.min.x,
+        bounds.max.y - bounds.min.y,
+        bounds.max.z - bounds.min.z,
+        1,
+      ),
+    };
+  }, [setup, scene]);
+
+  // Single projection shared by the draw pass and pointer hit-testing so a
+  // marker's on-screen position and its click target never drift apart.
+  const project = useMemo(() => {
+    const scale =
+      ((Math.min(canvasSize.width, canvasSize.height) * 0.68) / viewFrame.extent) * zoom;
+    return (point: Vec3): ProjectedPoint =>
+      projectPoint(
+        point,
+        viewFrame.center,
+        yaw,
+        pitch,
+        scale,
+        pan,
+        canvasSize.width,
+        canvasSize.height,
+      );
+  }, [canvasSize, viewFrame, yaw, pitch, zoom, pan]);
+
+  // Pick candidates arrive in model coordinates; the view draws setup
+  // coordinates when a setup exists.
+  const toView = (point: Point3Dto): Vec3 =>
+    setup ? modelToSetup(point, setup) : { x: point.x, y: point.y, z: point.z };
+
+  const pickMarkers = useMemo(
+    () =>
+      (pick?.candidates ?? []).map((candidate, index) => ({
+        position: toView(candidate.point),
+        label: candidate.label,
+        hovered: hoverPick === index,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pick, setup, hoverPick],
+  );
+
+  const pickCandidateAt = (clientX: number, clientY: number): number | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || !pick) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    let best: number | null = null;
+    let bestDistance = 16;
+    pick.candidates.forEach((candidate, index) => {
+      const projected = project(toView(candidate.point));
+      const distance = Math.hypot(projected.x - x, projected.y - y);
+      if (distance <= bestDistance) {
+        best = index;
+        bestDistance = distance;
+      }
+    });
+    return best;
+  };
+
+  // Escape cancels an active pick session.
+  useEffect(() => {
+    if (!pick) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelCamPointPick();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pick]);
+
+  // Clear any stale hover marker when a pick session ends.
+  useEffect(() => {
+    if (!pick) setHoverPick(null);
+  }, [pick]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -82,6 +207,103 @@ export function CamSimulationViewport({
     return () => observer.disconnect();
   }, []);
 
+  // Wheel navigation, same mapping as the modeling viewport:
+  //   ctrl+wheel  = trackpad pinch → zoom (macOS sets ctrlKey on pinch)
+  //   Shift+wheel = orbit (trackpad two-finger swipe)
+  //   plain wheel = pan on a trackpad swipe, zoom on a mouse notch
+  // Plain events are classified by heuristic: line/page deltaMode, horizontal
+  // deltas, non-integer or small deltas, and bursts all mean "trackpad".
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const isWindowsPlatform = /Windows/i.test(navigator.userAgent);
+    const TRACKPAD_PINCH_SENSITIVITY = 0.002;
+    const TRACKPAD_PINCH_ZOOM_IN_MULTIPLIER = 2;
+    const MAX_WHEEL_STEP_PX = 240;
+    const gesture = { kind: null as 'mouse' | 'trackpad' | null, lastT: 0, count: 0 };
+
+    // Logitech wheel-tilt is a discrete horizontal notch, not navigation.
+    const isDiscreteHorizontalWheel = (event: WheelEvent) =>
+      event.deltaY === 0 &&
+      event.deltaX !== 0 &&
+      !event.ctrlKey &&
+      (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+        (Number.isInteger(event.deltaX) && Math.abs(event.deltaX) >= 50));
+
+    const classify = (event: WheelEvent): 'pan' | 'zoom' => {
+      const now = performance.now();
+      const gap = now - gesture.lastT;
+      gesture.lastT = now;
+      if (gap > 350) {
+        gesture.kind = null;
+        gesture.count = 0;
+      }
+      gesture.count += 1;
+      if (event.deltaMode !== 0) {
+        gesture.kind = 'mouse';
+        return 'zoom';
+      }
+      if (gesture.kind === 'trackpad') return 'pan';
+      if (gesture.kind === 'mouse') {
+        if (gesture.count >= 3 && gap < 120) {
+          gesture.kind = 'trackpad';
+          return 'pan';
+        }
+        return 'zoom';
+      }
+      if (
+        event.deltaX !== 0 ||
+        !Number.isInteger(event.deltaY) ||
+        Math.abs(event.deltaY) < 50 ||
+        (gesture.count >= 3 && gap < 120)
+      ) {
+        gesture.kind = 'trackpad';
+        return 'pan';
+      }
+      if (Math.abs(event.deltaY) >= 100 && gap > 250) {
+        gesture.kind = 'mouse';
+        return 'zoom';
+      }
+      return 'pan';
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (isWindowsPlatform && isDiscreteHorizontalWheel(event)) return;
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+      const bounded = (value: number) =>
+        Number.isFinite(value)
+          ? Math.max(-MAX_WHEEL_STEP_PX, Math.min(MAX_WHEEL_STEP_PX, value * unit))
+          : 0;
+      const deltaX = bounded(event.deltaX);
+      const deltaY = bounded(event.deltaY);
+      if (deltaX === 0 && deltaY === 0) return;
+      if (event.shiftKey) {
+        // Shift+swipe orbits; deltas are negated (macOS natural scrolling) so
+        // the scene rotates with the fingers, matching the modeling viewport.
+        setYaw((value) => value - deltaX * ORBIT_SPEED);
+        setPitch((value) => clampPitch(value - deltaY * ORBIT_SPEED));
+        return;
+      }
+      if (event.ctrlKey) {
+        // Pinch zoom; zoom-in is twice as responsive as zoom-out.
+        const sensitivity =
+          TRACKPAD_PINCH_SENSITIVITY *
+          (deltaY < 0 ? TRACKPAD_PINCH_ZOOM_IN_MULTIPLIER : 1);
+        setZoom((value) => clampZoom(value * Math.exp(-deltaY * sensitivity)));
+        return;
+      }
+      if (classify(event) === 'zoom') {
+        setZoom((value) => clampZoom(value * Math.exp(-deltaY * 0.002))); // notch down = zoom out
+      } else {
+        // Natural scrolling: content tracks the fingers.
+        setPan((value) => ({ x: value.x - deltaX, y: value.y - deltaY }));
+      }
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -92,13 +314,14 @@ export function CamSimulationViewport({
       stockTriangles,
       toolpath,
       collisions: simulation?.collisions.map((collision) => collision.position) ?? [],
+      markers: pickMarkers,
+      project,
       yaw,
       pitch,
-      zoom,
       width: canvasSize.width,
       height: canvasSize.height,
     });
-  }, [canvasSize, pitch, setup, simulation?.collisions, stockTriangles, targetTriangles, toolpath, yaw, zoom]);
+  }, [canvasSize, pickMarkers, pitch, project, setup, simulation?.collisions, stockTriangles, targetTriangles, toolpath, yaw]);
 
   return (
     <div
@@ -107,20 +330,46 @@ export function CamSimulationViewport({
     >
       <canvas
         ref={canvasRef}
-        className="h-full w-full cursor-grab touch-none active:cursor-grabbing"
+        className={`h-full w-full touch-none ${
+          pick ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+        }`}
         aria-label="Interactive 3D CAM stock simulation"
+        onContextMenu={(event) => event.preventDefault()}
         onPointerDown={(event) => {
-          dragRef.current = { x: event.clientX, y: event.clientY };
+          // Point-picking session: left click chooses the nearest candidate.
+          if (pick && event.button === 0) {
+            const index = pickCandidateAt(event.clientX, event.clientY);
+            if (index !== null) completeCamPointPick(pick.candidates[index]);
+            return;
+          }
+          // Same button mapping as the modeling viewport: right = orbit,
+          // middle = pan, Shift+middle = orbit, left = no camera action.
+          if (event.button === 2) {
+            dragRef.current = { x: event.clientX, y: event.clientY, mode: 'orbit' };
+          } else if (event.button === 1) {
+            dragRef.current = { x: event.clientX, y: event.clientY, mode: event.shiftKey ? 'orbit' : 'pan' };
+          } else {
+            return;
+          }
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerMove={(event) => {
+          if (pick && !dragRef.current) {
+            setHoverPick(pickCandidateAt(event.clientX, event.clientY));
+            return;
+          }
           const previous = dragRef.current;
           if (!previous) return;
           const dx = event.clientX - previous.x;
           const dy = event.clientY - previous.y;
-          dragRef.current = { x: event.clientX, y: event.clientY };
-          setYaw((value) => value + dx * 0.008);
-          setPitch((value) => Math.max(-1.45, Math.min(1.45, value + dy * 0.008)));
+          dragRef.current = { ...previous, x: event.clientX, y: event.clientY };
+          if (previous.mode === 'orbit') {
+            setYaw((value) => value + dx * ORBIT_SPEED);
+            setPitch((value) => clampPitch(value + dy * ORBIT_SPEED));
+          } else {
+            // Grab feel: content follows the pointer.
+            setPan((value) => ({ x: value.x + dx, y: value.y + dy }));
+          }
         }}
         onPointerUp={(event) => {
           dragRef.current = null;
@@ -129,14 +378,10 @@ export function CamSimulationViewport({
         onPointerCancel={() => {
           dragRef.current = null;
         }}
-        onWheel={(event) => {
-          event.preventDefault();
-          setZoom((value) => Math.max(0.35, Math.min(4, value * Math.exp(-event.deltaY * 0.001))));
-        }}
       />
 
       <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-1.5 text-[9px] font-semibold uppercase tracking-wide">
-        <Badge label="3D voxel stock" tone="accent" />
+        {setup && <Badge label="3D voxel stock" tone="accent" />}
         {simulation && (
           <>
             <Badge
@@ -158,11 +403,18 @@ export function CamSimulationViewport({
         )}
       </div>
 
+      {pick && (
+        <div className="pointer-events-none absolute left-1/2 top-3 max-w-[80%] -translate-x-1/2 rounded border border-accent/50 bg-header/90 px-3 py-1.5 text-center text-[11px] text-accent shadow-xl backdrop-blur-sm">
+          {pick.prompt} · click a highlighted point · Esc to cancel
+        </div>
+      )}
+
       <div className="pointer-events-none absolute bottom-3 right-3 rounded border border-edge bg-header/85 px-2 py-1 text-[9px] text-mute backdrop-blur-sm">
-        Drag to orbit · wheel to zoom · setup coordinates
+        Right-drag / Shift+swipe orbit · middle-drag / swipe pan · wheel / pinch zoom ·{' '}
+        {setup ? 'setup coordinates' : 'model coordinates · no setup yet'}
       </div>
 
-      {(busy || error || !simulation) && (
+      {(busy || error || (!simulation && setup)) && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="rounded border border-edge bg-header/90 px-4 py-2 text-center text-[11px] text-mute shadow-xl backdrop-blur-sm">
             {busy ? 'Simulating volumetric stock…' : error ?? 'Run 3D simulation to generate remaining stock.'}
@@ -201,21 +453,21 @@ function buildStockTriangles(simulation: CamSimulationResultDto | null): Triangl
   return triangles;
 }
 
-function buildTargetTriangles(scene: SolidSceneDto, setup: CamSetupDto): Triangle[] {
-  const wanted = new Set(setup.body_ids);
+function buildTargetTriangles(scene: SolidSceneDto, setup: CamSetupDto | null): Triangle[] {
+  // Without a setup every modeled body is shown as-is in model coordinates;
+  // with a setup only its bodies are shown, transformed into setup space.
+  const wanted = setup ? new Set(setup.body_ids) : null;
   const candidates: Triangle[] = [];
   for (const body of scene.bodies) {
-    if (!wanted.has(body.id)) continue;
+    if (wanted && !wanted.has(body.id)) continue;
     const { positions, indices } = body.mesh;
     for (let index = 0; index + 2 < indices.length; index += 3) {
       const points = [indices[index], indices[index + 1], indices[index + 2]].map((vertex) => {
         const offset = vertex * 3;
-        return modelToSetup(
-          { x: positions[offset], y: positions[offset + 1], z: positions[offset + 2] },
-          setup,
-        );
+        const point = { x: positions[offset], y: positions[offset + 1], z: positions[offset + 2] };
+        return setup ? modelToSetup(point, setup) : point;
       }) as [Vec3, Vec3, Vec3];
-      candidates.push({ points, color: [71, 157, 214], alpha: 0.22 });
+      candidates.push({ points, color: [71, 157, 214], alpha: setup ? 0.22 : 0.55 });
     }
   }
   if (candidates.length <= MAX_TARGET_TRIANGLES) return candidates;
@@ -286,16 +538,24 @@ function modelToSetup(point: Point3Dto, setup: CamSetupDto): Vec3 {
   };
 }
 
+interface PickMarker {
+  position: Vec3;
+  label: string;
+  hovered: boolean;
+}
+
 interface DrawInput {
   canvas: HTMLCanvasElement;
-  setup: CamSetupDto;
+  setup: CamSetupDto | null;
   targetTriangles: Triangle[];
   stockTriangles: Triangle[];
   toolpath: ToolpathSegment[];
   collisions: Point3Dto[];
+  markers: PickMarker[];
+  project: (point: Vec3) => ProjectedPoint;
+  /** Camera angles, used only to rotate shading normals. */
   yaw: number;
   pitch: number;
-  zoom: number;
   width: number;
   height: number;
 }
@@ -308,9 +568,10 @@ function drawScene(input: DrawInput) {
     stockTriangles,
     toolpath,
     collisions,
+    markers,
+    project,
     yaw,
     pitch,
-    zoom,
     width,
     height,
   } = input;
@@ -321,20 +582,6 @@ function drawScene(input: DrawInput) {
   if (!context) return;
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, width, height);
-
-  const center = {
-    x: (setup.stock.min.x + setup.stock.max.x) * 0.5,
-    y: (setup.stock.min.y + setup.stock.max.y) * 0.5,
-    z: (setup.stock.min.z + setup.stock.max.z) * 0.5,
-  };
-  const extent = Math.max(
-    setup.stock.max.x - setup.stock.min.x,
-    setup.stock.max.y - setup.stock.min.y,
-    setup.stock.max.z - setup.stock.min.z,
-    1,
-  );
-  const scale = Math.min(width, height) * 0.68 / extent * zoom;
-  const project = (point: Vec3): ProjectedPoint => projectPoint(point, center, yaw, pitch, scale, width, height);
 
   const projected = [...targetTriangles, ...stockTriangles].map((triangle) => {
     const points = triangle.points.map(project) as [ProjectedPoint, ProjectedPoint, ProjectedPoint];
@@ -381,7 +628,26 @@ function drawScene(input: DrawInput) {
     context.stroke();
   }
 
-  drawAxes(context, project, setup);
+  // Pick candidates render last so they stay on top of part/stock geometry.
+  for (const marker of markers) {
+    const point = project(marker.position);
+    context.beginPath();
+    context.arc(point.x, point.y, marker.hovered ? 6 : 4, 0, Math.PI * 2);
+    context.fillStyle = marker.hovered
+      ? 'rgba(87, 214, 163, 0.95)'
+      : 'rgba(102, 185, 239, 0.9)';
+    context.fill();
+    context.strokeStyle = 'rgba(16, 21, 26, 0.9)';
+    context.lineWidth = 1.5;
+    context.stroke();
+    if (marker.hovered) {
+      context.font = '10px ui-monospace, monospace';
+      context.fillStyle = 'rgba(226, 232, 240, 0.95)';
+      context.fillText(marker.label, point.x + 9, point.y - 7);
+    }
+  }
+
+  if (setup) drawAxes(context, project, setup);
 }
 
 function projectPoint(
@@ -390,6 +656,7 @@ function projectPoint(
   yaw: number,
   pitch: number,
   scale: number,
+  pan: { x: number; y: number },
   width: number,
   height: number,
 ): ProjectedPoint {
@@ -399,8 +666,8 @@ function projectPoint(
     pitch,
   );
   return {
-    x: width * 0.5 + rotated.x * scale,
-    y: height * 0.52 - rotated.y * scale,
+    x: width * 0.5 + pan.x + rotated.x * scale,
+    y: height * 0.52 + pan.y - rotated.y * scale,
     depth: rotated.z,
   };
 }

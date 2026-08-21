@@ -2194,10 +2194,90 @@ export interface CamWorkCoordinateSystemDto {
 
 export type CamWorkOffset = 'g54' | 'g55' | 'g56' | 'g57' | 'g58' | 'g59';
 export type CamPostDialect = 'grbl' | 'linux_cnc' | 'fanuc' | 'siemens828d';
-export type CamToolKind = 'flat_end_mill' | 'ball_end_mill' | 'drill' | 'chamfer_mill';
+export type CamToolKind =
+  | 'flat_end_mill'
+  | 'ball_end_mill'
+  | 'drill'
+  | 'chamfer_mill'
+  | 'tap'
+  | 'reamer'
+  | 'boring_bar';
+/** Hole-machining cycle family of a drill operation. The planner expands
+ *  every cycle to explicit longhand motion, so posted output never depends on
+ *  a control's canned-cycle dialect. */
+export type CamDrillCycle =
+  | 'drill'
+  | 'chip_breaking'
+  | 'deep_hole'
+  | 'tapping_right'
+  | 'tapping_left'
+  | 'reaming'
+  | 'boring';
 export type CamCoolantMode = 'off' | 'mist' | 'flood';
 export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
 export type CamContourCompensation = 'on' | 'inside' | 'outside';
+/** Operator-facing units. Persisted geometry and planned motion stay mm. */
+export type CamUnits = 'millimeters' | 'inches';
+export type CamBoxAnchor = 'min' | 'center' | 'max';
+
+/** How the operator picked the WCS origin; the resolved frame is in `wcs`. */
+export type CamWcsOriginSpec =
+  | { mode: 'explicit' }
+  | { mode: 'stock_box_point'; x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor }
+  | { mode: 'model_box_point'; x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor }
+  | { mode: 'sketch_point'; sketch: string; entity_id: number };
+
+/** Stock geometry family chosen for a setup. */
+export type CamStockShape = 'box' | 'cylinder' | 'hex' | 'model_body';
+
+/** A bounding-box face of the model, used to park the model against one
+ *  stock face instead of centering it. */
+export type CamStockFace = 'x_min' | 'x_max' | 'y_min' | 'y_max' | 'z_min' | 'z_max';
+
+/** How a fixed-size stock holds the model. */
+export interface CamStockPlacementDto {
+  center: boolean;
+  face: CamStockFace | null;
+  offset: number;
+}
+
+/** Per-face allowances when stock grows out of the model bounding box.
+ *  Cylinder/hex shapes consume x_min..y_max as the radial allowance and
+ *  z_min/z_max as the axial allowances. */
+export interface CamStockOffsetsDto {
+  x_min: number;
+  x_max: number;
+  y_min: number;
+  y_max: number;
+  z_min: number;
+  z_max: number;
+}
+
+/** How the operator defines the stock. The host resolves it to concrete
+ *  geometry; the resolved envelope and shape persist on the setup. */
+export type CamStockSpecDto =
+  | {
+      mode: 'fixed';
+      shape: CamStockShape;
+      /** Box: full XYZ size. Cylinder: X = diameter, Z = height. Hex: X =
+       *  across-flats, Z = height. */
+      size: Point3Dto;
+      placement: CamStockPlacementDto;
+    }
+  | { mode: 'from_model'; shape: CamStockShape; offsets: CamStockOffsetsDto }
+  | { mode: 'rest_from_setup'; setup_id: number }
+  | { mode: 'model_body'; body_id: number }
+  /** Legacy documents predate the spec; their resolved box is authoritative. */
+  | { mode: 'legacy_box' };
+
+/** Resolved stock geometry in setup coordinates. The Z extent always comes
+ *  from the setup's `stock` envelope. */
+export type CamResolvedStockDto =
+  | { shape: 'box' }
+  | { shape: 'cylinder'; center: CamPoint2Dto; radius: number }
+  | { shape: 'hex'; center: CamPoint2Dto; across_flats: number }
+  | { shape: 'rest'; source_setup_id: number }
+  | { shape: 'model_body'; body_id: number };
 
 export type Siemens828dAtcStyle = 'double_arm' | 'umbrella' | 'carousel_chain' | 'other';
 export type Siemens828dToolChangePositioning =
@@ -2226,15 +2306,33 @@ export interface CamPostConfigDto {
   siemens_828d: Siemens828dPostConfigDto | null;
 }
 
+/** Neutral post configuration for fresh documents and export-dialog prefill. */
+export const DEFAULT_CAM_POST_CONFIG: CamPostConfigDto = {
+  dialect: 'grbl',
+  program_number: null,
+  sequence_numbers: false,
+  siemens_828d: null,
+};
+
 export interface CamToolDto {
+  /** Internal identity; operations reference tools by id, never by number/name. */
   id: number;
-  number: number;
+  /** Machine-facing tool number. Null is allowed: number-based posts
+   *  (Fanuc/GRBL/LinuxCNC style) fail closed without one, while the Siemens
+   *  828D post prefers calling by name. */
+  number: number | null;
+  /** Operator-facing name; also the tool-call identifier on name-capable controls. */
   name: string;
   kind: CamToolKind;
   diameter: number;
   flute_length: number;
   overall_length: number;
   center_cutting: boolean;
+  flute_count: number;
+  /** Chamfer mills only; chamfer operations currently require 90 degrees. */
+  point_angle_degrees: number | null;
+  /** Library cutting defaults copied into new operations at creation. */
+  cutting: CamCuttingParametersDto;
 }
 
 export interface CamCuttingParametersDto {
@@ -2249,6 +2347,10 @@ interface CamOperationBase {
   name: string;
   enabled: boolean;
   tool_id: number;
+  /** Safe travel plane above the stock (setup Z, mm). */
+  clearance_z: number;
+  /** Approach / peck-return plane, between the cut top and clearance. */
+  retract_z: number;
   cutting: CamCuttingParametersDto;
 }
 
@@ -2274,22 +2376,54 @@ export type CamOperationDto =
       points: CamPoint2Dto[];
       top_z: number;
       bottom_z: number;
-      retract_z: number;
+      /** Hole-machining cycle family; defaults to plain 'drill'. */
+      cycle: CamDrillCycle;
       peck_depth: number | null;
+      /** Chip-breaking partial retract (mm); < peck_depth. */
+      peck_retract: number | null;
+      /** Tapping pitch (mm/rev); tap feed = pitch x rpm. */
+      thread_pitch: number | null;
+      /** Reaming/boring feed-out (mm/min); defaults to the plunge feed. */
+      feed_out: number | null;
       dwell_seconds: number;
+    })
+  | (CamOperationBase & {
+      kind: 'pocket2d';
+      outline: CamPoint2Dto[];
+      top_z: number;
+      bottom_z: number;
+      step_down: number;
+      step_over: number;
+    })
+  | (CamOperationBase & {
+      kind: 'chamfer2d';
+      path: CamPoint2Dto[];
+      /** Z of the sharp top edge being chamfered. */
+      top_z: number;
+      chamfer_width: number;
+      tip_offset: number;
+      /** Which side of the path the material wall is on (never 'on'). */
+      wall_side: CamContourCompensation;
     });
 
 export interface CamSetupDto {
   id: number;
   name: string;
   wcs: CamWorkCoordinateSystemDto;
+  /** WCS origin provenance for re-resolution; planners use `wcs`. */
+  wcs_origin: CamWcsOriginSpec;
+  /** First work offset this setup posts with. */
   work_offset: CamWorkOffset;
+  /** Consecutive offsets the program repeats with (1 = single part). */
+  work_offset_count: number;
+  /** Operator's stock definition, kept for re-editing. */
+  stock_spec: CamStockSpecDto;
+  /** Resolved stock shape consumed by planner/simulator/viewport. */
+  resolved_stock: CamResolvedStockDto;
   stock: CamStockBoxDto;
+  /** Operator-entered model-space stock box kept for re-editing. */
+  stock_model_box: CamStockBoxDto | null;
   body_ids: number[];
-  clearance_z: number;
-  retract_z: number;
-  rapid_feed: number;
-  post: CamPostConfigDto;
   operations: CamOperationDto[];
 }
 
@@ -2297,6 +2431,9 @@ export interface CamDocumentDto {
   setups: CamSetupDto[];
   active_setup_id: number | null;
   tools: CamToolDto[];
+  units: CamUnits;
+  /** Post settings remembered from the last export; pre-fill only. */
+  post_defaults: CamPostConfigDto;
   next_setup_id: number;
   next_operation_id: number;
   next_tool_id: number;
@@ -2304,8 +2441,9 @@ export interface CamDocumentDto {
 
 export type CamCommandDto =
   | { kind: 'program_start'; name: string; work_offset: CamWorkOffset }
+  | { kind: 'work_offset'; offset: CamWorkOffset }
   | { kind: 'section_start'; operation_id: number; name: string; tool_id: number }
-  | { kind: 'tool_change'; tool_id: number; tool_number: number; tool_name: string }
+  | { kind: 'tool_change'; tool_id: number; tool_number: number | null; tool_name: string }
   | { kind: 'spindle'; direction: CamSpindleDirection; rpm: number }
   | { kind: 'coolant'; mode: CamCoolantMode }
   | { kind: 'rapid'; to: Point3Dto }
@@ -2327,12 +2465,15 @@ export interface CamProgramDto {
   name: string;
   commands: CamCommandDto[];
   stats: CamProgramStatsDto;
+  /** Work offsets the program repeats with, in posted order. */
+  work_offsets: CamWorkOffset[];
   warnings: string[];
 }
 
 export interface CamPostRequestDto {
   setup_id: number;
-  dialect?: CamPostDialect | null;
+  /** Post configuration chosen at export time; defaults from the document. */
+  post?: CamPostConfigDto | null;
   program_name?: string | null;
 }
 
@@ -2367,10 +2508,18 @@ export interface NbPostAnalysisDto {
   warnings: string[];
 }
 
+/** Closed triangle mesh of a modeled body used as stock, model coords (mm). */
+export interface CamStockMeshDto {
+  positions: number[];
+  indices: number[];
+}
+
 export interface CamSimulationRequestDto {
   setup_id: number;
   voxel_size?: number | null;
   max_voxels?: number | null;
+  /** Required when the setup's stock is a modeled body. */
+  stock_mesh?: CamStockMeshDto | null;
 }
 
 export type CamSimulationStepKind = 'rapid' | 'linear' | 'circular' | 'dwell';
