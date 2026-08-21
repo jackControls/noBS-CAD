@@ -144,6 +144,18 @@ body {
   opacity: 0 !important;
 }
 
+/* The native renderer becomes ready asynchronously after React mounts. Keep
+ * this transition in CSS so the GTK/WebKitGTK path reveals the DrawingArea
+ * immediately when the bridge marks Bevy active, without requiring a React
+ * render that may never otherwise occur. */
+.native-viewport-surface {
+  background: linear-gradient(180deg, var(--vp-top) 0%, var(--vp-bottom) 100%);
+}
+
+:root[data-native-viewport='bevy'] .native-viewport-surface {
+  background: transparent;
+}
+
 /*
  * noBS CAD feature panels use a continuous iris perimeter and a quiet
  * directional header wash. This is the shared visual signature for browser

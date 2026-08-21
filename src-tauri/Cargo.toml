@@ -43,7 +43,7 @@ nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
 
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 bevy = { version = "0.19.0", default-features = false, features = [
   "async_executor",
   "bevy_asset",
@@ -75,6 +75,18 @@ bevy_ecs = "0.19.0"
 bevy_gizmos = "0.19.0"
 bevy_reflect = "0.19.0"
 raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# GTK/WebKitGTK remain the React/Tauri shell. An X11 child DrawingArea beneath
+# the transparent webview is the native wgpu surface, matching the opaque-window
+# architecture used on macOS and Windows without a second top-level window.
+# Ubuntu's Wayland desktop reaches this child-window path through XWayland.
+gdk = "0.18.2"
+gdkx11-sys = "0.18.2"
+glib = "0.18.5"
+gtk = "0.18.2"
+webkit2gtk = "2.0.2"
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }

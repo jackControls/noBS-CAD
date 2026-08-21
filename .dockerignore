@@ -1,0 +1,9 @@
+.git
+node_modules
+dist
+target
+src-tauri/target
+vcpkg_installed
+release
+*.app
+*.dmg

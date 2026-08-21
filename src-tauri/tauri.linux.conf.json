@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "resources": {
+      "../LICENSE": "licenses/noBS-CAD-LICENSE.txt",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../node_modules/opencascade.js/LICENSE": "licenses/OPENCASCADE_JS_LICENSE.txt",
+      "./linux-licenses/LGPL-2.1.txt": "licenses/OCCT-LGPL-2.1.txt",
+      "./linux-licenses/OCCT-copyright.txt": "licenses/OCCT-copyright.txt"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "depends": [
+          "libayatana-appindicator3-1",
+          "libgtk-3-0t64",
+          "libocct-data-exchange-7.9",
+          "librsvg2-2",
+          "libudev1",
+          "libvulkan1",
+          "libwebkit2gtk-4.1-0",
+          "xwayland"
+        ]
+      }
+    }
+  }
+}

@@ -6,16 +6,26 @@
 //! standard menu and replace only those two entries with application commands
 //! that the frontend routes through the same history controller as shortcuts.
 
+#[cfg(target_os = "macos")]
 use std::io;
 use std::sync::Mutex;
 
-use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, MenuEvent, MenuItemKind};
+use tauri::menu::MenuItem;
+#[cfg(target_os = "macos")]
+use tauri::{AppHandle, Emitter, Manager};
+use tauri::Wry;
 
+#[cfg(target_os = "macos")]
 pub const EDIT_COMMAND_EVENT: &str = "native-edit-command";
+#[cfg(target_os = "macos")]
 pub const QUIT_COMMAND_EVENT: &str = "native-quit-request";
+#[cfg(target_os = "macos")]
 const UNDO_ID: &str = "nbcad-edit-undo";
+#[cfg(target_os = "macos")]
 const REDO_ID: &str = "nbcad-edit-redo";
+#[cfg(target_os = "macos")]
 const QUIT_ID: &str = "nbcad-app-quit";
 
 #[derive(Default)]
@@ -24,6 +34,7 @@ pub struct NativeEditMenuState {
 }
 
 impl NativeEditMenuState {
+    #[cfg(target_os = "macos")]
     fn install(&self, undo: MenuItem<Wry>, redo: MenuItem<Wry>) {
         if let Ok(mut items) = self.items.lock() {
             *items = Some((undo, redo));

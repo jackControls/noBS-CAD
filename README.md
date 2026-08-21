@@ -4,8 +4,8 @@
 fully free, and fully open source. It is designed first for mechanical parts,
 around the familiar sketch-and-extrude workflow.
 
-> noBS CAD is currently pre-alpha. Download the current macOS and Windows
-> desktop snapshots from [GitHub Releases](https://github.com/jackControls/noBS-CAD/releases).
+> noBS CAD is currently pre-alpha. Download the current macOS, Windows, and
+> Ubuntu desktop snapshots from [GitHub Releases](https://github.com/jackControls/noBS-CAD/releases).
 > These builds are for testing and feedback, not production-critical work.
 
 ![testPiece modeled in noBS CAD](docs/assets/testPiece.png)
@@ -45,7 +45,7 @@ report where it breaks down.
 The current application includes:
 
 - a native Bevy/wgpu desktop viewport beneath the React interface, packaged
-  with Tauri for Apple-silicon macOS and x64 Windows;
+  with Tauri for Apple-silicon macOS, x64 Windows, and x64 Ubuntu 26.04 LTS;
 - parametric sketches with dimensions, geometric constraints, snapping,
   construction geometry, patterns, trim/extend, and fillet/chamfer tools;
 - extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
@@ -165,7 +165,7 @@ Near-term engineering priorities:
 2. Harden closed-loop and large-assembly solving, connector repair, collision
    workflows, and component editing.
 3. Keep improving selection, manipulators, navigation, responsive desktop UI,
-   and accessibility on both macOS and Windows.
+   and accessibility across macOS, Windows, and Ubuntu.
 4. Improve interactive preview, picking, recompute, and large-model rendering
    performance.
 5. Turn reported failures into focused cross-platform regression tests.
@@ -180,6 +180,34 @@ carefully: start with research and testable pieces, listen to machinists, and
 earn trust one operation at a time. We would love to hear from CAM experts!
 
 ## Build locally
+
+### Ubuntu 26.04 LTS
+
+Ubuntu 26.04 LTS is the official Linux desktop baseline. The app uses the
+native Bevy/wgpu Vulkan viewport inside the Tauri WebKitGTK window. It runs on
+X11 directly and on Ubuntu's standard Wayland desktop through XWayland. The
+release job produces an Ubuntu `.deb` and a portable AppImage, then
+launch-tests both display routes.
+
+The committed container is the simplest reproducible build environment:
+
+```sh
+docker build -f scripts/docker/ubuntu-26.04.Dockerfile -t nbcad-ubuntu-26.04 .
+docker run --rm -v "$PWD:/workspace" -w /workspace nbcad-ubuntu-26.04 \
+  sh -lc 'npm ci && cargo install wasm-pack --version 0.13.1 --locked && npm run bundle:linux'
+```
+
+On a native Ubuntu 26.04 development system with the documented GTK, Vulkan,
+and OCCT packages already installed:
+
+```sh
+npm ci
+cargo install wasm-pack --version 0.13.1 --locked
+npm run bundle:linux
+```
+
+See [Ubuntu 26.04 packaging](docs/LINUX_PACKAGING.md) for dependencies,
+artifacts, X11/XWayland verification, and 3D-input permissions.
 
 ### Windows x64 portable build
 
@@ -224,8 +252,8 @@ src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
 
 Development packages intentionally retain Rust symbols for crash diagnosis.
 The desktop packaging workflow treats a `v*` Git tag as the production
-boundary and sets `CARGO_PROFILE_RELEASE_STRIP=symbols` for both macOS and
-Windows. To reproduce a stripped production package locally, set that variable
+boundary and sets `CARGO_PROFILE_RELEASE_STRIP=symbols` for macOS, Windows,
+and Linux. To reproduce a stripped production package locally, set that variable
 before running the platform bundle command:
 
 ```sh

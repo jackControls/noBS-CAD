@@ -45,6 +45,7 @@
 | Doc | Notes |
 |-----|-------|
 | [OCCT_PACKAGING.md](OCCT_PACKAGING.md) | Native OCCT |
+| [LINUX_PACKAGING.md](LINUX_PACKAGING.md) | Ubuntu 26.04 DEB/AppImage and X11/XWayland verification |
 | [WINDOWS_PACKAGING.md](WINDOWS_PACKAGING.md) | Portable ZIP |
 | [WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md](WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md) | Windows Bevy/WebView2 field-debugging runbook |
 | [ICON_PROVENANCE.md](ICON_PROVENANCE.md) | Icons |

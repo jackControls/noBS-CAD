@@ -64,6 +64,8 @@ fn main() {
         .join(&target_triplet);
     let platform_roots = if target_os == "windows" {
         vec![project_vcpkg]
+    } else if target_os == "linux" {
+        vec![PathBuf::from("/usr"), PathBuf::from("/opt/opencascade")]
     } else {
         vec![
             PathBuf::from("/opt/homebrew/opt/opencascade"),
@@ -89,6 +91,8 @@ fn main() {
         [
             root.join("lib"),
             root.join("lib64"),
+            root.join("lib/x86_64-linux-gnu"),
+            root.join("lib/aarch64-linux-gnu"),
             root.join("win64/vc17/lib"),
             root.join("win64/vc16/lib"),
             root.join("win64/vc15/lib"),
@@ -153,6 +157,9 @@ fn main() {
     if target_os == "macos" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+    } else if target_os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/nbcad");
     }
 
     assert!(Path::new("include/shim.hpp").exists());

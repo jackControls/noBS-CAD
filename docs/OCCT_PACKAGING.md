@@ -1,6 +1,7 @@
 # OCCT Packaging and Browser/WASM Strategy
 
-Status: implemented for the current macOS, Windows x64, and browser baseline.
+Status: implemented for the current macOS, Windows x64, Ubuntu 26.04 x64, and
+browser baseline.
 
 ## 1. Ownership boundary
 
@@ -174,7 +175,25 @@ SHA-256 file. Documentation-only pull requests skip both expensive runners.
 See [Windows portable packaging](WINDOWS_PACKAGING.md) for exact Windows setup
 and runtime requirements.
 
-## 5. Browser/WASM development
+## 5. Reproducible Ubuntu 26.04 packages
+
+Ubuntu 26.04 LTS is the official Linux baseline. The package uses Ubuntu's
+OCCT 7.9 runtime, GTK 3/WebKitGTK 4.1 shell, and a Vulkan Bevy viewport embedded
+in an X11 GTK child drawing surface. Native X11 and Wayland desktops through
+XWayland share the same raw-window-handle path and are both exercised by the
+packaged-application launch probe.
+
+Use the supported entry point:
+
+```sh
+npm run bundle:linux
+```
+
+It creates and audits a `.deb`, an AppImage, their SHA-256 files, and the
+required project/OCCT license notices. See [Ubuntu 26.04 packaging](LINUX_PACKAGING.md)
+for the exact SDK, runtime requirements, and verification commands.
+
+## 6. Browser/WASM development
 
 The browser host combines two WASM modules:
 
@@ -208,7 +227,7 @@ contains only the symbols reached by `occtBrowser.ts`, then lock it by content
 digest and run the native/browser conformance suite. Threaded OpenCascade.js is
 deferred until hosting provides COOP/COEP cross-origin isolation.
 
-## 6. Version and CI policy
+## 7. Version and CI policy
 
 - Local development: Homebrew OCCT 7.9.x is supported.
 - macOS CI currently installs the Homebrew OCCT formula, requires it to resolve
@@ -219,6 +238,9 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
   installed as the dynamic `x64-windows` triplet. Preserve vcpkg binary
   packages in an ABI-keyed CI cache; a cache miss must rebuild from the pinned
   sources.
+- Linux CI: build on `ubuntu-26.04`, consume Ubuntu's OCCT 7.9 packages, create
+  both DEB and AppImage artifacts, and verify Vulkan viewport startup under
+  headless X11 and Weston/XWayland sessions.
 - Browser: keep the exact OpenCascade.js package version; upgrades require
   native/browser conformance fixtures and a checked bundle-size report.
 - The lockfile is committed with the exact browser-kernel package resolution.

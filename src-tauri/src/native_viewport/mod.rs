@@ -10,12 +10,12 @@
 //! OCCT tessellation is cloned from `AppState` instead of being serialized
 //! through JavaScript.
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod platform;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
 #[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
 ))]
 pub mod ui_lab;
@@ -460,18 +460,18 @@ pub(crate) struct ViewportModel {
 }
 
 pub struct NativeViewport {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     inner: platform::PlatformNativeViewport,
 }
 
 impl NativeViewport {
     pub fn install(app: &mut App) -> Result<Self, String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             platform::PlatformNativeViewport::install(app).map(|inner| Self { inner })
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = app;
             Ok(Self {})
@@ -479,12 +479,12 @@ impl NativeViewport {
     }
 
     pub fn set_layout(&self, app: &AppHandle, layout: ViewportLayout) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.set_layout(app, layout)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = (app, layout);
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -492,12 +492,12 @@ impl NativeViewport {
     }
 
     pub fn set_suspended(&self, app: &AppHandle, suspended: bool) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.set_suspended(app, suspended)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = (app, suspended);
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -505,12 +505,12 @@ impl NativeViewport {
     }
 
     pub(crate) fn sync_model(&self, model: ViewportModel) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.sync_model(model)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = model;
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -518,12 +518,12 @@ impl NativeViewport {
     }
 
     pub(crate) fn drop_model_session(&self, session_id: String) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.drop_model_session(session_id)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = session_id;
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -531,12 +531,12 @@ impl NativeViewport {
     }
 
     pub(crate) fn rebind_model_session(&self, from: String, to: String) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.rebind_model_session(from, to)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = (from, to);
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -544,12 +544,12 @@ impl NativeViewport {
     }
 
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.set_camera(camera)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = camera;
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -557,12 +557,12 @@ impl NativeViewport {
     }
 
     pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.set_preview(preview)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = preview;
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -570,12 +570,12 @@ impl NativeViewport {
     }
 
     pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.set_presentation(presentation)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = presentation;
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -589,12 +589,12 @@ impl NativeViewport {
         camera: Option<ViewportCamera>,
         logical_size: Option<(f32, f32)>,
     ) -> Result<Option<NativePick>, String> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.pick(x, y, camera, logical_size)
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = (x, y, camera, logical_size);
             Err("the embedded native viewport is unavailable on this platform".to_string())
@@ -602,12 +602,12 @@ impl NativeViewport {
     }
 
     pub fn metrics(&self) -> NativeViewportMetrics {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             self.inner.metrics()
         }
 
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             NativeViewportMetrics {
                 backend: "unavailable".to_string(),

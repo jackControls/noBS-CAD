@@ -11,6 +11,10 @@ use bevy::{
         WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
     },
 };
+#[cfg(target_os = "linux")]
+use bevy::render::settings::{
+    RenderCreation, WgpuFeatures, WgpuSettings, WgpuSettingsPriority,
+};
 use nbcad_core::{BodyAppearance, PlaneBasis};
 use nbcad_sketch::{BodyPoseDto, EntityDto, InstanceBodyPoseDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{
@@ -27,13 +31,16 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 #[cfg(target_os = "macos")]
 use objc2_quartz_core::{kCAFillRuleEvenOdd, CAShapeLayer};
 #[cfg(target_os = "macos")]
-use raw_window_handle::AppKitWindowHandle;
-#[cfg(target_os = "windows")]
-use raw_window_handle::Win32WindowHandle;
+use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle};
 use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle, WindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle,
 };
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "linux")]
+use raw_window_handle::{XlibDisplayHandle, XlibWindowHandle};
+#[cfg(target_os = "windows")]
+use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::ptr::NonNull;
 use std::{
     any::Any,
@@ -82,14 +89,21 @@ use windows_sys::Win32::{
         },
     },
 };
+#[cfg(target_os = "linux")]
+use {
+    glib::{prelude::*, translate::from_glib_borrow},
+    gtk::prelude::*,
+    webkit2gtk::WebViewExt,
+};
 
 use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets};
 use super::{
     NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
-    ViewportLayout, ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette,
-    ViewportLinePattern, ViewportPresentation, ViewportPreview, ViewportRect, ViewportSnapKind,
-    ViewportSnapMarker,
+    ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel, ViewportOriginPlane,
+    ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind, ViewportSnapMarker,
 };
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+use super::ViewportRect;
 use crate::state::BOOTSTRAP_SESSION_ID;
 
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
@@ -113,6 +127,9 @@ const SNAP_MARKER_HALF_SIZE_PX: f32 = 6.0;
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
 #[cfg(target_os = "windows")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu DX12-Vulkan / embedded HWND";
+#[cfg(target_os = "linux")]
+const NATIVE_BACKEND: &str =
+    "Bevy 0.19 / wgpu Vulkan / embedded GTK X11-XWayland DrawingArea";
 
 #[derive(Default)]
 struct NativePointers {
@@ -125,6 +142,7 @@ struct NativePointers {
 struct MetricsState {
     ready: bool,
     startup_error: Option<String>,
+    display_backend: String,
     ci_probe_written: bool,
     probe_count: u64,
     logical_width: f64,
@@ -269,8 +287,11 @@ impl PlatformNativeViewport {
                             )
                         })
                 };
+                #[cfg(target_os = "linux")]
+                let result =
+                    unsafe { install_native_views(platform.inner(), install_pointers.clone()) };
 
-                let (view_pointer, scale_factor) = match result {
+                let (view_handle, scale_factor) = match result {
                     Ok(value) => value,
                     Err(error) => {
                         record_startup_failure(
@@ -280,13 +301,14 @@ impl PlatformNativeViewport {
                         return;
                     }
                 };
+                let display_backend = view_handle.display_backend_name().to_string();
 
                 // Renderer initialization can panic inside a platform backend before
                 // Tauri has a chance to surface an IPC error. Keep the React shell
                 // alive and expose the real cause through metrics/CI instead of
                 // silently leaving an empty viewport.
                 let initialized = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    let bevy_app = build_bevy_app(view_pointer, scale_factor as f32)?;
+                    let bevy_app = build_bevy_app(view_handle, scale_factor as f32)?;
                     let mut render_runtime = Box::new(MainThreadRenderRuntime {
                         app: bevy_app,
                         model: ViewportModel {
@@ -338,6 +360,7 @@ impl PlatformNativeViewport {
                 if let Ok(mut current) = install_metrics.lock() {
                     current.ready = true;
                     current.scale_factor = scale_factor;
+                    current.display_backend = display_backend;
                 }
                 eprintln!(
                     "native Bevy viewport installed ({NATIVE_BACKEND}, {scale_factor:.2}x scale)"
@@ -611,6 +634,7 @@ fn write_ci_probe(metrics: &MetricsState, status: &str) -> Result<(), String> {
     let payload = serde_json::json!({
         "status": status,
         "backend": NATIVE_BACKEND,
+        "displayBackend": metrics.display_backend,
         "error": metrics.startup_error,
         "logicalWidth": metrics.logical_width,
         "logicalHeight": metrics.logical_height,
@@ -666,7 +690,7 @@ unsafe fn install_native_views(
     webview_pointer: *mut c_void,
     window_pointer: *mut c_void,
     pointers: Arc<NativePointers>,
-) -> Result<(usize, f64), String> {
+) -> Result<(NativeViewHandle, f64), String> {
     if webview_pointer.is_null() || window_pointer.is_null() {
         return Err("Tauri returned a null AppKit handle".to_string());
     }
@@ -700,7 +724,10 @@ unsafe fn install_native_views(
         .window
         .store(window_pointer as usize, Ordering::Release);
 
-    Ok((view_pointer, ns_window.backingScaleFactor()))
+    Ok((
+        NativeViewHandle::appkit(view_pointer),
+        ns_window.backingScaleFactor(),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -819,12 +846,7 @@ unsafe fn set_native_viewport_suspended(
         }
     } else if let Some(layout) = layout {
         let _ = unsafe {
-            apply_native_layout(
-                webview_pointer,
-                viewport_pointer,
-                window_pointer,
-                layout,
-            )
+            apply_native_layout(webview_pointer, viewport_pointer, window_pointer, layout)
         };
     }
 }
@@ -1174,7 +1196,7 @@ unsafe fn install_native_views(
     webview_pointer: *mut c_void,
     pointers: Arc<NativePointers>,
     core_webview: ICoreWebView2,
-) -> Result<(usize, f64), String> {
+) -> Result<(NativeViewHandle, f64), String> {
     if webview_pointer.is_null() {
         return Err("WebView2 returned a null container HWND".to_string());
     }
@@ -1234,7 +1256,10 @@ unsafe fn install_native_views(
         .store(viewport as usize, Ordering::Release);
     pointers.window.store(window as usize, Ordering::Release);
 
-    Ok((viewport as usize, windows_scale_factor(window)))
+    Ok((
+        NativeViewHandle::win32(viewport as usize),
+        windows_scale_factor(window),
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -1309,12 +1334,7 @@ unsafe fn set_native_viewport_suspended(
         }
     } else if let Some(layout) = layout {
         let _ = unsafe {
-            apply_native_layout(
-                webview_pointer,
-                viewport_pointer,
-                window_pointer,
-                layout,
-            )
+            apply_native_layout(webview_pointer, viewport_pointer, window_pointer, layout)
         };
     }
 }
@@ -1376,6 +1396,140 @@ fn apply_windows_viewport_region(
     }
 }
 
+/// Installs a GTK drawing surface below WebKitGTK inside the existing opaque
+/// Tauri window. The webview remains the top overlay so normal DOM menus,
+/// dialogs, accessibility and input continue to work. Only the viewport DOM
+/// background is transparent, revealing Bevy without a transparent top-level
+/// window or a second native window.
+#[cfg(target_os = "linux")]
+unsafe fn install_native_views(
+    webview: webkit2gtk::WebView,
+    pointers: Arc<NativePointers>,
+) -> Result<(NativeViewHandle, f64), String> {
+    let parent = webview
+        .parent()
+        .and_then(|widget| widget.downcast::<gtk::Box>().ok())
+        .ok_or_else(|| "WebKitGTK is not attached to Tauri's GTK box".to_string())?;
+    let child_index = parent
+        .children()
+        .iter()
+        .position(|child| child == webview.upcast_ref::<gtk::Widget>())
+        .unwrap_or(0) as i32;
+
+    // Hold a strong reference to the webview while it is temporarily removed
+    // from Wry's default box and moved into the overlay.
+    parent.remove(&webview);
+    let overlay = gtk::Overlay::new();
+    let fixed = gtk::Fixed::new();
+    let viewport = gtk::DrawingArea::new();
+    overlay.set_hexpand(true);
+    overlay.set_vexpand(true);
+    fixed.set_hexpand(true);
+    fixed.set_vexpand(true);
+    viewport.set_app_paintable(true);
+    viewport.set_can_focus(false);
+    viewport.set_size_request(INITIAL_PHYSICAL_SIZE as i32, INITIAL_PHYSICAL_SIZE as i32);
+    viewport.connect_draw(|_, _| glib::Propagation::Stop);
+    fixed.put(&viewport, 0, 0);
+    overlay.add(&fixed);
+
+    webview.set_hexpand(true);
+    webview.set_vexpand(true);
+    webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+    overlay.add_overlay(&webview);
+    overlay.set_overlay_pass_through(&webview, false);
+    parent.pack_start(&overlay, true, true, 0);
+    parent.reorder_child(&overlay, child_index);
+    overlay.show_all();
+    viewport.realize();
+    viewport.map();
+
+    let gdk_window = viewport
+        .window()
+        .ok_or_else(|| "GTK did not realize a native viewport window".to_string())?;
+    let gdk_display = gdk_window.display();
+    let backend_name = gdk_display.type_().name();
+    if !backend_name.contains("X11") {
+        return Err(format!(
+            "unsupported GTK display backend {backend_name}; the embedded viewport requires X11 or XWayland"
+        ));
+    }
+    let xid = unsafe { gdk_x11_sys::gdk_x11_window_get_xid(gdk_window.as_ptr().cast()) };
+    let display = unsafe { gdk_x11_sys::gdk_x11_display_get_xdisplay(gdk_display.as_ptr().cast()) };
+    if xid == 0 {
+        return Err("GDK X11 viewport window has no XID".to_string());
+    }
+    let view_handle = NativeViewHandle::xlib(
+        xid as u64,
+        NonNull::new(display.cast())
+            .ok_or_else(|| "GDK X11 display is not available".to_string())?,
+    );
+
+    pointers
+        .webview
+        .store(webview.as_ptr() as usize, Ordering::Release);
+    pointers
+        .viewport
+        .store(viewport.as_ptr() as usize, Ordering::Release);
+    pointers
+        .window
+        .store(fixed.as_ptr() as usize, Ordering::Release);
+
+    Ok((view_handle, viewport.scale_factor().max(1) as f64))
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn apply_native_layout(
+    _webview_pointer: usize,
+    viewport_pointer: usize,
+    window_pointer: usize,
+    layout: &ViewportLayout,
+) -> f64 {
+    let viewport = unsafe {
+        from_glib_borrow::<_, gtk::DrawingArea>(viewport_pointer as *mut gtk::ffi::GtkDrawingArea)
+    };
+    let fixed =
+        unsafe { from_glib_borrow::<_, gtk::Fixed>(window_pointer as *mut gtk::ffi::GtkFixed) };
+    let scale_factor = viewport.scale_factor().max(1) as f64;
+    let rect = layout.viewport;
+    if rect.width < 2.0 || rect.height < 2.0 {
+        viewport.hide();
+        return scale_factor;
+    }
+
+    // DOM client coordinates and GTK allocations are both logical pixels;
+    // wgpu applies the widget scale factor when it configures the surface.
+    fixed.move_(&*viewport, rect.x.round() as i32, rect.y.round() as i32);
+    viewport.set_size_request(
+        rect.width.round().max(1.0) as i32,
+        rect.height.round().max(1.0) as i32,
+    );
+    viewport.show();
+    viewport.queue_resize();
+    scale_factor
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn set_native_viewport_suspended(
+    webview_pointer: usize,
+    viewport_pointer: usize,
+    window_pointer: usize,
+    suspended: bool,
+    layout: Option<&ViewportLayout>,
+) {
+    let viewport = unsafe {
+        from_glib_borrow::<_, gtk::DrawingArea>(viewport_pointer as *mut gtk::ffi::GtkDrawingArea)
+    };
+    if suspended {
+        viewport.hide();
+    } else if let Some(layout) = layout {
+        let _ = unsafe {
+            apply_native_layout(webview_pointer, viewport_pointer, window_pointer, layout)
+        };
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
     let left = a.x.max(b.x);
     let top = a.y.max(b.y);
@@ -1400,46 +1554,68 @@ fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
     })
 }
 
-#[derive(Debug)]
-struct NativeViewHandle(usize);
+#[derive(Debug, Clone, Copy)]
+struct NativeViewHandle {
+    window: RawWindowHandle,
+    display: RawDisplayHandle,
+}
 
 unsafe impl Send for NativeViewHandle {}
 unsafe impl Sync for NativeViewHandle {}
 
+impl NativeViewHandle {
+    fn display_backend_name(&self) -> &'static str {
+        match self.display {
+            RawDisplayHandle::AppKit(_) => "appkit",
+            RawDisplayHandle::Windows(_) => "win32",
+            RawDisplayHandle::Xlib(_) => "x11",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn appkit(view_pointer: usize) -> Self {
+        let pointer =
+            NonNull::new(view_pointer as *mut c_void).expect("NSView handle cannot be null");
+        Self {
+            window: RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer)),
+            display: RawDisplayHandle::AppKit(AppKitDisplayHandle::new()),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn win32(view_pointer: usize) -> Self {
+        let pointer =
+            NonZeroIsize::new(view_pointer as isize).expect("viewport HWND cannot be null");
+        let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+        let mut handle = Win32WindowHandle::new(pointer);
+        // Vulkan requires this field. Without it wgpu can create only a DX12
+        // surface, which excludes adapters exposed only through Vulkan.
+        handle.hinstance = NonZeroIsize::new(module as isize);
+        Self {
+            window: RawWindowHandle::Win32(handle),
+            display: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn xlib(window: u64, display: NonNull<c_void>) -> Self {
+        Self {
+            window: RawWindowHandle::Xlib(XlibWindowHandle::new(window as _)),
+            display: RawDisplayHandle::Xlib(XlibDisplayHandle::new(Some(display), 0)),
+        }
+    }
+}
+
 impl HasWindowHandle for NativeViewHandle {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        #[cfg(target_os = "macos")]
-        {
-            let pointer =
-                NonNull::new(self.0 as *mut c_void).expect("NSView handle cannot be null");
-            let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer));
-            Ok(unsafe { WindowHandle::borrow_raw(raw) })
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let pointer = NonZeroIsize::new(self.0 as isize).expect("viewport HWND cannot be null");
-            let module = unsafe { GetModuleHandleW(std::ptr::null()) };
-            let mut handle = Win32WindowHandle::new(pointer);
-            // Vulkan requires this field. Without it wgpu can create only a
-            // DX12 surface, so Windows systems whose best compatible adapter
-            // is exposed through Vulkan end up with no usable viewport.
-            handle.hinstance = NonZeroIsize::new(module as isize);
-            let raw = RawWindowHandle::Win32(handle);
-            Ok(unsafe { WindowHandle::borrow_raw(raw) })
-        }
+        Ok(unsafe { WindowHandle::borrow_raw(self.window) })
     }
 }
 
 impl HasDisplayHandle for NativeViewHandle {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(DisplayHandle::appkit())
-        }
-        #[cfg(target_os = "windows")]
-        {
-            Ok(DisplayHandle::windows())
-        }
+        Ok(unsafe { DisplayHandle::borrow_raw(self.display) })
     }
 }
 
@@ -1621,8 +1797,36 @@ struct CadSketchPointOutlineGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadSketchPointGizmos;
 
-fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::App, String> {
+fn build_bevy_app(
+    view_handle: NativeViewHandle,
+    scale_factor: f32,
+) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
+    let render_plugin = RenderPlugin {
+        // This renderer advances only in response to bridge commands. On
+        // Windows, asynchronously compiled PBR/UI pipelines can otherwise
+        // finish after the two-frame render burst and remain invisible
+        // until unrelated input happens to wake Bevy again. Blocking the
+        // pipeline queue keeps origin-plane fills and native HUD chrome
+        // deterministic. Bevy ignores this setting on macOS.
+        synchronous_pipeline_compilation: true,
+        ..default()
+    };
+    #[cfg(target_os = "linux")]
+    let render_plugin = RenderPlugin {
+        // Bevy's native default requires adapter-specific texture format
+        // features. They are optional for this viewport and are not exposed
+        // by every conforming Vulkan adapter (notably Mesa lavapipe and some
+        // older integrated GPUs). Stay within the WebGPU portability profile
+        // so startup can fall back to those adapters without weakening the
+        // Vulkan-only production backend.
+        render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+            priority: WgpuSettingsPriority::WebGPU,
+            features: WgpuFeatures::empty(),
+            ..default()
+        })),
+        ..render_plugin
+    };
     let plugins = DefaultPlugins
         .build()
         .set(WindowPlugin {
@@ -1639,16 +1843,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
             exit_condition: ExitCondition::DontExit,
             close_when_requested: false,
         })
-        .set(RenderPlugin {
-            // This renderer advances only in response to bridge commands. On
-            // Windows, asynchronously compiled PBR/UI pipelines can otherwise
-            // finish after the two-frame render burst and remain invisible
-            // until unrelated input happens to wake Bevy again. Blocking the
-            // pipeline queue keeps origin-plane fills and native HUD chrome
-            // deterministic. Bevy ignores this setting on macOS.
-            synchronous_pipeline_compilation: true,
-            ..default()
-        });
+        .set(render_plugin);
     app.add_plugins(plugins)
         .init_gizmo_group::<CadHighlightGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
@@ -1665,7 +1860,7 @@ fn build_bevy_app(view_pointer: usize, scale_factor: f32) -> Result<bevy::app::A
         (entity, holder.clone())
     };
 
-    let wrapped_view = WindowWrapper::new(NativeViewHandle(view_pointer));
+    let wrapped_view = WindowWrapper::new(view_handle);
     let raw_handle = RawHandleWrapper::new(&wrapped_view)
         .map_err(|error| format!("could not wrap the embedded native view: {error}"))?;
     *holder
@@ -2116,8 +2311,7 @@ fn occurrence_edges_are_visible(
     {
         return false;
     }
-    radius / world_per_pixel_at(camera, viewport, center)
-        >= OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX
+    radius / world_per_pixel_at(camera, viewport, center) >= OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX
 }
 
 fn resize_reference_planes(
@@ -3347,12 +3541,9 @@ fn draw_cad_gizmos(
                 if length <= f32::EPSILON {
                     continue;
                 }
-                let world_per_pixel = world_per_pixel_at(
-                    camera.camera,
-                    *viewport,
-                    start.lerp(end, 0.5),
-                )
-                .max(f32::EPSILON);
+                let world_per_pixel =
+                    world_per_pixel_at(camera.camera, *viewport, start.lerp(end, 0.5))
+                        .max(f32::EPSILON);
                 // Tiny screen-space strokes read as dots without relying on
                 // a renderer-specific dash shader. Cap the subdivision so a
                 // pathological guide cannot degrade pointer latency.
@@ -3399,7 +3590,7 @@ fn draw_cad_gizmos(
             let center = Vec3::new(point[0], point[1], point[2]);
             let forward = (Vec3::from_array(camera.camera.target)
                 - Vec3::from_array(camera.camera.position))
-                .normalize_or_zero();
+            .normalize_or_zero();
             let up_hint = Vec3::from_array(camera.camera.up).normalize_or_zero();
             let right = forward.cross(up_hint).normalize_or_zero();
             let right = if right == Vec3::ZERO { Vec3::X } else { right };
