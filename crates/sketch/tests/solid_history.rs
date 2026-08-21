@@ -345,7 +345,7 @@ fn new_sketch_is_inserted_at_the_build_cursor() {
         .document_dto()
         .features
         .iter()
-        .map(|feature| feature.name)
+        .map(|feature| feature.name.clone())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["Sketch1", "Extrude1", "Sketch3", "Sketch2"]);
     assert_eq!(
