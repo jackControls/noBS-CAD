@@ -14,10 +14,12 @@ mod post_events;
 mod simulation;
 
 pub use model::{
-    CamDocumentDto, CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind,
-    ContourCompensation, CoolantMode, CuttingParametersDto, Point2Dto, Point3Dto, PostDialect,
-    Rect2Dto, Siemens828dAtcStyle, Siemens828dPostConfigDto, Siemens828dToolChangePositioning,
-    SpindleDirection, StockBoxDto, WorkCoordinateSystemDto, WorkOffset,
+    BoxAnchor, CamDocumentDto, CamOperationDto, CamPostConfigDto, CamResolvedStockDto,
+    CamSetupDto, CamStockFace, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape,
+    CamStockSpecDto, CamToolDto, CamToolKind, CamUnits, ContourCompensation, CoolantMode,
+    CuttingParametersDto, Point2Dto, Point3Dto, PostDialect, Rect2Dto, Siemens828dAtcStyle,
+    Siemens828dPostConfigDto, Siemens828dToolChangePositioning, SpindleDirection, StockBoxDto,
+    WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
 };
 pub use nbpost::{
     analyze_nbpost, NbPostAnalysisDto, NbPostAnalysisRequestDto, NbPostCompatibilityLevel,
@@ -30,5 +32,5 @@ pub use post::{post_setup, CamPostRequestDto, CamPostResultDto};
 pub use post_events::{post_event_stream, PostEventDto, PostEventStreamDto};
 pub use simulation::{
     simulate_setup, CamSimulationCollisionDto, CamSimulationMeshDto, CamSimulationRequestDto,
-    CamSimulationResultDto, CamSimulationStepDto, CamSimulationStepKind,
+    CamSimulationResultDto, CamSimulationStepDto, CamSimulationStepKind, CamStockMeshDto,
 };

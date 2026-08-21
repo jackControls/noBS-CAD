@@ -81,7 +81,7 @@ check('coincident is structural (no constraint record)', l3.created_constraints.
 
 // Drag the l1/l2 shared endpoint: the origin is grounded, so the solver
 // follows the cursor only along the remaining horizontal degree of freedom.
-// The H/V constraints and the origin reference must all HOLD.
+// The H/Perpendicular constraints and the origin reference must all HOLD.
 const dragged = unwrap(
   engine.move_point(
     JSON.stringify({ point_id: l2.start_point_id, to_raw: { x: 80, y: 0 }, ctrl_held: false, phase: 'single' }),

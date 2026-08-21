@@ -11,9 +11,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    CamDocumentDto, CamSetupDto, CamToolDto, CamToolKind, Point3Dto, WorkCoordinateSystemDto,
+    CamDocumentDto, CamResolvedStockDto, CamSetupDto, CamToolDto, CamToolKind, Point3Dto,
+    StockBoxDto, WorkCoordinateSystemDto,
 };
-use crate::planner::{plan_setup, CamCommandDto, CamPlanError, CamProgramDto};
+use crate::planner::{
+    plan_setup, CamCommandDto, CamPlanError, CamProgramDto, RAPID_FEED_ESTIMATE_MM_PER_MIN,
+};
 
 const DEFAULT_MAX_VOXELS: usize = 750_000;
 const HARD_MAX_VOXELS: usize = 4_000_000;
@@ -21,7 +24,23 @@ const MAX_SWEEP_SAMPLES: usize = 2_000_000;
 /// Matches the native transient triangle budget. Greedy meshing normally
 /// keeps a rectangular 3-axis stock far below this limit.
 const MAX_SURFACE_TRIANGLES: usize = 65_536;
+/// Tessellation budget for a modeled body used as stock.
+const MAX_STOCK_MESH_TRIANGLES: usize = 20_000;
+/// Hard cap on triangle-to-column intersection tests while voxelizing a
+/// modeled stock body, so a pathological mesh fails instead of hanging.
+const MAX_STOCK_VOXELIZE_TESTS: usize = 50_000_000;
 const EPSILON: f64 = 1.0e-9;
+
+/// Closed triangle mesh of a modeled body used as stock, in model
+/// coordinates (millimetres). The host extracts it from the scene; the
+/// simulator transforms it into setup coordinates with the setup WCS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CamStockMeshDto {
+    #[serde(default)]
+    pub positions: Vec<f64>,
+    #[serde(default)]
+    pub indices: Vec<u32>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CamSimulationRequestDto {
@@ -34,6 +53,10 @@ pub struct CamSimulationRequestDto {
     /// remains in force even when a larger value is supplied.
     #[serde(default)]
     pub max_voxels: Option<usize>,
+    /// Required when the setup's stock is a modeled body: that body's mesh
+    /// in model coordinates. Ignored for parametric stock shapes.
+    #[serde(default)]
+    pub stock_mesh: Option<CamStockMeshDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,151 +144,19 @@ fn simulate_program(
         }
         None => None,
     };
-    let mut stock = VoxelStock::new(setup, requested_size, max_voxels)?;
+    let spec = GridSpec::for_stock(&setup.stock, requested_size, max_voxels)?;
+    let mut stock = initial_stock(document, setup, &spec, request.stock_mesh.as_ref())?;
     let initial_voxels = stock.occupied_count;
-    let mut active_tool: Option<&CamToolDto> = None;
-    let mut position: Option<Point3Dto> = None;
-    let mut cumulative_seconds = 0.0;
-    let mut steps = Vec::new();
-    let mut collisions = Vec::new();
+    let outcome = run_program(document, program, &mut stock, true)?;
+
     let mut warnings = program.warnings.clone();
-    let mut sweep_samples = 0usize;
-    let mut approximated_drill = false;
-    let mut approximated_chamfer = false;
-
-    for (command_index, command) in program.commands.iter().enumerate() {
-        match command {
-            CamCommandDto::ToolChange { tool_id, .. } => {
-                active_tool = document.tool(*tool_id);
-            }
-            CamCommandDto::Rapid { to } => {
-                let from = position;
-                let duration = from
-                    .map(|start| distance(start, *to) / setup.rapid_feed * 60.0)
-                    .unwrap_or(0.0);
-                if let (Some(start), Some(tool)) = (from, active_tool) {
-                    let outcome = stock.sweep_tool(
-                        tool,
-                        start,
-                        *to,
-                        SweepMode::CollisionOnly,
-                        &mut sweep_samples,
-                    )?;
-                    if let Some(hit) = outcome.first_contact {
-                        collisions.push(CamSimulationCollisionDto {
-                            command_index,
-                            position: hit,
-                            message: format!(
-                                "rapid motion intersects remaining stock with tool T{}",
-                                tool.number
-                            ),
-                        });
-                    }
-                }
-                cumulative_seconds += duration;
-                steps.push(CamSimulationStepDto {
-                    command_index,
-                    kind: CamSimulationStepKind::Rapid,
-                    from,
-                    to: Some(*to),
-                    duration_seconds: duration,
-                    cumulative_seconds,
-                    removed_voxels: 0,
-                });
-                position = Some(*to);
-            }
-            CamCommandDto::Linear { to, feed } => {
-                let from = position;
-                let duration = from
-                    .map(|start| distance(start, *to) / *feed * 60.0)
-                    .unwrap_or(0.0);
-                let removed = if let (Some(start), Some(tool)) = (from, active_tool) {
-                    note_approximation(tool, &mut approximated_drill, &mut approximated_chamfer);
-                    stock
-                        .sweep_tool(
-                            tool,
-                            start,
-                            *to,
-                            SweepMode::RemoveMaterial,
-                            &mut sweep_samples,
-                        )?
-                        .removed
-                } else {
-                    0
-                };
-                cumulative_seconds += duration;
-                steps.push(CamSimulationStepDto {
-                    command_index,
-                    kind: CamSimulationStepKind::Linear,
-                    from,
-                    to: Some(*to),
-                    duration_seconds: duration,
-                    cumulative_seconds,
-                    removed_voxels: removed,
-                });
-                position = Some(*to);
-            }
-            CamCommandDto::Circular {
-                clockwise,
-                center,
-                to,
-                feed,
-            } => {
-                let from = position;
-                let (duration, removed) = if let (Some(start), Some(tool)) = (from, active_tool) {
-                    note_approximation(tool, &mut approximated_drill, &mut approximated_chamfer);
-                    let arc = ArcSweep::new(start, *center, *to, *clockwise)?;
-                    let duration = arc.length / *feed * 60.0;
-                    let removed = stock.sweep_arc(
-                        tool,
-                        &arc,
-                        SweepMode::RemoveMaterial,
-                        &mut sweep_samples,
-                    )?;
-                    (duration, removed.removed)
-                } else {
-                    (0.0, 0)
-                };
-                cumulative_seconds += duration;
-                steps.push(CamSimulationStepDto {
-                    command_index,
-                    kind: CamSimulationStepKind::Circular,
-                    from,
-                    to: Some(*to),
-                    duration_seconds: duration,
-                    cumulative_seconds,
-                    removed_voxels: removed,
-                });
-                position = Some(*to);
-            }
-            CamCommandDto::Dwell { seconds } => {
-                cumulative_seconds += seconds;
-                steps.push(CamSimulationStepDto {
-                    command_index,
-                    kind: CamSimulationStepKind::Dwell,
-                    from: position,
-                    to: position,
-                    duration_seconds: *seconds,
-                    cumulative_seconds,
-                    removed_voxels: 0,
-                });
-            }
-            CamCommandDto::ProgramStart { .. }
-            | CamCommandDto::SectionStart { .. }
-            | CamCommandDto::Spindle { .. }
-            | CamCommandDto::Coolant { .. }
-            | CamCommandDto::SectionEnd
-            | CamCommandDto::ProgramEnd => {}
-        }
-    }
-
-    if approximated_drill {
+    if outcome.approximated_drill {
         warnings.push(
             "Drill stock removal uses a conventional 118-degree point because tool point angle is not yet stored."
                 .to_string(),
         );
     }
-    if approximated_chamfer {
+    if outcome.approximated_chamfer {
         warnings.push(
             "Chamfer-mill stock removal currently uses a cylindrical envelope until tool angle is stored."
                 .to_string(),
@@ -302,19 +193,443 @@ fn simulate_program(
         removed_voxels,
         remaining_volume_mm3: remaining_voxels as f64 * voxel_volume,
         removed_volume_mm3: removed_voxels as f64 * voxel_volume,
-        estimated_seconds: cumulative_seconds,
-        steps,
-        collisions,
+        estimated_seconds: outcome.cumulative_seconds,
+        steps: outcome.steps,
+        collisions: outcome.collisions,
         stock_mesh,
         warnings,
     })
+}
+
+#[derive(Default)]
+struct ProgramRunOutcome {
+    steps: Vec<CamSimulationStepDto>,
+    collisions: Vec<CamSimulationCollisionDto>,
+    cumulative_seconds: f64,
+    approximated_drill: bool,
+    approximated_chamfer: bool,
+}
+
+/// Sweep the program through the stock. With `collect` false (evaluating a
+/// rest-stock source setup) only material removal runs: steps, collision
+/// reporting, and rapid sweeps are skipped because the source setup's own
+/// simulation already reported them.
+fn run_program(
+    document: &CamDocumentDto,
+    program: &CamProgramDto,
+    stock: &mut VoxelStock,
+    collect: bool,
+) -> Result<ProgramRunOutcome, CamPlanError> {
+    let mut outcome = ProgramRunOutcome::default();
+    let mut active_tool: Option<&CamToolDto> = None;
+    let mut position: Option<Point3Dto> = None;
+    let mut sweep_samples = 0usize;
+
+    for (command_index, command) in program.commands.iter().enumerate() {
+        match command {
+            CamCommandDto::ToolChange { tool_id, .. } => {
+                active_tool = document.tool(*tool_id);
+            }
+            CamCommandDto::Rapid { to } => {
+                let from = position;
+                let duration = from
+                    .map(|start| distance(start, *to) / RAPID_FEED_ESTIMATE_MM_PER_MIN * 60.0)
+                    .unwrap_or(0.0);
+                if collect {
+                    if let (Some(start), Some(tool)) = (from, active_tool) {
+                        let sweep = stock.sweep_tool(
+                            tool,
+                            start,
+                            *to,
+                            SweepMode::CollisionOnly,
+                            &mut sweep_samples,
+                        )?;
+                        if let Some(hit) = sweep.first_contact {
+                            outcome.collisions.push(CamSimulationCollisionDto {
+                                command_index,
+                                position: hit,
+                                message: format!(
+                                    "rapid motion intersects remaining stock with tool {}",
+                                    tool.label()
+                                ),
+                            });
+                        }
+                    }
+                    outcome.cumulative_seconds += duration;
+                    outcome.steps.push(CamSimulationStepDto {
+                        command_index,
+                        kind: CamSimulationStepKind::Rapid,
+                        from,
+                        to: Some(*to),
+                        duration_seconds: duration,
+                        cumulative_seconds: outcome.cumulative_seconds,
+                        removed_voxels: 0,
+                    });
+                }
+                position = Some(*to);
+            }
+            CamCommandDto::Linear { to, feed } => {
+                let from = position;
+                let duration = from
+                    .map(|start| distance(start, *to) / *feed * 60.0)
+                    .unwrap_or(0.0);
+                let removed = if let (Some(start), Some(tool)) = (from, active_tool) {
+                    note_approximation(
+                        tool,
+                        &mut outcome.approximated_drill,
+                        &mut outcome.approximated_chamfer,
+                    );
+                    stock
+                        .sweep_tool(
+                            tool,
+                            start,
+                            *to,
+                            SweepMode::RemoveMaterial,
+                            &mut sweep_samples,
+                        )?
+                        .removed
+                } else {
+                    0
+                };
+                if collect {
+                    outcome.cumulative_seconds += duration;
+                    outcome.steps.push(CamSimulationStepDto {
+                        command_index,
+                        kind: CamSimulationStepKind::Linear,
+                        from,
+                        to: Some(*to),
+                        duration_seconds: duration,
+                        cumulative_seconds: outcome.cumulative_seconds,
+                        removed_voxels: removed,
+                    });
+                }
+                position = Some(*to);
+            }
+            CamCommandDto::Circular {
+                clockwise,
+                center,
+                to,
+                feed,
+            } => {
+                let from = position;
+                let (duration, removed) = if let (Some(start), Some(tool)) = (from, active_tool) {
+                    note_approximation(
+                        tool,
+                        &mut outcome.approximated_drill,
+                        &mut outcome.approximated_chamfer,
+                    );
+                    let arc = ArcSweep::new(start, *center, *to, *clockwise)?;
+                    let duration = arc.length / *feed * 60.0;
+                    let removed = stock.sweep_arc(
+                        tool,
+                        &arc,
+                        SweepMode::RemoveMaterial,
+                        &mut sweep_samples,
+                    )?;
+                    (duration, removed.removed)
+                } else {
+                    (0.0, 0)
+                };
+                if collect {
+                    outcome.cumulative_seconds += duration;
+                    outcome.steps.push(CamSimulationStepDto {
+                        command_index,
+                        kind: CamSimulationStepKind::Circular,
+                        from,
+                        to: Some(*to),
+                        duration_seconds: duration,
+                        cumulative_seconds: outcome.cumulative_seconds,
+                        removed_voxels: removed,
+                    });
+                }
+                position = Some(*to);
+            }
+            CamCommandDto::Dwell { seconds } => {
+                if collect {
+                    outcome.cumulative_seconds += seconds;
+                    outcome.steps.push(CamSimulationStepDto {
+                        command_index,
+                        kind: CamSimulationStepKind::Dwell,
+                        from: position,
+                        to: position,
+                        duration_seconds: *seconds,
+                        cumulative_seconds: outcome.cumulative_seconds,
+                        removed_voxels: 0,
+                    });
+                }
+            }
+            CamCommandDto::ProgramStart { .. }
+            | CamCommandDto::WorkOffset { .. }
+            | CamCommandDto::SectionStart { .. }
+            | CamCommandDto::Spindle { .. }
+            | CamCommandDto::Coolant { .. }
+            | CamCommandDto::SectionEnd
+            | CamCommandDto::ProgramEnd => {}
+        }
+    }
+    Ok(outcome)
+}
+
+/// Voxel grid derived from a stock envelope and a resolution budget.
+struct GridSpec {
+    min: Point3Dto,
+    dimensions: [usize; 3],
+    cell_size: [f64; 3],
+    /// Isotropic edge that produced this grid, reused to reproduce the exact
+    /// grid of a rest-stock source setup.
+    edge: f64,
+}
+
+impl GridSpec {
+    fn for_stock(
+        stock: &StockBoxDto,
+        requested_size: Option<f64>,
+        max_voxels: usize,
+    ) -> Result<Self, CamPlanError> {
+        let extent = [
+            stock.max.x - stock.min.x,
+            stock.max.y - stock.min.y,
+            stock.max.z - stock.min.z,
+        ];
+        let max_extent = extent.iter().copied().fold(0.0, f64::max);
+        let mut edge = requested_size.unwrap_or_else(|| (max_extent / 72.0).clamp(0.25, 2.0));
+        let mut dimensions = dimensions_for_extent(extent, edge);
+        while dimensions.iter().product::<usize>() > max_voxels {
+            edge *= 1.125;
+            dimensions = dimensions_for_extent(extent, edge);
+        }
+        let count = dimensions.iter().product::<usize>();
+        if count == 0 || count > HARD_MAX_VOXELS {
+            return Err(CamPlanError(format!(
+                "simulation grid requires {count} voxels; increase voxel size"
+            )));
+        }
+        Ok(Self {
+            min: stock.min,
+            dimensions,
+            cell_size: [
+                extent[0] / dimensions[0] as f64,
+                extent[1] / dimensions[1] as f64,
+                extent[2] / dimensions[2] as f64,
+            ],
+            edge,
+        })
+    }
+}
+
+/// Build the starting stock for a setup. Rest stock re-runs the source
+/// setup's program on an identical grid; document validation guarantees the
+/// chain is acyclic, the WCS frames match, and the envelopes agree.
+fn initial_stock(
+    document: &CamDocumentDto,
+    setup: &CamSetupDto,
+    spec: &GridSpec,
+    stock_mesh: Option<&CamStockMeshDto>,
+) -> Result<VoxelStock, CamPlanError> {
+    match &setup.resolved_stock {
+        CamResolvedStockDto::Box => Ok(VoxelStock::filled(spec, |_| true)),
+        CamResolvedStockDto::Cylinder { center, radius } => {
+            Ok(VoxelStock::filled(spec, |point| {
+                let dx = point.x - center.x;
+                let dy = point.y - center.y;
+                dx * dx + dy * dy <= radius * radius + EPSILON
+            }))
+        }
+        CamResolvedStockDto::Hex {
+            center,
+            across_flats,
+        } => {
+            // Flats perpendicular to X; the other two slab normals sit at
+            // +/-60 degrees from X.
+            let half = across_flats / 2.0;
+            let sin60 = 0.866_025_403_784_438_6;
+            Ok(VoxelStock::filled(spec, |point| {
+                let dx = point.x - center.x;
+                let dy = point.y - center.y;
+                dx.abs() <= half + EPSILON
+                    && (0.5 * dx + sin60 * dy).abs() <= half + EPSILON
+                    && (0.5 * dx - sin60 * dy).abs() <= half + EPSILON
+            }))
+        }
+        CamResolvedStockDto::ModelBody { .. } => {
+            let mesh = stock_mesh.ok_or_else(|| {
+                CamPlanError(format!(
+                    "setup '{}' uses a modeled body as stock; simulation needs the host to supply that body's mesh",
+                    setup.name
+                ))
+            })?;
+            voxelize_mesh_stock(setup, spec, mesh)
+        }
+        CamResolvedStockDto::Rest { source_setup_id } => {
+            let source = document.setup(*source_setup_id).ok_or_else(|| {
+                CamPlanError(format!(
+                    "setup '{}' inherits remaining stock from a missing setup",
+                    setup.name
+                ))
+            })?;
+            // Reproduce the source grid exactly: same envelope (validated),
+            // same requested edge, and no budget-driven edge growth.
+            let source_spec = GridSpec::for_stock(&source.stock, Some(spec.edge), HARD_MAX_VOXELS)?;
+            if source_spec.dimensions != spec.dimensions {
+                return Err(CamPlanError(format!(
+                    "rest-stock source setup '{}' produced a different voxel grid",
+                    source.name
+                )));
+            }
+            let mut stock = initial_stock(document, source, &source_spec, stock_mesh)?;
+            let program = plan_setup(document, source.id)?;
+            run_program(document, &program, &mut stock, false)?;
+            Ok(stock)
+        }
+    }
+}
+
+/// Voxelize a closed triangle mesh (model coordinates) into the setup grid
+/// by casting a vertical ray through each XY column and filling between
+/// sorted intersection pairs (even-odd rule).
+fn voxelize_mesh_stock(
+    setup: &CamSetupDto,
+    spec: &GridSpec,
+    mesh: &CamStockMeshDto,
+) -> Result<VoxelStock, CamPlanError> {
+    if mesh.positions.len() % 3 != 0 || mesh.indices.len() % 3 != 0 {
+        return Err(CamPlanError(
+            "stock body mesh must contain xyz triples and complete triangles".to_string(),
+        ));
+    }
+    let vertex_count = mesh.positions.len() / 3;
+    let triangle_count = mesh.indices.len() / 3;
+    if triangle_count == 0 || triangle_count > MAX_STOCK_MESH_TRIANGLES {
+        return Err(CamPlanError(format!(
+            "stock body mesh must have 1..={MAX_STOCK_MESH_TRIANGLES} triangles"
+        )));
+    }
+    if mesh
+        .indices
+        .iter()
+        .any(|index| *index as usize >= vertex_count)
+    {
+        return Err(CamPlanError(
+            "stock body mesh indices reference missing vertices".to_string(),
+        ));
+    }
+    if !mesh.positions.iter().all(|value| value.is_finite()) {
+        return Err(CamPlanError(
+            "stock body mesh vertices must be finite".to_string(),
+        ));
+    }
+
+    let wcs = &setup.wcs;
+    let to_setup = |index: u32| -> Point3Dto {
+        let base = index as usize * 3;
+        let dx = mesh.positions[base] - wcs.origin.x;
+        let dy = mesh.positions[base + 1] - wcs.origin.y;
+        let dz = mesh.positions[base + 2] - wcs.origin.z;
+        Point3Dto::new(
+            dx * wcs.x_axis[0] + dy * wcs.x_axis[1] + dz * wcs.x_axis[2],
+            dx * wcs.y_axis[0] + dy * wcs.y_axis[1] + dz * wcs.y_axis[2],
+            dx * wcs.z_axis[0] + dy * wcs.z_axis[1] + dz * wcs.z_axis[2],
+        )
+    };
+
+    let column_count = spec.dimensions[0] * spec.dimensions[1];
+    let mut column_hits: Vec<Vec<f64>> = (0..column_count).map(|_| Vec::new()).collect();
+    let mut tests = 0usize;
+    for triangle in mesh.indices.chunks_exact(3) {
+        let vertices = [to_setup(triangle[0]), to_setup(triangle[1]), to_setup(triangle[2])];
+        let min_x = vertices.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let max_x = vertices.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = vertices.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let max_y = vertices.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        let column_range = |min: f64, max: f64, origin: f64, cell: f64, count: usize| {
+            let lo = ((min - origin) / cell).floor() as isize;
+            let hi = ((max - origin) / cell).ceil() as isize;
+            (lo.clamp(0, count as isize) as usize)..(hi.clamp(0, count as isize) as usize)
+        };
+        let xs = column_range(min_x, max_x, spec.min.x, spec.cell_size[0], spec.dimensions[0]);
+        let ys = column_range(min_y, max_y, spec.min.y, spec.cell_size[1], spec.dimensions[1]);
+        tests = tests.saturating_add(xs.len().saturating_mul(ys.len()));
+        if tests > MAX_STOCK_VOXELIZE_TESTS {
+            return Err(CamPlanError(
+                "stock body mesh is too complex to voxelize; supply a coarser tessellation"
+                    .to_string(),
+            ));
+        }
+        let edge1 = Point3Dto::new(
+            vertices[1].x - vertices[0].x,
+            vertices[1].y - vertices[0].y,
+            vertices[1].z - vertices[0].z,
+        );
+        let edge2 = Point3Dto::new(
+            vertices[2].x - vertices[0].x,
+            vertices[2].y - vertices[0].y,
+            vertices[2].z - vertices[0].z,
+        );
+        let determinant = edge1.x * edge2.y - edge2.x * edge1.y;
+        if determinant.abs() <= 1.0e-12 {
+            // Vertical as seen from Z: no column crossing at cell resolution.
+            continue;
+        }
+        for iy in ys {
+            let cy = spec.min.y + (iy as f64 + 0.5) * spec.cell_size[1];
+            for ix in xs.clone() {
+                let cx = spec.min.x + (ix as f64 + 0.5) * spec.cell_size[0];
+                let px = cx - vertices[0].x;
+                let py = cy - vertices[0].y;
+                let u = (px * edge2.y - py * edge2.x) / determinant;
+                let v = (edge1.x * py - edge1.y * px) / determinant;
+                if u < -EPSILON || v < -EPSILON || u + v > 1.0 + EPSILON {
+                    continue;
+                }
+                column_hits[ix + spec.dimensions[0] * iy]
+                    .push(vertices[0].z + u * edge1.z + v * edge2.z);
+            }
+        }
+    }
+
+    let mut stock = VoxelStock::filled(spec, |_| false);
+    let z_epsilon = spec.cell_size[2] * 1.0e-6;
+    for iy in 0..spec.dimensions[1] {
+        for ix in 0..spec.dimensions[0] {
+            let hits = &mut column_hits[ix + spec.dimensions[0] * iy];
+            if hits.len() < 2 {
+                continue;
+            }
+            hits.sort_by(|a, b| a.total_cmp(b));
+            hits.dedup_by(|a, b| (*a - *b).abs() <= z_epsilon);
+            for pair in hits.chunks_exact(2) {
+                let (z_low, z_high) = (pair[0].min(pair[1]), pair[0].max(pair[1]));
+                let lo = ((z_low - spec.min.z) / spec.cell_size[2]).floor() as isize;
+                let hi = ((z_high - spec.min.z) / spec.cell_size[2]).ceil() as isize;
+                for iz in lo.clamp(0, spec.dimensions[2] as isize) as usize
+                    ..hi.clamp(0, spec.dimensions[2] as isize) as usize
+                {
+                    let cz = spec.min.z + (iz as f64 + 0.5) * spec.cell_size[2];
+                    if cz >= z_low - z_epsilon && cz <= z_high + z_epsilon {
+                        let index = stock.index(ix, iy, iz);
+                        if !stock.is_occupied_index(index) {
+                            stock.occupied[index / 64] |= 1u64 << (index % 64);
+                            stock.occupied_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(stock)
 }
 
 fn note_approximation(tool: &CamToolDto, drill: &mut bool, chamfer: &mut bool) {
     match tool.kind {
         CamToolKind::Drill => *drill = true,
         CamToolKind::ChamferMill => *chamfer = true,
-        CamToolKind::FlatEndMill | CamToolKind::BallEndMill => {}
+        // Taps, reamers, and boring bars sweep as plain cylinders, like end
+        // mills, so they need no tip-approximation note.
+        CamToolKind::FlatEndMill
+        | CamToolKind::BallEndMill
+        | CamToolKind::Tap
+        | CamToolKind::Reamer
+        | CamToolKind::BoringBar => {}
     }
 }
 
@@ -339,49 +654,36 @@ struct VoxelStock {
 }
 
 impl VoxelStock {
-    fn new(
-        setup: &CamSetupDto,
-        requested_size: Option<f64>,
-        max_voxels: usize,
-    ) -> Result<Self, CamPlanError> {
-        let extent = [
-            setup.stock.max.x - setup.stock.min.x,
-            setup.stock.max.y - setup.stock.min.y,
-            setup.stock.max.z - setup.stock.min.z,
-        ];
-        let max_extent = extent.iter().copied().fold(0.0, f64::max);
-        let mut edge = requested_size.unwrap_or_else(|| (max_extent / 72.0).clamp(0.25, 2.0));
-        let mut dimensions = dimensions_for_extent(extent, edge);
-        while dimensions.iter().product::<usize>() > max_voxels {
-            edge *= 1.125;
-            dimensions = dimensions_for_extent(extent, edge);
-        }
-        let count = dimensions.iter().product::<usize>();
-        if count == 0 || count > HARD_MAX_VOXELS {
-            return Err(CamPlanError(format!(
-                "simulation grid requires {count} voxels; increase voxel size"
-            )));
-        }
-        let cell_size = [
-            extent[0] / dimensions[0] as f64,
-            extent[1] / dimensions[1] as f64,
-            extent[2] / dimensions[2] as f64,
-        ];
+    /// Fill every cell whose center satisfies `contains`. Box stock passes a
+    /// constant true; profiles (cylinder/hex) test their XY slab; modeled
+    /// bodies mark cells directly after mesh voxelization.
+    fn filled(spec: &GridSpec, contains: impl Fn(Point3Dto) -> bool) -> Self {
+        let count = spec.dimensions.iter().product::<usize>();
         let word_count = count.div_ceil(64);
-        let mut occupied = vec![u64::MAX; word_count];
-        if let Some(last) = occupied.last_mut() {
-            let used = count % 64;
-            if used != 0 {
-                *last = (1u64 << used) - 1;
+        let mut occupied = vec![0u64; word_count];
+        let mut occupied_count = 0usize;
+        let mut stock = Self {
+            min: spec.min,
+            dimensions: spec.dimensions,
+            cell_size: spec.cell_size,
+            occupied: Vec::new(),
+            occupied_count: 0,
+        };
+        for z in 0..spec.dimensions[2] {
+            for y in 0..spec.dimensions[1] {
+                for x in 0..spec.dimensions[0] {
+                    if !contains(stock.center(x, y, z)) {
+                        continue;
+                    }
+                    let index = stock.index(x, y, z);
+                    occupied[index / 64] |= 1u64 << (index % 64);
+                    occupied_count += 1;
+                }
             }
         }
-        Ok(Self {
-            min: setup.stock.min,
-            dimensions,
-            cell_size,
-            occupied,
-            occupied_count: count,
-        })
+        stock.occupied = occupied;
+        stock.occupied_count = occupied_count;
+        stock
     }
 
     fn sweep_tool(
@@ -658,7 +960,11 @@ fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool 
         return false;
     }
     match tool.kind {
-        CamToolKind::FlatEndMill | CamToolKind::ChamferMill => {
+        CamToolKind::FlatEndMill
+        | CamToolKind::ChamferMill
+        | CamToolKind::Tap
+        | CamToolKind::Reamer
+        | CamToolKind::BoringBar => {
             radial_sq <= radius * radius + EPSILON
         }
         CamToolKind::BallEndMill => {
@@ -765,8 +1071,8 @@ fn lerp(a: Point3Dto, b: Point3Dto, t: f64) -> Point3Dto {
 mod tests {
     use super::*;
     use crate::model::{
-        CamOperationDto, CamPostConfigDto, ContourCompensation, CoolantMode, CuttingParametersDto,
-        Point2Dto, Rect2Dto, StockBoxDto, WorkOffset,
+        CamOperationDto, CamPostConfigDto, CamUnits, ContourCompensation, CoolantMode,
+        CuttingParametersDto, Point2Dto, Rect2Dto, StockBoxDto, WcsOriginSpecDto, WorkOffset,
     };
 
     fn document() -> CamDocumentDto {
@@ -781,16 +1087,19 @@ mod tests {
                 id: 1,
                 name: "Voxel test".to_string(),
                 wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
                 work_offset: WorkOffset::G54,
                 stock: StockBoxDto {
                     min: Point3Dto::new(0.0, 0.0, -6.0),
                     max: Point3Dto::new(20.0, 16.0, 0.0),
                 },
+                work_offset_count: 1,
+                stock_spec: crate::model::CamStockSpecDto::LegacyBox,
+                resolved_stock: crate::model::CamResolvedStockDto::Box,
+                stock_model_box: None,
                 body_ids: Vec::new(),
-                clearance_z: 5.0,
-                retract_z: 2.0,
-                rapid_feed: 2_000.0,
-                post: CamPostConfigDto::default(),
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
                 operations: vec![
                     CamOperationDto::Face {
                         id: 1,
@@ -805,6 +1114,8 @@ mod tests {
                         target_z: -1.0,
                         step_over: 3.0,
                         step_down: 1.0,
+                        clearance_z: 5.0,
+                        retract_z: 2.0,
                         cutting,
                     },
                     CamOperationDto::Contour2d {
@@ -822,6 +1133,8 @@ mod tests {
                         bottom_z: -4.0,
                         step_down: 1.5,
                         compensation: ContourCompensation::On,
+                        clearance_z: 5.0,
+                        retract_z: 2.0,
                         cutting,
                     },
                 ],
@@ -829,14 +1142,19 @@ mod tests {
             active_setup_id: Some(1),
             tools: vec![CamToolDto {
                 id: 1,
-                number: 1,
+                number: Some(1),
                 name: "6 mm flat".to_string(),
                 kind: CamToolKind::FlatEndMill,
                 diameter: 6.0,
                 flute_length: 12.0,
                 overall_length: 50.0,
                 center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                cutting: CuttingParametersDto::default(),
             }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto::default(),
             next_setup_id: 2,
             next_operation_id: 3,
             next_tool_id: 2,
@@ -851,6 +1169,7 @@ mod tests {
                 setup_id: 1,
                 voxel_size: Some(1.0),
                 max_voxels: None,
+                stock_mesh: None,
             },
         )
         .expect("simulation");
@@ -867,6 +1186,7 @@ mod tests {
             setup_id: 1,
             voxel_size: Some(1.5),
             max_voxels: None,
+            stock_mesh: None,
         };
         let first = simulate_setup(&document(), &request).expect("first simulation");
         let second = simulate_setup(&document(), &request).expect("second simulation");
@@ -881,9 +1201,196 @@ mod tests {
                 setup_id: 1,
                 voxel_size: Some(0.0),
                 max_voxels: None,
+                stock_mesh: None,
             },
         )
         .unwrap_err();
         assert!(error.to_string().contains("voxel size"));
+    }
+
+    #[test]
+    fn cylinder_stock_initializes_only_its_circular_profile() {
+        let mut document = document();
+        document.setups[0].stock_spec = crate::model::CamStockSpecDto::FromModel {
+            shape: crate::model::CamStockShape::Cylinder,
+            offsets: crate::model::CamStockOffsetsDto::default(),
+        };
+        document.setups[0].resolved_stock = CamResolvedStockDto::Cylinder {
+            center: crate::model::Point2Dto::new(10.0, 8.0),
+            radius: 7.0,
+        };
+        let result = simulate_setup(
+            &document,
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+            },
+        )
+        .expect("simulation");
+        // 20x16x6 box would fill 1920 voxels; the r=7 cylinder profile holds
+        // about pi*49*6 ~ 924.
+        assert!(result.initial_voxels < 1_200);
+        assert!(result.initial_voxels > 700);
+        assert!(result.removed_voxels > 0);
+        assert!(result.removed_voxels < result.initial_voxels);
+    }
+
+    #[test]
+    fn hex_stock_initializes_only_its_hexagonal_profile() {
+        let mut document = document();
+        document.setups[0].stock_spec = crate::model::CamStockSpecDto::FromModel {
+            shape: crate::model::CamStockShape::Hex,
+            offsets: crate::model::CamStockOffsetsDto::default(),
+        };
+        document.setups[0].resolved_stock = CamResolvedStockDto::Hex {
+            center: crate::model::Point2Dto::new(10.0, 8.0),
+            across_flats: 13.0,
+        };
+        let result = simulate_setup(
+            &document,
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+            },
+        )
+        .expect("simulation");
+        // Hexagon area (sqrt(3)/2 * AF^2 ~ 146) times 6 layers ~ 878.
+        assert!(result.initial_voxels < 1_100);
+        assert!(result.initial_voxels > 650);
+    }
+
+    #[test]
+    fn rest_stock_continues_from_the_source_setups_remaining_material() {
+        let first = simulate_setup(
+            &document(),
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+            },
+        )
+        .expect("first setup simulation");
+        let mut document = document();
+        let mut second = document.setups[0].clone();
+        second.id = 2;
+        second.name = "Second clamping group".to_string();
+        second.stock_spec = crate::model::CamStockSpecDto::RestFromSetup { setup_id: 1 };
+        second.resolved_stock = CamResolvedStockDto::Rest {
+            source_setup_id: 1,
+        };
+        second.operations = vec![CamOperationDto::Face {
+            id: 3,
+            name: "Corner face".to_string(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(1.0, 1.0),
+                max: Point2Dto::new(6.0, 6.0),
+            },
+            top_z: -1.0,
+            target_z: -2.0,
+            step_over: 2.0,
+            step_down: 1.0,
+            clearance_z: 5.0,
+            retract_z: 2.0,
+            cutting: CuttingParametersDto {
+                spindle_rpm: 8_000,
+                feed_xy: 600.0,
+                feed_z: 180.0,
+                coolant: CoolantMode::Off,
+            },
+        }];
+        second.operations.iter_mut().for_each(|operation| match operation {
+            CamOperationDto::Face { id, .. } => *id = 3,
+            _ => {}
+        });
+        document.setups.push(second);
+        document.next_setup_id = 3;
+        document.next_operation_id = 4;
+        let result = simulate_setup(
+            &document,
+            &CamSimulationRequestDto {
+                setup_id: 2,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+            },
+        )
+        .expect("rest simulation");
+        // The second setup starts from what the first left behind, and the
+        // corner face still removes its own material.
+        assert_eq!(result.initial_voxels, first.remaining_voxels);
+        assert!(result.removed_voxels > 0);
+    }
+
+    #[test]
+    fn modeled_body_stock_voxelizes_a_closed_mesh() {
+        // A 10 x 8 x 4 box body sitting inside the 20 x 16 x 6 envelope,
+        // expressed in model coordinates (the default WCS is identity).
+        let corners = [
+            (2.0, 2.0, -4.0),
+            (12.0, 2.0, -4.0),
+            (12.0, 10.0, -4.0),
+            (2.0, 10.0, -4.0),
+            (2.0, 2.0, 0.0),
+            (12.0, 2.0, 0.0),
+            (12.0, 10.0, 0.0),
+            (2.0, 10.0, 0.0),
+        ];
+        let mut positions = Vec::new();
+        for (x, y, z) in corners {
+            positions.extend([x, y, z]);
+        }
+        #[rustfmt::skip]
+        let indices: Vec<u32> = vec![
+            0, 2, 1, 0, 3, 2, // bottom
+            4, 5, 6, 4, 6, 7, // top
+            0, 1, 5, 0, 5, 4, // -Y
+            1, 2, 6, 1, 6, 5, // +X
+            2, 3, 7, 2, 7, 6, // +Y
+            3, 0, 4, 3, 4, 7, // -X
+        ];
+        let mut document = document();
+        document.setups[0].stock_spec =
+            crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
+        document.setups[0].resolved_stock = CamResolvedStockDto::ModelBody { body_id: 9 };
+        let result = simulate_setup(
+            &document,
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: Some(CamStockMeshDto { positions, indices }),
+            },
+        )
+        .expect("model-body simulation");
+        // Exactly the 10 x 8 x 4 cell block is material before cutting.
+        assert_eq!(result.initial_voxels, 320);
+        assert!(result.removed_voxels > 0);
+        assert!(result.remaining_voxels < 320);
+    }
+
+    #[test]
+    fn modeled_body_stock_fails_closed_without_the_host_mesh() {
+        let mut document = document();
+        document.setups[0].stock_spec =
+            crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
+        document.setups[0].resolved_stock = CamResolvedStockDto::ModelBody { body_id: 9 };
+        let error = simulate_setup(
+            &document,
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.0.contains("supply that body's mesh"));
     }
 }

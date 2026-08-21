@@ -141,8 +141,9 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV2, String> {
         ));
     }
 
-    let model: ProjectModelV2 = serde_json::from_value(header)
+    let mut model: ProjectModelV2 = serde_json::from_value(header)
         .map_err(|error| format!("invalid project model: {error}"))?;
+    model.cam.migrate_legacy();
     validate_project(&model)?;
     Ok(model)
 }

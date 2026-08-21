@@ -1,16 +1,54 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    CamDocumentDto, CoolantMode, Point3Dto, PostDialect, Siemens828dPostConfigDto,
-    Siemens828dToolChangePositioning, SpindleDirection, WorkOffset,
+    CamDocumentDto, CamPostConfigDto, CamUnits, CoolantMode, Point3Dto, PostDialect,
+    Siemens828dPostConfigDto, Siemens828dToolChangePositioning, SpindleDirection, WorkOffset,
 };
 use crate::planner::{plan_setup, CamCommandDto, CamPlanError, CamProgramDto};
+
+/// Converts canonical millimetre motion into the document's output units and
+/// formats controller words. Seconds and RPM pass through unchanged.
+#[derive(Debug, Clone, Copy)]
+struct PostUnits(CamUnits);
+
+impl PostUnits {
+    fn len(self, value_mm: f64) -> String {
+        coordinate(self.0.from_mm(value_mm))
+    }
+
+    fn feed(self, value_mm_per_min: f64) -> String {
+        feedrate(self.0.from_mm(value_mm_per_min))
+    }
+
+    fn siemens_len(self, value_mm: f64) -> String {
+        siemens_coordinate(self.0.from_mm(value_mm))
+    }
+
+    /// Modal unit word for the ISO-style posts (`G21` metric / `G20` inch).
+    fn iso_mode_word(self) -> &'static str {
+        match self.0 {
+            CamUnits::Millimeters => "G21",
+            CamUnits::Inches => "G20",
+        }
+    }
+
+    /// SINUMERIK dimensional mode (`G710` metric / `G70` inch).
+    fn siemens_mode_word(self) -> &'static str {
+        match self.0 {
+            CamUnits::Millimeters => "G710",
+            CamUnits::Inches => "G70",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CamPostRequestDto {
     pub setup_id: u64,
+    /// Post configuration chosen at export time. When omitted, the document's
+    /// remembered defaults are used. The neutral toolpath program is
+    /// dialect-independent; any post can render it.
     #[serde(default)]
-    pub dialect: Option<PostDialect>,
+    pub post: Option<CamPostConfigDto>,
     #[serde(default)]
     pub program_name: Option<String>,
 }
@@ -24,18 +62,29 @@ pub struct CamPostResultDto {
     pub warnings: Vec<String>,
 }
 
-/// Plan and post one setup with either its saved dialect or a one-shot
-/// override. Built-in posts intentionally cover a conservative 3-axis subset;
-/// controller-specific customization remains isolated behind this boundary.
+/// Plan and post one setup. The post configuration is chosen at export time
+/// (falling back to the document's remembered defaults); the planned motion
+/// program itself stays controller-neutral, so any post can render it.
 pub fn post_setup(
     document: &CamDocumentDto,
     request: &CamPostRequestDto,
 ) -> Result<CamPostResultDto, CamPlanError> {
     let program = plan_setup(document, request.setup_id)?;
-    let setup = document
-        .setup(request.setup_id)
-        .ok_or_else(|| CamPlanError(format!("CAM setup {} does not exist", request.setup_id)))?;
-    let dialect = request.dialect.unwrap_or(setup.post.dialect);
+    if document.setup(request.setup_id).is_none() {
+        return Err(CamPlanError(format!(
+            "CAM setup {} does not exist",
+            request.setup_id
+        )));
+    }
+    let post = request
+        .post
+        .clone()
+        .unwrap_or_else(|| document.post_defaults.clone());
+    if let Some(profile) = &post.siemens_828d {
+        profile.validate().map_err(CamPlanError)?;
+    }
+    let dialect = post.dialect;
+    let units = PostUnits(document.units);
     let name = request
         .program_name
         .as_deref()
@@ -46,11 +95,30 @@ pub fn post_setup(
         &program,
         dialect,
         name,
-        setup.post.program_number,
-        setup.post.sequence_numbers,
-        setup.post.siemens_828d.as_ref(),
+        post.program_number,
+        post.sequence_numbers,
+        post.siemens_828d.as_ref(),
+        units,
     )?;
     let mut warnings = program.warnings.clone();
+    if document.units == CamUnits::Inches {
+        warnings.push(
+            "Posted in inches (G20/G70); confirm the control's dimensional mode and every offset before running."
+                .to_string(),
+        );
+    }
+    if program.work_offsets.len() > 1 {
+        warnings.push(format!(
+            "Program repeats the toolpath under {} ({} parts); verify every fixture offset on the control.",
+            program
+                .work_offsets
+                .iter()
+                .map(|offset| offset.code())
+                .collect::<Vec<_>>()
+                .join(", "),
+            program.work_offsets.len(),
+        ));
+    }
     warnings.push(match dialect {
         PostDialect::Grbl => {
             "GRBL output pauses for manual tool changes; confirm the tool and re-zero policy before resuming."
@@ -65,10 +133,10 @@ pub fn post_setup(
                 .to_string()
         }
         PostDialect::Siemens828d => {
-            if let Some(profile) = setup.post.siemens_828d.as_ref() {
+            if let Some(profile) = post.siemens_828d.as_ref() {
                 format!(
                     "Siemens 828D native output uses G0 SUPA Z{} D0 for machine-coordinate retracts; verify that position, D{}, tool calls, and M-codes on the control before running.",
-                    coordinate(profile.supa_retract_z),
+                    units.len(profile.supa_retract_z),
                     profile.tool_length_offset,
                 )
             } else {
@@ -88,11 +156,11 @@ pub fn post_setup(
             "ATC style is descriptive only; generated positioning and next-tool preloading follow separate, explicit machine-profile settings."
                 .to_string(),
         );
-        if let Some(profile) = setup.post.siemens_828d.as_ref() {
+        if let Some(profile) = post.siemens_828d.as_ref() {
             warnings.push(match profile.tool_change_positioning {
                 Siemens828dToolChangePositioning::SupaZ => format!(
                     "Before later tool changes, the post commands G0 SUPA Z{} D0 and then M6.",
-                    coordinate(profile.supa_retract_z)
+                    units.len(profile.supa_retract_z)
                 ),
                 Siemens828dToolChangePositioning::ControllerManaged => {
                     "Before later tool changes, the post emits no machine-axis station move and assumes the machine builder's M6/PLC cycle owns positioning."
@@ -100,8 +168,8 @@ pub fn post_setup(
                 }
                 Siemens828dToolChangePositioning::SupaZThenXy => format!(
                     "Before later tool changes, the post commands SUPA Z first and then the verified machine station X{} Y{} before M6.",
-                    coordinate(profile.station_x.unwrap_or_default()),
-                    coordinate(profile.station_y.unwrap_or_default())
+                    units.len(profile.station_x.unwrap_or_default()),
+                    units.len(profile.station_y.unwrap_or_default())
                 ),
             });
             warnings.push(if profile.preload_next_tool {
@@ -129,6 +197,7 @@ fn render_program(
     program_number: Option<u32>,
     sequence_numbers: bool,
     siemens_profile: Option<&Siemens828dPostConfigDto>,
+    units: PostUnits,
 ) -> Result<String, CamPlanError> {
     if dialect == PostDialect::Siemens828d {
         let profile = siemens_profile.ok_or_else(|| {
@@ -137,40 +206,57 @@ fn render_program(
                     .to_string(),
             )
         })?;
-        return render_siemens828d_program(program, program_name, sequence_numbers, profile);
+        return render_siemens828d_program(program, program_name, sequence_numbers, profile, units);
     }
     let mut writer = NcWriter::new(sequence_numbers, 10);
     let mut position: Option<Point3Dto> = None;
     for command in &program.commands {
         match command {
-            CamCommandDto::ProgramStart { work_offset, .. } => {
+            CamCommandDto::ProgramStart { .. } => {
                 if dialect == PostDialect::Fanuc {
                     writer.raw("%");
                     writer.raw(&format!("O{:04}", program_number.unwrap_or(1001) % 10_000));
                 }
                 writer.comment(program_name);
                 writer.comment("GENERATED BY NOBS CAD - VERIFY AND DRY RUN");
-                writer.block("G90 G17 G21 G40 G49 G80");
-                writer.block(work_offset.code());
+                writer.block(&format!(
+                    "G90 G17 {} G40 G49 G80",
+                    units.iso_mode_word()
+                ));
                 writer.block("M5");
                 writer.block("M9");
+            }
+            CamCommandDto::WorkOffset { offset } => {
+                writer.block(offset.code());
             }
             CamCommandDto::SectionStart { name, .. } => writer.comment(name),
             CamCommandDto::ToolChange {
                 tool_number,
                 tool_name,
                 ..
-            } => match dialect {
-                PostDialect::Grbl => {
-                    writer.block("M5");
-                    writer.comment(&format!("MANUAL TOOL CHANGE: T{tool_number} {tool_name}"));
-                    writer.block("M0");
+            } => {
+                // ISO-style posts call tools numerically (T<n>). A library
+                // tool without a number cannot be called this way; fail
+                // closed instead of silently emitting a bad block.
+                let Some(tool_number) = tool_number else {
+                    return Err(CamPlanError(format!(
+                        "tool '{tool_name}' has no tool number, but this post calls tools numerically; assign a number in the tool library or post with a name-capable control"
+                    )));
+                };
+                match dialect {
+                    PostDialect::Grbl => {
+                        writer.block("M5");
+                        writer.comment(&format!(
+                            "MANUAL TOOL CHANGE: T{tool_number} {tool_name}"
+                        ));
+                        writer.block("M0");
+                    }
+                    PostDialect::LinuxCnc | PostDialect::Fanuc | PostDialect::Siemens828d => {
+                        writer.comment(tool_name);
+                        writer.block(&format!("T{tool_number} M6"));
+                    }
                 }
-                PostDialect::LinuxCnc | PostDialect::Fanuc | PostDialect::Siemens828d => {
-                    writer.comment(tool_name);
-                    writer.block(&format!("T{tool_number} M6"));
-                }
-            },
+            }
             CamCommandDto::Spindle { direction, rpm } => match direction {
                 SpindleDirection::Off => writer.block("M5"),
                 SpindleDirection::Clockwise => writer.block(&format!("S{rpm} M3")),
@@ -186,14 +272,14 @@ fn render_program(
                     // A combined XYZ rapid from an unknown start can move
                     // diagonally through stock. Establish clearance in Z
                     // before the first XY positioning move.
-                    writer.block(&format!("G0 Z{}", coordinate(to.z)));
-                    writer.block(&format!("G0 X{} Y{}", coordinate(to.x), coordinate(to.y)));
+                    writer.block(&format!("G0 Z{}", units.len(to.z)));
+                    writer.block(&format!("G0 X{} Y{}", units.len(to.x), units.len(to.y)));
                 } else {
                     writer.block(&format!(
                         "G0 X{} Y{} Z{}",
-                        coordinate(to.x),
-                        coordinate(to.y),
-                        coordinate(to.z)
+                        units.len(to.x),
+                        units.len(to.y),
+                        units.len(to.z)
                     ));
                 }
                 position = Some(*to);
@@ -201,10 +287,10 @@ fn render_program(
             CamCommandDto::Linear { to, feed } => {
                 writer.block(&format!(
                     "G1 X{} Y{} Z{} F{}",
-                    coordinate(to.x),
-                    coordinate(to.y),
-                    coordinate(to.z),
-                    feedrate(*feed)
+                    units.len(to.x),
+                    units.len(to.y),
+                    units.len(to.z),
+                    units.feed(*feed)
                 ));
                 position = Some(*to);
             }
@@ -226,12 +312,12 @@ fn render_program(
                 writer.block(&format!(
                     "{} X{} Y{} Z{} I{} J{} F{}",
                     if *clockwise { "G2" } else { "G3" },
-                    coordinate(to.x),
-                    coordinate(to.y),
-                    coordinate(to.z),
-                    coordinate(center.x - from.x),
-                    coordinate(center.y - from.y),
-                    feedrate(*feed)
+                    units.len(to.x),
+                    units.len(to.y),
+                    units.len(to.z),
+                    units.len(center.x - from.x),
+                    units.len(center.y - from.y),
+                    units.feed(*feed)
                 ));
                 position = Some(*to);
             }
@@ -263,6 +349,7 @@ fn render_siemens828d_program(
     program_name: &str,
     sequence_numbers: bool,
     profile: &Siemens828dPostConfigDto,
+    units: PostUnits,
 ) -> Result<String, CamPlanError> {
     if profile.tool_change_positioning == Siemens828dToolChangePositioning::SupaZThenXy
         && (profile.station_x.is_none() || profile.station_y.is_none())
@@ -280,17 +367,16 @@ fn render_siemens828d_program(
 
     for (index, command) in program.commands.iter().enumerate() {
         match command {
-            CamCommandDto::ProgramStart {
-                work_offset: offset,
-                ..
-            } => {
-                work_offset = *offset;
+            CamCommandDto::ProgramStart { .. } => {
                 writer.raw(&format!("; %_N_{}_MPF", siemens_program_name(program_name)));
                 writer.raw("; GENERATED BY NOBS CAD - VERIFY, SIMULATE, AND DRY RUN");
-                writer.block(work_offset.code());
-                writer.block("G17 G710 G90 G94");
+                writer.block(&format!("G17 {} G90 G94", units.siemens_mode_word()));
                 writer.block("G64");
-                writer.block(&siemens_supa_retract(profile));
+                writer.block(&siemens_supa_retract(profile, units));
+            }
+            CamCommandDto::WorkOffset { offset } => {
+                work_offset = *offset;
+                writer.block(work_offset.code());
             }
             CamCommandDto::SectionStart { name, .. } => {
                 let changes_tool = program.commands[index + 1..]
@@ -309,7 +395,7 @@ fn render_siemens828d_program(
                 ..
             } => {
                 if tool_change_count > 0 {
-                    if write_siemens_tool_change_positioning(&mut writer, profile)? {
+                    if write_siemens_tool_change_positioning(&mut writer, profile, units)? {
                         writer.block(&format!("D{}", profile.tool_length_offset));
                     }
                 }
@@ -320,19 +406,22 @@ fn render_siemens828d_program(
                 if tool_change_count > 0 && profile.optional_stop_on_tool_change {
                     writer.block("M1");
                 }
+                // SINUMERIK calls tools by name (T="..."); the tool number is
+                // only the fallback for tools whose name cannot be called.
+                let tool_call = siemens_tool_call(tool_name, *tool_number)?;
                 writer.raw(&format!(
-                    "; T{} {}",
-                    tool_number,
+                    "; {} {}",
+                    tool_call,
                     siemens_plain_text(tool_name)
                 ));
-                writer.block(&format!("T{tool_number}"));
+                writer.block(&tool_call);
                 writer.block("M6");
                 writer.block(&format!("D{}", profile.tool_length_offset));
                 if profile.preload_next_tool {
-                    if let Some(next_tool_number) =
-                        siemens_next_preload_tool(program, index, *tool_number)
+                    if let Some(next_call) =
+                        siemens_next_preload_call(program, index, &tool_call)
                     {
-                        writer.block(&format!("T{next_tool_number}"));
+                        writer.block(&next_call);
                     }
                 }
                 writer.block("G17 G90 G94");
@@ -352,18 +441,18 @@ fn render_siemens828d_program(
             },
             CamCommandDto::Rapid { to } => {
                 if position.is_none() {
-                    writer.block(&format!("G0 Z{}", siemens_coordinate(to.z)));
+                    writer.block(&format!("G0 Z{}", units.siemens_len(to.z)));
                     writer.block(&format!(
                         "G0 X{} Y{}",
-                        siemens_coordinate(to.x),
-                        siemens_coordinate(to.y)
+                        units.siemens_len(to.x),
+                        units.siemens_len(to.y)
                     ));
                 } else {
                     writer.block(&format!(
                         "G0 X{} Y{} Z{}",
-                        siemens_coordinate(to.x),
-                        siemens_coordinate(to.y),
-                        siemens_coordinate(to.z)
+                        units.siemens_len(to.x),
+                        units.siemens_len(to.y),
+                        units.siemens_len(to.z)
                     ));
                 }
                 position = Some(*to);
@@ -371,10 +460,10 @@ fn render_siemens828d_program(
             CamCommandDto::Linear { to, feed } => {
                 writer.block(&format!(
                     "G1 X{} Y{} Z{} F{}",
-                    siemens_coordinate(to.x),
-                    siemens_coordinate(to.y),
-                    siemens_coordinate(to.z),
-                    feedrate(*feed)
+                    units.siemens_len(to.x),
+                    units.siemens_len(to.y),
+                    units.siemens_len(to.z),
+                    units.feed(*feed)
                 ));
                 position = Some(*to);
             }
@@ -396,12 +485,12 @@ fn render_siemens828d_program(
                 writer.block(&format!(
                     "{} X{} Y{} Z{} I{} J{} F{}",
                     if *clockwise { "G2" } else { "G3" },
-                    siemens_coordinate(to.x),
-                    siemens_coordinate(to.y),
-                    siemens_coordinate(to.z),
-                    siemens_coordinate(center.x - from.x),
-                    siemens_coordinate(center.y - from.y),
-                    feedrate(*feed)
+                    units.siemens_len(to.x),
+                    units.siemens_len(to.y),
+                    units.siemens_len(to.z),
+                    units.siemens_len(center.x - from.x),
+                    units.siemens_len(center.y - from.y),
+                    units.feed(*feed)
                 ));
                 position = Some(*to);
             }
@@ -415,7 +504,7 @@ fn render_siemens828d_program(
                 pending_section = None;
             }
             CamCommandDto::ProgramEnd => {
-                writer.block(&siemens_supa_retract(profile));
+                writer.block(&siemens_supa_retract(profile, units));
                 writer.block(&format!("D{}", profile.tool_length_offset));
                 writer.block("M30");
             }
@@ -436,8 +525,8 @@ fn write_siemens_message(writer: &mut NcWriter, name: &str) {
     writer.raw(&format!("MSG (\"{}\")", siemens_plain_text(name)));
 }
 
-fn siemens_supa_retract(profile: &Siemens828dPostConfigDto) -> String {
-    format!("G0 SUPA Z{} D0", siemens_coordinate(profile.supa_retract_z))
+fn siemens_supa_retract(profile: &Siemens828dPostConfigDto, units: PostUnits) -> String {
+    format!("G0 SUPA Z{} D0", units.siemens_len(profile.supa_retract_z))
 }
 
 /// Emit only the positioning behavior explicitly confirmed in the machine
@@ -445,10 +534,11 @@ fn siemens_supa_retract(profile: &Siemens828dPostConfigDto) -> String {
 fn write_siemens_tool_change_positioning(
     writer: &mut NcWriter,
     profile: &Siemens828dPostConfigDto,
+    units: PostUnits,
 ) -> Result<bool, CamPlanError> {
     match profile.tool_change_positioning {
         Siemens828dToolChangePositioning::SupaZ => {
-            writer.block(&siemens_supa_retract(profile));
+            writer.block(&siemens_supa_retract(profile, units));
             Ok(true)
         }
         Siemens828dToolChangePositioning::ControllerManaged => {
@@ -462,40 +552,66 @@ fn write_siemens_tool_change_positioning(
                         .to_string(),
                 ));
             };
-            writer.block(&siemens_supa_retract(profile));
+            writer.block(&siemens_supa_retract(profile, units));
             writer.block(&format!(
                 "G0 SUPA X{} Y{}",
-                siemens_coordinate(x),
-                siemens_coordinate(y)
+                units.siemens_len(x),
+                units.siemens_len(y)
             ));
             Ok(true)
         }
     }
 }
 
-/// Return the next actual tool change, wrapping to the program's first tool so
-/// repeated program runs can stage it too. A one-tool program never emits a
-/// redundant/self preload.
-fn siemens_next_preload_tool(
+/// Build the SINUMERIK tool call word. Named tools are called by name
+/// (`T="NAME"`, the control's native identifier); the number is the fallback
+/// when the name carries no usable identifier, and the call fails closed when
+/// the tool has neither.
+fn siemens_tool_call(tool_name: &str, tool_number: Option<u32>) -> Result<String, CamPlanError> {
+    let mut identifier = String::new();
+    for character in tool_name.trim().chars() {
+        if identifier.chars().count() >= 31 {
+            break;
+        }
+        if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+            identifier.push(character.to_ascii_uppercase());
+        } else {
+            identifier.push('_');
+        }
+    }
+    let identifier = identifier.trim_matches('_').to_string();
+    if !identifier.is_empty() {
+        return Ok(format!("T=\"{identifier}\""));
+    }
+    match tool_number {
+        Some(number) => Ok(format!("T{number}")),
+        None => Err(CamPlanError(format!(
+            "tool '{tool_name}' has neither a callable name nor a tool number for the Siemens 828D post"
+        ))),
+    }
+}
+
+/// Return the next actual tool change call, wrapping to the program's first
+/// tool so repeated program runs can stage it too. A one-tool program never
+/// emits a redundant/self preload.
+fn siemens_next_preload_call(
     program: &CamProgramDto,
     current_index: usize,
-    current_tool_number: u32,
-) -> Option<u32> {
-    program.commands[current_index + 1..]
-        .iter()
-        .find_map(|command| match command {
-            CamCommandDto::ToolChange { tool_number, .. } => Some(*tool_number),
+    current_call: &str,
+) -> Option<String> {
+    let find_call = |commands: &[CamCommandDto]| {
+        commands.iter().find_map(|command| match command {
+            CamCommandDto::ToolChange {
+                tool_number,
+                tool_name,
+                ..
+            } => siemens_tool_call(tool_name, *tool_number).ok(),
             _ => None,
         })
-        .or_else(|| {
-            program.commands[..current_index]
-                .iter()
-                .find_map(|command| match command {
-                    CamCommandDto::ToolChange { tool_number, .. } => Some(*tool_number),
-                    _ => None,
-                })
-        })
-        .filter(|tool_number| *tool_number != current_tool_number)
+    };
+    find_call(&program.commands[current_index + 1..])
+        .or_else(|| find_call(&program.commands[..current_index]))
+        .filter(|call| call != current_call)
 }
 
 fn siemens_program_name(value: &str) -> String {
@@ -623,9 +739,9 @@ fn feedrate(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::model::{
-        CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind,
-        CuttingParametersDto, Point2Dto, Rect2Dto, Siemens828dAtcStyle, StockBoxDto,
-        WorkCoordinateSystemDto, WorkOffset,
+        CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CamUnits,
+        CuttingParametersDto, DrillCycle, Point2Dto, Rect2Dto, Siemens828dAtcStyle, StockBoxDto,
+        WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
     };
 
     fn document(dialect: PostDialect) -> CamDocumentDto {
@@ -634,22 +750,19 @@ mod tests {
                 id: 1,
                 name: "Fixture A".into(),
                 wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
                 work_offset: WorkOffset::G54,
+                work_offset_count: 1,
+                stock_spec: crate::model::CamStockSpecDto::LegacyBox,
+                resolved_stock: crate::model::CamResolvedStockDto::Box,
                 stock: StockBoxDto {
                     min: Point3Dto::new(0.0, 0.0, -10.0),
                     max: Point3Dto::new(20.0, 20.0, 0.0),
                 },
+                stock_model_box: None,
                 body_ids: vec![],
-                clearance_z: 8.0,
-                retract_z: 2.0,
-                rapid_feed: 3_000.0,
-                post: CamPostConfigDto {
-                    dialect,
-                    program_number: Some(42),
-                    sequence_numbers: false,
-                    siemens_828d: (dialect == PostDialect::Siemens828d)
-                        .then(Siemens828dPostConfigDto::default),
-                },
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
                 operations: vec![CamOperationDto::Face {
                     id: 1,
                     name: "Face top".into(),
@@ -663,6 +776,8 @@ mod tests {
                     target_z: -1.0,
                     step_over: 3.0,
                     step_down: 1.0,
+                    clearance_z: 8.0,
+                    retract_z: 2.0,
                     cutting: CuttingParametersDto {
                         spindle_rpm: 10_000,
                         feed_xy: 600.0,
@@ -674,14 +789,25 @@ mod tests {
             active_setup_id: Some(1),
             tools: vec![CamToolDto {
                 id: 1,
-                number: 1,
+                number: Some(1),
                 name: "6 mm flat".into(),
                 kind: CamToolKind::FlatEndMill,
                 diameter: 6.0,
                 flute_length: 15.0,
                 overall_length: 50.0,
                 center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                cutting: CuttingParametersDto::default(),
             }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto {
+                dialect,
+                program_number: Some(42),
+                sequence_numbers: false,
+                siemens_828d: (dialect == PostDialect::Siemens828d)
+                    .then(Siemens828dPostConfigDto::default),
+            },
             next_setup_id: 2,
             next_operation_id: 2,
             next_tool_id: 2,
@@ -692,13 +818,16 @@ mod tests {
         let mut source = document(PostDialect::Siemens828d);
         source.tools.push(CamToolDto {
             id: 2,
-            number: 19,
+            number: Some(19),
             name: "5 mm drill".into(),
             kind: CamToolKind::Drill,
             diameter: 5.0,
             flute_length: 25.0,
             overall_length: 55.0,
             center_cutting: true,
+            flute_count: 2,
+            point_angle_degrees: None,
+            cutting: CuttingParametersDto::default(),
         });
         source.setups[0].operations.push(CamOperationDto::Drill {
             id: 2,
@@ -709,8 +838,13 @@ mod tests {
             top_z: 0.0,
             bottom_z: -3.0,
             retract_z: 2.0,
+            clearance_z: 8.0,
             peck_depth: None,
             dwell_seconds: 0.25,
+            cycle: DrillCycle::Drill,
+            peck_retract: None,
+            thread_pitch: None,
+            feed_out: None,
             cutting: CuttingParametersDto {
                 spindle_rpm: 2_500,
                 feed_xy: 300.0,
@@ -729,13 +863,13 @@ mod tests {
             &document(PostDialect::Grbl),
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: Some("FACE SAMPLE".into()),
             },
         )
         .unwrap();
         assert!(posted.nc.contains("G90 G17 G21 G40 G49 G80"));
-        assert!(posted.nc.contains("G54\nM5\nM9"));
+        assert!(posted.nc.contains("M5\nM9\nG54"));
         assert!(posted.nc.contains("(MANUAL TOOL CHANGE: T1 6 mm flat)"));
         assert!(posted.nc.contains("M0"));
         assert!(posted.nc.contains("G1 X"));
@@ -751,7 +885,7 @@ mod tests {
             &document(PostDialect::Fanuc),
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -765,22 +899,24 @@ mod tests {
     fn siemens_native_post_matches_the_validated_828d_envelope_without_shop_macros() {
         let mut source = document(PostDialect::Siemens828d);
         source.setups[0].work_offset = WorkOffset::G58;
-        source.setups[0].post.sequence_numbers = true;
+        source.post_defaults.sequence_numbers = true;
         let posted = post_setup(
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: Some("61047097 op1 v4".to_string()),
             },
         )
         .unwrap();
 
         assert!(posted.nc.starts_with("; %_N_61047097_OP1_V4_MPF\n"));
-        assert!(posted.nc.contains("N10 G58\nN11 G17 G710 G90 G94\nN12 G64"));
+        assert!(posted.nc.contains("N10 G17 G710 G90 G94\nN11 G64"));
+    assert!(posted.nc.contains("N13 G58\n"));
         assert!(posted.nc.contains("G0 SUPA Z0 D0"));
         assert!(posted.nc.contains("MSG (\"Face top\")"));
-        assert!(posted.nc.contains("T1\n"));
+        // The 828D calls the tool by its library name, not a bare number.
+        assert!(posted.nc.contains("T=\"6_MM_FLAT\"\n"));
         assert!(posted.nc.contains("M6\n"));
         assert!(posted.nc.contains("D1\n"));
         assert!(posted.nc.contains("S10000 M3"));
@@ -793,12 +929,12 @@ mod tests {
     #[test]
     fn siemens_native_post_fails_closed_without_a_confirmed_machine_profile() {
         let mut source = document(PostDialect::Siemens828d);
-        source.setups[0].post.siemens_828d = None;
+        source.post_defaults.siemens_828d = None;
         let error = post_setup(
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -818,7 +954,7 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -827,19 +963,18 @@ mod tests {
         let shutdown = posted.nc.find("M9\nM5\nG0 SUPA Z0 D0").unwrap();
         let message = posted.nc.find("MSG (\"Drill holes\")").unwrap();
         let optional_stop = posted.nc[message..].find("M1").unwrap() + message;
-        let tool_change = posted.nc[optional_stop..].find("T19").unwrap() + optional_stop;
+        let tool_change = posted.nc[optional_stop..].find("T=\"5_MM_DRILL\"").unwrap() + optional_stop;
         assert!(shutdown < message && message < optional_stop && optional_stop < tool_change);
         assert!(posted.nc.contains("G4 F0.25"));
         assert_eq!(posted.nc.matches("G0 SUPA Z0 D0").count(), 3);
-        assert!(!posted.nc.contains("M6\nD1\nT19\n"));
+        assert!(!posted.nc.contains("M6\nD1\nT=\"5_MM_DRILL\"\n"));
         assert!(!posted.nc.contains("SP_RP_D"));
     }
 
     #[test]
     fn siemens_next_tool_preload_is_explicit_and_wraps_to_the_first_tool() {
         let mut source = two_tool_siemens_document();
-        source.setups[0]
-            .post
+        source.post_defaults
             .siemens_828d
             .as_mut()
             .unwrap()
@@ -849,21 +984,20 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
         .unwrap();
 
-        assert!(posted.nc.contains("T1\nM6\nD1\nT19\nG17 G90 G94"));
-        assert!(posted.nc.contains("T19\nM6\nD1\nT1\nG17 G90 G94"));
+        assert!(posted.nc.contains("T=\"6_MM_FLAT\"\nM6\nD1\nT=\"5_MM_DRILL\"\nG17 G90 G94"));
+        assert!(posted.nc.contains("T=\"5_MM_DRILL\"\nM6\nD1\nT=\"6_MM_FLAT\"\nG17 G90 G94"));
     }
 
     #[test]
     fn siemens_next_tool_preload_never_repeats_the_only_tool() {
         let mut source = document(PostDialect::Siemens828d);
-        source.setups[0]
-            .post
+        source.post_defaults
             .siemens_828d
             .as_mut()
             .unwrap()
@@ -873,20 +1007,68 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
         .unwrap();
 
-        assert_eq!(posted.nc.matches("\nT1\n").count(), 1);
+        assert_eq!(posted.nc.matches("\nT=\"6_MM_FLAT\"\n").count(), 1);
+    }
+
+    #[test]
+    fn number_based_posts_fail_closed_when_a_tool_has_no_number() {
+        let mut source = document(PostDialect::Fanuc);
+        source.tools[0].number = None;
+        let error = post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .expect_err("a numberless tool must not reach a numeric tool call");
+        assert!(error.to_string().contains("no tool number"));
+    }
+
+    #[test]
+    fn siemens_falls_back_to_the_number_when_the_name_is_not_callable() {
+        let mut source = document(PostDialect::Siemens828d);
+        source.tools[0].name = "!!!".into();
+        let posted = post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        assert!(posted.nc.contains("T1\n"));
+        assert!(!posted.nc.contains("T=\""));
+    }
+
+    #[test]
+    fn siemens_named_tool_call_survives_a_missing_number() {
+        let mut source = document(PostDialect::Siemens828d);
+        source.tools[0].number = None;
+        let posted = post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        assert!(posted.nc.contains("T=\"6_MM_FLAT\"\n"));
     }
 
     #[test]
     fn siemens_controller_managed_strategy_leaves_station_motion_to_m6() {
         let mut source = two_tool_siemens_document();
-        source.setups[0]
-            .post
+        source.post_defaults
             .siemens_828d
             .as_mut()
             .unwrap()
@@ -896,7 +1078,7 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -911,7 +1093,7 @@ mod tests {
     #[test]
     fn siemens_fixed_station_strategy_moves_z_before_machine_xy() {
         let mut source = two_tool_siemens_document();
-        let profile = source.setups[0].post.siemens_828d.as_mut().unwrap();
+        let profile = source.post_defaults.siemens_828d.as_mut().unwrap();
         profile.tool_change_positioning = Siemens828dToolChangePositioning::SupaZThenXy;
         profile.station_x = Some(123.4);
         profile.station_y = Some(-56.7);
@@ -920,7 +1102,7 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -934,8 +1116,7 @@ mod tests {
     #[test]
     fn siemens_fixed_station_strategy_fails_closed_until_both_axes_are_entered() {
         let mut source = two_tool_siemens_document();
-        source.setups[0]
-            .post
+        source.post_defaults
             .siemens_828d
             .as_mut()
             .unwrap()
@@ -945,7 +1126,7 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -960,14 +1141,14 @@ mod tests {
             &source,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
         .unwrap();
         let mut umbrella = source;
-        umbrella.setups[0]
-            .post
+        umbrella
+            .post_defaults
             .siemens_828d
             .as_mut()
             .unwrap()
@@ -976,7 +1157,7 @@ mod tests {
             &umbrella,
             &CamPostRequestDto {
                 setup_id: 1,
-                dialect: None,
+                post: None,
                 program_name: None,
             },
         )
@@ -1007,5 +1188,46 @@ mod tests {
         assert_eq!(coordinate(-2.5), "-2.5");
         assert_eq!(siemens_coordinate(1.234_567), "1.23457");
         assert_eq!(siemens_program_name(" Part 12.mpf "), "PART_12");
+    }
+
+    #[test]
+    fn inch_documents_post_g20_with_converted_lengths_and_feeds() {
+        let mut source = document(PostDialect::Grbl);
+        source.units = CamUnits::Inches;
+        let posted = post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        assert!(posted.nc.contains("G90 G17 G20 G40 G49 G80"));
+        // 8 mm clearance -> 0.315 in; 600 mm/min -> 23.622 in/min.
+        assert!(posted.nc.contains("G0 Z0.315"));
+        assert!(posted.nc.contains("F23.622"));
+        assert!(!posted.nc.contains("G21"));
+        assert!(posted
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("inches")));
+    }
+
+    #[test]
+    fn inch_documents_post_g70_on_the_siemens_profile() {
+        let mut source = document(PostDialect::Siemens828d);
+        source.units = CamUnits::Inches;
+        let posted = post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        assert!(posted.nc.contains("G17 G70 G90 G94"));
+        assert!(!posted.nc.contains("G710"));
     }
 }

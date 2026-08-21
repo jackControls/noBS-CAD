@@ -1240,8 +1240,9 @@ impl SketchManager {
 
     pub fn set_cam_document(
         &mut self,
-        cam: CamDocumentDto,
+        mut cam: CamDocumentDto,
     ) -> Result<CamDocumentDto, SessionError> {
+        cam.migrate_legacy();
         cam.validate().map_err(SessionError::Solid)?;
         self.cam = cam;
         Ok(self.cam.clone())
@@ -4063,9 +4064,9 @@ mod project_tests {
         DrawingViewKind,
     };
     use nbcad_cam::{
-        CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CoolantMode,
-        CuttingParametersDto, Point2Dto as CamPoint2Dto, Point3Dto as CamPoint3Dto,
-        Rect2Dto as CamRect2Dto, StockBoxDto, WorkCoordinateSystemDto, WorkOffset,
+        CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CamUnits,
+        CoolantMode, CuttingParametersDto, Point2Dto as CamPoint2Dto, Point3Dto as CamPoint3Dto,
+        Rect2Dto as CamRect2Dto, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
     };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
@@ -4863,16 +4864,19 @@ mod project_tests {
                 id: 3,
                 name: "Top setup".to_string(),
                 wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
                 work_offset: WorkOffset::G55,
+                work_offset_count: 1,
+                stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+                resolved_stock: nbcad_cam::CamResolvedStockDto::Box,
                 stock: StockBoxDto {
                     min: CamPoint3Dto::new(0.0, 0.0, -12.0),
                     max: CamPoint3Dto::new(30.0, 20.0, 0.0),
                 },
+                stock_model_box: None,
                 body_ids: vec![],
-                clearance_z: 8.0,
-                retract_z: 2.0,
-                rapid_feed: 3_000.0,
-                post: CamPostConfigDto::default(),
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
                 operations: vec![CamOperationDto::Face {
                     id: 7,
                     name: "Face stock".to_string(),
@@ -4886,6 +4890,8 @@ mod project_tests {
                     target_z: -1.0,
                     step_over: 3.0,
                     step_down: 1.0,
+                    clearance_z: 8.0,
+                    retract_z: 2.0,
                     cutting: CuttingParametersDto {
                         spindle_rpm: 12_000,
                         feed_xy: 800.0,
@@ -4897,14 +4903,19 @@ mod project_tests {
             active_setup_id: Some(3),
             tools: vec![CamToolDto {
                 id: 5,
-                number: 1,
+                number: Some(1),
                 name: "6 mm flat end mill".to_string(),
                 kind: CamToolKind::FlatEndMill,
                 diameter: 6.0,
                 flute_length: 20.0,
                 overall_length: 50.0,
                 center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                cutting: CuttingParametersDto::default(),
             }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto::default(),
             next_setup_id: 4,
             next_operation_id: 8,
             next_tool_id: 6,
@@ -4933,7 +4944,7 @@ mod project_tests {
         let posted = loaded
             .cam_post(CamPostRequestDto {
                 setup_id: 3,
-                dialect: None,
+                post: None,
                 program_name: None,
             })
             .unwrap();

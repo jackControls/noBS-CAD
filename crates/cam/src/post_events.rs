@@ -23,6 +23,9 @@ pub struct PostEventStreamDto {
 #[serde(tag = "callback", rename_all = "camelCase")]
 pub enum PostEventDto {
     OnOpen,
+    OnWorkOffset {
+        offset: crate::model::WorkOffset,
+    },
     OnSection {
         operation_id: u64,
         name: String,
@@ -30,7 +33,7 @@ pub enum PostEventDto {
     },
     OnToolChange {
         tool_id: u64,
-        tool_number: u32,
+        tool_number: Option<u32>,
         tool_name: String,
     },
     OnSpindleSpeed {
@@ -69,6 +72,7 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
     for command in &program.commands {
         events.push(match command {
             CamCommandDto::ProgramStart { .. } => PostEventDto::OnOpen,
+            CamCommandDto::WorkOffset { offset } => PostEventDto::OnWorkOffset { offset: *offset },
             CamCommandDto::SectionStart {
                 operation_id,
                 name,
@@ -154,6 +158,7 @@ mod tests {
                 CamCommandDto::ProgramEnd,
             ],
             stats: Default::default(),
+            work_offsets: vec![WorkOffset::G54],
             warnings: vec![],
         };
         let events = post_event_stream(&CamDocumentDto::default(), &program);
