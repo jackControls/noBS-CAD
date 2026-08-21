@@ -8,6 +8,7 @@ src-tauri/gen
 src/engine-wasm/pkg
 src-tauri/occt-libs
 src-tauri/tauri.occt.conf.json
+src-tauri/linux-licenses
 vcpkg_installed
 .vcpkg
 *.local

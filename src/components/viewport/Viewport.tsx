@@ -11369,10 +11369,7 @@ export function Viewport() {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 overflow-hidden"
-      style={{
-        background: 'linear-gradient(180deg, var(--vp-top) 0%, var(--vp-bottom) 100%)',
-      }}
+      className="native-viewport-surface absolute inset-0 overflow-hidden"
     >
       {/* Active viewport selection role (top-center, mirrored by Bevy HUD). */}
       {selectionPrompt && (

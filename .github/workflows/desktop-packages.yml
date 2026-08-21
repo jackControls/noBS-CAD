@@ -34,6 +34,7 @@ jobs:
     outputs:
       windows_should_build: ${{ steps.classify.outputs.windows_should_build }}
       macos_should_build: ${{ steps.classify.outputs.macos_should_build }}
+      linux_should_build: ${{ steps.classify.outputs.linux_should_build }}
     steps:
       - name: Inspect changed paths
         id: classify
@@ -41,9 +42,10 @@ jobs:
         with:
           script: |
             if (context.eventName !== "pull_request") {
-              core.info(`${context.eventName} runs always build both desktop packages.`);
+              core.info(`${context.eventName} runs always build all desktop packages.`);
               core.setOutput("windows_should_build", "true");
               core.setOutput("macos_should_build", "true");
+              core.setOutput("linux_should_build", "true");
               return;
             }
 
@@ -101,6 +103,16 @@ jobs:
                 reason: "macOS packaging script",
               },
             ]);
+            const linuxMatches = platformMatches([
+              {
+                pattern: /^scripts\/(?:bundle-linux\.mjs|verify-linux-viewport\.sh)$/,
+                reason: "Linux packaging or native viewport verification script",
+              },
+              {
+                pattern: /^scripts\/docker\/ubuntu-26\.04\.Dockerfile$/,
+                reason: "Ubuntu 26.04 build SDK",
+              },
+            ]);
 
             const report = (platform, output, matches) => {
               const shouldBuild = matches.length > 0;
@@ -116,6 +128,7 @@ jobs:
 
             report("Windows", "windows_should_build", windowsMatches);
             report("macOS", "macos_should_build", macosMatches);
+            report("Linux", "linux_should_build", linuxMatches);
 
   build-windows-portable:
     name: Windows x64 portable ZIP
@@ -294,6 +307,146 @@ jobs:
           path: |
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.zip
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  build-linux-ubuntu:
+    name: Ubuntu 26.04 x64 DEB and AppImage
+    needs: classify_changes
+    if: needs.classify_changes.outputs.linux_should_build == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
+
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust targets
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install Ubuntu 26.04 desktop and OpenCASCADE SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            clang \
+            cmake \
+            dbus-x11 \
+            file \
+            libayatana-appindicator3-dev \
+            libfuse2t64 \
+            libgtk-3-dev \
+            libocct-data-exchange-7.9 \
+            libocct-foundation-dev \
+            libocct-modeling-algorithms-dev \
+            libocct-modeling-data-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libudev-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libwebkit2gtk-4.1-dev \
+            libx11-dev \
+            libxdo-dev \
+            libxkbcommon-dev \
+            mesa-vulkan-drivers \
+            ninja-build \
+            patchelf \
+            vulkan-tools \
+            weston \
+            xauth \
+            xwayland \
+            xvfb
+
+          # Ubuntu's STEP development package recommends the VTK/IVTK SDK,
+          # which noBS CAD does not use. Extract its headers after installing
+          # the exact OCCT runtime and lower-level development libraries.
+          pushd "$RUNNER_TEMP"
+          apt-get download libocct-data-exchange-dev
+          package="$(find . -maxdepth 1 -name 'libocct-data-exchange-dev_*.deb' -print -quit)"
+          test -n "$package"
+          sudo dpkg-deb --extract "$package" /
+          popd
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: linux-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            linux-ubuntu-26.04-${{ runner.arch }}-
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.13.1 --locked
+
+      - name: Build and audit Linux packages
+        run: npm run bundle:linux
+
+      - name: Verify packaged native viewport on X11 and XWayland
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          deb="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          if [[ -z "$appimage" ]]; then
+            echo "AppImage was not created" >&2
+            exit 1
+          fi
+          if [[ -z "$deb" ]]; then
+            echo "Debian package was not created" >&2
+            exit 1
+          fi
+          chmod +x scripts/verify-linux-viewport.sh
+          scripts/verify-linux-viewport.sh \
+            "$appimage" \
+            x11 \
+            "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/x11"
+          scripts/verify-linux-viewport.sh \
+            "$deb" \
+            xwayland \
+            "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/xwayland"
+
+      - name: Upload Linux viewport diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-linux-viewport-diagnostics
+          path: ${{ runner.temp }}/nbcad-linux-viewport-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload Ubuntu release
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-0.1.0-ubuntu-26.04-x64
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/deb/*.deb.sha256
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.AppImage.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

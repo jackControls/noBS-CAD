@@ -53,6 +53,11 @@ pub(crate) fn load_system_font(mut commands: Commands, mut fonts: ResMut<Assets<
         r"C:\Windows\Fonts\segoeui.ttf",
         r"C:\Windows\Fonts\arial.ttf",
     ];
+    #[cfg(target_os = "linux")]
+    let candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ];
 
     let font = candidates
         .into_iter()
