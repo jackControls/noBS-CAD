@@ -1,3 +1,7 @@
+#[cfg(target_os = "linux")]
+use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
+#[cfg(target_os = "linux")]
+use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings, WgpuSettingsPriority};
 use bevy::{
     asset::RenderAssetUsages,
     camera::{visibility::RenderLayers, ClearColorConfig},
@@ -10,10 +14,6 @@ use bevy::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
         WindowPlugin, WindowResized, WindowResolution, WindowScaleFactorChanged, WindowWrapper,
     },
-};
-#[cfg(target_os = "linux")]
-use bevy::render::settings::{
-    RenderCreation, WgpuFeatures, WgpuSettings, WgpuSettingsPriority,
 };
 use nbcad_core::{BodyAppearance, PlaneBasis};
 use nbcad_sketch::{BodyPoseDto, EntityDto, InstanceBodyPoseDto, SketchDto, Vec2 as SketchVec2};
@@ -36,12 +36,14 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
-#[cfg(target_os = "linux")]
-use raw_window_handle::{XlibDisplayHandle, XlibWindowHandle};
 #[cfg(target_os = "windows")]
 use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+#[cfg(target_os = "linux")]
+use raw_window_handle::{XlibDisplayHandle, XlibWindowHandle};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::ptr::NonNull;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 use std::{
     any::Any,
     collections::HashMap,
@@ -91,21 +93,26 @@ use windows_sys::Win32::{
 };
 #[cfg(target_os = "linux")]
 use {
-    glib::{prelude::*, translate::from_glib_borrow},
+    glib::{
+        prelude::*,
+        translate::{from_glib_borrow, IntoGlib, ToGlibPtr},
+    },
     gtk::prelude::*,
-    webkit2gtk::WebViewExt,
 };
 
 use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
+use super::ViewportRect;
 use super::{
     NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
     ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel, ViewportOriginPlane,
     ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind, ViewportSnapMarker,
 };
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
-use super::ViewportRect;
 use crate::state::BOOTSTRAP_SESSION_ID;
 
+#[cfg(target_os = "linux")]
+const INITIAL_PHYSICAL_SIZE: u32 = 1;
+#[cfg(not(target_os = "linux"))]
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
@@ -128,8 +135,7 @@ const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Metal / embedded NSView";
 #[cfg(target_os = "windows")]
 const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu DX12-Vulkan / embedded HWND";
 #[cfg(target_os = "linux")]
-const NATIVE_BACKEND: &str =
-    "Bevy 0.19 / wgpu Vulkan / embedded GTK X11-XWayland DrawingArea";
+const NATIVE_BACKEND: &str = "Bevy 0.19 / wgpu Vulkan / embedded GTK X11-XWayland DrawingArea";
 
 #[derive(Default)]
 struct NativePointers {
@@ -250,6 +256,8 @@ impl PlatformNativeViewport {
         let install_metrics = metrics.clone();
         let install_runtime = runtime.clone();
         let install_pending = pending.clone();
+        #[cfg(target_os = "linux")]
+        let install_last_layout = last_layout.clone();
 
         main_window
             .with_webview(move |platform| {
@@ -288,8 +296,16 @@ impl PlatformNativeViewport {
                         })
                 };
                 #[cfg(target_os = "linux")]
-                let result =
-                    unsafe { install_native_views(platform.inner(), install_pointers.clone()) };
+                let result = unsafe {
+                    install_native_views(
+                        platform.inner(),
+                        install_pointers.clone(),
+                        install_runtime.clone(),
+                        install_pending.clone(),
+                        install_metrics.clone(),
+                        install_last_layout.clone(),
+                    )
+                };
 
                 let (view_handle, scale_factor) = match result {
                     Ok(value) => value,
@@ -309,7 +325,7 @@ impl PlatformNativeViewport {
                 // silently leaving an empty viewport.
                 let initialized = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     let bevy_app = build_bevy_app(view_handle, scale_factor as f32)?;
-                    let mut render_runtime = Box::new(MainThreadRenderRuntime {
+                    let render_runtime = Box::new(MainThreadRenderRuntime {
                         app: bevy_app,
                         model: ViewportModel {
                             session_id: BOOTSTRAP_SESSION_ID.to_string(),
@@ -328,6 +344,15 @@ impl PlatformNativeViewport {
                         scale_factor: scale_factor as f32,
                         session_aliases: HashMap::new(),
                     });
+                    // Linux must not create a Vulkan surface for GTK's 1x1
+                    // placeholder drawable. Its first Bevy update is driven
+                    // by the server-confirmed ConfigureNotify below. macOS
+                    // and Windows keep their established eager bootstrap.
+                    #[cfg(target_os = "linux")]
+                    let render_runtime = render_runtime;
+                    #[cfg(not(target_os = "linux"))]
+                    let mut render_runtime = render_runtime;
+                    #[cfg(not(target_os = "linux"))]
                     render_frames(&mut render_runtime.app, 2, &install_metrics);
                     Ok::<_, String>(render_runtime)
                 }));
@@ -365,6 +390,11 @@ impl PlatformNativeViewport {
                 eprintln!(
                     "native Bevy viewport installed ({NATIVE_BACKEND}, {scale_factor:.2}x scale)"
                 );
+                // On Linux the bootstrap scene is commonly queued before GTK
+                // has allocated the embedded X11 child. Keep it coalesced
+                // until the first real ConfigureNotify; draining here would
+                // still create a FIFO swapchain for the 1x1 placeholder.
+                #[cfg(not(target_os = "linux"))]
                 drain_render_commands(&install_runtime, &install_pending, &install_metrics);
             })
             .map_err(|error| format!("could not access the native webview: {error}"))?;
@@ -418,17 +448,52 @@ impl PlatformNativeViewport {
             let scale_factor = unsafe {
                 apply_native_layout(webview_pointer, viewport_pointer, window_pointer, &layout)
             };
-            push_render_command(
-                &pending,
-                RenderCommand::Resize {
-                    logical_width: layout.viewport.width.max(1.0),
-                    logical_height: layout.viewport.height.max(1.0),
-                    scale_factor,
-                    palette: layout.palette,
-                    hud: layout.hud,
-                },
-            );
-            drain_render_commands(&runtime, &pending, &metrics);
+            #[cfg(target_os = "linux")]
+            {
+                // A DOM layout is a requested GTK allocation, not proof that
+                // X11 has resized the child drawable. Rendering the requested
+                // extent early violates Vulkan's currentExtent contract and
+                // can permanently blacken the swapchain. A matching layout is
+                // still a useful explicit redraw (palette/HUD/full-screen
+                // transitions); actual size changes are driven exclusively by
+                // the viewport's server-confirmed configure event below.
+                let pointer = runtime.load(Ordering::Acquire);
+                let matches_configured_size = if pointer == 0 {
+                    false
+                } else {
+                    let render_runtime = unsafe { &*(pointer as *const MainThreadRenderRuntime) };
+                    (render_runtime.logical_size.0 - layout.viewport.width as f32).abs() <= 0.01
+                        && (render_runtime.logical_size.1 - layout.viewport.height as f32).abs()
+                            <= 0.01
+                };
+                if matches_configured_size {
+                    push_render_command(
+                        &pending,
+                        RenderCommand::Resize {
+                            logical_width: layout.viewport.width.max(1.0),
+                            logical_height: layout.viewport.height.max(1.0),
+                            scale_factor,
+                            palette: layout.palette,
+                            hud: layout.hud,
+                        },
+                    );
+                    drain_render_commands(&runtime, &pending, &metrics);
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                push_render_command(
+                    &pending,
+                    RenderCommand::Resize {
+                        logical_width: layout.viewport.width.max(1.0),
+                        logical_height: layout.viewport.height.max(1.0),
+                        scale_factor,
+                        palette: layout.palette,
+                        hud: layout.hud,
+                    },
+                );
+                drain_render_commands(&runtime, &pending, &metrics);
+            }
         })
         .map_err(|error| format!("could not schedule native viewport layout: {error}"))
     }
@@ -1396,15 +1461,138 @@ fn apply_windows_viewport_region(
     }
 }
 
-/// Installs a GTK drawing surface below WebKitGTK inside the existing opaque
-/// Tauri window. The webview remains the top overlay so normal DOM menus,
-/// dialogs, accessibility and input continue to work. Only the viewport DOM
-/// background is transparent, revealing Bevy without a transparent top-level
-/// window or a second native window.
+/// Installs an opaque GTK/X11 child above WebKitGTK inside Tauri's existing
+/// window. Its X11 shape is cut around visible DOM overlay islands, matching
+/// the Windows ownership boundary without relying on WebKitGTK's accelerated
+/// transparency path. Input passes through to the webview underneath, so the
+/// DOM remains the accessibility and interaction owner.
+#[cfg(target_os = "linux")]
+unsafe fn disconnect_latest_instance_handler(
+    webview: &webkit2gtk::WebView,
+    signal_name: &'static [u8],
+) -> bool {
+    let signal_id = unsafe {
+        glib::gobject_ffi::g_signal_lookup(signal_name.as_ptr().cast(), webview.type_().into_glib())
+    };
+    if signal_id == 0 {
+        return false;
+    }
+
+    // Handler ids increase as handlers are connected. Wry attaches its
+    // undecorated-resize hooks after WebKit has installed the handlers that
+    // dispatch DOM input, so the newest instance handler is the one to
+    // replace. Temporarily block matches while enumerating them; otherwise
+    // g_signal_handler_find would return the same handler every time.
+    let instance = webview.as_ptr().cast();
+    let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED;
+    let mut handler_ids = Vec::new();
+    loop {
+        let handler_id = unsafe {
+            glib::gobject_ffi::g_signal_handler_find(
+                instance,
+                mask,
+                signal_id,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if handler_id == 0 {
+            break;
+        }
+        unsafe { glib::gobject_ffi::g_signal_handler_block(instance, handler_id) };
+        handler_ids.push(handler_id);
+    }
+
+    let latest = handler_ids.iter().copied().max();
+    for handler_id in handler_ids {
+        if Some(handler_id) == latest {
+            unsafe { glib::gobject_ffi::g_signal_handler_disconnect(instance, handler_id) };
+        } else {
+            unsafe { glib::gobject_ffi::g_signal_handler_unblock(instance, handler_id) };
+        }
+    }
+    latest.is_some()
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn replace_tauri_gtk_resize_handler(webview: &webkit2gtk::WebView) {
+    // Tauri's Linux resize hook walks `webview -> GtkBox -> GtkWindow` and
+    // unwraps the final cast. The native viewport deliberately inserts a
+    // GtkOverlay between the box and webview, so leaving that hook installed
+    // makes every primary-button press panic before GTK can dispatch it to
+    // the application. Remove the hook that Wry attached at construction and
+    // replace it with the same edge-resize behavior using Widget::toplevel(),
+    // which remains valid after reparenting.
+    if !unsafe { disconnect_latest_instance_handler(webview, b"button-press-event\0") } {
+        eprintln!("WebKitGTK had no instance button resize handler to replace");
+    }
+    if !unsafe { disconnect_latest_instance_handler(webview, b"touch-event\0") } {
+        eprintln!("WebKitGTK had no instance touch resize handler to replace");
+    }
+
+    webview.connect_button_press_event(|webview, event| {
+        if event.button() != 1 {
+            return glib::Propagation::Proceed;
+        }
+        let Some(window) = webview
+            .toplevel()
+            .and_then(|widget| widget.downcast::<gtk::Window>().ok())
+        else {
+            return glib::Propagation::Proceed;
+        };
+        if window.is_decorated() || !window.is_resizable() || window.is_maximized() {
+            return glib::Propagation::Proceed;
+        }
+        let Some(gdk_window) = window.window() else {
+            return glib::Propagation::Proceed;
+        };
+        let (root_x, root_y) = event.root();
+        let (window_x, window_y) = gdk_window.position();
+        let x = root_x - window_x as f64;
+        let y = root_y - window_y as f64;
+        let width = gdk_window.width() as f64;
+        let height = gdk_window.height() as f64;
+        let inset = (window.scale_factor() * 5) as f64;
+        let west = x < inset;
+        let east = x >= width - inset;
+        let north = y < inset;
+        let south = y >= height - inset;
+        let edge = match (west, east, north, south) {
+            (true, _, true, _) => Some(gtk::gdk::WindowEdge::NorthWest),
+            (_, true, true, _) => Some(gtk::gdk::WindowEdge::NorthEast),
+            (true, _, _, true) => Some(gtk::gdk::WindowEdge::SouthWest),
+            (_, true, _, true) => Some(gtk::gdk::WindowEdge::SouthEast),
+            (true, _, _, _) => Some(gtk::gdk::WindowEdge::West),
+            (_, true, _, _) => Some(gtk::gdk::WindowEdge::East),
+            (_, _, true, _) => Some(gtk::gdk::WindowEdge::North),
+            (_, _, _, true) => Some(gtk::gdk::WindowEdge::South),
+            _ => None,
+        };
+        if let Some(edge) = edge {
+            gdk_window.begin_resize_drag(
+                edge,
+                1,
+                root_x.round() as i32,
+                root_y.round() as i32,
+                event.time(),
+            );
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+}
+
 #[cfg(target_os = "linux")]
 unsafe fn install_native_views(
     webview: webkit2gtk::WebView,
     pointers: Arc<NativePointers>,
+    runtime: Arc<AtomicUsize>,
+    pending: Arc<Mutex<PendingRenderCommands>>,
+    metrics: Arc<Mutex<MetricsState>>,
+    last_layout: Arc<Mutex<Option<ViewportLayout>>>,
 ) -> Result<(NativeViewHandle, f64), String> {
     let parent = webview
         .parent()
@@ -1415,6 +1603,8 @@ unsafe fn install_native_views(
         .iter()
         .position(|child| child == webview.upcast_ref::<gtk::Widget>())
         .unwrap_or(0) as i32;
+
+    unsafe { replace_tauri_gtk_resize_handler(&webview) };
 
     // Hold a strong reference to the webview while it is temporarily removed
     // from Wry's default box and moved into the overlay.
@@ -1428,16 +1618,86 @@ unsafe fn install_native_views(
     fixed.set_vexpand(true);
     viewport.set_app_paintable(true);
     viewport.set_can_focus(false);
+    // GTK's Cairo backing store otherwise repaints this X11 child after wgpu
+    // presents, replacing the Bevy frame with the widget's theme background.
+    // The DrawingArea is an external Vulkan target and Bevy is its sole
+    // painter, matching Tao's X11 setup for externally rendered windows.
+    unsafe {
+        let widget = viewport.upcast_ref::<gtk::Widget>();
+        gtk::ffi::gtk_widget_set_double_buffered(widget.to_glib_none().0, 0);
+    }
     viewport.set_size_request(INITIAL_PHYSICAL_SIZE as i32, INITIAL_PHYSICAL_SIZE as i32);
+    // `size-allocate` and `draw` describe GTK's requested/cached geometry.
+    // Vulkan's X11 surface capabilities do not change until the server emits
+    // ConfigureNotify. Make that event the single authority for swapchain
+    // dimensions and coalesce bursts to the newest confirmed extent.
+    let configured_size = Arc::new(AtomicU64::new(0));
+    let render_scheduled = Arc::new(AtomicBool::new(false));
+    viewport.connect_configure_event(move |viewport, event| {
+        let (logical_width, logical_height) = event.size();
+        // GTK realizes the DrawingArea at its 1x1 placeholder allocation
+        // before React supplies the actual viewport rectangle. Creating or
+        // updating a FIFO swapchain for that transient drawable can consume
+        // every image before X11 has a presentable window. Wait for a real
+        // allocation; the later ConfigureNotify is the authoritative first
+        // render and resize signal.
+        if logical_width < 32 || logical_height < 32 {
+            return false;
+        }
+        let size_key = (u64::from(logical_width.max(1)) << 32) | u64::from(logical_height.max(1));
+        configured_size.store(size_key, Ordering::Release);
+        if render_scheduled.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+
+        let runtime = runtime.clone();
+        let pending = pending.clone();
+        let metrics = metrics.clone();
+        let last_layout = last_layout.clone();
+        let configured_size = configured_size.clone();
+        let render_scheduled = render_scheduled.clone();
+        let viewport = viewport.clone();
+        let scale_factor = f64::from(viewport.scale_factor().max(1));
+        // ConfigureNotify is emitted while GTK may still have a queued Cairo
+        // paint for this child. Present on the next frame boundary so GTK has
+        // finished its layout/draw pass before Bevy owns the X11 drawable.
+        glib::timeout_add_local_once(Duration::from_millis(16), move || {
+            let size_key = configured_size.load(Ordering::Acquire);
+            let logical_width = (size_key >> 32) as u32;
+            let logical_height = size_key as u32;
+            if let Some(layout) = last_layout.lock().ok().and_then(|current| current.clone()) {
+                if let Some(window) = viewport.window() {
+                    apply_linux_viewport_region(
+                        &window,
+                        &layout,
+                        logical_width.max(1) as i32,
+                        logical_height.max(1) as i32,
+                    );
+                }
+                push_render_command(
+                    &pending,
+                    RenderCommand::Resize {
+                        logical_width: f64::from(logical_width.max(1)),
+                        logical_height: f64::from(logical_height.max(1)),
+                        scale_factor,
+                        palette: layout.palette,
+                        hud: layout.hud,
+                    },
+                );
+                drain_render_commands(&runtime, &pending, &metrics);
+            }
+            render_scheduled.store(false, Ordering::Release);
+        });
+        false
+    });
     viewport.connect_draw(|_, _| glib::Propagation::Stop);
     fixed.put(&viewport, 0, 0);
-    overlay.add(&fixed);
 
     webview.set_hexpand(true);
     webview.set_vexpand(true);
-    webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
-    overlay.add_overlay(&webview);
-    overlay.set_overlay_pass_through(&webview, false);
+    overlay.add(&webview);
+    overlay.add_overlay(&fixed);
+    overlay.set_overlay_pass_through(&fixed, true);
     parent.pack_start(&overlay, true, true, 0);
     parent.reorder_child(&overlay, child_index);
     overlay.show_all();
@@ -1447,6 +1707,11 @@ unsafe fn install_native_views(
     let gdk_window = viewport
         .window()
         .ok_or_else(|| "GTK did not realize a native viewport window".to_string())?;
+    // Bevy receives pointer input through the React bridge. Its native X11
+    // child must therefore be input-transparent; otherwise that child owns
+    // every click inside the viewport rectangle and DOM controls revealed by
+    // the X11 shape cutouts become inert.
+    gdk_window.set_pass_through(true);
     let gdk_display = gdk_window.display();
     let backend_name = gdk_display.type_().name();
     if !backend_name.contains("X11") {
@@ -1480,11 +1745,16 @@ unsafe fn install_native_views(
 
 #[cfg(target_os = "linux")]
 unsafe fn apply_native_layout(
-    _webview_pointer: usize,
+    webview_pointer: usize,
     viewport_pointer: usize,
     window_pointer: usize,
     layout: &ViewportLayout,
 ) -> f64 {
+    let webview = unsafe {
+        from_glib_borrow::<_, webkit2gtk::WebView>(
+            webview_pointer as *mut webkit2gtk::ffi::WebKitWebView,
+        )
+    };
     let viewport = unsafe {
         from_glib_borrow::<_, gtk::DrawingArea>(viewport_pointer as *mut gtk::ffi::GtkDrawingArea)
     };
@@ -1493,20 +1763,141 @@ unsafe fn apply_native_layout(
     let scale_factor = viewport.scale_factor().max(1) as f64;
     let rect = layout.viewport;
     if rect.width < 2.0 || rect.height < 2.0 {
-        viewport.hide();
+        // Keep the Vulkan child mapped, sized, and in the same X11 stacking
+        // order so its swapchain remains presentable. Moving it outside the
+        // parent allocation exposes the opaque WebView for Drawing without
+        // relying on transparent GTK compositing or an empty XShape region.
+        park_linux_viewport(&webview, &viewport, &fixed);
         return scale_factor;
     }
 
     // DOM client coordinates and GTK allocations are both logical pixels;
     // wgpu applies the widget scale factor when it configures the surface.
+    let width = rect.width.round().max(1.0) as i32;
+    let height = rect.height.round().max(1.0) as i32;
     fixed.move_(&*viewport, rect.x.round() as i32, rect.y.round() as i32);
-    viewport.set_size_request(
-        rect.width.round().max(1.0) as i32,
-        rect.height.round().max(1.0) as i32,
-    );
+    viewport.set_size_request(width, height);
     viewport.show();
     viewport.queue_resize();
+    if let Some(window) = viewport.window() {
+        webview.queue_draw();
+        apply_linux_viewport_region(&window, layout, width, height);
+        // `GtkFixed::move_` updates the X11 child allocation asynchronously.
+        // When the viewport returns from Drawing, GTK first carries forward
+        // the empty clip it computed while the child was offscreen. Restore
+        // the application-owned overlay cutouts after that allocation pass;
+        // doing this synchronously is overwritten by GTK a few milliseconds
+        // later and leaves an otherwise healthy Vulkan surface invisible.
+        let deferred_window = window.clone();
+        let deferred_layout = layout.clone();
+        glib::timeout_add_local_once(Duration::from_millis(16), move || {
+            apply_linux_viewport_region(&deferred_window, &deferred_layout, width, height);
+            deferred_window.invalidate_rect(None, false);
+        });
+    }
     scale_factor
+}
+
+#[cfg(target_os = "linux")]
+fn park_linux_viewport(
+    webview: &webkit2gtk::WebView,
+    viewport: &gtk::DrawingArea,
+    fixed: &gtk::Fixed,
+) {
+    // Hiding or unmapping the DrawingArea destroys wgpu's presentation path
+    // on some X11 drivers. Keep the child mapped and park it beyond the
+    // GtkFixed allocation while a non-3D workspace or native dialog owns the
+    // window, then expose the opaque WebView immediately.
+    let hidden_x = -viewport.allocated_width().max(1) - 16;
+    fixed.move_(viewport, hidden_x, 0);
+    viewport.show();
+    webview.queue_draw();
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_viewport_region(
+    window: &gdk::Window,
+    layout: &ViewportLayout,
+    width: i32,
+    height: i32,
+) {
+    use gdk::cairo::{RectangleInt, Region};
+
+    let visible = Region::create_rectangle(&RectangleInt::new(0, 0, width, height));
+    for overlay in &layout.overlays {
+        let Some(intersection) = intersect_rect(*overlay, layout.viewport) else {
+            continue;
+        };
+        let left = (intersection.x - layout.viewport.x)
+            .floor()
+            .clamp(0.0, f64::from(width)) as i32;
+        let top = (intersection.y - layout.viewport.y)
+            .floor()
+            .clamp(0.0, f64::from(height)) as i32;
+        let right = (intersection.x + intersection.width - layout.viewport.x)
+            .ceil()
+            .clamp(0.0, f64::from(width)) as i32;
+        let bottom = (intersection.y + intersection.height - layout.viewport.y)
+            .ceil()
+            .clamp(0.0, f64::from(height)) as i32;
+        if right <= left || bottom <= top {
+            continue;
+        }
+
+        let radius = intersection
+            .corner_radius
+            .round()
+            .clamp(0.0, f64::from((right - left).min(bottom - top)) / 2.0)
+            as i32;
+        let cutout = if radius <= 1 {
+            Region::create_rectangle(&RectangleInt::new(left, top, right - left, bottom - top))
+        } else {
+            rounded_linux_region(left, top, right, bottom, radius)
+        };
+        if let Err(error) = visible.subtract(&cutout) {
+            eprintln!("could not clip a DOM overlay from the Linux viewport: {error}");
+        }
+    }
+    window.shape_combine_region(Some(&visible), 0, 0);
+}
+
+#[cfg(target_os = "linux")]
+fn rounded_linux_region(
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    radius: i32,
+) -> gdk::cairo::Region {
+    use gdk::cairo::{RectangleInt, Region};
+
+    // Cairo regions are integer rectangles. Build one scan line per corner
+    // row so rounded DOM dialogs retain their true silhouette instead of
+    // exposing rectangular flashes around their transparent corner pixels.
+    let mut rows = Vec::with_capacity((bottom - top).max(0) as usize);
+    let radius_f = f64::from(radius);
+    for y in top..bottom {
+        let local_y = y - top;
+        let from_nearest_edge = if local_y < radius {
+            local_y
+        } else if local_y >= bottom - top - radius {
+            bottom - top - 1 - local_y
+        } else {
+            radius
+        };
+        let inset = if from_nearest_edge >= radius {
+            0
+        } else {
+            let dy = radius_f - (f64::from(from_nearest_edge) + 0.5);
+            (radius_f - (radius_f * radius_f - dy * dy).max(0.0).sqrt()).floor() as i32
+        };
+        let row_left = left + inset;
+        let row_right = right - inset;
+        if row_right > row_left {
+            rows.push(RectangleInt::new(row_left, y, row_right - row_left, 1));
+        }
+    }
+    Region::create_rectangles(&rows)
 }
 
 #[cfg(target_os = "linux")]
@@ -1517,11 +1908,18 @@ unsafe fn set_native_viewport_suspended(
     suspended: bool,
     layout: Option<&ViewportLayout>,
 ) {
+    let webview = unsafe {
+        from_glib_borrow::<_, webkit2gtk::WebView>(
+            webview_pointer as *mut webkit2gtk::ffi::WebKitWebView,
+        )
+    };
     let viewport = unsafe {
         from_glib_borrow::<_, gtk::DrawingArea>(viewport_pointer as *mut gtk::ffi::GtkDrawingArea)
     };
+    let fixed =
+        unsafe { from_glib_borrow::<_, gtk::Fixed>(window_pointer as *mut gtk::ffi::GtkFixed) };
     if suspended {
-        viewport.hide();
+        park_linux_viewport(&webview, &viewport, &fixed);
     } else if let Some(layout) = layout {
         let _ = unsafe {
             apply_native_layout(webview_pointer, viewport_pointer, window_pointer, layout)
@@ -1529,7 +1927,7 @@ unsafe fn set_native_viewport_suspended(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 fn intersect_rect(a: ViewportRect, b: ViewportRect) -> Option<ViewportRect> {
     let left = a.x.max(b.x);
     let top = a.y.max(b.y);
@@ -1802,6 +2200,10 @@ fn build_bevy_app(
     scale_factor: f32,
 ) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
+    #[cfg(target_os = "linux")]
+    let present_mode = PresentMode::Fifo;
+    #[cfg(not(target_os = "linux"))]
+    let present_mode = PresentMode::AutoNoVsync;
     let render_plugin = RenderPlugin {
         // This renderer advances only in response to bridge commands. On
         // Windows, asynchronously compiled PBR/UI pipelines can otherwise
@@ -1835,7 +2237,11 @@ fn build_bevy_app(
                 resolution: WindowResolution::new(INITIAL_PHYSICAL_SIZE, INITIAL_PHYSICAL_SIZE)
                     .with_scale_factor_override(scale_factor.max(1.0)),
                 visible: true,
-                present_mode: PresentMode::AutoNoVsync,
+                // FIFO is the only Vulkan presentation mode guaranteed on
+                // every Linux surface. Event-driven rendering still sleeps at
+                // idle, while avoiding resize-loss behavior seen with
+                // mailbox/immediate surfaces on X11 software and older GPUs.
+                present_mode,
                 desired_maximum_frame_latency: NonZeroU32::new(2),
                 ..default()
             }),
@@ -1844,6 +2250,8 @@ fn build_bevy_app(
             close_when_requested: false,
         })
         .set(render_plugin);
+    #[cfg(target_os = "linux")]
+    let plugins = plugins.disable::<PipelinedRenderingPlugin>();
     app.add_plugins(plugins)
         .init_gizmo_group::<CadHighlightGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
@@ -4159,7 +4567,8 @@ fn drain_render_commands(
                 pending.presentation.take(),
             )
         };
-        let requires_pipeline_settle = commands.0.is_some()
+        let resize_requested = commands.0.is_some();
+        let requires_pipeline_settle = resize_requested
             || commands.1.is_some()
             || !commands.2.is_empty()
             || !commands.3.is_empty()
@@ -4223,14 +4632,24 @@ fn drain_render_commands(
         }
         if dirty {
             // Structural changes get a second update to settle Bevy's
-            // extracted/pipelined render world. Camera and presentation-only
+            // extracted render world. Camera and presentation-only
             // changes use one frame on every platform; rendering them twice
             // adds pointer latency without creating any new GPU pipelines.
-            render_frames(
-                &mut runtime.app,
-                if requires_pipeline_settle { 2 } else { 1 },
-                metrics,
-            );
+            // A Linux Vulkan surface can reject the first frames after the
+            // embedded X11 drawable changes extent. Drain that short-lived
+            // stale-surface window here instead of running a continuous idle
+            // renderer. Normal interaction remains one frame per bridge wake.
+            #[cfg(target_os = "linux")]
+            let frame_count = if resize_requested {
+                1
+            } else if requires_pipeline_settle {
+                2
+            } else {
+                1
+            };
+            #[cfg(not(target_os = "linux"))]
+            let frame_count = if requires_pipeline_settle { 2 } else { 1 };
+            render_frames(&mut runtime.app, frame_count, metrics);
             maybe_write_ready_probe(metrics);
         }
     }
@@ -4256,6 +4675,13 @@ fn apply_render_command(
                 || (runtime.logical_size.1 - logical_height as f32).abs() > 0.01;
             let scale_factor_changed = (runtime.scale_factor - scale_factor as f32).abs() > 0.001;
             let size_changed = logical_size_changed || scale_factor_changed;
+            #[cfg(target_os = "linux")]
+            if std::env::var_os("NBCAD_VIEWPORT_PROBE_FILE").is_some() {
+                eprintln!(
+                    "native Bevy resize command: {:.0}x{:.0} logical, changed={size_changed}, background={:?}, native_chrome={}",
+                    logical_width, logical_height, palette.background, hud.render_native_chrome
+                );
+            }
             if size_changed {
                 resize_embedded_window(
                     runtime.app.world_mut(),
@@ -4525,6 +4951,31 @@ fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<Met
     for _ in 0..count {
         let started = Instant::now();
         app.update();
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("NBCAD_VIEWPORT_PROBE_FILE").is_some() {
+            if let Some(render_app) = app.get_sub_app(bevy::render::RenderApp) {
+                let world = render_app.world();
+                let windows = world.get_resource::<bevy::render::view::window::ExtractedWindows>();
+                let cameras = world.get_resource::<bevy::render::camera::SortedCameras>();
+                if let Some(windows) = windows {
+                    for window in windows.windows.values() {
+                        eprintln!(
+                            "native Bevy extracted window: {}x{}, format={:?}, texture={}, initial_present={}",
+                            window.physical_width,
+                            window.physical_height,
+                            window.swap_chain_texture_format,
+                            window.swap_chain_texture.is_some(),
+                            window.needs_initial_present,
+                        );
+                    }
+                }
+                eprintln!(
+                    "native Bevy render world: windows={}, cameras={}",
+                    windows.map_or(0, |windows| windows.windows.len()),
+                    cameras.map_or(0, |cameras| cameras.0.len()),
+                );
+            }
+        }
         let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
         if let Ok(mut current) = metrics.lock() {
             current.rendered_frames += 1;

@@ -14,8 +14,10 @@ the embedded CAD viewport; native OCCT owns exact geometry.
 - Vulkan rendering through wgpu. Mesa's lavapipe software Vulkan driver is
   used only by the headless CI probe; it is a compatibility fallback, not a
   performance target.
-- A fully opaque GTK/Tauri top-level window. WebKitGTK remains above the native
-  surface, so DOM menus and dialogs are not clipped by the viewport.
+- A fully opaque GTK/Tauri top-level window. The input-transparent native X11
+  child sits above WebKitGTK and is shaped around React's visible overlay
+  islands, so DOM menus and dialogs remain intact without depending on
+  accelerated transparent-WebKit compositing.
 
 Other distributions may work when they provide compatible GTK, WebKitGTK,
 Vulkan and OCCT 7.9 libraries, but Ubuntu 26.04 is the tested support contract.
@@ -32,7 +34,7 @@ docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
   nbcad-ubuntu-26.04 \
-  sh -lc 'npm ci && cargo install wasm-pack --version 0.13.1 --locked && npm run bundle:linux'
+  sh -lc 'npm ci && npm run bundle:linux'
 ```
 
 The container deliberately extracts only the Ubuntu STEP development headers

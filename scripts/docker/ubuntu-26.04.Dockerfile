@@ -53,7 +53,8 @@ RUN apt-get update \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable \
-    && rustup target add wasm32-unknown-unknown
+    && rustup target add wasm32-unknown-unknown \
+    && cargo install wasm-pack --version 0.13.1 --locked
 
 # Keep the reproducible SDK rooted in the official Ubuntu 26.04 archive. CI
 # still uses setup-node for the pinned Node 22 release toolchain.

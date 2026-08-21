@@ -161,6 +161,21 @@ if [[ ! -f "$probe" ]]; then
   exit 1
 fi
 
+# A render-task panic can race the asynchronous readiness probe. Give the
+# renderer a moment to flush its diagnostics, then require both a live process
+# and a panic-free application log before trusting the probe payload.
+sleep 1
+if ! kill -0 "$app_pid" 2>/dev/null; then
+  cat "$app_log" >&2
+  echo "Application exited immediately after reporting native viewport readiness" >&2
+  exit 1
+fi
+if grep -Eiq 'panicked at|thread .* panicked|Encountered a panic in system' "$app_log"; then
+  cat "$app_log" >&2
+  echo "Native viewport reported ready but the renderer subsequently panicked" >&2
+  exit 1
+fi
+
 cat "$probe"
 node - "$probe" x11 <<'NODE'
 const [probePath, expectedDisplay] = process.argv.slice(2);

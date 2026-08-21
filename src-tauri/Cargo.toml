@@ -17,6 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
+# Tauri's CLI enables this feature for release builds so the web shell is
+# loaded from the assets embedded by `tauri-build` instead of the Vite dev URL.
+custom-protocol = ["tauri/custom-protocol"]
 # Adds logging only for the headless GPU visual-regression lab. The production
 # Tauri binary keeps using the embedded native view and does not include the
 # capture entry point.

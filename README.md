@@ -194,7 +194,7 @@ The committed container is the simplest reproducible build environment:
 ```sh
 docker build -f scripts/docker/ubuntu-26.04.Dockerfile -t nbcad-ubuntu-26.04 .
 docker run --rm -v "$PWD:/workspace" -w /workspace nbcad-ubuntu-26.04 \
-  sh -lc 'npm ci && cargo install wasm-pack --version 0.13.1 --locked && npm run bundle:linux'
+  sh -lc 'npm ci && npm run bundle:linux'
 ```
 
 On a native Ubuntu 26.04 development system with the documented GTK, Vulkan,
