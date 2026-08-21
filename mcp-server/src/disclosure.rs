@@ -484,11 +484,13 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
+            | "cad_script"
+            | "cad_compare_solids"
     );
     if spine {
         let pack = match name {
-            "cad_document" => FocusPack::Document,
-            "solid_scene" | "solid_recompute" => FocusPack::Inspect,
+            "cad_document" | "cad_script" => FocusPack::Document,
+            "solid_scene" | "solid_recompute" | "cad_compare_solids" => FocusPack::Inspect,
             _ => FocusPack::Document,
         };
         return (pack, true);
@@ -565,7 +567,9 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "solid_combine"
         | "solid_edit_combine"
         | "solid_split_body"
-        | "solid_edit_split_body" => FocusPack::BodyOps,
+        | "solid_edit_split_body"
+        | "solid_import_step"
+        | "solid_edit_import_step" => FocusPack::BodyOps,
         "construction_plane_definitions"
         | "construction_plane_offset"
         | "construction_plane_edit_offset"
@@ -638,7 +642,8 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
             || name.contains("mirror")
             || name.contains("pattern")
             || name.contains("combine")
-            || name.contains("split_body"))
+            || name.contains("split_body")
+            || name.contains("import_step"))
     {
         return Some(FocusPack::BodyOps);
     }
@@ -695,7 +700,8 @@ pub fn focus_from_ui(
             | "rectangular_pattern"
             | "circular_pattern"
             | "combine"
-            | "split_body" => FocusPack::BodyOps,
+            | "split_body"
+            | "import_step" => FocusPack::BodyOps,
             "extrude" | "revolve" | "sweep" | "loft" | "rib" => FocusPack::Solid,
             "construction_plane" | "offset_plane" | "midplane" | "plane_at_angle" => {
                 FocusPack::Datums
@@ -866,6 +872,8 @@ mod tests {
             "solid_edit_combine",
             "solid_split_body",
             "solid_edit_split_body",
+            "solid_import_step",
+            "solid_edit_import_step",
             "construction_plane_definitions",
             "construction_plane_offset",
             "construction_plane_edit_offset",
@@ -890,7 +898,7 @@ mod tests {
             "solid_scene",
             "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 105);
+        assert_eq!(modeling.len(), 107);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(

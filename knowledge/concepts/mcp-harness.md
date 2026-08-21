@@ -3,7 +3,7 @@ type: Concept
 title: MCP harness
 description: Current local MCP behavior and proposed UI co-link milestones.
 status: stable
-updated: 2026-08-20
+updated: 2026-08-21
 ---
 
 # MCP harness
@@ -25,6 +25,12 @@ Proposals: [proposed architecture](../../docs/proposed-architecture.md).
 | No in-the-loop UI+MCP on the same doc | Blocked on co-link. [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
 
 Use MCP as an engine/automation probe until UI co-link exists.
+
+`solid_import_step` imports a STEP file as a **reference solid** (dumb body).
+`cad_script` dumps the successful **forward** MCP tool sequence for this
+process. We do **not** reverse-engineer feature history from STEP B-rep.
+`cad_compare_solids` summarizes existing `solid_scene` bbox/mesh counts so a
+rebuilt history can be checked against that imported reference.
 
 ## Proposed next
 

@@ -20,7 +20,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 105;
+const MODELING_TOOL_COUNT: usize = 107;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -126,6 +126,8 @@ struct CadServer {
     /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
     pending_recompute_transaction: Option<u64>,
+    /// Forward record of successful mutating `tools/call` entries for `cad_script`.
+    tool_trace: Vec<Value>,
 }
 
 impl CadServer {
@@ -136,10 +138,23 @@ impl CadServer {
             disclosure: DisclosureState::new(),
             attached_document_id: None,
             pending_recompute_transaction: None,
+            tool_trace: Vec::new(),
         })
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let trace_args = arguments.clone();
+        let result = self.dispatch_tool(name, arguments);
+        if result.is_ok() && records_in_script(name) {
+            self.tool_trace.push(json!({
+                "name": name,
+                "arguments": trace_args,
+            }));
+        }
+        result
+    }
+
+    fn dispatch_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
         let tools = tool_specs();
         let spec = tools
             .iter()
@@ -338,6 +353,8 @@ impl CadServer {
                     "session_mode": "read_only_snapshot",
                 })
             }
+            "cad_script" => json!({ "calls": self.tool_trace.clone() }),
+            "cad_compare_solids" => compare_solids_summary(&self.manager.solid_scene()),
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
@@ -1133,6 +1150,21 @@ fn tool_specs() -> Vec<ToolSpec> {
             "plane": plane.clone()
         }),
         &["body_id", "plane"],
+    );
+    let import_step = object_schema(
+        json!({
+            "file_name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Original STEP/STP file name stored with the import feature."
+            },
+            "data_base64": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Base64-encoded STEP/STP bytes. Imported as a dumb reference body, not recovered sketch/extrude history."
+            }
+        }),
+        &["file_name", "data_base64"],
     );
     let offset_plane = object_schema(
         json!({
@@ -2251,6 +2283,28 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::solid(
+            "solid_import_step",
+            "Import STEP body",
+            "Import a licensed STEP/STP file as a persistent reference solid. The kernel stores the source bytes and tessellates a dumb body; this does not recover sketch/extrude feature history.",
+            "solid_prepare_body_feature",
+            Payload::BodyFeature("import_step"),
+            import_step.clone(),
+        ),
+        ToolSpec::solid(
+            "solid_edit_import_step",
+            "Edit STEP import feature",
+            "Replace the stored STEP source on a persisted Import feature and fully replay downstream history. Still a reference solid, not reverse-engineered feature history.",
+            "solid_prepare_edit_body_feature",
+            Payload::EditBodyFeature("import_step"),
+            object_schema(
+                json!({
+                    "feature_id": {"type": "integer", "minimum": 1},
+                    "request": import_step
+                }),
+                &["feature_id", "request"],
+            ),
+        ),
+        ToolSpec::solid(
             "solid_recompute",
             "Recompute solids",
             "Fully replay active solid feature history through native OCCT.",
@@ -2539,6 +2593,18 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Clear the attached session id. Leaves the in-memory document as last loaded; does not delete session files.",
             empty_schema(),
         ),
+        ToolSpec::control(
+            "cad_script",
+            "Dump forward MCP script",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Forward record only — skips inspect/export helpers, failed calls, and cad_script itself. Does not reverse-engineer STEP feature history.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_compare_solids",
+            "Compare solid scene metrics",
+            "Summarize active bodies from solid_scene: body count plus per-body bbox, vertex_count, and triangle_count from existing mesh fields. Use to check a rebuilt history against an imported reference solid. Does not invent volume.",
+            empty_schema(),
+        ),
     ];
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
@@ -2546,6 +2612,83 @@ fn tool_specs() -> Vec<ToolSpec> {
         tool.spine = spine;
     }
     tools
+}
+
+fn records_in_script(name: &str) -> bool {
+    if matches!(
+        name,
+        "cad_script"
+            | "cad_compare_solids"
+            | "cad_document"
+            | "cad_project_model"
+            | "cad_get_focus"
+            | "cad_set_focus"
+            | "cad_list_focus_areas"
+            | "cad_get_tool_disclosure_mode"
+            | "cad_set_tool_disclosure_mode"
+            | "cad_list_all_tools"
+            | "cad_cancel_recompute"
+            | "cad_list_sessions"
+            | "cad_detach"
+            | "sketch_active"
+            | "sketch_finished"
+            | "sketch_profiles"
+            | "solid_scene"
+            | "solid_tessellate"
+            | "solid_export_step"
+            | "solid_export_stl"
+            | "solid_export_3mf"
+            | "solid_export_preflight"
+            | "material_catalog"
+            | "body_appearances"
+            | "demo_export_pip_3mf"
+    ) {
+        return false;
+    }
+    if name.ends_with("_definitions") || name.contains("_preview_") {
+        return false;
+    }
+    true
+}
+
+fn compare_solids_summary(scene: &nbcad_solid::SolidSceneDto) -> Value {
+    let bodies: Vec<Value> = scene
+        .bodies
+        .iter()
+        .map(|body| {
+            let positions = &body.mesh.positions;
+            let mut min = [f32::INFINITY; 3];
+            let mut max = [f32::NEG_INFINITY; 3];
+            for chunk in positions.chunks_exact(3) {
+                for (i, component) in chunk.iter().enumerate() {
+                    min[i] = min[i].min(*component);
+                    max[i] = max[i].max(*component);
+                }
+            }
+            let empty = positions.len() < 3;
+            json!({
+                "id": body.id,
+                "name": body.name,
+                "vertex_count": positions.len() / 3,
+                "triangle_count": body.mesh.indices.len() / 3,
+                "bbox_min": if empty {
+                    Value::Null
+                } else {
+                    json!([min[0], min[1], min[2]])
+                },
+                "bbox_max": if empty {
+                    Value::Null
+                } else {
+                    json!([max[0], max[1], max[2]])
+                },
+            })
+        })
+        .collect();
+    json!({
+        "body_count": bodies.len(),
+        "bodies": bodies,
+        "error_count": scene.errors.len(),
+    })
 }
 
 fn tool_list_result(disclosure: &mut DisclosureState) -> Value {
@@ -2966,8 +3109,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 19,
-            "105 modeling tools plus 8 print helpers and 11 control tools"
+            MODELING_TOOL_COUNT + 21,
+            "107 modeling tools plus 8 print helpers and 13 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2994,6 +3137,8 @@ mod tests {
                             | "cad_attach"
                             | "cad_refresh"
                             | "cad_detach"
+                            | "cad_script"
+                            | "cad_compare_solids"
                     )
                 )
             })
@@ -3050,6 +3195,8 @@ mod tests {
                     | "cad_attach"
                     | "cad_refresh"
                     | "cad_detach"
+                    | "cad_script"
+                    | "cad_compare_solids"
             ) {
                 continue;
             }
@@ -3511,6 +3658,56 @@ mod tests {
         assert_eq!(exported["format"], "step");
         assert_eq!(exported["encoding"], "base64");
         assert!(exported["bytes_base64"].as_str().unwrap().len() > 16);
+    }
+
+    #[test]
+    fn mcp_import_step_records_forward_script() {
+        let (mut donor, _) = mcp_box();
+        let exported = donor
+            .call_tool("solid_export_step", json!({}))
+            .expect("STEP export should succeed for a simple box");
+        let data_base64 = exported["bytes_base64"]
+            .as_str()
+            .expect("STEP export returns bytes_base64")
+            .to_string();
+
+        let mut server = CadServer::new().unwrap();
+        let imported = server
+            .call_tool(
+                "solid_import_step",
+                json!({
+                    "file_name": "box.step",
+                    "data_base64": data_base64,
+                }),
+            )
+            .expect("solid_import_step should import the exported box");
+        assert!(
+            imported["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            imported["scene"]["errors"]
+        );
+        assert_eq!(imported["scene"]["bodies"].as_array().unwrap().len(), 1);
+
+        let compared = server
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("cad_compare_solids summarizes the imported scene");
+        assert_eq!(compared["body_count"], 1);
+        assert!(compared["bodies"][0]["triangle_count"].as_u64().unwrap() > 0);
+
+        let script = server
+            .call_tool("cad_script", json!({}))
+            .expect("cad_script dumps the forward tool trace");
+        let calls = script["calls"].as_array().expect("cad_script.calls");
+        assert!(
+            calls.iter().any(|call| call["name"] == "solid_import_step"),
+            "cad_script should contain solid_import_step, got {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|call| call["name"] != "cad_script" && call["name"] != "cad_compare_solids"),
+            "cad_script must skip itself and read-only compare"
+        );
     }
 
     #[test]
