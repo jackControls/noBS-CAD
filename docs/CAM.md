@@ -4,27 +4,101 @@ This branch starts a host-neutral, fixed-axis CAM module for common 3-axis
 milling workflows. It is an engineering foundation, not yet a claim of
 production-safe CAM.
 
+## Operating model: nothing is created automatically
+
+Entering the manufacturing workspace never creates a setup, a tool, or an
+operation. The operator programs the job explicitly, in this order:
+
+1. **Tool library first.** Every cutter is a library entry with its geometry
+   (kind, diameter, flute length/count, tip angle where relevant) and its
+   default cutting data (spindle speed, cut/plunge feeds, coolant). Operations
+   reference library tools by an internal id and inherit their cutting data as
+   editable defaults, so renumbering or renaming a tool never breaks an
+   operation. The machine-facing identity is deliberately dual: a tool number
+   is optional — number-calling posts (GRBL/LinuxCNC/Fanuc style) fail closed
+   with a clear error when it is missing, while the Siemens 828D post prefers
+   the tool name (`T="NAME"`), falling back to the number only when the name
+   carries no callable identifier. Tool kinds cover flat/ball end mills,
+   drills, chamfer mills, taps, reamers, and boring bars.
+2. **Manual setup.** The operator chooses the part bodies, defines the stock,
+   and picks the WCS origin on the geometry. Stock has four shapes — box,
+   cylinder, hex bar, or a modeled body — defined in one of three ways: a
+   fixed size with the model centered inside or parked against a chosen face
+   with a gap; grown from the model bounding box with per-face allowances; or
+   the remaining stock of an earlier setup (rest machining, which inherits the
+   source setup's WCS). The WCS origin is picked in the viewport on a lattice
+   of 27 stock/model box points (corners, edge midpoints, face centers,
+   volume center) or on any point sketched earlier; explicit coordinates and
+   equivalent anchor dropdowns remain available. Orientation (Z flip,
+   rotation about Z) is explicit. Work offsets name a first offset (G54…G59)
+   plus a duplicate-part count: posting one program repeats the toolpaths
+   under that many consecutive offsets. The post dialect is **not** a setup
+   property — it is chosen in the Post NC dialog at export time, because the
+   planned toolpaths are dialect-neutral and any post can render them.
+3. **One operation at a time.** Each operation is programmed against geometry
+   the operator selects — sketch loops for contours, pockets, and chamfers;
+   sketched points or explicit coordinates for drilling; the stock top or an
+   explicit region for facing. Safe heights (clearance and retract Z) are set
+   per operation, not globally on the setup. The engine validates the input
+   and rejects incomplete programs instead of guessing.
+
+The same document is fully scriptable through the MCP `cam_*` tools
+(`cam_get_document`, `cam_set_document`, `cam_plan_setup`, `cam_post_setup`,
+`cam_simulate_setup`), which run the same validation as the UI.
+
+## Units
+
+Persisted geometry, planned motion, and simulation are always canonical
+millimetres. The document carries an operator-facing unit switch (mm / inch)
+that can be flipped at any time: every field, readout, and point list in the
+workspace displays and accepts input in the chosen unit, and posts emit
+matching controller words (`G21`/`G20`, `G710`/`G70`). Switching units never
+rewrites stored geometry.
+
 ## As-built scope
 
-- Persistent manufacturing intent in `.nbcad`: setups, WCS, G54-G59 work
-  offset, rectangular stock, tool library, cutting parameters, operations, and
-  post settings.
-- Deterministic controller-neutral motion planning in millimetres.
-- Face, closed 2D contour, and point-drilling operations.
-- Multiple depth passes, contour side compensation, stepover, stepdown, and
-  peck drilling.
+- Persistent manufacturing intent in `.nbcad`: setups, WCS (with origin
+  provenance), G54-G59 work offset plus duplicate-part count, stock
+  definitions (box/cylinder/hex/modeled body; fixed size, model-grown
+  allowances, or rest from an earlier setup), tool library with cutting data,
+  operations with per-operation safe heights, unit preference, and post
+  defaults used only to pre-fill the export dialog.
+- Deterministic controller-neutral motion planning in millimetres, with
+  per-offset program duplication (`G54`, `G55`, … blocks in one program).
+- Facing, closed 2D contour, 2D pocket (zigzag clear plus boundary finish
+  pass), 2D chamfer (90° chamfer mill with tip-offset control), and hole
+  operations with an explicit cycle family: plain drilling (rapid out), chip
+  breaking (peck with an in-hole partial retract), deep drilling (peck with
+  full retract), right/left-hand tapping (pitch-synchronised feed with
+  spindle reversal), reaming, and boring (dwell and feed out). Every cycle is
+  expanded to explicit longhand motion, so posted output never depends on a
+  control's canned-cycle dialect.
+- Multiple depth passes, contour side compensation, stepover, and stepdown.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
-  confirmed machine-coordinate `SUPA` retract.
+  confirmed machine-coordinate `SUPA` retract. The post configuration
+  (dialect, program name/number, sequence numbers, machine profile) is chosen
+  at export time; all posts honor the document unit switch.
 - A `.nbpost` file contract and non-executing callback-post analyzer.
   Script execution is not implemented yet and therefore cannot generate NC.
 - A bounded, deterministic 3D voxel stock simulator that consumes the same
   neutral motion IR as the post layer, records per-command removal/time,
   detects rapid/tool contact with remaining stock, and greedily extracts a
-  renderer-neutral remaining-stock surface mesh.
-- A React manufacturing workspace with a setup/operation browser, parameter
-  inspectors, interactive orbitable 3D remaining-stock preview, distance/time
-  estimates, warnings, NC export, and neutral post-event export.
+  renderer-neutral remaining-stock surface mesh. Initial stock is voxelized
+  from the setup's resolved shape: box grid, cylinder/hex prisms, a modeled
+  body's mesh, or an earlier setup's simulated remainder (rest chains are
+  validated against shared WCS/envelope and cycles).
+- A React manufacturing workspace that shares the modeling viewport and
+  browser: the modeling tree stays in place and gains a Setups section
+  (operations listed with their tool tag, `[T<n>]`/`[name]`), while the tool
+  library lives in its own full dialog (table plus editor), not in the
+  browser tree. The workspace opens directly onto the modeled parts (setups
+  are created from a centered dialog via the ribbon, never implicitly), with
+  manual setup and operation dialogs, viewport point picking for WCS origins,
+  parameter inspectors, interactive 3D remaining-stock preview, distance/time
+  estimates, warnings, NC export via the Post NC dialog, and neutral
+  post-event export. Viewport navigation (orbit, pan, zoom, pinch,
+  Shift+swipe orbit) matches the modeling viewport exactly.
 
 The Rust crate at `crates/cam/` owns validation, path generation, motion IR,
 posting, and post-event projection. The React code under `src/cam/` and
@@ -34,20 +108,29 @@ saved CAM intent.
 
 ## Coordinate and safety contract
 
-- All persisted dimensions and motion coordinates are millimetres.
-- Each setup has an orthonormal, right-handed WCS. Setup `Z+` points away from
-  the stock and remains parallel to the spindle axis.
-- `clearance_z` must be above `retract_z`, and both must be above stock top.
+- All persisted dimensions and motion coordinates are canonical millimetres;
+  the document unit switch changes display and posted output only.
+- Each setup has an orthonormal, right-handed WCS derived from the origin the
+  operator picked (stock box point, model box point, sketch point, or explicit
+  coordinates). Setup `Z+` points away from the stock and remains parallel to
+  the spindle axis.
+- Safe heights live on each operation: `clearance_z` must be above the stock
+  top, and `retract_z` must sit between the operation's cut top and its
+  clearance plane.
+- Rapid moves (`G0`) are always full-speed; there is no configurable "rapid
+  feed". The simulator's time estimate uses a fixed internal rapid constant.
 - Operations must remain inside the stock range, reference a compatible tool,
   and stay within that tool's flute length.
 - Posted programs start in absolute metric XY-plane mode and explicitly cancel
-  common modal compensation/cycles.
+  common modal compensation/cycles. Each duplicated part block re-emits its
+  work offset word (`G54`, `G55`, …) before its toolpaths.
 
 The simulator models volumetric remaining stock and flags rapid contact with
 that stock, but it does **not** yet check target-part gouging, fixtures, clamps,
 shanks, holders, machine travel, tool-change positions, or spindle envelopes.
-Built-in posts retract Z to setup clearance before their first XY move,
-but that still assumes a correctly set WCS and machine-safe starting position.
+Built-in posts retract Z to the operation's clearance plane before their
+first XY move, but that still assumes a correctly set WCS and machine-safe
+starting position.
 Every output must be simulated, inspected, and dry-run above the workpiece
 before machining.
 
@@ -62,7 +145,10 @@ This is the same `CamProgram` consumed by every built-in post and by the
 host-neutral event projection. That makes simulation a check on planned CAM
 motion instead of a picture reconstructed from controller text.
 
-The first stock engine starts with a fully occupied rectangular voxel grid. It
+The stock engine starts from the setup's resolved shape: a fully occupied
+voxel grid for box stock, shape-masked grids for cylinder and hex bar stock, a
+mesh-voxelized grid for modeled-body stock, or the remainder voxel grid of the
+source setup for rest stock. It
 tracks occupancy in a bitset, sweeps the active cutter along linear and XY-arc
 motions, removes intersected cells on feed moves, and checks rapid moves for
 tool contact with remaining stock. Each motion produces a timeline record
@@ -212,6 +298,8 @@ the following independently implemented fixed 3-axis subset:
 - profile-controlled tool-change positioning: `SUPA Z`, controller-managed
   `M6`, or `SUPA Z` followed by a verified fixed machine `X/Y` station;
 - unnumbered `MSG ("operation")` records;
+- tool calls by name (`T="NAME"`, sanitized to a callable identifier), with
+  the plain tool number as fallback when a name carries no usable identifier;
 - separate `T...`, `M6`, and configured `D...` blocks;
 - optional `M1` before the second and later tool changes;
 - optional, explicitly enabled next-tool `T...` preload immediately after
@@ -297,15 +385,18 @@ model, machine definitions, cycles, and verification layer are mature.
 
 ## Next engineering slices
 
-1. Selection-derived contours and drill points from exact BRep faces/edges.
-2. Exact target-solid voxelization, fixture/tool-holder definitions, gouge and
+1. Selection-derived contours and drill points from exact BRep faces/edges
+   (today the operator picks sketch loops/points or enters coordinates).
+2. Second operation wave: thread milling, bore cycles, 3D adaptive clearing,
+   and richer drilling cycles (chip-breaking, deep hole, tapping, reaming,
+   boring).
+3. Exact target-solid voxelization, fixture/tool-holder definitions, gouge and
    collision checking, plus operation-to-operation rest machining.
-3. Dedicated retained Bevy CAM scene and timeline playback fed directly from
+4. Dedicated retained Bevy CAM scene and timeline playback fed directly from
    the headless simulator; the current canvas consumes the same stock mesh as
    a cross-platform presentation path.
-4. Tool-length compensation, machine limits, safe tool-change/home policies,
+5. Tool-length compensation, machine limits, safe tool-change/home policies,
    and configurable controller capabilities.
-5. Pockets, adaptive clearing, ramp/helical entries, tabs, lead-in/out, canned
-   drill cycles, and arc fitting.
-6. Parse and simulate final posted NC, compare it with pre-post motion, and add
+6. Ramp/helical entries, tabs, lead-in/out, and arc fitting.
+7. Parse and simulate final posted NC, compare it with pre-post motion, and add
    per-command inspection plus golden controller tests.

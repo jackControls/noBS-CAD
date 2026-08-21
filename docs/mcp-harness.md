@@ -38,7 +38,7 @@ Spine → active pack → soft packs (60 s TTL, LRU 2). Hidden tools stay
 
 ### Focus packs
 ```text
-document | sketch | solid | modify | body_ops | datums | history | inspect | print
+document | sketch | solid | modify | body_ops | datums | history | inspect | print | cam
 ```
 Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 
