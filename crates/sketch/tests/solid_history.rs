@@ -303,3 +303,54 @@ fn split_body_is_inserted_at_the_build_cursor() {
     );
     assert_eq!(update.document.rollback_index, 3);
 }
+
+#[test]
+fn new_sketch_is_inserted_at_the_build_cursor() {
+    let mut manager = SketchManager::new();
+    manager.begin_sketch(XY).unwrap();
+    rectangle(&mut manager, Vec2::new(-10.0, -10.0), Vec2::new(10.0, 10.0));
+    manager.end_sketch().unwrap();
+
+    let extrude_plan = manager.prepare_extrude(extrusion("Sketch1")).unwrap();
+    let target_body = result_body_id(&extrude_plan.jobs[0]);
+    manager
+        .commit_solid(CommitKernelRequest {
+            transaction_id: extrude_plan.transaction_id,
+            scene: KernelSceneDto {
+                bodies: vec![planar_body(target_body, "target", 10.0)],
+                errors: Vec::new(),
+            },
+        })
+        .unwrap();
+
+    manager.begin_sketch(XY).unwrap();
+    manager.end_sketch().unwrap();
+    let rollback_plan = manager
+        .prepare_set_rollback(SetRollbackRequest { rollback_index: 2 })
+        .unwrap();
+    manager
+        .commit_solid(CommitKernelRequest {
+            transaction_id: rollback_plan.transaction_id,
+            scene: KernelSceneDto {
+                bodies: vec![planar_body(target_body, "target", 10.0)],
+                errors: Vec::new(),
+            },
+        })
+        .unwrap();
+
+    manager.begin_sketch(XY).unwrap();
+    manager.end_sketch().unwrap();
+
+    let names = manager
+        .document_dto()
+        .features
+        .iter()
+        .map(|feature| feature.name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Sketch1", "Extrude1", "Sketch3", "Sketch2"]);
+    assert_eq!(
+        manager.document_dto().rollback_index,
+        3,
+        "later history must stay rolled back after a mid-timeline sketch"
+    );
+}
