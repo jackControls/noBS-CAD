@@ -2814,6 +2814,152 @@ mod tests {
         (server, update)
     }
 
+    fn decode_pip_3mf(exported: &Value) -> Vec<u8> {
+        assert_eq!(exported["format"], "3mf");
+        assert_eq!(exported["encoding"], "base64");
+        let b64 = exported["bytes_base64"].as_str().expect("base64 payload");
+        assert!(b64.len() > 32);
+        let bytes = BASE64.decode(b64).expect("valid base64");
+        assert!(bytes.len() > 32);
+        assert_eq!(&bytes[0..2], b"PK");
+        bytes
+    }
+
+    fn pip_model_xml(bytes: &[u8]) -> String {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec()))
+            .expect("3MF should be a zip");
+        let mut model = archive.by_name("3D/3dmodel.model").unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut model, &mut xml).unwrap();
+        xml
+    }
+
+    fn assert_pip_objects(xml: &str, names: &[&str]) {
+        for name in names {
+            assert!(
+                xml.contains(&format!(r#"name="{name}""#)),
+                "3MF model missing object {name}"
+            );
+        }
+        let object_count = xml.matches(r#"type="model""#).count();
+        assert_eq!(object_count, names.len());
+    }
+
+    #[test]
+    fn tutor_quest_pip_cam_bolt() {
+        // Headless golden: 4-body print-in-place cam bolt. No cad_attach.
+        // Generator asserts pairwise AABB clearance ≥ CLEAR_MM (0.4).
+        let (meshes, apps) = nbcad_export::print_in_place_cam_bolt();
+        assert_eq!(meshes.len(), 4);
+        assert_eq!(apps.len(), 4);
+        assert_eq!(nbcad_export::CLEAR_MM, 0.4);
+
+        let mut server = CadServer::new().unwrap();
+        let exported = server
+            .call_tool("demo_export_pip_3mf", json!({"kind": "cam_bolt"}))
+            .expect("cam bolt demo export");
+        assert_eq!(exported["demo"], "print_in_place_cam_bolt");
+        assert_eq!(exported["body_count"], 4);
+        assert!((exported["clearance_mm"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(
+            scene["bodies"].as_array().unwrap().is_empty(),
+            "demo_export_pip_3mf must not mutate the document"
+        );
+        let bytes = decode_pip_3mf(&exported);
+        assert!(bytes.len() > 3_000);
+        let xml = pip_model_xml(&bytes);
+        assert_pip_objects(
+            &xml,
+            &[
+                "PIP Cam Housing",
+                "PIP Cam Bolt",
+                "PIP Cam Follower",
+                "PIP Cam Dial",
+            ],
+        );
+    }
+
+    #[test]
+    fn tutor_quest_pip_clip() {
+        // Headless golden: 3-body captive drawer clip. No cad_attach.
+        let (meshes, apps) = nbcad_export::print_in_place_clip();
+        assert_eq!(meshes.len(), 3);
+        assert_eq!(apps.len(), 3);
+
+        let mut server = CadServer::new().unwrap();
+        let exported = server
+            .call_tool("demo_export_pip_3mf", json!({"kind": "clip"}))
+            .expect("clip demo export");
+        assert_eq!(exported["demo"], "print_in_place_clip");
+        assert_eq!(exported["body_count"], 3);
+        assert!((exported["clearance_mm"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(scene["bodies"].as_array().unwrap().is_empty());
+        let bytes = decode_pip_3mf(&exported);
+        assert!(bytes.len() > 2_500);
+        let xml = pip_model_xml(&bytes);
+        assert_pip_objects(
+            &xml,
+            &["PIP Clip Housing", "PIP Clip Drawer", "PIP Clip Latch"],
+        );
+    }
+
+    #[test]
+    fn tutor_quest_pip_slicer_variants() {
+        // Headless golden: same cam bolt, each slicer_target carries distinct Metadata.
+        let mut server = CadServer::new().unwrap();
+        let cases: &[(&str, Option<&str>, Option<&str>)] = &[
+            (
+                "bambu_studio",
+                Some("Metadata/project_settings.config"),
+                Some("Bambu Lab X1 Carbon"),
+            ),
+            (
+                "orca_slicer",
+                Some("Metadata/project_settings.config"),
+                Some("Orca Generic"),
+            ),
+            ("prusa_slicer", Some("Metadata/Slic3r_PE.config"), None),
+            ("cura", Some("Metadata/cura_materials.json"), None),
+            ("standard", None, None),
+        ];
+        for (target, extra_file, marker) in cases {
+            let exported = server
+                .call_tool(
+                    "demo_export_pip_3mf",
+                    json!({"kind": "cam_bolt", "slicer_target": target}),
+                )
+                .unwrap_or_else(|error| panic!("{target}: {error}"));
+            assert_eq!(exported["slicer_target"], *target);
+            assert_eq!(exported["body_count"], 4);
+            assert!((exported["clearance_mm"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+            let bytes = decode_pip_3mf(&exported);
+            let mut archive =
+                zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("3MF should be a zip");
+            assert!(
+                archive.by_name("3D/3dmodel.model").is_ok(),
+                "{target} 3MF missing 3D/3dmodel.model"
+            );
+            if let Some(path) = extra_file {
+                assert!(archive.by_name(path).is_ok(), "{target} 3MF missing {path}");
+            } else {
+                assert!(archive.by_name("Metadata/project_settings.config").is_err());
+                assert!(archive.by_name("Metadata/Slic3r_PE.config").is_err());
+                assert!(archive.by_name("Metadata/cura_materials.json").is_err());
+            }
+            if let Some(marker) = marker {
+                let mut settings = archive.by_name("Metadata/project_settings.config").unwrap();
+                let mut text = String::new();
+                std::io::Read::read_to_string(&mut settings, &mut text).unwrap();
+                assert!(
+                    text.contains(marker),
+                    "{target} settings missing {marker}: {text}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn tool_registry_is_granular_and_protocol_lists_revolve() {
         let catalog = full_tool_catalog();
@@ -3167,7 +3313,10 @@ mod tests {
             .call_tool("cad_attach", json!({"session_id": "My Document"}))
             .is_err());
         // Missing model must refuse attach (and leave nothing attached).
-        let missing = format!("00000000-0000-4000-8000-{:012x}", session::now_ms().wrapping_add(1) & 0xffffffffffff);
+        let missing = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            session::now_ms().wrapping_add(1) & 0xffffffffffff
+        );
         std::fs::create_dir_all(dir.join(&missing)).unwrap();
         assert!(server
             .call_tool("cad_attach", json!({"session_id": missing}))

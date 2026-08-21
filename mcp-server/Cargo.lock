@@ -269,6 +269,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-assembly"
+version = "0.1.0"
+dependencies = [
+ "nbcad-core",
+ "nbcad-solid",
+ "serde",
+]
+
+[[package]]
 name = "nbcad-core"
 version = "0.1.0"
 dependencies = [
@@ -309,6 +318,7 @@ dependencies = [
  "nbcad-core",
  "nbcad-export",
  "nbcad-solid",
+ "serde",
  "serde_json",
 ]
 
@@ -316,6 +326,7 @@ dependencies = [
 name = "nbcad-sketch"
 version = "0.1.0"
 dependencies = [
+ "nbcad-assembly",
  "nbcad-core",
  "nbcad-solid",
  "serde",

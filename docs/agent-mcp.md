@@ -45,11 +45,14 @@ Soft disclosure: out-of-focus tools stay **callable**; results may include
 
 | Name | Idea |
 |------|------|
-| Box | rectangle → extrude → one body |
-| Hole | box → hole on a face |
+| Cam bolt | `demo_export_pip_3mf` `{kind:"cam_bolt"}` — 4-body print-in-place (`tutor_quest_pip_cam_bolt`) |
+| Drawer clip | `{kind:"clip"}` — 3-body captive clip (`tutor_quest_pip_clip`) |
+| Slicer variants | same cam bolt for bambu / orca / prusa / cura / standard (`tutor_quest_pip_slicer_variants`) |
 
-Print-ready **3MF** with materials/colors is a **target**, not available via MCP
-yet. **STEP:** `solid_export_step` (AP242 base64).
+CI scores those three as headless goldens (see
+[mcp-harness.md](mcp-harness.md#tutor-quests-ci-goldens)).
+`demo_export_pip_3mf` does not mutate the document. Prefer
+`solid_export_3mf` for your own bodies; `solid_export_step` for CAD interchange.
 
 ## Failures
 
