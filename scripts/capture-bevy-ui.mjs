@@ -1,4 +1,4 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { access, mkdir, stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,21 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputDir = join(repoRoot, 'public', '__bevy_ui__');
 const outputPath = join(outputDir, 'native.png');
 await mkdir(outputDir, { recursive: true });
+
+const lavapipeIcd = '/usr/share/vulkan/icd.d/lvp_icd.json';
+const env = { ...process.env, CARGO_TERM_COLOR: 'always' };
+if (process.platform === 'linux') {
+  env.XDG_RUNTIME_DIR ||= '/tmp';
+  try {
+    await access(lavapipeIcd);
+    env.VK_ICD_FILENAMES ||= lavapipeIcd;
+    env.VK_DRIVER_FILES ||= lavapipeIcd;
+    env.WGPU_BACKEND ||= 'vulkan';
+    env.LIBGL_ALWAYS_SOFTWARE ||= '1';
+  } catch {
+    // Hardware Vulkan stays as-is when lavapipe is not installed.
+  }
+}
 
 const cargo = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
 const args = [
@@ -24,7 +39,7 @@ const args = [
 const exitCode = await new Promise((resolve, reject) => {
   const child = spawn(cargo, args, {
     cwd: repoRoot,
-    env: { ...process.env, CARGO_TERM_COLOR: 'always' },
+    env,
     stdio: 'inherit',
   });
   child.once('error', reject);
