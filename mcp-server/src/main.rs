@@ -2610,8 +2610,9 @@ fn tool_specs() -> Vec<ToolSpec> {
             "cad_attach",
             "Attach read-only session snapshot",
             "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. writeback must be omitted or false — writeback:true is rejected (live writeback is #11 future). Never writes back to the session dir. While attached, mutating tools are rejected; inspect/export remain allowed.",
-            object_schema(
-                json!({
+            json!({
+                "type": "object",
+                "properties": {
                     "session_id": {
                         "type": "string",
                         "minLength": 36,
@@ -2628,9 +2629,13 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "type": "boolean",
                         "description": "Must be omitted or false. true is rejected; live writeback is #11 future."
                     }
-                }),
-                &["session_id"],
-            ),
+                },
+                "anyOf": [
+                    { "required": ["session_id"] },
+                    { "required": ["document_id"] }
+                ],
+                "additionalProperties": false
+            }),
         ),
         ToolSpec::control(
             "cad_refresh",
@@ -3306,6 +3311,20 @@ mod tests {
         assert!(server.attached_document_id.is_none());
         assert!(server.call_tool("cad_refresh", json!({})).is_err());
 
+        // document_id is a schema-valid alias for session_id
+        let attached_alias = server
+            .call_tool("cad_attach", json!({"document_id": unique}))
+            .unwrap();
+        assert_eq!(attached_alias["attached"], true);
+        assert_eq!(attached_alias["session_id"], unique);
+        assert_eq!(attached_alias["document_id"], unique);
+        assert_eq!(attached_alias["session_mode"], "read_only_snapshot");
+        assert_eq!(attached_alias["writeback"], false);
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(unique.as_str())
+        );
+
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3317,12 +3336,7 @@ mod tests {
     fn assert_lock_error(error: &str, expected_code: &str) {
         let parsed = parse_lock_error(error);
         let code = parsed["code"].as_str().unwrap_or("");
-        assert!(
-            code == expected_code
-                || code == "writeback_rejected"
-                || code == "session_read_only",
-            "expected {expected_code} (or writeback_rejected/session_read_only), got {error}"
-        );
+        assert_eq!(code, expected_code);
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "read_only_snapshot");
         assert!(parsed["hint"].as_str().unwrap_or("").contains("cad_detach"));
