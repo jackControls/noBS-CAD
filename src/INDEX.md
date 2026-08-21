@@ -3,7 +3,7 @@
 | Path | Role |
 |------|------|
 | [main.tsx](main.tsx) | React app bootstrap + snapshot bridge start |
-| [sessionBridge.ts](sessionBridge.ts) | Read-only MCP snapshot publisher (Tauri-owned window session) |
+| [sessionBridge.ts](sessionBridge.ts) | MCP snapshot publisher + UI-owned inbox apply poll (Tauri-owned window session) |
 | [store/](store/) | App state (mode, tool, document, solids) |
 | [engine/](engine/) | Host-neutral CAD core (TS) |
 | [files/projectFiles.ts](files/projectFiles.ts) | Project open/save/import/export and crash recovery |

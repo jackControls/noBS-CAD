@@ -494,6 +494,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_detach"
             | "cad_script"
             | "cad_compare_solids"
+            | "cad_submit"
     );
     if spine {
         let pack = match name {

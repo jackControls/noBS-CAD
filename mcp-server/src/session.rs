@@ -1,10 +1,12 @@
 //! Headless session directories under `NBCAD_SESSION_DIR` (or temp `nbcad-sessions`).
 //!
-//! This is a **read-only snapshot bridge** helper for MCP goldens and desktop
-//! publish → attach. It is **not** a live UI co-link: MCP never writes
-//! model/focus back after attach.
+//! Snapshot publish is **UI-owned**. MCP may `cad_attach` (copy) and `cad_submit`
+//! an inbox op; it must **not** write `model.json` back (no last-writer-wins).
+//! The desktop/engine applies inbox ops via the same `host::handle` path as
+//! Tauri IPC, then the existing publisher writes a new snapshot. This is still
+//! **not** in-process shared memory.
 //!
-//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`.
+//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,inbox/<seq>.json}`.
 //! Session ids must be UUID v4 strings.
 
 use std::fs;
@@ -209,14 +211,252 @@ pub fn sessions_list_json() -> Value {
 
 fn session_path(session_id: &str, filename: &str) -> Result<PathBuf, String> {
     require_valid_session_id(session_id)?;
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains("..")
+    if filename.is_empty() || filename.contains('\\') || filename.contains("..") {
+        return Err("invalid filename".to_string());
+    }
+    let parts: Vec<&str> = filename.split('/').collect();
+    if parts.is_empty()
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || *part == "."
+                || *part == ".."
+                || !part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+        })
     {
         return Err("invalid filename".to_string());
     }
-    Ok(session_dir().join(session_id).join(filename))
+    let mut path = session_dir().join(session_id);
+    for part in parts {
+        path.push(part);
+    }
+    Ok(path)
+}
+
+/// One MCP-submitted modeling op. UI/engine is the only live-document writer.
+#[derive(Debug, Clone)]
+pub struct InboxOp {
+    pub name: String,
+    pub arguments: Value,
+    pub base_generation: u64,
+}
+
+impl InboxOp {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "arguments": self.arguments,
+            "base_generation": self.base_generation,
+        })
+    }
+
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "inbox op missing 'name'".to_string())?
+            .to_string();
+        let arguments = value.get("arguments").cloned().unwrap_or(json!({}));
+        let base_generation = value
+            .get("base_generation")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "inbox op missing 'base_generation'".to_string())?;
+        Ok(Self {
+            name,
+            arguments,
+            base_generation,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyResult {
+    pub seq: u64,
+    pub op: InboxOp,
+    pub host_result: Value,
+}
+
+/// Current heartbeat `generation`, if the file is present and parseable.
+pub fn read_heartbeat_generation(session_id: &str) -> Result<u64, String> {
+    let meta = heartbeat_meta(session_id);
+    meta.get("generation")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!("session '{session_id}' has no heartbeat generation; UI must publish first")
+        })
+}
+
+/// Structured writer-lock error. MCP never writes model.json (`writeback: false`).
+pub fn generation_conflict_error(
+    session_id: &str,
+    base_generation: u64,
+    current_generation: Option<u64>,
+) -> String {
+    serde_json::to_string(&json!({
+        "code": "generation_conflict",
+        "writeback": false,
+        "session_mode": "ui_owned_apply",
+        "session_id": session_id,
+        "base_generation": base_generation,
+        "current_generation": current_generation,
+        "hint": "UI moved; cad_refresh then resubmit with the new heartbeat generation",
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"generation_conflict\",\"writeback\":false,\"session_mode\":\"ui_owned_apply\",\"session_id\":\"{session_id}\"}}"
+        )
+    })
+}
+
+pub fn not_attached_error() -> String {
+    serde_json::to_string(&json!({
+        "code": "not_attached",
+        "writeback": false,
+        "session_mode": "ui_owned_apply",
+        "session_id": Value::Null,
+        "hint": "cad_submit requires cad_attach; headless goldens call modeling tools directly",
+    }))
+    .unwrap_or_else(|_| {
+        "{\"code\":\"not_attached\",\"writeback\":false,\"session_mode\":\"ui_owned_apply\"}"
+            .to_string()
+    })
+}
+
+fn parse_inbox_seq(name: &str) -> Option<u64> {
+    name.strip_suffix(".json")?.parse().ok()
+}
+
+fn inbox_seqs_in(dir: &std::path::Path) -> Vec<u64> {
+    let mut seqs = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return seqs;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+            continue;
+        }
+        if let Some(seq) = parse_inbox_seq(&entry.file_name().to_string_lossy()) {
+            seqs.push(seq);
+        }
+    }
+    seqs.sort_unstable();
+    seqs
+}
+
+/// Next inbox sequence (1-based), considering pending and archived ops.
+pub fn next_inbox_seq(session_id: &str) -> Result<u64, String> {
+    require_valid_session_id(session_id)?;
+    let root = session_dir().join(session_id);
+    let mut max = 0u64;
+    for seq in inbox_seqs_in(&root.join("inbox")) {
+        max = max.max(seq);
+    }
+    for seq in inbox_seqs_in(&root.join("inbox").join("applied")) {
+        max = max.max(seq);
+    }
+    Ok(max.saturating_add(1))
+}
+
+/// Pending inbox seqs, lowest first.
+pub fn pending_inbox_seqs(session_id: &str) -> Result<Vec<u64>, String> {
+    require_valid_session_id(session_id)?;
+    Ok(inbox_seqs_in(&session_dir().join(session_id).join("inbox")))
+}
+
+/// Atomically write `inbox/<seq>.json`. Does not mutate any in-memory document.
+pub fn write_inbox_op(session_id: &str, op: &InboxOp) -> Result<u64, String> {
+    let seq = next_inbox_seq(session_id)?;
+    let body = serde_json::to_string_pretty(&op.to_json())
+        .map_err(|error| format!("encode inbox op: {error}"))?;
+    write_session(session_id, &format!("inbox/{seq}.json"), &body)?;
+    Ok(seq)
+}
+
+pub fn read_inbox_op(session_id: &str, seq: u64) -> Result<InboxOp, String> {
+    let body = read_session_file(session_id, &format!("inbox/{seq}.json"))?;
+    let parsed: Value =
+        serde_json::from_str(&body).map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
+    InboxOp::from_json(&parsed)
+}
+
+fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
+    let src = session_path(session_id, &format!("inbox/{seq}.json"))?;
+    let dest = session_path(session_id, &format!("inbox/applied/{seq}.json"))?;
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    match fs::rename(&src, &dest) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let body = fs::read_to_string(&src)
+                .map_err(|error| format!("archive read inbox/{seq}.json: {error}"))?;
+            write_session(session_id, &format!("inbox/applied/{seq}.json"), &body)?;
+            fs::remove_file(&src).map_err(|error| format!("remove applied inbox op: {error}"))
+        }
+    }
+}
+
+/// Read the lowest pending inbox op, check `base_generation` against heartbeat,
+/// call `host_apply`, then archive the op. Does **not** write model.json —
+/// the caller (UI publisher or test) publishes the new snapshot.
+///
+/// `host_apply` must target the **live** engine (desktop) or a **separate**
+/// SketchManager loaded from the published model (tests). Never the attached
+/// MCP in-memory copy.
+pub fn apply_inbox_op<F>(session_id: &str, host_apply: F) -> Result<ApplyResult, String>
+where
+    F: FnOnce(&str, Value) -> Result<Value, String>,
+{
+    require_valid_session_id(session_id)?;
+    let seqs = pending_inbox_seqs(session_id)?;
+    let seq = seqs
+        .first()
+        .copied()
+        .ok_or_else(|| format!("session '{session_id}' has no pending inbox op"))?;
+    let op = read_inbox_op(session_id, seq)?;
+    let current = match read_heartbeat_generation(session_id) {
+        Ok(generation) => generation,
+        Err(_) => {
+            return Err(generation_conflict_error(
+                session_id,
+                op.base_generation,
+                None,
+            ));
+        }
+    };
+    if op.base_generation != current {
+        return Err(generation_conflict_error(
+            session_id,
+            op.base_generation,
+            Some(current),
+        ));
+    }
+    let host_result = host_apply(&op.name, op.arguments.clone())?;
+    archive_inbox_op(session_id, seq)?;
+    Ok(ApplyResult {
+        seq,
+        op,
+        host_result,
+    })
+}
+
+/// Test/helper: replace model.json and bump heartbeat generation.
+/// Used after a successful host apply on a **separate** SketchManager.
+/// Not an MCP writeback path — the live UI publisher is the production writer.
+pub fn publish_applied_snapshot(session_id: &str, model_json: &str) -> Result<u64, String> {
+    let next = read_heartbeat_generation(session_id).unwrap_or(0).saturating_add(1);
+    write_session(session_id, "model.json", model_json)?;
+    let heartbeat = serde_json::to_string_pretty(&json!({
+        "updated_ms": now_ms(),
+        "generation": next,
+        "session_id": session_id,
+        "session_mode": "ui_owned_apply",
+        "writeback": false,
+    }))
+    .map_err(|error| format!("encode heartbeat: {error}"))?;
+    write_session(session_id, "heartbeat.json", &heartbeat)?;
+    Ok(next)
 }
 
 /// Deterministic-looking UUID v4 for tests (unique via `now_ms` nibble).
@@ -276,6 +516,54 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-bad-{}", now_ms()));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
         assert!(write_session("not-a-uuid", "model.json", "{}").is_err());
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inbox_write_and_stale_apply_are_generation_locked() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-inbox-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":3}}"#, now_ms()),
+        )
+        .unwrap();
+
+        let seq = write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "solid_mirror".to_string(),
+                arguments: json!({"body_ids": [1]}),
+                base_generation: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(seq, 1);
+        let pending = pending_inbox_seqs(&unique).unwrap();
+        assert_eq!(pending, vec![1]);
+        let body = read_session_file(&unique, "inbox/1.json").unwrap();
+        assert!(body.contains("solid_mirror"));
+        assert!(body.contains("base_generation"));
+
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":4}}"#, now_ms()),
+        )
+        .unwrap();
+        let err = apply_inbox_op(&unique, |_name, _args| Ok(json!({"applied": true})))
+            .expect_err("stale base_generation must not apply");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "ui_owned_apply");
+        assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![1]);
+
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }

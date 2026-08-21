@@ -106,12 +106,13 @@ not recovered sketch/extrude history; dump a forward tool sequence with
 
 `cad_project_model` returns the authoritative versioned `model.json`,
 `cad_load_project_model` transactionally restores and recomputes it, and
-`cad_new_project` clears to an empty document. The read-only **snapshot bridge**
-uses `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` under
-`NBCAD_SESSION_DIR` (UUID v4 session ids; require valid `model.json`; never write
-back). Desktop Tauri publishes the snapshot files; MCP only reads.
-Each MCP process still owns one headless document unless attached.
-Revisioned MCP→UI sync and installer/UI launch remain follow-ups.
+`cad_new_project` clears to an empty document. The **snapshot bridge** uses
+`cad_list_sessions` / `cad_attach` / `cad_submit` / `cad_refresh` / `cad_detach`
+under `NBCAD_SESSION_DIR` (UUID v4 session ids; require valid `model.json`).
+`cad_submit` writes `inbox/<seq>.json` for UI-owned apply; MCP does **not**
+write `model.json` (no last-writer-wins). Desktop Tauri applies inbox ops via
+`host::handle` and publishes a new snapshot. Headless goldens (no attach) still
+mutate this process directly. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open.
 
 **Print handoff:** `solid_export_preflight` → `set_body_appearance` (optional) →
 `solid_export_3mf` (preferred for slicers). Use `solid_tessellate` to inspect
