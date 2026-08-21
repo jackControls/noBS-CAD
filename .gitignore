@@ -62,3 +62,6 @@ docs/RELEASE_CHECKLIST.md
 docs/qa/
 docs/reference/
 scripts/probe-*.mjs
+
+# Local reference material (screenshots etc.), never committed.
+reference/
