@@ -484,6 +484,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
+            | "cad_submit"
     );
     if spine {
         let pack = match name {

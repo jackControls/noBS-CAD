@@ -2,10 +2,14 @@
  * Read-only MCP snapshot bridge publisher (Jack §3 model 1).
  *
  * Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
- * via Tauri. Not a live UI co-link — MCP never writebacks these files.
+ * via Tauri. MCP `cad_submit` writes `inbox/<seq>.json`; this module polls
+ * `mcp_session_bridge_apply_inbox` so the live engine applies the op, then
+ * the existing publisher emits a new snapshot. Not in-process shared memory.
+ * MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
+import type { SolidUpdateDto } from './engine/types';
 import {
   exportProjectModelWithVisibility,
   useAppStore,
@@ -78,7 +82,18 @@ function activeSolidDialog(state: ReturnType<typeof useAppStore.getState>): stri
 
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let inboxTimer: ReturnType<typeof setInterval> | null = null;
+let inboxApplying = false;
 let started = false;
+
+interface InboxApplyResult {
+  applied: boolean;
+  reason?: string;
+  seq?: number;
+  name?: string;
+  result?: SolidUpdateDto;
+  pending?: number;
+}
 
 interface PublishReservation {
   session_id: string;
@@ -115,6 +130,27 @@ async function publishNow(): Promise<void> {
     });
   } catch (error) {
     console.debug('[sessionBridge] publish failed', error);
+  }
+}
+
+/** Apply one MCP inbox op on the live engine, then let the publisher run. */
+async function applyInboxNow(): Promise<void> {
+  const state = useAppStore.getState();
+  if (state.engineKind !== 'tauri' || inboxApplying) return;
+  inboxApplying = true;
+  try {
+    const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
+    if (!result?.applied) return;
+    if (result.result?.scene && result.result.document) {
+      useAppStore.getState().applySolidUpdate(result.result);
+    } else {
+      await useAppStore.getState().loadDocument();
+    }
+    scheduleSessionBridgePublish();
+  } catch (error) {
+    console.debug('[sessionBridge] inbox apply failed', error);
+  } finally {
+    inboxApplying = false;
   }
 }
 
@@ -157,4 +193,9 @@ export function startSessionBridge(): void {
   heartbeatTimer = setInterval(() => {
     void heartbeatNow();
   }, 10_000);
+  if (inboxTimer) clearInterval(inboxTimer);
+  inboxTimer = setInterval(() => {
+    void applyInboxNow();
+  }, 250);
+  void applyInboxNow();
 }

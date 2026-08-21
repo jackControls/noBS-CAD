@@ -7,8 +7,10 @@ Product directions: [goals.md](goals.md).
 
 **Warning:** an MCP process without a live attach is a **fork of truth**.
 It does **not** share the document the user is looking at. Snapshot attach
-(`cad_list_sessions` / `cad_attach`) is read-only and still a copy, not
-in-process co-link ([#11](https://github.com/jackControls/noBS-CAD/issues/11)).
+(`cad_list_sessions` / `cad_attach`) loads a **copy**. `cad_submit` queues a
+UI-owned apply (`inbox/<seq>.json`); the desktop/engine is the only writer of
+the live document. This is still **not** in-process shared memory, and MCP
+must **not** write `model.json` back ([#11](https://github.com/jackControls/noBS-CAD/issues/11) remains open).
 
 ## Why MCP
 MCP gives coding agents a tool API without turning noBS CAD into a cloud
@@ -25,7 +27,7 @@ machine (or CI runner).
 | Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
 | Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
-| Sessions | Read-only snapshot dirs: `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` |
+| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_refresh` re-reads. Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
 | Geometry | Same native OCCT replay path as desktop when OCCT is available |
 | Export | STEP + STL + **3MF** (`solid_export_*`, `material_catalog`); 3MF preferred for slicers |
 
@@ -40,10 +42,16 @@ document | sketch | solid | modify | body_ops | datums | history | inspect | pri
 ```
 Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 
-### Read-only snapshot bridge (not live UI co-link)
-Headless goldens work **without** attach.
+### Snapshot bridge + UI-owned apply (not in-process co-link)
+Headless goldens work **without** attach (they still mutate the MCP process directly).
 Desktop UI (Tauri) publishes:
 `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
+MCP `cad_submit` (attached only) writes `inbox/<seq>.json` with
+`{ name, arguments, base_generation }`. A stale `base_generation` is
+`generation_conflict` (`writeback: false`, `session_mode: ui_owned_apply`).
+The desktop polls that inbox, applies via the same `host::handle` / solid-replay
+path as Tauri IPC, then the existing publisher writes a new snapshot. MCP never
+writes `model.json` (Jack removed last-writer-wins; do not bring it back).
 
 While a sketch transaction is active, project export intentionally keeps the
 last completed `model.json`; `active-sketch.json` carries the current
@@ -52,10 +60,12 @@ inspected without admitting half-finished history into the project format.
 (atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
 1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`.
-2. `cad_attach` — **requires** UUID v4 + valid `model.json`; loads into this MCP process; optional `focus.json`. **Never writes back.**
-3. `cad_refresh` — explicit re-read of the attached session from disk.
-4. `cad_detach` — clears the attached session id.
-Revisioned MCP→UI sync remains future work. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
+2. `cad_attach` — **requires** UUID v4 + valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
+3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Inspect/export/control tools are not submit-able.
+4. UI/engine applies the inbox op (generation-checked), then publishes a new snapshot.
+5. `cad_refresh` — explicit re-read of the attached session from disk (needed after apply+publish).
+6. `cad_detach` — clears the attached session id.
+This is **UI-owned apply**, not in-process shared memory. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
 
@@ -72,13 +82,13 @@ require a later `ping` or tool call to flush the notification.
 
 | Capability | Today | Target | Issue |
 |------------|-------|--------|-------|
-| Agents and UI share one live document | **No.** MCP is a fork of truth (optional read-only snapshot attach, never writes back) | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
+| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
 | Multi-window agent control | **No.** One MCP process, one document | Broker / `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
 
 ## Proposed (not shipped here)
-- Live UI ↔ MCP in-process co-link / writer lock ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
+- In-process UI ↔ MCP co-link (same memory). UI-owned inbox apply is a file protocol, not that ([#11](https://github.com/jackControls/noBS-CAD/issues/11) still open)
 - Multi-window broker ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
 - In-the-loop browser+MCP validation ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
 See [proposed-architecture.md](proposed-architecture.md).
