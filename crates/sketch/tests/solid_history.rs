@@ -349,6 +349,15 @@ fn new_sketch_is_inserted_at_the_build_cursor() {
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["Sketch1", "Extrude1", "Sketch3", "Sketch2"]);
     assert_eq!(
+        manager
+            .finished_sketches()
+            .iter()
+            .map(|sketch| sketch.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Sketch1", "Sketch3", "Sketch2"],
+        "finished list must follow feature-tree order, not append order"
+    );
+    assert_eq!(
         manager.document_dto().rollback_index,
         3,
         "later history must stay rolled back after a mid-timeline sketch"

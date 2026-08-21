@@ -477,6 +477,23 @@ impl SketchManager {
             session,
             feature_id,
         });
+        // Load-from-project already sorts saved sketches by feature-tree
+        // index. Live teardown must do the same so rollback → new sketch
+        // → end does not leave the new sketch last in finished.
+        let feature_order = self
+            .document
+            .features()
+            .features
+            .iter()
+            .enumerate()
+            .map(|(index, feature)| (feature.id, index))
+            .collect::<HashMap<_, _>>();
+        self.finished.sort_by_key(|finished| {
+            feature_order
+                .get(&finished.feature_id)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
         Ok(EndSketchResult {
             document: self.document_dto(),
         })
