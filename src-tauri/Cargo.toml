@@ -76,6 +76,39 @@ bevy_gizmos = "0.19.0"
 bevy_reflect = "0.19.0"
 raw-window-handle = "0.6"
 
+# Offscreen Bevy HUD lab (bevy-ui-lab / dev-ui-lab). Not the product GTK embed.
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy = { version = "0.19.0", default-features = false, features = [
+  "async_executor",
+  "bevy_asset",
+  "bevy_camera",
+  "bevy_color",
+  "bevy_core_pipeline",
+  "bevy_gizmos",
+  "bevy_gizmos_render",
+  "bevy_image",
+  "bevy_light",
+  "bevy_material",
+  "bevy_mesh",
+  "bevy_pbr",
+  "bevy_render",
+  "bevy_shader",
+  "bevy_text",
+  "bevy_ui",
+  "bevy_ui_render",
+  "bevy_window",
+  "default_font",
+  "hdr",
+  "multi_threaded",
+  "png",
+  "std",
+  "tonemapping_luts",
+  "x11",
+  "zstd_rust",
+] }
+bevy_ecs = "0.19.0"
+hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
 objc2 = "0.6"

@@ -12,10 +12,10 @@
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod platform;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
 #[cfg(all(
-    any(target_os = "macos", target_os = "windows"),
+    any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
 ))]
 pub mod ui_lab;
