@@ -9,7 +9,7 @@ Parent directions: [../docs/goals.md](../docs/goals.md) · As-built:
 |----|--------|--------|
 | M1.1 | Default advertised tools ≪ full catalog in `dynamic` mode | On `feat/3mf-print-export` |
 | M1.2 | Out-of-focus tools stay callable | On branch |
-| M1.3 | 105 modeling tools tagged in disclosure matrix | On branch |
+| M1.3 | 107 modeling tools tagged in disclosure matrix | On branch |
 | M1.4 | Pack matrix CI (list + per-pack representatives) | On branch |
 
 ## M2 — Escape hatch (branch)

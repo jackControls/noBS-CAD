@@ -98,8 +98,11 @@ that operation is meaningful.
 
 Construction-plane tools create and edit Offset, Midplane, and Plane at Angle
 features with stable datum IDs. Body-operation tools expose Shell, Mirror,
-one/two-direction Rectangular Pattern, Circular Pattern, Combine, and Split
-Body through the same replayable history as the interactive application.
+one/two-direction Rectangular Pattern, Circular Pattern, Combine, Split
+Body, and STEP import (`solid_import_step`) through the same replayable
+history as the interactive application. STEP import is a reference solid,
+not recovered sketch/extrude history; dump a forward tool sequence with
+`cad_script` and compare mesh bbox/counts with `cad_compare_solids`.
 
 `cad_project_model` returns the authoritative versioned `model.json`,
 `cad_load_project_model` transactionally restores and recomputes it, and

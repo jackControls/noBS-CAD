@@ -20,7 +20,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 105;
+const MODELING_TOOL_COUNT: usize = 109;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -126,6 +126,8 @@ struct CadServer {
     /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
     pending_recompute_transaction: Option<u64>,
+    /// Forward record of successful mutating `tools/call` entries for `cad_script`.
+    tool_trace: Vec<Value>,
 }
 
 impl CadServer {
@@ -136,10 +138,23 @@ impl CadServer {
             disclosure: DisclosureState::new(),
             attached_document_id: None,
             pending_recompute_transaction: None,
+            tool_trace: Vec::new(),
         })
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let trace_args = arguments.clone();
+        let result = self.dispatch_tool(name, arguments);
+        if result.is_ok() && records_in_script(name) {
+            self.tool_trace.push(json!({
+                "name": name,
+                "arguments": trace_args,
+            }));
+        }
+        result
+    }
+
+    fn dispatch_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
         let tools = tool_specs();
         let spec = tools
             .iter()
@@ -338,6 +353,8 @@ impl CadServer {
                     "session_mode": "read_only_snapshot",
                 })
             }
+            "cad_script" => json!({ "calls": self.tool_trace.clone() }),
+            "cad_compare_solids" => compare_solids_summary(&self.manager.solid_scene()),
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
@@ -393,7 +410,8 @@ impl CadServer {
         let plan_value = parse_engine_envelope(host::handle(
             &mut self.manager,
             "project_prepare_load",
-            &serde_json::to_string(&Value::String(model_json)).map_err(|e| e.to_string())?,
+            &serde_json::to_string(&Value::String(model_json.clone()))
+                .map_err(|e| e.to_string())?,
         ))?;
         let plan: RecomputePlanDto = serde_json::from_value(plan_value)
             .map_err(|error| format!("invalid model.json / recompute plan: {error}"))?;
@@ -416,7 +434,20 @@ impl CadServer {
             })
             .map_err(|e| e.to_string())?,
         ))?;
+        // Attach/refresh replace manager from disk; seed a portable script baseline so
+        // cad_script can replay on a fresh CadServer without session UUIDs or files.
+        // Refresh re-seeds/replaces the baseline the same way (drops post-attach mutates).
+        self.seed_script_baseline_from_model(&model_json);
         Ok(())
+    }
+
+    /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
+    fn seed_script_baseline_from_model(&mut self, model_json: &str) {
+        self.tool_trace.clear();
+        self.tool_trace.push(json!({
+            "name": "cad_load_project_model",
+            "arguments": { "model_json": model_json },
+        }));
     }
 
     fn apply_snapshot_focus(&mut self, session_id: &str) {
@@ -1083,6 +1114,22 @@ fn tool_specs() -> Vec<ToolSpec> {
         }),
         &["body_id", "face_ids", "thickness", "inward"],
     );
+    let move_copy = object_schema(
+        json!({
+            "body_ids": body_ids.clone(),
+            "translation": point3.clone(),
+            "rotation": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Unit quaternion [x, y, z, w]. Default identity [0, 0, 0, 1]."
+            },
+            "pivot": point3.clone(),
+            "copy": { "type": "boolean", "description": "When true, leave the source bodies and create copies." }
+        }),
+        &["body_ids", "translation", "pivot"],
+    );
     let solid_mirror = object_schema(
         json!({
             "body_ids": body_ids.clone(),
@@ -1133,6 +1180,21 @@ fn tool_specs() -> Vec<ToolSpec> {
             "plane": plane.clone()
         }),
         &["body_id", "plane"],
+    );
+    let import_step = object_schema(
+        json!({
+            "file_name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Original STEP/STP file name stored with the import feature."
+            },
+            "data_base64": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Base64-encoded STEP/STP bytes. Imported as a dumb reference body, not recovered sketch/extrude history."
+            }
+        }),
+        &["file_name", "data_base64"],
     );
     let offset_plane = object_schema(
         json!({
@@ -2141,6 +2203,28 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::solid(
+            "solid_move_copy",
+            "Move or copy bodies",
+            "Apply a rigid transform to one or more bodies. Rotation is a unit quaternion [x, y, z, w]; translation and pivot are millimetres. copy=true leaves the sources and creates new bodies.",
+            "solid_prepare_body_feature",
+            Payload::BodyFeature("move_copy"),
+            move_copy.clone(),
+        ),
+        ToolSpec::solid(
+            "solid_edit_move_copy",
+            "Edit Move/Copy feature",
+            "Edit a persisted Move/Copy and fully replay downstream history.",
+            "solid_prepare_edit_body_feature",
+            Payload::EditBodyFeature("move_copy"),
+            object_schema(
+                json!({
+                    "feature_id": {"type": "integer", "minimum": 1},
+                    "request": move_copy
+                }),
+                &["feature_id", "request"],
+            ),
+        ),
+        ToolSpec::solid(
             "solid_mirror",
             "Mirror bodies",
             "Create mirrored copies of one or more bodies around an origin, face, or construction plane.",
@@ -2246,6 +2330,28 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({
                     "feature_id": {"type": "integer", "minimum": 1},
                     "request": split_body
+                }),
+                &["feature_id", "request"],
+            ),
+        ),
+        ToolSpec::solid(
+            "solid_import_step",
+            "Import STEP body",
+            "Import a licensed STEP/STP file as a persistent reference solid. The kernel stores the source bytes and tessellates a dumb body; this does not recover sketch/extrude feature history.",
+            "solid_prepare_body_feature",
+            Payload::BodyFeature("import_step"),
+            import_step.clone(),
+        ),
+        ToolSpec::solid(
+            "solid_edit_import_step",
+            "Edit STEP import feature",
+            "Replace the stored STEP source on a persisted Import feature and fully replay downstream history. Still a reference solid, not reverse-engineered feature history.",
+            "solid_prepare_edit_body_feature",
+            Payload::EditBodyFeature("import_step"),
+            object_schema(
+                json!({
+                    "feature_id": {"type": "integer", "minimum": 1},
+                    "request": import_step
                 }),
                 &["feature_id", "request"],
             ),
@@ -2514,7 +2620,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. Never writes back to the session dir.",
             object_schema(
                 json!({
                     "session_id": {
@@ -2530,13 +2636,25 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_refresh",
             "Refresh attached session snapshot",
-            "Re-read model.json (and optional focus.json) for the currently attached session. Explicit refresh — MCP does not watch the filesystem.",
+            "Re-read model.json (and optional focus.json) for the currently attached session; replaces cad_script baseline with cad_load_project_model for the reloaded model. Explicit refresh — MCP does not watch the filesystem.",
             empty_schema(),
         ),
         ToolSpec::control(
             "cad_detach",
             "Detach session snapshot",
             "Clear the attached session id. Leaves the in-memory document as last loaded; does not delete session files.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_script",
+            "Dump forward MCP script",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history.",
+            empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_compare_solids",
+            "Compare solid scene metrics",
+            "Summarize active bodies from solid_scene: body count plus per-body bbox, vertex_count, and triangle_count from existing mesh fields. Use to check a rebuilt history against an imported reference solid. Does not invent volume.",
             empty_schema(),
         ),
     ];
@@ -2546,6 +2664,85 @@ fn tool_specs() -> Vec<ToolSpec> {
         tool.spine = spine;
     }
     tools
+}
+
+fn records_in_script(name: &str) -> bool {
+    if matches!(
+        name,
+        "cad_script"
+            | "cad_compare_solids"
+            | "cad_document"
+            | "cad_project_model"
+            | "cad_get_focus"
+            | "cad_set_focus"
+            | "cad_list_focus_areas"
+            | "cad_get_tool_disclosure_mode"
+            | "cad_set_tool_disclosure_mode"
+            | "cad_list_all_tools"
+            | "cad_cancel_recompute"
+            | "cad_list_sessions"
+            | "cad_attach"
+            | "cad_refresh"
+            | "cad_detach"
+            | "sketch_active"
+            | "sketch_finished"
+            | "sketch_profiles"
+            | "solid_scene"
+            | "solid_tessellate"
+            | "solid_export_step"
+            | "solid_export_stl"
+            | "solid_export_3mf"
+            | "solid_export_preflight"
+            | "material_catalog"
+            | "body_appearances"
+            | "demo_export_pip_3mf"
+    ) {
+        return false;
+    }
+    if name.ends_with("_definitions") || name.contains("_preview_") {
+        return false;
+    }
+    true
+}
+
+fn compare_solids_summary(scene: &nbcad_solid::SolidSceneDto) -> Value {
+    let bodies: Vec<Value> = scene
+        .bodies
+        .iter()
+        .map(|body| {
+            let positions = &body.mesh.positions;
+            let mut min = [f32::INFINITY; 3];
+            let mut max = [f32::NEG_INFINITY; 3];
+            for chunk in positions.chunks_exact(3) {
+                for (i, component) in chunk.iter().enumerate() {
+                    min[i] = min[i].min(*component);
+                    max[i] = max[i].max(*component);
+                }
+            }
+            let empty = positions.len() < 3;
+            json!({
+                "id": body.id,
+                "name": body.name,
+                "vertex_count": positions.len() / 3,
+                "triangle_count": body.mesh.indices.len() / 3,
+                "bbox_min": if empty {
+                    Value::Null
+                } else {
+                    json!([min[0], min[1], min[2]])
+                },
+                "bbox_max": if empty {
+                    Value::Null
+                } else {
+                    json!([max[0], max[1], max[2]])
+                },
+            })
+        })
+        .collect();
+    json!({
+        "body_count": bodies.len(),
+        "bodies": bodies,
+        "error_count": scene.errors.len(),
+    })
 }
 
 fn tool_list_result(disclosure: &mut DisclosureState) -> Value {
@@ -2966,8 +3163,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 19,
-            "105 modeling tools plus 8 print helpers and 11 control tools"
+            MODELING_TOOL_COUNT + 21,
+            "109 modeling tools plus 8 print helpers and 13 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -2994,6 +3191,8 @@ mod tests {
                             | "cad_attach"
                             | "cad_refresh"
                             | "cad_detach"
+                            | "cad_script"
+                            | "cad_compare_solids"
                     )
                 )
             })
@@ -3050,6 +3249,8 @@ mod tests {
                     | "cad_attach"
                     | "cad_refresh"
                     | "cad_detach"
+                    | "cad_script"
+                    | "cad_compare_solids"
             ) {
                 continue;
             }
@@ -3511,6 +3712,200 @@ mod tests {
         assert_eq!(exported["format"], "step");
         assert_eq!(exported["encoding"], "base64");
         assert!(exported["bytes_base64"].as_str().unwrap().len() > 16);
+    }
+
+    #[test]
+    fn mcp_import_step_records_forward_script() {
+        let (mut donor, _) = mcp_box();
+        let exported = donor
+            .call_tool("solid_export_step", json!({}))
+            .expect("STEP export should succeed for a simple box");
+        let data_base64 = exported["bytes_base64"]
+            .as_str()
+            .expect("STEP export returns bytes_base64")
+            .to_string();
+
+        let mut server = CadServer::new().unwrap();
+        let imported = server
+            .call_tool(
+                "solid_import_step",
+                json!({
+                    "file_name": "box.step",
+                    "data_base64": data_base64,
+                }),
+            )
+            .expect("solid_import_step should import the exported box");
+        assert!(
+            imported["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            imported["scene"]["errors"]
+        );
+        assert_eq!(imported["scene"]["bodies"].as_array().unwrap().len(), 1);
+
+        let compared = server
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("cad_compare_solids summarizes the imported scene");
+        assert_eq!(compared["body_count"], 1);
+        assert!(compared["bodies"][0]["triangle_count"].as_u64().unwrap() > 0);
+
+        let script = server
+            .call_tool("cad_script", json!({}))
+            .expect("cad_script dumps the forward tool trace");
+        let calls = script["calls"].as_array().expect("cad_script.calls");
+        assert!(
+            calls.iter().any(|call| call["name"] == "solid_import_step"),
+            "cad_script should contain solid_import_step, got {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|call| call["name"] != "cad_script" && call["name"] != "cad_compare_solids"),
+            "cad_script must skip itself and read-only compare"
+        );
+    }
+
+    #[test]
+    fn cad_script_after_attach_refresh_replays_on_fresh_server() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-script-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .expect("attach snapshot for script regression");
+        server
+            .call_tool("cad_refresh", json!({}))
+            .expect("refresh snapshot for script regression");
+
+        let scene = server
+            .call_tool("solid_scene", json!({}))
+            .expect("attached snapshot has a solid scene");
+        let body_id = scene["bodies"][0]["id"].clone();
+        let mirrored = server
+            .call_tool(
+                "solid_mirror",
+                json!({
+                    "body_ids": [body_id],
+                    "plane": {"type": "origin_plane", "plane": "yz"}
+                }),
+            )
+            .expect("modeling mutate after attach/refresh");
+        assert_eq!(mirrored["scene"]["bodies"].as_array().unwrap().len(), 2);
+
+        let script = server
+            .call_tool("cad_script", json!({}))
+            .expect("cad_script dumps portable modeling ops");
+        let calls = script["calls"].as_array().expect("cad_script.calls");
+        assert_eq!(
+            calls.first().and_then(|call| call["name"].as_str()),
+            Some("cad_load_project_model"),
+            "attach/refresh must seed cad_load_project_model baseline, got {calls:?}"
+        );
+        assert!(
+            calls.iter().any(|call| call["name"] == "solid_mirror"),
+            "cad_script should contain solid_mirror, got {calls:?}"
+        );
+        assert!(
+            calls.iter().all(|call| {
+                !matches!(
+                    call["name"].as_str(),
+                    Some("cad_attach" | "cad_refresh" | "cad_detach" | "solid_scene")
+                )
+            }),
+            "cad_script must omit session-control and inspect helpers, got {calls:?}"
+        );
+        let script_text = serde_json::to_string(&script).unwrap();
+        assert!(
+            !script_text.contains(&unique),
+            "portable cad_script must not embed the ephemeral session UUID, got {script_text}"
+        );
+
+        let expected = server
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("compare solids on attached+modeled server");
+
+        let mut fresh = CadServer::new().unwrap();
+        for call in calls {
+            let name = call["name"].as_str().expect("script call name");
+            let arguments = call.get("arguments").cloned().unwrap_or(Value::Null);
+            fresh
+                .call_tool(name, arguments)
+                .unwrap_or_else(|error| panic!("fresh replay of {name} failed: {error}"));
+        }
+        let replayed = fresh
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("compare solids after fresh script replay");
+        assert_eq!(
+            replayed["body_count"], expected["body_count"],
+            "replayed body_count should match attached session"
+        );
+        assert_eq!(
+            replayed["bodies"], expected["bodies"],
+            "replayed solid metrics should match attached session"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mcp_solid_move_copy_translates_body() {
+        let (mut server, base) = mcp_box();
+        let body_id = base["scene"]["bodies"][0]["id"].clone();
+        let moved = server
+            .call_tool(
+                "solid_move_copy",
+                json!({
+                    "body_ids": [body_id],
+                    "translation": {"x": 12.0, "y": -4.0, "z": 2.0},
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "pivot": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "copy": false
+                }),
+            )
+            .expect("solid_move_copy should translate the box");
+        assert!(
+            moved["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            moved["scene"]["errors"]
+        );
+        assert_eq!(moved["scene"]["bodies"].as_array().unwrap().len(), 1);
+
+        let copied = server
+            .call_tool(
+                "solid_move_copy",
+                json!({
+                    "body_ids": [moved["scene"]["bodies"][0]["id"].clone()],
+                    "translation": {"x": 25.0, "y": 0.0, "z": 0.0},
+                    "pivot": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "copy": true
+                }),
+            )
+            .expect("solid_move_copy copy=true should leave source and create a body");
+        assert!(
+            copied["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            copied["scene"]["errors"]
+        );
+        assert_eq!(copied["scene"]["bodies"].as_array().unwrap().len(), 2);
     }
 
     #[test]

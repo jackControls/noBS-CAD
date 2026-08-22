@@ -21,7 +21,7 @@ machine (or CI runner).
 | Topic | Current state |
 |-------|----------------|
 | Transport | **stdio** JSON-RPC (`nbcad-mcp`) — logs on **stderr** |
-| Tools | **105** modeling tools + control/export helpers |
+| Tools | **107** modeling tools + control/export helpers |
 | Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
 | Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
@@ -67,6 +67,22 @@ document. Prefer `solid_export_3mf` for slicer handoff; STEP for CAD interchange
 Focus / mode / soft-TTL changes schedule `notifications/tools/list_changed`.
 The server wakes on that deadline even if the client is idle — it does **not**
 require a later `ping` or tool call to flush the notification.
+
+### STEP import and forward scripts
+`solid_import_step` (and `solid_edit_import_step`) load a licensed STEP/STP
+file as a **reference solid**: the kernel stores the source bytes and
+tessellates a dumb body. Scripts are **recorded forward** via `cad_script`
+(`{ "calls": [ { "name", "arguments" } ] }` of successful mutating
+`tools/call` entries). `cad_script` is **portable modeling ops only**:
+session-control reads (`cad_attach` / `cad_refresh` / `cad_detach`) are not
+recorded. Successful attach/refresh **clear and seed** the forward trace with
+`cad_load_project_model` carrying the loaded `model_json` (refresh replaces
+that baseline the same way), so a dumped script replays on a fresh CadServer
+without ephemeral session UUIDs or external snapshot files. Inspect/export
+helpers and failed calls are also skipped. We do **not** reverse-engineer sketch/extrude feature
+history from STEP B-rep. After modeling (or after importing a reference),
+`cad_compare_solids` summarizes `solid_scene` mesh bbox + vertex/triangle
+counts so a rebuilt history can be checked against the imported solid.
 
 ## Today vs target
 
