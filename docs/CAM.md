@@ -19,7 +19,7 @@ operation. The operator programs the job explicitly, in this order:
    with a clear error when it is missing, while the Siemens 828D post prefers
    the tool name (`T="NAME"`), falling back to the number only when the name
    carries no callable identifier. Tool kinds cover flat/ball end mills,
-   drills, chamfer mills, taps, reamers, and boring bars.
+   drills, chamfer mills, taps, reamers, boring bars, and thread mills.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
    cylinder, hex bar, or a modeled body — defined in one of three ways: a
@@ -37,10 +37,11 @@ operation. The operator programs the job explicitly, in this order:
    planned toolpaths are dialect-neutral and any post can render them.
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
-   sketched points or explicit coordinates for drilling; the stock top or an
-   explicit region for facing. Safe heights (clearance and retract Z) are set
-   per operation, not globally on the setup. The engine validates the input
-   and rejects incomplete programs instead of guessing.
+   sketched points or explicit coordinates for drilling and thread milling;
+   the stock top or an explicit region for facing. Safe heights (clearance
+   and retract Z) are set per operation, not globally on the setup. The
+   engine validates the input and rejects incomplete programs instead of
+   guessing.
 
 The same document is fully scriptable through the MCP `cam_*` tools
 (`cam_get_document`, `cam_set_document`, `cam_plan_setup`, `cam_post_setup`,
@@ -66,13 +67,19 @@ rewrites stored geometry.
 - Deterministic controller-neutral motion planning in millimetres, with
   per-offset program duplication (`G54`, `G55`, … blocks in one program).
 - Facing, closed 2D contour, 2D pocket (zigzag clear plus boundary finish
-  pass), 2D chamfer (90° chamfer mill with tip-offset control), and hole
+  pass), 2D chamfer (90° chamfer mill with tip-offset control), internal
+  thread milling (thread mill orbiting a helical path one pitch per
+  revolution, split into semicircular arcs; right/left-hand threads, climb or
+  conventional direction, optional multi-pass radial stepovers finishing at
+  the full orbit; the host resolves the designation to explicit pitch and
+  major/minor diameters stored on the operation), and hole
   operations with an explicit cycle family: plain drilling (rapid out), chip
   breaking (peck with an in-hole partial retract), deep drilling (peck with
   full retract), right/left-hand tapping (pitch-synchronised feed with
   spindle reversal), reaming, and boring (dwell and feed out). Every cycle is
   expanded to explicit longhand motion, so posted output never depends on a
-  control's canned-cycle dialect.
+  control's canned-cycle dialect. Helical arcs post as plain G2/G3 blocks
+  carrying a Z word in every dialect.
 - Multiple depth passes, contour side compensation, stepover, and stepdown.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
@@ -102,8 +109,13 @@ rewrites stored geometry.
   through the viewport's native transient channel (`src/cam/overlay.ts`):
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
+  a translucent ghost of the selected operation's tool parked at its last
+  cutting position (fluted section brighter than the shank),
   the simulated remaining stock in green with rapid-collision markers, and
-  point-pick candidates. Setup-space planner output is transformed back to
+  point-pick candidates. A status chip at the viewport's lower right reports
+  the selected operation's machining time (`h:mm:ss`, from the program's
+  per-operation stats) or the whole setup's total when nothing is selected.
+  Setup-space planner output is transformed back to
   model coordinates in that one module.
 
 The Rust crate at `crates/cam/` owns validation, path generation, motion IR,

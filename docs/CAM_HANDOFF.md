@@ -1,6 +1,6 @@
 # CAM branch handoff — 2026-08-22
 
-State of `feature/cam` after four working rounds. Everything below is
+State of `feature/cam` after five working rounds. Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
@@ -12,15 +12,32 @@ and the tests, not this document, when they disagree.
   `id` (internal uid, the only key operations reference), `number:
   Option<u32>` (machine-facing, optional), `name` (required, also the call
   identifier on name-capable controls). Tool kinds: flat/ball end mill,
-  drill, chamfer mill, tap, reamer, boring bar. `CamToolDto::label()` renders
+  drill, chamfer mill, tap, reamer, boring bar, thread mill.
+  `CamToolDto::label()` renders
   `T<n>` or the name for diagnostics. Drill operations carry `cycle:
   DrillCycle` (drill / chip_breaking / deep_hole / tapping_right /
   tapping_left / reaming / boring) with `peck_depth`, `peck_retract`,
-  `thread_pitch`, `feed_out`, all validated fail-closed per cycle.
+  `thread_pitch`, `feed_out`, all validated fail-closed per cycle. Thread
+  operations (internal thread milling) store an explicit `pitch`,
+  `major_diameter`, `minor_diameter` (the host resolves the designation via
+  `src/lib/threadStandards.ts`; the planner never derives thread geometry),
+  plus `hand`, `direction`, `radial_passes`, and `step_over`, all validated
+  fail-closed (tool must be a thread mill smaller than the minor diameter;
+  depth + one pitch of overtravel must fit the flute length; multi-pass
+  stepovers must leave a finishing orbit).
 - `planner.rs` — controller-neutral motion. Every drill cycle is expanded to
   longhand moves (no canned-cycle dialects). Tapping emits pitch-synchronised
   feeds (pitch x rpm) with spindle reversal via the builder's deduped
-  `spindle()` helper, restoring CW after every hole. Work offsets repeat the
+  `spindle()` helper, restoring CW after every hole. Thread milling emits a
+  helical orbit: one pitch of Z travel per revolution, split into
+  semicircular `CamCommandDto::Circular` arcs via the builder's `circular()`
+  helper (arc length including Z feeds distance/time estimates); straight
+  line leads in/out from the hole center (helical leads are roadmap). With a
+  CW spindle, climb = CW orbit and the thread hand fixes the Z sense (RH
+  descends going CW); conventional reverses the orbit. Radial passes open up
+  from the smallest orbit, finishing pass last. `CamProgramDto.per_operation`
+  carries per-operation rapid/cutting distance and time for the status
+  readout (first work-offset copy only). Work offsets repeat the
   whole program per consecutive G54+ code. Rapids have no programmable feed;
   the 8 m/min constant feeds only the time estimate.
 - `post.rs` — GRBL / LinuxCNC / Fanuc-style / native Siemens 828D. Numeric
@@ -28,9 +45,11 @@ and the tests, not this document, when they disagree.
   (`T="NAME"`, sanitized, 31-char cap) with the number as fallback;
   next-tool preload compares call words, not numbers. Post config is chosen
   at export time (`CamPostRequestDto.post`), document `post_defaults` only
-  prefill the dialog.
+  prefill the dialog. Helical arcs (Z advances through the turn, i.e. thread
+  milling) post as plain G2/G3 blocks carrying a Z word in every dialect.
 - `simulation.rs` — voxel stock removal + rapid-collision reports. Tap /
-  reamer / boring bar sweep as plain cylinders (no tip-approximation note).
+  reamer / boring bar / thread mill sweep as plain cylinders (no
+  tip-approximation note).
 - `post_events.rs` — neutral callback-event stream for future post adapters.
 
 **Frontend (`src/cam/`, `src/components/cam/`)**
@@ -51,7 +70,12 @@ and the tests, not this document, when they disagree.
   result live in the store (`camProgram` / `camSimulation`) so the collector
   can read them; every store change already marks the transient channel
   dirty, so no extra invalidation plumbing exists. The old hand-rolled 2D
-  canvas (`CamSimulationViewport`) is deleted.
+  canvas (`CamSimulationViewport`) is deleted. Selecting an operation also
+  draws a translucent ghost of its tool (fluted section brighter, shank
+  fainter) parked at the operation's last cutting position.
+- A machining-time chip sits at the viewport's lower right: the selected
+  operation's `h:mm:ss` from `program.per_operation`, or the setup total when
+  nothing is selected.
 - Viewport point picking works in the shared viewport: `onPointerDown`
   intercepts left clicks during a `camPointPick` session and projects
   candidates with the live camera (16 px nearest-wins); Escape cancels via a
@@ -60,7 +84,15 @@ and the tests, not this document, when they disagree.
   with `CamSetupsPanel` docked below. Operation rows show `[T<n>]`/`[name]`
   tool tags. The tool library is a separate full-size dialog (table + editor
   + duplicate), never a browser node. The setup dialog is a centered modal;
-  during a viewport pick it steps aside.
+  during a viewport pick it steps aside. The ribbon's manufacturing tab
+  mirrors the reference hierarchy: WORKSPACE (return to model), SETUP (new
+  setup), TOOLPATHS (face/contour/pocket/chamfer/drill/thread), MANAGE (tool
+  library), OUTPUT (post/events); the right sidebar holds only inspectors,
+  no creation buttons.
+- All CAM dialogs carry `data-native-viewport-dim` on the backdrop and the
+  `feature-dialog` class on the panel: the native viewport is a platform
+  child view, and without those hooks it draws over DOM dialogs
+  (`nativeViewportBridge.ts` collects dim opacity and overlay cutout rects).
 - `geometry.ts` resolves stock specs (box/cylinder/hex/model body; fixed /
   from-model allowances / rest-from-setup) and WCS origins; `pointPick.ts`
   owns the shared viewport point-pick session (27-lattice box points, sketch
@@ -70,7 +102,9 @@ and the tests, not this document, when they disagree.
 - `CamOperationDialog` — per-operation programming incl. per-op
   clearance/retract; drill cycle picker filters compatible tools per cycle
   and scrubs inapplicable fields on cycle change (the inspector's DrillFields
-  does the same).
+  does the same). The thread operation picker resolves the chosen designation
+  to pitch/major/minor through `src/lib/threadStandards.ts` and stores the
+  resolved numbers on the operation; the designation string never persists.
 
 **MCP (`mcp-server/`)** — `cam_get_document` / `cam_set_document` /
 `cam_plan_setup` / `cam_post_setup` / `cam_simulate_setup`, same validation
@@ -90,27 +124,25 @@ as the UI. Descriptions document tool identity and drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 51, sketch 101, others green), mcp-server 28,
+`cargo test --workspace` (cam 58, sketch 101, others green), mcp-server 28,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
 ## Not done yet (rough priority)
 
-1. Thread milling (reuse `src/lib/threadStandards.ts`; helical entry +
-   climb/conventional), then bore milling (circular interpolation of holes).
+1. Bore milling (circular interpolation of holes with an end mill).
 2. 3D adaptive clearing — the largest outstanding algorithmic piece.
 3. Fine boring with shift (G76 semantics), back-boring, gun drilling;
    canned-cycle output variants behind per-control validation, if ever.
-4. Tool library: holders/shafts, cutting-data presets per material,
+4. Thread milling round 2: helical lead-in/out arcs (line leads today),
+   external threads, multi-start, tool-pitch matching against the operation.
+5. Tool library: holders/shafts, cutting-data presets per material,
    import/export of the library.
-5. Heights "From"-references (model top / stock bottom + offset) like the
+6. Heights "From"-references (model top / stock bottom + offset) like the
    reference workflow, instead of absolute Z fields only.
-6. Geometry picking upgrades: viewport chain selection for
+7. Geometry picking upgrades: viewport chain selection for
    contour/pocket/chamfer (sketch loops already supported), hole-face
-   selection for drilling.
-7. Translucent tool model at the toolpath cursor (the reference workflow
-   shows it during path review); the overlay channel already supports the
-   triangle layer it would need.
+   selection for drilling and thread milling.
 
 ## Process note
 
