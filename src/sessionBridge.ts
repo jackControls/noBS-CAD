@@ -140,6 +140,8 @@ async function publishNow(): Promise<void> {
 async function applyInboxNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri' || inboxApplying) return;
+  // inboxApplying also suppresses noteEngineRevision in the store subscription:
+  // native apply already advanced engine_revision; a second bump would double-count.
   inboxApplying = true;
   try {
     const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
@@ -151,7 +153,8 @@ async function applyInboxNow(): Promise<void> {
     if (result.result?.scene && result.result.document) {
       useAppStore.getState().applySolidUpdate(result.result);
     } else {
-      await useAppStore.getState().loadDocument();
+      // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
+      await useAppStore.getState().refreshAfterInboxApply(result.name);
     }
     scheduleSessionBridgePublish();
   } catch (error) {
@@ -206,9 +209,12 @@ export function startSessionBridge(): void {
       // Bump authoritative engine revision immediately so inbox OCC cannot
       // race the 300 ms debounced snapshot publish / 250 ms poll.
       if (
-        state.document !== prev.document ||
-        state.solidScene !== prev.solidScene ||
-        state.activeSketch !== prev.activeSketch
+        !inboxApplying
+        && (
+          state.document !== prev.document ||
+          state.solidScene !== prev.solidScene ||
+          state.activeSketch !== prev.activeSketch
+        )
       ) {
         void noteEngineRevision();
       }
