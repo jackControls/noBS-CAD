@@ -416,6 +416,20 @@ function boxFromCenterSize(center: { x: number; y: number }, zMin: number, sx: n
   };
 }
 
+/** Express a setup-space point in model coordinates (inverse of
+ *  `modelPointToSetup`). Toolpaths, stock envelopes, and simulation meshes are
+ *  produced in setup coordinates; the shared viewport renders model space. */
+export function setupPointToModel(
+  point: Point3Dto,
+  wcs: CamWorkCoordinateSystemDto,
+): Point3Dto {
+  return {
+    x: wcs.origin.x + point.x * wcs.x_axis[0] + point.y * wcs.y_axis[0] + point.z * wcs.z_axis[0],
+    y: wcs.origin.y + point.x * wcs.x_axis[1] + point.y * wcs.y_axis[1] + point.z * wcs.z_axis[1],
+    z: wcs.origin.z + point.x * wcs.x_axis[2] + point.y * wcs.y_axis[2] + point.z * wcs.z_axis[2],
+  };
+}
+
 /** Express a setup-space stock envelope back in model coordinates. */
 export function setupBoxToModel(
   setupBox: CamStockBoxDto,
@@ -423,11 +437,7 @@ export function setupBoxToModel(
 ): CamStockBoxDto {
   const min = { x: Infinity, y: Infinity, z: Infinity };
   const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-  const toModel = (point: Point3Dto): Point3Dto => ({
-    x: wcs.origin.x + point.x * wcs.x_axis[0] + point.y * wcs.y_axis[0] + point.z * wcs.z_axis[0],
-    y: wcs.origin.y + point.x * wcs.x_axis[1] + point.y * wcs.y_axis[1] + point.z * wcs.z_axis[1],
-    z: wcs.origin.z + point.x * wcs.x_axis[2] + point.y * wcs.y_axis[2] + point.z * wcs.z_axis[2],
-  });
+  const toModel = (point: Point3Dto): Point3Dto => setupPointToModel(point, wcs);
   for (const x of [setupBox.min.x, setupBox.max.x]) {
     for (const y of [setupBox.min.y, setupBox.max.y]) {
       for (const z of [setupBox.min.z, setupBox.max.z]) {

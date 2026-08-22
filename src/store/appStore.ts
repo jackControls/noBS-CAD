@@ -17,6 +17,8 @@ import type {
   BodyAppearance,
   CamDocumentDto,
   CamOperationDto,
+  CamProgramDto,
+  CamSimulationResultDto,
   ComponentDefinitionDto,
   ComponentOccurrenceDto,
   CreateJointRequestDto,
@@ -733,6 +735,10 @@ interface AppState {
   camDialog: CamDialogState | null;
   /** Active viewport point-picking session for CAM inputs; null when idle. */
   camPointPick: CamPointPickSession | null;
+  /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
+  camProgram: CamProgramDto | null;
+  /** Latest volumetric stock simulation; shared-viewport overlay input. */
+  camSimulation: CamSimulationResultDto | null;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -861,6 +867,8 @@ interface AppState {
   setSelectedCamOperationId: (operationId: number | null) => void;
   setCamDialog: (dialog: CamDialogState | null) => void;
   setCamPointPick: (session: CamPointPickSession | null) => void;
+  setCamProgram: (program: CamProgramDto | null) => void;
+  setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -1054,6 +1062,8 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedCamOperationId: null,
     camDialog: null,
     camPointPick: null,
+    camProgram: null,
+    camSimulation: null,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -1172,6 +1182,8 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedCamOperationId: null,
   camDialog: null,
   camPointPick: null,
+  camProgram: null,
+  camSimulation: null,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -2105,6 +2117,10 @@ export const useAppStore = create<AppState>()((set) => ({
   setCamDialog: (camDialog) => set({ camDialog }),
 
   setCamPointPick: (camPointPick) => set({ camPointPick }),
+
+  setCamProgram: (camProgram) => set({ camProgram }),
+
+  setCamSimulation: (camSimulation) => set({ camSimulation }),
 
   loadProjectState: (
     update,

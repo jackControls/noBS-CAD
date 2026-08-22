@@ -1,6 +1,6 @@
-# CAM branch handoff — 2026-08-21
+# CAM branch handoff — 2026-08-22
 
-State of `feature/cam` after three working rounds. Everything below is
+State of `feature/cam` after four working rounds. Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
@@ -35,11 +35,32 @@ and the tests, not this document, when they disagree.
 
 **Frontend (`src/cam/`, `src/components/cam/`)**
 
-- Manufacturing and modeling share the viewport and the browser: App renders
-  `BrowserTree` (embedded mode) with `CamSetupsPanel` docked below. Operation
-  rows show `[T<n>]`/`[name]` tool tags. The tool library is a separate
-  full-size dialog (table + editor + duplicate), never a browser node. The
-  setup dialog is a centered modal; during a viewport pick it steps aside.
+- Manufacturing and modeling share one viewport outright: `CamWorkspace`
+  mounts the same `Viewport` component as the modeling tab, so navigation,
+  grid, ViewCube, and model presentation are identical by construction. CAM
+  overlays are collected by `src/cam/overlay.ts` and merged into the
+  viewport's native transient preview channel inside
+  `collectNativeViewportTransient`: translucent stock ghost + envelope edges,
+  RGB WCS axes at the setup origin, the selected operation's toolpath
+  (dotted amber rapids / solid green cuts, width >= 2 so they render through
+  geometry via the highlight gizmo group), green remaining-stock mesh from
+  the voxel simulator with red rapid-collision markers, and point-pick
+  candidates. All planner/simulator output is setup-space; `overlay.ts` is
+  the single place that transforms it back to model coordinates
+  (`geometry.ts::setupPointToModel`). The planned program and simulation
+  result live in the store (`camProgram` / `camSimulation`) so the collector
+  can read them; every store change already marks the transient channel
+  dirty, so no extra invalidation plumbing exists. The old hand-rolled 2D
+  canvas (`CamSimulationViewport`) is deleted.
+- Viewport point picking works in the shared viewport: `onPointerDown`
+  intercepts left clicks during a `camPointPick` session and projects
+  candidates with the live camera (16 px nearest-wins); Escape cancels via a
+  `CamWorkspace` listener, and the prompt shows as a DOM banner.
+- The browser stays shared too: App renders `BrowserTree` (embedded mode)
+  with `CamSetupsPanel` docked below. Operation rows show `[T<n>]`/`[name]`
+  tool tags. The tool library is a separate full-size dialog (table + editor
+  + duplicate), never a browser node. The setup dialog is a centered modal;
+  during a viewport pick it steps aside.
 - `geometry.ts` resolves stock specs (box/cylinder/hex/model body; fixed /
   from-model allowances / rest-from-setup) and WCS origins; `pointPick.ts`
   owns the shared viewport point-pick session (27-lattice box points, sketch
@@ -87,6 +108,9 @@ as the UI. Descriptions document tool identity and drill cycles.
 6. Geometry picking upgrades: viewport chain selection for
    contour/pocket/chamfer (sketch loops already supported), hole-face
    selection for drilling.
+7. Translucent tool model at the toolpath cursor (the reference workflow
+   shows it during path review); the overlay channel already supports the
+   triangle layer it would need.
 
 ## Process note
 

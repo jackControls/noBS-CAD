@@ -95,10 +95,16 @@ rewrites stored geometry.
   browser tree. The workspace opens directly onto the modeled parts (setups
   are created from a centered dialog via the ribbon, never implicitly), with
   manual setup and operation dialogs, viewport point picking for WCS origins,
-  parameter inspectors, interactive 3D remaining-stock preview, distance/time
-  estimates, warnings, NC export via the Post NC dialog, and neutral
-  post-event export. Viewport navigation (orbit, pan, zoom, pinch,
-  Shift+swipe orbit) matches the modeling viewport exactly.
+  parameter inspectors, distance/time estimates, warnings, NC export via the
+  Post NC dialog, and neutral post-event export. The manufacturing tab mounts
+  the very same viewport component as modeling — navigation, grid, ViewCube,
+  and model presentation are literally identical — and CAM adds its overlays
+  through the viewport's native transient channel (`src/cam/overlay.ts`):
+  a translucent stock ghost with envelope edges, RGB WCS axes, the selected
+  operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
+  the simulated remaining stock in green with rapid-collision markers, and
+  point-pick candidates. Setup-space planner output is transformed back to
+  model coordinates in that one module.
 
 The Rust crate at `crates/cam/` owns validation, path generation, motion IR,
 posting, and post-event projection. The React code under `src/cam/` and
@@ -166,12 +172,12 @@ fixture/holder collisions, and exact target voxelization still need explicit
 geometry inputs. Avoiding repeated topology-changing OCCT booleans also keeps
 interactive simulation deterministic and bounded.
 
-Bevy remains a presentation layer. The stock result already uses the same
-packed triangle shape accepted by the native transient rendering path, but the
-CAM workspace currently renders it with an orbitable React canvas so the
-desktop, browser/WASM, and automated-test paths share behavior. A dedicated
-retained Bevy CAM scene and timeline player can consume the same result later;
-it should not own material removal or safety decisions.
+Bevy remains a presentation layer. The remaining-stock mesh rides the native
+viewport's transient triangle channel (alpha-blended, depth-tested) alongside
+the toolpath line layers, so the desktop app renders simulation results in the
+shared modeling viewport. A dedicated retained Bevy CAM scene and timeline
+player can consume the same result later; it should not own material removal
+or safety decisions.
 
 ## Post-processor ecosystem decision
 
@@ -392,9 +398,9 @@ model, machine definitions, cycles, and verification layer are mature.
    boring).
 3. Exact target-solid voxelization, fixture/tool-holder definitions, gouge and
    collision checking, plus operation-to-operation rest machining.
-4. Dedicated retained Bevy CAM scene and timeline playback fed directly from
-   the headless simulator; the current canvas consumes the same stock mesh as
-   a cross-platform presentation path.
+4. Timeline playback and per-step inspection fed directly from the headless
+   simulator; the remaining-stock mesh already renders through the shared
+   viewport's transient channel.
 5. Tool-length compensation, machine limits, safe tool-change/home policies,
    and configurable controller capabilities.
 6. Ramp/helical entries, tabs, lead-in/out, and arc fitting.

@@ -111,6 +111,8 @@ import {
   type NativeViewportTransient,
 } from './nativeViewportBridge';
 import { triangulateProfileRegion } from './profileTriangulation';
+import { collectCamOverlay } from '../../cam/overlay';
+import { completeCamPointPick } from '../../cam/pointPick';
 
 function hasMovableJointPath(
   joints: JointDefinitionDto[],
@@ -1219,6 +1221,15 @@ export function Viewport() {
           lineLayers.set(key, target);
         }
         target.segments.push(...source.segments);
+      };
+      const appendPointLayer = (source: PointLayer) => {
+        const key = pointKey(source.color, source.radius);
+        let target = pointLayers.get(key);
+        if (!target) {
+          target = { color: source.color, radius: source.radius, positions: [] };
+          pointLayers.set(key, target);
+        }
+        target.positions.push(...source.positions);
       };
       const appendPoint = (
         color: Rgba,
@@ -3033,6 +3044,24 @@ export function Viewport() {
           xray: true,
         });
       }
+
+      // Manufacturing overlays (stock ghost, WCS axes, the selected
+      // operation's toolpath, simulated remaining stock, point-pick
+      // candidates) ride the same transient channel, so the manufacturing tab
+      // presents them inside this shared viewport.
+      const camOverlay = collectCamOverlay({
+        activeTab: transientState.activeTab,
+        camDocument: transientState.camDocument,
+        selectedCamOperationId: transientState.selectedCamOperationId,
+        camProgram: transientState.camProgram,
+        camSimulation: transientState.camSimulation,
+        camPointPick: transientState.camPointPick,
+        solidScene: transientState.solidScene,
+      });
+      for (const layer of camOverlay.lines) appendLineLayer(layer);
+      for (const layer of camOverlay.points) appendPointLayer(layer);
+      triangles.push(...camOverlay.triangles);
+      arrows.push(...camOverlay.arrows);
 
       let marker: NativeViewportTransient['marker'] = null;
       if (sketchGroup.visible && snapMarker.visible) {
@@ -9581,6 +9610,30 @@ export function Viewport() {
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const state = store.getState();
+
+      // CAM point-pick sessions own the left button: choose the nearest
+      // highlighted candidate (model coordinates) and never fall through
+      // into navigation tools or selection.
+      const camPick = state.camPointPick;
+      if (camPick) {
+        const rect = surface.domElement.getBoundingClientRect();
+        const projected = new CAD.Vector3();
+        let best: (typeof camPick.candidates)[number] | null = null;
+        let bestDistance = 16;
+        for (const candidate of camPick.candidates) {
+          projected.set(candidate.point.x, candidate.point.y, candidate.point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) continue;
+          const sx = rect.left + ((projected.x + 1) * rect.width) / 2;
+          const sy = rect.top + ((1 - projected.y) * rect.height) / 2;
+          const distance = Math.hypot(sx - e.clientX, sy - e.clientY);
+          if (distance <= bestDistance) {
+            best = candidate;
+            bestDistance = distance;
+          }
+        }
+        if (best) completeCamPointPick(best);
+        return;
+      }
 
       // Modal nav tool: left-drag applies it (a clean click in pick-plane
       // mode still picks the plane — handled on pointerup).

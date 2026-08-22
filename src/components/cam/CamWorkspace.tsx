@@ -37,39 +37,44 @@ import type {
   CamOperationDto,
   CamPoint2Dto,
   CamProgramDto,
-  CamSimulationResultDto,
   CamSetupDto,
   CamToolDto,
   CamUnits,
   NbPostAnalysisDto,
 } from '../../engine/types';
+import { cancelCamPointPick } from '../../cam/pointPick';
 import { useAppStore } from '../../store/appStore';
+import { Viewport } from '../viewport/Viewport';
 import { runCamAction } from './CamBrowser';
 import { CamOperationDialog } from './CamOperationDialog';
 import { CamPostDialog } from './CamPostDialog';
 import { CamSetupDialog } from './CamSetupDialog';
-import { CamSimulationViewport } from './CamSimulationViewport';
 import { CamToolDialog } from './CamToolDialog';
 
 export function CamWorkspace() {
   const cam = useAppStore((state) => state.camDocument);
   const scene = useAppStore((state) => state.solidScene);
   const selectedOperationId = useAppStore((state) => state.selectedCamOperationId);
+  // The planned program and volumetric simulation live in the store so the
+  // shared viewport's overlay collector can read them between React renders.
+  const program = useAppStore((state) => state.camProgram);
+  const simulation = useAppStore((state) => state.camSimulation);
+  const resolvedTheme = useAppStore((state) => state.resolvedTheme);
+  const pick = useAppStore((state) => state.camPointPick);
   const setup = activeCamSetup(cam);
   const operation = findCamOperation(cam, selectedOperationId);
   const units = cam.units;
-  const [program, setProgram] = useState<CamProgramDto | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [simulation, setSimulation] = useState<CamSimulationResultDto | null>(null);
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [simulationGeneration, setSimulationGeneration] = useState(0);
   const [simulationBusy, setSimulationBusy] = useState(false);
 
   useEffect(() => {
+    const { setCamProgram } = useAppStore.getState();
     if (!setup) {
-      setProgram(null);
+      setCamProgram(null);
       setPlanError(null);
       return;
     }
@@ -79,12 +84,12 @@ export function CamWorkspace() {
       .then((engine) => engine.camPlan(setup.id))
       .then((next) => {
         if (cancelled) return;
-        setProgram(next);
+        setCamProgram(next);
         setPlanError(null);
       })
       .catch((error) => {
         if (cancelled) return;
-        setProgram(null);
+        setCamProgram(null);
         setPlanError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
@@ -96,11 +101,14 @@ export function CamWorkspace() {
   }, [cam, setup?.id, generation]);
 
   useEffect(() => {
-    setSimulation(null);
+    useAppStore.getState().setCamSimulation(null);
     setSimulationError(null);
   }, [cam]);
 
   useEffect(() => {
+    const { setCamSimulation } = useAppStore.getState();
+    // A stale result must never paint over a freshly selected setup.
+    setCamSimulation(null);
     if (!setup) return;
     let cancelled = false;
     setSimulationBusy(true);
@@ -121,12 +129,12 @@ export function CamWorkspace() {
       .then((engine) => engine.camSimulate({ setup_id: setup.id, stock_mesh: stockMesh }))
       .then((next) => {
         if (cancelled) return;
-        setSimulation(next);
+        setCamSimulation(next);
         setSimulationError(null);
       })
       .catch((error) => {
         if (cancelled) return;
-        setSimulation(null);
+        setCamSimulation(null);
         setSimulationError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => {
@@ -136,6 +144,19 @@ export function CamWorkspace() {
       cancelled = true;
     };
   }, [setup?.id, simulationGeneration, scene]);
+
+  // Escape cancels an active viewport point-pick session.
+  useEffect(() => {
+    if (!pick) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelCamPointPick();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pick]);
 
   // The manufacturing tab opens straight onto the modeled parts, even before
   // the first setup exists; setups are created from the ribbon or the empty
@@ -204,14 +225,16 @@ export function CamWorkspace() {
           </div>
         </div>
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          <CamSimulationViewport
-            setup={setup}
-            program={program}
-            simulation={simulation}
-            scene={scene}
-            busy={simulationBusy}
-            error={simulationError}
-          />
+          {/* The manufacturing tab shares the modeling viewport outright:
+              same navigation, same grid, same model. CAM adds its overlays
+              (stock, WCS, toolpaths, simulated stock) through the viewport's
+              transient preview channel. */}
+          <Viewport key={resolvedTheme} />
+          {pick && (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-10 max-w-[80%] -translate-x-1/2 rounded border border-accent/50 bg-header/90 px-3 py-1.5 text-center text-[11px] text-accent shadow-xl backdrop-blur-sm">
+              {pick.prompt} · click a highlighted point · Esc to cancel
+            </div>
+          )}
           {(planError || simulationError || program?.warnings.length || simulation?.collisions.length) && (
             <div className="absolute bottom-3 left-3 right-3 max-w-3xl rounded border border-[#d69b45]/45 bg-[#2a2117]/95 p-2.5 text-[10px] text-[#e8c589] shadow-lg">
               <div className="flex items-start gap-2">
