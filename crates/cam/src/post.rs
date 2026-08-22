@@ -303,12 +303,8 @@ fn render_program(
                 let from = position.ok_or_else(|| {
                     CamPlanError("a circular post record needs a known start position".to_string())
                 })?;
-                if (center.z - from.z).abs() > 1.0e-6 || (to.z - from.z).abs() > 1.0e-6 {
-                    return Err(CamPlanError(
-                        "built-in posts currently support circular interpolation in XY only"
-                            .to_string(),
-                    ));
-                }
+                // Helical arcs (Z advances through the turn, e.g. thread
+                // milling) post as a plain circular block with a Z word.
                 writer.block(&format!(
                     "{} X{} Y{} Z{} I{} J{} F{}",
                     if *clockwise { "G2" } else { "G3" },
@@ -476,12 +472,8 @@ fn render_siemens828d_program(
                 let from = position.ok_or_else(|| {
                     CamPlanError("a circular post record needs a known start position".to_string())
                 })?;
-                if (center.z - from.z).abs() > 1.0e-6 || (to.z - from.z).abs() > 1.0e-6 {
-                    return Err(CamPlanError(
-                        "the Siemens 828D built-in post currently supports circular interpolation in XY only"
-                            .to_string(),
-                    ));
-                }
+                // Helical arcs (Z advances through the turn, e.g. thread
+                // milling) post as a plain circular block with a Z word.
                 writer.block(&format!(
                     "{} X{} Y{} Z{} I{} J{} F{}",
                     if *clockwise { "G2" } else { "G3" },
@@ -740,8 +732,9 @@ mod tests {
     use super::*;
     use crate::model::{
         CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CamUnits,
-        CuttingParametersDto, DrillCycle, Point2Dto, Rect2Dto, Siemens828dAtcStyle, StockBoxDto,
-        WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
+        CuttingParametersDto, DrillCycle, MillingDirection, Point2Dto, Rect2Dto,
+        Siemens828dAtcStyle, StockBoxDto, ThreadHand, WcsOriginSpecDto, WorkCoordinateSystemDto,
+        WorkOffset,
     };
 
     fn document(dialect: PostDialect) -> CamDocumentDto {
@@ -855,6 +848,81 @@ mod tests {
         source.next_tool_id = 3;
         source.next_operation_id = 3;
         source
+    }
+
+    fn thread_document(dialect: PostDialect) -> CamDocumentDto {
+        let mut source = document(dialect);
+        source.tools.push(CamToolDto {
+            id: 7,
+            number: Some(61),
+            name: "4.8 mm thread mill".into(),
+            kind: CamToolKind::ThreadMill,
+            diameter: 4.8,
+            flute_length: 12.0,
+            overall_length: 58.0,
+            center_cutting: false,
+            flute_count: 4,
+            point_angle_degrees: None,
+            cutting: CuttingParametersDto::default(),
+        });
+        source.setups[0].operations = vec![CamOperationDto::Thread {
+            id: 3,
+            name: "Thread M6".into(),
+            enabled: true,
+            tool_id: 7,
+            points: vec![Point2Dto::new(10.0, 10.0)],
+            top_z: 0.0,
+            bottom_z: -6.0,
+            pitch: 1.0,
+            major_diameter: 6.0,
+            minor_diameter: 5.035,
+            hand: ThreadHand::Right,
+            direction: MillingDirection::Climb,
+            radial_passes: 1,
+            step_over: None,
+            clearance_z: 8.0,
+            retract_z: 2.0,
+            cutting: CuttingParametersDto {
+                spindle_rpm: 8_000,
+                feed_xy: 500.0,
+                feed_z: 150.0,
+                coolant: CoolantMode::Flood,
+            },
+        }];
+        source.next_tool_id = 8;
+        source.next_operation_id = 4;
+        source
+    }
+
+    #[test]
+    fn helical_thread_arcs_post_with_a_z_word() {
+        for dialect in [PostDialect::Fanuc, PostDialect::Siemens828d] {
+            let posted = post_setup(
+                &thread_document(dialect),
+                &CamPostRequestDto {
+                    setup_id: 1,
+                    post: None,
+                    program_name: None,
+                },
+            )
+            .unwrap();
+            let arc_blocks: Vec<&str> = posted
+                .nc
+                .lines()
+                .filter(|line| line.starts_with("G2 "))
+                .collect();
+            assert!(
+                !arc_blocks.is_empty(),
+                "{dialect:?} thread program needs G2 arc blocks"
+            );
+            // Helical interpolation: every arc advances Z through the turn.
+            assert!(
+                arc_blocks
+                    .iter()
+                    .all(|line| line.contains(" Z") && line.contains(" I") && line.contains(" J")),
+                "{dialect:?} helical arcs keep their Z word: {arc_blocks:?}"
+            );
+        }
     }
 
     #[test]

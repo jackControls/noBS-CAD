@@ -158,6 +158,7 @@ mod tests {
                 CamCommandDto::ProgramEnd,
             ],
             stats: Default::default(),
+            per_operation: vec![],
             work_offsets: vec![WorkOffset::G54],
             warnings: vec![],
         };

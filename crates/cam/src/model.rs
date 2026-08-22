@@ -418,6 +418,9 @@ pub enum CamToolKind {
     Tap,
     Reamer,
     BoringBar,
+    /// Orbital thread-milling tool; never center-cutting, always works in a
+    /// pre-machined hole.
+    ThreadMill,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -618,6 +621,33 @@ pub enum DrillCycle {
     Boring,
 }
 
+/// Hand of a thread's helix.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadHand {
+    /// Standard thread: the groove advances away when turned clockwise viewed
+    /// from the thread's entry face.
+    #[default]
+    Right,
+    Left,
+}
+
+/// Orbit direction of a milling pass relative to the tool's own rotation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MillingDirection {
+    /// Tool rotation matches the orbital feed direction at the contact point.
+    /// With a clockwise spindle this means a clockwise orbit viewed from
+    /// above.
+    #[default]
+    Climb,
+    Conventional,
+}
+
+fn default_radial_passes() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CamOperationDto {
@@ -730,6 +760,45 @@ pub enum CamOperationDto {
         retract_z: f64,
         cutting: CuttingParametersDto,
     },
+    /// Helical thread milling of pre-machined internal threads — a
+    /// standalone 2D-group operation, not a drill canned cycle. The tool
+    /// orbits on a helical path advancing one pitch per revolution; radial
+    /// stock is removed in `radial_passes` orbital passes from the smallest
+    /// orbit out to the full one.
+    Thread {
+        id: u64,
+        name: String,
+        #[serde(default = "default_true")]
+        enabled: bool,
+        tool_id: u64,
+        /// Hole centers the threads are milled into, in setup XY.
+        points: Vec<Point2Dto>,
+        top_z: f64,
+        bottom_z: f64,
+        /// Thread pitch (mm/rev). The host resolves it from the chosen
+        /// designation and stores it explicitly; the planner never derives it.
+        pitch: f64,
+        /// Groove-root diameter the tool teeth reach (internal major).
+        major_diameter: f64,
+        /// Pre-machined hole diameter (internal minor); the tool must fit
+        /// inside it with the orbit starting at the hole center.
+        minor_diameter: f64,
+        #[serde(default)]
+        hand: ThreadHand,
+        #[serde(default)]
+        direction: MillingDirection,
+        /// Orbital passes, smallest orbit radius first, full radius last.
+        #[serde(default = "default_radial_passes")]
+        radial_passes: u32,
+        /// Radial depth per pass; required with multiple passes.
+        #[serde(default)]
+        step_over: Option<f64>,
+        #[serde(default)]
+        clearance_z: f64,
+        #[serde(default)]
+        retract_z: f64,
+        cutting: CuttingParametersDto,
+    },
 }
 
 impl CamOperationDto {
@@ -739,7 +808,8 @@ impl CamOperationDto {
             | Self::Contour2d { id, .. }
             | Self::Drill { id, .. }
             | Self::Pocket2d { id, .. }
-            | Self::Chamfer2d { id, .. } => *id,
+            | Self::Chamfer2d { id, .. }
+            | Self::Thread { id, .. } => *id,
         }
     }
 
@@ -749,7 +819,8 @@ impl CamOperationDto {
             | Self::Contour2d { name, .. }
             | Self::Drill { name, .. }
             | Self::Pocket2d { name, .. }
-            | Self::Chamfer2d { name, .. } => name,
+            | Self::Chamfer2d { name, .. }
+            | Self::Thread { name, .. } => name,
         }
     }
 
@@ -759,7 +830,8 @@ impl CamOperationDto {
             | Self::Contour2d { enabled, .. }
             | Self::Drill { enabled, .. }
             | Self::Pocket2d { enabled, .. }
-            | Self::Chamfer2d { enabled, .. } => *enabled,
+            | Self::Chamfer2d { enabled, .. }
+            | Self::Thread { enabled, .. } => *enabled,
         }
     }
 
@@ -769,7 +841,8 @@ impl CamOperationDto {
             | Self::Contour2d { tool_id, .. }
             | Self::Drill { tool_id, .. }
             | Self::Pocket2d { tool_id, .. }
-            | Self::Chamfer2d { tool_id, .. } => *tool_id,
+            | Self::Chamfer2d { tool_id, .. }
+            | Self::Thread { tool_id, .. } => *tool_id,
         }
     }
 
@@ -779,7 +852,8 @@ impl CamOperationDto {
             | Self::Contour2d { cutting, .. }
             | Self::Drill { cutting, .. }
             | Self::Pocket2d { cutting, .. }
-            | Self::Chamfer2d { cutting, .. } => *cutting,
+            | Self::Chamfer2d { cutting, .. }
+            | Self::Thread { cutting, .. } => *cutting,
         }
     }
 
@@ -790,7 +864,8 @@ impl CamOperationDto {
             | Self::Contour2d { clearance_z, .. }
             | Self::Drill { clearance_z, .. }
             | Self::Pocket2d { clearance_z, .. }
-            | Self::Chamfer2d { clearance_z, .. } => *clearance_z,
+            | Self::Chamfer2d { clearance_z, .. }
+            | Self::Thread { clearance_z, .. } => *clearance_z,
         }
     }
 
@@ -801,7 +876,8 @@ impl CamOperationDto {
             | Self::Contour2d { retract_z, .. }
             | Self::Drill { retract_z, .. }
             | Self::Pocket2d { retract_z, .. }
-            | Self::Chamfer2d { retract_z, .. } => *retract_z,
+            | Self::Chamfer2d { retract_z, .. }
+            | Self::Thread { retract_z, .. } => *retract_z,
         }
     }
 
@@ -833,7 +909,8 @@ impl CamOperationDto {
             | Self::Contour2d { top_z, .. }
             | Self::Drill { top_z, .. }
             | Self::Pocket2d { top_z, .. }
-            | Self::Chamfer2d { top_z, .. } => *top_z,
+            | Self::Chamfer2d { top_z, .. }
+            | Self::Thread { top_z, .. } => *top_z,
         };
         let retract_z = self.retract_z();
         if !retract_z.is_finite() || retract_z <= cut_top || retract_z > clearance_z {
@@ -1122,6 +1199,95 @@ impl CamOperationDto {
                     return Err(format!(
                         "chamfer operation '{label}' reaches beyond the tool's flute length"
                     ));
+                }
+            }
+            Self::Thread {
+                points,
+                top_z,
+                bottom_z,
+                pitch,
+                major_diameter,
+                minor_diameter,
+                radial_passes,
+                step_over,
+                ..
+            } => {
+                if tool.kind != CamToolKind::ThreadMill {
+                    return Err(format!(
+                        "thread operation '{label}' requires a thread mill tool"
+                    ));
+                }
+                if points.is_empty() || points.len() > MAX_PATH_POINTS {
+                    return Err(format!(
+                        "thread operation '{label}' needs 1..={MAX_PATH_POINTS} hole centers"
+                    ));
+                }
+                if !points.iter().copied().all(within_xy) {
+                    return Err(format!(
+                        "thread operation '{label}' hole centers must lie within stock"
+                    ));
+                }
+                if !within_z(*top_z) || !within_z(*bottom_z) || *bottom_z >= *top_z - EPSILON {
+                    return Err(format!(
+                        "thread operation '{label}' depth range must descend within the stock"
+                    ));
+                }
+                if !pitch.is_finite() || *pitch <= 0.0 {
+                    return Err(format!("thread operation '{label}' pitch must be positive"));
+                }
+                if !major_diameter.is_finite()
+                    || !minor_diameter.is_finite()
+                    || *minor_diameter <= 0.0
+                    || *minor_diameter >= *major_diameter - EPSILON
+                {
+                    return Err(format!(
+                        "thread operation '{label}' needs a positive minor diameter smaller than the major diameter"
+                    ));
+                }
+                // The tool orbits out from the hole center, so its body must
+                // fit the pre-machined (minor) diameter.
+                if tool.diameter >= *minor_diameter - EPSILON {
+                    return Err(format!(
+                        "thread operation '{label}' tool diameter must be smaller than the {minor_diameter:.3} mm minor diameter"
+                    ));
+                }
+                // The spiral overtravels half a pitch past each end; the
+                // threaded portion of the tool must cover the travel.
+                if *top_z - *bottom_z + *pitch > tool.flute_length + EPSILON {
+                    return Err(format!(
+                        "thread operation '{label}' thread depth plus one pitch of overtravel exceeds the tool's flute length"
+                    ));
+                }
+                if *radial_passes == 0 || *radial_passes > 20 {
+                    return Err(format!(
+                        "thread operation '{label}' radial passes must be between 1 and 20"
+                    ));
+                }
+                match step_over {
+                    Some(step) if *radial_passes > 1 => {
+                        if !step.is_finite() || *step <= 0.0 {
+                            return Err(format!(
+                                "thread operation '{label}' stepover must be positive"
+                            ));
+                        }
+                        let orbit = (major_diameter - tool.diameter) * 0.5;
+                        if f64::from(*radial_passes - 1) * *step >= orbit - EPSILON {
+                            return Err(format!(
+                                "thread operation '{label}' stepovers consume the whole orbit radius; add passes or shrink the stepover"
+                            ));
+                        }
+                    }
+                    None if *radial_passes > 1 => {
+                        return Err(format!(
+                            "thread operation '{label}' with multiple radial passes needs a stepover"
+                        ));
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "thread operation '{label}' takes a stepover only with multiple radial passes"
+                        ));
+                    }
+                    None => {}
                 }
             }
         }
@@ -1653,6 +1819,13 @@ impl CamDocumentDto {
                         ..
                     }
                     | CamOperationDto::Chamfer2d {
+                        clearance_z,
+                        retract_z,
+                        ..
+                    }
+                    // Thread operations postdate legacy heights; listed here
+                    // only to keep the match exhaustive.
+                    | CamOperationDto::Thread {
                         clearance_z,
                         retract_z,
                         ..

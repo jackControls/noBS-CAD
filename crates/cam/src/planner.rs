@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     signed_area, CamDocumentDto, CamOperationDto, CamToolDto, ContourCompensation, CoolantMode,
-    DrillCycle, Point2Dto, Point3Dto, SpindleDirection, WorkOffset,
+    DrillCycle, MillingDirection, Point2Dto, Point3Dto, SpindleDirection, ThreadHand, WorkOffset,
 };
 
 const EPSILON: f64 = 1.0e-9;
@@ -113,12 +113,26 @@ pub struct CamProgramStatsDto {
     pub operation_count: usize,
 }
 
+/// Motion totals of one operation within a single work-offset copy of the
+/// program. Programs repeated across consecutive work offsets report the
+/// first copy, which every duplicate shares.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct CamOperationStatsDto {
+    pub operation_id: u64,
+    pub rapid_distance: f64,
+    pub cutting_distance: f64,
+    pub estimated_seconds: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CamProgramDto {
     pub setup_id: u64,
     pub name: String,
     pub commands: Vec<CamCommandDto>,
     pub stats: CamProgramStatsDto,
+    /// Per-operation motion totals for the manufacturing status readout.
+    #[serde(default)]
+    pub per_operation: Vec<CamOperationStatsDto>,
     /// Work offsets the program repeats with, in posted order.
     #[serde(default)]
     pub work_offsets: Vec<WorkOffset>,
@@ -155,6 +169,7 @@ pub fn plan_setup(document: &CamDocumentDto, setup_id: u64) -> Result<CamProgram
     let mut active_tool: Option<u64> = None;
     let mut active_spindle: Option<(SpindleDirection, u32)> = None;
     let mut active_coolant = CoolantMode::Off;
+    let mut per_operation: Vec<CamOperationStatsDto> = Vec::new();
     // The program is planned once per consecutive work offset: the same
     // toolpath repeats under G54, G55, ... inside a single program. Modal
     // state (tool/spindle/coolant) carries across the copies, so the second
@@ -171,6 +186,7 @@ pub fn plan_setup(document: &CamDocumentDto, setup_id: u64) -> Result<CamProgram
                 name: operation.name().to_string(),
                 tool_id: tool.id,
             });
+            let section_stats = builder.stats;
 
             if active_tool != Some(tool.id) {
                 builder.retract_to_clearance();
@@ -219,9 +235,25 @@ pub fn plan_setup(document: &CamDocumentDto, setup_id: u64) -> Result<CamProgram
                 CamOperationDto::Drill { .. } => plan_drill(&mut builder, operation, tool)?,
                 CamOperationDto::Pocket2d { .. } => plan_pocket(&mut builder, operation, tool)?,
                 CamOperationDto::Chamfer2d { .. } => plan_chamfer(&mut builder, operation, tool)?,
+                CamOperationDto::Thread { .. } => plan_thread(&mut builder, operation, tool)?,
             }
             builder.commands.push(CamCommandDto::SectionEnd);
             builder.stats.operation_count += 1;
+            // Duplicated work offsets repeat identical motion; keep the first
+            // copy's totals as the operation's machining-time readout.
+            if !per_operation
+                .iter()
+                .any(|entry| entry.operation_id == operation.id())
+            {
+                per_operation.push(CamOperationStatsDto {
+                    operation_id: operation.id(),
+                    rapid_distance: builder.stats.rapid_distance - section_stats.rapid_distance,
+                    cutting_distance: builder.stats.cutting_distance
+                        - section_stats.cutting_distance,
+                    estimated_seconds: builder.stats.estimated_seconds
+                        - section_stats.estimated_seconds,
+                });
+            }
         }
     }
 
@@ -244,6 +276,7 @@ pub fn plan_setup(document: &CamDocumentDto, setup_id: u64) -> Result<CamProgram
         name: setup.name.clone(),
         commands: builder.commands,
         stats: builder.stats,
+        per_operation,
         work_offsets,
         warnings: vec![
             "Toolpaths are stock-aware but are not yet collision-checked against fixtures or holders."
@@ -318,6 +351,45 @@ impl ProgramBuilder {
         }
         self.commands.push(CamCommandDto::Dwell { seconds });
         self.stats.estimated_seconds += seconds;
+    }
+
+    /// Circular interpolation in the setup XY plane. `to` may carry a
+    /// different Z than the current position, producing a helical move
+    /// (thread milling). The arc length, including the Z travel, feeds the
+    /// distance and time estimates.
+    fn circular(&mut self, to: Point3Dto, center: Point2Dto, clockwise: bool, feed: f64) {
+        let Some(from) = self.position else {
+            // An arc needs an established start point; position first.
+            self.linear(to, feed);
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let radius = distance_2d(Point2Dto { x: from.x, y: from.y }, center);
+        let start_angle = (from.y - center.y).atan2(from.x - center.x);
+        let end_angle = (to.y - center.y).atan2(to.x - center.x);
+        let mut sweep = end_angle - start_angle;
+        if clockwise {
+            while sweep >= 0.0 {
+                sweep -= std::f64::consts::TAU;
+            }
+        } else {
+            while sweep <= 0.0 {
+                sweep += std::f64::consts::TAU;
+            }
+        }
+        let arc = radius * sweep.abs();
+        let length = arc.hypot(to.z - from.z);
+        self.stats.cutting_distance += length;
+        self.stats.estimated_seconds += length / feed * 60.0;
+        self.commands.push(CamCommandDto::Circular {
+            clockwise,
+            center: Point3Dto::new(center.x, center.y, from.z),
+            to,
+            feed,
+        });
+        self.position = Some(to);
     }
 
     /// Emit a spindle word only when the state changes. Tapping cycles
@@ -783,6 +855,128 @@ fn scanline_spans(polygon: &[Point2Dto], y: f64) -> Vec<(f64, f64)> {
         }
     }
     spans
+}
+
+/// Mill an internal thread with a helical orbit: one pitch of Z travel per
+/// revolution, split into semicircular arc records. Radial stock is removed
+/// in orbital passes from the smallest radius out, so the finishing pass is
+/// last. With a clockwise spindle, climb milling orbits clockwise; the thread
+/// hand then fixes the Z sense of travel (a right-hand groove descends in the
+/// clockwise direction, a left-hand groove ascends), so a conventional pass
+/// starts at the bottom and climbs back out. The spiral overtravels half a
+/// pitch past each end so the thread is fully formed at both faces.
+fn plan_thread(
+    builder: &mut ProgramBuilder,
+    operation: &CamOperationDto,
+    tool: &CamToolDto,
+) -> Result<(), CamPlanError> {
+    let CamOperationDto::Thread {
+        points,
+        top_z,
+        bottom_z,
+        pitch,
+        major_diameter,
+        radial_passes,
+        step_over,
+        hand,
+        direction,
+        cutting,
+        name,
+        ..
+    } = operation
+    else {
+        unreachable!();
+    };
+    require_flute_length(tool, top_z - bottom_z + pitch, name)?;
+    let orbit = (major_diameter - tool.diameter) * 0.5;
+    if orbit <= EPSILON {
+        return Err(CamPlanError(format!(
+            "thread operation '{name}' has no orbit radius; the tool must be smaller than the major diameter"
+        )));
+    }
+    let step = if *radial_passes > 1 {
+        Some(step_over.ok_or_else(|| {
+            CamPlanError(format!(
+                "thread operation '{name}' with multiple radial passes needs a stepover"
+            ))
+        })?)
+    } else {
+        None
+    };
+    // Smallest orbit first, the finishing pass at the full orbit last.
+    let radii = (0..*radial_passes)
+        .map(|index| orbit - f64::from(*radial_passes - 1 - index) * step.unwrap_or(0.0))
+        .collect::<Vec<_>>();
+    let clockwise = matches!(direction, MillingDirection::Climb);
+    let descending = matches!(
+        (clockwise, hand),
+        (true, ThreadHand::Right) | (false, ThreadHand::Left)
+    );
+    let (z_start, z_end) = if descending {
+        (top_z + pitch * 0.5, bottom_z - pitch * 0.5)
+    } else {
+        (bottom_z - pitch * 0.5, top_z + pitch * 0.5)
+    };
+    let revolutions = (z_end - z_start).abs() / pitch;
+    let arcs_per_pass = (revolutions * 2.0).ceil() as usize + 2;
+    ensure_program_budget(
+        builder.commands.len(),
+        points
+            .len()
+            .saturating_mul(radii.len())
+            .saturating_mul(arcs_per_pass.saturating_add(3)),
+        name,
+    )?;
+    for point in points {
+        let center = Point2Dto {
+            x: point.x,
+            y: point.y,
+        };
+        builder.retract_to_clearance();
+        builder.rapid(Point3Dto::new(point.x, point.y, builder.clearance_z));
+        builder.rapid(Point3Dto::new(point.x, point.y, builder.retract_z));
+        for radius in radii.iter().copied() {
+            // The plunge runs at the hole center, inside the pre-machined
+            // hole's clear bore.
+            builder.linear(Point3Dto::new(point.x, point.y, z_start), cutting.feed_z);
+            // Straight lead-out to the orbit radius at the spiral's start
+            // angle; helical lead arcs remain on the roadmap.
+            builder.linear(
+                Point3Dto::new(point.x + radius, point.y, z_start),
+                cutting.feed_xy,
+            );
+            let total_angle = revolutions * std::f64::consts::TAU;
+            let mut covered = 0.0;
+            let mut angle = 0.0;
+            while covered < total_angle - EPSILON {
+                let step_angle = (total_angle - covered).min(std::f64::consts::PI);
+                let next_angle = if clockwise {
+                    angle - step_angle
+                } else {
+                    angle + step_angle
+                };
+                let next_z = z_start + (z_end - z_start) * ((covered + step_angle) / total_angle);
+                builder.circular(
+                    Point3Dto::new(
+                        point.x + radius * next_angle.cos(),
+                        point.y + radius * next_angle.sin(),
+                        next_z,
+                    ),
+                    center,
+                    clockwise,
+                    cutting.feed_xy,
+                );
+                angle = next_angle;
+                covered += step_angle;
+            }
+            // Lead back to the hole center at the exit Z, then clear the hole
+            // for the next pass or the next center.
+            builder.linear(Point3Dto::new(point.x, point.y, z_end), cutting.feed_xy);
+            builder.rapid(Point3Dto::new(point.x, point.y, builder.retract_z));
+        }
+    }
+    builder.retract_to_clearance();
+    Ok(())
 }
 
 fn require_flute_length(
@@ -1616,5 +1810,283 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.0.contains("chamfer mill"));
+    }
+
+    fn thread_operation(hand: ThreadHand, direction: MillingDirection) -> CamOperationDto {
+        CamOperationDto::Thread {
+            id: 3,
+            name: "Thread".into(),
+            enabled: true,
+            tool_id: 7,
+            points: vec![Point2Dto::new(20.0, 15.0)],
+            top_z: 0.0,
+            bottom_z: -8.0,
+            pitch: 1.0,
+            major_diameter: 6.0,
+            minor_diameter: 5.035,
+            hand,
+            direction,
+            radial_passes: 1,
+            step_over: None,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        }
+    }
+
+    fn thread_program(operation: CamOperationDto, tool: CamToolDto) -> CamProgramDto {
+        plan_setup(&document(vec![operation], vec![tool]), 1).unwrap()
+    }
+
+    /// Circular commands with their start points and sweep angles, walking the
+    /// program's motion so each arc can be measured.
+    fn circular_moves(program: &CamProgramDto) -> Vec<(Point3Dto, CamCommandDto, f64)> {
+        let mut position = Point3Dto::new(0.0, 0.0, 0.0);
+        let mut moves = Vec::new();
+        for command in &program.commands {
+            match command {
+                CamCommandDto::Rapid { to } | CamCommandDto::Linear { to, .. } => position = *to,
+                CamCommandDto::Circular {
+                    to,
+                    center,
+                    clockwise,
+                    ..
+                } => {
+                    let start = (position.y - center.y).atan2(position.x - center.x);
+                    let end = (to.y - center.y).atan2(to.x - center.x);
+                    let mut sweep = end - start;
+                    if *clockwise {
+                        while sweep >= 0.0 {
+                            sweep -= std::f64::consts::TAU;
+                        }
+                    } else {
+                        while sweep <= 0.0 {
+                            sweep += std::f64::consts::TAU;
+                        }
+                    }
+                    moves.push((position, command.clone(), sweep));
+                    position = *to;
+                }
+                _ => {}
+            }
+        }
+        moves
+    }
+
+    #[test]
+    fn right_hand_climb_thread_orbits_clockwise_and_descends() {
+        let program = thread_program(
+            thread_operation(ThreadHand::Right, MillingDirection::Climb),
+            tool(7, CamToolKind::ThreadMill, 4.8),
+        );
+        let arcs = circular_moves(&program);
+        assert!(arcs.len() >= 18, "9 revolutions split into semicircles");
+        // The spiral overtravels half a pitch past each end: 0.5 down to -8.5.
+        let zs: Vec<f64> = arcs
+            .iter()
+            .map(|(_, command, _)| match command {
+                CamCommandDto::Circular { to, .. } => to.z,
+                _ => unreachable!(),
+            })
+            .collect();
+        // The spiral overtravels half a pitch past each end: it starts at
+        // 0.5 and the last arc lands exactly at -8.5, monotonically
+        // descending. The first arc endpoint sits within one pitch of the
+        // start (per-arc Z travel is total travel / arc count).
+        assert!(zs[0] <= 0.5 + 1.0e-9 && zs[0] > 0.5 - 1.0);
+        assert!((zs[zs.len() - 1] - (-8.5)).abs() < 1.0e-9);
+        assert!(zs.windows(2).all(|pair| pair[1] <= pair[0] + 1.0e-9));
+        for (_, command, sweep) in &arcs {
+            let CamCommandDto::Circular { clockwise, .. } = command else {
+                unreachable!();
+            };
+            assert!(clockwise, "climb milling orbits clockwise");
+            assert!(
+                sweep.abs() <= std::f64::consts::PI + 1.0e-9,
+                "arcs split at 180 degrees, got {sweep}"
+            );
+        }
+    }
+
+    #[test]
+    fn right_hand_conventional_thread_orbits_counterclockwise_and_ascends() {
+        // Conventional milling reverses the orbit; the right-hand groove then
+        // ascends in the counterclockwise direction, so the pass starts at
+        // the bottom and climbs out.
+        let program = thread_program(
+            thread_operation(ThreadHand::Right, MillingDirection::Conventional),
+            tool(7, CamToolKind::ThreadMill, 4.8),
+        );
+        let arcs = circular_moves(&program);
+        assert!(!arcs.is_empty());
+        let zs: Vec<f64> = arcs
+            .iter()
+            .map(|(_, command, _)| match command {
+                CamCommandDto::Circular { to, .. } => to.z,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert!(zs[0] >= -8.5 - 1.0e-9 && zs[0] < -8.5 + 1.0);
+        assert!((zs[zs.len() - 1] - 0.5).abs() < 1.0e-9);
+        assert!(zs.windows(2).all(|pair| pair[1] >= pair[0] - 1.0e-9));
+        for (_, command, _) in &arcs {
+            let CamCommandDto::Circular { clockwise, .. } = command else {
+                unreachable!();
+            };
+            assert!(!clockwise, "conventional milling orbits counterclockwise");
+        }
+    }
+
+    #[test]
+    fn left_hand_thread_reverses_the_z_travel() {
+        // Same climb orbit as the right-hand case, but the left-hand groove
+        // ascends in the clockwise direction, so the pass starts at the
+        // bottom.
+        let program = thread_program(
+            thread_operation(ThreadHand::Left, MillingDirection::Climb),
+            tool(7, CamToolKind::ThreadMill, 4.8),
+        );
+        let arcs = circular_moves(&program);
+        assert!(!arcs.is_empty());
+        let zs: Vec<f64> = arcs
+            .iter()
+            .map(|(_, command, _)| match command {
+                CamCommandDto::Circular { to, .. } => to.z,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert!(zs[0] >= -8.5 - 1.0e-9 && zs[0] < -8.5 + 1.0);
+        assert!((zs[zs.len() - 1] - 0.5).abs() < 1.0e-9);
+        assert!(zs.windows(2).all(|pair| pair[1] >= pair[0] - 1.0e-9));
+    }
+
+    #[test]
+    fn thread_radial_passes_open_up_and_finish_at_the_full_orbit() {
+        let mut operation = thread_operation(ThreadHand::Right, MillingDirection::Climb);
+        let CamOperationDto::Thread {
+            radial_passes,
+            step_over,
+            ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        *radial_passes = 3;
+        *step_over = Some(0.2);
+        let program = thread_program(operation, tool(7, CamToolKind::ThreadMill, 4.8));
+        // The straight lead-out from the hole center marks each pass's orbit
+        // radius: (6 - 4.8) / 2 = 0.6, stepped in by 0.2 per pass.
+        let lead_radii: Vec<f64> = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, feed }
+                    if *feed == 800.0
+                        && (to.z - 0.5).abs() < 1.0e-9
+                        && (to.y - 15.0).abs() < 1.0e-9
+                        && to.x > 20.0 + 1.0e-9 =>
+                {
+                    Some(to.x - 20.0)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lead_radii.len(), 3);
+        for (actual, expected) in lead_radii.iter().zip([0.2, 0.4, 0.6].iter()) {
+            assert!(
+                (actual - expected).abs() < 1.0e-9,
+                "orbit radius {actual} should be {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn thread_motion_is_reported_per_operation() {
+        let program = thread_program(
+            thread_operation(ThreadHand::Right, MillingDirection::Climb),
+            tool(7, CamToolKind::ThreadMill, 4.8),
+        );
+        let entry = program
+            .per_operation
+            .iter()
+            .find(|entry| entry.operation_id == 3)
+            .expect("the thread operation reports its own totals");
+        assert!(entry.cutting_distance > 0.0);
+        assert!(entry.estimated_seconds > 0.0);
+    }
+
+    #[test]
+    fn thread_validation_fails_closed() {
+        // A thread operation needs a thread mill.
+        let error = plan_setup(
+            &document(
+                vec![thread_operation(ThreadHand::Right, MillingDirection::Climb)],
+                vec![tool(7, CamToolKind::FlatEndMill, 4.8)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("thread mill"));
+        // The tool body must fit the pre-machined minor diameter.
+        let error = plan_setup(
+            &document(
+                vec![thread_operation(ThreadHand::Right, MillingDirection::Climb)],
+                vec![tool(7, CamToolKind::ThreadMill, 5.5)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("minor diameter"));
+        // Multiple radial passes need a stepover...
+        let mut operation = thread_operation(ThreadHand::Right, MillingDirection::Climb);
+        let CamOperationDto::Thread { radial_passes, .. } = &mut operation else {
+            unreachable!();
+        };
+        *radial_passes = 2;
+        let error = plan_setup(
+            &document(
+                vec![operation],
+                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("needs a stepover"));
+        // ...that leaves a finishing orbit.
+        let mut operation = thread_operation(ThreadHand::Right, MillingDirection::Climb);
+        let CamOperationDto::Thread {
+            radial_passes,
+            step_over,
+            ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        *radial_passes = 3;
+        *step_over = Some(0.5);
+        let error = plan_setup(
+            &document(
+                vec![operation],
+                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("consume the whole orbit"));
+        // A single pass takes no stepover.
+        let mut operation = thread_operation(ThreadHand::Right, MillingDirection::Climb);
+        let CamOperationDto::Thread { step_over, .. } = &mut operation else {
+            unreachable!();
+        };
+        *step_over = Some(0.2);
+        let error = plan_setup(
+            &document(
+                vec![operation],
+                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("takes a stepover only"));
     }
 }
