@@ -10,6 +10,7 @@ pub const SOFT_LRU: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FocusPack {
     Document,
+    Assembly,
     Sketch,
     Solid,
     Modify,
@@ -21,8 +22,9 @@ pub enum FocusPack {
 }
 
 impl FocusPack {
-    pub const ALL: [FocusPack; 9] = [
+    pub const ALL: [FocusPack; 10] = [
         FocusPack::Document,
+        FocusPack::Assembly,
         FocusPack::Sketch,
         FocusPack::Solid,
         FocusPack::Modify,
@@ -36,6 +38,7 @@ impl FocusPack {
     pub fn as_str(self) -> &'static str {
         match self {
             FocusPack::Document => "document",
+            FocusPack::Assembly => "assembly",
             FocusPack::Sketch => "sketch",
             FocusPack::Solid => "solid",
             FocusPack::Modify => "modify",
@@ -50,6 +53,7 @@ impl FocusPack {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "document" => Some(FocusPack::Document),
+            "assembly" => Some(FocusPack::Assembly),
             "sketch" => Some(FocusPack::Sketch),
             "solid" => Some(FocusPack::Solid),
             "modify" => Some(FocusPack::Modify),
@@ -65,6 +69,9 @@ impl FocusPack {
     pub fn description(self) -> &'static str {
         match self {
             FocusPack::Document => "Document name, project export/load, and session metadata.",
+            FocusPack::Assembly => {
+                "Assembly components, occurrences, poses, grounding, and solution inspect."
+            }
             FocusPack::Sketch => {
                 "Sketch creation, constraints, dimensions, and sketch modify tools."
             }
@@ -471,6 +478,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
     let spine = matches!(
         name,
         "cad_document"
+            | "assembly_document"
             | "solid_scene"
             | "solid_recompute"
             | "cad_get_focus"
@@ -490,6 +498,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
     if spine {
         let pack = match name {
             "cad_document" | "cad_script" => FocusPack::Document,
+            "assembly_document" => FocusPack::Assembly,
             "solid_scene" | "solid_recompute" | "cad_compare_solids" => FocusPack::Inspect,
             _ => FocusPack::Document,
         };
@@ -501,6 +510,13 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "cad_project_model"
         | "cad_load_project_model"
         | "cad_new_project" => FocusPack::Document,
+        "assembly_solution"
+        | "assembly_create_component"
+        | "assembly_update_component"
+        | "assembly_create_occurrence"
+        | "assembly_update_occurrence"
+        | "assembly_set_occurrence_pose"
+        | "assembly_set_occurrence_grounded" => FocusPack::Assembly,
         "sketch_begin"
         | "sketch_finish"
         | "sketch_edit"
@@ -684,6 +700,9 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     ) {
         return Some(FocusPack::Document);
     }
+    if name.starts_with("assembly_") {
+        return Some(FocusPack::Assembly);
+    }
     None
 }
 
@@ -724,6 +743,7 @@ pub fn focus_from_ui(
     match mode {
         "sketch" | "sketchEdit" => FocusPack::Sketch,
         "solid" | "feature" => FocusPack::Solid,
+        "assembly" => FocusPack::Assembly,
         "modify" => FocusPack::Modify,
         "datums" | "pickPlane" => FocusPack::Datums,
         "history" => FocusPack::History,
@@ -900,17 +920,28 @@ mod tests {
             "solid_hole_definitions",
             "solid_body_feature_definitions",
             "solid_tessellate",
+            "assembly_document",
+            "assembly_solution",
+            "assembly_create_component",
+            "assembly_update_component",
+            "assembly_create_occurrence",
+            "assembly_update_occurrence",
+            "assembly_set_occurrence_pose",
+            "assembly_set_occurrence_grounded",
             "cad_document",
             "solid_scene",
             "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 109);
+        assert_eq!(modeling.len(), 117);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(
                 !matches!(pack, FocusPack::Document) || name.starts_with("cad_") || spine,
                 "unexpected default pack for {name}"
             );
+            if name.starts_with("assembly_") {
+                assert_eq!(pack, FocusPack::Assembly, "{name}");
+            }
             let _ = spine;
         }
         for name in [
