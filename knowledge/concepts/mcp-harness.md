@@ -29,10 +29,11 @@ Use MCP as an engine/automation probe until UI co-link exists.
 `solid_import_step` imports a STEP file as a **reference solid** (dumb body).
 `cad_script` dumps the successful **forward** MCP tool sequence for this
 process — portable modeling ops only (session-control `cad_attach` /
-`cad_refresh` / `cad_detach` are not recorded). We do **not** reverse-engineer
-feature history from STEP B-rep. `cad_compare_solids` summarizes existing
-`solid_scene` bbox/mesh counts so a rebuilt history can be checked against
-that imported reference.
+`cad_refresh` / `cad_detach` are not recorded). Attach/refresh seed the trace
+with `cad_load_project_model` + loaded `model_json` (refresh replaces the
+baseline). We do **not** reverse-engineer feature history from STEP B-rep.
+`cad_compare_solids` summarizes existing `solid_scene` bbox/mesh counts so a
+rebuilt history can be checked against that imported reference.
 
 ## Proposed next
 

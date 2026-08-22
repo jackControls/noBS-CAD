@@ -410,7 +410,8 @@ impl CadServer {
         let plan_value = parse_engine_envelope(host::handle(
             &mut self.manager,
             "project_prepare_load",
-            &serde_json::to_string(&Value::String(model_json)).map_err(|e| e.to_string())?,
+            &serde_json::to_string(&Value::String(model_json.clone()))
+                .map_err(|e| e.to_string())?,
         ))?;
         let plan: RecomputePlanDto = serde_json::from_value(plan_value)
             .map_err(|error| format!("invalid model.json / recompute plan: {error}"))?;
@@ -433,7 +434,20 @@ impl CadServer {
             })
             .map_err(|e| e.to_string())?,
         ))?;
+        // Attach/refresh replace manager from disk; seed a portable script baseline so
+        // cad_script can replay on a fresh CadServer without session UUIDs or files.
+        // Refresh re-seeds/replaces the baseline the same way (drops post-attach mutates).
+        self.seed_script_baseline_from_model(&model_json);
         Ok(())
+    }
+
+    /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
+    fn seed_script_baseline_from_model(&mut self, model_json: &str) {
+        self.tool_trace.clear();
+        self.tool_trace.push(json!({
+            "name": "cad_load_project_model",
+            "arguments": { "model_json": model_json },
+        }));
     }
 
     fn apply_snapshot_focus(&mut self, session_id: &str) {
@@ -2606,7 +2620,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Fails if the id/model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. Never writes back to the session dir.",
             object_schema(
                 json!({
                     "session_id": {
@@ -2622,7 +2636,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_refresh",
             "Refresh attached session snapshot",
-            "Re-read model.json (and optional focus.json) for the currently attached session. Explicit refresh — MCP does not watch the filesystem.",
+            "Re-read model.json (and optional focus.json) for the currently attached session; replaces cad_script baseline with cad_load_project_model for the reloaded model. Explicit refresh — MCP does not watch the filesystem.",
             empty_schema(),
         ),
         ToolSpec::control(
@@ -2634,7 +2648,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_script",
             "Dump forward MCP script",
-            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. Does not reverse-engineer STEP feature history.",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history.",
             empty_schema(),
         ),
         ToolSpec::control(
@@ -3751,7 +3765,7 @@ mod tests {
     }
 
     #[test]
-    fn cad_script_excludes_attach_refresh_after_snapshot_modeling() {
+    fn cad_script_after_attach_refresh_replays_on_fresh_server() {
         let _guard = session::ENV_LOCK.lock().unwrap();
         let unique = session::test_session_uuid();
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-script-{unique}"));
@@ -3800,6 +3814,11 @@ mod tests {
             .call_tool("cad_script", json!({}))
             .expect("cad_script dumps portable modeling ops");
         let calls = script["calls"].as_array().expect("cad_script.calls");
+        assert_eq!(
+            calls.first().and_then(|call| call["name"].as_str()),
+            Some("cad_load_project_model"),
+            "attach/refresh must seed cad_load_project_model baseline, got {calls:?}"
+        );
         assert!(
             calls.iter().any(|call| call["name"] == "solid_mirror"),
             "cad_script should contain solid_mirror, got {calls:?}"
@@ -3813,14 +3832,34 @@ mod tests {
             }),
             "cad_script must omit session-control and inspect helpers, got {calls:?}"
         );
-        assert!(
-            calls.first().and_then(|call| call["name"].as_str()) != Some("cad_attach"),
-            "portable script must not require ephemeral attach as first call"
-        );
         let script_text = serde_json::to_string(&script).unwrap();
         assert!(
             !script_text.contains(&unique),
             "portable cad_script must not embed the ephemeral session UUID, got {script_text}"
+        );
+
+        let expected = server
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("compare solids on attached+modeled server");
+
+        let mut fresh = CadServer::new().unwrap();
+        for call in calls {
+            let name = call["name"].as_str().expect("script call name");
+            let arguments = call.get("arguments").cloned().unwrap_or(Value::Null);
+            fresh
+                .call_tool(name, arguments)
+                .unwrap_or_else(|error| panic!("fresh replay of {name} failed: {error}"));
+        }
+        let replayed = fresh
+            .call_tool("cad_compare_solids", json!({}))
+            .expect("compare solids after fresh script replay");
+        assert_eq!(
+            replayed["body_count"], expected["body_count"],
+            "replayed body_count should match attached session"
+        );
+        assert_eq!(
+            replayed["bodies"], expected["bodies"],
+            "replayed solid metrics should match attached session"
         );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
