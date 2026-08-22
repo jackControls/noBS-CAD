@@ -1222,8 +1222,17 @@ export interface CreateComponentRequestDto {
   absorb_promoted_bodies: boolean;
 }
 
+/** Patch fields for assembly_update_component; omitted keys keep current values. */
+export interface ComponentDefinitionPatchDto {
+  id: number;
+  name?: string;
+  body_ids?: number[];
+  local_coordinate_system?: AssemblyTransformDto;
+  promoted?: boolean;
+}
+
 export interface UpdateComponentRequestDto {
-  component: ComponentDefinitionDto;
+  component: ComponentDefinitionPatchDto;
 }
 
 export interface CreateOccurrenceRequestDto {
@@ -1233,8 +1242,20 @@ export interface CreateOccurrenceRequestDto {
   local_pose: AssemblyTransformDto;
 }
 
+/** Patch fields for assembly_update_occurrence; omitted keys keep current values. */
+export interface ComponentOccurrencePatchDto {
+  id: number;
+  name?: string;
+  component_id?: number;
+  /** Present null clears parent; omit to leave unchanged. */
+  parent_occurrence_id?: number | null;
+  local_pose?: AssemblyTransformDto;
+  visible?: boolean;
+  grounded?: boolean;
+}
+
 export interface UpdateOccurrenceRequestDto {
-  occurrence: ComponentOccurrenceDto;
+  occurrence: ComponentOccurrencePatchDto;
 }
 
 export interface DuplicateOccurrenceRequestDto {

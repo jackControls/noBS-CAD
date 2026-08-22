@@ -2507,7 +2507,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "assembly_update_component",
             "Update assembly component",
-            "Replace a component definition (name, body ids, local coordinate system). Matches UpdateComponentRequestDto.",
+            "Patch a component definition. Only id is required; omitted name/body_ids/local_coordinate_system/promoted keep their current values (ComponentDefinitionPatchDto).",
             "assembly_update_component",
             Payload::Object,
             object_schema(
@@ -2524,7 +2524,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                             "local_coordinate_system": assembly_transform.clone(),
                             "promoted": {"type": "boolean"}
                         }),
-                        &["id", "name"],
+                        &["id"],
                     )
                 }),
                 &["component"],
@@ -2549,7 +2549,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "assembly_update_occurrence",
             "Update assembly occurrence",
-            "Replace an occurrence record (name, parent, pose, visibility, grounded). Matches UpdateOccurrenceRequestDto.",
+            "Patch an occurrence record. Only id is required; omitted name/component_id/parent/pose/visibility/grounded keep their current values (ComponentOccurrencePatchDto).",
             "assembly_update_occurrence",
             Payload::Object,
             object_schema(
@@ -2564,7 +2564,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                             "visible": {"type": "boolean"},
                             "grounded": {"type": "boolean"}
                         }),
-                        &["id", "name", "component_id"],
+                        &["id"],
                     )
                 }),
                 &["occurrence"],
@@ -5186,5 +5186,230 @@ mod tests {
                 spec.name
             );
         }
+    }
+
+    #[test]
+    fn assembly_update_component_rename_preserves_bodies_and_lcs() {
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": -5.0, "y": -5.0},
+                    "p2": {"x": 5.0, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let extruded = server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": "Sketch1",
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 6.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap();
+        let body_id = extruded["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extruded body id");
+
+        let component = server
+            .call_tool(
+                "assembly_create_component",
+                json!({
+                    "name": "Stock",
+                    "body_ids": [body_id],
+                    "local_coordinate_system": {
+                        "translation": [1.0, 2.0, 3.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0]
+                    },
+                    "absorb_promoted_bodies": true
+                }),
+            )
+            .expect("create component");
+        let component_id = component["id"].as_u64().expect("component id");
+        let body_ids_before = component["body_ids"].clone();
+        let lcs_before = component["local_coordinate_system"].clone();
+        let promoted_before = component["promoted"].clone();
+
+        let renamed = server
+            .call_tool(
+                "assembly_update_component",
+                json!({
+                    "component": {
+                        "id": component_id,
+                        "name": "StockRenamed"
+                    }
+                }),
+            )
+            .expect("rename-only component update");
+        assert_eq!(renamed["name"], "StockRenamed");
+        assert_eq!(renamed["body_ids"], body_ids_before);
+        assert_eq!(renamed["local_coordinate_system"], lcs_before);
+        assert_eq!(renamed["promoted"], promoted_before);
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("assembly document");
+        let definition = document["component_structure"]["definitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["id"].as_u64() == Some(component_id))
+            .expect("renamed definition");
+        assert_eq!(definition["name"], "StockRenamed");
+        assert_eq!(definition["body_ids"], body_ids_before);
+        assert_eq!(definition["local_coordinate_system"], lcs_before);
+        assert_eq!(definition["promoted"], promoted_before);
+    }
+
+    #[test]
+    fn assembly_update_occurrence_rename_preserves_pose_parent_flags() {
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": -5.0, "y": -5.0},
+                    "p2": {"x": 5.0, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let extruded = server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": "Sketch1",
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 4.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap();
+        let body_id = extruded["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extruded body id");
+        let component = server
+            .call_tool(
+                "assembly_create_component",
+                json!({
+                    "name": "Part",
+                    "body_ids": [body_id],
+                    "absorb_promoted_bodies": true
+                }),
+            )
+            .expect("create component");
+        let component_id = component["id"].as_u64().expect("component id");
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("assembly document");
+        let occurrence_id = document["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["component_id"].as_u64() == Some(component_id))
+            .and_then(|occurrence| occurrence["id"].as_u64())
+            .expect("occurrence id");
+
+        server
+            .call_tool(
+                "assembly_set_occurrence_pose",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "local_pose": {
+                        "translation": [7.0, 8.0, 9.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0]
+                    }
+                }),
+            )
+            .expect("set pose");
+        server
+            .call_tool(
+                "assembly_set_occurrence_grounded",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "grounded": true
+                }),
+            )
+            .expect("set grounded");
+
+        let before = server
+            .call_tool("assembly_document", json!({}))
+            .expect("document before rename");
+        let occurrence_before = before["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["id"].as_u64() == Some(occurrence_id))
+            .cloned()
+            .expect("occurrence before rename");
+        let parent_before = occurrence_before["parent_occurrence_id"].clone();
+        let pose_before = occurrence_before["local_pose"].clone();
+        let visible_before = occurrence_before["visible"].clone();
+        let grounded_before = occurrence_before["grounded"].clone();
+        let component_before = occurrence_before["component_id"].clone();
+
+        let renamed = server
+            .call_tool(
+                "assembly_update_occurrence",
+                json!({
+                    "occurrence": {
+                        "id": occurrence_id,
+                        "name": "PartRenamed"
+                    }
+                }),
+            )
+            .expect("rename-only occurrence update");
+        assert_eq!(renamed["name"], "PartRenamed");
+        assert_eq!(renamed["component_id"], component_before);
+        assert_eq!(renamed["parent_occurrence_id"], parent_before);
+        assert_eq!(renamed["local_pose"], pose_before);
+        assert_eq!(renamed["visible"], visible_before);
+        assert_eq!(renamed["grounded"], grounded_before);
+
+        let after = server
+            .call_tool("assembly_document", json!({}))
+            .expect("document after rename");
+        let occurrence_after = after["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["id"].as_u64() == Some(occurrence_id))
+            .expect("occurrence after rename");
+        assert_eq!(occurrence_after["name"], "PartRenamed");
+        assert_eq!(occurrence_after["component_id"], component_before);
+        assert_eq!(occurrence_after["parent_occurrence_id"], parent_before);
+        assert_eq!(occurrence_after["local_pose"], pose_before);
+        assert_eq!(occurrence_after["visible"], visible_before);
+        assert_eq!(occurrence_after["grounded"], grounded_before);
     }
 }

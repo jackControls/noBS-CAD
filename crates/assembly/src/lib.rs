@@ -571,30 +571,27 @@ impl AssemblyDocumentDto {
             .iter()
             .position(|definition| definition.id == request.component.id)
             .ok_or_else(|| format!("component {} does not exist", request.component.id.0))?;
-        if request.component.name.trim().is_empty() {
+        let previous = self.component_structure.definitions[index].clone();
+        let patch = request.component;
+        let name = patch.name.unwrap_or_else(|| previous.name.clone());
+        if name.trim().is_empty() {
             return Err("component name cannot be empty".to_string());
         }
         if self.component_structure.definitions.iter().enumerate().any(
             |(candidate_index, definition)| {
-                candidate_index != index && definition.name == request.component.name
+                candidate_index != index && definition.name == name
             },
         ) {
-            return Err(format!(
-                "duplicate component name '{}'",
-                request.component.name
-            ));
+            return Err(format!("duplicate component name '{}'", name));
         }
-        validate_transform(
-            request.component.local_coordinate_system,
-            "component coordinate system",
-        )?;
-        let body_ids = request
-            .component
-            .body_ids
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        if body_ids.len() != request.component.body_ids.len() {
+        let body_ids_list = patch.body_ids.unwrap_or_else(|| previous.body_ids.clone());
+        let local_coordinate_system =
+            patch
+                .local_coordinate_system
+                .unwrap_or(previous.local_coordinate_system);
+        validate_transform(local_coordinate_system, "component coordinate system")?;
+        let body_ids = body_ids_list.iter().copied().collect::<HashSet<_>>();
+        if body_ids.len() != body_ids_list.len() {
             return Err("component body ids must be unique".to_string());
         }
         for body_id in &body_ids {
@@ -606,7 +603,7 @@ impl AssemblyDocumentDto {
             .component_structure
             .occurrences
             .iter()
-            .filter(|occurrence| occurrence.component_id == request.component.id)
+            .filter(|occurrence| occurrence.component_id == previous.id)
             .map(|occurrence| occurrence.id)
             .collect::<HashSet<_>>();
         for joint in &self.joints {
@@ -633,10 +630,13 @@ impl AssemblyDocumentDto {
                 ));
             }
         }
-        let mut updated = request.component;
-        updated.local_coordinate_system = normalized_transform(updated.local_coordinate_system);
-        updated.promoted = false;
-        let previous = self.component_structure.definitions[index].clone();
+        let updated = ComponentDefinitionDto {
+            id: previous.id,
+            name,
+            body_ids: body_ids_list,
+            local_coordinate_system: normalized_transform(local_coordinate_system),
+            promoted: patch.promoted.unwrap_or(previous.promoted),
+        };
         self.component_structure.definitions[index] = updated.clone();
         if let Err(error) = self.validate() {
             self.component_structure.definitions[index] = previous;
@@ -707,10 +707,36 @@ impl AssemblyDocumentDto {
             .iter()
             .position(|occurrence| occurrence.id == request.occurrence.id)
             .ok_or_else(|| format!("occurrence {} does not exist", request.occurrence.id.0))?;
-        validate_transform(request.occurrence.local_pose, "occurrence pose")?;
-        let mut updated = request.occurrence;
-        updated.local_pose = normalized_transform(updated.local_pose);
         let previous = self.component_structure.occurrences[index].clone();
+        let patch = request.occurrence;
+        let name = patch.name.unwrap_or_else(|| previous.name.clone());
+        if name.trim().is_empty() {
+            return Err("occurrence name cannot be empty".to_string());
+        }
+        let component_id = patch.component_id.unwrap_or(previous.component_id);
+        if self.component_structure.definition(component_id).is_none() {
+            return Err(format!("component {} does not exist", component_id.0));
+        }
+        let parent_occurrence_id = match patch.parent_occurrence_id {
+            Some(parent) => parent,
+            None => previous.parent_occurrence_id,
+        };
+        if parent_occurrence_id
+            .is_some_and(|parent| self.component_structure.occurrence(parent).is_none())
+        {
+            return Err("parent occurrence does not exist".to_string());
+        }
+        let local_pose = patch.local_pose.unwrap_or(previous.local_pose);
+        validate_transform(local_pose, "occurrence pose")?;
+        let updated = ComponentOccurrenceDto {
+            id: previous.id,
+            name,
+            component_id,
+            parent_occurrence_id,
+            local_pose: normalized_transform(local_pose),
+            visible: patch.visible.unwrap_or(previous.visible),
+            grounded: patch.grounded.unwrap_or(previous.grounded),
+        };
         self.component_structure.occurrences[index] = updated.clone();
         if let Err(error) = self.validate() {
             self.component_structure.occurrences[index] = previous;
@@ -1142,9 +1168,44 @@ pub struct CreateComponentRequestDto {
     pub absorb_promoted_bodies: bool,
 }
 
+/// Patch fields for `assembly_update_component`. Omitted fields keep their
+/// current values — a rename-only call must not wipe `body_ids` or reset LCS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComponentDefinitionPatchDto {
+    pub id: ComponentId,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub body_ids: Option<Vec<BodyId>>,
+    #[serde(default)]
+    pub local_coordinate_system: Option<AssemblyTransformDto>,
+    #[serde(default)]
+    pub promoted: Option<bool>,
+}
+
+impl From<ComponentDefinitionDto> for ComponentDefinitionPatchDto {
+    fn from(value: ComponentDefinitionDto) -> Self {
+        Self {
+            id: value.id,
+            name: Some(value.name),
+            body_ids: Some(value.body_ids),
+            local_coordinate_system: Some(value.local_coordinate_system),
+            promoted: Some(value.promoted),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateComponentRequestDto {
-    pub component: ComponentDefinitionDto,
+    pub component: ComponentDefinitionPatchDto,
+}
+
+impl From<ComponentDefinitionDto> for UpdateComponentRequestDto {
+    fn from(component: ComponentDefinitionDto) -> Self {
+        Self {
+            component: component.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1157,9 +1218,59 @@ pub struct CreateOccurrenceRequestDto {
     pub local_pose: AssemblyTransformDto,
 }
 
+/// Patch fields for `assembly_update_occurrence`. Omitted fields keep their
+/// current values. `parent_occurrence_id` uses double-option so JSON `null`
+/// clears the parent while a missing field preserves it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComponentOccurrencePatchDto {
+    pub id: OccurrenceId,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub component_id: Option<ComponentId>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub parent_occurrence_id: Option<Option<OccurrenceId>>,
+    #[serde(default)]
+    pub local_pose: Option<AssemblyTransformDto>,
+    #[serde(default)]
+    pub visible: Option<bool>,
+    #[serde(default)]
+    pub grounded: Option<bool>,
+}
+
+impl From<ComponentOccurrenceDto> for ComponentOccurrencePatchDto {
+    fn from(value: ComponentOccurrenceDto) -> Self {
+        Self {
+            id: value.id,
+            name: Some(value.name),
+            component_id: Some(value.component_id),
+            parent_occurrence_id: Some(value.parent_occurrence_id),
+            local_pose: Some(value.local_pose),
+            visible: Some(value.visible),
+            grounded: Some(value.grounded),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateOccurrenceRequestDto {
-    pub occurrence: ComponentOccurrenceDto,
+    pub occurrence: ComponentOccurrencePatchDto,
+}
+
+impl From<ComponentOccurrenceDto> for UpdateOccurrenceRequestDto {
+    fn from(occurrence: ComponentOccurrenceDto) -> Self {
+        Self {
+            occurrence: occurrence.into(),
+        }
+    }
+}
+
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -6412,9 +6523,7 @@ mod tests {
         nested_part.parent_occurrence_id = Some(subassembly_occurrence);
         nested_part.local_pose.translation = [5.0, 0.0, 0.0];
         document
-            .update_occurrence(UpdateOccurrenceRequestDto {
-                occurrence: nested_part,
-            })
+            .update_occurrence(UpdateOccurrenceRequestDto::from(nested_part))
             .unwrap();
         document
             .set_occurrence_pose(SetOccurrencePoseRequestDto {
@@ -6686,5 +6795,105 @@ mod tests {
             broad_phase_interference_pairs(&scene, &poses, &request).unwrap(),
             vec![(0, 1)]
         );
+    }
+
+    #[test]
+    fn update_component_and_occurrence_patches_preserve_omitted_fields() {
+        let scene = scene();
+        let mut document = AssemblyDocumentDto::default();
+        let component = document
+            .create_component(
+                CreateComponentRequestDto {
+                    name: "Block".to_string(),
+                    body_ids: vec![BodyId(1)],
+                    local_coordinate_system: AssemblyTransformDto {
+                        translation: [4.0, 5.0, 6.0],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    absorb_promoted_bodies: true,
+                },
+                &scene,
+            )
+            .unwrap();
+        let occurrence_id = document
+            .component_structure
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.component_id == component.id)
+            .unwrap()
+            .id;
+        document
+            .set_occurrence_pose(SetOccurrencePoseRequestDto {
+                occurrence_id,
+                local_pose: AssemblyTransformDto {
+                    translation: [9.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        document
+            .set_occurrence_grounded(SetOccurrenceGroundedRequestDto {
+                occurrence_id,
+                grounded: true,
+            })
+            .unwrap();
+
+        let renamed_component = document
+            .update_component(
+                UpdateComponentRequestDto {
+                    component: ComponentDefinitionPatchDto {
+                        id: component.id,
+                        name: Some("BlockRenamed".to_string()),
+                        body_ids: None,
+                        local_coordinate_system: None,
+                        promoted: None,
+                    },
+                },
+                &scene,
+            )
+            .unwrap();
+        assert_eq!(renamed_component.name, "BlockRenamed");
+        assert_eq!(renamed_component.body_ids, vec![BodyId(1)]);
+        assert_eq!(
+            renamed_component.local_coordinate_system.translation,
+            [4.0, 5.0, 6.0]
+        );
+        assert_eq!(renamed_component.promoted, component.promoted);
+
+        let renamed_occurrence = document
+            .update_occurrence(UpdateOccurrenceRequestDto {
+                occurrence: ComponentOccurrencePatchDto {
+                    id: occurrence_id,
+                    name: Some("BlockRenamed.1".to_string()),
+                    component_id: None,
+                    parent_occurrence_id: None,
+                    local_pose: None,
+                    visible: None,
+                    grounded: None,
+                },
+            })
+            .unwrap();
+        assert_eq!(renamed_occurrence.name, "BlockRenamed.1");
+        assert_eq!(renamed_occurrence.component_id, component.id);
+        assert_eq!(renamed_occurrence.parent_occurrence_id, None);
+        assert_eq!(renamed_occurrence.local_pose.translation, [9.0, 0.0, 0.0]);
+        assert!(renamed_occurrence.visible);
+        assert!(renamed_occurrence.grounded);
+
+        // Explicit null parent stays null; pose/flags still preserved when omitted.
+        let json = serde_json::json!({
+            "occurrence": {
+                "id": occurrence_id.0,
+                "name": "RootAgain",
+                "parent_occurrence_id": null
+            }
+        });
+        let request: UpdateOccurrenceRequestDto = serde_json::from_value(json).unwrap();
+        assert_eq!(request.occurrence.parent_occurrence_id, Some(None));
+        let cleared = document.update_occurrence(request).unwrap();
+        assert_eq!(cleared.name, "RootAgain");
+        assert_eq!(cleared.parent_occurrence_id, None);
+        assert_eq!(cleared.local_pose.translation, [9.0, 0.0, 0.0]);
+        assert!(cleared.grounded);
     }
 }
