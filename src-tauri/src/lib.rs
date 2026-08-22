@@ -672,6 +672,7 @@ pub fn run() {
         .manage(AppState::new())
         .manage(NativeQuitState::default())
         .manage(native_menu::NativeEditMenuState::default())
+        .manage(native_menu::NativeFileMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
         .manage(SixDofMouseState::default());
     #[cfg(target_os = "macos")]
@@ -723,6 +724,7 @@ pub fn run() {
             native_viewport_pick,
             native_viewport_metrics,
             native_menu::native_edit_menu_set_state,
+            native_menu::native_file_menu_set_state,
             read_binary_file,
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,

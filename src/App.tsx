@@ -61,6 +61,7 @@ import {
   installNativeEditMenu,
   nativeMacMenuOwnsUndoRedo,
 } from './nativeEditMenu';
+import { installNativeFileMenu } from './nativeFileMenu';
 import { isTauriRuntime } from './engine';
 import { requestUnsavedDecision } from './files/unsavedChanges';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
@@ -100,6 +101,8 @@ export default function App() {
   useEffect(() => installProjectTabRetention(), []);
 
   useEffect(() => installNativeEditMenu(), []);
+
+  useEffect(() => installNativeFileMenu(), []);
 
   useEffect(() => {
     const media = window.matchMedia(SYSTEM_DARK_QUERY);
