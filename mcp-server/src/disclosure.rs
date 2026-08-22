@@ -77,7 +77,7 @@ impl FocusPack {
             }
             FocusPack::Solid => "Solid creators: extrude, revolve, sweep, loft, and rib.",
             FocusPack::Modify => "Edge and face modifiers: fillet, chamfer, and hole.",
-            FocusPack::BodyOps => "Body operations: shell, mirror, patterns, combine, and split.",
+            FocusPack::BodyOps => "Body operations: shell, move/copy, mirror, patterns, combine, split, and STEP import.",
             FocusPack::Datums => "Construction planes and datum features.",
             FocusPack::History => "Rollback, delete, and reorder in feature history.",
             FocusPack::Inspect => "Read-only solid and sketch definition catalogs.",
@@ -493,12 +493,14 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_refresh"
             | "cad_detach"
             | "cad_submit"
+            | "cad_script"
+            | "cad_compare_solids"
     );
     if spine {
         let pack = match name {
-            "cad_document" => FocusPack::Document,
+            "cad_document" | "cad_script" => FocusPack::Document,
             "assembly_document" => FocusPack::Assembly,
-            "solid_scene" | "solid_recompute" => FocusPack::Inspect,
+            "solid_scene" | "solid_recompute" | "cad_compare_solids" => FocusPack::Inspect,
             _ => FocusPack::Document,
         };
         return (pack, true);
@@ -579,10 +581,14 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "solid_edit_rectangular_pattern"
         | "solid_circular_pattern"
         | "solid_edit_circular_pattern"
+        | "solid_move_copy"
+        | "solid_edit_move_copy"
         | "solid_combine"
         | "solid_edit_combine"
         | "solid_split_body"
-        | "solid_edit_split_body" => FocusPack::BodyOps,
+        | "solid_edit_split_body"
+        | "solid_import_step"
+        | "solid_edit_import_step" => FocusPack::BodyOps,
         "construction_plane_definitions"
         | "construction_plane_offset"
         | "construction_plane_edit_offset"
@@ -652,10 +658,12 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     }
     if name.starts_with("solid_")
         && (name.contains("shell")
+            || name.contains("move_copy")
             || name.contains("mirror")
             || name.contains("pattern")
             || name.contains("combine")
-            || name.contains("split_body"))
+            || name.contains("split_body")
+            || name.contains("import_step"))
     {
         return Some(FocusPack::BodyOps);
     }
@@ -715,7 +723,9 @@ pub fn focus_from_ui(
             | "rectangular_pattern"
             | "circular_pattern"
             | "combine"
-            | "split_body" => FocusPack::BodyOps,
+            | "split_body"
+            | "import_step"
+            | "move_copy" => FocusPack::BodyOps,
             "extrude" | "revolve" | "sweep" | "loft" | "rib" => FocusPack::Solid,
             "construction_plane" | "offset_plane" | "midplane" | "plane_at_angle" => {
                 FocusPack::Datums
@@ -877,6 +887,8 @@ mod tests {
             "solid_edit_hole",
             "solid_shell",
             "solid_edit_shell",
+            "solid_move_copy",
+            "solid_edit_move_copy",
             "solid_mirror",
             "solid_edit_mirror",
             "solid_rectangular_pattern",
@@ -887,6 +899,8 @@ mod tests {
             "solid_edit_combine",
             "solid_split_body",
             "solid_edit_split_body",
+            "solid_import_step",
+            "solid_edit_import_step",
             "construction_plane_definitions",
             "construction_plane_offset",
             "construction_plane_edit_offset",
@@ -919,7 +933,7 @@ mod tests {
             "solid_scene",
             "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 113);
+        assert_eq!(modeling.len(), 117);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(
