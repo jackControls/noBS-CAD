@@ -71,8 +71,8 @@ export function CamPostDialog() {
 
   if (!setup) {
     return (
-      <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
-        <div className="pointer-events-auto absolute right-5 top-[132px] w-[340px] rounded border border-edge bg-panel p-4 shadow-2xl">
+      <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+        <div className="feature-dialog pointer-events-auto absolute right-5 top-[132px] w-[340px] rounded border border-edge bg-panel p-4 shadow-2xl">
           <p className="text-[11px] text-mute">Create a CAM setup before posting NC code.</p>
           <button
             type="button"
@@ -150,11 +150,11 @@ export function CamPostDialog() {
   };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
       <form
         data-testid="cam-post-dialog"
         onSubmit={submit}
-        className="pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[360px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
+        className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[360px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Download size={15} className="text-accent" />

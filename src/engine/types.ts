@@ -2201,7 +2201,8 @@ export type CamToolKind =
   | 'chamfer_mill'
   | 'tap'
   | 'reamer'
-  | 'boring_bar';
+  | 'boring_bar'
+  | 'thread_mill';
 /** Hole-machining cycle family of a drill operation. The planner expands
  *  every cycle to explicit longhand motion, so posted output never depends on
  *  a control's canned-cycle dialect. */
@@ -2216,6 +2217,12 @@ export type CamDrillCycle =
 export type CamCoolantMode = 'off' | 'mist' | 'flood';
 export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
 export type CamContourCompensation = 'on' | 'inside' | 'outside';
+/** Thread groove hand: a right-hand groove descends in the clockwise
+ *  direction viewed along Z- (a nut turned clockwise advances away). */
+export type CamThreadHand = 'right' | 'left';
+/** Orbital direction of a thread mill pass. Climb orbits clockwise with a
+ *  clockwise spindle; conventional reverses the orbit. */
+export type CamMillingDirection = 'climb' | 'conventional';
 /** Operator-facing units. Persisted geometry and planned motion stay mm. */
 export type CamUnits = 'millimeters' | 'inches';
 export type CamBoxAnchor = 'min' | 'center' | 'max';
@@ -2404,6 +2411,26 @@ export type CamOperationDto =
       tip_offset: number;
       /** Which side of the path the material wall is on (never 'on'). */
       wall_side: CamContourCompensation;
+    })
+  | (CamOperationBase & {
+      kind: 'thread';
+      /** Hole centers the threads are milled into, in setup XY. */
+      points: CamPoint2Dto[];
+      top_z: number;
+      bottom_z: number;
+      /** Pitch (mm/rev), resolved by the host from the chosen designation
+       *  and stored explicitly; the planner never derives it. */
+      pitch: number;
+      /** Groove-root diameter the tool teeth reach (internal major). */
+      major_diameter: number;
+      /** Pre-machined hole diameter (internal minor). */
+      minor_diameter: number;
+      hand: CamThreadHand;
+      direction: CamMillingDirection;
+      /** Orbital passes, smallest radius first, finishing pass last. */
+      radial_passes: number;
+      /** Radial depth per pass; only with multiple passes. */
+      step_over: number | null;
     });
 
 export interface CamSetupDto {
@@ -2460,11 +2487,22 @@ export interface CamProgramStatsDto {
   operation_count: number;
 }
 
+/** Motion totals of one operation within a single work-offset copy of the
+ *  program; the manufacturing status readout shows these. */
+export interface CamOperationStatsDto {
+  operation_id: number;
+  rapid_distance: number;
+  cutting_distance: number;
+  estimated_seconds: number;
+}
+
 export interface CamProgramDto {
   setup_id: number;
   name: string;
   commands: CamCommandDto[];
   stats: CamProgramStatsDto;
+  /** Per-operation motion totals (first work-offset copy). */
+  per_operation: CamOperationStatsDto[];
   /** Work offsets the program repeats with, in posted order. */
   work_offsets: CamWorkOffset[];
   warnings: string[];

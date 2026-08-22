@@ -15,7 +15,12 @@ import {
   type SketchLoop,
 } from '../../cam/geometry';
 import { commitFeed, commitLength, displayFeed, displayLength } from '../../cam/units';
-import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamPoint2Dto } from '../../engine/types';
+import {
+  THREAD_PRESETS,
+  defaultThreadPreset,
+  isoMetricGrade6Envelope,
+} from '../../lib/threadStandards';
+import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamPoint2Dto, CamThreadHand } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
@@ -91,6 +96,13 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const [threadPitch, setThreadPitch] = useState('');
   const [feedOut, setFeedOut] = useState('');
   const [dwell, setDwell] = useState('0');
+  // Thread milling: the designation resolves pitch/major/minor through the
+  // standards table; the resolved values are stored on the operation.
+  const [threadPresetId, setThreadPresetId] = useState(defaultThreadPreset().id);
+  const [threadHand, setThreadHand] = useState<CamThreadHand>('right');
+  const [threadDirection, setThreadDirection] = useState<CamMillingDirection>('climb');
+  const [radialPasses, setRadialPasses] = useState('1');
+  const [threadStepOver, setThreadStepOver] = useState('');
   const [faceMin, setFaceMin] = useState({ x: '', y: '' });
   const [faceMax, setFaceMax] = useState({ x: '', y: '' });
   const [faceFromStock, setFaceFromStock] = useState(true);
@@ -287,6 +299,38 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
           };
           break;
         }
+        case 'thread': {
+          // The designation only seeds values here; the stored operation
+          // carries the resolved pitch and diameters explicitly.
+          const preset =
+            THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId) ??
+            defaultThreadPreset();
+          const envelope = isoMetricGrade6Envelope(
+            preset.nominalDiameterMm,
+            preset.pitchMm,
+            'internal',
+          );
+          const passes = Math.max(1, Math.round(parseDraft(radialPasses, 'Radial passes')));
+          operation = {
+            ...base,
+            kind,
+            points: resolveDrillPoints(),
+            top_z: top,
+            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            pitch: preset.pitchMm,
+            major_diameter: envelope.modeledMajor,
+            minor_diameter: envelope.modeledMinor,
+            hand: threadHand,
+            direction: threadDirection,
+            radial_passes: passes,
+            step_over:
+              passes > 1
+                ? commitLength(parseDraft(threadStepOver, 'Radial stepover'), units)
+                : null,
+            cutting: cutting(),
+          };
+          break;
+        }
       }
       runCamAction(() => addCamOperation(operation).then(() => close()));
     } catch (cause) {
@@ -294,8 +338,17 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     }
   };
 
+  const threadReadout = (): string => {
+    const preset =
+      THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId) ??
+      defaultThreadPreset();
+    const envelope = isoMetricGrade6Envelope(preset.nominalDiameterMm, preset.pitchMm, 'internal');
+    const len = (mm: number) => displayLength(mm, units).toFixed(units === 'inches' ? 4 : 3);
+    return `Pitch ${len(preset.pitchMm)} ${lu}/rev · major Ø${len(envelope.modeledMajor)} · minor Ø${len(envelope.modeledMinor)} ${lu}. Pre-machine the hole to the minor diameter; custom diameters can be edited on the created operation.`;
+  };
+
   const geometrySection = () => {
-    if (kind === 'drill') {
+    if (kind === 'drill' || kind === 'thread') {
       return (
         <DialogSection title="HOLE CENTERS · SKETCH POINTS">
           {pointRefs.length > 0 ? (
@@ -421,11 +474,11 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+    <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
       <form
         data-testid="cam-operation-dialog"
         onSubmit={submit}
-        className="pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
+        className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CircleDot size={15} className="text-accent" />
@@ -469,6 +522,56 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
           </DialogSection>
 
           {geometrySection()}
+
+          {kind === 'thread' && (
+            <DialogSection title="THREAD (INTERNAL)">
+              <label className="block">
+                <span className={CAM_DIALOG_LABEL}>Designation</span>
+                <select
+                  value={threadPresetId}
+                  onChange={(event) => setThreadPresetId(event.target.value)}
+                  className={CAM_DIALOG_INPUT}
+                >
+                  {THREAD_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.designation} · {preset.class}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className={CAM_DIALOG_LABEL}>Hand</span>
+                  <select
+                    value={threadHand}
+                    onChange={(event) => setThreadHand(event.target.value as CamThreadHand)}
+                    className={CAM_DIALOG_INPUT}
+                  >
+                    <option value="right">Right hand</option>
+                    <option value="left">Left hand</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className={CAM_DIALOG_LABEL}>Direction</span>
+                  <select
+                    value={threadDirection}
+                    onChange={(event) => setThreadDirection(event.target.value as CamMillingDirection)}
+                    className={CAM_DIALOG_INPUT}
+                  >
+                    <option value="climb">Climb</option>
+                    <option value="conventional">Conventional</option>
+                  </select>
+                </label>
+                <DraftNumber label="Radial passes" value={radialPasses} onChange={setRadialPasses} unit="passes" integer />
+                {Number(radialPasses) > 1 && (
+                  <DraftNumber label="Radial stepover" value={threadStepOver} onChange={setThreadStepOver} unit={lu} />
+                )}
+              </div>
+              <p className="rounded border border-edge/70 bg-header/50 p-2 font-mono text-[9px] leading-relaxed text-mute">
+                {threadReadout()}
+              </p>
+            </DialogSection>
+          )}
 
           <DialogSection title={`HEIGHTS & PASSES (${lu}, setup frame)`}>
             <div className="grid grid-cols-2 gap-2">

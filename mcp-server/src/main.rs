@@ -2995,7 +2995,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "cam_set_document",
             "Write CAM document",
-            "Replace the machining document after full validation. Build it from cam_get_document: add tool-library entries, create a setup with an explicit WCS origin (stock/model box point or sketch point), then append face/contour2d/pocket2d/chamfer2d/drill operations. Drill operations carry a cycle (drill, chip_breaking, deep_hole, tapping_right/left, reaming, boring) with its matching fields (peck_depth/peck_retract, thread_pitch, feed_out). Nothing is auto-created.",
+            "Replace the machining document after full validation. Build it from cam_get_document: add tool-library entries, create a setup with an explicit WCS origin (stock/model box point or sketch point), then append face/contour2d/pocket2d/chamfer2d/drill/thread operations. Drill operations carry a cycle (drill, chip_breaking, deep_hole, tapping_right/left, reaming, boring) with its matching fields (peck_depth/peck_retract, thread_pitch, feed_out). Thread operations mill internal threads with a thread mill: hole-center points, pitch, major/minor diameters (resolved by the host from the thread designation and stored explicitly), hand (right/left), direction (climb/conventional), and optional radial passes with step_over. Nothing is auto-created.",
             "cam_set_document",
             Payload::Object,
             object_schema(
@@ -3009,7 +3009,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                     "tools": {
                         "type": "array",
                         "items": {"type": "object", "additionalProperties": true},
-                        "description": "Tool library entries: internal id (the primary key operations reference), optional machine number (number-based posts fail closed without it; the Siemens 828D post calls tools by name), name, kind (flat/ball end mill, drill, chamfer mill, tap, reamer, boring bar), diameter, flute length/count, and default cutting data (rpm, feeds, coolant)."
+                        "description": "Tool library entries: internal id (the primary key operations reference), optional machine number (number-based posts fail closed without it; the Siemens 828D post calls tools by name), name, kind (flat/ball end mill, drill, chamfer mill, tap, reamer, boring bar, thread mill), diameter, flute length/count, and default cutting data (rpm, feeds, coolant)."
                     },
                     "units": {
                         "type": "string",

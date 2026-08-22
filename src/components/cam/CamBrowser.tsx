@@ -181,6 +181,8 @@ function OperationIcon({ kind }: { kind: CamOperationDto['kind'] }) {
       return <Triangle size={12} />;
     case 'drill':
       return <CircleDot size={12} />;
+    case 'thread':
+      return <CircleDot size={12} />;
   }
 }
 

@@ -830,8 +830,13 @@ export const CAM_TAB: RibbonTab = {
       labelKey: 'ribbon.panels.workspace',
       buttons: [
         { id: 'returnModel', labelKey: 'ribbon.cam.model', icon: 'select', enabled: true, action: 'modelWorkspace' },
+      ],
+    },
+    {
+      id: 'setup',
+      labelKey: 'ribbon.panels.setup',
+      buttons: [
         { id: 'newSetup', labelKey: 'ribbon.cam.newSetup', icon: 'plane', enabled: true, action: 'camNewSetup' },
-        { id: 'toolLibrary', labelKey: 'ribbon.cam.toolLibrary', icon: 'hole', enabled: true, action: 'camToolLibrary' },
       ],
     },
     {
@@ -843,6 +848,14 @@ export const CAM_TAB: RibbonTab = {
         { id: 'camPocket', labelKey: 'ribbon.cam.pocket', icon: 'pathPattern', enabled: true, action: 'camAddOperation', payload: 'pocket2d' },
         { id: 'camChamfer', labelKey: 'ribbon.cam.chamfer', icon: 'section', enabled: true, action: 'camAddOperation', payload: 'chamfer2d' },
         { id: 'camDrill', labelKey: 'ribbon.cam.drill', icon: 'hole', enabled: true, action: 'camAddOperation', payload: 'drill' },
+        { id: 'camThread', labelKey: 'ribbon.cam.thread', icon: 'hole', enabled: true, action: 'camAddOperation', payload: 'thread' },
+      ],
+    },
+    {
+      id: 'manage',
+      labelKey: 'ribbon.panels.manage',
+      buttons: [
+        { id: 'toolLibrary', labelKey: 'ribbon.cam.toolLibrary', icon: 'hole', enabled: true, action: 'camToolLibrary' },
       ],
     },
     {

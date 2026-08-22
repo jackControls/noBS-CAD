@@ -338,6 +338,8 @@ export function camOperationLabel(kind: CamOperationKind): string {
       return '2D Chamfer';
     case 'drill':
       return 'Drill';
+    case 'thread':
+      return 'Thread';
   }
 }
 
@@ -371,6 +373,8 @@ export function camToolCompatible(
         default:
           return tool.kind === 'drill' || tool.center_cutting;
       }
+    case 'thread':
+      return tool.kind === 'thread_mill';
   }
 }
 

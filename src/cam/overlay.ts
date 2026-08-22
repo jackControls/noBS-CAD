@@ -57,6 +57,8 @@ const CUT_LINE: Rgba = [0.34, 0.84, 0.64, 0.95];
 const REST_STOCK_FILL: Rgba = [0.16, 0.6, 0.25, 0.9];
 const COLLISION_POINT: Rgba = [0.94, 0.38, 0.35, 0.95];
 const PICK_POINT: Rgba = [0.4, 0.73, 0.94, 0.95];
+const TOOL_FLUTE_FILL: Rgba = [0.78, 0.8, 0.84, 0.55];
+const TOOL_SHANK_FILL: Rgba = [0.62, 0.65, 0.7, 0.3];
 const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
 const AXIS_Y: Rgba = [0.34, 0.84, 0.64, 1];
 const AXIS_Z: Rgba = [0.4, 0.73, 0.94, 1];
@@ -141,6 +143,7 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   pushWcsAxes(layers, setup);
   pushStockGhost(layers, setup);
   pushSelectedToolpath(layers, state, setup);
+  pushSelectedTool(layers, state, setup);
   pushSimulationStock(layers, state, setup, markerRadius);
   return layers;
 }
@@ -261,6 +264,60 @@ function pushSelectedToolpath(
   }
   if (cutting.length > 0) {
     layers.lines.push({ color: CUT_LINE, width: 2, pattern: 'solid', segments: cutting });
+  }
+}
+
+/** Ghost of the selected operation's tool parked at its last cutting
+ *  position: the fluted section opaque enough to read, the shank fainter.
+ *  The tool axis is parallel to setup Z (fixed-axis planning). */
+function pushSelectedTool(
+  layers: CamOverlayLayers,
+  state: CamOverlayState,
+  setup: CamSetupDto,
+) {
+  const operationId = state.selectedCamOperationId;
+  const program = state.camProgram;
+  if (operationId === null || !program || program.setup_id !== setup.id) return;
+  const operation = setup.operations.find((candidate) => candidate.id === operationId);
+  if (!operation) return;
+  const tool = state.camDocument.tools.find((entry) => entry.id === operation.tool_id);
+  if (!tool) return;
+
+  // Walk the operation's sections; duplicated work offsets repeat identical
+  // setup-space motion, so any copy's endpoint positions the ghost.
+  let inSection = false;
+  let cuttingTip: Point3Dto | null = null;
+  let anyTip: Point3Dto | null = null;
+  for (const command of program.commands) {
+    if (command.kind === 'section_start') {
+      inSection = command.operation_id === operationId;
+      continue;
+    }
+    if (command.kind === 'section_end') {
+      inSection = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (command.kind === 'rapid') anyTip = command.to;
+    if (command.kind === 'linear' || command.kind === 'circular') {
+      cuttingTip = command.to;
+      anyTip = command.to;
+    }
+  }
+  const tip = cuttingTip ?? anyTip;
+  if (!tip) return;
+
+  const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
+  const ring = regularRing(tip.x, tip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
+  const flutePositions: number[] = [];
+  pushPrism(toModel, ring, tip.z, tip.z + tool.flute_length, flutePositions, []);
+  if (flutePositions.length > 0) {
+    layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
+  }
+  const shankPositions: number[] = [];
+  pushPrism(toModel, ring, tip.z + tool.flute_length, tip.z + tool.overall_length, shankPositions, []);
+  if (shankPositions.length > 0) {
+    layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
   }
 }
 

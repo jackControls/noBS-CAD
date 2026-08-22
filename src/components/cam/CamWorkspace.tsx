@@ -235,8 +235,20 @@ export function CamWorkspace() {
               {pick.prompt} · click a highlighted point · Esc to cancel
             </div>
           )}
+          {/* Machining-time readout: the selected operation's own totals when
+              one is selected, otherwise the whole setup's program. */}
+          {program && (
+            <div
+              data-testid="cam-machining-time"
+              className="pointer-events-none absolute bottom-3 right-3 z-10 rounded border border-edge bg-header/85 px-2.5 py-1 font-mono text-[10px] text-mute shadow backdrop-blur-sm"
+            >
+              {operation
+                ? `${operation.name} | Machining time: ${formatMachiningTime(program.per_operation.find((entry) => entry.operation_id === operation.id)?.estimated_seconds)}`
+                : `${program.name} | Total machining time: ${formatMachiningTime(program.stats.estimated_seconds)}`}
+            </div>
+          )}
           {(planError || simulationError || program?.warnings.length || simulation?.collisions.length) && (
-            <div className="absolute bottom-3 left-3 right-3 max-w-3xl rounded border border-[#d69b45]/45 bg-[#2a2117]/95 p-2.5 text-[10px] text-[#e8c589] shadow-lg">
+            <div className="absolute bottom-3 left-3 max-w-3xl rounded border border-[#d69b45]/45 bg-[#2a2117]/95 p-2.5 text-[10px] text-[#e8c589] shadow-lg">
               <div className="flex items-start gap-2">
                 <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                 <div>
@@ -262,23 +274,10 @@ export function CamWorkspace() {
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-mute" data-testid="cam-sidebar-empty">
             <p className="max-w-[230px] text-center text-[11px] leading-relaxed">
-              Nothing is created automatically. Add tools to the library, create
-              a setup, then program each operation by hand.
+              Nothing is created automatically. Add tools from the Tool Library
+              and create a setup — both live in the ribbon — then program each
+              operation by hand.
             </p>
-            <button
-              type="button"
-              onClick={() => useAppStore.getState().setCamDialog({ type: 'setup' })}
-              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border border-accent/40 bg-accent/10 px-3 text-[11px] font-semibold text-accent hover:bg-accent/20"
-            >
-              <Gauge size={13} /> New setup
-            </button>
-            <button
-              type="button"
-              onClick={() => useAppStore.getState().setCamDialog({ type: 'tool', toolId: null })}
-              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border border-edge bg-panel px-3 text-[11px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
-            >
-              <Wrench size={13} /> New tool
-            </button>
           </div>
         )}
       </aside>
@@ -513,6 +512,7 @@ function OperationInspector({ operation, tools, units }: { operation: CamOperati
       {operation.kind === 'pocket2d' && <PocketFields operation={operation} units={units} update={update} />}
       {operation.kind === 'chamfer2d' && <ChamferFields operation={operation} units={units} update={update} />}
       {operation.kind === 'drill' && <DrillFields operation={operation} units={units} update={update} />}
+      {operation.kind === 'thread' && <ThreadFields operation={operation} units={units} update={update} />}
       <button type="button" onClick={() => runCamAction(() => deleteCamOperation(operation.id))} className="mt-5 flex h-7 w-full items-center justify-center gap-1.5 rounded border border-warn/30 text-[10px] text-warn hover:bg-warn/10">
         <Trash2 size={12} /> Delete operation
       </button>
@@ -525,6 +525,7 @@ type ContourOperation = Extract<CamOperationDto, { kind: 'contour2d' }>;
 type PocketOperation = Extract<CamOperationDto, { kind: 'pocket2d' }>;
 type ChamferOperation = Extract<CamOperationDto, { kind: 'chamfer2d' }>;
 type DrillOperation = Extract<CamOperationDto, { kind: 'drill' }>;
+type ThreadOperation = Extract<CamOperationDto, { kind: 'thread' }>;
 type OperationUpdate = (mutate: (next: CamOperationDto) => void) => Promise<void>;
 
 function FaceFields({ operation, units, update }: { operation: FaceOperation; units: CamUnits; update: OperationUpdate }) {
@@ -629,6 +630,37 @@ function DrillFields({ operation, units, update }: { operation: DrillOperation; 
   </>;
 }
 
+function ThreadFields({ operation, units, update }: { operation: ThreadOperation; units: CamUnits; update: OperationUpdate }) {
+  return <>
+    <div className="grid grid-cols-2 gap-2">
+      <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.top_z = value; })} />
+      <LengthField label="Bottom Z" valueMm={operation.bottom_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.bottom_z = value; })} />
+      <LengthField label="Pitch" valueMm={operation.pitch} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.pitch = value; })} />
+      <Field label="Hand"><select value={operation.hand} onChange={(event) => runCamAction(() => update((next) => { if (next.kind === 'thread') next.hand = event.target.value as ThreadOperation['hand']; }))} className="cam-input"><option value="right">Right hand</option><option value="left">Left hand</option></select></Field>
+      <LengthField label="Major Ø" valueMm={operation.major_diameter} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.major_diameter = value; })} />
+      <LengthField label="Minor Ø" valueMm={operation.minor_diameter} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.minor_diameter = value; })} />
+      <Field label="Direction"><select value={operation.direction} onChange={(event) => runCamAction(() => update((next) => { if (next.kind === 'thread') next.direction = event.target.value as ThreadOperation['direction']; }))} className="cam-input"><option value="climb">Climb</option><option value="conventional">Conventional</option></select></Field>
+      <NumberField label="Radial passes" value={operation.radial_passes} unit="passes" integer onCommit={(value) => update((next) => {
+        if (next.kind === 'thread') {
+          const passes = Math.max(1, Math.min(20, Math.round(value)));
+          next.radial_passes = passes;
+          // Scrub fields the new pass count rejects so validation cannot fail
+          // on a stale carry-over; seed a stepover that splits the radial
+          // allowance when single-pass becomes multi-pass.
+          if (passes <= 1) next.step_over = null;
+          else if (next.step_over === null) {
+            next.step_over = Math.max(0.05, (next.major_diameter - next.minor_diameter) / 2 / passes);
+          }
+        }
+      })} />
+      {operation.radial_passes > 1 && (
+        <LengthField label="Radial stepover" valueMm={operation.step_over ?? 0} units={units} onCommit={(value) => update((next) => { if (next.kind === 'thread') next.step_over = value; })} />
+      )}
+    </div>
+    <Field label={`Hole centers · one X,Y point per line · ${lengthUnitLabel(units)}`}><CommitPoints value={operation.points} units={units} onCommit={(points) => update((next) => { if (next.kind === 'thread') next.points = points; })} /></Field>
+  </>;
+}
+
 function InspectorSection({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
   return <div className="p-3">
     <div className="mb-3 flex h-6 items-center gap-2 border-b border-edge pb-2 text-[10px] font-semibold tracking-[0.14em] text-mute">{icon}{title}</div>
@@ -727,4 +759,14 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.round(seconds % 60);
   return `${minutes}m ${remainder}s`;
+}
+
+/** Machinist-style h:mm:ss readout for the manufacturing status line. */
+function formatMachiningTime(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds)) return '—';
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }

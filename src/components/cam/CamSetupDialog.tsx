@@ -384,11 +384,14 @@ export function CamSetupDialog() {
   const isRoundStock = stockShape === 'cylinder' || stockShape === 'hex';
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6">
+    <div
+      data-native-viewport-dim="0.25"
+      className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6"
+    >
       <form
         data-testid="cam-setup-dialog"
         onSubmit={submit}
-        className="pointer-events-auto flex max-h-full w-[560px] max-w-full flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
+        className="feature-dialog pointer-events-auto flex max-h-full w-[560px] max-w-full flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Crosshair size={15} className="text-accent" />

@@ -33,11 +33,12 @@ const KIND_LABELS: Record<CamToolKind, string> = {
   tap: 'Tap',
   reamer: 'Reamer',
   boring_bar: 'Boring bar',
+  thread_mill: 'Thread mill',
 };
 
 /** Kinds whose shank feeds axially into a hole; the center-cutting flag does
  *  not apply to them (it only gates plunge-capable milling/drilling). */
-const HOLE_TOOL_KINDS: CamToolKind[] = ['tap', 'reamer', 'boring_bar'];
+const HOLE_TOOL_KINDS: CamToolKind[] = ['tap', 'reamer', 'boring_bar', 'thread_mill'];
 
 /** Tool library: a full-window dialog with the tool table on the left and
  *  the editor for the selected (or new) tool on the right. The library is
@@ -69,10 +70,13 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
       : null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6">
+    <div
+      data-native-viewport-dim="0.25"
+      className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6"
+    >
       <div
         data-testid="cam-tool-dialog"
-        className="pointer-events-auto flex h-[78vh] w-[880px] max-w-full flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
+        className="feature-dialog pointer-events-auto flex h-[78vh] w-[880px] max-w-full flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl"
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Wrench size={15} className="text-accent" />

@@ -143,7 +143,9 @@
       "sheet": "SHEET",
       "joints": "JOINTS",
       "manufacturing": "MANUFACTURING",
-      "toolpaths": "TOOLPATHS"
+      "toolpaths": "TOOLPATHS",
+      "setup": "SETUP",
+      "manage": "MANAGE"
     },
     "finishSketch": "FINISH SKETCH",
     "solid": {
@@ -241,6 +243,7 @@
       "pocket": "2D Pocket",
       "chamfer": "2D Chamfer",
       "drill": "Drill",
+      "thread": "Thread",
       "post": "Post NC",
       "events": "Post Events"
     },
