@@ -20,7 +20,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 107;
+const MODELING_TOOL_COUNT: usize = 109;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -1100,6 +1100,22 @@ fn tool_specs() -> Vec<ToolSpec> {
         }),
         &["body_id", "face_ids", "thickness", "inward"],
     );
+    let move_copy = object_schema(
+        json!({
+            "body_ids": body_ids.clone(),
+            "translation": point3.clone(),
+            "rotation": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Unit quaternion [x, y, z, w]. Default identity [0, 0, 0, 1]."
+            },
+            "pivot": point3.clone(),
+            "copy": { "type": "boolean", "description": "When true, leave the source bodies and create copies." }
+        }),
+        &["body_ids", "translation", "pivot"],
+    );
     let solid_mirror = object_schema(
         json!({
             "body_ids": body_ids.clone(),
@@ -2173,6 +2189,28 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::solid(
+            "solid_move_copy",
+            "Move or copy bodies",
+            "Apply a rigid transform to one or more bodies. Rotation is a unit quaternion [x, y, z, w]; translation and pivot are millimetres. copy=true leaves the sources and creates new bodies.",
+            "solid_prepare_body_feature",
+            Payload::BodyFeature("move_copy"),
+            move_copy.clone(),
+        ),
+        ToolSpec::solid(
+            "solid_edit_move_copy",
+            "Edit Move/Copy feature",
+            "Edit a persisted Move/Copy and fully replay downstream history.",
+            "solid_prepare_edit_body_feature",
+            Payload::EditBodyFeature("move_copy"),
+            object_schema(
+                json!({
+                    "feature_id": {"type": "integer", "minimum": 1},
+                    "request": move_copy
+                }),
+                &["feature_id", "request"],
+            ),
+        ),
+        ToolSpec::solid(
             "solid_mirror",
             "Mirror bodies",
             "Create mirrored copies of one or more bodies around an origin, face, or construction plane.",
@@ -2596,7 +2634,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_script",
             "Dump forward MCP script",
-            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Forward record only — skips inspect/export helpers, failed calls, and cad_script itself. Does not reverse-engineer STEP feature history.",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. Does not reverse-engineer STEP feature history.",
             empty_schema(),
         ),
         ToolSpec::control(
@@ -2629,6 +2667,8 @@ fn records_in_script(name: &str) -> bool {
             | "cad_list_all_tools"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
+            | "cad_attach"
+            | "cad_refresh"
             | "cad_detach"
             | "sketch_active"
             | "sketch_finished"
@@ -3110,7 +3150,7 @@ mod tests {
         assert_eq!(
             all_tools.len(),
             MODELING_TOOL_COUNT + 21,
-            "107 modeling tools plus 8 print helpers and 13 control tools"
+            "109 modeling tools plus 8 print helpers and 13 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3708,6 +3748,125 @@ mod tests {
                 .all(|call| call["name"] != "cad_script" && call["name"] != "cad_compare_solids"),
             "cad_script must skip itself and read-only compare"
         );
+    }
+
+    #[test]
+    fn cad_script_excludes_attach_refresh_after_snapshot_modeling() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-script-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .expect("attach snapshot for script regression");
+        server
+            .call_tool("cad_refresh", json!({}))
+            .expect("refresh snapshot for script regression");
+
+        let scene = server
+            .call_tool("solid_scene", json!({}))
+            .expect("attached snapshot has a solid scene");
+        let body_id = scene["bodies"][0]["id"].clone();
+        let mirrored = server
+            .call_tool(
+                "solid_mirror",
+                json!({
+                    "body_ids": [body_id],
+                    "plane": {"type": "origin_plane", "plane": "yz"}
+                }),
+            )
+            .expect("modeling mutate after attach/refresh");
+        assert_eq!(mirrored["scene"]["bodies"].as_array().unwrap().len(), 2);
+
+        let script = server
+            .call_tool("cad_script", json!({}))
+            .expect("cad_script dumps portable modeling ops");
+        let calls = script["calls"].as_array().expect("cad_script.calls");
+        assert!(
+            calls.iter().any(|call| call["name"] == "solid_mirror"),
+            "cad_script should contain solid_mirror, got {calls:?}"
+        );
+        assert!(
+            calls.iter().all(|call| {
+                !matches!(
+                    call["name"].as_str(),
+                    Some("cad_attach" | "cad_refresh" | "cad_detach" | "solid_scene")
+                )
+            }),
+            "cad_script must omit session-control and inspect helpers, got {calls:?}"
+        );
+        assert!(
+            calls.first().and_then(|call| call["name"].as_str()) != Some("cad_attach"),
+            "portable script must not require ephemeral attach as first call"
+        );
+        let script_text = serde_json::to_string(&script).unwrap();
+        assert!(
+            !script_text.contains(&unique),
+            "portable cad_script must not embed the ephemeral session UUID, got {script_text}"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mcp_solid_move_copy_translates_body() {
+        let (mut server, base) = mcp_box();
+        let body_id = base["scene"]["bodies"][0]["id"].clone();
+        let moved = server
+            .call_tool(
+                "solid_move_copy",
+                json!({
+                    "body_ids": [body_id],
+                    "translation": {"x": 12.0, "y": -4.0, "z": 2.0},
+                    "rotation": [0.0, 0.0, 0.0, 1.0],
+                    "pivot": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "copy": false
+                }),
+            )
+            .expect("solid_move_copy should translate the box");
+        assert!(
+            moved["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            moved["scene"]["errors"]
+        );
+        assert_eq!(moved["scene"]["bodies"].as_array().unwrap().len(), 1);
+
+        let copied = server
+            .call_tool(
+                "solid_move_copy",
+                json!({
+                    "body_ids": [moved["scene"]["bodies"][0]["id"].clone()],
+                    "translation": {"x": 25.0, "y": 0.0, "z": 0.0},
+                    "pivot": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "copy": true
+                }),
+            )
+            .expect("solid_move_copy copy=true should leave source and create a body");
+        assert!(
+            copied["scene"]["errors"].as_array().unwrap().is_empty(),
+            "{}",
+            copied["scene"]["errors"]
+        );
+        assert_eq!(copied["scene"]["bodies"].as_array().unwrap().len(), 2);
     }
 
     #[test]

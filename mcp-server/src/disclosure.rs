@@ -70,7 +70,7 @@ impl FocusPack {
             }
             FocusPack::Solid => "Solid creators: extrude, revolve, sweep, loft, and rib.",
             FocusPack::Modify => "Edge and face modifiers: fillet, chamfer, and hole.",
-            FocusPack::BodyOps => "Body operations: shell, mirror, patterns, combine, and split.",
+            FocusPack::BodyOps => "Body operations: shell, move/copy, mirror, patterns, combine, split, and STEP import.",
             FocusPack::Datums => "Construction planes and datum features.",
             FocusPack::History => "Rollback, delete, and reorder in feature history.",
             FocusPack::Inspect => "Read-only solid and sketch definition catalogs.",
@@ -564,6 +564,8 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "solid_edit_rectangular_pattern"
         | "solid_circular_pattern"
         | "solid_edit_circular_pattern"
+        | "solid_move_copy"
+        | "solid_edit_move_copy"
         | "solid_combine"
         | "solid_edit_combine"
         | "solid_split_body"
@@ -639,6 +641,7 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     }
     if name.starts_with("solid_")
         && (name.contains("shell")
+            || name.contains("move_copy")
             || name.contains("mirror")
             || name.contains("pattern")
             || name.contains("combine")
@@ -701,7 +704,8 @@ pub fn focus_from_ui(
             | "circular_pattern"
             | "combine"
             | "split_body"
-            | "import_step" => FocusPack::BodyOps,
+            | "import_step"
+            | "move_copy" => FocusPack::BodyOps,
             "extrude" | "revolve" | "sweep" | "loft" | "rib" => FocusPack::Solid,
             "construction_plane" | "offset_plane" | "midplane" | "plane_at_angle" => {
                 FocusPack::Datums
@@ -868,6 +872,8 @@ mod tests {
             "solid_edit_rectangular_pattern",
             "solid_circular_pattern",
             "solid_edit_circular_pattern",
+            "solid_move_copy",
+            "solid_edit_move_copy",
             "solid_combine",
             "solid_edit_combine",
             "solid_split_body",
@@ -898,7 +904,7 @@ mod tests {
             "solid_scene",
             "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 107);
+        assert_eq!(modeling.len(), 109);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(

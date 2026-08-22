@@ -73,7 +73,11 @@ require a later `ping` or tool call to flush the notification.
 file as a **reference solid**: the kernel stores the source bytes and
 tessellates a dumb body. Scripts are **recorded forward** via `cad_script`
 (`{ "calls": [ { "name", "arguments" } ] }` of successful mutating
-`tools/call` entries). We do **not** reverse-engineer sketch/extrude feature
+`tools/call` entries). `cad_script` is **portable modeling ops only**:
+session-control reads (`cad_attach` / `cad_refresh` / `cad_detach`) are not
+recorded, so a dumped script does not depend on an ephemeral session UUID or
+mutable snapshot files outside the script. Inspect/export helpers and failed
+calls are also skipped. We do **not** reverse-engineer sketch/extrude feature
 history from STEP B-rep. After modeling (or after importing a reference),
 `cad_compare_solids` summarizes `solid_scene` mesh bbox + vertex/triangle
 counts so a rebuilt history can be checked against the imported solid.
