@@ -82,3 +82,22 @@ require a later `ping` or tool call to flush the notification.
 - Multi-window broker ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
 - In-the-loop browser+MCP validation ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
 See [proposed-architecture.md](proposed-architecture.md).
+
+## Tutor quests (CI goldens)
+
+Three headless MCP quests score the first education path from
+[#16](https://github.com/jackControls/noBS-CAD/issues/16).
+They wrap the built-in print-in-place parts (`demo_export_pip_3mf`) —
+the **cam bolt** and **drawer clip** — not a cube. Tests:
+`tutor_quest_pip_*` in `cargo test --manifest-path mcp-server/Cargo.toml`
+(Windows CI: `mcp-server.yml`). No `cad_attach`. The UI tutor that narrates
+the same steps is still open on that issue.
+
+| Quest | What you do | How CI scores it |
+|-------|-------------|------------------|
+| **Cam bolt** | `demo_export_pip_3mf` with `kind: cam_bolt` | 4 named bodies, 0.4 mm AABB clearance, ZIP/`PK` 3MF |
+| **Drawer clip** | same tool with `kind: clip` | 3 named bodies, 0.4 mm clearance, ZIP/`PK` 3MF |
+| **Slicer variants** | same cam bolt for each `slicer_target` | Bambu / Orca / Prusa / Cura / standard packages carry the right Metadata |
+
+These are regression tests, not badges or streaks. The demo tool does not
+mutate the headless document.
