@@ -106,7 +106,7 @@ Body through the same replayable history as the interactive application.
 `cad_new_project` clears to an empty document. The **snapshot bridge** uses
 `cad_list_sessions` / `cad_attach` / `cad_submit` / `cad_refresh` / `cad_detach`
 under `NBCAD_SESSION_DIR` (UUID v4 session ids; require valid `model.json`).
-`cad_submit` writes `inbox/<seq>.json` for UI-owned apply; MCP does **not**
+While attached, direct mutates return `session_read_only` (use `cad_submit`). `cad_submit` writes `inbox/<seq>.json` for UI-owned apply; MCP does **not**
 write `model.json` (no last-writer-wins). Desktop Tauri applies inbox ops via
 `host::handle` and publishes a new snapshot. Headless goldens (no attach) still
 mutate this process directly. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open.

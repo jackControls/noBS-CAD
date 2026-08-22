@@ -2,9 +2,24 @@
 //!
 //! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
 //! with atomic temp+rename. MCP `cad_submit` drops `inbox/<seq>.json`; this
-//! module applies those ops on the live SketchManager (same `host::handle` /
-//! solid-replay path as IPC) and then the existing TS publisher emits a new
-//! snapshot. MCP never writes model.json (no last-writer-wins).
+//! module applies those ops on the live SketchManager (shared
+//! `nbcad_mcp_mutate` name→engine-method map + solid replay) and then the
+//! existing TS publisher emits a new snapshot. MCP never writes model.json
+//! (no last-writer-wins).
+//!
+//! # Authoritative engine revision (Jack #60 blocker 2)
+//!
+//! `WindowPublisher.engine_revision` is the sole OCC gate for inbox apply.
+//! It is advanced atomically with the live engine mutation under the
+//! publisher lock:
+//! - UI local edits call `note_mutation_for_window` immediately (no 300 ms
+//!   debounce) so a stale-base op cannot slip in before heartbeat publish.
+//! - Successful inbox apply requires `base_generation == engine_revision`,
+//!   applies on the live engine, then `engine_revision += 1` and writes
+//!   heartbeat.json. Two same-base ops therefore cannot both apply.
+//! - Debounced snapshot publish may only raise `engine_revision` to the
+//!   published generation (never regress it). Heartbeat-only refreshes do
+//!   not bump the counter.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -17,6 +32,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use nbcad_mcp_mutate::ExecutionKind;
+
 use crate::state::AppState;
 
 #[derive(Debug)]
@@ -24,6 +41,8 @@ struct WindowPublisher {
     session_id: String,
     next_generation: u64,
     last_applied_generation: u64,
+    /// Authoritative live-engine revision for inbox OCC (see module docs).
+    engine_revision: u64,
 }
 
 impl WindowPublisher {
@@ -32,6 +51,7 @@ impl WindowPublisher {
             session_id: Uuid::new_v4().to_string(),
             next_generation: 0,
             last_applied_generation: 0,
+            engine_revision: 0,
         }
     }
 }
@@ -185,12 +205,16 @@ impl SessionBridgeState {
         atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)?;
 
         publisher.last_applied_generation = parsed.generation;
+        if parsed.generation > publisher.engine_revision {
+            publisher.engine_revision = parsed.generation;
+        }
 
         Ok(json!({
             "skipped": false,
             "session_id": publisher.session_id,
             "session_dir": dir.display().to_string(),
             "generation": parsed.generation,
+            "engine_revision": publisher.engine_revision,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
@@ -221,7 +245,7 @@ impl SessionBridgeState {
 
         let heartbeat_body = serde_json::to_string_pretty(&json!({
             "updated_ms": now_ms(),
-            "generation": publisher.last_applied_generation,
+            "generation": publisher.engine_revision,
             "session_id": publisher.session_id,
             "session_mode": "read_only_snapshot",
             "kind": "heartbeat",
@@ -232,13 +256,13 @@ impl SessionBridgeState {
         Ok(json!({
             "skipped": false,
             "session_id": publisher.session_id,
-            "generation": publisher.last_applied_generation,
+            "generation": publisher.engine_revision,
+            "engine_revision": publisher.engine_revision,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
     }
 }
-
 
 fn inbox_dir(session_id: &str) -> PathBuf {
     session_root().join(session_id).join("inbox")
@@ -254,7 +278,11 @@ fn pending_inbox_seqs(session_id: &str) -> Vec<u64> {
         return seqs;
     };
     for entry in entries.flatten() {
-        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
             continue;
         }
         if let Some(seq) = parse_inbox_seq(&entry.file_name().to_string_lossy()) {
@@ -298,95 +326,31 @@ fn parse_engine_envelope(raw: String) -> Result<Value, String> {
     }
 }
 
-fn body_feature_kind(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "solid_shell" => "shell",
-        "solid_mirror" => "mirror",
-        "solid_rectangular_pattern" => "rectangular_pattern",
-        "solid_circular_pattern" => "circular_pattern",
-        "solid_combine" => "combine",
-        "solid_split_body" => "split_body",
-        _ => return None,
-    })
+fn write_engine_revision_heartbeat(publisher: &WindowPublisher) -> Result<(), String> {
+    let dir = session_root().join(&publisher.session_id);
+    fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
+    let heartbeat_body = serde_json::to_string_pretty(&json!({
+        "updated_ms": now_ms(),
+        "generation": publisher.engine_revision,
+        "session_id": publisher.session_id,
+        "session_mode": "ui_owned_apply",
+        "kind": "engine_revision",
+    }))
+    .map_err(|error| format!("encode heartbeat.json: {error}"))?;
+    atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)
 }
 
-/// Dispatch an MCP mutate onto the live desktop engine — same path as IPC.
-fn dispatch_inbox_on_engine(engine: &AppState, name: &str, arguments: &Value) -> Result<Value, String> {
-    let encoded = serde_json::to_string(arguments)
-        .map_err(|error| format!("encode inbox arguments: {error}"))?;
-    match name {
-        "cad_set_document_name" => {
-            let payload = arguments
-                .get("name")
-                .ok_or_else(|| "cad_set_document_name missing name".to_string())?;
-            parse_engine_envelope(engine.engine_call(
-                "document_set_name",
-                &serde_json::to_string(payload).map_err(|error| error.to_string())?,
-            ))
-        }
-        "set_body_appearance" => {
-            parse_engine_envelope(engine.engine_call("set_body_appearance", &encoded))
-        }
-        "sketch_begin" => parse_engine_envelope(engine.engine_call("begin_sketch", &encoded)),
-        "sketch_finish" => parse_engine_envelope(engine.engine_call("end_sketch", "")),
-        "sketch_edit" => parse_engine_envelope(engine.engine_call("edit_sketch", &encoded)),
-        "sketch_add_line" => parse_engine_envelope(engine.engine_call("add_line", &encoded)),
-        "sketch_add_rectangle" => parse_engine_envelope(engine.engine_call("add_rectangle", &encoded)),
-        "sketch_add_circle" => parse_engine_envelope(engine.engine_call("add_circle", &encoded)),
-        "solid_extrude" => parse_engine_envelope(engine.solid_extrude(&encoded)),
-        "solid_edit_extrude" => parse_engine_envelope(engine.solid_edit_extrude(&encoded)),
-        "solid_revolve" => parse_engine_envelope(engine.solid_revolve(&encoded)),
-        "solid_edit_revolve" => parse_engine_envelope(engine.solid_edit_revolve(&encoded)),
-        "solid_sweep" => parse_engine_envelope(engine.solid_sweep(&encoded)),
-        "solid_edit_sweep" => parse_engine_envelope(engine.solid_edit_sweep(&encoded)),
-        "solid_loft" => parse_engine_envelope(engine.solid_loft(&encoded)),
-        "solid_edit_loft" => parse_engine_envelope(engine.solid_edit_loft(&encoded)),
-        "solid_rib" => parse_engine_envelope(engine.solid_rib(&encoded)),
-        "solid_edit_rib" => parse_engine_envelope(engine.solid_edit_rib(&encoded)),
-        "solid_fillet" => parse_engine_envelope(engine.solid_fillet(&encoded)),
-        "solid_edit_fillet" => parse_engine_envelope(engine.solid_edit_fillet(&encoded)),
-        "solid_chamfer" => parse_engine_envelope(engine.solid_chamfer(&encoded)),
-        "solid_edit_chamfer" => parse_engine_envelope(engine.solid_edit_chamfer(&encoded)),
-        "solid_hole" => parse_engine_envelope(engine.solid_hole(&encoded)),
-        "solid_edit_hole" => parse_engine_envelope(engine.solid_edit_hole(&encoded)),
-        "solid_delete_feature" => parse_engine_envelope(engine.solid_delete_feature(&encoded)),
-        "solid_set_rollback" => parse_engine_envelope(engine.solid_set_rollback(&encoded)),
-        "solid_reorder_feature" => parse_engine_envelope(engine.solid_reorder_feature(&encoded)),
-        "cad_new_project" => parse_engine_envelope(engine.project_new()),
-        "cad_load_project_model" => {
-            let model = arguments
-                .get("model_json")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "cad_load_project_model missing model_json".to_string())?;
-            parse_engine_envelope(engine.project_load(
-                &serde_json::to_string(model).map_err(|error| error.to_string())?,
-            ))
-        }
-        other if body_feature_kind(other).is_some() => {
-            let kind = body_feature_kind(other).unwrap();
-            let payload = json!({ "type": kind, "request": arguments });
-            parse_engine_envelope(engine.solid_body_feature(&payload.to_string()))
-        }
-        other if other.starts_with("solid_edit_") => {
-            if let Some(kind) = body_feature_kind(&other.replacen("solid_edit_", "solid_", 1)) {
-                let feature_id = arguments
-                    .get("feature_id")
-                    .cloned()
-                    .ok_or_else(|| "edit body feature missing feature_id".to_string())?;
-                let request = arguments.get("request").cloned().unwrap_or(json!({}));
-                let payload = json!({
-                    "feature_id": feature_id,
-                    "feature": { "type": kind, "request": request }
-                });
-                return parse_engine_envelope(engine.solid_edit_body_feature(&payload.to_string()));
-            }
-            Err(format!("unmapped inbox tool '{other}'"))
-        }
-        other => {
-            // Last resort: MCP name matches a host::handle method.
-            parse_engine_envelope(engine.engine_call(other, &encoded))
-        }
-    }
+/// Dispatch an MCP mutate onto the live desktop engine using the shared map.
+fn dispatch_inbox_on_engine(
+    engine: &AppState,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let spec = nbcad_mcp_mutate::lookup_mutate(name)
+        .ok_or_else(|| format!("unsupported inbox mutate '{name}'"))?;
+    let encoded = nbcad_mcp_mutate::encode_payload(spec.payload, arguments)?;
+    let solid = matches!(spec.execution, ExecutionKind::SolidReplay);
+    parse_engine_envelope(engine.apply_encoded_mutate(spec.engine_method, &encoded, solid))
 }
 
 fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
@@ -402,6 +366,25 @@ fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Move a failed op out of the pending queue so later ops are not wedged.
+fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), String> {
+    let src = inbox_dir(session_id).join(format!("{seq}.json"));
+    let dest_dir = inbox_dir(session_id).join("failed");
+    fs::create_dir_all(&dest_dir).map_err(|error| error.to_string())?;
+    let original = fs::read_to_string(&src).map_err(|error| error.to_string())?;
+    let mut parsed: Value = serde_json::from_str(&original)
+        .map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
+    if let Some(object) = parsed.as_object_mut() {
+        object.insert("error".to_string(), Value::String(error.to_string()));
+        object.insert("failed_ms".to_string(), json!(now_ms()));
+    }
+    let body = serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?;
+    let dest = dest_dir.join(format!("{seq}.json"));
+    atomic_write(&dest, &body)?;
+    fs::remove_file(&src).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 impl SessionBridgeState {
     fn session_id_for_window(&self, window_label: &str) -> Result<Option<String>, String> {
         let publishers = self
@@ -412,10 +395,67 @@ impl SessionBridgeState {
             .get(window_label)
             .map(|publisher| publisher.session_id.clone()))
     }
+
+    /// Advance the authoritative engine revision immediately on a local UI
+    /// mutation (before the debounced snapshot publish).
+    fn note_mutation_for_window(&self, window_label: &str) -> Result<Value, String> {
+        let mut publishers = self
+            .publishers
+            .lock()
+            .map_err(|_| "session publisher lock poisoned".to_string())?;
+        let publisher = publishers
+            .entry(window_label.to_string())
+            .or_insert_with(WindowPublisher::new);
+        publisher.engine_revision = publisher
+            .engine_revision
+            .checked_add(1)
+            .ok_or_else(|| "session engine revision exhausted".to_string())?;
+        if publisher.engine_revision > publisher.next_generation {
+            publisher.next_generation = publisher.engine_revision;
+        }
+        write_engine_revision_heartbeat(publisher)?;
+        Ok(json!({
+            "session_id": publisher.session_id,
+            "engine_revision": publisher.engine_revision,
+            "generation": publisher.engine_revision,
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+        }))
+    }
+
+    fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
+        let publishers = self
+            .publishers
+            .lock()
+            .map_err(|_| "session publisher lock poisoned".to_string())?;
+        Ok(publishers
+            .get(window_label)
+            .map(|publisher| publisher.engine_revision))
+    }
 }
 
-fn apply_one_inbox_op(session_id: &str, engine: &AppState) -> Result<Value, String> {
-    let seqs = pending_inbox_seqs(session_id);
+/// Apply one pending inbox op under the publisher lock so revision check,
+/// live engine apply, and revision advance are atomic w.r.t. other applies
+/// and UI mutation notes.
+fn apply_one_inbox_op(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+) -> Result<Value, String> {
+    let mut publishers = state
+        .publishers
+        .lock()
+        .map_err(|_| "session publisher lock poisoned".to_string())?;
+    let Some(publisher) = publishers.get_mut(window_label) else {
+        return Ok(json!({
+            "applied": false,
+            "reason": "no_window_session",
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+        }));
+    };
+    let session_id = publisher.session_id.clone();
+    let seqs = pending_inbox_seqs(&session_id);
     let Some(seq) = seqs.first().copied() else {
         return Ok(json!({
             "applied": false,
@@ -424,38 +464,87 @@ fn apply_one_inbox_op(session_id: &str, engine: &AppState) -> Result<Value, Stri
             "session_mode": "ui_owned_apply",
             "writeback": false,
             "pending": 0,
+            "engine_revision": publisher.engine_revision,
         }));
     };
-    let path = inbox_dir(session_id).join(format!("{seq}.json"));
-    let body = fs::read_to_string(&path)
-        .map_err(|error| format!("read inbox/{seq}.json: {error}"))?;
-    let parsed: Value =
-        serde_json::from_str(&body).map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
+    let path = inbox_dir(&session_id).join(format!("{seq}.json"));
+    let body =
+        fs::read_to_string(&path).map_err(|error| format!("read inbox/{seq}.json: {error}"))?;
+    let parsed: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
     let name = parsed
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| "inbox op missing name".to_string())?;
+        .ok_or_else(|| "inbox op missing name".to_string())?
+        .to_string();
     let arguments = parsed.get("arguments").cloned().unwrap_or(json!({}));
     let base_generation = parsed
         .get("base_generation")
         .and_then(Value::as_u64)
         .ok_or_else(|| "inbox op missing base_generation".to_string())?;
-    let current = read_session_generation(session_id);
-    if current != Some(base_generation) {
-        return Err(generation_conflict(session_id, base_generation, current));
+    let current = publisher.engine_revision;
+    if current != base_generation {
+        return Err(generation_conflict(
+            &session_id,
+            base_generation,
+            Some(current),
+        ));
     }
-    let result = dispatch_inbox_on_engine(engine, name, &arguments)?;
-    archive_inbox_op(session_id, seq)?;
-    Ok(json!({
-        "applied": true,
-        "seq": seq,
-        "name": name,
-        "result": result,
-        "session_id": session_id,
-        "session_mode": "ui_owned_apply",
-        "writeback": false,
-        "pending": pending_inbox_seqs(session_id).len(),
-    }))
+    if nbcad_mcp_mutate::lookup_mutate(&name).is_none() {
+        let error = format!("unsupported inbox mutate '{name}'");
+        dead_letter_inbox_op(&session_id, seq, &error)?;
+        return Ok(json!({
+            "applied": false,
+            "dead_lettered": true,
+            "seq": seq,
+            "name": name,
+            "error": error,
+            "session_id": session_id,
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+            "pending": pending_inbox_seqs(&session_id).len(),
+            "engine_revision": publisher.engine_revision,
+        }));
+    }
+    match dispatch_inbox_on_engine(engine, &name, &arguments) {
+        Ok(result) => {
+            publisher.engine_revision = publisher
+                .engine_revision
+                .checked_add(1)
+                .ok_or_else(|| "session engine revision exhausted".to_string())?;
+            if publisher.engine_revision > publisher.next_generation {
+                publisher.next_generation = publisher.engine_revision;
+            }
+            write_engine_revision_heartbeat(publisher)?;
+            archive_inbox_op(&session_id, seq)?;
+            Ok(json!({
+                "applied": true,
+                "seq": seq,
+                "name": name,
+                "result": result,
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }))
+        }
+        Err(error) => {
+            dead_letter_inbox_op(&session_id, seq, &error)?;
+            Ok(json!({
+                "applied": false,
+                "dead_lettered": true,
+                "seq": seq,
+                "name": name,
+                "error": error,
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }))
+        }
+    }
 }
 
 /// Reserve a monotonic generation before the frontend starts an async export.
@@ -490,6 +579,15 @@ pub fn mcp_session_bridge_heartbeat(
     state.heartbeat_for_window(window.label())
 }
 
+/// Advance authoritative engine revision on a local UI mutation (no debounce).
+#[tauri::command]
+pub fn mcp_session_bridge_note_mutation(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SessionBridgeState>,
+) -> Result<serde_json::Value, String> {
+    state.note_mutation_for_window(window.label())
+}
+
 /// Apply one pending MCP inbox op on the live engine (UI-owned write).
 ///
 /// Called from the session-bridge TS poll. After a successful apply the
@@ -501,15 +599,7 @@ pub fn mcp_session_bridge_apply_inbox(
     state: tauri::State<'_, SessionBridgeState>,
     engine: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let Some(session_id) = state.session_id_for_window(window.label())? else {
-        return Ok(json!({
-            "applied": false,
-            "reason": "no_window_session",
-            "session_mode": "ui_owned_apply",
-            "writeback": false,
-        }));
-    };
-    apply_one_inbox_op(&session_id, &engine)
+    apply_one_inbox_op(&state, window.label(), &engine)
 }
 
 #[cfg(test)]
@@ -676,6 +766,18 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn write_inbox(session_id: &str, seq: u64, name: &str, base: u64, arguments: Value) {
+        let inbox = session_root().join(session_id).join("inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let body = serde_json::to_string_pretty(&json!({
+            "name": name,
+            "arguments": arguments,
+            "base_generation": base,
+        }))
+        .unwrap();
+        fs::write(inbox.join(format!("{seq}.json")), body).unwrap();
+    }
+
     #[test]
     fn inbox_generation_mismatch_is_conflict_and_leaves_op() {
         let _test = TEST_LOCK.lock().unwrap();
@@ -686,17 +788,16 @@ mod tests {
         state
             .write_for_window("main", payload(generation, "base"))
             .unwrap();
-        let inbox = dir.join(&session_id).join("inbox");
-        fs::create_dir_all(&inbox).unwrap();
-        fs::write(
-            inbox.join("1.json"),
-            r#"{"name":"cad_set_document_name","arguments":{"name":"Nope"},"base_generation":99}"#,
-        )
-        .unwrap();
-        let current = read_session_generation(&session_id);
-        assert_eq!(current, Some(generation));
-        assert_eq!(pending_inbox_seqs(&session_id), vec![1]);
-        let err = generation_conflict(&session_id, 99, current);
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            99,
+            json!({"name": "Nope"}),
+        );
+        let engine = AppState::new();
+        let err =
+            apply_one_inbox_op(&state, "main", &engine).expect_err("stale base must conflict");
         let parsed: Value = serde_json::from_str(&err).unwrap();
         assert_eq!(parsed["code"], "generation_conflict");
         assert_eq!(parsed["writeback"], false);
@@ -705,5 +806,192 @@ mod tests {
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ui_mutation_note_rejects_stale_base_before_publish() {
+        // Race 1: UI mutates and notes revision immediately; debounced publish
+        // has not advanced heartbeat yet in the old design. Authoritative
+        // engine_revision must already reject the stale-base inbox op.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-stale-ui-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(generation, "base"))
+            .unwrap();
+        assert_eq!(
+            state.engine_revision_for_window("main").unwrap(),
+            Some(generation)
+        );
+
+        let noted = state.note_mutation_for_window("main").unwrap();
+        assert_eq!(noted["engine_revision"], generation + 1);
+        assert_eq!(read_session_generation(&session_id), Some(generation + 1));
+
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation, // stale relative to noted UI mutation
+            json!({"name": "Stale"}),
+        );
+        let engine = AppState::new();
+        let err = apply_one_inbox_op(&state, "main", &engine).expect_err("stale after UI note");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert_eq!(parsed["current_generation"], generation + 1);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![1]);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_same_base_ops_second_conflicts_after_first_advances() {
+        // Race 2: two queued ops share the same base_generation. The first
+        // apply advances engine_revision atomically; the second must conflict.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-same-base-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(generation, "base"))
+            .unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "First"}),
+        );
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "Second"}),
+        );
+        let engine = AppState::new();
+        let first = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(first["applied"], true);
+        assert_eq!(first["seq"], 1);
+        assert_eq!(first["engine_revision"], generation + 1);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let err = apply_one_inbox_op(&state, "main", &engine).expect_err("second same-base");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert_eq!(parsed["base_generation"], generation);
+        assert_eq!(parsed["current_generation"], generation + 1);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_inbox_op_is_dead_lettered_and_unblocks_queue() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-dead-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(generation, "base"))
+            .unwrap();
+        // Unsupported name should have been rejected at cad_submit, but if it
+        // reaches the queue it must dead-letter rather than wedge.
+        write_inbox(&session_id, 1, "not_a_real_tool", generation, json!({}));
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "AfterFail"}),
+        );
+        let engine = AppState::new();
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["seq"], 1);
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/failed/1.json")
+            .exists());
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], true);
+        assert_eq!(second["seq"], 2);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_mutate_map_covers_every_inbox_dispatch() {
+        for spec in nbcad_mcp_mutate::mutate_specs() {
+            assert!(!spec.name.is_empty());
+            assert!(!spec.engine_method.is_empty());
+            // Encoding empty/object/field shapes must not panic on {} where optional.
+            let _ = nbcad_mcp_mutate::encode_payload(spec.payload, &json!({}));
+        }
+        let locked = nbcad_mcp_mutate::lookup_mutate("sketch_add_line_locked").unwrap();
+        assert_eq!(locked.engine_method, "add_line_locked");
+        assert_eq!(locked.execution, ExecutionKind::Direct);
+    }
+
+    #[test]
+    fn table_driven_accepted_mutates_dispatch_without_name_fallback() {
+        // Every shared mutate must resolve to an engine method (no MCP-name
+        // fallback). Spot-check a few that previously broke via name passthrough.
+        let cases = [
+            (
+                "sketch_add_line_locked",
+                "add_line_locked",
+                ExecutionKind::Direct,
+            ),
+            ("sketch_begin", "begin_sketch", ExecutionKind::Direct),
+            (
+                "cad_set_document_name",
+                "document_set_name",
+                ExecutionKind::Direct,
+            ),
+            (
+                "solid_extrude",
+                "solid_prepare_extrude",
+                ExecutionKind::SolidReplay,
+            ),
+            (
+                "solid_mirror",
+                "solid_prepare_body_feature",
+                ExecutionKind::SolidReplay,
+            ),
+            (
+                "set_body_appearance",
+                "set_body_appearance",
+                ExecutionKind::Direct,
+            ),
+        ];
+        for (name, method, execution) in cases {
+            let spec = nbcad_mcp_mutate::lookup_mutate(name).expect(name);
+            assert_eq!(spec.engine_method, method, "{name}");
+            assert_eq!(spec.execution, execution, "{name}");
+        }
+        assert_eq!(
+            nbcad_mcp_mutate::mutate_specs().len(),
+            nbcad_mcp_mutate::MUTATES.len()
+        );
+        // Jack's example: MCP sketch_add_line_locked must not be passed through
+        // as the host method name.
+        assert_ne!(
+            nbcad_mcp_mutate::lookup_mutate("sketch_add_line_locked")
+                .unwrap()
+                .engine_method,
+            "sketch_add_line_locked"
+        );
     }
 }
