@@ -526,6 +526,42 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::SolidReplay,
     },
     MutateSpec {
+        name: "assembly_create_component",
+        engine_method: "assembly_create_component",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_component",
+        engine_method: "assembly_update_component",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_create_occurrence",
+        engine_method: "assembly_create_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_occurrence",
+        engine_method: "assembly_update_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_occurrence_pose",
+        engine_method: "assembly_set_occurrence_pose",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_occurrence_grounded",
+        engine_method: "assembly_set_occurrence_grounded",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "set_body_appearance",
         engine_method: "set_body_appearance",
         payload: PayloadKind::Object,
@@ -635,5 +671,24 @@ mod tests {
         assert!(field.contains("Part"));
         let err = encode_payload(PayloadKind::Field("name"), &json!({})).unwrap_err();
         assert!(err.contains("missing required argument 'name'"));
+    }
+
+    #[test]
+    fn assembly_create_component_is_in_lookup_mutate() {
+        let spec = lookup_mutate("assembly_create_component").expect("present");
+        assert_eq!(spec.engine_method, "assembly_create_component");
+        assert_eq!(spec.execution, ExecutionKind::Direct);
+        assert_eq!(spec.payload, PayloadKind::Object);
+        assert!(lookup_mutate("assembly_document").is_none());
+        assert!(lookup_mutate("assembly_solution").is_none());
+        for name in [
+            "assembly_update_component",
+            "assembly_create_occurrence",
+            "assembly_update_occurrence",
+            "assembly_set_occurrence_pose",
+            "assembly_set_occurrence_grounded",
+        ] {
+            assert!(lookup_mutate(name).is_some(), "{name}");
+        }
     }
 }
