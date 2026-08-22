@@ -8,11 +8,11 @@ use nbcad_occt::{
 };
 use nbcad_sketch::{
     approximate_pair_result, broad_phase_interference_pairs, contact_violation_score, err_json,
-    host, ok_json, BodyPoseDto, ContactSetDto, EvaluateMotionStudyRequestDto,
-    InstanceBodyPoseDto, InterferenceCheckRequestDto, InterferencePairResultDto,
-    InterferenceReportDto, MotionStudyEvaluationDto, MotionStudySampleDto,
-    MotionStudyId, SampleMotionStudyRequestDto, SketchDto, SketchManager, SweptCollisionEventDto,
-    SweptCollisionReportDto, SweptCollisionRequestDto,
+    host, ok_json, BodyPoseDto, ContactSetDto, EvaluateMotionStudyRequestDto, InstanceBodyPoseDto,
+    InterferenceCheckRequestDto, InterferencePairResultDto, InterferenceReportDto,
+    MotionStudyEvaluationDto, MotionStudyId, MotionStudySampleDto, SampleMotionStudyRequestDto,
+    SketchDto, SketchManager, SweptCollisionEventDto, SweptCollisionReportDto,
+    SweptCollisionRequestDto,
 };
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
@@ -225,6 +225,38 @@ impl AppState {
         result
     }
 
+    /// Apply one MCP mutate using the shared name→method map encoding.
+    /// Direct tools go through `host::handle`; solid-replay tools prepare,
+    /// recompute, and commit on the live kernel (same path as IPC).
+    pub fn apply_encoded_mutate(&self, method: &str, payload: &str, solid: bool) -> String {
+        if !solid {
+            return self.engine_call(method, payload);
+        }
+        self.execute(|manager| {
+            let raw = host::handle(manager, method, payload);
+            let envelope: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+                nbcad_sketch::SessionError::Solid(format!("invalid engine response: {error}"))
+            })?;
+            if envelope.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+                let message = envelope
+                    .get("error")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown noBS CAD engine error")
+                    .to_string();
+                return Err(nbcad_sketch::SessionError::Solid(message));
+            }
+            let value = envelope
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::from_value(value).map_err(|error| {
+                nbcad_sketch::SessionError::Solid(format!(
+                    "engine returned an invalid recompute plan: {error}"
+                ))
+            })
+        })
+    }
+
     pub fn solid_extrude(&self, payload: &str) -> String {
         self.with_request(payload, |manager, request: ExtrudeRequest| {
             manager.prepare_extrude(request)
@@ -424,7 +456,11 @@ impl AppState {
                     time_seconds: start_time,
                 });
             if let Ok(start) = start {
-                for contact in enabled_contacts.iter().copied().filter(|contact| contact.stop_motion) {
+                for contact in enabled_contacts
+                    .iter()
+                    .copied()
+                    .filter(|contact| contact.stop_motion)
+                {
                     let start_violation = match gated_exact_contact_violation(
                         &inner.kernel,
                         &inner.manager.solid_scene(),
@@ -492,7 +528,10 @@ impl AppState {
                 Err(error) => return err_json(error),
             }
         }
-        let contacts = InterferenceReportDto { exact: contacts_exact, pairs: contact_pairs };
+        let contacts = InterferenceReportDto {
+            exact: contacts_exact,
+            pairs: contact_pairs,
+        };
         ok_json(MotionStudyEvaluationDto {
             sample: final_sample,
             contacts,

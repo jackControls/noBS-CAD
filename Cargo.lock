@@ -298,6 +298,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-mcp-mutate"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-occt"
 version = "0.1.0"
 dependencies = [

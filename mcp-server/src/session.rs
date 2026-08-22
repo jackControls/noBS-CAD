@@ -333,7 +333,11 @@ fn inbox_seqs_in(dir: &std::path::Path) -> Vec<u64> {
         return seqs;
     };
     for entry in entries.flatten() {
-        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
             continue;
         }
         if let Some(seq) = parse_inbox_seq(&entry.file_name().to_string_lossy()) {
@@ -375,8 +379,8 @@ pub fn write_inbox_op(session_id: &str, op: &InboxOp) -> Result<u64, String> {
 
 pub fn read_inbox_op(session_id: &str, seq: u64) -> Result<InboxOp, String> {
     let body = read_session_file(session_id, &format!("inbox/{seq}.json"))?;
-    let parsed: Value =
-        serde_json::from_str(&body).map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
+    let parsed: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
     InboxOp::from_json(&parsed)
 }
 
@@ -445,7 +449,9 @@ where
 /// Used after a successful host apply on a **separate** SketchManager.
 /// Not an MCP writeback path — the live UI publisher is the production writer.
 pub fn publish_applied_snapshot(session_id: &str, model_json: &str) -> Result<u64, String> {
-    let next = read_heartbeat_generation(session_id).unwrap_or(0).saturating_add(1);
+    let next = read_heartbeat_generation(session_id)
+        .unwrap_or(0)
+        .saturating_add(1);
     write_session(session_id, "model.json", model_json)?;
     let heartbeat = serde_json::to_string_pretty(&json!({
         "updated_ms": now_ms(),

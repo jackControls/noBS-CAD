@@ -6,6 +6,7 @@ use std::time::Duration;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nbcad_core::BodyId;
 use nbcad_export::MeshExportRequest;
+use nbcad_mcp_mutate;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
@@ -165,6 +166,15 @@ impl CadServer {
         let payload_kind = spec.payload;
         let pack = spec.pack;
         let spine = spec.spine;
+
+        // While snapshot-attached, direct mutates are rejected (#55 / Jack #60 §1).
+        // Inspect/export/control (including cad_submit) stay callable.
+        if self.attached_document_id.is_some() && !is_read_safe_while_attached(name) {
+            return Err(session_lock_error(
+                "session_read_only",
+                self.attached_document_id.as_deref(),
+            ));
+        }
 
         if execution == Execution::Control {
             return self.call_control(name, arguments);
@@ -367,7 +377,11 @@ impl CadServer {
         let session_id = arguments
             .get("session_id")
             .or_else(|| arguments.get("document_id"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str);
+        if writeback_requested(arguments) {
+            return Err(session_lock_error("writeback_rejected", session_id));
+        }
+        let session_id = session_id
             .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
         session::require_valid_session_id(session_id)?;
         if !session::list_sessions()?.iter().any(|id| id == session_id) {
@@ -424,15 +438,16 @@ impl CadServer {
         if !tool_specs().iter().any(|spec| spec.name == name) {
             return Err(format!("unknown tool: {name}"));
         }
-        if !is_modeling_mutate(name) {
+        if nbcad_mcp_mutate::lookup_mutate(name).is_none() {
             return Err(serde_json::to_string(&json!({
-                "code": "not_a_mutate",
+                "code": "unsupported_inbox_mutate",
                 "writeback": false,
                 "session_mode": "ui_owned_apply",
                 "session_id": session_id,
-                "hint": "cad_submit is for modeling mutates only; inspect/export/control stay direct tools",
+                "name": name,
+                "hint": "cad_submit only accepts modeling mutates with a shared engine mapping; inspect/export/control stay direct tools",
             }))
-            .unwrap_or_else(|_| "cad_submit is for modeling mutates only".to_string()));
+            .unwrap_or_else(|_| "unsupported inbox mutate".to_string()));
         }
         let current = session::read_heartbeat_generation(&session_id)?;
         if current != base_generation {
@@ -867,10 +882,30 @@ fn is_read_safe_while_attached(name: &str) -> bool {
 }
 
 fn is_modeling_mutate(name: &str) -> bool {
-    !is_read_safe_while_attached(name)
-        && tool_specs()
-            .iter()
-            .any(|spec| spec.name == name && spec.execution != Execution::Control)
+    nbcad_mcp_mutate::is_inbox_mutate(name)
+}
+
+fn writeback_requested(arguments: &Value) -> bool {
+    match arguments.get("writeback") {
+        None => false,
+        Some(Value::Bool(false)) => false,
+        Some(_) => true,
+    }
+}
+
+fn session_lock_error(code: &str, session_id: Option<&str>) -> String {
+    serde_json::to_string(&json!({
+        "code": code,
+        "writeback": false,
+        "session_mode": "read_only_snapshot",
+        "session_id": session_id,
+        "hint": "cad_submit for mutates while attached; cad_refresh to re-read UI; cad_detach to fork headless"
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"{code}\",\"writeback\":false,\"session_mode\":\"read_only_snapshot\"}}"
+        )
+    })
 }
 
 fn tool_specs() -> Vec<ToolSpec> {
@@ -2887,7 +2922,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir.",
             object_schema(
                 json!({
                     "session_id": {
@@ -2895,6 +2930,16 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "minLength": 36,
                         "maxLength": 36,
                         "description": "UUID v4 session directory name"
+                    },
+                    "document_id": {
+                        "type": "string",
+                        "minLength": 36,
+                        "maxLength": 36,
+                        "description": "Alias for session_id"
+                    },
+                    "writeback": {
+                        "type": "boolean",
+                        "description": "Must be omitted or false. true is rejected; mutates go through cad_submit while attached."
                     }
                 }),
                 &["session_id"],
@@ -3905,7 +3950,10 @@ mod tests {
                 }),
             )
             .expect_err("inspect tools must not be submitted");
-        assert_eq!(parse_session_error(&inspect_err)["code"], "not_a_mutate");
+        assert_eq!(
+            parse_session_error(&inspect_err)["code"],
+            "unsupported_inbox_mutate"
+        );
 
         let submitted = server
             .call_tool(
@@ -3983,7 +4031,10 @@ mod tests {
         .expect("apply helper should run host on a separate SketchManager");
         assert_eq!(applied.seq, 1);
         assert_eq!(applied.op.name, "solid_mirror");
-        assert!(applied.host_result.is_object(), "separate host apply should return an engine object");
+        assert!(
+            applied.host_result.is_object(),
+            "separate host apply should return an engine object"
+        );
         assert_eq!(session::read_heartbeat_generation(&unique).unwrap(), 2);
         assert!(session::pending_inbox_seqs(&unique).unwrap().is_empty());
 
@@ -5368,6 +5419,137 @@ mod tests {
         );
     }
 
+    fn parse_lock_error(error: &str) -> Value {
+        serde_json::from_str(error).unwrap_or_else(|_| json!({ "raw": error }))
+    }
+
+    fn assert_session_read_only(error: &str) {
+        let parsed = parse_lock_error(error);
+        assert_eq!(parsed["code"], "session_read_only");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "read_only_snapshot");
+        assert!(
+            parsed["hint"].as_str().unwrap_or("").contains("cad_submit"),
+            "hint should mention cad_submit: {error}"
+        );
+    }
+
+    #[test]
+    fn attach_direct_mutate_rejected_submit_accepted_detach_restores() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-lock-submit-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(!scene["bodies"].as_array().unwrap().is_empty());
+
+        let mutate_err = server
+            .call_tool("solid_mirror", solid_mirror_args(&body_id))
+            .expect_err("direct mutate must fail while attached");
+        assert_session_read_only(&mutate_err);
+        assert!(server.attached_document_id.is_some());
+
+        let appearance_err = server
+            .call_tool(
+                "set_body_appearance",
+                json!({"body_id": body_id, "preset_id": "generic.pla"}),
+            )
+            .expect_err("appearance write must fail while attached");
+        assert_session_read_only(&appearance_err);
+
+        let writeback_err = server
+            .call_tool(
+                "cad_attach",
+                json!({"session_id": unique, "writeback": true}),
+            )
+            .expect_err("writeback:true attach must fail");
+        let wb = parse_lock_error(&writeback_err);
+        assert_eq!(wb["code"], "writeback_rejected");
+        assert_eq!(wb["writeback"], false);
+
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .expect("cad_submit must be accepted while attached");
+        assert_eq!(submitted["submitted"], true);
+        assert_eq!(submitted["seq"], 1);
+        assert_eq!(submitted["applied"], false);
+
+        server.call_tool("cad_detach", json!({})).unwrap();
+        assert!(server.attached_document_id.is_none());
+        server
+            .call_tool("solid_mirror", solid_mirror_args(&body_id))
+            .expect("direct mutate must succeed after cad_detach");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_spec_mutates_match_shared_inbox_map() {
+        let mut missing = Vec::new();
+        let mut mismatched = Vec::new();
+        for spec in tool_specs() {
+            if spec.execution == Execution::Control || is_read_safe_while_attached(spec.name) {
+                assert!(
+                    nbcad_mcp_mutate::lookup_mutate(spec.name).is_none(),
+                    "read-safe/control {} must not be an inbox mutate",
+                    spec.name
+                );
+                continue;
+            }
+            let Some(shared) = nbcad_mcp_mutate::lookup_mutate(spec.name) else {
+                missing.push(spec.name);
+                continue;
+            };
+            if shared.engine_method != spec.engine_method {
+                mismatched.push(format!(
+                    "{} engine_method {} != {}",
+                    spec.name, shared.engine_method, spec.engine_method
+                ));
+            }
+            let expected_exec = match spec.execution {
+                Execution::Direct => nbcad_mcp_mutate::ExecutionKind::Direct,
+                Execution::SolidReplay => nbcad_mcp_mutate::ExecutionKind::SolidReplay,
+                Execution::Control => unreachable!(),
+            };
+            if shared.execution != expected_exec {
+                mismatched.push(format!("{} execution mismatch", spec.name));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "ToolSpec mutates missing from shared map: {missing:?}"
+        );
+        assert!(
+            mismatched.is_empty(),
+            "ToolSpec/shared map mismatches: {mismatched:?}"
+        );
+        assert_eq!(
+            nbcad_mcp_mutate::mutate_specs().len(),
+            tool_specs()
+                .iter()
+                .filter(|spec| spec.execution != Execution::Control
+                    && !is_read_safe_while_attached(spec.name))
+                .count()
+        );
+    }
+
+
     #[test]
     fn assembly_update_component_rename_preserves_bodies_and_lcs() {
         let mut server = CadServer::new().unwrap();
@@ -5591,5 +5773,21 @@ mod tests {
         assert_eq!(occurrence_after["local_pose"], pose_before);
         assert_eq!(occurrence_after["visible"], visible_before);
         assert_eq!(occurrence_after["grounded"], grounded_before);
+    }
+
+    #[test]
+    fn every_shared_mutate_is_accepted_by_cad_submit_classifier() {
+        for spec in nbcad_mcp_mutate::mutate_specs() {
+            assert!(
+                is_modeling_mutate(spec.name),
+                "{} must classify as modeling mutate",
+                spec.name
+            );
+            assert!(
+                !is_read_safe_while_attached(spec.name),
+                "{} must not be read-safe while attached",
+                spec.name
+            );
+        }
     }
 }

@@ -17,6 +17,7 @@ nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
+nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
 
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
