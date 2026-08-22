@@ -339,15 +339,13 @@ try {
       [...document.querySelectorAll(
         '[data-native-hud] button, [data-native-hud-control]',
       )].every((element) => getComputedStyle(element).pointerEvents !== 'none');
-    const shellOverlayIslands = [
-      document.querySelector('[data-testid="project-tabs"]'),
+    const shellOverlayIslands =
+      document
+        .querySelector('[data-testid="project-tabs"]')
+        ?.hasAttribute('data-native-viewport-overlay') === false &&
       [...document.querySelectorAll('[data-native-viewport-overlay]')].find(
         (element) => element.textContent?.includes('COMMENTS'),
-      ),
-    ].every(
-      (element) =>
-        element?.hasAttribute('data-native-viewport-overlay') === true,
-    );
+      ) !== undefined;
     const animatedHud =
       [...document.querySelectorAll(
         '[data-native-hud="navigation"] button, [data-orientation-dial] button',

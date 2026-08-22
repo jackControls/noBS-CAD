@@ -197,13 +197,14 @@ try {
       appControls &&
       browserPanel &&
       projectTabs &&
+      projectTabs.x <= 1 &&
+      projectTabs.y <= 1 &&
+      projectTabs.y + projectTabs.height <= ribbonTools.y + 1 &&
       appControls.x <= 1 &&
       Math.abs(appControls.y - ribbonTools.y) <= 1 &&
       Math.abs(appControls.height - ribbonTools.height) <= 1 &&
-      Math.abs(browserPanel.y - (ribbonTools.y + ribbonTools.height)) <= 1 &&
-      Math.abs(projectTabs.y - browserPanel.y) <= 1 &&
-      Math.abs(projectTabs.x - (browserPanel.x + browserPanel.width)) <= 1,
-    'below the workspace-module row, PROJECT is flush left, Browser starts below the ribbon, and tabs begin at the Browser edge',
+      Math.abs(browserPanel.y - (ribbonTools.y + ribbonTools.height)) <= 1,
+    'project tabs form the top window row above the workspace ribbon, PROJECT stays flush left in the ribbon, and the Browser starts below the ribbon',
   );
   assert.equal(
     await page.getByTestId('main-menu-row').count(),

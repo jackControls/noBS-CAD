@@ -259,6 +259,9 @@ export interface ProjectTabSummary {
   name: string;
   fileName: string | null;
   dirty: boolean;
+  /** Workspace stage (solid/drawing) the project was last viewed in;
+   * restored on tab activation so each project keeps its own stage. */
+  workspaceTab: string;
 }
 
 /** Sketch tools (M1a–M1c). `null` = select/edit. */
