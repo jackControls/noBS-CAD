@@ -89,9 +89,12 @@ pub struct NativeEditMenuState {
     items: Mutex<Option<(MenuItem<Wry>, MenuItem<Wry>)>>,
 }
 
-/// File-menu handles grouped by the store condition that enables them. New /
-/// Open / Settings stay enabled and are not tracked here.
+/// File-menu handles grouped by the store condition that enables them.
+/// Settings stays enabled while project/model mutations are busy; every
+/// project action, including New and Open, is disabled until the mutation
+/// finishes.
 pub struct NativeFileItems {
+    idle_items: Vec<MenuItem<Wry>>,
     document_items: Vec<MenuItem<Wry>>,
     all_body_items: Vec<MenuItem<Wry>>,
     selected_body_items: Vec<MenuItem<Wry>>,
@@ -114,6 +117,7 @@ impl NativeFileMenuState {
 
     fn set_state(
         &self,
+        busy: bool,
         document_open: bool,
         has_bodies: bool,
         has_selected_body: bool,
@@ -128,25 +132,29 @@ impl NativeFileMenuState {
             // Non-macOS builds do not install an application menu.
             return Ok(());
         };
+        for item in &items.idle_items {
+            item.set_enabled(!busy)
+                .map_err(|error| error.to_string())?;
+        }
         for item in &items.document_items {
-            item.set_enabled(document_open)
+            item.set_enabled(!busy && document_open)
                 .map_err(|error| error.to_string())?;
         }
         for item in &items.all_body_items {
-            item.set_enabled(document_open && has_bodies)
+            item.set_enabled(!busy && document_open && has_bodies)
                 .map_err(|error| error.to_string())?;
         }
         for item in &items.selected_body_items {
-            item.set_enabled(document_open && has_selected_body)
+            item.set_enabled(!busy && document_open && has_selected_body)
                 .map_err(|error| error.to_string())?;
         }
         items
             .drawing_dxf
-            .set_enabled(drawing_workspace && drawing_sheet_ready)
+            .set_enabled(!busy && drawing_workspace && drawing_sheet_ready)
             .map_err(|error| error.to_string())?;
         items
             .profile_dxf
-            .set_enabled(drawing_workspace)
+            .set_enabled(!busy && drawing_workspace)
             .map_err(|error| error.to_string())?;
         Ok(())
     }
@@ -324,6 +332,7 @@ pub fn build(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     ];
     file.insert_items(&file_items, 0)?;
     app.state::<NativeFileMenuState>().install(NativeFileItems {
+        idle_items: vec![new_project, open],
         document_items: vec![save, save_as, rename, import_step],
         all_body_items: vec![export_step_all, export_3mf_all, export_stl_all],
         selected_body_items: vec![export_step_selected, export_3mf_selected, export_stl_selected],
@@ -381,6 +390,7 @@ pub fn native_edit_menu_set_state(
 #[tauri::command]
 pub fn native_file_menu_set_state(
     state: tauri::State<'_, NativeFileMenuState>,
+    busy: bool,
     document_open: bool,
     has_bodies: bool,
     has_selected_body: bool,
@@ -388,6 +398,7 @@ pub fn native_file_menu_set_state(
     drawing_sheet_ready: bool,
 ) -> Result<(), String> {
     state.set_state(
+        busy,
         document_open,
         has_bodies,
         has_selected_body,

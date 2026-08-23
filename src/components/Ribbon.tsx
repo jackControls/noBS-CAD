@@ -142,9 +142,9 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
   return (
     <div
       ref={anchorRef}
-      className="flex h-full shrink-0 flex-col border-r border-edge bg-header pr-1.5"
+      className="flex h-full w-[108px] shrink-0 flex-col border-r border-edge bg-header pr-1.5 max-[1400px]:w-14 max-[1400px]:pr-0"
     >
-      <div className="flex h-[62px] items-start pl-1.5 pt-1.5">
+      <div className="flex h-[62px] w-full items-start pl-1.5 pt-1.5 max-[1400px]:pl-0.5">
         <button
           type="button"
           data-testid="workspace-switcher"
@@ -170,15 +170,17 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
             onOpen();
             setOpen(true);
           }}
-          className="flex h-[52px] min-w-24 flex-col items-center justify-center gap-0.5 rounded px-2 text-mute hover:bg-edge hover:text-ink disabled:cursor-default disabled:opacity-50"
+          className="flex h-[52px] w-full min-w-0 flex-col items-center justify-center gap-0.5 rounded px-2 text-mute hover:bg-edge hover:text-ink disabled:cursor-default disabled:opacity-50 max-[1400px]:px-1"
         >
           <span className="flex h-6 items-center justify-center text-ink">
             {drawingActive ? <FileText size={20} /> : <Box size={20} />}
           </span>
           <span className="flex items-center gap-0.5 whitespace-nowrap text-[9px] leading-tight">
-            {drawingActive ? t('ribbon.tabs.drawingWorkspace') : t('ribbon.tabs.solidModeling')}
+            <span className="max-[1400px]:hidden">
+              {drawingActive ? t('ribbon.tabs.drawingWorkspace') : t('ribbon.tabs.solidModeling')}
+            </span>
             {sketching && (
-              <span className="rounded bg-accent/15 px-1 text-[8px] font-medium text-accent">
+              <span className="rounded bg-accent/15 px-1 text-[8px] font-medium text-accent max-[1400px]:hidden">
                 {t('ribbon.tabs.sketch')}
               </span>
             )}
@@ -186,7 +188,7 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
           </span>
         </button>
       </div>
-      <div className="flex h-5 items-center justify-center text-[10px] tracking-wider text-mute">
+      <div className="flex h-5 items-center justify-center text-[10px] tracking-wider text-mute max-[1400px]:text-[8px] max-[1400px]:tracking-normal">
         {t('ribbon.panels.workspace')}
       </div>
       {open && menuPos && createPortal(

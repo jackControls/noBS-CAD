@@ -160,7 +160,8 @@ export function ProjectMenuControls() {
   }, [menuOpen, menuPosition]);
 
   const run = (action: () => Promise<unknown>) => {
-    if (useAppStore.getState().projectBusy) return;
+    const state = useAppStore.getState();
+    if (state.projectBusy || state.solidBusy) return;
     setMenuOpen(false);
     setBusy(true);
     setProjectBusy(true);

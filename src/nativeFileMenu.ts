@@ -50,6 +50,7 @@ export function nativeMacMenuOwnsFileCommands(): boolean {
 function menuFlags() {
   const state = useAppStore.getState();
   return {
+    busy: state.projectBusy || state.solidBusy,
     documentOpen: state.document !== null,
     hasBodies: state.solidScene.bodies.length > 0,
     hasSelectedBody: state.selectedBody !== null,
@@ -65,7 +66,8 @@ function menuFlags() {
 
 /** Same guard + error surface as the in-app menu's click handler. */
 function run(action: () => Promise<unknown> | void): void {
-  if (useAppStore.getState().projectBusy) return;
+  const state = useAppStore.getState();
+  if (state.projectBusy || state.solidBusy) return;
   useAppStore.getState().setProjectBusy(true);
   Promise.resolve()
     .then(() => action())
@@ -111,9 +113,8 @@ function dispatch(command: NativeFileCommand): void {
         useAppStore.getState().setDrawingProfileExportOpen(true);
       });
     case 'settings':
-      return run(() => {
-        useAppStore.getState().setSettingsOpen(true);
-      });
+      useAppStore.getState().setSettingsOpen(true);
+      return;
   }
 }
 
