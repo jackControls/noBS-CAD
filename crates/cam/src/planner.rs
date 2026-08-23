@@ -1166,6 +1166,7 @@ mod tests {
             center_cutting: true,
             flute_count: 4,
             point_angle_degrees: (kind == CamToolKind::ChamferMill).then_some(90.0),
+            corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
         }

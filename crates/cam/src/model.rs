@@ -413,6 +413,9 @@ impl Default for CamPostConfigDto {
 pub enum CamToolKind {
     FlatEndMill,
     BallEndMill,
+    /// Flat end mill with a corner radius; the radius drives the effective
+    /// cutting diameter used by the speeds & feeds calculator.
+    BullNoseEndMill,
     /// Indexable-insert face/shell mill for large facing passes.
     FaceMill,
     Drill,
@@ -423,6 +426,9 @@ pub enum CamToolKind {
     /// Orbital thread-milling tool; never center-cutting, always works in a
     /// pre-machined hole.
     ThreadMill,
+    /// Lathe tooling, reserved for the turning workspace; no milling
+    /// operation accepts it.
+    TurningGeneral,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -454,6 +460,12 @@ pub struct CamToolDto {
     /// currently supports 90 degree tools only; other kinds store `None`.
     #[serde(default)]
     pub point_angle_degrees: Option<f64>,
+    /// Corner (nose) radius in mm for flat/bull-nose/face mills; `None`
+    /// means a sharp corner. The speeds & feeds calculator uses it for the
+    /// effective cutting diameter at a given depth of cut, which matters
+    /// most on high-feed tooling with large corner radii.
+    #[serde(default)]
+    pub corner_radius: Option<f64>,
     /// Library cutting defaults captured with the tool. Creating an
     /// operation copies these into the operation, where they remain
     /// independently editable; later library edits never rewrite existing
@@ -531,6 +543,31 @@ impl CamToolDto {
         if self.kind == CamToolKind::ChamferMill && self.point_angle_degrees.is_none() {
             return Err(format!(
                 "chamfer mill '{}' must declare a point angle",
+                self.name
+            ));
+        }
+        if let Some(radius) = self.corner_radius {
+            let radius_capable = matches!(
+                self.kind,
+                CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::FaceMill
+            );
+            if !radius_capable {
+                return Err(format!(
+                    "tool '{}' carries a corner radius, which only flat, bull-nose, and face mills support",
+                    self.name
+                ));
+            }
+            if !radius.is_finite() || radius <= 0.0 || radius > self.diameter * 0.5 + EPSILON {
+                return Err(format!(
+                    "tool '{}' corner radius must be positive and no more than half the diameter",
+                    self.name
+                ));
+            }
+        }
+        // A bull-nose end mill is defined by its corner radius.
+        if self.kind == CamToolKind::BullNoseEndMill && self.corner_radius.is_none() {
+            return Err(format!(
+                "bull-nose end mill '{}' must declare a corner radius",
                 self.name
             ));
         }
@@ -976,8 +1013,10 @@ impl CamOperationDto {
                 step_down,
                 ..
             } => {
-                if !matches!(tool.kind, CamToolKind::FlatEndMill | CamToolKind::FaceMill)
-                    || !tool.center_cutting
+                if !matches!(
+                    tool.kind,
+                    CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::FaceMill
+                ) || !tool.center_cutting
                 {
                     return Err(format!(
                         "face operation '{label}' requires a center-cutting flat or face mill until ramp entries are supported"
@@ -2061,6 +2100,7 @@ mod tests {
             center_cutting: true,
             flute_count: 4,
             point_angle_degrees: None,
+            corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
         }
@@ -2235,6 +2275,36 @@ mod tests {
         document.tools = vec![blank];
         let error = document.validate().unwrap_err();
         assert!(error.contains("must have names"));
+    }
+
+    #[test]
+    fn corner_radius_is_checked_against_kind_and_diameter() {
+        let setup = || setup(1, CamStockSpecDto::LegacyBox, CamResolvedStockDto::Box);
+        // A bull-nose end mill without a corner radius is not a bull nose.
+        let mut bull = tool();
+        bull.kind = CamToolKind::BullNoseEndMill;
+        let mut document = document_with(vec![setup()]);
+        document.tools = vec![bull.clone()];
+        let error = document.validate().unwrap_err();
+        assert!(error.contains("corner radius"));
+        // A valid corner radius passes...
+        let mut valid = bull.clone();
+        valid.corner_radius = Some(1.5);
+        document.tools = vec![valid];
+        document.validate().unwrap();
+        // ...bounded by half the diameter.
+        let mut oversized = bull.clone();
+        oversized.corner_radius = Some(4.0);
+        document.tools = vec![oversized];
+        let error = document.validate().unwrap_err();
+        assert!(error.contains("half the diameter"));
+        // Hole-making and turning kinds carry no corner radius.
+        let mut tap_tool = tool();
+        tap_tool.kind = CamToolKind::Tap;
+        tap_tool.corner_radius = Some(0.5);
+        document.tools = vec![tap_tool];
+        let error = document.validate().unwrap_err();
+        assert!(error.contains("only flat, bull-nose, and face mills"));
     }
 
     #[test]

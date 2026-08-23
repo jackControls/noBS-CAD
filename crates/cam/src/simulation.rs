@@ -625,14 +625,18 @@ fn note_approximation(tool: &CamToolDto, drill: &mut bool, chamfer: &mut bool) {
         CamToolKind::ChamferMill => *chamfer = true,
         // Taps, reamers, boring bars, thread mills, and face mills sweep as
         // plain cylinders, like end mills, so they need no
-        // tip-approximation note.
+        // tip-approximation note. Bull-nose corner radii deviate from the
+        // cylinder only along the bottom edge, which the note does not
+        // cover either. Turning tools never reach the simulator today.
         CamToolKind::FlatEndMill
         | CamToolKind::BallEndMill
+        | CamToolKind::BullNoseEndMill
         | CamToolKind::FaceMill
         | CamToolKind::Tap
         | CamToolKind::Reamer
         | CamToolKind::BoringBar
-        | CamToolKind::ThreadMill => {}
+        | CamToolKind::ThreadMill
+        | CamToolKind::TurningGeneral => {}
     }
 }
 
@@ -964,12 +968,14 @@ fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool 
     }
     match tool.kind {
         CamToolKind::FlatEndMill
+        | CamToolKind::BullNoseEndMill
         | CamToolKind::FaceMill
         | CamToolKind::ChamferMill
         | CamToolKind::Tap
         | CamToolKind::Reamer
         | CamToolKind::BoringBar
-        | CamToolKind::ThreadMill => {
+        | CamToolKind::ThreadMill
+        | CamToolKind::TurningGeneral => {
             radial_sq <= radius * radius + EPSILON
         }
         CamToolKind::BallEndMill => {
@@ -1156,6 +1162,7 @@ mod tests {
                 center_cutting: true,
                 flute_count: 4,
                 point_angle_degrees: None,
+                corner_radius: None,
                 cutting: CuttingParametersDto::default(),
                 cutting_presets: vec![],
             }],

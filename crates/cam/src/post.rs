@@ -791,6 +791,7 @@ mod tests {
                 center_cutting: true,
                 flute_count: 4,
                 point_angle_degrees: None,
+                corner_radius: None,
                 cutting: CuttingParametersDto::default(),
                 cutting_presets: vec![],
             }],
@@ -821,6 +822,7 @@ mod tests {
             center_cutting: true,
             flute_count: 2,
             point_angle_degrees: None,
+            corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
         });
@@ -865,6 +867,7 @@ mod tests {
             center_cutting: false,
             flute_count: 4,
             point_angle_degrees: None,
+            corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
         });

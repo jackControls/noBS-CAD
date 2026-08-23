@@ -4912,6 +4912,7 @@ mod project_tests {
                 center_cutting: true,
                 flute_count: 4,
                 point_angle_degrees: None,
+                corner_radius: None,
                 cutting: CuttingParametersDto::default(),
                 cutting_presets: vec![],
             }],
