@@ -4235,15 +4235,15 @@ mod project_tests {
             .find(|definition| definition.body_ids == vec![body_id])
             .unwrap();
         manager
-            .update_component(UpdateComponentRequestDto {
-                component: nbcad_assembly::ComponentDefinitionDto {
+            .update_component(UpdateComponentRequestDto::from(
+                nbcad_assembly::ComponentDefinitionDto {
                     local_coordinate_system: nbcad_assembly::AssemblyTransformDto {
                         translation: [2.0, 0.0, 0.0],
                         rotation: [0.0, 0.0, 0.0, 1.0],
                     },
                     ..promoted.clone()
                 },
-            })
+            ))
             .unwrap();
         let subassembly = manager
             .create_component(CreateComponentRequestDto {

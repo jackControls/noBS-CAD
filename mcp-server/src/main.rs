@@ -20,7 +20,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 109;
+const MODELING_TOOL_COUNT: usize = 117;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -1220,6 +1220,25 @@ fn tool_specs() -> Vec<ToolSpec> {
         &["reference", "body_id", "edge_id", "angle_deg"],
     );
 
+    let assembly_transform = object_schema(
+        json!({
+            "translation": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3
+            },
+            "rotation": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Unit quaternion as [x, y, z, w]."
+            }
+        }),
+        &["translation", "rotation"],
+    );
+
     let mut tools = vec![
         ToolSpec::direct(
             "cad_document",
@@ -2401,6 +2420,139 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::direct(
+            "assembly_document",
+            "Inspect assembly document",
+            "Return the host-neutral assembly document: component definitions, occurrences, joints, and grounding.",
+            "assembly_document",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "assembly_solution",
+            "Inspect assembly solution",
+            "Return the current host-neutral assembly forward-kinematics solution (occurrence and body poses).",
+            "assembly_solution",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "assembly_create_component",
+            "Create assembly component",
+            "Create a reusable component definition from body ids. Use absorb_promoted_bodies to replace auto-promoted one-body components.",
+            "assembly_create_component",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1},
+                    "body_ids": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "uniqueItems": true
+                    },
+                    "local_coordinate_system": assembly_transform.clone(),
+                    "absorb_promoted_bodies": {
+                        "type": "boolean",
+                        "description": "Replace automatically promoted one-body root occurrences for these bodies."
+                    }
+                }),
+                &["name"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_update_component",
+            "Update assembly component",
+            "Patch a component definition. Only id is required; omitted name/body_ids/local_coordinate_system/promoted keep their current values (ComponentDefinitionPatchDto).",
+            "assembly_update_component",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "component": object_schema(
+                        json!({
+                            "id": {"type": "integer", "minimum": 1},
+                            "name": {"type": "string", "minLength": 1},
+                            "body_ids": {
+                                "type": "array",
+                                "items": {"type": "integer", "minimum": 1},
+                                "uniqueItems": true
+                            },
+                            "local_coordinate_system": assembly_transform.clone(),
+                            "promoted": {"type": "boolean"}
+                        }),
+                        &["id"],
+                    )
+                }),
+                &["component"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_create_occurrence",
+            "Create assembly occurrence",
+            "Instantiate a component definition as a new occurrence with an optional parent and local pose.",
+            "assembly_create_occurrence",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "component_id": {"type": "integer", "minimum": 1},
+                    "name": {"type": "string", "minLength": 1},
+                    "parent_occurrence_id": {"type": ["integer", "null"], "minimum": 1},
+                    "local_pose": assembly_transform.clone()
+                }),
+                &["component_id", "name"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_update_occurrence",
+            "Update assembly occurrence",
+            "Patch an occurrence record. Only id is required; omitted name/component_id/parent/pose/visibility/grounded keep their current values (ComponentOccurrencePatchDto).",
+            "assembly_update_occurrence",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "occurrence": object_schema(
+                        json!({
+                            "id": {"type": "integer", "minimum": 1},
+                            "name": {"type": "string", "minLength": 1},
+                            "component_id": {"type": "integer", "minimum": 1},
+                            "parent_occurrence_id": {"type": ["integer", "null"], "minimum": 1},
+                            "local_pose": assembly_transform.clone(),
+                            "visible": {"type": "boolean"},
+                            "grounded": {"type": "boolean"}
+                        }),
+                        &["id"],
+                    )
+                }),
+                &["occurrence"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_set_occurrence_pose",
+            "Set occurrence pose",
+            "Set the parent-local pose of an occurrence (translation + x/y/z/w quaternion).",
+            "assembly_set_occurrence_pose",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "occurrence_id": {"type": "integer", "minimum": 1},
+                    "local_pose": assembly_transform.clone()
+                }),
+                &["occurrence_id", "local_pose"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_set_occurrence_grounded",
+            "Set occurrence grounded",
+            "Ground or unground an occurrence. Only one occurrence may be grounded within each sibling group.",
+            "assembly_set_occurrence_grounded",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "occurrence_id": {"type": "integer", "minimum": 1},
+                    "grounded": {"type": "boolean"}
+                }),
+                &["occurrence_id", "grounded"],
+            ),
+        ),
+        ToolSpec::direct(
             "solid_export_step",
             "Export STEP",
             "Export selected or all active bodies as AP242 STEP bytes encoded in base64. Prefer solid_export_3mf for slicers.",
@@ -2563,7 +2715,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({
                     "focus": {
                         "type": "string",
-                        "enum": ["document", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
+                        "enum": ["document", "assembly", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
                     },
                     "explicit": {
                         "type": "boolean",
@@ -3164,7 +3316,7 @@ mod tests {
         assert_eq!(
             all_tools.len(),
             MODELING_TOOL_COUNT + 21,
-            "109 modeling tools plus 8 print helpers and 13 control tools"
+            "117 modeling tools plus 8 print helpers and 13 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3257,9 +3409,10 @@ mod tests {
             *packs.entry(tool.pack.as_str()).or_default() += 1;
         }
         assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
-        // Modeling registry covers 8 packs; print helpers are outside MODELING_TOOL_COUNT.
+        // Modeling registry covers 9 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 5);
+        assert_eq!(packs["assembly"], 8);
         assert_eq!(packs["sketch"], 50);
         assert_eq!(packs["solid"], 10);
         assert!(packs["modify"] >= 6);
@@ -4694,5 +4847,369 @@ mod tests {
             to_face["scene"]["errors"]
         );
         assert_eq!(to_face["scene"]["bodies"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn assembly_component_occurrence_grounded_roundtrip() {
+        // Headless: new project → box → create component (absorb) → ground → inspect.
+        // No cad_attach.
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": -5.0, "y": -5.0},
+                    "p2": {"x": 5.0, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let extruded = server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": "Sketch1",
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 8.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap();
+        let body_id = extruded["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extruded body id");
+
+        let component = server
+            .call_tool(
+                "assembly_create_component",
+                json!({
+                    "name": "Block",
+                    "body_ids": [body_id],
+                    "absorb_promoted_bodies": true
+                }),
+            )
+            .expect("create component");
+        assert_eq!(component["name"], "Block");
+        let component_id = component["id"].as_u64().expect("component id");
+        assert!(
+            component["body_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|id| id.as_u64() == Some(body_id)),
+            "component should own extruded body: {component}"
+        );
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("assembly document");
+        let definitions = document["component_structure"]["definitions"]
+            .as_array()
+            .expect("definitions");
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| definition["id"].as_u64() == Some(component_id)
+                    && definition["name"] == "Block"),
+            "assembly_document missing component: {document}"
+        );
+        let occurrence = document["component_structure"]["occurrences"]
+            .as_array()
+            .expect("occurrences")
+            .iter()
+            .find(|occurrence| occurrence["component_id"].as_u64() == Some(component_id))
+            .cloned()
+            .expect("occurrence for Block");
+        let occurrence_id = occurrence["id"].as_u64().expect("occurrence id");
+
+        server
+            .call_tool(
+                "assembly_set_occurrence_pose",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "local_pose": {
+                        "translation": [10.0, 0.0, 0.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0]
+                    }
+                }),
+            )
+            .expect("set pose");
+        let grounded = server
+            .call_tool(
+                "assembly_set_occurrence_grounded",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "grounded": true
+                }),
+            )
+            .expect("set grounded");
+        let grounded_occurrence = grounded["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["id"].as_u64() == Some(occurrence_id))
+            .unwrap();
+        assert_eq!(grounded_occurrence["grounded"], true);
+        assert_eq!(
+            grounded_occurrence["local_pose"]["translation"][0].as_f64().unwrap(),
+            10.0
+        );
+
+        let inspect = server
+            .call_tool("assembly_document", json!({}))
+            .expect("re-inspect");
+        assert!(
+            inspect["component_structure"]["definitions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|definition| definition["name"] == "Block"),
+            "component missing after ground: {inspect}"
+        );
+        let solution = server
+            .call_tool("assembly_solution", json!({}))
+            .expect("assembly solution");
+        assert!(
+            solution.get("occurrence_poses").is_some() || solution.get("body_poses").is_some()
+                || solution.as_object().map(|o| !o.is_empty()).unwrap_or(false),
+            "expected a non-empty assembly solution: {solution}"
+        );
+    }
+
+    #[test]
+    fn assembly_update_component_rename_preserves_bodies_and_lcs() {
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": -5.0, "y": -5.0},
+                    "p2": {"x": 5.0, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let extruded = server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": "Sketch1",
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 6.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap();
+        let body_id = extruded["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extruded body id");
+
+        let component = server
+            .call_tool(
+                "assembly_create_component",
+                json!({
+                    "name": "Stock",
+                    "body_ids": [body_id],
+                    "local_coordinate_system": {
+                        "translation": [1.0, 2.0, 3.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0]
+                    },
+                    "absorb_promoted_bodies": true
+                }),
+            )
+            .expect("create component");
+        let component_id = component["id"].as_u64().expect("component id");
+        let body_ids_before = component["body_ids"].clone();
+        let lcs_before = component["local_coordinate_system"].clone();
+        let promoted_before = component["promoted"].clone();
+
+        let renamed = server
+            .call_tool(
+                "assembly_update_component",
+                json!({
+                    "component": {
+                        "id": component_id,
+                        "name": "StockRenamed"
+                    }
+                }),
+            )
+            .expect("rename-only component update");
+        assert_eq!(renamed["name"], "StockRenamed");
+        assert_eq!(renamed["body_ids"], body_ids_before);
+        assert_eq!(renamed["local_coordinate_system"], lcs_before);
+        assert_eq!(renamed["promoted"], promoted_before);
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("assembly document");
+        let definition = document["component_structure"]["definitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["id"].as_u64() == Some(component_id))
+            .expect("renamed definition");
+        assert_eq!(definition["name"], "StockRenamed");
+        assert_eq!(definition["body_ids"], body_ids_before);
+        assert_eq!(definition["local_coordinate_system"], lcs_before);
+        assert_eq!(definition["promoted"], promoted_before);
+    }
+
+    #[test]
+    fn assembly_update_occurrence_rename_preserves_pose_parent_flags() {
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": -5.0, "y": -5.0},
+                    "p2": {"x": 5.0, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let extruded = server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": "Sketch1",
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 4.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap();
+        let body_id = extruded["scene"]["bodies"][0]["id"]
+            .as_u64()
+            .expect("extruded body id");
+        let component = server
+            .call_tool(
+                "assembly_create_component",
+                json!({
+                    "name": "Part",
+                    "body_ids": [body_id],
+                    "absorb_promoted_bodies": true
+                }),
+            )
+            .expect("create component");
+        let component_id = component["id"].as_u64().expect("component id");
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("assembly document");
+        let occurrence_id = document["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["component_id"].as_u64() == Some(component_id))
+            .and_then(|occurrence| occurrence["id"].as_u64())
+            .expect("occurrence id");
+
+        server
+            .call_tool(
+                "assembly_set_occurrence_pose",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "local_pose": {
+                        "translation": [7.0, 8.0, 9.0],
+                        "rotation": [0.0, 0.0, 0.0, 1.0]
+                    }
+                }),
+            )
+            .expect("set pose");
+        server
+            .call_tool(
+                "assembly_set_occurrence_grounded",
+                json!({
+                    "occurrence_id": occurrence_id,
+                    "grounded": true
+                }),
+            )
+            .expect("set grounded");
+
+        let before = server
+            .call_tool("assembly_document", json!({}))
+            .expect("document before rename");
+        let occurrence_before = before["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["id"].as_u64() == Some(occurrence_id))
+            .cloned()
+            .expect("occurrence before rename");
+        let parent_before = occurrence_before["parent_occurrence_id"].clone();
+        let pose_before = occurrence_before["local_pose"].clone();
+        let visible_before = occurrence_before["visible"].clone();
+        let grounded_before = occurrence_before["grounded"].clone();
+        let component_before = occurrence_before["component_id"].clone();
+
+        let renamed = server
+            .call_tool(
+                "assembly_update_occurrence",
+                json!({
+                    "occurrence": {
+                        "id": occurrence_id,
+                        "name": "PartRenamed"
+                    }
+                }),
+            )
+            .expect("rename-only occurrence update");
+        assert_eq!(renamed["name"], "PartRenamed");
+        assert_eq!(renamed["component_id"], component_before);
+        assert_eq!(renamed["parent_occurrence_id"], parent_before);
+        assert_eq!(renamed["local_pose"], pose_before);
+        assert_eq!(renamed["visible"], visible_before);
+        assert_eq!(renamed["grounded"], grounded_before);
+
+        let after = server
+            .call_tool("assembly_document", json!({}))
+            .expect("document after rename");
+        let occurrence_after = after["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|occurrence| occurrence["id"].as_u64() == Some(occurrence_id))
+            .expect("occurrence after rename");
+        assert_eq!(occurrence_after["name"], "PartRenamed");
+        assert_eq!(occurrence_after["component_id"], component_before);
+        assert_eq!(occurrence_after["parent_occurrence_id"], parent_before);
+        assert_eq!(occurrence_after["local_pose"], pose_before);
+        assert_eq!(occurrence_after["visible"], visible_before);
+        assert_eq!(occurrence_after["grounded"], grounded_before);
     }
 }
