@@ -2197,13 +2197,17 @@ export type CamPostDialect = 'grbl' | 'linux_cnc' | 'fanuc' | 'siemens828d';
 export type CamToolKind =
   | 'flat_end_mill'
   | 'ball_end_mill'
+  | 'bull_nose_end_mill'
   | 'face_mill'
   | 'drill'
   | 'chamfer_mill'
   | 'tap'
   | 'reamer'
   | 'boring_bar'
-  | 'thread_mill';
+  | 'thread_mill'
+  /** Lathe tooling, reserved for the turning workspace; no milling
+   *  operation accepts it. */
+  | 'turning_general';
 /** Hole-machining cycle family of a drill operation. The planner expands
  *  every cycle to explicit longhand motion, so posted output never depends on
  *  a control's canned-cycle dialect. */
@@ -2339,6 +2343,10 @@ export interface CamToolDto {
   flute_count: number;
   /** Chamfer mills only; chamfer operations currently require 90 degrees. */
   point_angle_degrees: number | null;
+  /** Corner (nose) radius for flat/bull-nose/face mills; null means a sharp
+   *  corner. Drives the effective cutting diameter in the speeds & feeds
+   *  calculator (critical on high-feed tooling). */
+  corner_radius: number | null;
   /** Library cutting defaults copied into new operations at creation. */
   cutting: CamCuttingParametersDto;
   /** Additional named cutting-data profiles (e.g. per material); `cutting`

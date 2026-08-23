@@ -807,6 +807,70 @@ fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result
 
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The CAM tool library belongs to the OS user, not to any project file:
+/// it lives in the platform config directory
+/// (macOS `~/Library/Application Support/org.nbcad.desktop`,
+/// Windows `%APPDATA%\\org.nbcad.desktop`,
+/// Linux `~/.config/org.nbcad.desktop`).
+fn cam_library_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("could not resolve the per-user config directory: {error}"))?;
+    Ok(directory.join("cam-tool-library.json"))
+}
+
+/// Read the centralized CAM tool library as raw JSON; `None` when the user
+/// has no library file yet (first run).
+#[tauri::command]
+fn cam_library_load(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let path = cam_library_path(&app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(&path).map_err(|error| format!("could not read tool library: {error}"))?;
+    if metadata.len() > MAX_FILE_BYTES {
+        return Err("tool library is larger than the 256 MB safety limit".to_string());
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("could not read tool library: {error}"))?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("tool library is not valid UTF-8: {error}"))
+}
+
+/// Persist the centralized CAM tool library atomically (temp file + rename).
+#[tauri::command]
+fn cam_library_save(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    if json.len() as u64 > MAX_FILE_BYTES {
+        return Err("tool library is larger than the 256 MB safety limit".to_string());
+    }
+    let target = cam_library_path(&app)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| "tool library path has no parent directory".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create the config directory: {error}"))?;
+    let temporary = parent.join(format!(".cam-tool-library.{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("could not create temporary library file: {error}"))?;
+        file.write_all(json.as_bytes())
+            .map_err(|error| format!("could not write tool library: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("could not flush tool library: {error}"))?;
+        fs::rename(&temporary, &target)
+            .map_err(|error| format!("could not replace tool library: {error}"))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
 #[tauri::command]
 fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     let metadata = fs::metadata(&path).map_err(|error| format!("could not read file: {error}"))?;
@@ -920,6 +984,8 @@ pub fn run() {
             native_menu::native_file_menu_set_state,
             read_binary_file,
             write_binary_file_atomic,
+            cam_library_load,
+            cam_library_save,
             session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
             session_bridge::mcp_session_bridge_heartbeat,

@@ -25,7 +25,6 @@ import type {
   CamCuttingParametersDto,
   CamToolDto,
   CamToolKind,
-  CamUnits,
 } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
@@ -40,6 +39,7 @@ import {
 const KIND_LABELS: Record<CamToolKind, string> = {
   flat_end_mill: 'Flat end mill',
   ball_end_mill: 'Ball end mill',
+  bull_nose_end_mill: 'Bull nose end mill',
   face_mill: 'Face / shell mill',
   drill: 'Drill',
   chamfer_mill: 'Chamfer mill',
@@ -47,40 +47,41 @@ const KIND_LABELS: Record<CamToolKind, string> = {
   reamer: 'Reamer',
   boring_bar: 'Boring bar',
   thread_mill: 'Thread mill',
+  turning_general: 'General turning',
 };
 
-/** New-tool wizard page 1: kinds grouped the way machinists shop for them. */
-const KIND_GROUPS: Array<{ label: string; kinds: CamToolKind[] }> = [
+/** New-tool picker page: kinds grouped the way machinists shop for them.
+ *  Turning lands with its own workspace; the tile stays visible as a
+ *  promise, disabled. */
+const KIND_GROUPS: Array<{ label: string; kinds: CamToolKind[]; planned?: boolean }> = [
   {
     label: 'Milling',
-    kinds: ['flat_end_mill', 'ball_end_mill', 'face_mill', 'chamfer_mill', 'thread_mill'],
+    kinds: ['flat_end_mill', 'ball_end_mill', 'bull_nose_end_mill', 'face_mill', 'chamfer_mill', 'thread_mill'],
   },
   { label: 'Hole making', kinds: ['drill', 'tap', 'reamer', 'boring_bar'] },
+  { label: 'Turning (planned)', kinds: ['turning_general'], planned: true },
 ];
 
 /** Kinds whose shank feeds axially into a hole; the center-cutting flag does
  *  not apply to them (it only gates plunge-capable milling/drilling). */
 const HOLE_TOOL_KINDS: CamToolKind[] = ['tap', 'reamer', 'boring_bar', 'thread_mill'];
 
-/** Tool library: a full-window dialog with the tool table on the left and
- *  the editor for the selected (or new) tool on the right. The library is
- *  the only source of tools for operations; every tool carries its geometry
- *  and its cutting-data defaults, which operations copy at creation. New
- *  tools go through a short wizard: kind, then geometry, then cutting data
- *  with named profiles. */
+/** Kinds that carry a corner (nose) radius. */
+const CORNER_RADIUS_KINDS: CamToolKind[] = ['flat_end_mill', 'bull_nose_end_mill', 'face_mill'];
+
+/** Tool library: a full-window dialog with the tool table on the left and a
+ *  tabbed editor (General / Cutter / Cutting data) on the right. New tools
+ *  start on a type-picker page, matching the reference workflow; editing an
+ *  existing tool lands directly on the tabs. */
 export function CamToolDialog({ toolId }: { toolId: number | null }) {
   const cam = useAppStore((state) => state.camDocument);
   const close = () => useAppStore.getState().setCamDialog(null);
   const units = cam.units;
   const lu = lengthUnitLabel(units);
 
-  // Selection: the tool being edited, 'new' for a blank draft. Opening from
-  // an operation's "edit tool" action lands on that tool directly.
   const [editing, setEditing] = useState<number | 'new' | null>(
     toolId ?? (cam.tools.length > 0 ? null : 'new'),
   );
-  // Template for "duplicate": prefill the new-tool editor from an existing
-  // tool. The counter forces the editor to remount on every duplicate/new.
   const [template, setTemplate] = useState<CamToolDto | null>(null);
   const [draftSeq, setDraftSeq] = useState(0);
   const startNew = (source: CamToolDto | null) => {
@@ -125,6 +126,7 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                     <th className="px-2 py-1.5 font-semibold">Name</th>
                     <th className="px-2 py-1.5 font-semibold">Type</th>
                     <th className="px-2 py-1.5 font-semibold">Ø</th>
+                    <th className="px-2 py-1.5 font-semibold">Corner R</th>
                     <th className="px-2 py-1.5 font-semibold">Flute len</th>
                     <th className="px-2 py-1.5 font-semibold">Overall</th>
                     <th className="px-2 py-1.5 font-semibold">Flutes</th>
@@ -151,6 +153,9 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                           {displayLength(tool.diameter, units).toFixed(2)}
                         </td>
                         <td className="px-2 py-1.5 font-mono">
+                          {tool.corner_radius != null ? displayLength(tool.corner_radius, units).toFixed(2) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono">
                           {displayLength(tool.flute_length, units).toFixed(1)}
                         </td>
                         <td className="px-2 py-1.5 font-mono">
@@ -163,7 +168,7 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                   })}
                   {cam.tools.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
+                      <td colSpan={9} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
                         Empty library — add tools before programming operations.
                       </td>
                     </tr>
@@ -227,6 +232,12 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
   );
 }
 
+/** Which side of a linked pair the operator last edited; the other side is
+ *  derived at commit time and re-resolved from this side at submit. */
+type SpeedDriver = 'rpm' | 'vc';
+type FeedDriver = 'feed' | 'fz';
+type PlungeDriver = 'plunge' | 'fpr';
+
 /** Editable state of one cutting-data profile; drafts stay strings in the
  *  document's display units until submit. */
 interface ProfileDraft {
@@ -235,21 +246,15 @@ interface ProfileDraft {
   feedXy: string;
   feedZ: string;
   coolant: CamCoolantMode;
+  surfaceSpeed: string;
+  feedPerTooth: string;
+  plungePerRev: string;
+  speedDriver: SpeedDriver;
+  feedDriver: FeedDriver;
+  plungeDriver: PlungeDriver;
 }
 
-function profileDraftFrom(
-  name: string,
-  cutting: CamCuttingParametersDto,
-  units: CamUnits,
-): ProfileDraft {
-  return {
-    name,
-    rpm: String(cutting.spindle_rpm),
-    feedXy: String(displayFeed(cutting.feed_xy, units)),
-    feedZ: String(displayFeed(cutting.feed_z, units)),
-    coolant: cutting.coolant,
-  };
-}
+type EditorTab = 'general' | 'cutter' | 'cutting';
 
 function ToolEditor({
   existing,
@@ -264,12 +269,10 @@ function ToolEditor({
   const units = cam.units;
   const lu = lengthUnitLabel(units);
   const fu = feedUnitLabel(units);
-  // New-tool drafts can be prefilled from a duplicate template.
   const source = existing ?? template;
-  // New tools are a three-page wizard (type → geometry → cutting data);
-  // editing an existing tool shows one scrolling page.
-  const wizard = existing === null;
-  const [step, setStep] = useState(0);
+  // Brand-new tools (no duplicate template) start on the type picker.
+  const [picking, setPicking] = useState(existing === null && template === null);
+  const [tab, setTab] = useState<EditorTab>('general');
 
   const [kind, setKind] = useState<CamToolKind>(source?.kind ?? 'flat_end_mill');
   const [name, setName] = useState(existing?.name ?? (template ? `${template.name} copy` : ''));
@@ -281,6 +284,9 @@ function ToolEditor({
     existing ? (existing.number != null ? String(existing.number) : '') : String(suggestedNumber),
   );
   const [diameter, setDiameter] = useState(source ? String(displayLength(source.diameter, units)) : '');
+  const [cornerRadius, setCornerRadius] = useState(
+    source?.corner_radius != null ? String(displayLength(source.corner_radius, units)) : '',
+  );
   const [fluteLength, setFluteLength] = useState(
     source ? String(displayLength(source.flute_length, units)) : '',
   );
@@ -292,64 +298,223 @@ function ToolEditor({
   const [pointAngle, setPointAngle] = useState(
     source?.point_angle_degrees != null ? String(source.point_angle_degrees) : '90',
   );
-  // Cutting-data profiles: index 0 is the default preset, the rest are named
-  // extra profiles the operator can pick when programming an operation.
+  const [error, setError] = useState<string | null>(null);
+
+  // --- Geometry parsing shared by the calculator and submit ---------------
+  const parsePositive = (value: string): number | null => {
+    const parsed = Number(value);
+    return value.trim() && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+  const diameterMm = parsePositive(diameter) !== null ? commitLength(Number(diameter), units) : null;
+  const cornerRadiusMm = parsePositive(cornerRadius) !== null ? commitLength(Number(cornerRadius), units) : null;
+  const flutes = parsePositive(fluteCount);
+
+  // --- Cutting-data profiles ------------------------------------------------
+  // Axial depth of cut for the effective-diameter engagement, mm/inch display.
+  // Declared before `profiles` because the profile initializer derives the
+  // linked chip-load fields through the effective diameter.
+  const [chipAp, setChipAp] = useState('');
   const [profiles, setProfiles] = useState<ProfileDraft[]>(() => {
-    const defaults: CamCuttingParametersDto = {
-      spindle_rpm: 0,
-      feed_xy: 0,
-      feed_z: 0,
-      coolant: 'off',
-    };
+    const fromCutting = (profileName: string, cutting: CamCuttingParametersDto): ProfileDraft => ({
+      name: profileName,
+      rpm: String(cutting.spindle_rpm),
+      feedXy: String(displayFeed(cutting.feed_xy, units)),
+      feedZ: String(displayFeed(cutting.feed_z, units)),
+      coolant: cutting.coolant,
+      surfaceSpeed: '',
+      feedPerTooth: '',
+      plungePerRev: '',
+      speedDriver: 'rpm',
+      feedDriver: 'feed',
+      plungeDriver: 'plunge',
+    });
     const first = source
-      ? profileDraftFrom('Default preset', source.cutting, units)
-      : { name: 'Default preset', rpm: '', feedXy: '', feedZ: '', coolant: defaults.coolant };
-    const extra = (source?.cutting_presets ?? []).map((preset) =>
-      profileDraftFrom(preset.name, preset.cutting, units),
-    );
-    return [first, ...extra];
+      ? fromCutting('Default preset', source.cutting)
+      : fromCutting('Default preset', { spindle_rpm: 0, feed_xy: 0, feed_z: 0, coolant: 'off' });
+    if (!source) {
+      first.rpm = '';
+      first.feedXy = '';
+      first.feedZ = '';
+    }
+    return [
+      first,
+      ...(source?.cutting_presets ?? []).map((preset) => fromCutting(preset.name, preset.cutting)),
+    ].map((profile) => ({
+      ...profile,
+      surfaceSpeed: deriveSurfaceSpeed(profile.rpm) ?? '',
+      feedPerTooth: deriveFeedPerTooth(profile.feedXy, profile.rpm) ?? '',
+      plungePerRev: derivePlungePerRev(profile.feedZ, profile.rpm) ?? '',
+    }));
   });
   const [activeProfile, setActiveProfile] = useState(0);
-  const [error, setError] = useState<string | null>(null);
 
   const patchProfile = (index: number, patch: Partial<ProfileDraft>) =>
     setProfiles((current) =>
       current.map((profile, i) => (i === index ? { ...profile, ...patch } : profile)),
     );
 
-  // Derived linked values, recomputed live like a chip-load calculator.
-  const diameterMm = diameter.trim() ? commitLength(Number(diameter), units) : NaN;
-  const rpmNum = Number(profiles[activeProfile]?.rpm);
-  const flutesNum = Number(fluteCount);
-  const feedXyMm = profiles[activeProfile]?.feedXy.trim()
-    ? commitFeed(Number(profiles[activeProfile].feedXy), units)
-    : NaN;
-  const feedZMm = profiles[activeProfile]?.feedZ.trim()
-    ? commitFeed(Number(profiles[activeProfile].feedZ), units)
-    : NaN;
-  const valid = (value: number) => Number.isFinite(value) && value > 0;
-  const surfaceSpeed =
-    valid(rpmNum) && valid(diameterMm)
-      ? displayCuttingSpeed(cuttingSpeedFromRpm(rpmNum, diameterMm), units)
-      : null;
-  const feedPerTooth =
-    valid(feedXyMm) && valid(rpmNum) && valid(flutesNum)
-      ? displayLength(feedXyMm / (rpmNum * flutesNum), units)
-      : null;
-  const plungePerRev =
-    valid(feedZMm) && valid(rpmNum) ? displayLength(feedZMm / rpmNum, units) : null;
+  /** Effective cutting diameter (mm) at the calculator's depth of cut. For a
+   *  corner-radius tool engaged shallower than its radius, contact happens
+   *  on the radius, not the full diameter:
+   *  De = D - 2R + 2·sqrt(2·R·ap - ap^2)  (ap <= R; beyond that De = D). */
+  function effectiveDiameterMm(apOverride?: number | null): number | null {
+    if (diameterMm === null) return null;
+    const apMm =
+      apOverride !== undefined
+        ? apOverride
+        : parsePositive(chipAp) !== null
+          ? commitLength(Number(chipAp), units)
+          : null;
+    if (cornerRadiusMm === null || apMm === null || apMm >= cornerRadiusMm) return diameterMm;
+    if (apMm <= 0) return null;
+    const engaged =
+      diameterMm - 2 * cornerRadiusMm + 2 * Math.sqrt(2 * cornerRadiusMm * apMm - apMm * apMm);
+    return Math.min(diameterMm, engaged);
+  }
 
-  const cuttingOf = (profile: ProfileDraft): CamCuttingParametersDto => ({
-    spindle_rpm: Math.round(parseDraft(profile.rpm, `${profile.name || 'Default preset'} spindle speed`)),
-    feed_xy: commitFeed(parseDraft(profile.feedXy, `${profile.name || 'Default preset'} cutting feed`), units),
-    feed_z: commitFeed(parseDraft(profile.feedZ, `${profile.name || 'Default preset'} plunge feed`), units),
-    coolant: profile.coolant,
-  });
+  function deriveSurfaceSpeed(rpm: string): string | null {
+    const rpmValue = parsePositive(rpm);
+    const de = effectiveDiameterMm();
+    if (rpmValue === null || de === null) return null;
+    return displayCuttingSpeed(cuttingSpeedFromRpm(rpmValue, de), units).toFixed(2);
+  }
 
-  /** Parse the geometry/identity pages so Next cannot advance on bad input. */
+  function deriveRpm(surfaceSpeed: string): string | null {
+    const vc = parsePositive(surfaceSpeed);
+    const de = effectiveDiameterMm();
+    if (vc === null || de === null) return null;
+    const rpm = rpmFromCuttingSpeed(commitCuttingSpeed(vc, units), de);
+    return rpm > 0 ? String(rpm) : null;
+  }
+
+  function deriveFeedPerTooth(feedXy: string, rpm: string): string | null {
+    const feed = parsePositive(feedXy);
+    const rpmValue = parsePositive(rpm);
+    if (feed === null || rpmValue === null || flutes === null) return null;
+    const feedMm = commitFeed(feed, units);
+    return displayLength(feedMm / (rpmValue * flutes), units).toFixed(4);
+  }
+
+  function deriveFeed(feedPerTooth: string, rpm: string): string | null {
+    const fz = parsePositive(feedPerTooth);
+    const rpmValue = parsePositive(rpm);
+    if (fz === null || rpmValue === null || flutes === null) return null;
+    const feedMm = commitLength(fz, units) * rpmValue * flutes;
+    return displayFeed(feedMm, units).toFixed(2);
+  }
+
+  function derivePlungePerRev(feedZ: string, rpm: string): string | null {
+    const plunge = parsePositive(feedZ);
+    const rpmValue = parsePositive(rpm);
+    if (plunge === null || rpmValue === null) return null;
+    return displayLength(commitFeed(plunge, units) / rpmValue, units).toFixed(4);
+  }
+
+  function derivePlunge(plungePerRev: string, rpm: string): string | null {
+    const fpr = parsePositive(plungePerRev);
+    const rpmValue = parsePositive(rpm);
+    if (fpr === null || rpmValue === null) return null;
+    return displayFeed(commitLength(fpr, units) * rpmValue, units).toFixed(2);
+  }
+
+  /** rpm changed (either side of the speed pair): refresh every field that
+   *  is currently driven by its chip-load side. */
+  function cascadeFromRpm(profile: ProfileDraft): Partial<ProfileDraft> {
+    const patch: Partial<ProfileDraft> = {};
+    if (profile.feedDriver === 'fz') {
+      const feed = deriveFeed(profile.feedPerTooth, profile.rpm);
+      if (feed !== null) patch.feedXy = feed;
+    }
+    if (profile.plungeDriver === 'fpr') {
+      const plunge = derivePlunge(profile.plungePerRev, profile.rpm);
+      if (plunge !== null) patch.feedZ = plunge;
+    }
+    return patch;
+  }
+
+  const commitRpm = (value: string) => {
+    const next = { ...profiles[activeProfile], rpm: value, speedDriver: 'rpm' as const };
+    const vc = deriveSurfaceSpeed(value);
+    if (vc !== null) next.surfaceSpeed = vc;
+    patchProfile(activeProfile, { rpm: value, speedDriver: 'rpm', surfaceSpeed: next.surfaceSpeed, ...cascadeFromRpm(next) });
+  };
+  const commitSurfaceSpeed = (value: string) => {
+    const rpm = deriveRpm(value);
+    const next = { ...profiles[activeProfile], surfaceSpeed: value, speedDriver: 'vc' as const };
+    if (rpm !== null) next.rpm = rpm;
+    patchProfile(activeProfile, { surfaceSpeed: value, speedDriver: 'vc', ...(rpm !== null ? { rpm } : {}), ...cascadeFromRpm(next) });
+  };
+  const commitFeedXy = (value: string) => {
+    const fz = deriveFeedPerTooth(value, profiles[activeProfile].rpm);
+    patchProfile(activeProfile, { feedXy: value, feedDriver: 'feed', ...(fz !== null ? { feedPerTooth: fz } : {}) });
+  };
+  const commitFeedPerTooth = (value: string) => {
+    const feed = deriveFeed(value, profiles[activeProfile].rpm);
+    patchProfile(activeProfile, { feedPerTooth: value, feedDriver: 'fz', ...(feed !== null ? { feedXy: feed } : {}) });
+  };
+  const commitFeedZ = (value: string) => {
+    const fpr = derivePlungePerRev(value, profiles[activeProfile].rpm);
+    patchProfile(activeProfile, { feedZ: value, plungeDriver: 'plunge', ...(fpr !== null ? { plungePerRev: fpr } : {}) });
+  };
+  const commitPlungePerRev = (value: string) => {
+    const plunge = derivePlunge(value, profiles[activeProfile].rpm);
+    patchProfile(activeProfile, { plungePerRev: value, plungeDriver: 'fpr', ...(plunge !== null ? { feedZ: plunge } : {}) });
+  };
+
+  /** Geometry commits that move the effective diameter or the flute count:
+   *  re-derive whichever side of each linked pair is not the driver. */
+  const refreshAfterGeometry = () => {
+    const profile = profiles[activeProfile];
+    const patch: Partial<ProfileDraft> = {};
+    if (profile.speedDriver === 'rpm') {
+      const vc = deriveSurfaceSpeed(profile.rpm);
+      if (vc !== null) patch.surfaceSpeed = vc;
+    } else {
+      const rpm = deriveRpm(profile.surfaceSpeed);
+      if (rpm !== null) patch.rpm = rpm;
+    }
+    if (profile.feedDriver === 'fz') {
+      const feed = deriveFeed(profile.feedPerTooth, profile.rpm);
+      if (feed !== null) patch.feedXy = feed;
+    }
+    patchProfile(activeProfile, patch);
+  };
+
+  const resolveRpm = (profile: ProfileDraft): number => {
+    if (profile.speedDriver === 'vc' && profile.surfaceSpeed.trim()) {
+      const de = effectiveDiameterMm();
+      if (de === null) throw new Error('Diameter is required to resolve surface speed.');
+      return rpmFromCuttingSpeed(
+        commitCuttingSpeed(parseDraft(profile.surfaceSpeed, 'Surface speed'), units),
+        de,
+      );
+    }
+    return Math.round(parseDraft(profile.rpm, `${profile.name || 'Default preset'} spindle speed`));
+  };
+
+  const cuttingOf = (profile: ProfileDraft): CamCuttingParametersDto => {
+    const rpm = resolveRpm(profile);
+    const feedMm =
+      profile.feedDriver === 'fz' && profile.feedPerTooth.trim()
+        ? commitLength(parseDraft(profile.feedPerTooth, 'Feed per tooth'), units) * rpm * (flutes ?? 1)
+        : commitFeed(parseDraft(profile.feedXy, `${profile.name || 'Default preset'} cutting feed`), units);
+    const plungeMm =
+      profile.plungeDriver === 'fpr' && profile.plungePerRev.trim()
+        ? commitLength(parseDraft(profile.plungePerRev, 'Plunge per rev'), units) * rpm
+        : commitFeed(parseDraft(profile.feedZ, `${profile.name || 'Default preset'} plunge feed`), units);
+    return { spindle_rpm: rpm, feed_xy: feedMm, feed_z: plungeMm, coolant: profile.coolant };
+  };
+
+  /** Parse the identity/geometry tabs so a bad field blocks submit early. */
   const checkGeometry = () => {
     if (number.trim()) parseDraft(number, 'Tool number');
     parseDraft(diameter, 'Diameter');
+    if (CORNER_RADIUS_KINDS.includes(kind)) {
+      if (kind === 'bull_nose_end_mill' && !cornerRadius.trim()) {
+        throw new Error('A bull nose end mill is defined by its corner radius.');
+      }
+      if (cornerRadius.trim()) parseDraft(cornerRadius, 'Corner radius');
+    }
     parseDraft(fluteLength, 'Flute length');
     parseDraft(overallLength, 'Overall length');
     parseDraft(fluteCount, 'Flute count');
@@ -361,8 +526,6 @@ function ToolEditor({
     setError(null);
     try {
       checkGeometry();
-      // The number is optional: empty means the tool is callable by name only
-      // (number-based posts fail closed with a clear error for such tools).
       const toolNumber = number.trim()
         ? Math.round(parseDraft(number, 'Tool number'))
         : null;
@@ -381,6 +544,10 @@ function ToolEditor({
         name: name.trim() || `${KIND_LABELS[kind]}${toolNumber !== null ? ` T${toolNumber}` : ''}`,
         kind,
         diameter: commitLength(parseDraft(diameter, 'Diameter'), units),
+        corner_radius:
+          CORNER_RADIUS_KINDS.includes(kind) && cornerRadius.trim()
+            ? commitLength(parseDraft(cornerRadius, 'Corner radius'), units)
+            : null,
         flute_length: commitLength(parseDraft(fluteLength, 'Flute length'), units),
         overall_length: commitLength(parseDraft(overallLength, 'Overall length'), units),
         center_cutting: HOLE_TOOL_KINDS.includes(kind) ? false : centerCutting,
@@ -403,358 +570,332 @@ function ToolEditor({
     }
   };
 
-  const typePicker = (
-    <DialogSection title="TOOL TYPE">
-      {KIND_GROUPS.map((group) => (
-        <div key={group.label} className="mb-3">
-          <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-widest text-mute/60">
-            {group.label}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {group.kinds.map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                onClick={() => {
-                  setKind(candidate);
-                  if (HOLE_TOOL_KINDS.includes(candidate)) setCenterCutting(false);
-                  setStep(1);
-                }}
-                className={`h-8 rounded border text-[10px] font-semibold ${
-                  kind === candidate
-                    ? 'border-accent/50 bg-accent/15 text-accent'
-                    : 'border-edge bg-header/50 text-mute hover:border-accent/40 hover:text-ink'
-                }`}
-              >
-                {KIND_LABELS[candidate]}
-              </button>
-            ))}
-          </div>
+  if (picking) {
+    return (
+      <div className="flex min-h-full flex-col">
+        <div className="flex h-9 shrink-0 items-center border-b border-edge px-3 text-[11px] font-semibold text-ink">
+          New library tool · pick a type
         </div>
-      ))}
-      <p className="text-[9px] leading-relaxed text-mute">
-        The kind decides which operations can pick this tool. Its geometry and
-        cutting data come next.
-      </p>
-    </DialogSection>
-  );
-
-  const identityAndGeometry = (
-    <>
-      <DialogSection title="TOOL">
-        {wizard && (
-          <div className="mb-2 flex items-center gap-2 text-[10px] text-mute">
-            <span className="rounded border border-accent/40 bg-accent/10 px-2 py-0.5 font-semibold text-accent">
-              {KIND_LABELS[kind]}
-            </span>
-            <button
-              type="button"
-              onClick={() => setStep(0)}
-              className="text-mute underline decoration-dotted hover:text-ink"
-            >
-              Change type
-            </button>
-          </div>
-        )}
-        <div className="grid grid-cols-2 gap-2">
-          {!wizard && (
-            <label className="block">
-              <span className={CAM_DIALOG_LABEL}>Kind</span>
-              <select
-                value={kind}
-                onChange={(event) => setKind(event.target.value as CamToolKind)}
-                className={CAM_DIALOG_INPUT}
-              >
-                {(Object.keys(KIND_LABELS) as CamToolKind[]).map((candidate) => (
-                  <option key={candidate} value={candidate}>
+        <div className="min-h-0 flex-1 space-y-3 p-3">
+          {KIND_GROUPS.map((group) => (
+            <div key={group.label}>
+              <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-widest text-mute/60">
+                {group.label}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {group.kinds.map((candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    disabled={group.planned}
+                    title={group.planned ? 'Turning support lands with its own workspace' : undefined}
+                    onClick={() => {
+                      setKind(candidate);
+                      if (HOLE_TOOL_KINDS.includes(candidate)) setCenterCutting(false);
+                      setPicking(false);
+                    }}
+                    className={`h-8 rounded border text-[10px] font-semibold ${
+                      group.planned
+                        ? 'cursor-not-allowed border-edge/50 bg-header/30 text-mute/40'
+                        : 'border-edge bg-header/50 text-mute hover:border-accent/40 hover:text-ink'
+                    }`}
+                  >
                     {KIND_LABELS[candidate]}
-                  </option>
+                  </button>
                 ))}
-              </select>
-            </label>
-          )}
-          <DraftNumber label="Tool number (optional)" value={number} onChange={setNumber} integer />
+              </div>
+            </div>
+          ))}
+          <p className="text-[9px] leading-relaxed text-mute">
+            The kind decides which operations can pick this tool. Everything
+            else — geometry, cutting data — is edited on the tabs, in any
+            order, now or later.
+          </p>
         </div>
-        <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Name</span>
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder={KIND_LABELS[kind]}
-            className={CAM_DIALOG_INPUT}
-          />
-        </label>
-        <p className="text-[9px] leading-relaxed text-mute">
-          Fanuc/GRBL/LinuxCNC-style posts call tools numerically and refuse a
-          tool without a number; the Siemens 828D post prefers calling by
-          name (T=&quot;NAME&quot;). Operations always reference the tool by
-          its internal id, so renumbering or renaming never breaks them.
-        </p>
-      </DialogSection>
-
-      <DialogSection title={`GEOMETRY (${lu})`}>
-        <div className="grid grid-cols-2 gap-2">
-          <DraftNumber label="Diameter" value={diameter} onChange={setDiameter} unit={lu} />
-          <DraftNumber label="Flute count" value={fluteCount} onChange={setFluteCount} integer />
-          <DraftNumber label="Flute length" value={fluteLength} onChange={setFluteLength} unit={lu} />
-          <DraftNumber label="Overall length" value={overallLength} onChange={setOverallLength} unit={lu} />
-          {kind === 'chamfer_mill' && (
-            <DraftNumber label="Point angle" value={pointAngle} onChange={setPointAngle} unit="deg" />
-          )}
-        </div>
-        {!HOLE_TOOL_KINDS.includes(kind) && kind !== 'drill' && (
-          <label className="mt-1 flex items-center gap-2 text-[11px] text-ink">
-            <input
-              type="checkbox"
-              checked={centerCutting}
-              onChange={(event) => setCenterCutting(event.target.checked)}
-            />
-            Center-cutting (plunge capable)
-          </label>
-        )}
-      </DialogSection>
-    </>
-  );
+      </div>
+    );
+  }
 
   const profile = profiles[activeProfile];
-  const cuttingData = (
-    <DialogSection title={`CUTTING DATA (${fu})`}>
-      <div className="flex flex-wrap items-center gap-1">
-        {profiles.map((candidate, index) => (
-          <button
-            key={index}
-            type="button"
-            onClick={() => setActiveProfile(index)}
-            className={`h-6 rounded border px-2 text-[9px] font-semibold ${
-              index === activeProfile
-                ? 'border-accent/50 bg-accent/15 text-accent'
-                : 'border-edge bg-header/50 text-mute hover:text-ink'
-            }`}
-          >
-            {index === 0 ? 'Default preset' : candidate.name || '(unnamed)'}
-          </button>
-        ))}
-        <button
-          type="button"
-          title="Add a cutting-data profile"
-          onClick={() =>
-            setProfiles((current) => [
-              ...current,
-              { ...current[0], name: `Profile ${current.length}` },
-            ])
-          }
-          className="flex h-6 items-center rounded border border-edge px-1.5 text-mute hover:text-ink"
-        >
-          <Plus size={11} />
-        </button>
-        {activeProfile > 0 && (
-          <button
-            type="button"
-            title="Delete this profile"
-            onClick={() => {
-              setProfiles((current) => current.filter((_, index) => index !== activeProfile));
-              setActiveProfile(0);
-            }}
-            className="flex h-6 items-center rounded border border-edge px-1.5 text-mute hover:text-warn"
-          >
-            <Trash2 size={11} />
-          </button>
-        )}
-      </div>
-      {activeProfile > 0 && (
-        <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Profile name</span>
-          <input
-            value={profile.name}
-            onChange={(event) => patchProfile(activeProfile, { name: event.target.value })}
-            placeholder="e.g. Aluminum 6061"
-            className={CAM_DIALOG_INPUT}
-          />
-        </label>
-      )}
-      <div className="grid grid-cols-2 gap-2">
-        <DraftNumber
-          label="Spindle"
-          value={profile.rpm}
-          onChange={(value) => patchProfile(activeProfile, { rpm: value })}
-          unit="rpm"
-          integer
-        />
-        <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Coolant</span>
-          <select
-            value={profile.coolant}
-            onChange={(event) =>
-              patchProfile(activeProfile, { coolant: event.target.value as CamCoolantMode })
-            }
-            className={CAM_DIALOG_INPUT}
-          >
-            <option value="off">Off</option>
-            <option value="mist">Mist</option>
-            <option value="flood">Flood</option>
-          </select>
-        </label>
-        <DraftNumber
-          label="Cutting feed"
-          value={profile.feedXy}
-          onChange={(value) => patchProfile(activeProfile, { feedXy: value })}
-          unit={fu}
-        />
-        <DraftNumber
-          label="Plunge feed"
-          value={profile.feedZ}
-          onChange={(value) => patchProfile(activeProfile, { feedZ: value })}
-          unit={fu}
-        />
-      </div>
-      <div className="rounded border border-edge/70 bg-header/40 p-2">
-        <div className="mb-1.5 text-[8px] font-semibold uppercase tracking-widest text-mute/60">
-          Chip-load calculator · edits update the fields above
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <LinkedNumber
-            label="Surface speed"
-            unit={cuttingSpeedUnitLabel(units)}
-            computed={surfaceSpeed}
-            onApply={(value) => {
-              const rpm = rpmFromCuttingSpeed(commitCuttingSpeed(value, units), diameterMm);
-              if (rpm > 0) patchProfile(activeProfile, { rpm: String(rpm) });
-            }}
-          />
-          <LinkedNumber
-            label="Feed per tooth"
-            unit={`${chipLoadUnitLabel(units)}/tooth`}
-            computed={feedPerTooth}
-            onApply={(value) => {
-              const feedMm = commitLength(value, units) * rpmNum * flutesNum;
-              patchProfile(activeProfile, { feedXy: displayFeed(feedMm, units).toFixed(4) });
-            }}
-          />
-          <LinkedNumber
-            label="Plunge per rev"
-            unit={`${chipLoadUnitLabel(units)}/rev`}
-            computed={plungePerRev}
-            onApply={(value) => {
-              const feedMm = commitLength(value, units) * rpmNum;
-              patchProfile(activeProfile, { feedZ: displayFeed(feedMm, units).toFixed(4) });
-            }}
-          />
-        </div>
-      </div>
-      <p className="text-[9px] leading-relaxed text-mute">
-        The picked profile is copied into operations that choose this tool.
-        Editing the library later never rewrites existing operations.
-      </p>
-    </DialogSection>
-  );
+  const effectiveDiameter = effectiveDiameterMm();
 
   return (
     <form onSubmit={submit} className="flex min-h-full flex-col">
       <div className="flex h-9 shrink-0 items-center border-b border-edge px-3 text-[11px] font-semibold text-ink">
         {existing
           ? `Edit ${existing.number != null ? `T${existing.number} ` : ''}${existing.name}`
-          : step === 0
-            ? 'New library tool · 1/3 type'
-            : step === 1
-              ? 'New library tool · 2/3 geometry'
-              : 'New library tool · 3/3 cutting data'}
+          : 'New library tool'}
+      </div>
+      <div className="flex shrink-0 items-center gap-1 border-b border-edge px-2 py-1">
+        {(
+          [
+            ['general', 'General'],
+            ['cutter', 'Cutter'],
+            ['cutting', 'Cutting data'],
+          ] as [EditorTab, string][]
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTab(value)}
+            className={`h-6 rounded px-2.5 text-[10px] font-semibold ${
+              tab === value ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div className="min-h-0 flex-1 space-y-4 p-3">
         {error && (
           <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">{error}</p>
         )}
-        {wizard && step === 0 && typePicker}
-        {(!wizard || step === 1) && identityAndGeometry}
-        {(!wizard || step === 2) && cuttingData}
+
+        {tab === 'general' && (
+          <>
+            <DialogSection title="TOOL">
+              {!existing && (
+                <div className="mb-2 flex items-center gap-2 text-[10px] text-mute">
+                  <span className="rounded border border-accent/40 bg-accent/10 px-2 py-0.5 font-semibold text-accent">
+                    {KIND_LABELS[kind]}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPicking(true)}
+                    className="text-mute underline decoration-dotted hover:text-ink"
+                  >
+                    Change type
+                  </button>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                {existing && (
+                  <label className="block">
+                    <span className={CAM_DIALOG_LABEL}>Kind</span>
+                    <select
+                      value={kind}
+                      onChange={(event) => setKind(event.target.value as CamToolKind)}
+                      className={CAM_DIALOG_INPUT}
+                    >
+                      {(Object.keys(KIND_LABELS) as CamToolKind[])
+                        .filter((candidate) => candidate !== 'turning_general')
+                        .map((candidate) => (
+                          <option key={candidate} value={candidate}>
+                            {KIND_LABELS[candidate]}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                )}
+                <DraftNumber label="Tool number (optional)" value={number} onChange={setNumber} integer />
+              </div>
+              <label className="block">
+                <span className={CAM_DIALOG_LABEL}>Name</span>
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder={KIND_LABELS[kind]}
+                  className={CAM_DIALOG_INPUT}
+                />
+              </label>
+              <p className="text-[9px] leading-relaxed text-mute">
+                Fanuc/GRBL/LinuxCNC-style posts call tools numerically and refuse a
+                tool without a number; the Siemens 828D post prefers calling by
+                name (T=&quot;NAME&quot;). Operations always reference the tool by
+                its internal id, so renumbering or renaming never breaks them.
+              </p>
+            </DialogSection>
+          </>
+        )}
+
+        {tab === 'cutter' && (
+          <DialogSection title={`GEOMETRY (${lu})`}>
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber label="Diameter" value={diameter} onChange={(value) => { setDiameter(value); }} unit={lu} />
+              {CORNER_RADIUS_KINDS.includes(kind) && (
+                <DraftNumber
+                  label={kind === 'bull_nose_end_mill' ? 'Corner radius (required)' : 'Corner radius (0 = sharp)'}
+                  value={cornerRadius}
+                  onChange={(value) => { setCornerRadius(value); }}
+                  unit={lu}
+                />
+              )}
+              <DraftNumber label="Flute count" value={fluteCount} onChange={setFluteCount} integer />
+              <DraftNumber label="Flute length" value={fluteLength} onChange={setFluteLength} unit={lu} />
+              <DraftNumber label="Overall length" value={overallLength} onChange={setOverallLength} unit={lu} />
+              {kind === 'chamfer_mill' && (
+                <DraftNumber label="Point angle" value={pointAngle} onChange={setPointAngle} unit="deg" />
+              )}
+            </div>
+            {(cornerRadiusMm !== null || CORNER_RADIUS_KINDS.includes(kind)) && (
+              <button
+                type="button"
+                onClick={refreshAfterGeometry}
+                className="mt-1 text-[9px] text-mute underline decoration-dotted hover:text-ink"
+              >
+                Refresh the cutting-data links after geometry edits
+              </button>
+            )}
+            {!HOLE_TOOL_KINDS.includes(kind) && kind !== 'drill' && (
+              <label className="mt-1 flex items-center gap-2 text-[11px] text-ink">
+                <input
+                  type="checkbox"
+                  checked={centerCutting}
+                  onChange={(event) => setCenterCutting(event.target.checked)}
+                />
+                Center-cutting (plunge capable)
+              </label>
+            )}
+          </DialogSection>
+        )}
+
+        {tab === 'cutting' && (
+          <DialogSection title={`CUTTING DATA (${fu})`}>
+            <div className="flex flex-wrap items-center gap-1">
+              {profiles.map((candidate, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => setActiveProfile(index)}
+                  className={`h-6 rounded border px-2 text-[9px] font-semibold ${
+                    index === activeProfile
+                      ? 'border-accent/50 bg-accent/15 text-accent'
+                      : 'border-edge bg-header/50 text-mute hover:text-ink'
+                  }`}
+                >
+                  {index === 0 ? 'Default preset' : candidate.name || '(unnamed)'}
+                </button>
+              ))}
+              <button
+                type="button"
+                title="Add a cutting-data profile"
+                onClick={() =>
+                  setProfiles((current) => [
+                    ...current,
+                    { ...current[0], name: `Profile ${current.length}` },
+                  ])
+                }
+                className="flex h-6 items-center rounded border border-edge px-1.5 text-mute hover:text-ink"
+              >
+                <Plus size={11} />
+              </button>
+              {activeProfile > 0 && (
+                <button
+                  type="button"
+                  title="Delete this profile"
+                  onClick={() => {
+                    setProfiles((current) => current.filter((_, index) => index !== activeProfile));
+                    setActiveProfile(0);
+                  }}
+                  className="flex h-6 items-center rounded border border-edge px-1.5 text-mute hover:text-warn"
+                >
+                  <Trash2 size={11} />
+                </button>
+              )}
+            </div>
+            {activeProfile > 0 && (
+              <label className="block">
+                <span className={CAM_DIALOG_LABEL}>Profile name</span>
+                <input
+                  value={profile.name}
+                  onChange={(event) => patchProfile(activeProfile, { name: event.target.value })}
+                  placeholder="e.g. Aluminum 6061"
+                  className={CAM_DIALOG_INPUT}
+                />
+              </label>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber
+                label="Spindle"
+                value={profile.rpm}
+                onChange={commitRpm}
+                unit="rpm"
+                integer
+              />
+              <DraftNumber
+                label={`Surface speed · ƒx${profile.speedDriver === 'vc' ? ' (drives)' : ''}`}
+                value={profile.surfaceSpeed}
+                onChange={commitSurfaceSpeed}
+                unit={cuttingSpeedUnitLabel(units)}
+              />
+              <DraftNumber
+                label="Cutting feed"
+                value={profile.feedXy}
+                onChange={commitFeedXy}
+                unit={fu}
+              />
+              <DraftNumber
+                label={`Feed per tooth · ƒx${profile.feedDriver === 'fz' ? ' (drives)' : ''}`}
+                value={profile.feedPerTooth}
+                onChange={commitFeedPerTooth}
+                unit={`${chipLoadUnitLabel(units)}/tooth`}
+              />
+              <DraftNumber
+                label="Plunge feed"
+                value={profile.feedZ}
+                onChange={commitFeedZ}
+                unit={fu}
+              />
+              <DraftNumber
+                label={`Plunge per rev · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`}
+                value={profile.plungePerRev}
+                onChange={commitPlungePerRev}
+                unit={`${chipLoadUnitLabel(units)}/rev`}
+              />
+              <label className="block">
+                <span className={CAM_DIALOG_LABEL}>Coolant</span>
+                <select
+                  value={profile.coolant}
+                  onChange={(event) =>
+                    patchProfile(activeProfile, { coolant: event.target.value as CamCoolantMode })
+                  }
+                  className={CAM_DIALOG_INPUT}
+                >
+                  <option value="off">Off</option>
+                  <option value="mist">Mist</option>
+                  <option value="flood">Flood</option>
+                </select>
+              </label>
+            </div>
+            <div className="rounded border border-edge/70 bg-header/40 p-2 text-[9px] leading-relaxed text-mute">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-semibold uppercase tracking-widest text-mute/60">
+                  Effective Ø
+                </span>
+                <span className="font-mono text-ink">
+                  {effectiveDiameter !== null ? `${displayLength(effectiveDiameter, units).toFixed(3)} ${lu}` : '—'}
+                </span>
+              </div>
+              {cornerRadiusMm !== null && (
+                <div className="mb-1">
+                  <DraftNumber
+                    label="At depth of cut ap"
+                    value={chipAp}
+                    onChange={(value) => { setChipAp(value); }}
+                    unit={lu}
+                    placeholder={String(displayLength(cornerRadiusMm, units).toFixed(3))}
+                  />
+                </div>
+              )}
+              {cornerRadiusMm !== null
+                ? 'Engaged shallower than the corner radius, the contact point rides the radius: De = D − 2R + 2√(2R·ap − ap²). This is what moves surface speed vs rpm on high-feed tooling. Leave ap empty for full-radius engagement (De = D).'
+                : 'Each ƒx pair is two-way: edit either side and the other follows; the side you touched last wins at save time.'}
+            </div>
+            <p className="text-[9px] leading-relaxed text-mute">
+              The picked profile is copied into operations that choose this tool.
+              Editing the library later never rewrites existing operations.
+            </p>
+          </DialogSection>
+        )}
       </div>
       <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
-        {wizard && step > 0 && (
-          <button
-            type="button"
-            onClick={() => setStep((current) => current - 1)}
-            className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink"
-          >
-            Back
-          </button>
-        )}
-        {wizard && step === 1 && (
-          <button
-            type="button"
-            onClick={() => {
-              try {
-                checkGeometry();
-                setError(null);
-                setStep(2);
-              } catch (cause) {
-                setError(cause instanceof Error ? cause.message : String(cause));
-              }
-            }}
-            className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
-          >
-            Next: cutting data
-          </button>
-        )}
-        {(!wizard || step === 2) && (
-          <button
-            type="submit"
-            className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
-          >
-            {existing ? 'Save tool' : 'Add to library'}
-          </button>
-        )}
+        <button
+          type="submit"
+          className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
+        >
+          {existing ? 'Save tool' : 'Add to library'}
+        </button>
       </footer>
     </form>
-  );
-}
-
-/** A cutting-data field linked by formula: it shows the value derived from
- *  the canonical fields and writes back through the inverse formula. */
-function LinkedNumber({
-  label,
-  unit,
-  computed,
-  onApply,
-}: {
-  label: string;
-  unit: string;
-  computed: number | null;
-  onApply: (value: number) => void;
-}) {
-  if (computed === null) {
-    return (
-      <label className="block opacity-50">
-        <span className={CAM_DIALOG_LABEL}>{label} · ƒx</span>
-        <span className="relative block">
-          <input disabled placeholder="—" className={`${CAM_DIALOG_INPUT} pr-12 font-mono`} />
-          <span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">
-            {unit}
-          </span>
-        </span>
-      </label>
-    );
-  }
-  const rounded = Number(computed.toFixed(4));
-  return (
-    <label className="block">
-      <span className={CAM_DIALOG_LABEL}>{label} · ƒx</span>
-      <span className="relative block">
-        <input
-          key={computed.toFixed(6)}
-          type="number"
-          step="any"
-          defaultValue={rounded}
-          className={`${CAM_DIALOG_INPUT} pr-12 font-mono`}
-          onBlur={(event) => {
-            const next = Number(event.target.value);
-            if (event.target.value.trim() && Number.isFinite(next) && next > 0 && next !== rounded) {
-              onApply(next);
-            }
-          }}
-        />
-        <span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">
-          {unit}
-        </span>
-      </span>
-    </label>
   );
 }

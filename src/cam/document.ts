@@ -11,6 +11,7 @@ import type {
   CamWorkOffset,
 } from '../engine/types';
 import { useAppStore } from '../store/appStore';
+import { mirrorCamLibraryToCentral, syncCamLibraryFromCentral } from './library';
 import {
   modelBoundsOfBodies,
   resolveStock,
@@ -45,6 +46,9 @@ export function enterCamWorkspace(): Promise<void> {
   state.setSelectedCamSetupId(setup?.id ?? null);
   state.setSelectedCamOperationId(setup?.operations[0]?.id ?? null);
   state.setActiveTab('cam');
+  // The tool library follows the OS user, not the project: merge the
+  // per-user library into the just-loaded document (no-op off desktop).
+  void syncCamLibraryFromCentral();
   return Promise.resolve();
 }
 
@@ -89,7 +93,10 @@ export function addCamTool(draft: CamToolDraft): Promise<number> {
     next.next_tool_id += 1;
     createdId = tool.id;
     return next;
-  }).then(() => createdId);
+  }).then(() => {
+    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
+    return createdId;
+  });
 }
 
 export function deleteCamTool(toolId: number): Promise<void> {
@@ -104,6 +111,8 @@ export function deleteCamTool(toolId: number): Promise<void> {
     const before = next.tools.length;
     next.tools = next.tools.filter((tool) => tool.id !== toolId);
     return next.tools.length === before ? cam : next;
+  }).then(() => {
+    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
   });
 }
 
@@ -307,6 +316,8 @@ export function updateCamTool(
     if (!tool) return cam;
     mutate(tool);
     return next;
+  }).then(() => {
+    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
   });
 }
 
@@ -355,10 +366,10 @@ export function camToolCompatible(
     case 'face':
     case 'pocket2d':
       return (
-        (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'face_mill') && tool.center_cutting
+        (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'bull_nose_end_mill' || tool.kind === 'face_mill') && tool.center_cutting
       );
     case 'contour2d':
-      return tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'face_mill';
+      return tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'bull_nose_end_mill' || tool.kind === 'face_mill';
     case 'chamfer2d':
       return tool.kind === 'chamfer_mill';
     case 'drill':
