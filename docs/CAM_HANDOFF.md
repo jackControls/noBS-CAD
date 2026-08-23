@@ -1,6 +1,6 @@
-# CAM branch handoff — 2026-08-22
+# CAM branch handoff — 2026-08-23
 
-State of `feature/cam` after five working rounds. Everything below is
+State of `feature/cam` after six working rounds. Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
@@ -12,7 +12,10 @@ and the tests, not this document, when they disagree.
   `id` (internal uid, the only key operations reference), `number:
   Option<u32>` (machine-facing, optional), `name` (required, also the call
   identifier on name-capable controls). Tool kinds: flat/ball end mill,
-  drill, chamfer mill, tap, reamer, boring bar, thread mill.
+  face (shell) mill, drill, chamfer mill, tap, reamer, boring bar, thread
+  mill. Cutting data is a default profile (`cutting`) plus named extra
+  profiles (`cutting_presets`, names unique/non-empty, each validated);
+  operations copy one profile's values at creation.
   `CamToolDto::label()` renders
   `T<n>` or the name for diagnostics. Drill operations carry `cycle:
   DrillCycle` (drill / chip_breaking / deep_hole / tapping_right /
@@ -82,33 +85,51 @@ and the tests, not this document, when they disagree.
   `CamWorkspace` listener, and the prompt shows as a DOM banner.
 - The browser stays shared too: App renders `BrowserTree` (embedded mode)
   with `CamSetupsPanel` docked below. Operation rows show `[T<n>]`/`[name]`
-  tool tags. The tool library is a separate full-size dialog (table + editor
-  + duplicate), never a browser node. The setup dialog is a centered modal;
+  tool tags. There is no right sidebar: double-clicking a setup row, the
+  "Stock & WCS" row, or an operation row floats that configuration in a
+  modal (`setupEdit` / `operationEdit` dialog states, reusing the former
+  inspector components inside a feature-dialog shell). The tool library is
+  a separate full-size dialog: tool table on the left; editing an existing
+  tool is one scrolling page, while creating one is a three-page wizard
+  (kind grid grouped Milling/Hole making → identity+geometry → cutting
+  data). Cutting data supports named profiles (default preset + extras) and
+  a chip-load calculator block whose Vc / feed-per-tooth / plunge-per-rev
+  fields are formula-linked to the canonical rpm/feed fields
+  (`src/cam/units.ts` owns the conversions). The setup dialog is a centered
+  modal;
   during a viewport pick it steps aside. The ribbon's manufacturing tab
   mirrors the reference hierarchy: WORKSPACE (return to model), SETUP (new
   setup), TOOLPATHS (face/contour/pocket/chamfer/drill/thread), MANAGE (tool
-  library), OUTPUT (post/events); the right sidebar holds only inspectors,
-  no creation buttons.
-- All CAM dialogs carry `data-native-viewport-dim` on the backdrop and the
-  `feature-dialog` class on the panel: the native viewport is a platform
-  child view, and without those hooks it draws over DOM dialogs
-  (`nativeViewportBridge.ts` collects dim opacity and overlay cutout rects).
-- `geometry.ts` resolves stock specs (box/cylinder/hex/model body; fixed /
-  from-model allowances / rest-from-setup) and WCS origins; `pointPick.ts`
-  owns the shared viewport point-pick session (27-lattice box points, sketch
-  points) reused by setup and will be reused wherever features are picked.
-- `units.ts` — canonical mm inside, display/commit conversion at the edges;
-  the document unit switch flips any time, posts emit G21/G20 / G710/G70.
+  library), OUTPUT (post/events).
+- Face operations target the model's top surface: dialogs and the inspector
+  enter a depth below model top (0 = model top), converted to absolute
+  setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
+  orthonormal WCS). The stored value stays absolute; editing the model
+  afterwards does not re-resolve (the full From-reference height system is
+  the roadmap item).
 - `CamOperationDialog` — per-operation programming incl. per-op
   clearance/retract; drill cycle picker filters compatible tools per cycle
   and scrubs inapplicable fields on cycle change (the inspector's DrillFields
   does the same). The thread operation picker resolves the chosen designation
   to pitch/major/minor through `src/lib/threadStandards.ts` and stores the
   resolved numbers on the operation; the designation string never persists.
+  A cutting-profile dropdown appears when the chosen library tool carries
+  named profiles and copies the picked profile into the drafts.
+- `geometry.ts` resolves stock specs (box/cylinder/hex/model body; fixed /
+  from-model allowances / rest-from-setup) and WCS origins; `pointPick.ts`
+  owns the shared viewport point-pick session (27-lattice box points, sketch
+  points) reused by setup and will be reused wherever features are picked.
+- `units.ts` — canonical mm inside, display/commit conversion at the edges;
+  the document unit switch flips any time, posts emit G21/G20 / G710/G70.
+- All CAM dialogs carry `data-native-viewport-dim` on the backdrop and the
+  `feature-dialog` class on the panel: the native viewport is a platform
+  child view, and without those hooks it draws over DOM dialogs
+  (`nativeViewportBridge.ts` collects dim opacity and overlay cutout rects).
 
 **MCP (`mcp-server/`)** — `cam_get_document` / `cam_set_document` /
 `cam_plan_setup` / `cam_post_setup` / `cam_simulate_setup`, same validation
-as the UI. Descriptions document tool identity and drill cycles.
+as the UI. Descriptions document tool identity, cutting-data profiles, and
+drill cycles.
 
 ## Invariants worth keeping
 
@@ -124,7 +145,7 @@ as the UI. Descriptions document tool identity and drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 58, sketch 101, others green), mcp-server 28,
+`cargo test --workspace` (cam 59, 456 total, sketch 101), mcp-server 28,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
@@ -136,13 +157,18 @@ as the UI. Descriptions document tool identity and drill cycles.
    canned-cycle output variants behind per-control validation, if ever.
 4. Thread milling round 2: helical lead-in/out arcs (line leads today),
    external threads, multi-start, tool-pitch matching against the operation.
-5. Tool library: holders/shafts, cutting-data presets per material,
-   import/export of the library.
+5. Tool library: holders/shafts, library import/export. (Named cutting-data
+   profiles and the Vc/fz calculator landed in round 6.)
 6. Heights "From"-references (model top / stock bottom + offset) like the
-   reference workflow, instead of absolute Z fields only.
+   reference workflow, applied to every height of every operation — face
+   depth already entered relative to model top, but stored absolute.
 7. Geometry picking upgrades: viewport chain selection for
    contour/pocket/chamfer (sketch loops already supported), hole-face
    selection for drilling and thread milling.
+8. Passes-tab depth from the reference review: stock-to-leave
+   (radial/axial), finishing passes with separate feed, tolerance/smoothing
+   fields, drill break-through depth + tip-through-bottom, contour lead
+   in/out geometry.
 
 ## Process note
 

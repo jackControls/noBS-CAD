@@ -11,15 +11,20 @@ operation. The operator programs the job explicitly, in this order:
 
 1. **Tool library first.** Every cutter is a library entry with its geometry
    (kind, diameter, flute length/count, tip angle where relevant) and its
-   default cutting data (spindle speed, cut/plunge feeds, coolant). Operations
-   reference library tools by an internal id and inherit their cutting data as
-   editable defaults, so renumbering or renaming a tool never breaks an
-   operation. The machine-facing identity is deliberately dual: a tool number
-   is optional — number-calling posts (GRBL/LinuxCNC/Fanuc style) fail closed
-   with a clear error when it is missing, while the Siemens 828D post prefers
-   the tool name (`T="NAME"`), falling back to the number only when the name
-   carries no callable identifier. Tool kinds cover flat/ball end mills,
-   drills, chamfer mills, taps, reamers, boring bars, and thread mills.
+   cutting data. Operations reference library tools by an internal id and
+   inherit their cutting data as editable defaults, so renumbering or
+   renaming a tool never breaks an operation. The machine-facing identity is
+   deliberately dual: a tool number is optional — number-calling posts
+   (GRBL/LinuxCNC/Fanuc style) fail closed with a clear error when it is
+   missing, while the Siemens 828D post prefers the tool name (`T="NAME"`),
+   falling back to the number only when the name carries no callable
+   identifier. Tool kinds cover flat/ball end mills, face (shell) mills,
+   drills, chamfer mills, taps, reamers, boring bars, and thread mills. New
+   tools go through a short wizard (kind, geometry, cutting data). Cutting
+   data is a default profile plus any number of named profiles (e.g. per
+   material), with a chip-load calculator linking surface speed (Vc) to
+   spindle speed and feed-per-tooth / plunge-per-rev (fz) to the feedrate
+   fields; operation creation can copy any profile instead of the default.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
    cylinder, hex bar, or a modeled body — defined in one of three ways: a
@@ -38,10 +43,11 @@ operation. The operator programs the job explicitly, in this order:
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
    sketched points or explicit coordinates for drilling and thread milling;
-   the stock top or an explicit region for facing. Safe heights (clearance
-   and retract Z) are set per operation, not globally on the setup. The
-   engine validates the input and rejects incomplete programs instead of
-   guessing.
+   the stock top or an explicit region for facing. Facing targets the
+   model's top surface: the operator enters a depth below it (0 faces the
+   model top exactly). Safe heights (clearance and retract Z) are set per
+   operation, not globally on the setup. The engine validates the input and
+   rejects incomplete programs instead of guessing.
 
 The same document is fully scriptable through the MCP `cam_*` tools
 (`cam_get_document`, `cam_set_document`, `cam_plan_setup`, `cam_post_setup`,
@@ -98,11 +104,14 @@ rewrites stored geometry.
 - A React manufacturing workspace that shares the modeling viewport and
   browser: the modeling tree stays in place and gains a Setups section
   (operations listed with their tool tag, `[T<n>]`/`[name]`), while the tool
-  library lives in its own full dialog (table plus editor), not in the
-  browser tree. The workspace opens directly onto the modeled parts (setups
+  library lives in its own full dialog (table plus wizard-style editor), not
+  in the browser tree. There is no side inspector panel: double-clicking a
+  setup or operation row floats its configuration in a dialog, exactly like
+  the modeling feature dialogs. The workspace opens directly onto the
+  modeled parts (setups
   are created from a centered dialog via the ribbon, never implicitly), with
   manual setup and operation dialogs, viewport point picking for WCS origins,
-  parameter inspectors, distance/time estimates, warnings, NC export via the
+  distance/time estimates, warnings, NC export via the
   Post NC dialog, and neutral post-event export. The manufacturing tab mounts
   the very same viewport component as modeling — navigation, grid, ViewCube,
   and model presentation are literally identical — and CAM adds its overlays
