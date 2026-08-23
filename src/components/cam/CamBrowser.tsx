@@ -12,6 +12,7 @@ import {
   Triangle,
   Wrench,
 } from 'lucide-react';
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   camOperationLabel,
   deleteCamSetup,
@@ -20,22 +21,59 @@ import {
 import type { CamDocumentDto, CamOperationDto, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 
+const CAM_SETUPS_HEIGHT_KEY = 'cam-setups-panel-height';
+
 /** Manufacturing section docked under the shared modeling browser. The tree
  *  above stays the modeling browser; this panel adds only what the
  *  manufacturing workspace owns: setups with their operations, and the entry
- *  point to the tool library (a separate dialog, not a browser node). */
+ *  point to the tool library (a separate dialog, not a browser node). In the
+ *  manufacturing tab this is the primary tree, so it opens tall and the top
+ *  edge drags to resize (height persists per machine). */
 export function CamSetupsPanel() {
   const cam = useAppStore((state) => state.camDocument);
   const selectedOperationId = useAppStore((state) => state.selectedCamOperationId);
   const selectSetup = useAppStore((state) => state.setSelectedCamSetupId);
   const selectOperation = useAppStore((state) => state.setSelectedCamOperationId);
   const openDialog = useAppStore((state) => state.setCamDialog);
+  const [height, setHeight] = useState(() => {
+    const saved = Number(localStorage.getItem(CAM_SETUPS_HEIGHT_KEY));
+    return Number.isFinite(saved) && saved >= 140 ? saved : 340;
+  });
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = height;
+    let current = startHeight;
+    const onMove = (move: PointerEvent) => {
+      const parent = sectionRef.current?.parentElement;
+      const max = parent ? parent.clientHeight * 0.8 : 720;
+      current = Math.min(max, Math.max(140, startHeight + (startY - move.clientY)));
+      setHeight(current);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      localStorage.setItem(CAM_SETUPS_HEIGHT_KEY, String(Math.round(current)));
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+  };
 
   return (
     <section
+      ref={sectionRef}
       data-testid="cam-setups-panel"
-      className="flex max-h-[45%] shrink-0 flex-col border-t border-edge bg-panel"
+      style={{ height }}
+      className="relative flex shrink-0 flex-col border-t border-edge bg-panel"
     >
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        title="Drag to resize the setups panel"
+        onPointerDown={startDrag}
+        className="absolute -top-1 left-0 right-0 z-10 h-2 cursor-row-resize"
+      />
       <header className="flex h-7 shrink-0 items-center justify-between border-b border-edge px-2">
         <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-mute">
           <Layers3 size={12} />
