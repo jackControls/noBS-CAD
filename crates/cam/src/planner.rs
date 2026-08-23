@@ -440,7 +440,20 @@ fn plan_face(
     };
     require_flute_length(tool, top_z - target_z, name)?;
     let radius = tool.diameter * 0.5;
-    let rows = inclusive_steps(bounds.min.y, bounds.max.y, *step_over)?;
+    // Rows advance from the near edge by the stepover; a further row is
+    // only added while the previous row's cutter band leaves material uncut
+    // at the far edge. When one band already spans the face the tool makes
+    // exactly one pass — never a redundant return trip.
+    let mut rows = vec![bounds.min.y];
+    while rows[rows.len() - 1] + radius < bounds.max.y - EPSILON {
+        if rows.len() >= MAX_GENERATED_STEPS {
+            return Err(CamPlanError(format!(
+                "toolpath needs more than {MAX_GENERATED_STEPS} stepover rows; increase the stepover"
+            )));
+        }
+        let last = rows[rows.len() - 1];
+        rows.push((last + step_over).min(bounds.max.y));
+    }
     let depths = depth_levels(*top_z, *target_z, *step_down)?;
     ensure_program_budget(
         builder.commands.len(),
@@ -1246,6 +1259,84 @@ mod tests {
         }));
         assert_eq!(program.stats.operation_count, 1);
         assert!(program.stats.cutting_distance > 0.0);
+    }
+
+    #[test]
+    fn face_makes_a_single_pass_when_one_band_spans_the_face() {
+        // 63 mm face mill, 19 mm wide strip, 31 mm stepover: the first row's
+        // cutter band already covers the far edge, so there is exactly one
+        // working stroke — no redundant return pass.
+        let operation = CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 19.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 31.0,
+            step_down: 1.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        };
+        let program = plan_setup(
+            &document(vec![operation], vec![tool(1, CamToolKind::FaceMill, 63.0)]),
+            1,
+        )
+        .unwrap();
+        let cuts: Vec<Point3Dto> = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, .. } if to.z < 0.0 => Some(*to),
+                _ => None,
+            })
+            .collect();
+        // The plunge plus exactly one stroke across X, both on the first row.
+        assert_eq!(cuts.len(), 2);
+        assert!(cuts.iter().all(|point| point.y.abs() < 1.0e-9));
+    }
+
+    #[test]
+    fn face_skips_the_far_edge_row_when_coverage_already_reaches_it() {
+        // 30 mm wide strip, 28 mm stepover, 32 mm tool: rows at 0 and 28;
+        // the 28 row's band reaches past 30, so no third row is forced onto
+        // the far edge.
+        let operation = CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 30.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 28.0,
+            step_down: 1.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        };
+        let program = plan_setup(
+            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 32.0)]),
+            1,
+        )
+        .unwrap();
+        let row_ys: Vec<f64> = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, .. } if to.z < 0.0 => Some(to.y),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(row_ys, vec![0.0, 0.0, 28.0, 28.0]);
     }
 
     #[test]
