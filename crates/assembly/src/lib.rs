@@ -578,17 +578,14 @@ impl AssemblyDocumentDto {
             return Err("component name cannot be empty".to_string());
         }
         if self.component_structure.definitions.iter().enumerate().any(
-            |(candidate_index, definition)| {
-                candidate_index != index && definition.name == name
-            },
+            |(candidate_index, definition)| candidate_index != index && definition.name == name,
         ) {
             return Err(format!("duplicate component name '{}'", name));
         }
         let body_ids_list = patch.body_ids.unwrap_or_else(|| previous.body_ids.clone());
-        let local_coordinate_system =
-            patch
-                .local_coordinate_system
-                .unwrap_or(previous.local_coordinate_system);
+        let local_coordinate_system = patch
+            .local_coordinate_system
+            .unwrap_or(previous.local_coordinate_system);
         validate_transform(local_coordinate_system, "component coordinate system")?;
         let body_ids = body_ids_list.iter().copied().collect::<HashSet<_>>();
         if body_ids.len() != body_ids_list.len() {
