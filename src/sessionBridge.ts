@@ -4,9 +4,12 @@
  * Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
  * via Tauri. MCP `cad_submit` writes `inbox/<seq>.json`; this module polls
  * `mcp_session_bridge_apply_inbox` so the live engine applies the op, then
- * the existing publisher emits a new snapshot. Local document mutations call
- * `mcp_session_bridge_note_mutation` immediately so inbox OCC cannot race the
- * debounced publish. Not in-process shared memory. MCP never writebacks model.json.
+ * the existing publisher emits a new snapshot.
+ *
+ * Authoritative `engine_revision` advances in native code under the publisher
+ * lock (`run_ui_mutation` / inbox apply) — not via a later JS note — so inbox
+ * OCC cannot race the UI→JS gap. Conflicting/malformed heads are dead-lettered.
+ * Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
@@ -144,7 +147,8 @@ async function applyInboxNow(): Promise<void> {
   try {
     const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
     if (result?.dead_lettered) {
-      console.debug('[sessionBridge] inbox op dead-lettered', result);
+      console.warn('[sessionBridge] inbox op dead-lettered; queue unblocked', result);
+      // Keep polling so the next sequence can apply on a subsequent tick.
       return;
     }
     if (!result?.applied) return;
@@ -158,17 +162,6 @@ async function applyInboxNow(): Promise<void> {
     console.debug('[sessionBridge] inbox apply failed', error);
   } finally {
     inboxApplying = false;
-  }
-}
-
-/** Advance backend engine_revision immediately on local document mutations. */
-async function noteEngineRevision(): Promise<void> {
-  const state = useAppStore.getState();
-  if (state.engineKind !== 'tauri') return;
-  try {
-    await invoke('mcp_session_bridge_note_mutation');
-  } catch (error) {
-    console.debug('[sessionBridge] note mutation failed', error);
   }
 }
 
@@ -203,15 +196,9 @@ export function startSessionBridge(): void {
       state.activeTool !== prev.activeTool ||
       activeSolidDialog(state) !== activeSolidDialog(prev)
     ) {
-      // Bump authoritative engine revision immediately so inbox OCC cannot
-      // race the 300 ms debounced snapshot publish / 250 ms poll.
-      if (
-        state.document !== prev.document ||
-        state.solidScene !== prev.solidScene ||
-        state.activeSketch !== prev.activeSketch
-      ) {
-        void noteEngineRevision();
-      }
+      // Native engine commands bump engine_revision under the publisher lock
+      // (run_ui_mutation). Do not fire-and-forget a JS note here — that
+      // reopens the UI→JS race and would double-count after native apply.
       scheduleSessionBridgePublish();
     }
   });

@@ -4383,6 +4383,12 @@ mod tests {
             .call_tool("solid_scene", json!({}))
             .expect("attached snapshot has a solid scene");
         let body_id = scene["bodies"][0]["id"].clone();
+        // While attached, direct mutates are session_read_only (UI-owned apply).
+        // Detach to fork headless so cad_script can record a portable mutate
+        // on top of the attach/refresh cad_load_project_model baseline.
+        server
+            .call_tool("cad_detach", json!({}))
+            .expect("detach before headless mutate for script regression");
         let mirrored = server
             .call_tool(
                 "solid_mirror",
@@ -4391,7 +4397,7 @@ mod tests {
                     "plane": {"type": "origin_plane", "plane": "yz"}
                 }),
             )
-            .expect("modeling mutate after attach/refresh");
+            .expect("modeling mutate after attach/refresh/detach");
         assert_eq!(mirrored["scene"]["bodies"].as_array().unwrap().len(), 2);
 
         let script = server

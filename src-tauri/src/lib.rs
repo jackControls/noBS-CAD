@@ -187,17 +187,48 @@ fn native_viewport_metrics(viewport: tauri::State<'_, NativeViewport>) -> Native
 
 macro_rules! engine_command {
     ($name:ident, $method:literal) => {
-        /// Engine command — see `nbcad_sketch::host::handle`.
+        engine_command!($name, $method, mutate);
+    };
+    ($name:ident, $method:literal, no_payload) => {
+        engine_command!($name, $method, no_payload, mutate);
+    };
+    ($name:ident, $method:literal, read) => {
+        /// Read-only engine command — see `nbcad_sketch::host::handle`.
         #[tauri::command]
         fn $name(state: tauri::State<'_, AppState>, payload: &str) -> String {
             state.engine_call($method, payload)
         }
     };
-    ($name:ident, $method:literal, no_payload) => {
-        /// Engine command — see `nbcad_sketch::host::handle`.
+    ($name:ident, $method:literal, no_payload, read) => {
+        /// Read-only engine command — see `nbcad_sketch::host::handle`.
         #[tauri::command]
         fn $name(state: tauri::State<'_, AppState>) -> String {
             state.engine_call($method, "")
+        }
+    };
+    ($name:ident, $method:literal, mutate) => {
+        /// Mutating engine command — bumps session `engine_revision` under the
+        /// publisher lock on success (same critical section as inbox apply).
+        #[tauri::command]
+        fn $name(
+            window: tauri::WebviewWindow,
+            bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+            state: tauri::State<'_, AppState>,
+            payload: &str,
+        ) -> String {
+            bridge.run_ui_mutation(window.label(), || state.engine_call($method, payload))
+        }
+    };
+    ($name:ident, $method:literal, no_payload, mutate) => {
+        /// Mutating engine command — bumps session `engine_revision` under the
+        /// publisher lock on success (same critical section as inbox apply).
+        #[tauri::command]
+        fn $name(
+            window: tauri::WebviewWindow,
+            bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+            state: tauri::State<'_, AppState>,
+        ) -> String {
+            bridge.run_ui_mutation(window.label(), || state.engine_call($method, ""))
         }
     };
 }
@@ -207,22 +238,22 @@ engine_command!(engine_document_set_name, "document_set_name");
 engine_command!(
     engine_project_export_model,
     "project_export_model",
-    no_payload
+    no_payload, read
 );
 engine_command!(engine_end_sketch, "end_sketch", no_payload);
-engine_command!(engine_finished_sketches, "finished_sketches", no_payload);
+engine_command!(engine_finished_sketches, "finished_sketches", no_payload, read);
 engine_command!(engine_edit_sketch, "edit_sketch");
-engine_command!(engine_active_sketch, "active_sketch", no_payload);
-engine_command!(engine_profile_catalog, "profile_catalog", no_payload);
-engine_command!(engine_solid_scene, "solid_scene", no_payload);
-engine_command!(engine_body_appearances, "body_appearances", no_payload);
-engine_command!(engine_project_visibility, "project_visibility", no_payload);
+engine_command!(engine_active_sketch, "active_sketch", no_payload, read);
+engine_command!(engine_profile_catalog, "profile_catalog", no_payload, read);
+engine_command!(engine_solid_scene, "solid_scene", no_payload, read);
+engine_command!(engine_body_appearances, "body_appearances", no_payload, read);
+engine_command!(engine_project_visibility, "project_visibility", no_payload, read);
 engine_command!(engine_project_set_visibility, "project_set_visibility");
-engine_command!(engine_drawing_document, "drawing_document", no_payload);
+engine_command!(engine_drawing_document, "drawing_document", no_payload, read);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
-engine_command!(engine_assembly_document, "assembly_document", no_payload);
+engine_command!(engine_assembly_document, "assembly_document", no_payload, read);
 engine_command!(engine_assembly_set_document, "assembly_set_document");
-engine_command!(engine_assembly_solution, "assembly_solution", no_payload);
+engine_command!(engine_assembly_solution, "assembly_solution", no_payload, read);
 engine_command!(
     engine_assembly_create_component,
     "assembly_create_component"
@@ -251,12 +282,13 @@ engine_command!(
     engine_assembly_set_occurrence_pose,
     "assembly_set_occurrence_pose"
 );
-engine_command!(engine_assembly_preview_joint, "assembly_preview_joint");
+engine_command!(engine_assembly_preview_joint, "assembly_preview_joint", read);
 engine_command!(engine_assembly_create_joint, "assembly_create_joint");
 engine_command!(engine_assembly_update_joint, "assembly_update_joint");
 engine_command!(
     engine_assembly_preview_joint_update,
-    "assembly_preview_joint_update"
+    "assembly_preview_joint_update",
+    read
 );
 engine_command!(engine_assembly_delete_joint, "assembly_delete_joint");
 engine_command!(
@@ -269,7 +301,8 @@ engine_command!(
 );
 engine_command!(
     engine_assembly_preview_joint_motion,
-    "assembly_preview_joint_motion"
+    "assembly_preview_joint_motion",
+    read
 );
 engine_command!(
     engine_assembly_set_grounded_body,
@@ -281,11 +314,13 @@ engine_command!(
 );
 engine_command!(
     engine_assembly_preview_joint_coordinates,
-    "assembly_preview_joint_coordinates"
+    "assembly_preview_joint_coordinates",
+    read
 );
 engine_command!(
     engine_assembly_preview_mechanism_drag,
-    "assembly_preview_mechanism_drag"
+    "assembly_preview_mechanism_drag",
+    read
 );
 engine_command!(
     engine_assembly_apply_joint_motions,
@@ -309,11 +344,13 @@ engine_command!(
 );
 engine_command!(
     engine_assembly_sample_motion_study,
-    "assembly_sample_motion_study"
+    "assembly_sample_motion_study",
+    read
 );
 engine_command!(
     engine_assembly_export_motion_path_csv,
-    "assembly_export_motion_path_csv"
+    "assembly_export_motion_path_csv",
+    read
 );
 engine_command!(
     engine_assembly_create_contact_set,
@@ -357,39 +394,39 @@ fn engine_drawing_projection(state: tauri::State<'_, AppState>, payload: &str) -
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
-    no_payload
+    no_payload, read
 );
 engine_command!(
     engine_revolve_definitions,
     "revolve_definitions",
-    no_payload
+    no_payload, read
 );
-engine_command!(engine_sweep_definitions, "sweep_definitions", no_payload);
-engine_command!(engine_loft_definitions, "loft_definitions", no_payload);
-engine_command!(engine_rib_definitions, "rib_definitions", no_payload);
-engine_command!(engine_fillet_definitions, "fillet_definitions", no_payload);
+engine_command!(engine_sweep_definitions, "sweep_definitions", no_payload, read);
+engine_command!(engine_loft_definitions, "loft_definitions", no_payload, read);
+engine_command!(engine_rib_definitions, "rib_definitions", no_payload, read);
+engine_command!(engine_fillet_definitions, "fillet_definitions", no_payload, read);
 engine_command!(
     engine_chamfer_definitions,
     "chamfer_definitions",
-    no_payload
+    no_payload, read
 );
-engine_command!(engine_hole_definitions, "hole_definitions", no_payload);
+engine_command!(engine_hole_definitions, "hole_definitions", no_payload, read);
 engine_command!(
     engine_datum_plane_definitions,
     "datum_plane_definitions",
-    no_payload
+    no_payload, read
 );
 engine_command!(
     engine_body_feature_definitions,
     "body_feature_definitions",
-    no_payload
+    no_payload, read
 );
 engine_command!(engine_datum_plane_create, "datum_plane_create");
 engine_command!(engine_datum_plane_edit, "datum_plane_edit");
-engine_command!(engine_preview_segment, "preview_segment");
-engine_command!(engine_eval_expression, "eval_expression");
+engine_command!(engine_preview_segment, "preview_segment", read);
+engine_command!(engine_eval_expression, "eval_expression", read);
 engine_command!(engine_add_line, "add_line");
-engine_command!(engine_preview_segment_locked, "preview_segment_locked");
+engine_command!(engine_preview_segment_locked, "preview_segment_locked", read);
 engine_command!(engine_add_line_locked, "add_line_locked");
 engine_command!(engine_add_point, "add_point");
 engine_command!(engine_add_line_midpoint, "add_line_midpoint");
@@ -409,12 +446,12 @@ engine_command!(engine_move_dimension, "move_dimension");
 engine_command!(engine_delete_dimension, "delete_dimension");
 engine_command!(engine_delete_constraint, "delete_constraint");
 engine_command!(engine_set_dimension_style, "set_dimension_style");
-engine_command!(engine_fillet_preview, "fillet_preview");
+engine_command!(engine_fillet_preview, "fillet_preview", read);
 engine_command!(engine_fillet_lines, "fillet_lines");
 engine_command!(engine_chamfer_lines, "chamfer_lines");
-engine_command!(engine_offset_preview, "offset_preview");
+engine_command!(engine_offset_preview, "offset_preview", read);
 engine_command!(engine_offset_curve, "offset_curve");
-engine_command!(engine_trim_preview, "trim_preview");
+engine_command!(engine_trim_preview, "trim_preview", read);
 engine_command!(engine_trim_entity, "trim_entity");
 engine_command!(engine_extend_entity, "extend_entity");
 engine_command!(engine_break_curve, "break_curve");
@@ -435,123 +472,241 @@ engine_command!(engine_set_grid_snap, "set_grid_snap");
 engine_command!(engine_set_grid_step, "set_grid_step");
 
 #[tauri::command]
-fn engine_solid_extrude(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_extrude(payload)
+fn engine_solid_extrude(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_extrude(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_extrude(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_extrude(payload)
+fn engine_solid_edit_extrude(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_extrude(payload))
 }
 
 #[tauri::command]
-fn engine_solid_revolve(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_revolve(payload)
+fn engine_solid_revolve(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_revolve(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_revolve(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_revolve(payload)
+fn engine_solid_edit_revolve(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_revolve(payload))
 }
 
 #[tauri::command]
-fn engine_solid_sweep(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_sweep(payload)
+fn engine_solid_sweep(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_sweep(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_sweep(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_sweep(payload)
+fn engine_solid_edit_sweep(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_sweep(payload))
 }
 
 #[tauri::command]
-fn engine_solid_loft(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_loft(payload)
+fn engine_solid_loft(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_loft(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_loft(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_loft(payload)
+fn engine_solid_edit_loft(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_loft(payload))
 }
 
 #[tauri::command]
-fn engine_solid_rib(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_rib(payload)
+fn engine_solid_rib(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_rib(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_rib(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_rib(payload)
+fn engine_solid_edit_rib(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_rib(payload))
 }
 
 #[tauri::command]
-fn engine_solid_fillet(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_fillet(payload)
+fn engine_solid_fillet(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_fillet(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_fillet(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_fillet(payload)
+fn engine_solid_edit_fillet(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_fillet(payload))
 }
 
 #[tauri::command]
-fn engine_solid_chamfer(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_chamfer(payload)
+fn engine_solid_chamfer(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_chamfer(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_chamfer(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_chamfer(payload)
+fn engine_solid_edit_chamfer(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_chamfer(payload))
 }
 
 #[tauri::command]
-fn engine_solid_hole(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_hole(payload)
+fn engine_solid_hole(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_hole(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_hole(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_hole(payload)
+fn engine_solid_edit_hole(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_hole(payload))
 }
 
 #[tauri::command]
-fn engine_solid_body_feature(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_body_feature(payload)
+fn engine_solid_body_feature(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_body_feature(payload))
 }
 
 #[tauri::command]
-fn engine_solid_edit_body_feature(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_edit_body_feature(payload)
+fn engine_solid_edit_body_feature(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_edit_body_feature(payload))
 }
 
 #[tauri::command]
-fn engine_solid_recompute(state: tauri::State<'_, AppState>) -> String {
-    state.solid_recompute()
+fn engine_solid_recompute(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_recompute())
 }
 
 #[tauri::command]
-fn engine_solid_set_rollback(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_set_rollback(payload)
+fn engine_solid_set_rollback(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_set_rollback(payload))
 }
 
 #[tauri::command]
-fn engine_solid_delete_feature(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_delete_feature(payload)
+fn engine_solid_delete_feature(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_delete_feature(payload))
 }
 
 #[tauri::command]
-fn engine_solid_reorder_feature(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.solid_reorder_feature(payload)
+fn engine_solid_reorder_feature(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.solid_reorder_feature(payload))
 }
 
 #[tauri::command]
-fn engine_project_load(state: tauri::State<'_, AppState>, payload: &str) -> String {
-    state.project_load(payload)
+fn engine_project_load(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.project_load(payload))
 }
 
 #[tauri::command]
-fn engine_project_new(state: tauri::State<'_, AppState>) -> String {
-    state.project_new()
+fn engine_project_new(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+) -> String {
+    bridge.run_ui_mutation(window.label(), || state.project_new())
 }
 
 #[tauri::command]

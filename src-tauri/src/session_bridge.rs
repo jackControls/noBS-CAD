@@ -7,16 +7,20 @@
 //! existing TS publisher emits a new snapshot. MCP never writes model.json
 //! (no last-writer-wins).
 //!
-//! # Authoritative engine revision (Jack #60 blocker 2)
+//! # Authoritative engine revision (Jack #60)
 //!
 //! `WindowPublisher.engine_revision` is the sole OCC gate for inbox apply.
 //! It is advanced atomically with the live engine mutation under the
-//! publisher lock:
-//! - UI local edits call `note_mutation_for_window` immediately (no 300 ms
-//!   debounce) so a stale-base op cannot slip in before heartbeat publish.
+//! publisher lock (lock order: publisher → engine):
+//! - UI local edits go through `run_ui_mutation`, which holds the publisher
+//!   lock across the engine call and bumps `engine_revision` + heartbeat on
+//!   success. A later JS `noteEngineRevision` is not the sole advance and
+//!   must not double-count (frontend suppresses while applying / omits it).
 //! - Successful inbox apply requires `base_generation == engine_revision`,
 //!   applies on the live engine, then `engine_revision += 1` and writes
 //!   heartbeat.json. Two same-base ops therefore cannot both apply.
+//! - Conflicting or malformed head inbox entries are dead-lettered to
+//!   `inbox/failed/` so the queue cannot wedge forever.
 //! - Debounced snapshot publish may only raise `engine_revision` to the
 //!   published generation (never regress it). Heartbeat-only refreshes do
 //!   not bump the counter.
@@ -366,26 +370,56 @@ fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Move a failed op out of the pending queue so later ops are not wedged.
+/// Move a failed/invalid/conflicting op out of the pending queue so later
+/// ops are not wedged forever.
 fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), String> {
     let src = inbox_dir(session_id).join(format!("{seq}.json"));
     let dest_dir = inbox_dir(session_id).join("failed");
     fs::create_dir_all(&dest_dir).map_err(|error| error.to_string())?;
-    let original = fs::read_to_string(&src).map_err(|error| error.to_string())?;
-    let mut parsed: Value = serde_json::from_str(&original)
-        .map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
-    if let Some(object) = parsed.as_object_mut() {
-        object.insert("error".to_string(), Value::String(error.to_string()));
-        object.insert("failed_ms".to_string(), json!(now_ms()));
-    }
-    let body = serde_json::to_string_pretty(&parsed).map_err(|error| error.to_string())?;
+    let original = fs::read_to_string(&src).unwrap_or_default();
+    let body = match serde_json::from_str::<Value>(&original) {
+        Ok(mut parsed) => {
+            if let Some(object) = parsed.as_object_mut() {
+                object.insert("error".to_string(), Value::String(error.to_string()));
+                object.insert("failed_ms".to_string(), json!(now_ms()));
+            }
+            serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| original.clone())
+        }
+        Err(_) => serde_json::to_string_pretty(&json!({
+            "error": error,
+            "failed_ms": now_ms(),
+            "raw": original,
+        }))
+        .map_err(|error| error.to_string())?,
+    };
     let dest = dest_dir.join(format!("{seq}.json"));
     atomic_write(&dest, &body)?;
-    fs::remove_file(&src).map_err(|error| error.to_string())?;
+    if src.exists() {
+        fs::remove_file(&src).map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
+fn engine_envelope_ok(raw: &str) -> bool {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|envelope| envelope.get("ok").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+fn bump_engine_revision(publisher: &mut WindowPublisher) -> Result<(), String> {
+    publisher.engine_revision = publisher
+        .engine_revision
+        .checked_add(1)
+        .ok_or_else(|| "session engine revision exhausted".to_string())?;
+    if publisher.engine_revision > publisher.next_generation {
+        publisher.next_generation = publisher.engine_revision;
+    }
+    write_engine_revision_heartbeat(publisher)
+}
+
 impl SessionBridgeState {
+    #[allow(dead_code)]
     fn session_id_for_window(&self, window_label: &str) -> Result<Option<String>, String> {
         let publishers = self
             .publishers
@@ -396,8 +430,9 @@ impl SessionBridgeState {
             .map(|publisher| publisher.session_id.clone()))
     }
 
-    /// Advance the authoritative engine revision immediately on a local UI
-    /// mutation (before the debounced snapshot publish).
+    /// Advance the authoritative engine revision immediately.
+    /// Prefer [`Self::run_ui_mutation`] so the bump shares the publisher lock
+    /// with the live engine call; this remains for tests and rare callers.
     fn note_mutation_for_window(&self, window_label: &str) -> Result<Value, String> {
         let mut publishers = self
             .publishers
@@ -406,14 +441,7 @@ impl SessionBridgeState {
         let publisher = publishers
             .entry(window_label.to_string())
             .or_insert_with(WindowPublisher::new);
-        publisher.engine_revision = publisher
-            .engine_revision
-            .checked_add(1)
-            .ok_or_else(|| "session engine revision exhausted".to_string())?;
-        if publisher.engine_revision > publisher.next_generation {
-            publisher.next_generation = publisher.engine_revision;
-        }
-        write_engine_revision_heartbeat(publisher)?;
+        bump_engine_revision(publisher)?;
         Ok(json!({
             "session_id": publisher.session_id,
             "engine_revision": publisher.engine_revision,
@@ -421,6 +449,32 @@ impl SessionBridgeState {
             "session_mode": "ui_owned_apply",
             "writeback": false,
         }))
+    }
+
+    /// Run a live UI engine mutation under the publisher lock and advance
+    /// `engine_revision` on success — same critical section inbox apply uses.
+    ///
+    /// If this window has no publisher yet (MCP session never reserved), the
+    /// mutate still runs but revision is not tracked (no inbox race).
+    pub fn run_ui_mutation(
+        &self,
+        window_label: &str,
+        mutate: impl FnOnce() -> String,
+    ) -> String {
+        let Ok(mut publishers) = self.publishers.lock() else {
+            return mutate();
+        };
+        let Some(publisher) = publishers.get_mut(window_label) else {
+            drop(publishers);
+            return mutate();
+        };
+        let result = mutate();
+        if engine_envelope_ok(&result) {
+            if let Err(error) = bump_engine_revision(publisher) {
+                eprintln!("session bridge could not bump engine_revision: {error}");
+            }
+        }
+        result
     }
 
     fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
@@ -468,27 +522,102 @@ fn apply_one_inbox_op(
         }));
     };
     let path = inbox_dir(&session_id).join(format!("{seq}.json"));
-    let body =
-        fs::read_to_string(&path).map_err(|error| format!("read inbox/{seq}.json: {error}"))?;
-    let parsed: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("invalid inbox/{seq}.json: {error}"))?;
-    let name = parsed
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "inbox op missing name".to_string())?
-        .to_string();
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) => {
+            let message = format!("read inbox/{seq}.json: {error}");
+            dead_letter_inbox_op(&session_id, seq, &message)?;
+            return Ok(json!({
+                "applied": false,
+                "dead_lettered": true,
+                "seq": seq,
+                "error": message,
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }));
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&body) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let message = format!("invalid inbox/{seq}.json: {error}");
+            dead_letter_inbox_op(&session_id, seq, &message)?;
+            return Ok(json!({
+                "applied": false,
+                "dead_lettered": true,
+                "seq": seq,
+                "error": message,
+                "reason": "malformed",
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }));
+        }
+    };
+    let name = match parsed.get("name").and_then(Value::as_str) {
+        Some(name) => name.to_string(),
+        None => {
+            let message = "inbox op missing name".to_string();
+            dead_letter_inbox_op(&session_id, seq, &message)?;
+            return Ok(json!({
+                "applied": false,
+                "dead_lettered": true,
+                "seq": seq,
+                "error": message,
+                "reason": "malformed",
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }));
+        }
+    };
     let arguments = parsed.get("arguments").cloned().unwrap_or(json!({}));
-    let base_generation = parsed
-        .get("base_generation")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "inbox op missing base_generation".to_string())?;
+    let base_generation = match parsed.get("base_generation").and_then(Value::as_u64) {
+        Some(base) => base,
+        None => {
+            let message = "inbox op missing base_generation".to_string();
+            dead_letter_inbox_op(&session_id, seq, &message)?;
+            return Ok(json!({
+                "applied": false,
+                "dead_lettered": true,
+                "seq": seq,
+                "name": name,
+                "error": message,
+                "reason": "malformed",
+                "session_id": session_id,
+                "session_mode": "ui_owned_apply",
+                "writeback": false,
+                "pending": pending_inbox_seqs(&session_id).len(),
+                "engine_revision": publisher.engine_revision,
+            }));
+        }
+    };
     let current = publisher.engine_revision;
     if current != base_generation {
-        return Err(generation_conflict(
-            &session_id,
-            base_generation,
-            Some(current),
-        ));
+        let conflict = generation_conflict(&session_id, base_generation, Some(current));
+        dead_letter_inbox_op(&session_id, seq, &conflict)?;
+        return Ok(json!({
+            "applied": false,
+            "dead_lettered": true,
+            "seq": seq,
+            "name": name,
+            "error": conflict,
+            "reason": "generation_conflict",
+            "base_generation": base_generation,
+            "current_generation": current,
+            "session_id": session_id,
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+            "pending": pending_inbox_seqs(&session_id).len(),
+            "engine_revision": publisher.engine_revision,
+        }));
     }
     if nbcad_mcp_mutate::lookup_mutate(&name).is_none() {
         let error = format!("unsupported inbox mutate '{name}'");
@@ -508,14 +637,7 @@ fn apply_one_inbox_op(
     }
     match dispatch_inbox_on_engine(engine, &name, &arguments) {
         Ok(result) => {
-            publisher.engine_revision = publisher
-                .engine_revision
-                .checked_add(1)
-                .ok_or_else(|| "session engine revision exhausted".to_string())?;
-            if publisher.engine_revision > publisher.next_generation {
-                publisher.next_generation = publisher.engine_revision;
-            }
-            write_engine_revision_heartbeat(publisher)?;
+            bump_engine_revision(publisher)?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,
@@ -779,7 +901,8 @@ mod tests {
     }
 
     #[test]
-    fn inbox_generation_mismatch_is_conflict_and_leaves_op() {
+    fn inbox_generation_mismatch_is_dead_lettered_and_unblocks_queue() {
+        // Production: a conflicting head must not remain pending forever.
         let _test = TEST_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("nbcad-bridge-inbox-{}", now_ms()));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
@@ -795,24 +918,38 @@ mod tests {
             99,
             json!({"name": "Nope"}),
         );
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "Next"}),
+        );
         let engine = AppState::new();
-        let err =
-            apply_one_inbox_op(&state, "main", &engine).expect_err("stale base must conflict");
-        let parsed: Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(parsed["code"], "generation_conflict");
-        assert_eq!(parsed["writeback"], false);
-        assert_eq!(parsed["session_mode"], "ui_owned_apply");
-        assert_eq!(pending_inbox_seqs(&session_id), vec![1]);
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["reason"], "generation_conflict");
+        assert_eq!(dead["seq"], 1);
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/failed/1.json")
+            .exists());
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let next = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(next["applied"], true);
+        assert_eq!(next["seq"], 2);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn ui_mutation_note_rejects_stale_base_before_publish() {
-        // Race 1: UI mutates and notes revision immediately; debounced publish
-        // has not advanced heartbeat yet in the old design. Authoritative
-        // engine_revision must already reject the stale-base inbox op.
+    fn ui_native_mutation_rejects_stale_base_without_js_note() {
+        // Race: between native UI mutation completion and a later JS
+        // noteEngineRevision, inbox apply must already see the advanced
+        // revision. run_ui_mutation bumps under the publisher lock.
         let _test = TEST_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("nbcad-bridge-stale-ui-{}", now_ms()));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
@@ -826,32 +963,51 @@ mod tests {
             Some(generation)
         );
 
-        let noted = state.note_mutation_for_window("main").unwrap();
-        assert_eq!(noted["engine_revision"], generation + 1);
+        let engine = AppState::new();
+        let raw = state.run_ui_mutation("main", || {
+            engine.engine_call("document_set_name", r#""NativeUI""#)
+        });
+        assert!(engine_envelope_ok(&raw), "ui mutate should succeed: {raw}");
+        assert_eq!(
+            state.engine_revision_for_window("main").unwrap(),
+            Some(generation + 1)
+        );
         assert_eq!(read_session_generation(&session_id), Some(generation + 1));
 
         write_inbox(
             &session_id,
             1,
             "cad_set_document_name",
-            generation, // stale relative to noted UI mutation
+            generation, // stale relative to native UI mutation
             json!({"name": "Stale"}),
         );
-        let engine = AppState::new();
-        let err = apply_one_inbox_op(&state, "main", &engine).expect_err("stale after UI note");
-        let parsed: Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(parsed["code"], "generation_conflict");
-        assert_eq!(parsed["current_generation"], generation + 1);
-        assert_eq!(pending_inbox_seqs(&session_id), vec![1]);
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation + 1,
+            json!({"name": "Fresh"}),
+        );
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["reason"], "generation_conflict");
+        assert_eq!(dead["current_generation"], generation + 1);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let fresh = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(fresh["applied"], true);
+        assert_eq!(fresh["seq"], 2);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn two_same_base_ops_second_conflicts_after_first_advances() {
+    fn two_same_base_ops_second_is_dead_lettered_after_first_advances() {
         // Race 2: two queued ops share the same base_generation. The first
-        // apply advances engine_revision atomically; the second must conflict.
+        // apply advances engine_revision atomically; the second must
+        // dead-letter so a later refreshed seq can progress.
         let _test = TEST_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("nbcad-bridge-same-base-{}", now_ms()));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
@@ -874,19 +1030,70 @@ mod tests {
             generation,
             json!({"name": "Second"}),
         );
+        write_inbox(
+            &session_id,
+            3,
+            "cad_set_document_name",
+            generation + 1,
+            json!({"name": "Rebased"}),
+        );
         let engine = AppState::new();
         let first = apply_one_inbox_op(&state, "main", &engine).unwrap();
         assert_eq!(first["applied"], true);
         assert_eq!(first["seq"], 1);
         assert_eq!(first["engine_revision"], generation + 1);
-        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2, 3]);
 
-        let err = apply_one_inbox_op(&state, "main", &engine).expect_err("second same-base");
-        let parsed: Value = serde_json::from_str(&err).unwrap();
-        assert_eq!(parsed["code"], "generation_conflict");
-        assert_eq!(parsed["base_generation"], generation);
-        assert_eq!(parsed["current_generation"], generation + 1);
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["reason"], "generation_conflict");
+        assert_eq!(dead["base_generation"], generation);
+        assert_eq!(dead["current_generation"], generation + 1);
+        assert_eq!(pending_inbox_seqs(&session_id), vec![3]);
+
+        let rebased = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(rebased["applied"], true);
+        assert_eq!(rebased["seq"], 3);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_inbox_head_is_dead_lettered_so_next_seq_applies() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-malformed-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(generation, "base"))
+            .unwrap();
+        let inbox = session_root().join(&session_id).join("inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("1.json"), "{not-json").unwrap();
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "AfterMalformed"}),
+        );
+        let engine = AppState::new();
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["reason"], "malformed");
         assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/failed/1.json")
+            .exists());
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], true);
+        assert_eq!(second["seq"], 2);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

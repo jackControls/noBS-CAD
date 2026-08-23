@@ -442,6 +442,18 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::SolidReplay,
     },
     MutateSpec {
+        name: "solid_move_copy",
+        engine_method: "solid_prepare_body_feature",
+        payload: PayloadKind::BodyFeature("move_copy"),
+        execution: ExecutionKind::SolidReplay,
+    },
+    MutateSpec {
+        name: "solid_edit_move_copy",
+        engine_method: "solid_prepare_edit_body_feature",
+        payload: PayloadKind::EditBodyFeature("move_copy"),
+        execution: ExecutionKind::SolidReplay,
+    },
+    MutateSpec {
         name: "solid_mirror",
         engine_method: "solid_prepare_body_feature",
         payload: PayloadKind::BodyFeature("mirror"),
@@ -499,6 +511,18 @@ pub static MUTATES: &[MutateSpec] = &[
         name: "solid_edit_split_body",
         engine_method: "solid_prepare_edit_body_feature",
         payload: PayloadKind::EditBodyFeature("split_body"),
+        execution: ExecutionKind::SolidReplay,
+    },
+    MutateSpec {
+        name: "solid_import_step",
+        engine_method: "solid_prepare_body_feature",
+        payload: PayloadKind::BodyFeature("import_step"),
+        execution: ExecutionKind::SolidReplay,
+    },
+    MutateSpec {
+        name: "solid_edit_import_step",
+        engine_method: "solid_prepare_edit_body_feature",
+        payload: PayloadKind::EditBodyFeature("import_step"),
         execution: ExecutionKind::SolidReplay,
     },
     MutateSpec {
@@ -625,6 +649,27 @@ mod tests {
         assert_eq!(spec.engine_method, "add_line_locked");
         assert_eq!(spec.execution, ExecutionKind::Direct);
         assert_eq!(spec.payload, PayloadKind::Object);
+    }
+
+    #[test]
+    fn solid_import_step_and_move_copy_are_in_lookup_mutate() {
+        let import = lookup_mutate("solid_import_step").expect("present");
+        assert_eq!(import.engine_method, "solid_prepare_body_feature");
+        assert_eq!(import.execution, ExecutionKind::SolidReplay);
+        assert_eq!(import.payload, PayloadKind::BodyFeature("import_step"));
+        let edit_import = lookup_mutate("solid_edit_import_step").expect("present");
+        assert_eq!(
+            edit_import.payload,
+            PayloadKind::EditBodyFeature("import_step")
+        );
+        let move_copy = lookup_mutate("solid_move_copy").expect("present");
+        assert_eq!(move_copy.engine_method, "solid_prepare_body_feature");
+        assert_eq!(move_copy.execution, ExecutionKind::SolidReplay);
+        assert_eq!(move_copy.payload, PayloadKind::BodyFeature("move_copy"));
+        let edit_move = lookup_mutate("solid_edit_move_copy").expect("present");
+        assert_eq!(edit_move.payload, PayloadKind::EditBodyFeature("move_copy"));
+        assert!(lookup_mutate("cad_script").is_none());
+        assert!(lookup_mutate("cad_compare_solids").is_none());
     }
 
     #[test]
