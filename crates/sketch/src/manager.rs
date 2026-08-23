@@ -4913,6 +4913,7 @@ mod project_tests {
                 flute_count: 4,
                 point_angle_degrees: None,
                 cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
             }],
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto::default(),

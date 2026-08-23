@@ -623,10 +623,12 @@ fn note_approximation(tool: &CamToolDto, drill: &mut bool, chamfer: &mut bool) {
     match tool.kind {
         CamToolKind::Drill => *drill = true,
         CamToolKind::ChamferMill => *chamfer = true,
-        // Taps, reamers, boring bars, and thread mills sweep as plain
-        // cylinders, like end mills, so they need no tip-approximation note.
+        // Taps, reamers, boring bars, thread mills, and face mills sweep as
+        // plain cylinders, like end mills, so they need no
+        // tip-approximation note.
         CamToolKind::FlatEndMill
         | CamToolKind::BallEndMill
+        | CamToolKind::FaceMill
         | CamToolKind::Tap
         | CamToolKind::Reamer
         | CamToolKind::BoringBar
@@ -962,6 +964,7 @@ fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool 
     }
     match tool.kind {
         CamToolKind::FlatEndMill
+        | CamToolKind::FaceMill
         | CamToolKind::ChamferMill
         | CamToolKind::Tap
         | CamToolKind::Reamer
@@ -1154,6 +1157,7 @@ mod tests {
                 flute_count: 4,
                 point_angle_degrees: None,
                 cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
             }],
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto::default(),

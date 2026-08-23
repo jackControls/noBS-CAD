@@ -1167,6 +1167,7 @@ mod tests {
             flute_count: 4,
             point_angle_degrees: (kind == CamToolKind::ChamferMill).then_some(90.0),
             cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
         }
     }
 

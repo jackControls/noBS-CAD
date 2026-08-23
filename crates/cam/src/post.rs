@@ -792,6 +792,7 @@ mod tests {
                 flute_count: 4,
                 point_angle_degrees: None,
                 cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
             }],
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto {
@@ -821,6 +822,7 @@ mod tests {
             flute_count: 2,
             point_angle_degrees: None,
             cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
         });
         source.setups[0].operations.push(CamOperationDto::Drill {
             id: 2,
@@ -864,6 +866,7 @@ mod tests {
             flute_count: 4,
             point_angle_degrees: None,
             cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
         });
         source.setups[0].operations = vec![CamOperationDto::Thread {
             id: 3,

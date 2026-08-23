@@ -413,6 +413,8 @@ impl Default for CamPostConfigDto {
 pub enum CamToolKind {
     FlatEndMill,
     BallEndMill,
+    /// Indexable-insert face/shell mill for large facing passes.
+    FaceMill,
     Drill,
     ChamferMill,
     Tap,
@@ -457,6 +459,18 @@ pub struct CamToolDto {
     /// independently editable; later library edits never rewrite existing
     /// operations.
     #[serde(default)]
+    pub cutting: CuttingParametersDto,
+    /// Additional named cutting-data profiles (e.g. per material). The plain
+    /// `cutting` field above is the default profile; operation creation lets
+    /// the operator pick any profile and copies its values.
+    #[serde(default)]
+    pub cutting_presets: Vec<CamCuttingPresetDto>,
+}
+
+/// A named cutting-data profile on a library tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CamCuttingPresetDto {
+    pub name: String,
     pub cutting: CuttingParametersDto,
 }
 
@@ -522,6 +536,27 @@ impl CamToolDto {
         }
         self.cutting
             .validate(&format!("tool '{}' library cutting data", self.name))?;
+        for preset in &self.cutting_presets {
+            if preset.name.trim().is_empty() {
+                return Err(format!(
+                    "tool '{}' cutting-data profiles must have names",
+                    self.name
+                ));
+            }
+            preset.cutting.validate(&format!(
+                "tool '{}' cutting-data profile '{}'",
+                self.name, preset.name
+            ))?;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for preset in &self.cutting_presets {
+            if !seen.insert(preset.name.trim().to_string()) {
+                return Err(format!(
+                    "tool '{}' cutting-data profile names must be unique",
+                    self.name
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -941,9 +976,11 @@ impl CamOperationDto {
                 step_down,
                 ..
             } => {
-                if tool.kind != CamToolKind::FlatEndMill || !tool.center_cutting {
+                if !matches!(tool.kind, CamToolKind::FlatEndMill | CamToolKind::FaceMill)
+                    || !tool.center_cutting
+                {
                     return Err(format!(
-                        "face operation '{label}' requires a center-cutting flat end mill until ramp entries are supported"
+                        "face operation '{label}' requires a center-cutting flat or face mill until ramp entries are supported"
                     ));
                 }
                 bounds.validate(&format!("face operation '{label}' bounds"))?;
@@ -2025,6 +2062,7 @@ mod tests {
             flute_count: 4,
             point_angle_degrees: None,
             cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
         }
     }
 
@@ -2148,6 +2186,55 @@ mod tests {
         assert!(setup_json.get("clearance_z").is_none());
         assert!(setup_json.get("rapid_feed").is_none());
         assert!(setup_json.get("post").is_none());
+    }
+
+    #[test]
+    fn cutting_data_profiles_validate_and_default_to_empty() {
+        // Documents written before profiles existed load with none.
+        let base = tool();
+        assert!(base.cutting_presets.is_empty());
+        document_with(vec![setup(1, CamStockSpecDto::LegacyBox, CamResolvedStockDto::Box)])
+            .validate()
+            .unwrap();
+
+        // A valid named profile passes.
+        let mut profiled = tool();
+        profiled.cutting_presets = vec![CamCuttingPresetDto {
+            name: "Aluminum".into(),
+            cutting: cutting(),
+        }];
+        let mut document = document_with(vec![setup(
+            1,
+            CamStockSpecDto::LegacyBox,
+            CamResolvedStockDto::Box,
+        )]);
+        document.tools = vec![profiled];
+        document.validate().unwrap();
+
+        // Duplicate or empty names fail closed.
+        let mut duplicated = tool();
+        duplicated.cutting_presets = vec![
+            CamCuttingPresetDto {
+                name: "Aluminum".into(),
+                cutting: cutting(),
+            },
+            CamCuttingPresetDto {
+                name: "Aluminum".into(),
+                cutting: cutting(),
+            },
+        ];
+        document.tools = vec![duplicated];
+        let error = document.validate().unwrap_err();
+        assert!(error.contains("unique"));
+
+        let mut blank = tool();
+        blank.cutting_presets = vec![CamCuttingPresetDto {
+            name: "  ".into(),
+            cutting: cutting(),
+        }];
+        document.tools = vec![blank];
+        let error = document.validate().unwrap_err();
+        assert!(error.contains("must have names"));
     }
 
     #[test]

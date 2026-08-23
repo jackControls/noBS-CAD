@@ -3009,7 +3009,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                     "tools": {
                         "type": "array",
                         "items": {"type": "object", "additionalProperties": true},
-                        "description": "Tool library entries: internal id (the primary key operations reference), optional machine number (number-based posts fail closed without it; the Siemens 828D post calls tools by name), name, kind (flat/ball end mill, drill, chamfer mill, tap, reamer, boring bar, thread mill), diameter, flute length/count, and default cutting data (rpm, feeds, coolant)."
+                        "description": "Tool library entries: internal id (the primary key operations reference), optional machine number (number-based posts fail closed without it; the Siemens 828D post calls tools by name), name, kind (flat/ball/face mill, drill, chamfer mill, tap, reamer, boring bar, thread mill), diameter, flute length/count, default cutting data (rpm, feeds, coolant) plus optional named cutting-data profiles (cutting_presets: per-material alternates an operation can copy instead of the default)."
                     },
                     "units": {
                         "type": "string",
