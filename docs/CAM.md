@@ -18,13 +18,29 @@ operation. The operator programs the job explicitly, in this order:
    (GRBL/LinuxCNC/Fanuc style) fail closed with a clear error when it is
    missing, while the Siemens 828D post prefers the tool name (`T="NAME"`),
    falling back to the number only when the name carries no callable
-   identifier. Tool kinds cover flat/ball end mills, face (shell) mills,
-   drills, chamfer mills, taps, reamers, boring bars, and thread mills. New
-   tools go through a short wizard (kind, geometry, cutting data). Cutting
+   identifier. Tool kinds cover flat/ball/bull-nose end mills, face (shell)
+   mills, drills, chamfer mills, taps, reamers, boring bars, and thread
+   mills (turning kinds are reserved for the planned turning workspace).
+   Flat, bull-nose, and face mills carry an optional corner radius. The
+   editor is tabbed (General / Cutter / Cutting data) — new tools start
+   from a type-picker page, and every field stays editable in any order
+   later. Cutting
    data is a default profile plus any number of named profiles (e.g. per
-   material), with a chip-load calculator linking surface speed (Vc) to
-   spindle speed and feed-per-tooth / plunge-per-rev (fz) to the feedrate
-   fields; operation creation can copy any profile instead of the default.
+   material), with a two-way chip-load calculator: each linked pair
+   (rpm ↔ surface speed, feed ↔ feed-per-tooth, plunge ↔ plunge-per-rev)
+   follows an edit on either side, and the side last touched wins at save
+   time. The calculator works on the *effective* cutting diameter: engaged
+   shallower than the corner radius, De = D − 2R + 2√(2R·ap − ap²) at the
+   entered depth of cut — the correction that matters most on high-feed
+   tooling. Operation creation can copy any profile instead of the default.
+
+   The library itself belongs to the OS user, not the project: every
+   mutation mirrors to a per-user file (`cam-tool-library.json` in the
+   platform config directory — `~/Library/Application Support` on macOS,
+   `%APPDATA%` on Windows, `~/.config` on Linux), and loading a project
+   merges that central library into the document (central wins on id
+   collisions, project-only tools are absorbed). Setups, operations, units,
+   and post defaults stay project data.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
    cylinder, hex bar, or a modeled body — defined in one of three ways: a

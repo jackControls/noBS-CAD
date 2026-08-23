@@ -1,6 +1,7 @@
 # CAM branch handoff — 2026-08-23
 
-State of `feature/cam` after six working rounds. Everything below is
+State of `feature/cam` after seven working rounds, rebased onto current
+`main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
@@ -11,9 +12,12 @@ and the tests, not this document, when they disagree.
 - `model.rs` — document model + all validation. Tool identity is three-layer:
   `id` (internal uid, the only key operations reference), `number:
   Option<u32>` (machine-facing, optional), `name` (required, also the call
-  identifier on name-capable controls). Tool kinds: flat/ball end mill,
-  face (shell) mill, drill, chamfer mill, tap, reamer, boring bar, thread
-  mill. Cutting data is a default profile (`cutting`) plus named extra
+  identifier on name-capable controls). Tool kinds: flat/ball/bull-nose end
+  mill, face (shell) mill, drill, chamfer mill, tap, reamer, boring bar,
+  thread mill; `turning_general` is reserved for the planned turning
+  workspace (no milling operation accepts it). Flat/bull-nose/face mills
+  carry `corner_radius` (validated: positive, ≤ D/2, required on bull
+  nose). Cutting data is a default profile (`cutting`) plus named extra
   profiles (`cutting_presets`, names unique/non-empty, each validated);
   operations copy one profile's values at creation.
   `CamToolDto::label()` renders
@@ -89,18 +93,30 @@ and the tests, not this document, when they disagree.
   "Stock & WCS" row, or an operation row floats that configuration in a
   modal (`setupEdit` / `operationEdit` dialog states, reusing the former
   inspector components inside a feature-dialog shell). The tool library is
-  a separate full-size dialog: tool table on the left; editing an existing
-  tool is one scrolling page, while creating one is a three-page wizard
-  (kind grid grouped Milling/Hole making → identity+geometry → cutting
-  data). Cutting data supports named profiles (default preset + extras) and
-  a chip-load calculator block whose Vc / feed-per-tooth / plunge-per-rev
-  fields are formula-linked to the canonical rpm/feed fields
+  a separate full-size dialog: tool table on the left; the editor is tabbed
+  (General / Cutter / Cutting data) and brand-new tools start on a grouped
+  type-picker page (Milling / Hole making, plus a disabled Turning tile for
+  the planned workspace). Cutting data supports named profiles (default
+  preset + extras) and a two-way chip-load calculator: each linked pair
+  (rpm↔Vc, feed↔fz, plunge↔fpr) follows an edit on either side without
+  oscillation (the side touched last is the driver and wins at submit);
+  the speed pair resolves through the *effective* cutting diameter, which
+  for corner-radius tools engaged shallower than R follows the vendor
+  button-cutter formula De = D − 2R + 2√(2R·ap − ap²)
   (`src/cam/units.ts` owns the conversions). The setup dialog is a centered
   modal;
   during a viewport pick it steps aside. The ribbon's manufacturing tab
   mirrors the reference hierarchy: WORKSPACE (return to model), SETUP (new
   setup), TOOLPATHS (face/contour/pocket/chamfer/drill/thread), MANAGE (tool
   library), OUTPUT (post/events).
+- The tool library follows the OS user, not the project: mutations
+  write-through to `cam-tool-library.json` in the per-user config dir
+  (new Tauri commands `cam_library_load`/`cam_library_save`,
+  `src/cam/library.ts`), and entering the manufacturing workspace merges
+  the central library into the loaded document (merge by id, central wins,
+  project-only tools absorbed; the document is only rewritten when the
+  merge changes content, so steady state never dirties a project on open).
+  Off the Tauri runtime the library stays project-local.
 - Face operations target the model's top surface: dialogs and the inspector
   enter a depth below model top (0 = model top), converted to absolute
   setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
@@ -145,7 +161,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 59, 456 total, sketch 101), mcp-server 28,
+`cargo test --workspace` (cam 60, 459 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
