@@ -23,7 +23,7 @@ pub enum FocusPack {
 }
 
 impl FocusPack {
-    pub const ALL: [FocusPack; 10] = [
+    pub const ALL: [FocusPack; 11] = [
         FocusPack::Document,
         FocusPack::Assembly,
         FocusPack::Sketch,
@@ -965,7 +965,7 @@ mod tests {
             "cam_post_setup",
             "cam_simulate_setup",
         ];
-        assert_eq!(modeling.len(), 119);
+        assert_eq!(modeling.len(), 124);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(

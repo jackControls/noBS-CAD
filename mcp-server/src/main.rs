@@ -21,7 +21,9 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 119;
+// 119 modeling tools from the main registry plus the 5 CAM tools this
+// branch adds on top.
+const MODELING_TOOL_COUNT: usize = 124;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -3723,7 +3725,7 @@ mod tests {
         assert_eq!(
             all_tools.len(),
             MODELING_TOOL_COUNT + 22,
-            "119 modeling tools plus 8 print helpers and 14 control tools"
+            "124 modeling tools (5 cam) plus 8 print helpers and 14 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3818,12 +3820,13 @@ mod tests {
             *packs.entry(tool.pack.as_str()).or_default() += 1;
         }
         assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
-        // Modeling registry covers 9 packs; print helpers are outside MODELING_TOOL_COUNT.
+        // Modeling registry covers 10 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 5);
         assert_eq!(packs["assembly"], 10);
         assert_eq!(packs["sketch"], 50);
         assert_eq!(packs["solid"], 10);
+        assert_eq!(packs["cam"], 5);
         assert!(packs["modify"] >= 6);
         assert!(packs["body_ops"] >= 10);
         assert!(packs["datums"] >= 6);
