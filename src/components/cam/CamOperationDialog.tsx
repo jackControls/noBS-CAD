@@ -11,6 +11,7 @@ import {
   listSketchLoops,
   listSketchPointRefs,
   loopToSetupPath,
+  modelTopZInSetup,
   sketchPointToSetup,
   type SketchLoop,
 } from '../../cam/geometry';
@@ -20,7 +21,7 @@ import {
   defaultThreadPreset,
   isoMetricGrade6Envelope,
 } from '../../lib/threadStandards';
-import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamPoint2Dto, CamThreadHand } from '../../engine/types';
+import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
@@ -42,6 +43,7 @@ type GeometrySource = 'sketch' | 'manual';
 export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const cam = useAppStore((state) => state.camDocument);
   const sketches = useAppStore((state) => state.finishedSketches);
+  const scene = useAppStore((state) => state.solidScene);
   const close = () => useAppStore.getState().setCamDialog(null);
   const units = cam.units;
   const lu = lengthUnit(units);
@@ -63,6 +65,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
 
   const [name, setName] = useState(`${camOperationLabel(kind)} ${existingCount + 1}`);
   const [toolId, setToolId] = useState<number | null>(tools[0]?.id ?? null);
+  const [presetIndex, setPresetIndex] = useState(0);
   const [rpm, setRpm] = useState('');
   const [feedXy, setFeedXy] = useState('');
   const [feedZ, setFeedZ] = useState('');
@@ -76,7 +79,9 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
 
   const [topZ, setTopZ] = useState(setup ? displayLength(setup.stock.max.z, units).toFixed(4) : '0');
   const [bottomZ, setBottomZ] = useState('');
-  const [targetZ, setTargetZ] = useState('');
+  // Face targets are entered as a depth below the model top surface: 0 faces
+  // exactly the model top, matching how machinists talk about the cut.
+  const [targetZ, setTargetZ] = useState(kind === 'face' ? '0' : '');
   const [stepDown, setStepDown] = useState('');
   const [stepOver, setStepOver] = useState('');
   const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
@@ -110,14 +115,29 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
 
   if (!setup) return null;
 
+  // Setup-space Z of the model's top surface; face depths are entered
+  // relative to it. Null when the setup references no bodies.
+  const modelTop = modelTopZInSetup(scene, setup);
+  const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
+
+  /** Copy a library cutting profile (default or a named preset) into the
+   *  feeds & speeds drafts. */
+  const applyCutting = (tool: CamToolDto, preset: number) => {
+    const data =
+      preset === 0 ? tool.cutting : tool.cutting_presets[preset - 1]?.cutting;
+    if (!data) return;
+    setRpm(String(data.spindle_rpm));
+    setFeedXy(displayFeed(data.feed_xy, units).toFixed(4));
+    setFeedZ(displayFeed(data.feed_z, units).toFixed(4));
+    setCoolant(data.coolant);
+  };
+
   const chooseTool = (id: number) => {
     setToolId(id);
+    setPresetIndex(0);
     const tool = cam.tools.find((candidate) => candidate.id === id);
     if (tool && !feedsTouched) {
-      setRpm(String(tool.cutting.spindle_rpm));
-      setFeedXy(displayFeed(tool.cutting.feed_xy, units).toFixed(4));
-      setFeedZ(displayFeed(tool.cutting.feed_z, units).toFixed(4));
-      setCoolant(tool.cutting.coolant);
+      applyCutting(tool, 0);
       if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
         setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
       }
@@ -226,7 +246,12 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             kind,
             bounds,
             top_z: top,
-            target_z: commitLength(parseDraft(targetZ, 'Target Z'), units),
+            // The operator enters the face depth as an offset below the
+            // model's top surface; the stored value is absolute setup Z.
+            target_z:
+              modelTop !== null
+                ? modelTop - commitLength(parseDraft(targetZ, 'Depth below model top'), units)
+                : commitLength(parseDraft(targetZ, 'Target Z'), units),
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
             step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
             cutting: cutting(),
@@ -500,20 +525,44 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
 
           <DialogSection title="TOOL (FROM LIBRARY)">
             {tools.length > 0 ? (
-              <select
-                value={toolId ?? ''}
-                onChange={(event) => {
-                  setFeedsTouched(false);
-                  chooseTool(Number(event.target.value));
-                }}
-                className={CAM_DIALOG_INPUT}
-              >
-                {tools.map((tool) => (
-                  <option key={tool.id} value={tool.id}>
-                    {tool.number != null ? `T${tool.number} · ` : ''}{tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)} {lu}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={toolId ?? ''}
+                  onChange={(event) => {
+                    setFeedsTouched(false);
+                    chooseTool(Number(event.target.value));
+                  }}
+                  className={CAM_DIALOG_INPUT}
+                >
+                  {tools.map((tool) => (
+                    <option key={tool.id} value={tool.id}>
+                      {tool.number != null ? `T${tool.number} · ` : ''}{tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)} {lu}
+                    </option>
+                  ))}
+                </select>
+                {selectedTool && selectedTool.cutting_presets.length > 0 && (
+                  <label className="mt-2 block">
+                    <span className={CAM_DIALOG_LABEL}>Cutting profile</span>
+                    <select
+                      value={presetIndex}
+                      onChange={(event) => {
+                        const index = Number(event.target.value);
+                        setPresetIndex(index);
+                        setFeedsTouched(false);
+                        applyCutting(selectedTool, index);
+                      }}
+                      className={CAM_DIALOG_INPUT}
+                    >
+                      <option value={0}>Default preset</option>
+                      {selectedTool.cutting_presets.map((preset, index) => (
+                        <option key={index + 1} value={index + 1}>
+                          {preset.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </>
             ) : (
               <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
                 No compatible tool in the library. Add one from the tool library first.
@@ -579,7 +628,12 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
               <DraftNumber label="Retract Z" value={retractZ} onChange={setRetractZ} unit={lu} />
               <DraftNumber label="Top Z" value={topZ} onChange={setTopZ} unit={lu} />
               {kind === 'face' ? (
-                <DraftNumber label="Target Z" value={targetZ} onChange={setTargetZ} unit={lu} />
+                <DraftNumber
+                  label={modelTop !== null ? 'Depth below model top (0 = model top)' : 'Target Z'}
+                  value={targetZ}
+                  onChange={setTargetZ}
+                  unit={lu}
+                />
               ) : (
                 <DraftNumber label="Bottom Z" value={bottomZ} onChange={setBottomZ} unit={lu} />
               )}

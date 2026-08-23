@@ -217,10 +217,14 @@ function jointConnectorIsLive(
 }
 
 /** Manufacturing editor dialogs: manual setup creation, per-operation
- *  programming, tool-library editing, and post-at-export. */
+ *  programming, tool-library editing, and post-at-export. The `*Edit`
+ *  variants float the configuration of an existing setup/operation in a
+ *  dialog (opened by double-clicking browser rows); there is no sidebar. */
 export type CamDialogState =
   | { type: 'setup' }
+  | { type: 'setupEdit' }
   | { type: 'operation'; kind: CamOperationDto['kind'] }
+  | { type: 'operationEdit'; operationId: number }
   | { type: 'tool'; toolId: number | null }
   | { type: 'post' };
 

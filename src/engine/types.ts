@@ -2197,6 +2197,7 @@ export type CamPostDialect = 'grbl' | 'linux_cnc' | 'fanuc' | 'siemens828d';
 export type CamToolKind =
   | 'flat_end_mill'
   | 'ball_end_mill'
+  | 'face_mill'
   | 'drill'
   | 'chamfer_mill'
   | 'tap'
@@ -2339,6 +2340,16 @@ export interface CamToolDto {
   /** Chamfer mills only; chamfer operations currently require 90 degrees. */
   point_angle_degrees: number | null;
   /** Library cutting defaults copied into new operations at creation. */
+  cutting: CamCuttingParametersDto;
+  /** Additional named cutting-data profiles (e.g. per material); `cutting`
+   *  above is the default profile. Operation creation can pick any profile
+   *  and copies its values. */
+  cutting_presets: CamCuttingPresetDto[];
+}
+
+/** A named cutting-data profile on a library tool. */
+export interface CamCuttingPresetDto {
+  name: string;
   cutting: CamCuttingParametersDto;
 }
 

@@ -261,6 +261,19 @@ export function modelBoundsOfBodies(
   return found ? { min, max } : null;
 }
 
+/** Setup-space Z of the model's top surface (max model Z across the setup's
+ *  bodies), or null when the setup references no bodies. Fixed-axis WCS
+ *  frames keep their Z axis parallel to model Z, so one probe point on the
+ *  top plane pins the setup Z of that whole plane. */
+export function modelTopZInSetup(
+  scene: { bodies: Array<{ id: number; mesh: { positions: number[] } }> },
+  setup: CamSetupDto,
+): number | null {
+  const bounds = modelBoundsOfBodies(scene, setup.body_ids);
+  if (!bounds) return null;
+  return modelPointToSetup({ x: bounds.min.x, y: bounds.min.y, z: bounds.max.z }, setup.wcs).z;
+}
+
 function anchorValue(min: number, max: number, anchor: 'min' | 'center' | 'max'): number {
   if (anchor === 'center') return (min + max) * 0.5;
   return anchor === 'max' ? max : min;

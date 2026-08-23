@@ -65,7 +65,14 @@ export function CamSetupsPanel() {
           const active = setup.id === cam.active_setup_id;
           return (
             <section key={setup.id}>
-              <div className={`flex h-7 items-center gap-1.5 px-2 ${active ? 'bg-accent/18' : ''}`}>
+              <div
+                className={`flex h-7 items-center gap-1.5 px-2 ${active ? 'bg-accent/18' : ''}`}
+                onDoubleClick={() => {
+                  runCamAction(() => setActiveCamSetup(setup.id));
+                  openDialog({ type: 'setupEdit' });
+                }}
+                title="Double-click to edit the setup configuration"
+              >
                 <button
                   type="button"
                   onClick={() => runCamAction(() => setActiveCamSetup(setup.id))}
@@ -96,6 +103,8 @@ export function CamSetupsPanel() {
                       selectSetup(setup.id);
                       selectOperation(null);
                     }}
+                    onDoubleClick={() => openDialog({ type: 'setupEdit' })}
+                    title="Stock, WCS, and work offsets — double-click to edit"
                     className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                       selectedOperationId === null
                         ? 'bg-accent/20 text-ink'
@@ -113,6 +122,12 @@ export function CamSetupsPanel() {
                         selectSetup(setup.id);
                         selectOperation(operation.id);
                       }}
+                      onDoubleClick={() => {
+                        selectSetup(setup.id);
+                        selectOperation(operation.id);
+                        openDialog({ type: 'operationEdit', operationId: operation.id });
+                      }}
+                      title="Double-click to edit the operation"
                       className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                         selectedOperationId === operation.id
                           ? 'bg-accent/25 text-ink'

@@ -355,10 +355,10 @@ export function camToolCompatible(
     case 'face':
     case 'pocket2d':
       return (
-        (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill') && tool.center_cutting
+        (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'face_mill') && tool.center_cutting
       );
     case 'contour2d':
-      return tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill';
+      return tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'face_mill';
     case 'chamfer2d':
       return tool.kind === 'chamfer_mill';
     case 'drill':

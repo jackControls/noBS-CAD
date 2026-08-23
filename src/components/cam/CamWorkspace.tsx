@@ -10,6 +10,7 @@ import {
   Route,
   Trash2,
   Wrench,
+  X,
 } from 'lucide-react';
 import {
   activeCamSetup,
@@ -43,6 +44,7 @@ import type {
   NbPostAnalysisDto,
 } from '../../engine/types';
 import { cancelCamPointPick } from '../../cam/pointPick';
+import { modelTopZInSetup } from '../../cam/geometry';
 import { useAppStore } from '../../store/appStore';
 import { Viewport } from '../viewport/Viewport';
 import { runCamAction } from './CamBrowser';
@@ -266,21 +268,8 @@ export function CamWorkspace() {
           )}
         </div>
       </section>
-      <aside className="w-[310px] shrink-0 overflow-y-auto border-l border-edge bg-panel">
-        {operation ? (
-          <OperationInspector operation={operation} tools={cam.tools} units={units} />
-        ) : setup ? (
-          <SetupInspector setup={setup} units={units} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-mute" data-testid="cam-sidebar-empty">
-            <p className="max-w-[230px] text-center text-[11px] leading-relaxed">
-              Nothing is created automatically. Add tools from the Tool Library
-              and create a setup — both live in the ribbon — then program each
-              operation by hand.
-            </p>
-          </div>
-        )}
-      </aside>
+      {/* No right sidebar in the manufacturing workspace: setup and
+          operation configuration live in double-click dialogs. */}
       <CamDialogHost />
     </div>
   );
@@ -289,11 +278,72 @@ export function CamWorkspace() {
 /** Renders the active manufacturing editor dialog, if any. */
 function CamDialogHost() {
   const dialog = useAppStore((state) => state.camDialog);
+  const cam = useAppStore((state) => state.camDocument);
   if (!dialog) return null;
   if (dialog.type === 'setup') return <CamSetupDialog />;
+  if (dialog.type === 'setupEdit') {
+    const setup = activeCamSetup(cam);
+    return setup ? <SetupEditDialog setup={setup} units={cam.units} /> : null;
+  }
   if (dialog.type === 'operation') return <CamOperationDialog kind={dialog.kind} />;
+  if (dialog.type === 'operationEdit') {
+    const operation = findCamOperation(cam, dialog.operationId);
+    return operation ? (
+      <OperationEditDialog operation={operation} tools={cam.tools} units={cam.units} />
+    ) : null;
+  }
   if (dialog.type === 'post') return <CamPostDialog />;
   return <CamToolDialog toolId={dialog.toolId} />;
+}
+
+/** Modal shell for editing an existing setup's configuration. */
+function SetupEditDialog({ setup, units }: { setup: CamSetupDto; units: CamUnits }) {
+  const close = () => useAppStore.getState().setCamDialog(null);
+  return (
+    <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+      <div className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
+          <Gauge size={15} className="text-accent" />
+          <span className="flex-1 text-xs font-semibold text-ink">Setup — {setup.name}</span>
+          <button type="button" onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink">
+            <X size={14} />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <SetupInspector setup={setup} units={units} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Modal shell for editing an existing operation's parameters. */
+function OperationEditDialog({
+  operation,
+  tools,
+  units,
+}: {
+  operation: CamOperationDto;
+  tools: CamToolDto[];
+  units: CamUnits;
+}) {
+  const close = () => useAppStore.getState().setCamDialog(null);
+  return (
+    <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
+      <div className="feature-dialog pointer-events-auto absolute right-5 top-[132px] flex max-h-[calc(100vh-190px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
+          <Wrench size={15} className="text-accent" />
+          <span className="flex-1 text-xs font-semibold text-ink">{operation.name}</span>
+          <button type="button" onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink">
+            <X size={14} />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <OperationInspector operation={operation} tools={tools} units={units} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ProgramStats({ program, units }: { program: CamProgramDto; units: CamUnits }) {
@@ -529,9 +579,18 @@ type ThreadOperation = Extract<CamOperationDto, { kind: 'thread' }>;
 type OperationUpdate = (mutate: (next: CamOperationDto) => void) => Promise<void>;
 
 function FaceFields({ operation, units, update }: { operation: FaceOperation; units: CamUnits; update: OperationUpdate }) {
+  const scene = useAppStore((state) => state.solidScene);
+  const setup = useAppStore((state) => activeCamSetup(state.camDocument));
+  // Face targets read as a depth below the model top surface; the stored
+  // value stays absolute setup Z.
+  const modelTop = setup ? modelTopZInSetup(scene, setup) : null;
   return <div className="grid grid-cols-2 gap-2">
     <LengthField label="Top Z" valueMm={operation.top_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.top_z = value; })} />
-    <LengthField label="Target Z" valueMm={operation.target_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.target_z = value; })} />
+    {modelTop !== null ? (
+      <LengthField label="Depth below model top" valueMm={modelTop - operation.target_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.target_z = modelTop - value; })} />
+    ) : (
+      <LengthField label="Target Z" valueMm={operation.target_z} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.target_z = value; })} />
+    )}
     <LengthField label="Stepover" valueMm={operation.step_over} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_over = value; })} />
     <LengthField label="Stepdown" valueMm={operation.step_down} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_down = value; })} />
   </div>;
