@@ -34,13 +34,25 @@ operation. The operator programs the job explicitly, in this order:
    entered depth of cut — the correction that matters most on high-feed
    tooling. Operation creation can copy any profile instead of the default.
 
-   The library itself belongs to the OS user, not the project: every
-   mutation mirrors to a per-user file (`cam-tool-library.json` in the
-   platform config directory — `~/Library/Application Support` on macOS,
-   `%APPDATA%` on Windows, `~/.config` on Linux), and loading a project
-   merges that central library into the document (central wins on id
-   collisions, project-only tools are absorbed). Setups, operations, units,
-   and post defaults stay project data.
+   The library lives in two scopes. The CENTRAL library belongs to the OS
+   user, not any project: it is a single per-user file
+   (`cam-tool-library.json` in the platform config directory —
+   `~/Library/Application Support` on macOS, `%APPDATA%` on Windows,
+   `~/.config` on Linux) holding every tool the operator ever defined, and
+   it owns tool-id allocation so ids stay unique across projects. The
+   PROJECT library lives inside the machining document (and the .nbcad
+   file): full-data snapshots of exactly the tools this project uses, which
+   is what operations reference — a project file is self-contained and
+   portable, and editing the central library never silently rewrites an
+   existing project. Synchronisation is always explicit, never a background
+   merge: import copies a central tool into the project (or refreshes the
+   same-id snapshot), publish pushes a project snapshot back into the
+   collection. Creating a tool inside a project also registers it centrally
+   so it stays importable everywhere. The Tool Library dialog (ribbon)
+   opens on the central scope with a header switch to the project scope;
+   operation dialogs list project tools and offer one-click import of
+   compatible central tools. Setups, operations, units, and post defaults
+   stay project data.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
    cylinder, hex bar, or a modeled body — defined in one of three ways: a
@@ -120,8 +132,8 @@ rewrites stored geometry.
 - A React manufacturing workspace that shares the modeling viewport and
   browser: the modeling tree stays in place and gains a Setups section
   (operations listed with their tool tag, `[T<n>]`/`[name]`), while the tool
-  library lives in its own full dialog (table plus wizard-style editor), not
-  in the browser tree. There is no side inspector panel: double-clicking a
+  library lives in its own full dialog (table plus tabbed editor, with a
+  central/project scope switch in the header), not in the browser tree. There is no side inspector panel: double-clicking a
   setup or operation row floats its configuration in a dialog, exactly like
   the modeling feature dialogs. The workspace opens directly onto the
   modeled parts (setups

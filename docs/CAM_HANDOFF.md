@@ -1,6 +1,6 @@
 # CAM branch handoff — 2026-08-23
 
-State of `feature/cam` after seven working rounds, rebased onto current
+State of `feature/cam` after eight working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
@@ -109,14 +109,38 @@ and the tests, not this document, when they disagree.
   mirrors the reference hierarchy: WORKSPACE (return to model), SETUP (new
   setup), TOOLPATHS (face/contour/pocket/chamfer/drill/thread), MANAGE (tool
   library), OUTPUT (post/events).
-- The tool library follows the OS user, not the project: mutations
-  write-through to `cam-tool-library.json` in the per-user config dir
-  (new Tauri commands `cam_library_load`/`cam_library_save`,
-  `src/cam/library.ts`), and entering the manufacturing workspace merges
-  the central library into the loaded document (merge by id, central wins,
-  project-only tools absorbed; the document is only rewritten when the
-  merge changes content, so steady state never dirties a project on open).
-  Off the Tauri runtime the library stays project-local.
+- The tool library is two-scope (round 8 rework; the write-through/merge
+  model was reverted after it shipped a real regression — a centrally
+  absorbed tool with `center_cutting: false` became unusable for facing,
+  and the merge rewrote projects on open). The CENTRAL library is a
+  per-user collection (`cam-tool-library.json` in the platform config dir;
+  Tauri commands `cam_library_load`/`cam_library_save`; `src/cam/library.ts`)
+  that owns tool-id allocation. The PROJECT library is the document's
+  `tools` array: full-data snapshots of the tools this project uses, saved
+  inside the .nbcad, referenced by operations — self-contained and
+  portable. NO automatic merge happens anywhere. Sync is explicit:
+  `importCamToolFromCentral` (pull/refresh same-id snapshot),
+  `publishCamToolToCentral` (push/overwrite same-id central entry).
+  `addCamTool` allocates the id through the central library and also
+  registers the tool there; `updateCamTool`/`deleteCamTool` touch the
+  project only. Off the Tauri runtime the central calls no-op and the
+  project library stands alone. The Tool Library dialog defaults to the
+  central scope with a header switch to "This project"; the project scope
+  has an import strip (central tools not yet snapshotted) and per-tool
+  sync actions in the editor footer (Add to central / Update central copy /
+  Reset to central copy, driven by a JSON content diff). The operation
+  dialog lists project tools and offers one-click import of compatible
+  central tools inline (selects and prefills from the imported copy). The
+  operation inspector's inline tool-geometry edits write the project
+  snapshot only, and say so.
+- Facing no longer demands a center-cutting tool (the round-8 regression's
+  root cause): the planner's entry plunge sits outside the stock boundary —
+  one radius plus a 2 mm approach clearance off the min-X edge — so
+  indexable face/shell mills, which are rarely center-cutting, are valid.
+  Engine validation and `camToolCompatible` were relaxed for `face` only;
+  pocket/contour entries still plunge into material and keep the
+  center-cutting requirement until ramp/helical/lead-in entries exist.
+  Engine test: `face_accepts_a_non_center_cutting_face_mill`.
 - Face operations target the model's top surface: dialogs and the inspector
   enter a depth below model top (0 = model top), converted to absolute
   setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
@@ -152,6 +176,9 @@ drill cycles.
 - Nothing is created automatically: no setup, tool, or operation appears
   without explicit operator input; incomplete input fails closed with a
   readable error.
+- Project tool libraries are self-contained snapshots; the central library
+  syncs only through explicit operator actions (import/publish), never
+  through a background merge on open.
 - Planned motion is controller-neutral and post-agnostic; any post must be
   able to render any program. New behavior belongs in the planner IR, not in
   a post.
@@ -161,7 +188,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 60, 459 total), mcp-server 37,
+`cargo test --workspace` (cam 63, 462 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
@@ -173,8 +200,9 @@ drill cycles.
    canned-cycle output variants behind per-control validation, if ever.
 4. Thread milling round 2: helical lead-in/out arcs (line leads today),
    external threads, multi-start, tool-pitch matching against the operation.
-5. Tool library: holders/shafts, library import/export. (Named cutting-data
-   profiles and the Vc/fz calculator landed in round 6.)
+5. Tool library: holders/shafts, central-library file import/export.
+   (The central/project two-scope model, named cutting-data profiles, and
+   the Vc/fz calculator are landed.)
 6. Heights "From"-references (model top / stock bottom + offset) like the
    reference workflow, applied to every height of every operation — face
    depth already entered relative to model top, but stored absolute.
@@ -185,6 +213,8 @@ drill cycles.
    (radial/axial), finishing passes with separate feed, tolerance/smoothing
    fields, drill break-through depth + tip-through-bottom, contour lead
    in/out geometry.
+9. Ramp/helical entries for pocket and contour — the blocker for
+   non-center-cutting tools there (facing is already exempt).
 
 ## Process note
 
