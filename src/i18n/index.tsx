@@ -2,21 +2,33 @@
  * Lightweight i18n provider.
  *
  * All user-facing strings live in locale JSON files; `en` is the default
- * and fallback. To add zh-CN later: create `zh-CN.json` with the same key
- * tree, register it in `dictionaries` below, and pass locale="zh-CN" to
- * the provider. Keys are dotted paths (e.g. "ribbon.tabs.model"); missing
- * keys render the key itself so gaps are visible during development.
+ * and fallback. To add a language: create `<locale>.json` with the same key
+ * tree, register it in `dictionaries` below, and pass its locale to the
+ * provider (see `src/i18n/locales.ts` for the supported set). Keys are
+ * dotted paths (e.g. "ribbon.tabs.model"); missing keys fall back to `en`,
+ * then render the key itself so gaps are visible during development.
  */
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import en from './en.json';
+import zhCN from './zh-CN.json';
+import es from './es.json';
+import de from './de.json';
 
-export type Locale = 'en' | (string & {});
+export type Locale = 'en' | 'zh-CN' | 'es' | 'de' | (string & {});
 
 type Messages = typeof en;
 
 const dictionaries: Record<string, Messages> = {
   en,
-  // 'zh-CN': zhCN, // TODO(locale): add Simplified Chinese dictionary
+  'zh-CN': zhCN,
+  es,
+  de,
 };
 
 interface I18nContextValue {
@@ -39,6 +51,17 @@ function lookup(dict: unknown, key: string): string | undefined {
   return typeof node === 'string' ? node : undefined;
 }
 
+/**
+ * Active locale for the non-hook `translate()` function. Kept in sync with
+ * the provider via `setActiveLocale` so engine controllers and dialog
+ * builders (which cannot use the React hook) still localize.
+ */
+let activeLocale: Locale = 'en';
+
+export function setActiveLocale(locale: Locale): void {
+  activeLocale = locale;
+}
+
 export function I18nProvider({
   locale = 'en',
   children,
@@ -54,6 +77,10 @@ export function I18nProvider({
     };
   }, [locale]);
 
+  useEffect(() => {
+    setActiveLocale(locale);
+  }, [locale]);
+
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 
@@ -63,9 +90,13 @@ export function useTranslation(): I18nContextValue {
 
 /**
  * Non-hook translation for non-React modules (engine controllers, dialog
- * builders). Always uses the default `en` dictionary — components should
+ * builders). Uses the active locale with `en` fallback; components should
  * prefer the hook.
  */
 export function translate(key: string): string {
-  return lookup(dictionaries.en, key) ?? key;
+  return (
+    lookup(dictionaries[activeLocale], key) ??
+    lookup(dictionaries.en, key) ??
+    key
+  );
 }

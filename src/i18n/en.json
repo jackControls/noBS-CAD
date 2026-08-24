@@ -98,6 +98,8 @@
     "sixDofSpeed": "3D mouse speed",
     "sixDofSpeedDescription": "Controls both translation and rotation. The production default is 150%.",
     "reset": "Reset",
+    "language": "LANGUAGE",
+    "languageHint": "Interface language. Community translations may be incomplete in places.",
     "legal": "LEGAL & CREDITS",
     "spaceMouseCompatibility": "noBS CAD is compatible with 3Dconnexion SpaceMouse devices.",
     "threeDconnexionAttribution": "3D input device development tools and related technology are provided under license from 3Dconnexion. © 3Dconnexion 1992 - 2020. All rights reserved.",

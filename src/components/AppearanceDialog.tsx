@@ -1,5 +1,7 @@
 import { Check, Monitor, Moon, Sun, X } from 'lucide-react';
 import { useTranslation } from '../i18n';
+import { LOCALE_NAMES, SUPPORTED_LOCALES } from '../i18n/locales';
+import { useLocaleStore } from '../i18n/localeStore';
 import { cx } from '../lib/cx';
 import { useAppStore } from '../store/appStore';
 import type { ThemePreference } from '../theme';
@@ -44,6 +46,8 @@ export function AppearanceDialog() {
   const setPreference = useAppStore((s) => s.setThemePreference);
   const setSixDofSpeed = useAppStore((s) => s.setSixDofSpeed);
   const setOpen = useAppStore((s) => s.setSettingsOpen);
+  const locale = useLocaleStore((s) => s.locale);
+  const setLocale = useLocaleStore((s) => s.setLocale);
 
   if (!open) return null;
 
@@ -165,6 +169,44 @@ export function AppearanceDialog() {
                   {t('appearance.reset')}
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-edge pt-4">
+            <div className="mb-2 text-[10px] font-semibold tracking-widest text-mute">
+              {t('appearance.language')}
+            </div>
+            <div className="rounded-lg border border-edge bg-header/55 p-3">
+              <div
+                className="flex flex-wrap gap-1.5"
+                role="radiogroup"
+                aria-label={t('appearance.language')}
+              >
+                {SUPPORTED_LOCALES.map((code) => {
+                  const selected = code === locale;
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      data-testid={`locale-${code}`}
+                      onClick={() => setLocale(code)}
+                      className={cx(
+                        'rounded border px-3 py-1.5 text-xs font-semibold transition-colors',
+                        selected
+                          ? 'border-accent bg-accent/15 text-accent'
+                          : 'border-edge bg-header/55 text-ink hover:border-accent/60 hover:bg-header',
+                      )}
+                    >
+                      {LOCALE_NAMES[code]}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-[10px] leading-relaxed text-mute">
+                {t('appearance.languageHint')}
+              </p>
             </div>
           </div>
 
