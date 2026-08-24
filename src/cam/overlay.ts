@@ -16,6 +16,7 @@ import type {
 import type { CamPointPickSession } from '../store/appStore';
 import { activeCamSetup } from './document';
 import { modelBoundsOfBodies, setupPointToModel } from './geometry';
+import { camPickCandidateKey } from './pointPick';
 
 /**
  * Manufacturing overlays for the shared modeling viewport.
@@ -57,6 +58,7 @@ const CUT_LINE: Rgba = [0.34, 0.84, 0.64, 0.95];
 const REST_STOCK_FILL: Rgba = [0.16, 0.6, 0.25, 0.9];
 const COLLISION_POINT: Rgba = [0.94, 0.38, 0.35, 0.95];
 const PICK_POINT: Rgba = [0.4, 0.73, 0.94, 0.95];
+const PICK_POINT_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
 const TOOL_FLUTE_FILL: Rgba = [0.78, 0.8, 0.84, 0.55];
 const TOOL_SHANK_FILL: Rgba = [0.62, 0.65, 0.7, 0.3];
 const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
@@ -128,14 +130,27 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   const setup = activeCamSetup(cam);
 
   // Point-pick candidates arrive in model coordinates and render on top of
-  // everything else, with or without a setup.
+  // everything else, with or without a setup. The hovered candidate draws
+  // brighter and larger so the operator sees exactly what a click commits.
   const markerRadius = pickMarkerRadius(scene, setup);
   if (state.camPointPick && state.camPointPick.candidates.length > 0) {
-    const positions: number[] = [];
+    const rest: number[] = [];
+    const hovered: number[] = [];
     for (const candidate of state.camPointPick.candidates) {
-      positions.push(candidate.point.x, candidate.point.y, candidate.point.z);
+      const target =
+        camPickCandidateKey(candidate) === state.camPointPick.hoverKey ? hovered : rest;
+      target.push(candidate.point.x, candidate.point.y, candidate.point.z);
     }
-    layers.points.push({ color: PICK_POINT, radius: markerRadius, positions });
+    if (rest.length > 0) {
+      layers.points.push({ color: PICK_POINT, radius: markerRadius, positions: rest });
+    }
+    if (hovered.length > 0) {
+      layers.points.push({
+        color: PICK_POINT_HOVER,
+        radius: markerRadius * 1.5,
+        positions: hovered,
+      });
+    }
   }
 
   if (!setup) return layers;
@@ -156,13 +171,13 @@ function pickMarkerRadius(scene: SolidSceneDto, setup: CamSetupDto | null): numb
       setup.stock.max.z - setup.stock.min.z,
       1,
     );
-    return clamp(extent * 0.008, 0.75, 6);
+    return clamp(extent * 0.011, 1, 7);
   }
   const bounds = modelBoundsOfBodies(scene, scene.bodies.map((body) => body.id));
   const extent = bounds
     ? Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z, 1)
     : 100;
-  return clamp(extent * 0.008, 0.75, 6);
+  return clamp(extent * 0.011, 1, 7);
 }
 
 /** RGB axes at the WCS origin; the WCS origin is already model-space. */

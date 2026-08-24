@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { Copy, Plus, Trash2, Wrench, X } from 'lucide-react';
+import { Copy, Plus, Search, Trash2, Wrench, X } from 'lucide-react';
 import {
   addCamTool,
+  camToolCompatible,
   deleteCamTool,
   importCamToolFromCentral,
   publishCamToolToCentral,
@@ -33,6 +34,8 @@ import {
 import type {
   CamCoolantMode,
   CamCuttingParametersDto,
+  CamDrillCycle,
+  CamOperationDto,
   CamToolDto,
   CamToolKind,
 } from '../../engine/types';
@@ -45,6 +48,8 @@ import {
   DraftNumber,
   parseDraft,
 } from './camFields';
+
+type CamToolPickKind = CamOperationDto['kind'];
 
 const KIND_LABELS: Record<CamToolKind, string> = {
   flat_end_mill: 'Flat end mill',
@@ -89,15 +94,29 @@ const CORNER_RADIUS_KINDS: CamToolKind[] = ['flat_end_mill', 'bull_nose_end_mill
  *  explicit: import pulls central tools into the project, publish pushes a
  *  project snapshot back into the collection. New tools start on a
  *  type-picker page; editing an existing tool lands directly on the tabs. */
-export function CamToolDialog({ toolId }: { toolId: number | null }) {
+export function CamToolDialog({
+  toolId,
+  pickFor = null,
+}: {
+  toolId: number | null;
+  /** Picker mode: stacked over an operation dialog; confirming a compatible
+   *  tool hands its id back through `camToolPick` instead of editing it. */
+  pickFor?: { kind: CamToolPickKind; cycle?: CamDrillCycle } | null;
+}) {
   const cam = useAppStore((state) => state.camDocument);
-  const close = () => useAppStore.getState().setCamDialog(null);
+  // In picker mode closing cancels the pick and returns to the dialog below.
+  const close = () =>
+    pickFor
+      ? useAppStore.getState().popCamDialog()
+      : useAppStore.getState().setCamDialog(null);
   const units = cam.units;
   const lu = lengthUnitLabel(units);
+  const [query, setQuery] = useState('');
 
   const centralOn = centralLibraryAvailable();
+  // Picking starts on the project scope; the operator can flip to central.
   const [scope, setScope] = useState<'central' | 'project'>(
-    toolId !== null || !centralOn ? 'project' : 'central',
+    toolId !== null || pickFor || !centralOn ? 'project' : 'central',
   );
   const [central, setCentral] = useState<CentralCamLibrary | null>(null);
   const reloadCentral = useCallback(async () => {
@@ -108,6 +127,32 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
   }, [reloadCentral]);
 
   const tools = scope === 'central' ? central?.tools ?? [] : cam.tools;
+  // Free-text filter over the visible scope: name, tool number, or type.
+  const needle = query.trim().toLowerCase();
+  const filteredTools = needle
+    ? tools.filter((tool) =>
+        [
+          tool.name,
+          tool.number != null ? `t${tool.number}` : '',
+          KIND_LABELS[tool.kind],
+        ].some((field) => field.toLowerCase().includes(needle)),
+      )
+    : tools;
+  // In picker mode only tools the waiting operation can use are selectable.
+  const compatible = (tool: CamToolDto) =>
+    !pickFor || camToolCompatible(pickFor.kind, tool, pickFor.cycle);
+  const [pickId, setPickId] = useState<number | null>(null);
+  const pickSelected =
+    pickId !== null ? tools.find((tool) => tool.id === pickId) ?? null : null;
+  /** Confirm a picker selection: central picks are copied into the project
+   *  first — operations reference project snapshots, never the shared
+   *  collection directly — then the id travels back via `camToolPick`. */
+  const confirmPick = (tool: CamToolDto) =>
+    runCamAction(async () => {
+      if (scope === 'central') await importCamToolFromCentral(tool.id);
+      useAppStore.getState().setCamToolPick(tool.id);
+      useAppStore.getState().popCamDialog();
+    });
   const [editing, setEditing] = useState<number | 'new' | null>(toolId);
   const [template, setTemplate] = useState<CamToolDto | null>(null);
   const [draftSeq, setDraftSeq] = useState(0);
@@ -121,12 +166,13 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
     typeof editing === 'number'
       ? tools.find((tool) => tool.id === editing) ?? null
       : null;
-  // First run with an empty library lands straight on the type picker.
+  // First run with an empty library lands straight on the type picker —
+  // except in picker mode, where the empty list speaks for itself.
   useEffect(() => {
-    if (editing !== null) return;
+    if (pickFor || editing !== null) return;
     if (scope === 'project' && cam.tools.length === 0) setEditing('new');
     if (scope === 'central' && central !== null && central.tools.length === 0) setEditing('new');
-  }, [editing, scope, cam.tools.length, central]);
+  }, [pickFor, editing, scope, cam.tools.length, central]);
 
   const saveTool = async (draft: CamToolDraft, existingId: number | null) => {
     if (scope === 'central') {
@@ -230,7 +276,11 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
   return (
     <div
       data-native-viewport-dim="0.25"
-      className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6"
+      className={`fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-6 ${
+        // Picker mode sits over an operation dialog: capture every click so
+        // the suspended dialog underneath stays inert.
+        pickFor ? 'pointer-events-auto' : 'pointer-events-none'
+      }`}
     >
       <div
         data-testid="cam-tool-dialog"
@@ -238,7 +288,9 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Wrench size={15} className="text-accent" />
-          <span className="text-xs font-semibold text-ink">Tool Library</span>
+          <span className="text-xs font-semibold text-ink">
+            {pickFor ? 'Select a tool' : 'Tool Library'}
+          </span>
           {centralOn && (
             <div className="ml-1 flex items-center gap-0.5 rounded border border-edge bg-header/40 p-0.5">
               {(
@@ -276,7 +328,7 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
         </header>
         <div className="flex min-h-0 flex-1">
           <div className="flex min-w-0 flex-1 flex-col">
-            {scope === 'project' && centralOn && importable.length > 0 && (
+            {!pickFor && scope === 'project' && centralOn && importable.length > 0 && (
               <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge px-3">
                 <span className="text-[9px] font-semibold uppercase tracking-widest text-mute/60">
                   Import
@@ -309,6 +361,20 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                 </button>
               </div>
             )}
+            <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge px-3">
+              <Search size={12} className="shrink-0 text-mute/60" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Filter by name, number, or type…"
+                className="h-6 min-w-0 flex-1 rounded border border-edge bg-header/60 px-1.5 text-[10px] text-ink outline-none placeholder:text-mute/50 focus:border-accent/50"
+              />
+              {needle && (
+                <span className="shrink-0 text-[9px] text-mute/70">
+                  {filteredTools.length} of {tools.length}
+                </span>
+              )}
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               <table className="w-full border-collapse text-[11px]">
                 <thead className="sticky top-0 bg-panel">
@@ -325,13 +391,34 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {tools.map((tool) => {
-                    const active = editing === tool.id;
+                  {filteredTools.map((tool) => {
+                    const usable = compatible(tool);
+                    const active = pickFor ? pickId === tool.id : editing === tool.id;
                     return (
                       <tr
                         key={tool.id}
-                        onClick={() => setEditing(tool.id)}
-                        className={`cursor-pointer border-b border-edge/50 ${
+                        onClick={() => {
+                          if (pickFor) {
+                            if (usable) setPickId(tool.id);
+                          } else {
+                            setEditing(tool.id);
+                          }
+                        }}
+                        onDoubleClick={() => {
+                          if (pickFor && usable) void confirmPick(tool);
+                        }}
+                        title={
+                          pickFor && !usable
+                            ? 'Not usable for this operation'
+                            : pickFor
+                              ? 'Double-click to select'
+                              : undefined
+                        }
+                        className={`border-b border-edge/50 ${
+                          pickFor && !usable
+                            ? 'cursor-not-allowed opacity-35'
+                            : 'cursor-pointer'
+                        } ${
                           active ? 'bg-accent/15 text-ink' : 'text-mute hover:bg-edge/30 hover:text-ink'
                         }`}
                       >
@@ -357,22 +444,48 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                       </tr>
                     );
                   })}
-                  {tools.length === 0 && (
+                  {filteredTools.length === 0 && (
                     <tr>
                       <td colSpan={9} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
-                        {scope === 'central'
-                          ? central === null
-                            ? 'Loading the central library…'
-                            : 'Central library is empty — tools added here are importable from every project.'
-                          : centralOn
-                            ? 'No tools in this project — import from the central library above, or create a new one.'
-                            : 'Empty library — add tools before programming operations.'}
+                        {needle
+                          ? `No tools match “${query.trim()}”.`
+                          : scope === 'central'
+                            ? central === null
+                              ? 'Loading the central library…'
+                              : 'Central library is empty — tools added here are importable from every project.'
+                            : centralOn
+                              ? 'No tools in this project — import from the central library, or create a new one.'
+                              : 'Empty library — add tools before programming operations.'}
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+            {pickFor ? (
+              <div className="flex h-9 shrink-0 items-center gap-2 border-t border-edge px-3">
+                <span className="min-w-0 flex-1 truncate text-[10px] text-mute">
+                  {pickSelected
+                    ? `${pickSelected.number != null ? `T${pickSelected.number} · ` : ''}${pickSelected.name}`
+                    : 'Pick a compatible tool — double-click selects directly.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={close}
+                  className="h-6 rounded border border-edge px-2 text-[10px] text-mute hover:text-ink"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!pickSelected || !compatible(pickSelected)}
+                  onClick={() => pickSelected && void confirmPick(pickSelected)}
+                  className="h-6 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25 disabled:opacity-40"
+                >
+                  Select tool
+                </button>
+              </div>
+            ) : (
             <div className="flex h-9 shrink-0 items-center gap-2 border-t border-edge px-3">
               <button
                 type="button"
@@ -411,7 +524,9 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                 </>
               )}
             </div>
+            )}
           </div>
+          {!pickFor && (
           <div className="w-[340px] shrink-0 overflow-y-auto border-l border-edge">
             {editing !== null ? (
               <ToolEditor
@@ -430,6 +545,7 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
               </p>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>

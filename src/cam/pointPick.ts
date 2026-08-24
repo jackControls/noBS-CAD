@@ -16,12 +16,18 @@ import { useAppStore, type CamPointPickCandidate } from '../store/appStore';
 
 let resolver: ((candidate: CamPointPickCandidate | null) => void) | null = null;
 
+/** Stable identity of a candidate for hover highlighting: lattice points are
+ *  unique by coordinates, and coincident candidates may share a highlight. */
+export function camPickCandidateKey(candidate: CamPointPickCandidate): string {
+  return `${candidate.point.x.toFixed(4)},${candidate.point.y.toFixed(4)},${candidate.point.z.toFixed(4)}`;
+}
+
 export function requestCamPointPick(
   candidates: CamPointPickCandidate[],
   prompt: string,
 ): Promise<CamPointPickCandidate | null> {
   finish(null);
-  useAppStore.getState().setCamPointPick({ prompt, candidates });
+  useAppStore.getState().setCamPointPick({ prompt, candidates, hoverKey: null });
   return new Promise((resolve) => {
     resolver = resolve;
   });

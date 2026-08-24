@@ -112,7 +112,7 @@ import {
 } from './nativeViewportBridge';
 import { triangulateProfileRegion } from './profileTriangulation';
 import { collectCamOverlay } from '../../cam/overlay';
-import { completeCamPointPick } from '../../cam/pointPick';
+import { camPickCandidateKey, completeCamPointPick } from '../../cam/pointPick';
 
 function hasMovableJointPath(
   joints: JointDefinitionDto[],
@@ -4751,6 +4751,9 @@ export function Viewport() {
       startY: number;
       moved: boolean;
     } | null = null;
+    /** True while a CAM point-pick session owns the cursor style; the next
+     *  plain move after the session resets it. */
+    let camPickCursorActive = false;
     /** Transient direct manipulation for the selected motion joint.
      * Release keeps a preview only; the Assembly panel owns Capture/Revert. */
     let jointMotionDrag: {
@@ -9052,6 +9055,36 @@ export function Viewport() {
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
+
+      // CAM point-pick sessions own the pointer: hover-highlight the nearest
+      // candidate (same 16 px rule as the click commit) and style the cursor;
+      // navigation and hover-picking stay suspended for the session.
+      const camPick = state.camPointPick;
+      if (camPick) {
+        const rect = surface.domElement.getBoundingClientRect();
+        const projected = new CAD.Vector3();
+        let bestKey: string | null = null;
+        let bestDistance = 16;
+        for (const candidate of camPick.candidates) {
+          projected.set(candidate.point.x, candidate.point.y, candidate.point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) continue;
+          const sx = rect.left + ((projected.x + 1) * rect.width) / 2;
+          const sy = rect.top + ((1 - projected.y) * rect.height) / 2;
+          const distance = Math.hypot(sx - e.clientX, sy - e.clientY);
+          if (distance <= bestDistance) {
+            bestDistance = distance;
+            bestKey = camPickCandidateKey(candidate);
+          }
+        }
+        state.setCamPointPickHover(bestKey);
+        surface.domElement.style.cursor = bestKey ? 'pointer' : 'crosshair';
+        camPickCursorActive = true;
+        return;
+      }
+      if (camPickCursorActive) {
+        camPickCursorActive = false;
+        surface.domElement.style.cursor = '';
+      }
 
       if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
         const drag = jointMotionDrag;

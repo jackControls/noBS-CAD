@@ -16,6 +16,7 @@ import type {
   BodyPoseDto,
   BodyAppearance,
   CamDocumentDto,
+  CamDrillCycle,
   CamOperationDto,
   CamProgramDto,
   CamSimulationResultDto,
@@ -225,7 +226,14 @@ export type CamDialogState =
   | { type: 'setupEdit' }
   | { type: 'operation'; kind: CamOperationDto['kind'] }
   | { type: 'operationEdit'; operationId: number }
-  | { type: 'tool'; toolId: number | null }
+  | {
+      type: 'tool';
+      toolId: number | null;
+      /** When set, the library runs as a picker for the operation dialog
+       *  underneath: compatible tools highlight, and confirming one hands
+       *  it back instead of opening the editor. */
+      pickFor?: { kind: CamOperationDto['kind']; cycle?: CamDrillCycle };
+    }
   | { type: 'post' };
 
 /** One point offered for picking in the CAM viewport: a point the operator
@@ -242,6 +250,9 @@ export interface CamPointPickCandidate {
 export interface CamPointPickSession {
   prompt: string;
   candidates: CamPointPickCandidate[];
+  /** Key (see `camPickCandidateKey`) of the candidate under the pointer;
+   *  the overlay renders it emphasized. */
+  hoverKey: string | null;
 }
 
 function emptyCamDocument(): CamDocumentDto {
@@ -737,6 +748,12 @@ interface AppState {
   selectedCamOperationId: number | null;
   /** Open manufacturing editor dialog; null when none is open. */
   camDialog: CamDialogState | null;
+  /** Dialog suspended underneath `camDialog` while the tool library is
+   *  stacked on top as a tool picker; restored when the picker closes. */
+  camDialogBelow: CamDialogState | null;
+  /** Tool id the picker dialog confirmed; the operation dialog underneath
+   *  consumes it and clears it back to null. */
+  camToolPick: number | null;
   /** Active viewport point-picking session for CAM inputs; null when idle. */
   camPointPick: CamPointPickSession | null;
   /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
@@ -870,7 +887,14 @@ interface AppState {
   setSelectedCamSetupId: (setupId: number | null) => void;
   setSelectedCamOperationId: (operationId: number | null) => void;
   setCamDialog: (dialog: CamDialogState | null) => void;
+  /** Stack a dialog on top of the current one (tool library opened as a
+   *  picker from inside an operation dialog). */
+  pushCamDialog: (dialog: CamDialogState) => void;
+  /** Close the top dialog and restore the one suspended underneath. */
+  popCamDialog: () => void;
+  setCamToolPick: (toolId: number | null) => void;
   setCamPointPick: (session: CamPointPickSession | null) => void;
+  setCamPointPickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;
   setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
   loadProjectState: (
@@ -1065,6 +1089,8 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedCamSetupId: null,
     selectedCamOperationId: null,
     camDialog: null,
+    camDialogBelow: null,
+    camToolPick: null,
     camPointPick: null,
     camProgram: null,
     camSimulation: null,
@@ -1185,6 +1211,8 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedCamSetupId: null,
   selectedCamOperationId: null,
   camDialog: null,
+  camDialogBelow: null,
+  camToolPick: null,
   camPointPick: null,
   camProgram: null,
   camSimulation: null,
@@ -2118,9 +2146,24 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setSelectedCamOperationId: (selectedCamOperationId) => set({ selectedCamOperationId }),
 
-  setCamDialog: (camDialog) => set({ camDialog }),
+  setCamDialog: (camDialog) => set({ camDialog, camDialogBelow: null, camToolPick: null }),
+
+  pushCamDialog: (dialog) =>
+    set((state) => ({ camDialogBelow: state.camDialog, camDialog: dialog })),
+
+  popCamDialog: () =>
+    set((state) => ({ camDialog: state.camDialogBelow, camDialogBelow: null })),
+
+  setCamToolPick: (camToolPick) => set({ camToolPick }),
 
   setCamPointPick: (camPointPick) => set({ camPointPick }),
+
+  setCamPointPickHover: (hoverKey) =>
+    set((state) =>
+      state.camPointPick && state.camPointPick.hoverKey !== hoverKey
+        ? { camPointPick: { ...state.camPointPick, hoverKey } }
+        : {},
+    ),
 
   setCamProgram: (camProgram) => set({ camProgram }),
 

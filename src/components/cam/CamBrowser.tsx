@@ -1,9 +1,12 @@
 import {
+  Ban,
   Box,
   ChevronDown,
   ChevronRight,
   CircleDot,
   Layers3,
+  Pencil,
+  Play,
   Plus,
   Route,
   ScanLine,
@@ -12,11 +15,13 @@ import {
   Triangle,
   Wrench,
 } from 'lucide-react';
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   camOperationLabel,
+  deleteCamOperation,
   deleteCamSetup,
   setActiveCamSetup,
+  updateCamOperation,
 } from '../../cam/document';
 import type { CamDocumentDto, CamOperationDto, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
@@ -40,6 +45,25 @@ export function CamSetupsPanel() {
     return Number.isFinite(saved) && saved >= 140 ? saved : 340;
   });
   const sectionRef = useRef<HTMLElement | null>(null);
+  /** Right-click context menu on an operation row: suppress/resume, edit,
+   *  delete. Position is clamped when rendered. */
+  const [opMenu, setOpMenu] = useState<{ x: number; y: number; operationId: number } | null>(null);
+
+  useEffect(() => {
+    if (!opMenu) return;
+    const closeMenu = () => setOpMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    window.addEventListener('pointerdown', closeMenu);
+    window.addEventListener('blur', closeMenu);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', closeMenu);
+      window.removeEventListener('blur', closeMenu);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [opMenu]);
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -165,7 +189,13 @@ export function CamSetupsPanel() {
                         selectOperation(operation.id);
                         openDialog({ type: 'operationEdit', operationId: operation.id });
                       }}
-                      title="Double-click to edit the operation"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        selectSetup(setup.id);
+                        selectOperation(operation.id);
+                        setOpMenu({ x: event.clientX, y: event.clientY, operationId: operation.id });
+                      }}
+                      title="Double-click to edit, right-click for more"
                       className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                         selectedOperationId === operation.id
                           ? 'bg-accent/25 text-ink'
@@ -178,6 +208,11 @@ export function CamSetupsPanel() {
                           [{toolTag(cam, operation)}]
                         </span>{' '}
                         {operation.name}
+                        {!operation.enabled && (
+                          <span className="ml-1 text-[8px] uppercase tracking-wider text-warn/80">
+                            suppressed
+                          </span>
+                        )}
                       </span>
                       <span className="text-[8px] uppercase opacity-60">
                         {camOperationLabel(operation.kind)}
@@ -200,6 +235,65 @@ export function CamSetupsPanel() {
           </div>
         )}
       </div>
+      {opMenu &&
+        (() => {
+          const operation = cam.setups
+            .flatMap((setup) => setup.operations)
+            .find((candidate) => candidate.id === opMenu.operationId);
+          if (!operation) return null;
+          const itemClass =
+            'flex h-7 w-full items-center gap-2 px-3 text-left text-[11px] text-mute hover:bg-edge/40 hover:text-ink';
+          const close = () => setOpMenu(null);
+          return (
+            <div
+              role="menu"
+              className="fixed z-[90] w-48 rounded border border-edge bg-panel py-1 shadow-2xl"
+              style={{
+                left: Math.min(opMenu.x, window.innerWidth - 200),
+                top: Math.min(opMenu.y, window.innerHeight - 130),
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                className={itemClass}
+                onClick={() => {
+                  close();
+                  runCamAction(() =>
+                    updateCamOperation(operation.id, (next) => {
+                      next.enabled = !operation.enabled;
+                    }),
+                  );
+                }}
+              >
+                {operation.enabled ? <Ban size={12} /> : <Play size={12} />}
+                {operation.enabled ? 'Suppress (skip in post)' : 'Resume'}
+              </button>
+              <button
+                type="button"
+                className={itemClass}
+                onClick={() => {
+                  close();
+                  openDialog({ type: 'operationEdit', operationId: operation.id });
+                }}
+              >
+                <Pencil size={12} /> Edit…
+              </button>
+              <div className="my-1 border-t border-edge/60" />
+              <button
+                type="button"
+                className={`${itemClass} hover:text-warn`}
+                onClick={() => {
+                  close();
+                  runCamAction(() => deleteCamOperation(operation.id));
+                }}
+              >
+                <Trash2 size={12} /> Delete
+              </button>
+            </div>
+          );
+        })()}
       <button
         type="button"
         title="Central library by default; switch to this project's snapshots inside"

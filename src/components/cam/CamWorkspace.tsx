@@ -45,7 +45,7 @@ import type {
 } from '../../engine/types';
 import { cancelCamPointPick } from '../../cam/pointPick';
 import { modelTopZInSetup } from '../../cam/geometry';
-import { useAppStore } from '../../store/appStore';
+import { useAppStore, type CamDialogState } from '../../store/appStore';
 import { Viewport } from '../viewport/Viewport';
 import { runCamAction } from './CamBrowser';
 import { CamOperationDialog } from './CamOperationDialog';
@@ -275,25 +275,36 @@ export function CamWorkspace() {
   );
 }
 
-/** Renders the active manufacturing editor dialog, if any. */
+/** Renders the active manufacturing editor dialog, if any. When the tool
+ *  library is stacked on top as a picker, the suspended dialog underneath
+ *  stays mounted so its drafts survive the round trip. */
 function CamDialogHost() {
   const dialog = useAppStore((state) => state.camDialog);
+  const below = useAppStore((state) => state.camDialogBelow);
   const cam = useAppStore((state) => state.camDocument);
   if (!dialog) return null;
-  if (dialog.type === 'setup') return <CamSetupDialog />;
-  if (dialog.type === 'setupEdit') {
-    const setup = activeCamSetup(cam);
-    return setup ? <SetupEditDialog setup={setup} units={cam.units} /> : null;
-  }
-  if (dialog.type === 'operation') return <CamOperationDialog kind={dialog.kind} />;
-  if (dialog.type === 'operationEdit') {
-    const operation = findCamOperation(cam, dialog.operationId);
-    return operation ? (
-      <OperationEditDialog operation={operation} tools={cam.tools} units={cam.units} />
-    ) : null;
-  }
-  if (dialog.type === 'post') return <CamPostDialog />;
-  return <CamToolDialog toolId={dialog.toolId} />;
+  const render = (state: CamDialogState) => {
+    if (state.type === 'setup') return <CamSetupDialog />;
+    if (state.type === 'setupEdit') {
+      const setup = activeCamSetup(cam);
+      return setup ? <SetupEditDialog setup={setup} units={cam.units} /> : null;
+    }
+    if (state.type === 'operation') return <CamOperationDialog kind={state.kind} />;
+    if (state.type === 'operationEdit') {
+      const operation = findCamOperation(cam, state.operationId);
+      return operation ? (
+        <OperationEditDialog operation={operation} tools={cam.tools} units={cam.units} />
+      ) : null;
+    }
+    if (state.type === 'post') return <CamPostDialog />;
+    return <CamToolDialog toolId={state.toolId} pickFor={state.pickFor ?? null} />;
+  };
+  return (
+    <>
+      {below ? render(below) : null}
+      {render(dialog)}
+    </>
+  );
 }
 
 /** Modal shell for editing an existing setup's configuration. */

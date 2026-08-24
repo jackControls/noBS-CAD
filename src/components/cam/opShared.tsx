@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { camToolCompatible, importCamToolFromCentral } from '../../cam/document';
-import { centralLibraryAvailable, loadCentralLibrary } from '../../cam/library';
+import { useEffect, useMemo } from 'react';
+import { camToolCompatible } from '../../cam/document';
 import { displayLength } from '../../cam/units';
 import type {
   CamCoolantMode,
@@ -10,7 +9,6 @@ import type {
   CamUnits,
 } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
-import { runCamAction } from './CamBrowser';
 import {
   CAM_DIALOG_INPUT,
   CAM_DIALOG_LABEL,
@@ -35,6 +33,9 @@ export interface OpPages {
   geometry: 'holes' | 'face' | 'path';
   /** Section label for the path geometry page. */
   pathLabel?: string;
+  /** Render the dialog body as Tool / Geometry / Heights / Passes / Linking
+   *  tabs instead of one flat scroll. */
+  tabs?: boolean;
   /** Thread-milling parameter page. */
   threadFields?: boolean;
   bottomZ?: boolean;
@@ -52,6 +53,7 @@ export interface OpPages {
 export const OP_PAGES: Record<OperationKind, OpPages> = {
   face: {
     geometry: 'face',
+    tabs: true,
     faceTarget: true,
     safeDistance: true,
     stepDown: true,
@@ -80,12 +82,40 @@ export const OP_PAGES: Record<OperationKind, OpPages> = {
   thread: { geometry: 'holes', bottomZ: true, threadFields: true },
 };
 
-/** The one tool picker every operation programs through. Defaults to the
- *  project's tool snapshots; switching to the central library lists every
- *  compatible tool there, and picking one copies it into the project and
- *  selects it in a single step — so a large central collection never
- *  floods the project picker. The cutting-profile select rides along when
- *  the chosen tool carries named profiles. */
+/** Adopt the result of a library picker round trip: the picker dialog
+ *  confirms a tool id into `camToolPick`; the waiting operation dialog
+ *  consumes it here and clears it back. */
+export function useCamToolPickResult(
+  compatible: (tool: CamToolDto) => boolean,
+  onChoose: (tool: CamToolDto) => void,
+) {
+  const pick = useAppStore((state) => state.camToolPick);
+  useEffect(() => {
+    if (pick === null) return;
+    const tool = useAppStore.getState().camDocument.tools.find(
+      (candidate) => candidate.id === pick,
+    );
+    useAppStore.getState().setCamToolPick(null);
+    if (tool && compatible(tool)) onChoose(tool);
+  }, [pick, compatible, onChoose]);
+}
+
+/** Stack the Tool Library dialog on top as a picker for this operation. */
+export function openCamToolPicker(kind: OperationKind, drillCycle?: CamDrillCycle) {
+  useAppStore.getState().pushCamDialog({
+    type: 'tool',
+    toolId: null,
+    pickFor: { kind, cycle: drillCycle },
+  });
+}
+
+/** The one tool picker every operation programs through. Project tools with
+ *  a compatible kind show in a dropdown; anything else goes through the Tool
+ *  Library dialog stacked on top as a picker (filtered to compatible tools,
+ *  double-click or confirm to choose — central picks are copied into the
+ *  project automatically), so a large central collection never floods this
+ *  dialog. The cutting-profile select rides along when the chosen tool
+ *  carries named profiles. */
 export function OpToolPicker({
   kind,
   drillCycle,
@@ -106,65 +136,26 @@ export function OpToolPicker({
   const cam = useAppStore((state) => state.camDocument);
   const units = cam.units;
   const lu = lengthUnit(units);
-  const centralOn = centralLibraryAvailable();
-  const [scope, setScope] = useState<'project' | 'central'>('project');
-  const [central, setCentral] = useState<CamToolDto[] | null>(null);
-  useEffect(() => {
-    if (!centralOn) return;
-    void loadCentralLibrary().then((library) => setCentral(library?.tools ?? []));
-  }, [centralOn]);
 
   const compatible = useMemo(
     () => (tool: CamToolDto) => camToolCompatible(kind, tool, drillCycle),
     [kind, drillCycle],
   );
   const projectTools = useMemo(() => cam.tools.filter(compatible), [cam.tools, compatible]);
-  const centralTools = useMemo(() => (central ?? []).filter(compatible), [central, compatible]);
   const selected = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
+
+  // Result of a library picker round trip: adopt the confirmed tool.
+  useCamToolPickResult(compatible, onChoose);
 
   const label = (tool: CamToolDto) =>
     `${tool.number != null ? `T${tool.number} · ` : ''}${tool.name} · Ø${displayLength(tool.diameter, units).toFixed(3)} ${lu}`;
 
-  /** A central pick is an action, not a state: import the snapshot into the
-   *  project, then hand it to the dialog as the chosen tool. */
-  const pickCentral = (idText: string) => {
-    const tool = centralTools.find((candidate) => candidate.id === Number(idText));
-    if (!tool) return;
-    runCamAction(async () => {
-      await importCamToolFromCentral(tool.id);
-      onChoose(tool);
-      setScope('project');
-    });
-  };
+  const openLibraryPicker = () => openCamToolPicker(kind, drillCycle);
 
   return (
     <DialogSection title="TOOL">
-      {centralOn && (
-        <div className="mb-2 grid grid-cols-2 gap-1.5">
-          {(
-            [
-              ['project', `This project (${projectTools.length})`],
-              ['central', `Central library (${centralTools.length})`],
-            ] as const
-          ).map(([value, text]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setScope(value)}
-              className={`h-7 rounded border text-[10px] font-semibold ${
-                scope === value
-                  ? 'border-accent/50 bg-accent/15 text-accent'
-                  : 'border-edge bg-header/50 text-mute hover:text-ink'
-              }`}
-            >
-              {text}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {scope === 'project' ? (
-        projectTools.length > 0 ? (
+      {projectTools.length > 0 ? (
+        <div className="flex items-center gap-1.5">
           <select
             value={toolId ?? ''}
             onChange={(event) => {
@@ -173,7 +164,7 @@ export function OpToolPicker({
               );
               if (tool) onChoose(tool);
             }}
-            className={CAM_DIALOG_INPUT}
+            className={`${CAM_DIALOG_INPUT} min-w-0 flex-1`}
           >
             {projectTools.map((tool) => (
               <option key={tool.id} value={tool.id}>
@@ -181,35 +172,28 @@ export function OpToolPicker({
               </option>
             ))}
           </select>
-        ) : (
-          <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
-            {centralOn && centralTools.length > 0
-              ? 'No compatible tool in this project yet — switch to the central library above; picking one copies it in.'
-              : 'No compatible tool available. Create one in the Tool Library (ribbon) first.'}
-          </p>
-        )
-      ) : central === null ? (
-        <p className="text-[10px] italic text-mute">Loading the central library…</p>
-      ) : centralTools.length > 0 ? (
-        <>
-          <select value="" onChange={(event) => pickCentral(event.target.value)} className={CAM_DIALOG_INPUT}>
-            <option value="" disabled>
-              Pick to copy into this project…
-            </option>
-            {centralTools.map((tool) => (
-              <option key={tool.id} value={tool.id}>
-                {label(tool)}
-                {cam.tools.some((candidate) => candidate.id === tool.id) ? ' (in project — refresh)' : ''}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-[9px] leading-relaxed text-mute/70">
-            Picking a central tool copies a snapshot into this project and selects it; later edits on
-            either side stay independent until you sync them in the Tool Library.
-          </p>
-        </>
+          <button
+            type="button"
+            title="Pick from the full library (central tools are copied into this project)"
+            onClick={openLibraryPicker}
+            className="h-7 shrink-0 rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
+          >
+            Library…
+          </button>
+        </div>
       ) : (
-        <p className="text-[10px] italic text-mute">No compatible tool in the central library.</p>
+        <div className="rounded border border-edge bg-header/40 p-2">
+          <p className="mb-1.5 text-[10px] leading-relaxed text-mute">
+            No compatible tool in this project yet.
+          </p>
+          <button
+            type="button"
+            onClick={openLibraryPicker}
+            className="flex h-7 w-full items-center justify-center rounded border border-accent/50 bg-accent/15 text-[10px] font-semibold text-accent hover:bg-accent/25"
+          >
+            Select from the library…
+          </button>
+        </div>
       )}
 
       {selected && selected.cutting_presets.length > 0 && (
