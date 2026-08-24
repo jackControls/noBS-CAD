@@ -8,6 +8,11 @@ use crate::model::{
 const EPSILON: f64 = 1.0e-9;
 const MAX_GENERATED_STEPS: usize = 250_000;
 const MAX_PROGRAM_COMMANDS: usize = 300_000;
+/// Extra clearance (mm, model units) beyond the cutter radius for the facing
+/// plunge point, so the cutter descends fully clear of the stock instead of
+/// grazing the boundary while tangent — non-center-cutting face mills need
+/// the plunge to happen in free air.
+const FACE_APPROACH_CLEARANCE: f64 = 2.0;
 /// G0 rapid is a full-speed machine move; standard G-code has no programmable
 /// rapid feed. This estimate only feeds the cycle-time statistic.
 pub(crate) const RAPID_FEED_ESTIMATE_MM_PER_MIN: f64 = 8_000.0;
@@ -462,7 +467,7 @@ fn plan_face(
             .saturating_mul(rows.len().saturating_mul(2).saturating_add(4)),
         name,
     )?;
-    let start_x = bounds.min.x - radius;
+    let start_x = bounds.min.x - radius - FACE_APPROACH_CLEARANCE;
     let end_x = bounds.max.x + radius;
     for depth in depths {
         let first = Point2Dto::new(start_x, rows[0]);
@@ -1337,6 +1342,49 @@ mod tests {
             })
             .collect();
         assert_eq!(row_ys, vec![0.0, 0.0, 28.0, 28.0]);
+    }
+
+    #[test]
+    fn face_accepts_a_non_center_cutting_face_mill() {
+        // Indexable face mills rarely cut to the center; facing still works
+        // because the plunge point sits outside the stock boundary.
+        let operation = CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 19.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 31.0,
+            step_down: 1.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        };
+        let mut shell_mill = tool(1, CamToolKind::FaceMill, 63.0);
+        shell_mill.center_cutting = false;
+        let program = plan_setup(&document(vec![operation], vec![shell_mill]), 1).unwrap();
+        // The plunge target is the last linear move onto depth before the
+        // first working stroke: fully clear of the stock's min-X edge.
+        let plunge = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, .. } if to.z < 0.0 => Some(*to),
+                _ => None,
+            })
+            .next()
+            .expect("a facing plunge");
+        let radius = 63.0 * 0.5;
+        assert!(
+            plunge.x + radius < 0.0,
+            "plunge at x={} must keep the cutter clear of the stock edge",
+            plunge.x
+        );
     }
 
     #[test]

@@ -948,7 +948,8 @@ mod tests {
         assert!(posted.nc.contains("M0"));
         assert!(posted.nc.contains("G1 X"));
         let z_clearance = posted.nc.find("G0 Z8").unwrap();
-        let xy_position = posted.nc.find("G0 X-3 Y0").unwrap();
+        // 3 mm tool radius plus the 2 mm facing approach clearance.
+        let xy_position = posted.nc.find("G0 X-5 Y0").unwrap();
         assert!(z_clearance < xy_position);
         assert!(posted.nc.ends_with("M30\n"));
     }
