@@ -8,11 +8,13 @@ import type {
   CamStockSpecDto,
   CamWcsOriginSpec,
   CamWorkCoordinateSystemDto,
+  CylindricalSurfaceDto,
   PlaneBasis,
   Point3Dto,
   SketchDto,
   Vec2,
 } from '../engine/types';
+import type { CamHolePickHole } from '../store/appStore';
 
 const CHAIN_TOLERANCE = 1.0e-6;
 const ARC_TESSELLATION_DEGREES = 5;
@@ -283,6 +285,36 @@ export function modelBottomZInSetup(
   const bounds = modelBoundsOfBodies(scene, setup.body_ids);
   if (!bounds) return null;
   return modelPointToSetup({ x: bounds.min.x, y: bounds.min.y, z: bounds.min.z }, setup.wcs).z;
+}
+
+/** Resolve a cylindrical solid face into a drillable hole for the setup.
+ *  Fixed-axis drilling requires the cylinder axis parallel to setup Z
+ *  (either sense); anything else returns null so the pointer shows the face
+ *  as unpickable. The marker point sits on the axis at the stock top plane;
+ *  the operation input is the axis position in setup-space X/Y. */
+export function camHoleFromCylinderFace(
+  bodyId: number,
+  faceId: number,
+  cylinder: CylindricalSurfaceDto,
+  setup: CamSetupDto,
+): CamHolePickHole | null {
+  const zAxis = setup.wcs.z_axis;
+  const alignment =
+    cylinder.axis.x * zAxis[0] + cylinder.axis.y * zAxis[1] + cylinder.axis.z * zAxis[2];
+  if (Math.abs(Math.abs(alignment) - 1) > 1e-6) return null;
+  const center = modelPointToSetup(cylinder.origin, setup.wcs);
+  const marker = setupPointToModel(
+    { x: center.x, y: center.y, z: setup.stock.max.z },
+    setup.wcs,
+  );
+  return {
+    key: `${bodyId}:${faceId}`,
+    bodyId,
+    faceId,
+    radius: cylinder.radius,
+    modelPoint: marker,
+    point: { x: center.x, y: center.y },
+  };
 }
 
 function anchorValue(min: number, max: number, anchor: 'min' | 'center' | 'max'): number {

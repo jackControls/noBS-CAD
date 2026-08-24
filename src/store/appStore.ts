@@ -255,6 +255,28 @@ export interface CamPointPickSession {
   hoverKey: string | null;
 }
 
+/** One hole chosen for drilling/thread milling: a cylindrical solid face
+ *  whose axis runs parallel to setup Z. */
+export interface CamHolePickHole {
+  /** Stable identity: `${bodyId}:${faceId}`. */
+  key: string;
+  bodyId: number;
+  faceId: number;
+  /** Cylinder radius, mm — the label reads the drilled diameter from it. */
+  radius: number;
+  /** Axis point at the stock top plane, model coordinates (overlay marker). */
+  modelPoint: Point3Dto;
+  /** Hole center in setup coordinates (operation input). */
+  point: { x: number; y: number };
+}
+
+/** Active viewport hole-picking session owned by a drill/thread operation
+ *  dialog; null when none is running. */
+export interface CamHolePickSession {
+  holes: CamHolePickHole[];
+  hoverKey: string | null;
+}
+
 function emptyCamDocument(): CamDocumentDto {
   return {
     setups: [],
@@ -756,6 +778,8 @@ interface AppState {
   camToolPick: number | null;
   /** Active viewport point-picking session for CAM inputs; null when idle. */
   camPointPick: CamPointPickSession | null;
+  /** Active viewport hole-face picking session (drill/thread dialogs). */
+  camHolePick: CamHolePickSession | null;
   /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
   camProgram: CamProgramDto | null;
   /** Latest volumetric stock simulation; shared-viewport overlay input. */
@@ -895,6 +919,10 @@ interface AppState {
   setCamToolPick: (toolId: number | null) => void;
   setCamPointPick: (session: CamPointPickSession | null) => void;
   setCamPointPickHover: (hoverKey: string | null) => void;
+  setCamHolePick: (session: CamHolePickSession | null) => void;
+  /** Toggle one hole in the active session (click behavior). */
+  toggleCamHolePickHole: (hole: CamHolePickHole) => void;
+  setCamHolePickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;
   setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
   loadProjectState: (
@@ -1092,6 +1120,7 @@ function resetDocumentUiState(): Partial<AppState> {
     camDialogBelow: null,
     camToolPick: null,
     camPointPick: null,
+    camHolePick: null,
     camProgram: null,
     camSimulation: null,
     selectedFace: null,
@@ -1214,6 +1243,7 @@ export const useAppStore = create<AppState>()((set) => ({
   camDialogBelow: null,
   camToolPick: null,
   camPointPick: null,
+  camHolePick: null,
   camProgram: null,
   camSimulation: null,
   selectedFace: null,
@@ -2162,6 +2192,29 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) =>
       state.camPointPick && state.camPointPick.hoverKey !== hoverKey
         ? { camPointPick: { ...state.camPointPick, hoverKey } }
+        : {},
+    ),
+
+  setCamHolePick: (camHolePick) => set({ camHolePick }),
+
+  toggleCamHolePickHole: (hole) =>
+    set((state) => {
+      if (!state.camHolePick) return {};
+      const exists = state.camHolePick.holes.some((entry) => entry.key === hole.key);
+      return {
+        camHolePick: {
+          ...state.camHolePick,
+          holes: exists
+            ? state.camHolePick.holes.filter((entry) => entry.key !== hole.key)
+            : [...state.camHolePick.holes, hole],
+        },
+      };
+    }),
+
+  setCamHolePickHover: (hoverKey) =>
+    set((state) =>
+      state.camHolePick && state.camHolePick.hoverKey !== hoverKey
+        ? { camHolePick: { ...state.camHolePick, hoverKey } }
         : {},
     ),
 

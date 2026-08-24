@@ -1308,6 +1308,51 @@ mod tests {
     }
 
     #[test]
+    fn face_entry_moves_outward_with_safe_distance() {
+        // The entry plunge must sit one cutter radius plus the safe distance
+        // clear of the stock's min-X edge, so the value is directly visible
+        // in the first cutting move's X.
+        let plan_with = |safe_distance: f64| {
+            let operation = CamOperationDto::Face {
+                id: 1,
+                name: "Face".into(),
+                enabled: true,
+                tool_id: 1,
+                bounds: Rect2Dto {
+                    min: Point2Dto::new(0.0, 0.0),
+                    max: Point2Dto::new(40.0, 19.0),
+                },
+                top_z: 0.0,
+                target_z: -1.0,
+                step_over: 31.0,
+                step_down: 1.0,
+                safe_distance,
+                clearance_z: 10.0,
+                retract_z: 3.0,
+                cutting: cutting(),
+            };
+            plan_setup(
+                &document(vec![operation], vec![tool(1, CamToolKind::FaceMill, 63.0)]),
+                1,
+            )
+            .unwrap()
+        };
+        let first_cut_x = |program: &CamProgramDto| {
+            program
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    CamCommandDto::Linear { to, .. } if to.z < 0.0 => Some(to.x),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let radius = 63.0 * 0.5;
+        assert!((first_cut_x(&plan_with(5.0)) - (-radius - 5.0)).abs() < 1.0e-9);
+        assert!((first_cut_x(&plan_with(20.0)) - (-radius - 20.0)).abs() < 1.0e-9);
+    }
+
+    #[test]
     fn face_skips_the_far_edge_row_when_coverage_already_reaches_it() {
         // 30 mm wide strip, 28 mm stepover, 32 mm tool: rows at 0 and 28;
         // the 28 row's band reaches past 30, so no third row is forced onto

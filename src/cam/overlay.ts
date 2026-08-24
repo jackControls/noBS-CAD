@@ -13,7 +13,7 @@ import type {
   NativeViewportPointLayer,
   NativeViewportTriangleLayer,
 } from '../components/viewport/nativeViewportBridge';
-import type { CamPointPickSession } from '../store/appStore';
+import type { CamHolePickSession, CamPointPickSession } from '../store/appStore';
 import { activeCamSetup } from './document';
 import { modelBoundsOfBodies, setupPointToModel } from './geometry';
 import { camPickCandidateKey } from './pointPick';
@@ -46,6 +46,11 @@ export interface CamOverlayState {
   camProgram: CamProgramDto | null;
   camSimulation: CamSimulationResultDto | null;
   camPointPick: CamPointPickSession | null;
+  /** Active viewport hole-picking session (drill/thread dialogs). */
+  camHolePick: CamHolePickSession | null;
+  /** A manufacturing editor dialog is open — the simulation hides so the
+   *  viewport shows the plain model while programming. */
+  camDialogOpen: boolean;
   solidScene: SolidSceneDto;
 }
 
@@ -59,6 +64,8 @@ const REST_STOCK_FILL: Rgba = [0.16, 0.6, 0.25, 0.9];
 const COLLISION_POINT: Rgba = [0.94, 0.38, 0.35, 0.95];
 const PICK_POINT: Rgba = [0.4, 0.73, 0.94, 0.95];
 const PICK_POINT_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
+/** Picked hole centers in a drill/thread hole-pick session. */
+const HOLE_POINT: Rgba = [0.5, 0.9, 0.55, 0.95];
 const TOOL_FLUTE_FILL: Rgba = [0.78, 0.8, 0.84, 0.55];
 const TOOL_SHANK_FILL: Rgba = [0.62, 0.65, 0.7, 0.3];
 const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
@@ -155,15 +162,44 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
 
   if (!setup) return layers;
 
+  // Hole-pick session markers: chosen hole centers, the hovered one
+  // emphasized. The face under the pointer is highlighted by the viewport's
+  // own face-hover channel, so only the chosen set draws here.
+  if (state.camHolePick && state.camHolePick.holes.length > 0) {
+    const rest: number[] = [];
+    const hovered: number[] = [];
+    for (const hole of state.camHolePick.holes) {
+      const target = hole.key === state.camHolePick.hoverKey ? hovered : rest;
+      target.push(hole.modelPoint.x, hole.modelPoint.y, hole.modelPoint.z);
+    }
+    if (rest.length > 0) {
+      layers.points.push({ color: HOLE_POINT, radius: markerRadius * 1.2, positions: rest });
+    }
+    if (hovered.length > 0) {
+      layers.points.push({
+        color: PICK_POINT_HOVER,
+        radius: markerRadius * 1.6,
+        positions: hovered,
+      });
+    }
+  }
+
   pushWcsAxes(layers, setup);
   pushStockGhost(layers, setup);
   pushSelectedToolpath(layers, state, setup);
   pushSelectedTool(layers, state, setup);
-  pushSimulationStock(layers, state, setup, markerRadius);
+  // The simulated stock belongs to a selected operation under review: with
+  // no selection, or while a dialog is open, the viewport shows the plain
+  // model instead.
+  if (state.selectedCamOperationId !== null && !state.camDialogOpen) {
+    pushSimulationStock(layers, state, setup, markerRadius);
+  }
   return layers;
 }
 
 function pickMarkerRadius(scene: SolidSceneDto, setup: CamSetupDto | null): number {
+  // Pick markers read as handles, not geometry: keep them small — the
+  // native side fills them solidly at one chord row per pixel.
   if (setup) {
     const extent = Math.max(
       setup.stock.max.x - setup.stock.min.x,
@@ -171,13 +207,13 @@ function pickMarkerRadius(scene: SolidSceneDto, setup: CamSetupDto | null): numb
       setup.stock.max.z - setup.stock.min.z,
       1,
     );
-    return clamp(extent * 0.011, 1, 7);
+    return clamp(extent * 0.006, 0.5, 3.5);
   }
   const bounds = modelBoundsOfBodies(scene, scene.bodies.map((body) => body.id));
   const extent = bounds
     ? Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z, 1)
     : 100;
-  return clamp(extent * 0.011, 1, 7);
+  return clamp(extent * 0.006, 0.5, 3.5);
 }
 
 /** RGB axes at the WCS origin; the WCS origin is already model-space. */

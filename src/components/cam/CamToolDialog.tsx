@@ -174,6 +174,16 @@ export function CamToolDialog({
     if (scope === 'central' && central !== null && central.tools.length === 0) setEditing('new');
   }, [pickFor, editing, scope, cam.tools.length, central]);
 
+  // Picker mode: when the project scope holds nothing the operation can use
+  // but the central library does, flip over automatically — an empty project
+  // list looks like the filter swallowed every tool otherwise.
+  useEffect(() => {
+    if (!pickFor || scope !== 'project' || central === null) return;
+    if (cam.tools.some(compatible)) return;
+    if (central.tools.some(compatible)) setScope('central');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickFor, scope, central, cam.tools]);
+
   const saveTool = async (draft: CamToolDraft, existingId: number | null) => {
     if (scope === 'central') {
       if (existingId !== null) {
@@ -449,13 +459,17 @@ export function CamToolDialog({
                       <td colSpan={9} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
                         {needle
                           ? `No tools match “${query.trim()}”.`
-                          : scope === 'central'
-                            ? central === null
-                              ? 'Loading the central library…'
-                              : 'Central library is empty — tools added here are importable from every project.'
-                            : centralOn
-                              ? 'No tools in this project — import from the central library, or create a new one.'
-                              : 'Empty library — add tools before programming operations.'}
+                          : pickFor
+                            ? centralOn
+                              ? 'Nothing usable for this operation here — check the other library scope.'
+                              : 'Nothing usable for this operation — create a compatible tool first.'
+                            : scope === 'central'
+                              ? central === null
+                                ? 'Loading the central library…'
+                                : 'Central library is empty — tools added here are importable from every project.'
+                              : centralOn
+                                ? 'No tools in this project — import from the central library, or create a new one.'
+                                : 'Empty library — add tools before programming operations.'}
                       </td>
                     </tr>
                   )}
@@ -604,6 +618,10 @@ function ToolEditor({
   const [tab, setTab] = useState<EditorTab>('general');
 
   const [kind, setKind] = useState<CamToolKind>(source?.kind ?? 'flat_end_mill');
+  // Holemaking tools follow drilling convention: surface speed drives rpm
+  // and the feed is entered per revolution (there is no per-tooth feed on a
+  // two-flute drill). Milling tools keep the rpm + per-tooth convention.
+  const holemaking = kind === 'drill' || kind === 'reamer' || kind === 'boring_bar';
   const [name, setName] = useState(existing?.name ?? (template ? `${template.name} copy` : ''));
   const suggestedNumber = Math.max(
     0,
@@ -653,9 +671,9 @@ function ToolEditor({
       surfaceSpeed: '',
       feedPerTooth: '',
       plungePerRev: '',
-      speedDriver: 'rpm',
+      speedDriver: holemaking ? 'vc' : 'rpm',
       feedDriver: 'feed',
-      plungeDriver: 'plunge',
+      plungeDriver: holemaking ? 'fpr' : 'plunge',
     });
     const first = source
       ? fromCutting('Default preset', source.cutting)
@@ -823,14 +841,17 @@ function ToolEditor({
 
   const cuttingOf = (profile: ProfileDraft): CamCuttingParametersDto => {
     const rpm = resolveRpm(profile);
-    const feedMm =
-      profile.feedDriver === 'fz' && profile.feedPerTooth.trim()
-        ? commitLength(parseDraft(profile.feedPerTooth, 'Feed per tooth'), units) * rpm * (flutes ?? 1)
-        : commitFeed(parseDraft(profile.feedXy, `${profile.name || 'Default preset'} cutting feed`), units);
     const plungeMm =
       profile.plungeDriver === 'fpr' && profile.plungePerRev.trim()
-        ? commitLength(parseDraft(profile.plungePerRev, 'Plunge per rev'), units) * rpm
+        ? commitLength(parseDraft(profile.plungePerRev, 'Feed per revolution'), units) * rpm
         : commitFeed(parseDraft(profile.feedZ, `${profile.name || 'Default preset'} plunge feed`), units);
+    // Holemaking has no transverse feed: the drilling feed serves both axes
+    // so downstream consumers (drill feed-out, boring) read a real value.
+    const feedMm = holemaking
+      ? plungeMm
+      : profile.feedDriver === 'fz' && profile.feedPerTooth.trim()
+        ? commitLength(parseDraft(profile.feedPerTooth, 'Feed per tooth'), units) * rpm * (flutes ?? 1)
+        : commitFeed(parseDraft(profile.feedXy, `${profile.name || 'Default preset'} cutting feed`), units);
     return { spindle_rpm: rpm, feed_xy: feedMm, feed_z: plungeMm, coolant: profile.coolant };
   };
 
@@ -1146,26 +1167,34 @@ function ToolEditor({
                 onChange={commitSurfaceSpeed}
                 unit={cuttingSpeedUnitLabel(units)}
               />
+              {!holemaking && (
+                <>
+                  <DraftNumber
+                    label="Cutting feed"
+                    value={profile.feedXy}
+                    onChange={commitFeedXy}
+                    unit={fu}
+                  />
+                  <DraftNumber
+                    label={`Feed per tooth · ƒx${profile.feedDriver === 'fz' ? ' (drives)' : ''}`}
+                    value={profile.feedPerTooth}
+                    onChange={commitFeedPerTooth}
+                    unit={`${chipLoadUnitLabel(units)}/tooth`}
+                  />
+                </>
+              )}
               <DraftNumber
-                label="Cutting feed"
-                value={profile.feedXy}
-                onChange={commitFeedXy}
-                unit={fu}
-              />
-              <DraftNumber
-                label={`Feed per tooth · ƒx${profile.feedDriver === 'fz' ? ' (drives)' : ''}`}
-                value={profile.feedPerTooth}
-                onChange={commitFeedPerTooth}
-                unit={`${chipLoadUnitLabel(units)}/tooth`}
-              />
-              <DraftNumber
-                label="Plunge feed"
+                label={holemaking ? 'Drilling feed' : 'Plunge feed'}
                 value={profile.feedZ}
                 onChange={commitFeedZ}
                 unit={fu}
               />
               <DraftNumber
-                label={`Plunge per rev · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`}
+                label={
+                  holemaking
+                    ? `Feed per revolution · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`
+                    : `Plunge per rev · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`
+                }
                 value={profile.plungePerRev}
                 onChange={commitPlungePerRev}
                 unit={`${chipLoadUnitLabel(units)}/rev`}

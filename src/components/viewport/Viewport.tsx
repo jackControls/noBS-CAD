@@ -113,6 +113,8 @@ import {
 import { triangulateProfileRegion } from './profileTriangulation';
 import { collectCamOverlay } from '../../cam/overlay';
 import { camPickCandidateKey, completeCamPointPick } from '../../cam/pointPick';
+import { activeCamSetup } from '../../cam/document';
+import { camHoleFromCylinderFace } from '../../cam/geometry';
 
 function hasMovableJointPath(
   joints: JointDefinitionDto[],
@@ -3056,6 +3058,8 @@ export function Viewport() {
         camProgram: transientState.camProgram,
         camSimulation: transientState.camSimulation,
         camPointPick: transientState.camPointPick,
+        camHolePick: transientState.camHolePick,
+        camDialogOpen: transientState.camDialog !== null,
         solidScene: transientState.solidScene,
       });
       for (const layer of camOverlay.lines) appendLineLayer(layer);
@@ -9051,6 +9055,22 @@ export function Viewport() {
     const clearViewportSelection = (state: ViewportState) => {
       releaseJointSelection(state);
       state.clearSolidSelection();
+      // Manufacturing: an empty-space click also drops the operation
+      // selection, which hides the toolpath/tool/simulation overlays.
+      if (state.selectedCamOperationId !== null) state.setSelectedCamOperationId(null);
+    };
+    /** CAM hole picking: resolve the pointer to a drillable cylindrical
+     *  face (axis parallel to setup Z), or null when it is not over one. */
+    const pickCamHole = (e: PointerEvent, state: ViewportState) => {
+      const faceHit = pickSolidFace(e);
+      if (!faceHit) return null;
+      const setup = activeCamSetup(state.camDocument);
+      if (!setup) return null;
+      const face = state.solidScene.bodies
+        .find((body) => body.id === faceHit.bodyId)
+        ?.faces.find((candidate) => candidate.id === faceHit.faceId);
+      if (!face?.cylinder) return null;
+      return camHoleFromCylinderFace(faceHit.bodyId, faceHit.faceId, face.cylinder, setup);
     };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
@@ -9084,6 +9104,16 @@ export function Viewport() {
       if (camPickCursorActive) {
         camPickCursorActive = false;
         surface.domElement.style.cursor = '';
+      }
+
+      // CAM hole-pick sessions: hovering highlights only drillable
+      // cylindrical faces; everything else stays inert for the session.
+      if (state.camHolePick) {
+        const hole = pickCamHole(e, state);
+        state.setCamHolePickHover(hole?.key ?? null);
+        state.setHoveredFace(hole ? hole.faceId : null);
+        surface.domElement.style.cursor = hole ? 'pointer' : 'not-allowed';
+        return;
       }
 
       if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
@@ -9665,6 +9695,14 @@ export function Viewport() {
           }
         }
         if (best) completeCamPointPick(best);
+        return;
+      }
+
+      // CAM hole-pick sessions: left-click toggles the cylindrical face
+      // under the pointer as a drilling/threading hole.
+      if (state.camHolePick) {
+        const hole = pickCamHole(e, state);
+        if (hole) state.toggleCamHolePickHole(hole);
         return;
       }
 

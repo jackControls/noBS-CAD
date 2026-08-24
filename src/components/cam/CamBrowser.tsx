@@ -247,6 +247,9 @@ export function CamSetupsPanel() {
           return (
             <div
               role="menu"
+              // The native viewport draws over plain DOM; this attribute
+              // registers the menu as an overlay cutout so it stays visible.
+              data-native-viewport-overlay
               className="fixed z-[90] w-48 rounded border border-edge bg-panel py-1 shadow-2xl"
               style={{
                 left: Math.min(opMenu.x, window.innerWidth - 200),
