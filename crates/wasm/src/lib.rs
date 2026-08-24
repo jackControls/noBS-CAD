@@ -519,6 +519,11 @@ impl WasmEngine {
         host::handle(&mut self.manager, "delete_dimension", payload)
     }
 
+    /// `payload`: serialized `DeleteConstraintRequest`.
+    pub fn delete_constraint(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "delete_constraint", payload)
+    }
+
     /// `payload`: serialized `SetDimensionStyleRequest`.
     pub fn set_dimension_style(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "set_dimension_style", payload)

@@ -9,6 +9,7 @@ use bevy::{
     mesh::Indices,
     prelude::*,
     render::{render_resource::PrimitiveTopology, RenderPlugin},
+    text::FontWeight,
     ui::UiTransform,
     window::{
         ExitCondition, PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder,
@@ -100,7 +101,7 @@ use {
     gtk::prelude::*,
 };
 
-use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets};
+use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use super::ViewportRect;
 use super::{
@@ -3232,6 +3233,7 @@ fn rebuild_native_annotations(
     mut commands: Commands,
     preview: Res<PreviewResource>,
     palette: Res<PaletteResource>,
+    assets: Res<ViewportUiAssets>,
     mut revisions: ResMut<RenderedRevisions>,
     existing: Query<Entity, With<NativeAnnotationRoot>>,
     cameras: Query<Entity, With<NativeOverlayCamera>>,
@@ -3256,22 +3258,32 @@ fn rebuild_native_annotations(
             continue;
         }
         let constraint = annotation.kind == ViewportAnnotationKind::Constraint;
-        // Dimension `screen` coordinates are the projected center of the
-        // browser-side annotation sprite. Keep the native label centered on
-        // that same point so the visible number and its DOM interaction proxy
-        // share one hit target. Constraint glyphs intentionally retain their
-        // small upper-right offset from the referenced sketch geometry.
-        let annotation_transform = if constraint {
-            UiTransform::default()
+        let selected = annotation.selected;
+        // `screen` is the projected center of the browser-side sprite, which
+        // is also the pick target. Center every native label on that point so
+        // clicking the visible H/V/∥/Tg glyph hits the same coordinates.
+        let annotation_transform = UiTransform::from_translation(Val2::percent(-50.0, -50.0));
+        let foreground = if selected {
+            rgb(palette.0.ink)
         } else {
-            UiTransform::from_translation(Val2::percent(-50.0, -50.0))
+            Color::srgba(
+                annotation.color[0],
+                annotation.color[1],
+                annotation.color[2],
+                annotation.color[3].clamp(0.0, 1.0),
+            )
         };
-        let foreground = Color::srgba(
-            annotation.color[0],
-            annotation.color[1],
-            annotation.color[2],
-            annotation.color[3].clamp(0.0, 1.0),
-        );
+        let (min_width, min_height, pad_x, pad_y, radius, font_size) = if constraint {
+            if selected {
+                (28.0, 24.0, 4.0, 2.0, 5.0, 11.0)
+            } else {
+                (22.0, 20.0, 2.0, 1.0, 4.0, 9.0)
+            }
+        } else if selected {
+            (28.0, 20.0, 5.0, 2.0, 5.0, 11.0)
+        } else {
+            (24.0, 18.0, 4.0, 2.0, 5.0, 10.0)
+        };
         commands
             .spawn((
                 Name::new(format!("Native viewport annotation {}", annotation.text)),
@@ -3279,35 +3291,49 @@ fn rebuild_native_annotations(
                 UiTargetCamera(camera),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(annotation.screen[0] + if constraint { 4.0 } else { 0.0 }),
-                    top: px(annotation.screen[1] - if constraint { 9.0 } else { 0.0 }),
-                    min_width: px(if constraint { 15.0 } else { 24.0 }),
-                    min_height: px(if constraint { 15.0 } else { 18.0 }),
-                    padding: UiRect::axes(
-                        px(if constraint { 2.0 } else { 4.0 }),
-                        px(if constraint { 1.0 } else { 2.0 }),
-                    ),
+                    left: px(annotation.screen[0]),
+                    top: px(annotation.screen[1]),
+                    min_width: px(min_width),
+                    min_height: px(min_height),
+                    padding: UiRect::axes(px(pad_x), px(pad_y)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border: UiRect::all(px(1.0)),
-                    border_radius: BorderRadius::all(px(if constraint { 4.0 } else { 5.0 })),
+                    border: UiRect::all(px(if selected { 2.0 } else { 1.0 })),
+                    border_radius: BorderRadius::all(px(radius)),
                     ..default()
                 },
                 annotation_transform,
-                BackgroundColor(rgba(
-                    if constraint {
-                        palette.0.background
+                BackgroundColor(if selected {
+                    rgba(palette.0.accent, 0.92)
+                } else {
+                    rgba(
+                        if constraint {
+                            palette.0.background
+                        } else {
+                            palette.0.header
+                        },
+                        if constraint { 0.78 } else { 0.90 },
+                    )
+                }),
+                BorderColor::all(rgba(
+                    if selected {
+                        palette.0.selection
                     } else {
-                        palette.0.header
+                        palette.0.ui_edge
                     },
-                    if constraint { 0.78 } else { 0.90 },
+                    if selected { 1.0 } else { 0.88 },
                 )),
-                BorderColor::all(rgba(palette.0.ui_edge, 0.88)),
                 ZIndex(18),
             ))
             .with_child((
                 Text::new(annotation.text.clone()),
-                TextFont::from_font_size(if constraint { 9.0 } else { 10.0 }),
+                // Same system UI font as the HUD — Bevy's embedded default
+                // lacks many CAD marks and otherwise renders tofu rectangles.
+                ViewportUiTheme::from_palette(&palette.0).text(
+                    &assets,
+                    font_size,
+                    FontWeight::NORMAL,
+                ),
                 TextColor(foreground),
             ));
     }
@@ -3912,6 +3938,8 @@ fn draw_cad_gizmos(
                 let (id, fully_defined) = sketch_entity_style(entity);
                 Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
                     palette.0.selection
+                } else if state.constraint_related_sketch_entity_ids.contains(&id) {
+                    palette.0.constraint_related
                 } else if state.hovered_sketch_entity_id == Some(id) {
                     palette.0.hover
                 } else if fully_defined {
@@ -3925,6 +3953,8 @@ fn draw_cad_gizmos(
             let (id, _) = sketch_entity_style(entity);
             if state.selected_sketch_entity_ids.contains(&id) {
                 Some(rgb(palette.0.selection))
+            } else if state.constraint_related_sketch_entity_ids.contains(&id) {
+                Some(rgb(palette.0.constraint_related))
             } else if state.hovered_sketch_entity_id == Some(id) {
                 Some(rgb(palette.0.hover))
             } else {

@@ -12,6 +12,7 @@ import { useAppStore } from './store/appStore';
 import {
   cancelPlanePick,
   deleteDimension,
+  deleteConstraint,
   deleteEntities,
   openExtrude,
   openHole,
@@ -346,12 +347,16 @@ export default function App() {
 
       if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
-        (s.selectedEntity !== null || s.selectedDimension !== null)
+        (s.selectedEntity !== null || s.selectedDimension !== null || s.selectedConstraint !== null)
       ) {
         e.preventDefault();
         // Dimensions take precedence when selected (D9).
         if (s.selectedDimension !== null) {
           void deleteDimension(s.selectedDimension);
+          return;
+        }
+        if (s.selectedConstraint !== null) {
+          void deleteConstraint(s.selectedConstraint);
           return;
         }
         const ids = new Set(s.selectedEntities);

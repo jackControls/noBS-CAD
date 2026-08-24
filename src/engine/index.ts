@@ -251,6 +251,7 @@ export interface Engine {
   editDimension(request: EditDimensionRequest): Promise<AddConstraintResult>;
   moveDimension(request: MoveDimensionRequest): Promise<AddConstraintResult>;
   deleteDimension(constraintId: number): Promise<AddConstraintResult>;
+  deleteConstraint(constraintId: number): Promise<AddConstraintResult>;
   setDimensionStyle(style: DimensionStyle): Promise<SketchDto>;
   evalExpression(text: string): Promise<EvalExpressionResult>;
   filletPreview(request: FilletRequest): Promise<FilletPreviewDto>;

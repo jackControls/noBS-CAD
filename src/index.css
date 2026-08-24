@@ -37,6 +37,8 @@
   --cad-defined: #e8e9ec;
   --cad-hover: #ffd166;
   --cad-sketch-selected: #c4b9ff;
+  /* Entities referenced by a selected geometric constraint (not true selection). */
+  --cad-constraint-related: #3ecf9a;
   --cad-preview: #8fc4ff;
   --cad-finished: #4ac7ff;
   --cad-finished-point: #ff9f43;
@@ -93,6 +95,7 @@
   --cad-defined: #252b32;
   --cad-hover: #9c4400;
   --cad-sketch-selected: #5038a8;
+  --cad-constraint-related: #0f8f6b;
   --cad-preview: #147fbe;
   --cad-finished: #007fb4;
   --cad-finished-point: #6b2d00;

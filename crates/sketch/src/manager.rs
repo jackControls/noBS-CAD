@@ -3058,6 +3058,13 @@ impl SketchManager {
         self.active_mut()?.delete_dimension(constraint_id)
     }
 
+    pub fn delete_constraint(
+        &mut self,
+        constraint_id: ConstraintId,
+    ) -> Result<AddConstraintResult, SessionError> {
+        self.active_mut()?.delete_constraint(constraint_id)
+    }
+
     /// ISO/aligned dimension style toggle (document setting, D4.5).
     pub fn set_dimension_style(
         &mut self,

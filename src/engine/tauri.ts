@@ -642,6 +642,10 @@ export class TauriEngine implements Engine {
     return this.call('engine_delete_dimension', { constraint_id: constraintId });
   }
 
+  async deleteConstraint(constraintId: number): Promise<AddConstraintResult> {
+    return this.call('engine_delete_constraint', { constraint_id: constraintId });
+  }
+
   async setDimensionStyle(style: DimensionStyle): Promise<SketchDto> {
     return this.call('engine_set_dimension_style', { style });
   }

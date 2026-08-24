@@ -2871,6 +2871,35 @@ impl SketchSession {
         })
     }
 
+    /// Remove a geometric constraint (panel-applied relations). Driving
+    /// dimensions must use [`Self::delete_dimension`].
+    pub fn delete_constraint(
+        &mut self,
+        cid: ConstraintId,
+    ) -> Result<AddConstraintResult, SessionError> {
+        let constraint = self
+            .sketch
+            .constraints()
+            .find(|(id, _)| *id == cid)
+            .map(|(_, c)| *c)
+            .ok_or(SessionError::InvalidConstraint(format!(
+                "constraint {cid:?} not found"
+            )))?;
+        if constraint.kind() == crate::constraint::ConstraintKind::Dimensional {
+            return Err(SessionError::InvalidConstraint(
+                "use delete_dimension for driving dimensions".to_string(),
+            ));
+        }
+        let before = self.sketch.snapshot();
+        self.sketch.remove_constraint(cid);
+        self.recompute();
+        self.push_command(before);
+        Ok(AddConstraintResult {
+            constraint_id: cid,
+            sketch: self.dto(),
+        })
+    }
+
     /// Fix/Unfix toggle: removes an existing Fix on the entity, else adds
     /// one.
     pub fn toggle_fix(&mut self, entity: EntityId) -> Result<AddConstraintResult, SessionError> {

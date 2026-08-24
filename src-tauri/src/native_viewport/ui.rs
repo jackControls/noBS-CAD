@@ -39,24 +39,29 @@ pub(crate) struct ViewportUiAssets {
     font: Option<Handle<Font>>,
 }
 
-/// Load the platform UI face directly from the OS so native labels use the
-/// same family as React's `-apple-system` / `Segoe UI` stack. The bundled Bevy
-/// font remains a safe fallback on unusual installations.
+/// Prefer a system UI font with broad glyph coverage so native labels match
+/// the desktop UI and CAD marks do not render as tofu. Bevy's embedded
+/// default remains a safe fallback on unusual installations.
 pub(crate) fn load_system_font(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     #[cfg(target_os = "macos")]
     let candidates = [
         "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     ];
     #[cfg(target_os = "windows")]
     let candidates = [
         r"C:\Windows\Fonts\segoeui.ttf",
         r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\seguisym.ttf",
     ];
     #[cfg(target_os = "linux")]
     let candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     ];
 
     let font = candidates
@@ -99,7 +104,7 @@ impl ViewportUiTheme {
         }
     }
 
-    fn text(self, assets: &ViewportUiAssets, size: f32, weight: FontWeight) -> TextFont {
+    pub(crate) fn text(self, assets: &ViewportUiAssets, size: f32, weight: FontWeight) -> TextFont {
         let mut text = TextFont::from_font_size(size).with_font_weight(weight);
         if let Some(font) = &assets.font {
             text = text.with_font(font.clone());
@@ -1342,6 +1347,7 @@ pub(crate) fn light_reference_palette() -> ViewportPalette {
         defined_sketch: [37.0 / 255.0, 43.0 / 255.0, 50.0 / 255.0],
         hover: [0.0, 110.0 / 255.0, 174.0 / 255.0],
         selection: [102.0 / 255.0, 84.0 / 255.0, 199.0 / 255.0],
+        constraint_related: [15.0 / 255.0, 143.0 / 255.0, 107.0 / 255.0],
         finished_sketch: [0.0, 127.0 / 255.0, 180.0 / 255.0],
         finished_sketch_point: [107.0 / 255.0, 45.0 / 255.0, 0.0],
         finished_sketch_point_outline: [1.0, 1.0, 1.0],
