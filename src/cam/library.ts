@@ -1,18 +1,27 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '../engine';
-import type { CamDocumentDto, CamToolDto } from '../engine/types';
-import { useAppStore } from '../store/appStore';
+import type { CamToolDto } from '../engine/types';
 
 /**
- * Centralized, per-OS-user CAM tool library.
+ * Two-scope tool library model.
  *
- * The tool library follows the operator, not the project: tools are mirrored
- * to a platform config file (`cam-tool-library.json` in the app's per-user
- * config directory) on every mutation, and merged back into the machining
- * document when a project loads. Setups, operations, units, and post
- * defaults remain project data; only `tools` / `next_tool_id` centralize.
- * Outside the Tauri desktop runtime (browser dev, tests) the library stays
- * project-local and every call below is a no-op.
+ * The CENTRAL library follows the OS user: every tool the operator ever
+ * defined lives in `cam-tool-library.json` inside the app's per-user config
+ * directory (macOS / Windows / Linux via Tauri's config path). It also owns
+ * tool-id allocation, so ids stay unique across every project on this
+ * machine.
+ *
+ * The PROJECT library lives inside the machining document (and therefore
+ * inside the .nbcad file): it holds full-data snapshots of exactly the
+ * tools this project uses. Operations reference these snapshots, so a
+ * project file is self-contained and portable; editing the central library
+ * never silently rewrites an existing project. Synchronisation is always an
+ * explicit operator action — import (central -> project) or publish
+ * (project -> central) — never a background merge.
+ *
+ * Outside the Tauri desktop runtime (browser dev, tests) there is no
+ * central library; every central call below is a no-op and the project
+ * library works standalone.
  */
 
 export interface CentralCamLibrary {
@@ -20,72 +29,92 @@ export interface CentralCamLibrary {
   tools: CamToolDto[];
 }
 
-async function loadCentralLibrary(): Promise<CentralCamLibrary | null> {
+/** Central storage only exists inside the desktop runtime. */
+export function centralLibraryAvailable(): boolean {
+  return isTauriRuntime();
+}
+
+export async function loadCentralLibrary(): Promise<CentralCamLibrary | null> {
   if (!isTauriRuntime()) return null;
   try {
     const raw = await invoke<string | null>('cam_library_load');
-    if (raw === null) return null;
+    if (raw === null) return { next_tool_id: 1, tools: [] };
     const parsed = JSON.parse(raw) as CentralCamLibrary;
     if (!Array.isArray(parsed.tools) || !Number.isFinite(parsed.next_tool_id)) return null;
     return parsed;
   } catch {
-    // A missing/corrupt library must never block project work; the
-    // project-local tools remain the fallback.
+    // A missing/corrupt library must never block project work; the project
+    // snapshots remain the fallback.
     return null;
   }
 }
 
-async function saveCentralLibrary(tools: CamToolDto[], nextToolId: number): Promise<void> {
+async function saveCentralLibrary(library: CentralCamLibrary): Promise<void> {
   if (!isTauriRuntime()) return;
   try {
-    await invoke('cam_library_save', {
-      json: JSON.stringify({ next_tool_id: nextToolId, tools } satisfies CentralCamLibrary),
-    });
+    await invoke('cam_library_save', { json: JSON.stringify(library) });
   } catch {
-    // Mirroring is best-effort; the project file still carries the tools.
+    // Central writes are best-effort; project snapshots keep the data.
   }
 }
 
-/** Union by tool id: central entries win (they are always freshest thanks to
- *  write-through), project-only entries are absorbed into the library. */
-function mergeLibrary(project: CamDocumentDto, central: CentralCamLibrary): CentralCamLibrary {
-  const tools = new Map<number, CamToolDto>();
-  for (const tool of project.tools) tools.set(tool.id, tool);
-  for (const tool of central.tools) tools.set(tool.id, tool);
-  const merged = [...tools.values()].sort((a, b) => a.id - b.id);
-  return {
-    tools: merged,
-    next_tool_id: Math.max(project.next_tool_id, central.next_tool_id),
-  };
+/** Next free central id: past both the counter and every live entry. */
+function freeId(library: CentralCamLibrary): number {
+  return Math.max(library.next_tool_id, ...library.tools.map((tool) => tool.id + 1), 1);
 }
 
-/** Mirror the document's tool library to the per-user store. Called after
- *  every tool-library mutation. */
-export function mirrorCamLibraryToCentral(cam: CamDocumentDto): void {
-  void saveCentralLibrary(cam.tools, cam.next_tool_id);
+/** Add a tool to the central collection, allocating its id. Returns the
+ *  stored tool (with id), or null when there is no central library. */
+export async function addCentralLibraryTool(
+  draft: Omit<CamToolDto, 'id'>,
+): Promise<CamToolDto | null> {
+  const library = await loadCentralLibrary();
+  if (library === null) return null;
+  const tool: CamToolDto = { ...structuredClone(draft), id: freeId(library) };
+  library.tools.push(tool);
+  library.tools.sort((a, b) => a.id - b.id);
+  library.next_tool_id = tool.id + 1;
+  await saveCentralLibrary(library);
+  return tool;
 }
 
-/** Merge the per-user library into the loaded document. The engine document
- *  is only rewritten when the merge actually changes the tool set, so steady
- *  state never dirties a freshly opened project. */
-export async function syncCamLibraryFromCentral(): Promise<void> {
-  const central = await loadCentralLibrary();
-  const state = useAppStore.getState();
-  const cam = state.camDocument;
-  if (central === null) {
-    // First run on this machine: adopt the project's library as the seed.
-    if (cam.tools.length > 0) mirrorCamLibraryToCentral(cam);
-    return;
-  }
-  const merged = mergeLibrary(cam, central);
-  // Content comparison (not identity): the same tool set must not rewrite
-  // the document, or every project open would dirty immediately.
-  const projectSorted = [...cam.tools].sort((a, b) => a.id - b.id);
-  const changed =
-    merged.next_tool_id !== cam.next_tool_id ||
-    JSON.stringify(merged.tools) !== JSON.stringify(projectSorted);
-  if (changed) {
-    await state.setCamDocument({ ...cam, tools: merged.tools, next_tool_id: merged.next_tool_id });
-  }
-  mirrorCamLibraryToCentral({ ...cam, tools: merged.tools, next_tool_id: merged.next_tool_id });
+export async function updateCentralLibraryTool(
+  toolId: number,
+  mutate: (tool: CamToolDto) => void,
+): Promise<void> {
+  const library = await loadCentralLibrary();
+  if (library === null) return;
+  const tool = library.tools.find((candidate) => candidate.id === toolId);
+  if (!tool) return;
+  mutate(tool);
+  await saveCentralLibrary(library);
+}
+
+/** Deleting from the central collection never touches project snapshots —
+ *  they are independent copies by design. */
+export async function deleteCentralLibraryTool(toolId: number): Promise<void> {
+  const library = await loadCentralLibrary();
+  if (library === null) return;
+  library.tools = library.tools.filter((candidate) => candidate.id !== toolId);
+  await saveCentralLibrary(library);
+}
+
+/** Publish a project snapshot into the central collection: replace the
+ *  same-id entry when one exists, append otherwise. */
+export async function publishToolToCentralLibrary(tool: CamToolDto): Promise<void> {
+  const library = await loadCentralLibrary();
+  if (library === null) return;
+  const index = library.tools.findIndex((candidate) => candidate.id === tool.id);
+  const snapshot = structuredClone(tool);
+  if (index >= 0) library.tools[index] = snapshot;
+  else library.tools.push(snapshot);
+  library.tools.sort((a, b) => a.id - b.id);
+  library.next_tool_id = Math.max(library.next_tool_id, tool.id + 1);
+  await saveCentralLibrary(library);
+}
+
+/** Fetch one central entry (import source for the project library). */
+export async function centralLibraryTool(toolId: number): Promise<CamToolDto | null> {
+  const library = await loadCentralLibrary();
+  return library?.tools.find((candidate) => candidate.id === toolId) ?? null;
 }

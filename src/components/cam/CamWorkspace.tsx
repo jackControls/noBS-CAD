@@ -533,11 +533,16 @@ function OperationInspector({ operation, tools, units }: { operation: CamOperati
       </Field>
       {tool && (
         <div className="rounded border border-edge bg-header/55 p-2">
-          <div className="mb-2 flex items-center gap-2 text-[10px] text-mute"><Wrench size={11} /> TOOL GEOMETRY</div>
+          <div className="mb-2 flex items-center gap-2 text-[10px] text-mute">
+            <Wrench size={11} /> TOOL GEOMETRY · PROJECT COPY
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <LengthField label="Diameter" valueMm={tool.diameter} units={units} onCommit={(value) => updateCamTool(tool.id, (next) => { next.diameter = value; })} />
             <LengthField label="Flute length" valueMm={tool.flute_length} units={units} onCommit={(value) => updateCamTool(tool.id, (next) => { next.flute_length = value; })} />
           </div>
+          <p className="mt-1.5 text-[9px] leading-relaxed text-mute/70">
+            Edits stay in this project; push them to the central library from the Tool Library dialog if they should apply everywhere.
+          </p>
         </div>
       )}
       <InspectorSubheading>Safe heights</InspectorSubheading>

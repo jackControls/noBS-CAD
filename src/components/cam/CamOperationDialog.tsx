@@ -5,8 +5,10 @@ import {
   addCamOperation,
   camOperationLabel,
   camToolCompatible,
+  importCamToolFromCentral,
   type CamOperationInput,
 } from '../../cam/document';
+import { centralLibraryAvailable, loadCentralLibrary } from '../../cam/library';
 import {
   listSketchLoops,
   listSketchPointRefs,
@@ -51,12 +53,28 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   // Drill operations pick the cycle before the tool: the cycle decides which
   // tool kinds are compatible (tap -> tap, reaming -> reamer, ...).
   const [drillCycle, setDrillCycle] = useState<CamDrillCycle>('drill');
+  // Operations pick from the project's tool snapshots; compatible tools that
+  // only exist in the central library can be imported in place here.
+  const [centralTools, setCentralTools] = useState<CamToolDto[] | null>(null);
+  useEffect(() => {
+    if (!centralLibraryAvailable()) return;
+    void loadCentralLibrary().then((library) => setCentralTools(library?.tools ?? []));
+  }, []);
   const tools = useMemo(
     () =>
       cam.tools.filter((tool) =>
         camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
       ),
     [cam.tools, kind, drillCycle],
+  );
+  const importable = useMemo(
+    () =>
+      (centralTools ?? []).filter(
+        (tool) =>
+          !cam.tools.some((project) => project.id === tool.id) &&
+          camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
+      ),
+    [centralTools, cam.tools, kind, drillCycle],
   );
 
   const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
@@ -523,7 +541,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
-          <DialogSection title="TOOL (FROM LIBRARY)">
+          <DialogSection title="TOOL · THIS PROJECT">
             {tools.length > 0 ? (
               <>
                 <select
@@ -565,8 +583,47 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
               </>
             ) : (
               <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
-                No compatible tool in the library. Add one from the tool library first.
+                {importable.length > 0
+                  ? 'No compatible tool in this project yet — import one from the central library below.'
+                  : 'No compatible tool in this project. Create one in the Tool Library (ribbon), then it can be imported here.'}
               </p>
+            )}
+            {importable.length > 0 && (
+              <div className="mt-2 rounded border border-edge/70 bg-header/40 p-1.5">
+                <div className="mb-1 text-[9px] font-semibold uppercase tracking-widest text-mute/60">
+                  In the central library
+                </div>
+                <div className="max-h-24 space-y-0.5 overflow-y-auto">
+                  {importable.map((tool) => (
+                    <div key={tool.id} className="flex items-center gap-1.5 text-[10px] text-mute">
+                      <span className="min-w-0 flex-1 truncate">
+                        {tool.number != null ? `T${tool.number} · ` : ''}
+                        {tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)}
+                      </span>
+                      <button
+                        type="button"
+                        title="Copy this tool into the project and select it"
+                        onClick={() =>
+                          runCamAction(async () => {
+                            await importCamToolFromCentral(tool.id);
+                            setToolId(tool.id);
+                            setPresetIndex(0);
+                            if (!feedsTouched) {
+                              applyCutting(tool, 0);
+                              if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
+                                setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
+                              }
+                            }
+                          })
+                        }
+                        className="h-5 shrink-0 rounded border border-accent/50 bg-accent/15 px-1.5 text-[9px] font-semibold text-accent hover:bg-accent/25"
+                      >
+                        Import
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </DialogSection>
 

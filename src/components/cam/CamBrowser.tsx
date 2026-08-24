@@ -202,12 +202,13 @@ export function CamSetupsPanel() {
       </div>
       <button
         type="button"
+        title="Central library by default; switch to this project's snapshots inside"
         onClick={() => openDialog({ type: 'tool', toolId: null })}
         className="flex h-8 shrink-0 items-center gap-2 border-t border-edge px-3 text-[11px] text-mute hover:bg-edge/40 hover:text-ink"
       >
         <Wrench size={12} />
         <span className="flex-1 text-left">Tool Library…</span>
-        <span className="font-mono text-[9px] text-mute/60">{cam.tools.length}</span>
+        <span className="font-mono text-[9px] text-mute/60">{cam.tools.length} in project</span>
       </button>
     </section>
   );

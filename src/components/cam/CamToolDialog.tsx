@@ -1,11 +1,21 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Copy, Plus, Trash2, Wrench, X } from 'lucide-react';
 import {
   addCamTool,
   deleteCamTool,
+  importCamToolFromCentral,
+  publishCamToolToCentral,
   updateCamTool,
   type CamToolDraft,
 } from '../../cam/document';
+import {
+  addCentralLibraryTool,
+  centralLibraryAvailable,
+  deleteCentralLibraryTool,
+  loadCentralLibrary,
+  updateCentralLibraryTool,
+  type CentralCamLibrary,
+} from '../../cam/library';
 import {
   chipLoadUnitLabel,
   commitCuttingSpeed,
@@ -70,20 +80,38 @@ const HOLE_TOOL_KINDS: CamToolKind[] = ['tap', 'reamer', 'boring_bar', 'thread_m
 const CORNER_RADIUS_KINDS: CamToolKind[] = ['flat_end_mill', 'bull_nose_end_mill', 'face_mill'];
 
 /** Tool library: a full-window dialog with the tool table on the left and a
- *  tabbed editor (General / Cutter / Cutting data) on the right. New tools
- *  start on a type-picker page, matching the reference workflow; editing an
- *  existing tool lands directly on the tabs. */
+ *  tabbed editor (General / Cutter / Cutting data) on the right.
+ *
+ *  Two scopes share the dialog. The CENTRAL scope (default) is the per-user
+ *  collection that follows the operator across projects. The PROJECT scope
+ *  holds the snapshots this project actually uses — operations reference
+ *  these, and editing them never touches the central copy. Syncing is
+ *  explicit: import pulls central tools into the project, publish pushes a
+ *  project snapshot back into the collection. New tools start on a
+ *  type-picker page; editing an existing tool lands directly on the tabs. */
 export function CamToolDialog({ toolId }: { toolId: number | null }) {
   const cam = useAppStore((state) => state.camDocument);
   const close = () => useAppStore.getState().setCamDialog(null);
   const units = cam.units;
   const lu = lengthUnitLabel(units);
 
-  const [editing, setEditing] = useState<number | 'new' | null>(
-    toolId ?? (cam.tools.length > 0 ? null : 'new'),
+  const centralOn = centralLibraryAvailable();
+  const [scope, setScope] = useState<'central' | 'project'>(
+    toolId !== null || !centralOn ? 'project' : 'central',
   );
+  const [central, setCentral] = useState<CentralCamLibrary | null>(null);
+  const reloadCentral = useCallback(async () => {
+    setCentral(await loadCentralLibrary());
+  }, []);
+  useEffect(() => {
+    void reloadCentral();
+  }, [reloadCentral]);
+
+  const tools = scope === 'central' ? central?.tools ?? [] : cam.tools;
+  const [editing, setEditing] = useState<number | 'new' | null>(toolId);
   const [template, setTemplate] = useState<CamToolDto | null>(null);
   const [draftSeq, setDraftSeq] = useState(0);
+  const [importId, setImportId] = useState('');
   const startNew = (source: CamToolDto | null) => {
     setTemplate(source);
     setDraftSeq((seq) => seq + 1);
@@ -91,8 +119,113 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
   };
   const selected =
     typeof editing === 'number'
-      ? cam.tools.find((tool) => tool.id === editing) ?? null
+      ? tools.find((tool) => tool.id === editing) ?? null
       : null;
+  // First run with an empty library lands straight on the type picker.
+  useEffect(() => {
+    if (editing !== null) return;
+    if (scope === 'project' && cam.tools.length === 0) setEditing('new');
+    if (scope === 'central' && central !== null && central.tools.length === 0) setEditing('new');
+  }, [editing, scope, cam.tools.length, central]);
+
+  const saveTool = async (draft: CamToolDraft, existingId: number | null) => {
+    if (scope === 'central') {
+      if (existingId !== null) {
+        await updateCentralLibraryTool(existingId, (tool) => Object.assign(tool, draft));
+      } else {
+        await addCentralLibraryTool(draft);
+      }
+    } else if (existingId !== null) {
+      await updateCamTool(existingId, (tool) => Object.assign(tool, draft));
+    } else {
+      // Project-scope creation also registers the tool centrally, so it is
+      // importable from every other project on this machine.
+      await addCamTool(draft);
+    }
+    await reloadCentral();
+  };
+
+  const removeTool = (tool: CamToolDto) =>
+    runCamAction(async () => {
+      if (scope === 'central') {
+        await deleteCentralLibraryTool(tool.id);
+        await reloadCentral();
+      } else {
+        await deleteCamTool(tool.id);
+      }
+      setEditing(null);
+    });
+
+  // Sync state of the selected project snapshot against its central twin.
+  const centralTwin =
+    scope === 'project' && selected
+      ? central?.tools.find((candidate) => candidate.id === selected.id) ?? null
+      : null;
+  const twinDiffers =
+    selected !== null &&
+    centralTwin !== null &&
+    JSON.stringify(centralTwin) !== JSON.stringify(selected);
+
+  const importable =
+    scope === 'project'
+      ? (central?.tools ?? []).filter(
+          (candidate) => !cam.tools.some((tool) => tool.id === candidate.id),
+        )
+      : [];
+
+  const syncActions: ReactNode =
+    scope === 'project' && selected && centralOn ? (
+      <div className="mr-auto flex items-center gap-1.5">
+        {centralTwin === null ? (
+          <button
+            type="button"
+            title="Copy this project tool into the central library"
+            onClick={() =>
+              runCamAction(async () => {
+                await publishCamToolToCentral(selected.id);
+                await reloadCentral();
+              })
+            }
+            className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
+          >
+            Add to central library
+          </button>
+        ) : twinDiffers ? (
+          <>
+            <button
+              type="button"
+              title="Overwrite the central copy with this project's edits"
+              onClick={() =>
+                runCamAction(async () => {
+                  await publishCamToolToCentral(selected.id);
+                  await reloadCentral();
+                })
+              }
+              className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
+            >
+              Update central copy
+            </button>
+            <button
+              type="button"
+              title="Discard this project's edits and reload the central copy"
+              onClick={() =>
+                runCamAction(async () => {
+                  await importCamToolFromCentral(selected.id);
+                  await reloadCentral();
+                  // Remount the editor so the pulled values re-initialise it.
+                  setDraftSeq((seq) => seq + 1);
+                })
+              }
+              className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-warn/40 hover:text-warn"
+            >
+              Reset to central copy
+            </button>
+          </>
+        ) : (
+          <span className="px-1 text-[9px] italic text-mute/60">In sync with the central copy</span>
+        )}
+      </div>
+    ) : null;
 
   return (
     <div
@@ -105,8 +238,33 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Wrench size={15} className="text-accent" />
-          <span className="flex-1 text-xs font-semibold text-ink">
-            Tool Library · {cam.tools.length} tools · units {lu}
+          <span className="text-xs font-semibold text-ink">Tool Library</span>
+          {centralOn && (
+            <div className="ml-1 flex items-center gap-0.5 rounded border border-edge bg-header/40 p-0.5">
+              {(
+                [
+                  ['central', 'Central library'],
+                  ['project', 'This project'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setScope(value);
+                    setEditing(null);
+                  }}
+                  className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                    scope === value ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <span className="flex-1 text-right text-[10px] text-mute">
+            {tools.length} tools · units {lu}
           </span>
           <button
             type="button"
@@ -118,6 +276,39 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
         </header>
         <div className="flex min-h-0 flex-1">
           <div className="flex min-w-0 flex-1 flex-col">
+            {scope === 'project' && centralOn && importable.length > 0 && (
+              <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge px-3">
+                <span className="text-[9px] font-semibold uppercase tracking-widest text-mute/60">
+                  Import
+                </span>
+                <select
+                  value={importId}
+                  onChange={(event) => setImportId(event.target.value)}
+                  className="h-6 min-w-0 flex-1 rounded border border-edge bg-header/60 px-1.5 text-[10px] text-ink"
+                >
+                  <option value="">From the central library…</option>
+                  {importable.map((tool) => (
+                    <option key={tool.id} value={tool.id}>
+                      {tool.number != null ? `T${tool.number} · ` : ''}
+                      {tool.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={importId === ''}
+                  onClick={() =>
+                    runCamAction(async () => {
+                      await importCamToolFromCentral(Number(importId));
+                      setImportId('');
+                    })
+                  }
+                  className="h-6 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25 disabled:opacity-40"
+                >
+                  Add to project
+                </button>
+              </div>
+            )}
             <div className="min-h-0 flex-1 overflow-y-auto">
               <table className="w-full border-collapse text-[11px]">
                 <thead className="sticky top-0 bg-panel">
@@ -134,7 +325,7 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {cam.tools.map((tool) => {
+                  {tools.map((tool) => {
                     const active = editing === tool.id;
                     return (
                       <tr
@@ -166,10 +357,16 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                       </tr>
                     );
                   })}
-                  {cam.tools.length === 0 && (
+                  {tools.length === 0 && (
                     <tr>
                       <td colSpan={9} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
-                        Empty library — add tools before programming operations.
+                        {scope === 'central'
+                          ? central === null
+                            ? 'Loading the central library…'
+                            : 'Central library is empty — tools added here are importable from every project.'
+                          : centralOn
+                            ? 'No tools in this project — import from the central library above, or create a new one.'
+                            : 'Empty library — add tools before programming operations.'}
                       </td>
                     </tr>
                   )}
@@ -179,6 +376,11 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
             <div className="flex h-9 shrink-0 items-center gap-2 border-t border-edge px-3">
               <button
                 type="button"
+                title={
+                  scope === 'project'
+                    ? 'Create a tool in this project (also registered in the central library)'
+                    : 'Create a tool in the central library'
+                }
                 onClick={() => startNew(null)}
                 className="flex h-6 items-center gap-1 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25"
               >
@@ -196,13 +398,12 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
                   </button>
                   <button
                     type="button"
-                    title="Delete tool (blocked while operations use it)"
-                    onClick={() =>
-                      runCamAction(async () => {
-                        await deleteCamTool(selected.id);
-                        setEditing(null);
-                      })
+                    title={
+                      scope === 'central'
+                        ? 'Delete from the central library (project snapshots are unaffected)'
+                        : 'Delete from this project (blocked while operations use it)'
                     }
+                    onClick={() => removeTool(selected)}
                     className="flex h-6 items-center gap-1 rounded border border-edge px-2 text-[10px] text-mute hover:text-warn"
                   >
                     <Trash2 size={11} /> Delete
@@ -215,10 +416,13 @@ export function CamToolDialog({ toolId }: { toolId: number | null }) {
             {editing !== null ? (
               <ToolEditor
                 // Remount per target so the draft fields re-initialise.
-                key={editing === 'new' ? `new-${draftSeq}` : editing}
+                key={editing === 'new' ? `new-${draftSeq}` : `${editing}-${draftSeq}`}
                 existing={selected}
                 template={editing === 'new' ? template : null}
+                scopeTools={tools}
+                onSave={saveTool}
                 onSaved={() => setEditing(null)}
+                syncActions={syncActions}
               />
             ) : (
               <p className="p-4 text-[10px] italic text-mute/70">
@@ -259,11 +463,20 @@ type EditorTab = 'general' | 'cutter' | 'cutting';
 function ToolEditor({
   existing,
   template,
+  scopeTools,
+  onSave,
   onSaved,
+  syncActions,
 }: {
   existing: CamToolDto | null;
   template: CamToolDto | null;
+  /** Tools of the active scope; seeds the next suggested tool number. */
+  scopeTools: CamToolDto[];
+  /** Scope-aware save (central collection vs project snapshot). */
+  onSave: (draft: CamToolDraft, existingId: number | null) => Promise<void>;
   onSaved: () => void;
+  /** Optional project↔central sync buttons rendered in the footer. */
+  syncActions?: ReactNode;
 }) {
   const cam = useAppStore((state) => state.camDocument);
   const units = cam.units;
@@ -278,7 +491,7 @@ function ToolEditor({
   const [name, setName] = useState(existing?.name ?? (template ? `${template.name} copy` : ''));
   const suggestedNumber = Math.max(
     0,
-    ...cam.tools.map((tool) => tool.number ?? 0),
+    ...scopeTools.map((tool) => tool.number ?? 0),
   ) + 1;
   const [number, setNumber] = useState(
     existing ? (existing.number != null ? String(existing.number) : '') : String(suggestedNumber),
@@ -561,8 +774,7 @@ function ToolEditor({
         })),
       };
       runCamAction(async () => {
-        if (existing) await updateCamTool(existing.id, (tool) => Object.assign(tool, draft));
-        else await addCamTool(draft);
+        await onSave(draft, existing?.id ?? null);
         onSaved();
       });
     } catch (cause) {
@@ -889,6 +1101,7 @@ function ToolEditor({
         )}
       </div>
       <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
+        {syncActions}
         <button
           type="submit"
           className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"

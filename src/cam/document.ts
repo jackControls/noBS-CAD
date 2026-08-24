@@ -11,7 +11,11 @@ import type {
   CamWorkOffset,
 } from '../engine/types';
 import { useAppStore } from '../store/appStore';
-import { mirrorCamLibraryToCentral, syncCamLibraryFromCentral } from './library';
+import {
+  addCentralLibraryTool,
+  centralLibraryTool,
+  publishToolToCentralLibrary,
+} from './library';
 import {
   modelBoundsOfBodies,
   resolveStock,
@@ -46,9 +50,8 @@ export function enterCamWorkspace(): Promise<void> {
   state.setSelectedCamSetupId(setup?.id ?? null);
   state.setSelectedCamOperationId(setup?.operations[0]?.id ?? null);
   state.setActiveTab('cam');
-  // The tool library follows the OS user, not the project: merge the
-  // per-user library into the just-loaded document (no-op off desktop).
-  void syncCamLibraryFromCentral();
+  // No library synchronisation happens here: the project keeps its own tool
+  // snapshots and the operator imports from the central library explicitly.
   return Promise.resolve();
 }
 
@@ -82,21 +85,54 @@ export function setCamPostDefaults(config: CamPostConfigDto): Promise<void> {
 
 export type CamToolDraft = Omit<CamToolDto, 'id'>;
 
-/** Add one operator-defined tool to the library. Nothing is created
- *  implicitly; the library is the only source of tools for operations. */
-export function addCamTool(draft: CamToolDraft): Promise<number> {
+/** Add one operator-defined tool to the project library. The id is
+ *  allocated by the central library (which also receives a copy), so ids
+ *  stay unique across projects on this machine; off the desktop runtime the
+ *  project's own counter allocates. Nothing is created implicitly — the
+ *  library is the only source of tools for operations. */
+export async function addCamTool(draft: CamToolDraft): Promise<number> {
+  const centralTool = await addCentralLibraryTool(draft);
   let createdId = 0;
-  return enqueueCamUpdate((cam) => {
+  await enqueueCamUpdate((cam) => {
     const next = structuredClone(cam);
-    const tool: CamToolDto = { ...draft, id: next.next_tool_id };
+    let id = centralTool?.id ?? next.next_tool_id;
+    // Defensive: never collide with a snapshot the project already holds.
+    const taken = new Set(next.tools.map((tool) => tool.id));
+    while (taken.has(id)) id += 1;
+    const tool: CamToolDto = { ...structuredClone(draft), id };
     next.tools.push(tool);
-    next.next_tool_id += 1;
-    createdId = tool.id;
+    next.tools.sort((a, b) => a.id - b.id);
+    next.next_tool_id = Math.max(next.next_tool_id, id + 1);
+    createdId = id;
     return next;
-  }).then(() => {
-    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
-    return createdId;
   });
+  return createdId;
+}
+
+/** Import (or refresh) a central-library tool as a project snapshot. The
+ *  same-id snapshot is replaced outright: operations keep their own copied
+ *  cutting data, and geometry edits are exactly what the operator asked for
+ *  by pulling the update in. */
+export async function importCamToolFromCentral(toolId: number): Promise<void> {
+  const central = await centralLibraryTool(toolId);
+  if (!central) throw new Error('That tool is no longer in the central library.');
+  await enqueueCamUpdate((cam) => {
+    const next = structuredClone(cam);
+    const index = next.tools.findIndex((candidate) => candidate.id === toolId);
+    if (index >= 0) next.tools[index] = structuredClone(central);
+    else next.tools.push(structuredClone(central));
+    next.tools.sort((a, b) => a.id - b.id);
+    next.next_tool_id = Math.max(next.next_tool_id, toolId + 1);
+    return next;
+  });
+}
+
+/** Publish a project snapshot back into the central collection, replacing
+ *  the same-id entry there. */
+export async function publishCamToolToCentral(toolId: number): Promise<void> {
+  const tool = useAppStore.getState().camDocument.tools.find((candidate) => candidate.id === toolId);
+  if (!tool) return;
+  await publishToolToCentralLibrary(tool);
 }
 
 export function deleteCamTool(toolId: number): Promise<void> {
@@ -111,8 +147,6 @@ export function deleteCamTool(toolId: number): Promise<void> {
     const before = next.tools.length;
     next.tools = next.tools.filter((tool) => tool.id !== toolId);
     return next.tools.length === before ? cam : next;
-  }).then(() => {
-    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
   });
 }
 
@@ -306,6 +340,9 @@ export function updateCamOperation(
   });
 }
 
+/** Edit the project's snapshot of a tool. The central library is NOT
+ *  touched — syncing back is the operator's explicit choice
+ *  (`publishCamToolToCentral`). */
 export function updateCamTool(
   toolId: number,
   mutate: (tool: CamToolDto) => void,
@@ -316,8 +353,6 @@ export function updateCamTool(
     if (!tool) return cam;
     mutate(tool);
     return next;
-  }).then(() => {
-    mirrorCamLibraryToCentral(useAppStore.getState().camDocument);
   });
 }
 
@@ -356,7 +391,10 @@ export function camOperationLabel(kind: CamOperationKind): string {
 
 /** True when an operation kind can use the given tool kind. Drill operations
  *  are cycle-aware: tapping needs a tap, reaming a reamer, boring a boring
- *  bar, and the drilling cycles a drill or any center-cutting tool. */
+ *  bar, and the drilling cycles a drill or any center-cutting tool. Facing
+ *  is the exception on plunge capability: the cut enters from outside the
+ *  stock boundary, so indexable face mills — rarely center-cutting — are
+ *  valid, while pocket/contour entries still plunge into material. */
 export function camToolCompatible(
   kind: CamOperationKind,
   tool: CamToolDto,
@@ -364,6 +402,12 @@ export function camToolCompatible(
 ): boolean {
   switch (kind) {
     case 'face':
+      return (
+        tool.kind === 'flat_end_mill' ||
+        tool.kind === 'ball_end_mill' ||
+        tool.kind === 'bull_nose_end_mill' ||
+        tool.kind === 'face_mill'
+      );
     case 'pocket2d':
       return (
         (tool.kind === 'flat_end_mill' || tool.kind === 'ball_end_mill' || tool.kind === 'bull_nose_end_mill' || tool.kind === 'face_mill') && tool.center_cutting
