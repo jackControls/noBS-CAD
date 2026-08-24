@@ -29,7 +29,11 @@ operation. The operator programs the job explicitly, in this order:
    material), with a two-way chip-load calculator: each linked pair
    (rpm ↔ surface speed, feed ↔ feed-per-tooth, plunge ↔ plunge-per-rev)
    follows an edit on either side, and the side last touched wins at save
-   time. The calculator works on the *effective* cutting diameter: engaged
+   time. Holemaking tools (drills, reamers, boring bars) drop the lateral
+   feed pair entirely — a drill only plunges — so their profiles are driven
+   by surface speed and plunge feed per revolution, and the editor hides the
+   milling feed fields for them. The calculator works on the *effective*
+   cutting diameter: engaged
    shallower than the corner radius, De = D − 2R + 2√(2R·ap − ap²) at the
    entered depth of cut — the correction that matters most on high-feed
    tooling. Operation creation can copy any profile instead of the default.
@@ -54,9 +58,10 @@ operation. The operator programs the job explicitly, in this order:
    through that same dialog stacked on top as a picker (the store keeps a
    one-deep dialog stack): the project scope shows first, compatible rows
    highlight, and a double-click or the confirm button chooses — central
-   picks are copied into the project on the way in. When the project already
-   holds compatible tools, a plain dropdown offers them directly. Setups, operations, units, and post defaults
-   stay project data.
+   picks are copied into the project on the way in. When the project scope
+   holds no compatible tool but the central library does, the picker switches
+   scopes on its own instead of showing an empty table. Setups, operations,
+   units, and post defaults stay project data.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
    cylinder, hex bar, or a modeled body — defined in one of three ways: a
@@ -74,9 +79,14 @@ operation. The operator programs the job explicitly, in this order:
    planned toolpaths are dialect-neutral and any post can render them.
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
-   sketched points or explicit coordinates for drilling and thread milling;
-   the stock top or an explicit region for facing. The facing dialog is
-   tabbed (Tool / Geometry / Heights / Passes / Linking): heights are entered
+   holes clicked directly on the model's cylindrical faces for drilling and
+   thread milling (hover highlights the face, a click toggles the hole, only
+   faces whose axis is parallel to setup Z are pickable, and explicit
+   coordinates remain available); the stock top or an explicit region for
+   facing. Every operation dialog is the same five-tab scaffold (Tool /
+   Geometry / Heights / Passes / Linking); the kind only switches on the
+   geometry shape and the fields it needs, so a shared tab is edited once for
+   all operation kinds. Heights are entered
    as a reference plane (model/stock top or bottom, or origin) plus a signed
    offset and resolved to absolute setup Z at submit, and the full option set
    of the reference workflow renders with the unplanned entries shown as
@@ -167,7 +177,11 @@ rewrites stored geometry.
   a translucent ghost of the selected operation's tool parked at its last
   cutting position (fluted section brighter than the shank),
   the simulated remaining stock in green with rapid-collision markers, and
-  point-pick candidates. A status chip at the viewport's lower right reports
+  point-pick candidates (solid discs whose fill density adapts to the pixel
+  size, so they read as dots at any zoom). Toolpaths and the simulated stock
+  only render while an operation is selected and no operation dialog is open
+  — clicking empty space clears the selection and returns the viewport to
+  the bare model. A status chip at the viewport's lower right reports
   the selected operation's machining time (`h:mm:ss`, from the program's
   per-operation stats) or the whole setup's total when nothing is selected.
   Setup-space planner output is transformed back to

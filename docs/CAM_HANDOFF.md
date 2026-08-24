@@ -1,6 +1,6 @@
 # CAM branch handoff — 2026-08-24
 
-State of `feature/cam` after nine working rounds, rebased onto current
+State of `feature/cam` after ten working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
@@ -87,6 +87,23 @@ and the tests, not this document, when they disagree.
   intercepts left clicks during a `camPointPick` session and projects
   candidates with the live camera (16 px nearest-wins); Escape cancels via a
   `CamWorkspace` listener, and the prompt shows as a DOM banner.
+- Viewport hole picking works the same way for drill/thread dialogs (round
+  10): the dialog opens a `camHolePick` session in the store for its
+  lifetime, pointermove highlights cylindrical faces whose axis is parallel
+  to setup Z (`camHoleFromCylinderFace` in `geometry.ts` converts a face to
+  a setup-space center + radius, marker parked at stock-top height), a click
+  toggles the hole into the dialog's list, and the overlay draws selected
+  holes as green markers (the hovered one enlarged). Manual X,Y entry
+  remains as a fallback. The old sketch-point checkbox menu is gone.
+- Round-10 overlay fixes: the filled-disc rasterizer
+  (`platform.rs::draw_filled_disc`) takes an adaptive half-step count derived
+  from the world-per-pixel size, so pick markers render as solid dots at any
+  zoom instead of striped bands; marker radii shrank to ~0.6% of the model
+  extent. Toolpaths and the green simulated stock only render while an
+  operation is selected and no operation dialog is open (`camDialogOpen` in
+  the overlay state); clicking empty space clears the CAM selection. The
+  operation context menu carries `data-native-viewport-overlay` so the
+  native viewport cuts out for it instead of drawing over it.
 - The browser stays shared too: App renders `BrowserTree` (embedded mode)
   with `CamSetupsPanel` docked below. Operation rows show `[T<n>]`/`[name]`
   tool tags. There is no right sidebar: double-clicking a setup row, the
@@ -146,38 +163,46 @@ and the tests, not this document, when they disagree.
   for `face` only; pocket/contour entries still plunge into material and
   keep the center-cutting requirement until ramp/helical/lead-in entries
   exist. Engine tests: `face_accepts_a_non_center_cutting_face_mill`,
-  `face_kind_gate_admits_flat_bottom_mills_only`; the inspector edits the
-  safe distance like any other face field.
-- Operation dialogs share one scaffold (`opShared.tsx`): the tool picker is
-  a single two-scope component (defaults to the project; switching to the
-  central library lists compatible tools and copies the pick into the
-  project — no more inline import list that would drown under a 100-tool
-  library), speeds & feeds is one component, and `OP_PAGES` declares per
-  kind which pages/fields render. New tools and new operations default to
-  flood coolant.
+  `face_kind_gate_admits_flat_bottom_mills_only`, and
+  `face_entry_moves_outward_with_safe_distance` (round 10, pins that the
+  entry X moves outward by exactly the safe distance); the inspector edits
+  the safe distance like any other face field.
+- Operation dialogs share one five-tab scaffold (Tool / Geometry / Heights /
+  Passes / Linking) for every kind — round 10 deleted the old flat layout
+  along with `OpToolPicker`/`OpSpeedsFeeds`; `opShared.tsx` now carries only
+  `OP_PAGES` (per-kind geometry shape + which fields go live), the library
+  picker plumbing, and the pick-result hook. New tools and new operations
+  default to flood coolant.
 - Face operations target the model's top surface: dialogs and the inspector
   enter a depth below model top (0 = model top), converted to absolute
   setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
   orthonormal WCS). The stored value stays absolute; editing the model
   afterwards does not re-resolve (the full From-reference height system is
   the roadmap item).
-- `CamOperationDialog` — per-operation programming incl. per-op
-  clearance/retract; drill cycle picker filters compatible tools per cycle
-  and scrubs inapplicable fields on cycle change (the inspector's DrillFields
-  does the same). The thread operation picker resolves the chosen designation
-  to pitch/major/minor through `src/lib/threadStandards.ts` and stores the
-  resolved numbers on the operation; the designation string never persists.
+- `CamOperationDialog` — every kind now runs the five-tab scaffold (round
+  10). The Tool tab is shared verbatim (current tool + Select… opening the
+  library picker, presets, feed & speed grid with derived surface speed /
+  feed per tooth / feed per rev); for drills it hides the lateral-feed pair
+  and relabels plunge feed as drilling feed. Heights are From-reference
+  (model/stock top or bottom, origin) plus signed offset for every kind,
+  resolved to absolute setup Z at submit; the bottom row only exists for
+  kinds that cut to a depth, and defaults aim at the obvious target (top:
+  stock top for facing, model top otherwise; bottom: model top for facing,
+  model bottom otherwise). The Passes tab switches live fields per kind
+  (face/pocket: stepover + multiple depths; contour: tool-side compensation
+  + multiple depths; chamfer: width/tip/material side; drill: cycle plus its
+  conditional peck/pitch/feed-out/dwell fields; thread: hand/direction/
+  radial passes) and renders the rest of the reference option set disabled
+  (`NOT_APPLIED_YET` in `camFields.tsx`). The thread designation select plus
+  its resolved readout lives on the Geometry tab. Drill cycle changes still
+  filter compatible tools per cycle and scrub inapplicable fields (the
+  inspector's DrillFields does the same). The thread designation resolves to
+  pitch/major/minor through `src/lib/threadStandards.ts`; the resolved
+  numbers persist on the operation, the designation string never does.
   A cutting-profile dropdown appears when the chosen library tool carries
-  named profiles and copies the picked profile into the drafts.
-  The face dialog is tabbed (Tool / Geometry / Heights / Passes / Linking
-  via `OP_PAGES.face.tabs`): heights are From-reference (model/stock top or
-  bottom, origin) plus signed offset, resolved to absolute setup Z at submit;
-  the Tool tab adds derived readouts (surface speed from rpm × Ø, feed per
-  tooth, plunge per rev) and placeholder rows for ramp/lead/transition feeds;
-  Passes/Linking render the reference option set with planner-unconsumed
-  fields disabled (`NOT_APPLIED_YET` in `camFields.tsx`). A live "Multiple
-  depths" toggle switches stepdown between the entered maximum and a single
-  full-depth pass. Other kinds keep the flat layout.
+  named profiles and copies the picked profile into the drafts. A live
+  "Multiple depths" toggle switches stepdown between the entered maximum and
+  a single full-depth pass (face/contour/pocket).
 - Tool picking goes through the Tool Library dialog itself: the store keeps
   a one-deep dialog stack (`camDialogBelow` + `pushCamDialog`/`popCamDialog`),
   the library mounts in picker mode (`pickFor`) over the operation dialog
@@ -186,8 +211,9 @@ and the tests, not this document, when they disagree.
   `camToolPick`, which the waiting dialog consumes (`useCamToolPickResult`
   in `opShared.tsx`); central-scope picks are imported into the project on
   confirm. The library table gained a free-text filter (name/number/type)
-  in both modes. `OpToolPicker` still renders a plain dropdown when the
-  project already holds compatible tools.
+  in both modes. The picker opens on the project scope but switches to the
+  central library on its own when the project holds no compatible tool and
+  the central library does (round 10; the empty-state copy says so).
 - `geometry.ts` resolves stock specs (box/cylinder/hex/model body; fixed /
   from-model allowances / rest-from-setup) and WCS origins; `pointPick.ts`
   owns the shared viewport point-pick session (27-lattice box points, sketch
@@ -227,7 +253,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 64, 463 total), mcp-server 37,
+`cargo test --workspace` (cam 65, 464 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
@@ -242,21 +268,20 @@ drill cycles.
 5. Tool library: holders/shafts, central-library file import/export.
    (The central/project two-scope model, named cutting-data profiles, and
    the Vc/fz calculator are landed.)
-6. Heights "From"-references: landed for the face dialog (five heights,
-   live model/stock top/bottom + origin references plus disabled placeholder
-   entries). Extend the same structured entry to every other operation kind,
-   and add the remaining references (fixture planes, selected contours,
-   highest/lowest-of) once selection plumbing exists.
+6. Heights "From"-references: landed for every operation kind (round 10 —
+   the five-tab scaffold is universal). Remaining: the additional references
+   (fixture planes, selected contours, highest/lowest-of) once selection
+   plumbing exists.
 7. Geometry picking upgrades: viewport chain selection for
-   contour/pocket/chamfer (sketch loops already supported), hole-face
-   selection for drilling and thread milling.
-8. The face dialog renders the reference Passes/Linking/Tool option set with
-   placeholders; the planner still needs to consume them: stock-to-leave
+   contour/pocket/chamfer (sketch loops already supported; hole-face
+   picking for drill/thread landed in round 10).
+8. The shared Passes/Linking tabs render the reference option set with
+   placeholders for every kind; the planner still needs to consume them:
+   stock-to-leave
    (radial/axial), finishing passes with separate feed, tolerance/smoothing,
    pass direction + extension, both-ways vs climb/conventional selection,
    keep-tool-down linking, lead in/out geometry, and the ramp/lead/transition
-   feedrates. The same tabbed layout + option sets should then roll out to
-   the other operation kinds. Also drill break-through depth +
+   feedrates. Also drill break-through depth +
    tip-through-bottom.
 9. Ramp/helical entries for pocket and contour — the blocker for
    non-center-cutting tools there (facing is already exempt).

@@ -9,11 +9,9 @@ import {
 } from '../../cam/document';
 import {
   listSketchLoops,
-  listSketchPointRefs,
   loopToSetupPath,
   modelBottomZInSetup,
   modelTopZInSetup,
-  sketchPointToSetup,
   type SketchLoop,
 } from '../../cam/geometry';
 import {
@@ -43,7 +41,7 @@ import {
   lengthUnit,
   parseDraft,
 } from './camFields';
-import { OP_PAGES, OpSpeedsFeeds, OpToolPicker, openCamToolPicker, useCamToolPickResult } from './opShared';
+import { OP_PAGES, openCamToolPicker, useCamToolPickResult } from './opShared';
 
 type OperationKind = CamOperationInput['kind'];
 type GeometrySource = 'sketch' | 'manual';
@@ -197,9 +195,9 @@ function DerivedField({ label, text, unit }: { label: string; text: string; unit
   );
 }
 
-type FaceTab = 'tool' | 'geometry' | 'heights' | 'passes' | 'linking';
+type OpTab = 'tool' | 'geometry' | 'heights' | 'passes' | 'linking';
 
-const FACE_TABS: Array<{ id: FaceTab; label: string; icon: LucideIcon }> = [
+const OP_TABS: Array<{ id: OpTab; label: string; icon: LucideIcon }> = [
   { id: 'tool', label: 'Tool', icon: Wrench },
   { id: 'geometry', label: 'Geometry', icon: Box },
   { id: 'heights', label: 'Heights', icon: ArrowUpDown },
@@ -207,11 +205,12 @@ const FACE_TABS: Array<{ id: FaceTab; label: string; icon: LucideIcon }> = [
   { id: 'linking', label: 'Linking', icon: Link2 },
 ];
 
-/** Program one operation end to end. Every kind shares this single dialog
- *  scaffold: the tool picker, heights, and speeds & feeds pages are the
- *  shared components from `opShared.tsx`, and the kind only switches pages
- *  and fields on through `OP_PAGES`. Geometry, tool, heights, and feeds
- *  are all explicit; validation in the engine rejects incomplete input. */
+/** Program one operation end to end. Every kind runs through the same
+ *  five-tab scaffold (Tool / Geometry / Heights / Passes / Linking); the
+ *  kind only switches geometry shapes and fields on through `OP_PAGES`, so
+ *  a shared tab (tool picking, heights, feeds) is edited once for all
+ *  operation kinds. Geometry, tool, heights, and feeds are all explicit;
+ *  validation in the engine rejects incomplete input. */
 export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const cam = useAppStore((state) => state.camDocument);
   const sketches = useAppStore((state) => state.finishedSketches);
@@ -233,7 +232,6 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   );
 
   const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
-  const pointRefs = useMemo(() => listSketchPointRefs(sketches), [sketches]);
   const existingCount = setup?.operations.filter((operation) => operation.kind === kind).length ?? 0;
 
   const [name, setName] = useState(`${camOperationLabel(kind)} ${existingCount + 1}`);
@@ -248,41 +246,36 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const [source, setSource] = useState<GeometrySource>(loops.length > 0 ? 'sketch' : 'manual');
   const [loopKey, setLoopKey] = useState('');
   const [manualPoints, setManualPoints] = useState('');
-  const [selectedPointKeys, setSelectedPointKeys] = useState<string[]>([]);
+  // Drilling/thread: holes are picked as cylindrical faces in the viewport;
+  // the session lives in the store so the shared viewport can drive it.
+  const holePick = useAppStore((state) => state.camHolePick);
 
-  const [topZ, setTopZ] = useState(setup ? displayLength(setup.stock.max.z, units).toFixed(4) : '0');
-  const [bottomZ, setBottomZ] = useState('');
-  // Face targets are entered as a depth below the model top surface: 0 faces
-  // exactly the model top, matching how machinists talk about the cut.
-  const [targetZ, setTargetZ] = useState(kind === 'face' ? '0' : '');
   const [stepDown, setStepDown] = useState('');
   const [stepOver, setStepOver] = useState('');
   // Facing plunge clearance from the stock boundary (see the planner).
   const [safeDistance, setSafeDistance] = useState(displayLength(5, units).toFixed(4));
-  // Tabbed face dialog: active tab, structured heights (reference plane +
-  // signed offset), and the multiple-depths toggle.
-  const [faceTab, setFaceTab] = useState<FaceTab>('tool');
+  // Active tab, structured heights (reference plane + signed offset), and the
+  // multiple-depths toggle.
+  const [opTab, setOpTab] = useState<OpTab>('tool');
   const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>('stock_top');
   const [clearanceOff, setClearanceOff] = useState(displayLength(10, units).toFixed(4));
   const [retractFrom, setRetractFrom] = useState<HeightFrom>('stock_top');
   const [retractOff, setRetractOff] = useState(displayLength(3, units).toFixed(4));
-  const [topFrom, setTopFrom] = useState<HeightFrom>('stock_top');
+  // Facing starts from the stock top; every other kind starts from the model
+  // top (a drill/contour rarely begins inside the stock allowance).
+  const [topFrom, setTopFrom] = useState<HeightFrom>(kind === 'face' ? 'stock_top' : 'model_top');
   const [topOff, setTopOff] = useState('0');
-  const [bottomFrom, setBottomFrom] = useState<HeightFrom>('model_top');
+  // Face bottoms ride the model top; hole/path kinds default to the model
+  // bottom so a fresh dialog describes a through cut.
+  const [bottomFrom, setBottomFrom] = useState<HeightFrom>(
+    kind === 'face' ? 'model_top' : 'model_bottom',
+  );
   const [bottomOff, setBottomOff] = useState('0');
   const [multipleDepths, setMultipleDepths] = useState(true);
   const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
   const [wallSide, setWallSide] = useState<CamContourCompensation>('inside');
   const [chamferWidth, setChamferWidth] = useState('');
   const [tipOffset, setTipOffset] = useState('');
-  // Per-operation safe heights (setup frame): clearance is the travel plane
-  // above the stock, retract the approach/peck-return plane above the cut.
-  const [clearanceZ, setClearanceZ] = useState(
-    setup ? displayLength(setup.stock.max.z + 10, units).toFixed(4) : '10',
-  );
-  const [retractZ, setRetractZ] = useState(
-    setup ? displayLength(setup.stock.max.z + 3, units).toFixed(4) : '3',
-  );
   const [peckDepth, setPeckDepth] = useState('');
   const [peckRetract, setPeckRetract] = useState('');
   const [threadPitch, setThreadPitch] = useState('');
@@ -308,7 +301,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const modelBottom = modelBottomZInSetup(scene, setup);
   const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
 
-  /** Reference plane of a structured face height, as absolute setup Z.
+  /** Reference plane of a structured height, as absolute setup Z.
    *  Falls back to the stock plane when the setup references no bodies. */
   const heightRefZ = (from: HeightFrom): number => {
     switch (from) {
@@ -370,19 +363,29 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tool picked in the stacked library picker. Only consumed here when the
-  // tabbed layout replaces OpToolPicker (face); otherwise the picker inside
-  // OpToolPicker consumes it and this callback no-ops.
+  // Tool picked in the stacked library picker: the picker confirms a tool id
+  // into `camToolPick`; this dialog consumes it here.
   const pickCompatible = useMemo(
     () => (tool: CamToolDto) =>
       camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
     [kind, drillCycle],
   );
   useCamToolPickResult(pickCompatible, (tool) => {
-    if (!pages.tabs) return;
     setFeedsTouched(false);
     chooseTool(tool);
   });
+
+  // Hole-geometry kinds open a viewport hole-pick session for the dialog's
+  // lifetime; closing the dialog ends picking and clears the hover state.
+  useEffect(() => {
+    if (pages.geometry !== 'holes') return;
+    useAppStore.getState().setCamHolePick({ holes: [], hoverKey: null });
+    return () => {
+      const state = useAppStore.getState();
+      state.setCamHolePick(null);
+      state.setHoveredFace(null);
+    };
+  }, [pages.geometry]);
 
   const selectedLoop = (): SketchLoop | null => {
     const loop = loops.find((candidate) => `${candidate.sketch}:${candidate.entityIds.join(',')}` === loopKey);
@@ -415,16 +418,14 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     source === 'sketch' ? pathFromLoop() : parseManualPoints(label);
 
   const resolveDrillPoints = (): CamPoint2Dto[] => {
-    const fromSketches = selectedPointKeys.map((key) => {
-      const ref = pointRefs.find((candidate) => `${candidate.sketch}:${candidate.entityId}` === key);
-      const sketch = sketches.find((candidate) => candidate.name === ref?.sketch);
-      if (!ref || !sketch) throw new Error('A selected sketch point no longer exists.');
-      return sketchPointToSetup(sketch, ref.uv, setup.wcs);
-    });
+    const fromPicks = (holePick?.holes ?? []).map((hole) => ({
+      x: hole.point.x,
+      y: hole.point.y,
+    }));
     const manual = manualPoints.trim() ? parseManualPoints('Hole centers') : [];
-    const points = [...fromSketches, ...manual];
+    const points = [...fromPicks, ...manual];
     if (points.length === 0) {
-      throw new Error('Pick at least one sketch point or enter hole centers manually.');
+      throw new Error('Click hole faces in the viewport, or enter hole centers manually.');
     }
     return points;
   };
@@ -445,16 +446,13 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         name: name.trim() || camOperationLabel(kind),
         enabled: true,
         tool_id: toolId,
-        clearance_z: pages.tabs
-          ? resolveHeight(clearanceFrom, clearanceOff, 'Clearance height')
-          : commitLength(parseDraft(clearanceZ, 'Clearance Z'), units),
-        retract_z: pages.tabs
-          ? resolveHeight(retractFrom, retractOff, 'Retract height')
-          : commitLength(parseDraft(retractZ, 'Retract Z'), units),
+        clearance_z: resolveHeight(clearanceFrom, clearanceOff, 'Clearance height'),
+        retract_z: resolveHeight(retractFrom, retractOff, 'Retract height'),
       };
-      const top = pages.tabs
-        ? resolveHeight(topFrom, topOff, 'Top height')
-        : commitLength(parseDraft(topZ, 'Top Z'), units);
+      const top = resolveHeight(topFrom, topOff, 'Top height');
+      // Bottom height is a reference plane plus a signed offset, resolved to
+      // absolute setup Z for the kinds that cut to a depth.
+      const bottomAbs = () => resolveHeight(bottomFrom, bottomOff, 'Bottom height');
       let operation: CamOperationInput;
       switch (kind) {
         case 'face': {
@@ -470,54 +468,55 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                   y: commitLength(parseDraft(faceMax.y, 'Face max Y'), units),
                 },
               };
-          // Tabbed layout: the bottom is a reference plane plus a signed
-          // offset. Flat layout: a depth below the model's top surface.
-          // Either way the stored value is absolute setup Z.
-          const targetAbs = pages.tabs
-            ? resolveHeight(bottomFrom, bottomOff, 'Bottom height')
-            : modelTop !== null
-              ? modelTop - commitLength(parseDraft(targetZ, 'Depth below model top'), units)
-              : commitLength(parseDraft(targetZ, 'Target Z'), units);
+          const target = bottomAbs();
           operation = {
             ...base,
             kind,
             bounds,
             top_z: top,
-            target_z: targetAbs,
+            target_z: target,
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
             // Without multiple depths a single pass covers the full depth.
             step_down: multipleDepths
               ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
-              : Math.max(Math.abs(top - targetAbs), 0.001),
+              : Math.max(Math.abs(top - target), 0.001),
             safe_distance: commitLength(parseDraft(safeDistance, 'Safe distance'), units),
             cutting: cutting(),
           };
           break;
         }
-        case 'contour2d':
+        case 'contour2d': {
+          const bottom = bottomAbs();
           operation = {
             ...base,
             kind,
             path: resolvePath('Contour path'),
             top_z: top,
-            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
-            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            bottom_z: bottom,
+            step_down: multipleDepths
+              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
+              : Math.max(Math.abs(top - bottom), 0.001),
             compensation,
             cutting: cutting(),
           };
           break;
-        case 'pocket2d':
+        }
+        case 'pocket2d': {
+          const bottom = bottomAbs();
           operation = {
             ...base,
             kind,
             outline: resolvePath('Pocket outline'),
             top_z: top,
-            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
-            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            bottom_z: bottom,
+            step_down: multipleDepths
+              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
+              : Math.max(Math.abs(top - bottom), 0.001),
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
             cutting: cutting(),
           };
           break;
+        }
         case 'chamfer2d':
           operation = {
             ...base,
@@ -539,7 +538,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             kind,
             points: resolveDrillPoints(),
             top_z: top,
-            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            bottom_z: bottomAbs(),
             cycle: drillCycle,
             peck_depth: pecking
               ? commitLength(parseDraft(peckDepth, 'Peck depth'), units)
@@ -577,7 +576,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             kind,
             points: resolveDrillPoints(),
             top_z: top,
-            bottom_z: commitLength(parseDraft(bottomZ, 'Bottom Z'), units),
+            bottom_z: bottomAbs(),
             pitch: preset.pitchMm,
             major_diameter: envelope.modeledMajor,
             minor_diameter: envelope.modeledMinor,
@@ -610,41 +609,40 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
 
   const geometrySection = () => {
     if (pages.geometry === 'holes') {
+      const holes = holePick?.holes ?? [];
       return (
-        <DialogSection title="HOLE CENTERS · SKETCH POINTS">
-          {pointRefs.length > 0 ? (
+        <DialogSection title="HOLES · PICKED IN VIEWPORT">
+          <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
+            Click cylindrical hole faces in the viewport to toggle them as hole centers; only
+            faces whose axis is parallel to setup Z are pickable.
+          </p>
+          {holes.length > 0 && (
             <div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge/70 p-1.5">
-              {pointRefs.map((ref) => {
-                const key = `${ref.sketch}:${ref.entityId}`;
-                return (
-                  <label key={key} className="flex items-center gap-2 text-[11px] text-ink">
-                    <input
-                      type="checkbox"
-                      checked={selectedPointKeys.includes(key)}
-                      onChange={(event) =>
-                        setSelectedPointKeys((current) =>
-                          event.target.checked
-                            ? [...current, key]
-                            : current.filter((candidate) => candidate !== key),
-                        )
-                      }
-                    />
-                    <span className="truncate">{ref.label}</span>
-                  </label>
-                );
-              })}
+              {holes.map((hole) => (
+                <div key={hole.key} className="flex items-center gap-2 text-[11px] text-ink">
+                  <span className="min-w-0 flex-1 truncate font-mono">
+                    Ø{displayLength(hole.radius * 2, units).toFixed(3)} · X{' '}
+                    {displayLength(hole.point.x, units).toFixed(3)} · Y{' '}
+                    {displayLength(hole.point.y, units).toFixed(3)}
+                  </span>
+                  <button
+                    type="button"
+                    title="Remove this hole"
+                    onClick={() => useAppStore.getState().toggleCamHolePickHole(hole)}
+                    className="shrink-0 rounded p-0.5 text-mute hover:bg-edge hover:text-warn"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
             </div>
-          ) : (
-            <p className="text-[10px] italic text-mute">
-              No sketch points yet — draw points in a sketch to select them here.
-            </p>
           )}
-          <label className="mt-2 block">
+          <label className="block">
             <span className={CAM_DIALOG_LABEL}>Manual centers · one X,Y per line ({lu})</span>
             <textarea
               value={manualPoints}
               onChange={(event) => setManualPoints(event.target.value)}
-              rows={3}
+              rows={2}
               className={`${CAM_DIALOG_INPUT} h-auto resize-y font-mono leading-5`}
             />
           </label>
@@ -736,10 +734,36 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     );
   };
 
-  /** FACE · Tool tab: current tool + Select (library picker), presets, and
-   *  the full feed & speed grid. Live fields drive the plan; derived fields
-   *  read out surface speed and chip loads; the rest are placeholders. */
-  const faceToolTab = () => {
+  /** THREAD · Geometry tab add-on: the designation resolves pitch and
+   *  diameters through the standards table; the readout spells them out. */
+  const threadGeometrySection = () => (
+    <DialogSection title="THREAD (INTERNAL)">
+      <label className="block">
+        <span className={CAM_DIALOG_LABEL}>Designation</span>
+        <select
+          value={threadPresetId}
+          onChange={(event) => setThreadPresetId(event.target.value)}
+          className={CAM_DIALOG_INPUT}
+        >
+          {THREAD_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.designation} · {preset.class}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="rounded border border-edge/70 bg-header/50 p-2 font-mono text-[9px] leading-relaxed text-mute">
+        {threadReadout()}
+      </p>
+    </DialogSection>
+  );
+
+  /** Tool tab: current tool + Select (library picker), presets, and the
+   *  feed & speed grid. Live fields drive the plan; derived fields read out
+   *  surface speed and chip loads; the rest are placeholders. Holemaking
+   *  cycles drop the lateral-feed pair — a drill only plunges. */
+  const toolTab = () => {
+    const holemaking = kind === 'drill';
     const rpmValue = Number(rpm);
     const rpmOk = rpm.trim() !== '' && Number.isFinite(rpmValue) && rpmValue > 0;
     const feedXyOk = feedXy.trim() !== '' && Number.isFinite(Number(feedXy));
@@ -764,7 +788,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             <button
               type="button"
               title="Pick from the Tool Library (central picks are copied into this project)"
-              onClick={() => openCamToolPicker(kind)}
+              onClick={() => openCamToolPicker(kind, kind === 'drill' ? drillCycle : undefined)}
               className="h-7 shrink-0 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25"
             >
               Select…
@@ -808,29 +832,33 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
               unit={cuttingSpeedUnitLabel(units)}
             />
             <DraftNumber label="Ramp spindle speed" value={rpm} onChange={() => {}} unit="rpm" disabled />
+            {!holemaking && (
+              <>
+                <DraftNumber
+                  label="Cutting feedrate"
+                  value={feedXy}
+                  onChange={(v) => { setFeedsTouched(true); setFeedXy(v); }}
+                  unit={fu}
+                />
+                <DerivedField
+                  label="Feed per tooth"
+                  text={perTooth === null ? '—' : displayLength(perTooth, units).toFixed(4)}
+                  unit={lu}
+                />
+                <DraftNumber label="Lead-in feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+                <DraftNumber label="Lead-out feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+                <DraftNumber label="Transition feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+                <DraftNumber label="Ramp feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+              </>
+            )}
             <DraftNumber
-              label="Cutting feedrate"
-              value={feedXy}
-              onChange={(v) => { setFeedsTouched(true); setFeedXy(v); }}
-              unit={fu}
-            />
-            <DerivedField
-              label="Feed per tooth"
-              text={perTooth === null ? '—' : displayLength(perTooth, units).toFixed(4)}
-              unit={lu}
-            />
-            <DraftNumber label="Lead-in feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-            <DraftNumber label="Lead-out feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-            <DraftNumber label="Transition feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-            <DraftNumber label="Ramp feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-            <DraftNumber
-              label="Plunge feedrate"
+              label={holemaking ? 'Drilling feedrate' : 'Plunge feedrate'}
               value={feedZ}
               onChange={(v) => { setFeedsTouched(true); setFeedZ(v); }}
               unit={fu}
             />
             <DerivedField
-              label="Plunge feed per revolution"
+              label={holemaking ? 'Feed per revolution' : 'Plunge feed per revolution'}
               text={perRev === null ? '—' : displayLength(perRev, units).toFixed(4)}
               unit={lu}
             />
@@ -852,10 +880,11 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     );
   };
 
-  /** FACE · Heights tab: five heights, each a reference plane plus a signed
-   *  offset. Feed height stays a placeholder — the planner approaches at
-   *  retract height today. */
-  const faceHeightsTab = () => (
+  /** Heights tab: five heights, each a reference plane plus a signed offset.
+   *  Feed height stays a placeholder — the planner approaches at retract
+   *  height today. The bottom height only exists for kinds that cut to a
+   *  depth (facing targets the model top by default). */
+  const heightsTab = () => (
     <>
       <DialogSection title="CLEARANCE HEIGHT">
         <HeightField from={clearanceFrom} offset={clearanceOff} onFrom={setClearanceFrom} onOffset={setClearanceOff} unit={lu} />
@@ -869,15 +898,18 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
       <DialogSection title="TOP HEIGHT">
         <HeightField from={topFrom} offset={topOff} onFrom={setTopFrom} onOffset={setTopOff} unit={lu} />
       </DialogSection>
-      <DialogSection title="BOTTOM HEIGHT">
-        <HeightField from={bottomFrom} offset={bottomOff} onFrom={setBottomFrom} onOffset={setBottomOff} unit={lu} />
-      </DialogSection>
+      {(pages.bottomZ || pages.faceTarget) && (
+        <DialogSection title="BOTTOM HEIGHT">
+          <HeightField from={bottomFrom} offset={bottomOff} onFrom={setBottomFrom} onOffset={setBottomOff} unit={lu} />
+        </DialogSection>
+      )}
     </>
   );
 
-  /** FACE · Passes tab: stepover and maximum stepdown are live; the rest of
-   *  the option set renders as placeholders so the contract is visible. */
-  const facePassesTab = () => (
+  /** MILLING (face / contour / pocket) · Passes tab: stepover, stepdown,
+   *  and tool-side compensation go live per kind; the rest of the option set
+   *  renders as placeholders so the contract is visible. */
+  const millingPassesSection = () => (
     <DialogSection title="PASSES">
       <div className="grid grid-cols-2 gap-2">
         <DraftNumber label="Tolerance" value="0.01" onChange={() => {}} unit={lu} disabled />
@@ -888,39 +920,172 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         </div>
         <DraftNumber label="Pass extension" value="" onChange={() => {}} unit={lu} disabled placeholder="auto" />
         <DraftNumber label="Stock offset" value="0" onChange={() => {}} unit={lu} disabled />
-        <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
-        <DeadSelect label="Direction" value="Both ways" />
+        {pages.stepOver ? (
+          <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
+        ) : (
+          <DraftNumber label="Stepover" value="" onChange={() => {}} unit={lu} disabled />
+        )}
+        {pages.compensation ? (
+          <label className="block">
+            <span className={CAM_DIALOG_LABEL}>Tool side</span>
+            <select
+              value={compensation}
+              onChange={(event) => setCompensation(event.target.value as CamContourCompensation)}
+              className={CAM_DIALOG_INPUT}
+            >
+              <option value="outside">Outside</option>
+              <option value="inside">Inside</option>
+              <option value="on">On path</option>
+            </select>
+          </label>
+        ) : (
+          <DeadSelect label="Direction" value="Both ways" />
+        )}
       </div>
-      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-        <DeadCheck label="Order for shorter links" />
-        <DeadCheck label="From other side" />
-        <DeadCheck label="Use chip thinning" />
-      </div>
-      <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
-        <input
-          type="checkbox"
-          checked={multipleDepths}
-          onChange={(event) => setMultipleDepths(event.target.checked)}
-        />
-        Multiple depths
-      </label>
-      {multipleDepths && (
-        <div className="grid grid-cols-2 gap-2">
-          <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+      {kind === 'face' && (
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+          <DeadCheck label="Order for shorter links" />
+          <DeadCheck label="From other side" />
+          <DeadCheck label="Use chip thinning" />
         </div>
       )}
-      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-        <DeadCheck label="Both sides" />
-        <DeadCheck label="Finishing step" />
-        <DeadCheck label="Use even stepdowns" />
-        <DeadCheck label="Stock to leave" />
+      {pages.stepDown && (
+        <>
+          <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
+            <input
+              type="checkbox"
+              checked={multipleDepths}
+              onChange={(event) => setMultipleDepths(event.target.checked)}
+            />
+            Multiple depths
+          </label>
+          {multipleDepths && (
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+            </div>
+          )}
+        </>
+      )}
+      {kind === 'face' && (
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+          <DeadCheck label="Both sides" />
+          <DeadCheck label="Finishing step" />
+          <DeadCheck label="Use even stepdowns" />
+          <DeadCheck label="Stock to leave" />
+        </div>
+      )}
+    </DialogSection>
+  );
+
+  /** DRILL · Passes tab: the cycle drives both the planner and tool
+   *  compatibility; cycle-specific fields appear underneath. */
+  const drillCycleSection = () => (
+    <DialogSection title="CYCLE">
+      <label className="block">
+        <span className={CAM_DIALOG_LABEL}>Cycle</span>
+        <select
+          value={drillCycle}
+          onChange={(event) => changeCycle(event.target.value as CamDrillCycle)}
+          className={CAM_DIALOG_INPUT}
+        >
+          <option value="drill">Drilling — rapid out</option>
+          <option value="chip_breaking">Chip breaking — partial retract</option>
+          <option value="deep_hole">Deep drilling — full retract</option>
+          <option value="tapping_right">Tapping — right hand</option>
+          <option value="tapping_left">Tapping — left hand</option>
+          <option value="reaming">Reaming — feed out</option>
+          <option value="boring">Boring — dwell and feed out</option>
+        </select>
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        {(drillCycle === 'chip_breaking' || drillCycle === 'deep_hole') && (
+          <DraftNumber label="Peck depth" value={peckDepth} onChange={setPeckDepth} unit={lu} />
+        )}
+        {drillCycle === 'chip_breaking' && (
+          <DraftNumber label="Peck retract (empty = auto)" value={peckRetract} onChange={setPeckRetract} unit={lu} />
+        )}
+        {(drillCycle === 'tapping_right' || drillCycle === 'tapping_left') && (
+          <DraftNumber label="Thread pitch" value={threadPitch} onChange={setThreadPitch} unit={`${lu}/rev`} />
+        )}
+        {(drillCycle === 'reaming' || drillCycle === 'boring') && (
+          <DraftNumber label="Feed out (empty = plunge feed)" value={feedOut} onChange={setFeedOut} unit={feedUnit(units)} />
+        )}
+        {drillCycle !== 'tapping_right' && drillCycle !== 'tapping_left' && (
+          <DraftNumber label="Dwell at bottom" value={dwell} onChange={setDwell} unit="sec" />
+        )}
       </div>
     </DialogSection>
   );
 
-  /** FACE · Linking tab: safe distance (the entry plunge clearance off the
-   *  stock boundary) is live; high-feed/keep-down/lead options placeholder. */
-  const faceLinkingTab = () => (
+  /** THREAD · Passes tab: hand, milling direction, and the radial pass
+   *  split for multi-pass threading. */
+  const threadPassesSection = () => (
+    <DialogSection title="PASSES">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className={CAM_DIALOG_LABEL}>Hand</span>
+          <select
+            value={threadHand}
+            onChange={(event) => setThreadHand(event.target.value as CamThreadHand)}
+            className={CAM_DIALOG_INPUT}
+          >
+            <option value="right">Right hand</option>
+            <option value="left">Left hand</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className={CAM_DIALOG_LABEL}>Direction</span>
+          <select
+            value={threadDirection}
+            onChange={(event) => setThreadDirection(event.target.value as CamMillingDirection)}
+            className={CAM_DIALOG_INPUT}
+          >
+            <option value="climb">Climb</option>
+            <option value="conventional">Conventional</option>
+          </select>
+        </label>
+        <DraftNumber label="Radial passes" value={radialPasses} onChange={setRadialPasses} unit="passes" integer />
+        {Number(radialPasses) > 1 && (
+          <DraftNumber label="Radial stepover" value={threadStepOver} onChange={setThreadStepOver} unit={lu} />
+        )}
+      </div>
+    </DialogSection>
+  );
+
+  /** CHAMFER · Passes tab: chamfer width, tip offset, and which side of the
+   *  path the material sits on. */
+  const chamferSection = () => (
+    <DialogSection title="CHAMFER">
+      <div className="grid grid-cols-2 gap-2">
+        <DraftNumber label="Chamfer width" value={chamferWidth} onChange={setChamferWidth} unit={lu} />
+        <DraftNumber label="Tip offset" value={tipOffset} onChange={setTipOffset} unit={lu} />
+        <label className="block">
+          <span className={CAM_DIALOG_LABEL}>Material side</span>
+          <select
+            value={wallSide}
+            onChange={(event) => setWallSide(event.target.value as CamContourCompensation)}
+            className={CAM_DIALOG_INPUT}
+          >
+            <option value="inside">Inside path (boss edge)</option>
+            <option value="outside">Outside path (hole edge)</option>
+          </select>
+        </label>
+      </div>
+    </DialogSection>
+  );
+
+  /** Passes tab dispatch: each operation kind gets its live field set. */
+  const passesTab = () => {
+    if (kind === 'drill') return drillCycleSection();
+    if (pages.threadFields) return threadPassesSection();
+    if (pages.chamferFields) return chamferSection();
+    return millingPassesSection();
+  };
+
+  /** Linking tab: the facing safe distance (entry plunge clearance off the
+   *  stock boundary) is live for facing; high-feed/keep-down/lead options
+   *  stay placeholders for every kind. */
+  const linkingTab = () => (
     <>
       <DialogSection title="LINKING">
         <DeadSelect label="High feedrate mode" value="Preserve rapid movements" />
@@ -930,12 +1095,16 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <DraftNumber label="Max stay-down distance" value="100" onChange={() => {}} unit={lu} disabled />
-          <DraftNumber
-            label="Safe distance"
-            value={safeDistance}
-            onChange={setSafeDistance}
-            unit={lu}
-          />
+          {pages.safeDistance ? (
+            <DraftNumber
+              label="Safe distance"
+              value={safeDistance}
+              onChange={setSafeDistance}
+              unit={lu}
+            />
+          ) : (
+            <DraftNumber label="Safe distance" value="" onChange={() => {}} unit={lu} disabled />
+          )}
         </div>
         <DeadCheck label="Extend before retract" />
       </DialogSection>
@@ -978,209 +1147,33 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
-          {pages.tabs && (
-            <nav className="grid grid-cols-5 gap-1 rounded border border-edge bg-header/40 p-1">
-              {FACE_TABS.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  title={label}
-                  onClick={() => setFaceTab(id)}
-                  className={`flex h-9 flex-col items-center justify-center gap-0.5 rounded text-[8px] font-semibold ${
-                    faceTab === id ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink'
-                  }`}
-                >
-                  <Icon size={14} />
-                  {label}
-                </button>
-              ))}
-            </nav>
-          )}
+          <nav className="grid grid-cols-5 gap-1 rounded border border-edge bg-header/40 p-1">
+            {OP_TABS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                title={label}
+                onClick={() => setOpTab(id)}
+                className={`flex h-9 flex-col items-center justify-center gap-0.5 rounded text-[8px] font-semibold ${
+                  opTab === id ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink'
+                }`}
+              >
+                <Icon size={14} />
+                {label}
+              </button>
+            ))}
+          </nav>
 
-          {pages.tabs ? (
+          {opTab === 'tool' && toolTab()}
+          {opTab === 'geometry' && (
             <>
-              {faceTab === 'tool' && faceToolTab()}
-              {faceTab === 'geometry' && geometrySection()}
-              {faceTab === 'heights' && faceHeightsTab()}
-              {faceTab === 'passes' && facePassesTab()}
-              {faceTab === 'linking' && faceLinkingTab()}
-            </>
-          ) : (
-            <>
-          <OpToolPicker
-            kind={kind}
-            drillCycle={kind === 'drill' ? drillCycle : undefined}
-            toolId={toolId}
-            presetIndex={presetIndex}
-            onChoose={(tool) => {
-              setFeedsTouched(false);
-              chooseTool(tool);
-            }}
-            onPreset={(tool, index) => {
-              setPresetIndex(index);
-              setFeedsTouched(false);
-              applyCutting(tool, index);
-            }}
-          />
-
-          {geometrySection()}
-
-          {pages.threadFields && (
-            <DialogSection title="THREAD (INTERNAL)">
-              <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Designation</span>
-                <select
-                  value={threadPresetId}
-                  onChange={(event) => setThreadPresetId(event.target.value)}
-                  className={CAM_DIALOG_INPUT}
-                >
-                  {THREAD_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.designation} · {preset.class}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Hand</span>
-                  <select
-                    value={threadHand}
-                    onChange={(event) => setThreadHand(event.target.value as CamThreadHand)}
-                    className={CAM_DIALOG_INPUT}
-                  >
-                    <option value="right">Right hand</option>
-                    <option value="left">Left hand</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Direction</span>
-                  <select
-                    value={threadDirection}
-                    onChange={(event) => setThreadDirection(event.target.value as CamMillingDirection)}
-                    className={CAM_DIALOG_INPUT}
-                  >
-                    <option value="climb">Climb</option>
-                    <option value="conventional">Conventional</option>
-                  </select>
-                </label>
-                <DraftNumber label="Radial passes" value={radialPasses} onChange={setRadialPasses} unit="passes" integer />
-                {Number(radialPasses) > 1 && (
-                  <DraftNumber label="Radial stepover" value={threadStepOver} onChange={setThreadStepOver} unit={lu} />
-                )}
-              </div>
-              <p className="rounded border border-edge/70 bg-header/50 p-2 font-mono text-[9px] leading-relaxed text-mute">
-                {threadReadout()}
-              </p>
-            </DialogSection>
-          )}
-
-          <DialogSection title={`HEIGHTS & PASSES (${lu}, setup frame)`}>
-            <div className="grid grid-cols-2 gap-2">
-              <DraftNumber label="Clearance Z" value={clearanceZ} onChange={setClearanceZ} unit={lu} />
-              <DraftNumber label="Retract Z" value={retractZ} onChange={setRetractZ} unit={lu} />
-              <DraftNumber label="Top Z" value={topZ} onChange={setTopZ} unit={lu} />
-              {pages.faceTarget ? (
-                <DraftNumber
-                  label={modelTop !== null ? 'Depth below model top (0 = model top)' : 'Target Z'}
-                  value={targetZ}
-                  onChange={setTargetZ}
-                  unit={lu}
-                />
-              ) : (
-                <DraftNumber label="Bottom Z" value={bottomZ} onChange={setBottomZ} unit={lu} />
-              )}
-              {pages.safeDistance && (
-                <DraftNumber label="Safe distance" value={safeDistance} onChange={setSafeDistance} unit={lu} />
-              )}
-              {pages.stepDown && (
-                <DraftNumber label="Stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
-              )}
-              {pages.stepOver && (
-                <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
-              )}
-              {pages.compensation && (
-                <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Tool side</span>
-                  <select
-                    value={compensation}
-                    onChange={(event) => setCompensation(event.target.value as CamContourCompensation)}
-                    className={CAM_DIALOG_INPUT}
-                  >
-                    <option value="outside">Outside</option>
-                    <option value="inside">Inside</option>
-                    <option value="on">On path</option>
-                  </select>
-                </label>
-              )}
-              {pages.chamferFields && (
-                <>
-                  <DraftNumber label="Chamfer width" value={chamferWidth} onChange={setChamferWidth} unit={lu} />
-                  <DraftNumber label="Tip offset" value={tipOffset} onChange={setTipOffset} unit={lu} />
-                  <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Material side</span>
-                    <select
-                      value={wallSide}
-                      onChange={(event) => setWallSide(event.target.value as CamContourCompensation)}
-                      className={CAM_DIALOG_INPUT}
-                    >
-                      <option value="inside">Inside path (boss edge)</option>
-                      <option value="outside">Outside path (hole edge)</option>
-                    </select>
-                  </label>
-                </>
-              )}
-              {pages.drillCycle && (
-                <>
-                  <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Cycle</span>
-                    <select
-                      value={drillCycle}
-                      onChange={(event) => changeCycle(event.target.value as CamDrillCycle)}
-                      className={CAM_DIALOG_INPUT}
-                    >
-                      <option value="drill">Drilling — rapid out</option>
-                      <option value="chip_breaking">Chip breaking — partial retract</option>
-                      <option value="deep_hole">Deep drilling — full retract</option>
-                      <option value="tapping_right">Tapping — right hand</option>
-                      <option value="tapping_left">Tapping — left hand</option>
-                      <option value="reaming">Reaming — feed out</option>
-                      <option value="boring">Boring — dwell and feed out</option>
-                    </select>
-                  </label>
-                  {(drillCycle === 'chip_breaking' || drillCycle === 'deep_hole') && (
-                    <DraftNumber label="Peck depth" value={peckDepth} onChange={setPeckDepth} unit={lu} />
-                  )}
-                  {drillCycle === 'chip_breaking' && (
-                    <DraftNumber label="Peck retract (empty = auto)" value={peckRetract} onChange={setPeckRetract} unit={lu} />
-                  )}
-                  {(drillCycle === 'tapping_right' || drillCycle === 'tapping_left') && (
-                    <DraftNumber label="Thread pitch" value={threadPitch} onChange={setThreadPitch} unit={`${lu}/rev`} />
-                  )}
-                  {(drillCycle === 'reaming' || drillCycle === 'boring') && (
-                    <DraftNumber label="Feed out (empty = plunge feed)" value={feedOut} onChange={setFeedOut} unit={feedUnit(units)} />
-                  )}
-                  {drillCycle !== 'tapping_right' && drillCycle !== 'tapping_left' && (
-                    <DraftNumber label="Dwell at bottom" value={dwell} onChange={setDwell} unit="sec" />
-                  )}
-                </>
-              )}
-            </div>
-          </DialogSection>
-
-          <OpSpeedsFeeds
-            units={units}
-            rpm={rpm}
-            feedXy={feedXy}
-            feedZ={feedZ}
-            coolant={coolant}
-            onRpm={(v) => { setFeedsTouched(true); setRpm(v); }}
-            onFeedXy={(v) => { setFeedsTouched(true); setFeedXy(v); }}
-            onFeedZ={(v) => { setFeedsTouched(true); setFeedZ(v); }}
-            onCoolant={(v) => { setFeedsTouched(true); setCoolant(v); }}
-          />
+              {geometrySection()}
+              {pages.threadFields && threadGeometrySection()}
             </>
           )}
+          {opTab === 'heights' && heightsTab()}
+          {opTab === 'passes' && passesTab()}
+          {opTab === 'linking' && linkingTab()}
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
           <button
