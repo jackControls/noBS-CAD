@@ -49,10 +49,13 @@ operation. The operator programs the job explicitly, in this order:
    same-id snapshot), publish pushes a project snapshot back into the
    collection. Creating a tool inside a project also registers it centrally
    so it stays importable everywhere. The Tool Library dialog (ribbon)
-   opens on the central scope with a header switch to the project scope;
-   every operation dialog picks tools through a shared two-scope picker
-   that defaults to the project and copies the pick in when switched to
-   the central library. Setups, operations, units, and post defaults
+   opens on the central scope with a header switch to the project scope and
+   a free-text filter over name/number/type. Operation dialogs pick tools
+   through that same dialog stacked on top as a picker (the store keeps a
+   one-deep dialog stack): the project scope shows first, compatible rows
+   highlight, and a double-click or the confirm button chooses — central
+   picks are copied into the project on the way in. When the project already
+   holds compatible tools, a plain dropdown offers them directly. Setups, operations, units, and post defaults
    stay project data.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
@@ -72,9 +75,14 @@ operation. The operator programs the job explicitly, in this order:
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
    sketched points or explicit coordinates for drilling and thread milling;
-   the stock top or an explicit region for facing. Facing targets the
-   model's top surface: the operator enters a depth below it (0 faces the
-   model top exactly). Facing also carries a mandatory **safe distance**
+   the stock top or an explicit region for facing. The facing dialog is
+   tabbed (Tool / Geometry / Heights / Passes / Linking): heights are entered
+   as a reference plane (model/stock top or bottom, or origin) plus a signed
+   offset and resolved to absolute setup Z at submit, and the full option set
+   of the reference workflow renders with the unplanned entries shown as
+   disabled placeholders. Facing targets the
+   model's top surface: the default bottom height is model top + 0. Facing
+   also carries a mandatory **safe distance**
    (default 5 mm): the entry plunge happens one cutter radius plus this
    clearance outside the stock boundary, so the tool always descends in free
    air and the entry never becomes plunge-milling — which is also why
@@ -142,10 +150,13 @@ rewrites stored geometry.
   library lives in its own full dialog (table plus tabbed editor, with a
   central/project scope switch in the header), not in the browser tree. There is no side inspector panel: double-clicking a
   setup or operation row floats its configuration in a dialog, exactly like
-  the modeling feature dialogs. The workspace opens directly onto the
+  the modeling feature dialogs; right-clicking an operation row opens a
+  context menu (suppress/resume — suppressed operations are skipped by the
+  planner and the post — edit, delete). The workspace opens directly onto the
   modeled parts (setups
   are created from a centered dialog via the ribbon, never implicitly), with
-  manual setup and operation dialogs, viewport point picking for WCS origins,
+  manual setup and operation dialogs, viewport point picking for WCS origins
+  (solid markers that highlight under the pointer),
   distance/time estimates, warnings, NC export via the
   Post NC dialog, and neutral post-event export. The manufacturing tab mounts
   the very same viewport component as modeling — navigation, grid, ViewCube,
