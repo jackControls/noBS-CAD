@@ -135,17 +135,26 @@ and the tests, not this document, when they disagree.
   snapshot only, and say so.
 - Facing no longer demands a center-cutting tool (the round-8 regression's
   root cause): the planner's entry plunge sits outside the stock boundary —
-  one radius plus a 2 mm approach clearance off the min-X edge — so
-  indexable face/shell mills, which are rarely center-cutting, are valid.
-  The kind gate admits flat-bottom mills only: flat end mills, bull-nose
-  end mills, and face mills (ball noses scallop the surface, chamfer mills
-  cut on an angled edge, thread mills cannot side-mill at all, hole-making
-  and turning tools are out). Engine validation and `camToolCompatible`
-  were relaxed for `face` only; pocket/contour entries still plunge into
-  material and keep the center-cutting requirement until ramp/helical/
-  lead-in entries exist. Engine tests:
-  `face_accepts_a_non_center_cutting_face_mill`,
-  `face_kind_gate_admits_flat_bottom_mills_only`.
+  one radius plus the operation's `safe_distance` (mandatory, 5 mm default,
+  serde-defaulted for older documents) off the min-X edge — so indexable
+  face/shell mills, which are rarely center-cutting, are valid, and the
+  entry can never degrade into plunge-milling. The kind gate admits
+  flat-bottom mills only: flat end mills, bull-nose end mills, and face
+  mills (ball noses scallop the surface, chamfer mills cut on an angled
+  edge, thread mills cannot side-mill at all, hole-making and turning
+  tools are out). Engine validation and `camToolCompatible` were relaxed
+  for `face` only; pocket/contour entries still plunge into material and
+  keep the center-cutting requirement until ramp/helical/lead-in entries
+  exist. Engine tests: `face_accepts_a_non_center_cutting_face_mill`,
+  `face_kind_gate_admits_flat_bottom_mills_only`; the inspector edits the
+  safe distance like any other face field.
+- Operation dialogs share one scaffold (`opShared.tsx`): the tool picker is
+  a single two-scope component (defaults to the project; switching to the
+  central library lists compatible tools and copies the pick into the
+  project — no more inline import list that would drown under a 100-tool
+  library), speeds & feeds is one component, and `OP_PAGES` declares per
+  kind which pages/fields render. New tools and new operations default to
+  flood coolant.
 - Face operations target the model's top surface: dialogs and the inspector
   enter a depth below model top (0 = model top), converted to absolute
   setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
@@ -193,7 +202,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 63, 462 total), mcp-server 37,
+`cargo test --workspace` (cam 64, 463 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 

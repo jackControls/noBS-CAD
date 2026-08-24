@@ -50,8 +50,9 @@ operation. The operator programs the job explicitly, in this order:
    collection. Creating a tool inside a project also registers it centrally
    so it stays importable everywhere. The Tool Library dialog (ribbon)
    opens on the central scope with a header switch to the project scope;
-   operation dialogs list project tools and offer one-click import of
-   compatible central tools. Setups, operations, units, and post defaults
+   every operation dialog picks tools through a shared two-scope picker
+   that defaults to the project and copies the pick in when switched to
+   the central library. Setups, operations, units, and post defaults
    stay project data.
 2. **Manual setup.** The operator chooses the part bodies, defines the stock,
    and picks the WCS origin on the geometry. Stock has four shapes — box,
@@ -73,7 +74,13 @@ operation. The operator programs the job explicitly, in this order:
    sketched points or explicit coordinates for drilling and thread milling;
    the stock top or an explicit region for facing. Facing targets the
    model's top surface: the operator enters a depth below it (0 faces the
-   model top exactly). Safe heights (clearance and retract Z) are set per
+   model top exactly). Facing also carries a mandatory **safe distance**
+   (default 5 mm): the entry plunge happens one cutter radius plus this
+   clearance outside the stock boundary, so the tool always descends in free
+   air and the entry never becomes plunge-milling — which is also why
+   non-center-cutting face mills are allowed (flat/bull-nose/face mills
+   only; ball, chamfer, and thread mills are rejected). Safe heights
+   (clearance and retract Z) are set per
    operation, not globally on the setup. The engine validates the input and
    rejects incomplete programs instead of guessing.
 
