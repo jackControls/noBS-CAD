@@ -274,6 +274,17 @@ export function modelTopZInSetup(
   return modelPointToSetup({ x: bounds.min.x, y: bounds.min.y, z: bounds.max.z }, setup.wcs).z;
 }
 
+/** Setup-space Z of the model's bottom surface; same fixed-axis reasoning
+ *  as `modelTopZInSetup`. */
+export function modelBottomZInSetup(
+  scene: { bodies: Array<{ id: number; mesh: { positions: number[] } }> },
+  setup: CamSetupDto,
+): number | null {
+  const bounds = modelBoundsOfBodies(scene, setup.body_ids);
+  if (!bounds) return null;
+  return modelPointToSetup({ x: bounds.min.x, y: bounds.min.y, z: bounds.min.z }, setup.wcs).z;
+}
+
 function anchorValue(min: number, max: number, anchor: 'min' | 'center' | 'max'): number {
   if (anchor === 'center') return (min + max) * 0.5;
   return anchor === 'max' ? max : min;

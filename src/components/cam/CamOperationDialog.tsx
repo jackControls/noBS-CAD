@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { CircleDot, X } from 'lucide-react';
+import { ArrowUpDown, Box, CircleDot, Layers, Link2, Wrench, X, type LucideIcon } from 'lucide-react';
 import {
   activeCamSetup,
   addCamOperation,
@@ -11,11 +11,20 @@ import {
   listSketchLoops,
   listSketchPointRefs,
   loopToSetupPath,
+  modelBottomZInSetup,
   modelTopZInSetup,
   sketchPointToSetup,
   type SketchLoop,
 } from '../../cam/geometry';
-import { commitFeed, commitLength, displayFeed, displayLength } from '../../cam/units';
+import {
+  commitFeed,
+  commitLength,
+  cuttingSpeedFromRpm,
+  cuttingSpeedUnitLabel,
+  displayCuttingSpeed,
+  displayFeed,
+  displayLength,
+} from '../../cam/units';
 import {
   THREAD_PRESETS,
   defaultThreadPreset,
@@ -29,14 +38,174 @@ import {
   CAM_DIALOG_LABEL,
   DialogSection,
   DraftNumber,
+  NOT_APPLIED_YET,
   feedUnit,
   lengthUnit,
   parseDraft,
 } from './camFields';
-import { OP_PAGES, OpSpeedsFeeds, OpToolPicker } from './opShared';
+import { OP_PAGES, OpSpeedsFeeds, OpToolPicker, openCamToolPicker, useCamToolPickResult } from './opShared';
 
 type OperationKind = CamOperationInput['kind'];
 type GeometrySource = 'sketch' | 'manual';
+
+/** Reference planes an operation height can hang off; resolved to absolute
+ *  setup Z at submit. The dead entries round out the option set the UI
+ *  contract promises; the planner only consumes the live five today. */
+type HeightFrom = 'model_top' | 'model_bottom' | 'stock_top' | 'stock_bottom' | 'origin';
+
+const HEIGHT_FROM_LIVE: Array<{ value: HeightFrom; label: string }> = [
+  { value: 'model_top', label: 'Model top' },
+  { value: 'model_bottom', label: 'Model bottom' },
+  { value: 'stock_top', label: 'Stock top' },
+  { value: 'stock_bottom', label: 'Stock bottom' },
+  { value: 'origin', label: 'Origin (absolute)' },
+];
+const HEIGHT_FROM_DEAD = [
+  'Retract height',
+  'Feed height',
+  'Top height',
+  'Bottom height',
+  'Fixture top',
+  'Fixture bottom',
+  'Selected contour(s)',
+  'Selection',
+  'Highest of…',
+  'Lowest of…',
+];
+
+/** One height row: reference plane + signed offset. */
+function HeightField({
+  from,
+  offset,
+  onFrom,
+  onOffset,
+  unit,
+  disabled = false,
+}: {
+  from: HeightFrom;
+  offset: string;
+  onFrom: (value: HeightFrom) => void;
+  onOffset: (value: string) => void;
+  unit: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      className={`grid grid-cols-2 gap-2 ${disabled ? 'opacity-45' : ''}`}
+      title={disabled ? NOT_APPLIED_YET : undefined}
+    >
+      <label className="block">
+        <span className={CAM_DIALOG_LABEL}>From</span>
+        <select
+          value={from}
+          disabled={disabled}
+          onChange={(event) => onFrom(event.target.value as HeightFrom)}
+          className={`${CAM_DIALOG_INPUT} ${disabled ? 'cursor-not-allowed' : ''}`}
+        >
+          {HEIGHT_FROM_LIVE.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+          <optgroup label="Not applied yet">
+            {HEIGHT_FROM_DEAD.map((text) => (
+              <option key={text} disabled>
+                {text}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+      </label>
+      <label className="block">
+        <span className={CAM_DIALOG_LABEL}>Offset</span>
+        <span className="relative block">
+          <input
+            type="number"
+            step="any"
+            value={offset}
+            disabled={disabled}
+            onChange={(event) => onOffset(event.target.value)}
+            className={`${CAM_DIALOG_INPUT} pr-12 font-mono ${disabled ? 'cursor-not-allowed' : ''}`}
+          />
+          <span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">
+            {unit}
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
+/** Placeholder checkbox the planner does not consume yet. */
+function DeadCheck({ label, checked = false }: { label: string; checked?: boolean }) {
+  return (
+    <label
+      className="flex cursor-not-allowed items-center gap-2 text-[11px] text-mute/60"
+      title={NOT_APPLIED_YET}
+    >
+      <input type="checkbox" checked={checked} disabled readOnly />
+      {label}
+    </label>
+  );
+}
+
+/** Placeholder select pinned to one display value. */
+function DeadSelect({ label, value }: { label: string; value: string }) {
+  return (
+    <label className="block" title={NOT_APPLIED_YET}>
+      <span className={CAM_DIALOG_LABEL}>{label}</span>
+      <select disabled className={`${CAM_DIALOG_INPUT} cursor-not-allowed opacity-45`}>
+        <option>{value}</option>
+      </select>
+    </label>
+  );
+}
+
+/** Placeholder button (viewport selection workflows land later). */
+function DeadButton({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title={NOT_APPLIED_YET}
+      className="h-7 cursor-not-allowed rounded border border-edge px-3 text-[10px] font-semibold text-mute/60 opacity-60"
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Read-only derived value (surface speed, chip load, …). */
+function DerivedField({ label, text, unit }: { label: string; text: string; unit?: string }) {
+  return (
+    <label className="block" title="Derived from the live fields">
+      <span className={CAM_DIALOG_LABEL}>{label}</span>
+      <span className="relative block">
+        <input
+          value={text}
+          disabled
+          readOnly
+          className={`${CAM_DIALOG_INPUT} cursor-default font-mono opacity-70 ${unit ? 'pr-12' : ''}`}
+        />
+        {unit && (
+          <span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">
+            {unit}
+          </span>
+        )}
+      </span>
+    </label>
+  );
+}
+
+type FaceTab = 'tool' | 'geometry' | 'heights' | 'passes' | 'linking';
+
+const FACE_TABS: Array<{ id: FaceTab; label: string; icon: LucideIcon }> = [
+  { id: 'tool', label: 'Tool', icon: Wrench },
+  { id: 'geometry', label: 'Geometry', icon: Box },
+  { id: 'heights', label: 'Heights', icon: ArrowUpDown },
+  { id: 'passes', label: 'Passes', icon: Layers },
+  { id: 'linking', label: 'Linking', icon: Link2 },
+];
 
 /** Program one operation end to end. Every kind shares this single dialog
  *  scaffold: the tool picker, heights, and speeds & feeds pages are the
@@ -90,6 +259,18 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const [stepOver, setStepOver] = useState('');
   // Facing plunge clearance from the stock boundary (see the planner).
   const [safeDistance, setSafeDistance] = useState(displayLength(5, units).toFixed(4));
+  // Tabbed face dialog: active tab, structured heights (reference plane +
+  // signed offset), and the multiple-depths toggle.
+  const [faceTab, setFaceTab] = useState<FaceTab>('tool');
+  const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>('stock_top');
+  const [clearanceOff, setClearanceOff] = useState(displayLength(10, units).toFixed(4));
+  const [retractFrom, setRetractFrom] = useState<HeightFrom>('stock_top');
+  const [retractOff, setRetractOff] = useState(displayLength(3, units).toFixed(4));
+  const [topFrom, setTopFrom] = useState<HeightFrom>('stock_top');
+  const [topOff, setTopOff] = useState('0');
+  const [bottomFrom, setBottomFrom] = useState<HeightFrom>('model_top');
+  const [bottomOff, setBottomOff] = useState('0');
+  const [multipleDepths, setMultipleDepths] = useState(true);
   const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
   const [wallSide, setWallSide] = useState<CamContourCompensation>('inside');
   const [chamferWidth, setChamferWidth] = useState('');
@@ -124,6 +305,27 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   // Setup-space Z of the model's top surface; face depths are entered
   // relative to it. Null when the setup references no bodies.
   const modelTop = modelTopZInSetup(scene, setup);
+  const modelBottom = modelBottomZInSetup(scene, setup);
+  const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
+
+  /** Reference plane of a structured face height, as absolute setup Z.
+   *  Falls back to the stock plane when the setup references no bodies. */
+  const heightRefZ = (from: HeightFrom): number => {
+    switch (from) {
+      case 'model_top':
+        return modelTop ?? setup.stock.max.z;
+      case 'model_bottom':
+        return modelBottom ?? setup.stock.min.z;
+      case 'stock_top':
+        return setup.stock.max.z;
+      case 'stock_bottom':
+        return setup.stock.min.z;
+      case 'origin':
+        return 0;
+    }
+  };
+  const resolveHeight = (from: HeightFrom, offset: string, label: string): number =>
+    heightRefZ(from) + commitLength(parseDraft(offset, `${label} offset`), units);
 
   /** Copy a library cutting profile (default or a named preset) into the
    *  feeds & speeds drafts. */
@@ -167,6 +369,20 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Tool picked in the stacked library picker. Only consumed here when the
+  // tabbed layout replaces OpToolPicker (face); otherwise the picker inside
+  // OpToolPicker consumes it and this callback no-ops.
+  const pickCompatible = useMemo(
+    () => (tool: CamToolDto) =>
+      camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
+    [kind, drillCycle],
+  );
+  useCamToolPickResult(pickCompatible, (tool) => {
+    if (!pages.tabs) return;
+    setFeedsTouched(false);
+    chooseTool(tool);
+  });
 
   const selectedLoop = (): SketchLoop | null => {
     const loop = loops.find((candidate) => `${candidate.sketch}:${candidate.entityIds.join(',')}` === loopKey);
@@ -229,10 +445,16 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         name: name.trim() || camOperationLabel(kind),
         enabled: true,
         tool_id: toolId,
-        clearance_z: commitLength(parseDraft(clearanceZ, 'Clearance Z'), units),
-        retract_z: commitLength(parseDraft(retractZ, 'Retract Z'), units),
+        clearance_z: pages.tabs
+          ? resolveHeight(clearanceFrom, clearanceOff, 'Clearance height')
+          : commitLength(parseDraft(clearanceZ, 'Clearance Z'), units),
+        retract_z: pages.tabs
+          ? resolveHeight(retractFrom, retractOff, 'Retract height')
+          : commitLength(parseDraft(retractZ, 'Retract Z'), units),
       };
-      const top = commitLength(parseDraft(topZ, 'Top Z'), units);
+      const top = pages.tabs
+        ? resolveHeight(topFrom, topOff, 'Top height')
+        : commitLength(parseDraft(topZ, 'Top Z'), units);
       let operation: CamOperationInput;
       switch (kind) {
         case 'face': {
@@ -248,19 +470,25 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                   y: commitLength(parseDraft(faceMax.y, 'Face max Y'), units),
                 },
               };
+          // Tabbed layout: the bottom is a reference plane plus a signed
+          // offset. Flat layout: a depth below the model's top surface.
+          // Either way the stored value is absolute setup Z.
+          const targetAbs = pages.tabs
+            ? resolveHeight(bottomFrom, bottomOff, 'Bottom height')
+            : modelTop !== null
+              ? modelTop - commitLength(parseDraft(targetZ, 'Depth below model top'), units)
+              : commitLength(parseDraft(targetZ, 'Target Z'), units);
           operation = {
             ...base,
             kind,
             bounds,
             top_z: top,
-            // The operator enters the face depth as an offset below the
-            // model's top surface; the stored value is absolute setup Z.
-            target_z:
-              modelTop !== null
-                ? modelTop - commitLength(parseDraft(targetZ, 'Depth below model top'), units)
-                : commitLength(parseDraft(targetZ, 'Target Z'), units),
+            target_z: targetAbs,
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
-            step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            // Without multiple depths a single pass covers the full depth.
+            step_down: multipleDepths
+              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
+              : Math.max(Math.abs(top - targetAbs), 0.001),
             safe_distance: commitLength(parseDraft(safeDistance, 'Safe distance'), units),
             cutting: cutting(),
           };
@@ -425,7 +653,11 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     }
     if (pages.geometry === 'face') {
       return (
-        <DialogSection title={`FACE AREA (${lu})`}>
+        <DialogSection title="STOCK CONTOURS">
+          <div className="flex items-center gap-2">
+            <span className="flex-1 text-[10px] text-mute">Stock Selections</span>
+            <DeadButton label="Select" />
+          </div>
           <label className="flex items-center gap-2 text-[11px] text-ink">
             <input
               type="checkbox"
@@ -435,7 +667,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             Face the whole stock top
           </label>
           {!faceFromStock && (
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <DraftNumber label="Min X" value={faceMin.x} onChange={(v) => setFaceMin((c) => ({ ...c, x: v }))} unit={lu} />
               <DraftNumber label="Min Y" value={faceMin.y} onChange={(v) => setFaceMin((c) => ({ ...c, y: v }))} unit={lu} />
               <DraftNumber label="Max X" value={faceMax.x} onChange={(v) => setFaceMax((c) => ({ ...c, x: v }))} unit={lu} />
@@ -504,6 +736,223 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     );
   };
 
+  /** FACE · Tool tab: current tool + Select (library picker), presets, and
+   *  the full feed & speed grid. Live fields drive the plan; derived fields
+   *  read out surface speed and chip loads; the rest are placeholders. */
+  const faceToolTab = () => {
+    const rpmValue = Number(rpm);
+    const rpmOk = rpm.trim() !== '' && Number.isFinite(rpmValue) && rpmValue > 0;
+    const feedXyOk = feedXy.trim() !== '' && Number.isFinite(Number(feedXy));
+    const feedZOk = feedZ.trim() !== '' && Number.isFinite(Number(feedZ));
+    const surfaceSpeed =
+      rpmOk && selectedTool ? cuttingSpeedFromRpm(rpmValue, selectedTool.diameter) : null;
+    const perTooth =
+      rpmOk && feedXyOk && selectedTool && selectedTool.flute_count > 0
+        ? commitFeed(Number(feedXy), units) / (rpmValue * selectedTool.flute_count)
+        : null;
+    const perRev = rpmOk && feedZOk ? commitFeed(Number(feedZ), units) / rpmValue : null;
+    const fu = feedUnit(units);
+    return (
+      <>
+        <DialogSection title="TOOL">
+          <div className="flex items-center gap-1.5">
+            <div className="flex h-7 min-w-0 flex-1 items-center truncate rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
+              {selectedTool
+                ? `${selectedTool.number != null ? `T${selectedTool.number} · ` : ''}${selectedTool.name} · Ø${displayLength(selectedTool.diameter, units).toFixed(3)} ${lu}`
+                : 'No tool selected'}
+            </div>
+            <button
+              type="button"
+              title="Pick from the Tool Library (central picks are copied into this project)"
+              onClick={() => openCamToolPicker(kind)}
+              className="h-7 shrink-0 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25"
+            >
+              Select…
+            </button>
+          </div>
+        </DialogSection>
+        <DialogSection title="FEED & SPEED">
+          <div className="grid grid-cols-2 gap-2">
+            {selectedTool && selectedTool.cutting_presets.length > 0 && (
+              <label className="col-span-2 block">
+                <span className={CAM_DIALOG_LABEL}>Preset</span>
+                <select
+                  value={presetIndex}
+                  onChange={(event) => {
+                    const index = Number(event.target.value);
+                    setPresetIndex(index);
+                    setFeedsTouched(false);
+                    applyCutting(selectedTool, index);
+                  }}
+                  className={CAM_DIALOG_INPUT}
+                >
+                  <option value={0}>Default preset</option>
+                  {selectedTool.cutting_presets.map((preset, index) => (
+                    <option key={index + 1} value={index + 1}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <DraftNumber
+              label="Spindle speed"
+              value={rpm}
+              onChange={(v) => { setFeedsTouched(true); setRpm(v); }}
+              unit="rpm"
+              integer
+            />
+            <DerivedField
+              label="Surface speed"
+              text={surfaceSpeed === null ? '—' : displayCuttingSpeed(surfaceSpeed, units).toFixed(2)}
+              unit={cuttingSpeedUnitLabel(units)}
+            />
+            <DraftNumber label="Ramp spindle speed" value={rpm} onChange={() => {}} unit="rpm" disabled />
+            <DraftNumber
+              label="Cutting feedrate"
+              value={feedXy}
+              onChange={(v) => { setFeedsTouched(true); setFeedXy(v); }}
+              unit={fu}
+            />
+            <DerivedField
+              label="Feed per tooth"
+              text={perTooth === null ? '—' : displayLength(perTooth, units).toFixed(4)}
+              unit={lu}
+            />
+            <DraftNumber label="Lead-in feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+            <DraftNumber label="Lead-out feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+            <DraftNumber label="Transition feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+            <DraftNumber label="Ramp feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+            <DraftNumber
+              label="Plunge feedrate"
+              value={feedZ}
+              onChange={(v) => { setFeedsTouched(true); setFeedZ(v); }}
+              unit={fu}
+            />
+            <DerivedField
+              label="Plunge feed per revolution"
+              text={perRev === null ? '—' : displayLength(perRev, units).toFixed(4)}
+              unit={lu}
+            />
+            <label className="col-span-2 block">
+              <span className={CAM_DIALOG_LABEL}>Coolant</span>
+              <select
+                value={coolant}
+                onChange={(event) => { setFeedsTouched(true); setCoolant(event.target.value as CamCoolantMode); }}
+                className={CAM_DIALOG_INPUT}
+              >
+                <option value="off">Off</option>
+                <option value="mist">Mist</option>
+                <option value="flood">Flood</option>
+              </select>
+            </label>
+          </div>
+        </DialogSection>
+      </>
+    );
+  };
+
+  /** FACE · Heights tab: five heights, each a reference plane plus a signed
+   *  offset. Feed height stays a placeholder — the planner approaches at
+   *  retract height today. */
+  const faceHeightsTab = () => (
+    <>
+      <DialogSection title="CLEARANCE HEIGHT">
+        <HeightField from={clearanceFrom} offset={clearanceOff} onFrom={setClearanceFrom} onOffset={setClearanceOff} unit={lu} />
+      </DialogSection>
+      <DialogSection title="RETRACT HEIGHT">
+        <HeightField from={retractFrom} offset={retractOff} onFrom={setRetractFrom} onOffset={setRetractOff} unit={lu} />
+      </DialogSection>
+      <DialogSection title="FEED HEIGHT">
+        <HeightField from="model_top" offset={displayLength(5, units).toFixed(4)} onFrom={() => {}} onOffset={() => {}} unit={lu} disabled />
+      </DialogSection>
+      <DialogSection title="TOP HEIGHT">
+        <HeightField from={topFrom} offset={topOff} onFrom={setTopFrom} onOffset={setTopOff} unit={lu} />
+      </DialogSection>
+      <DialogSection title="BOTTOM HEIGHT">
+        <HeightField from={bottomFrom} offset={bottomOff} onFrom={setBottomFrom} onOffset={setBottomOff} unit={lu} />
+      </DialogSection>
+    </>
+  );
+
+  /** FACE · Passes tab: stepover and maximum stepdown are live; the rest of
+   *  the option set renders as placeholders so the contract is visible. */
+  const facePassesTab = () => (
+    <DialogSection title="PASSES">
+      <div className="grid grid-cols-2 gap-2">
+        <DraftNumber label="Tolerance" value="0.01" onChange={() => {}} unit={lu} disabled />
+        <DraftNumber label="Pass direction" value="0" onChange={() => {}} unit="deg" disabled />
+        <div className="col-span-2 flex items-center gap-2">
+          <span className="flex-1 text-[10px] text-mute">Pass direction reference</span>
+          <DeadButton label="Select" />
+        </div>
+        <DraftNumber label="Pass extension" value="" onChange={() => {}} unit={lu} disabled placeholder="auto" />
+        <DraftNumber label="Stock offset" value="0" onChange={() => {}} unit={lu} disabled />
+        <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
+        <DeadSelect label="Direction" value="Both ways" />
+      </div>
+      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+        <DeadCheck label="Order for shorter links" />
+        <DeadCheck label="From other side" />
+        <DeadCheck label="Use chip thinning" />
+      </div>
+      <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
+        <input
+          type="checkbox"
+          checked={multipleDepths}
+          onChange={(event) => setMultipleDepths(event.target.checked)}
+        />
+        Multiple depths
+      </label>
+      {multipleDepths && (
+        <div className="grid grid-cols-2 gap-2">
+          <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+        <DeadCheck label="Both sides" />
+        <DeadCheck label="Finishing step" />
+        <DeadCheck label="Use even stepdowns" />
+        <DeadCheck label="Stock to leave" />
+      </div>
+    </DialogSection>
+  );
+
+  /** FACE · Linking tab: safe distance (the entry plunge clearance off the
+   *  stock boundary) is live; high-feed/keep-down/lead options placeholder. */
+  const faceLinkingTab = () => (
+    <>
+      <DialogSection title="LINKING">
+        <DeadSelect label="High feedrate mode" value="Preserve rapid movements" />
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+          <DeadCheck label="Allow rapid retract" checked />
+          <DeadCheck label="Keep tool down" checked />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <DraftNumber label="Max stay-down distance" value="100" onChange={() => {}} unit={lu} disabled />
+          <DraftNumber
+            label="Safe distance"
+            value={safeDistance}
+            onChange={setSafeDistance}
+            unit={lu}
+          />
+        </div>
+        <DeadCheck label="Extend before retract" />
+      </DialogSection>
+      <DialogSection title="LEADS & TRANSITIONS">
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+          <DeadCheck label="Lead-in (entry)" checked />
+          <DeadCheck label="Lead-out (exit)" checked />
+          <DeadCheck label="Same as lead-in" checked />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <DraftNumber label="Vertical lead-in radius" value="2" onChange={() => {}} unit={lu} disabled />
+          <DeadSelect label="Transition type" value="Smooth" />
+        </div>
+      </DialogSection>
+    </>
+  );
+
   return (
     <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
       <form
@@ -529,6 +978,35 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
+          {pages.tabs && (
+            <nav className="grid grid-cols-5 gap-1 rounded border border-edge bg-header/40 p-1">
+              {FACE_TABS.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  title={label}
+                  onClick={() => setFaceTab(id)}
+                  className={`flex h-9 flex-col items-center justify-center gap-0.5 rounded text-[8px] font-semibold ${
+                    faceTab === id ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink'
+                  }`}
+                >
+                  <Icon size={14} />
+                  {label}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {pages.tabs ? (
+            <>
+              {faceTab === 'tool' && faceToolTab()}
+              {faceTab === 'geometry' && geometrySection()}
+              {faceTab === 'heights' && faceHeightsTab()}
+              {faceTab === 'passes' && facePassesTab()}
+              {faceTab === 'linking' && faceLinkingTab()}
+            </>
+          ) : (
+            <>
           <OpToolPicker
             kind={kind}
             drillCycle={kind === 'drill' ? drillCycle : undefined}
@@ -701,6 +1179,8 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             onFeedZ={(v) => { setFeedsTouched(true); setFeedZ(v); }}
             onCoolant={(v) => { setFeedsTouched(true); setCoolant(v); }}
           />
+            </>
+          )}
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
           <button

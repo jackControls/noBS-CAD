@@ -18,6 +18,10 @@ export function DialogSection({ title, children }: { title: string; children: Re
   );
 }
 
+/** Title hint for fields rendered as placeholders: the option exists in the
+ *  UI contract but the planner does not consume it yet. */
+export const NOT_APPLIED_YET = 'Not applied yet — planning support lands later';
+
 /** Numeric draft field. Drafts stay strings in the document's display units;
  *  conversion to canonical mm happens once at submit. */
 export function DraftNumber({
@@ -27,6 +31,7 @@ export function DraftNumber({
   unit,
   integer = false,
   placeholder,
+  disabled = false,
 }: {
   label: string;
   value: string;
@@ -34,9 +39,10 @@ export function DraftNumber({
   unit?: string;
   integer?: boolean;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
-    <label className="block">
+    <label className="block" title={disabled ? NOT_APPLIED_YET : undefined}>
       <span className={CAM_DIALOG_LABEL}>{label}</span>
       <span className="relative block">
         <input
@@ -44,8 +50,11 @@ export function DraftNumber({
           step={integer ? 1 : 'any'}
           value={value}
           placeholder={placeholder}
+          disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className={`${CAM_DIALOG_INPUT} font-mono ${unit ? 'pr-12' : ''}`}
+          className={`${CAM_DIALOG_INPUT} font-mono ${unit ? 'pr-12' : ''} ${
+            disabled ? 'cursor-not-allowed opacity-45' : ''
+          }`}
         />
         {unit && (
           <span className="pointer-events-none absolute right-2 top-1.5 text-[8px] text-mute/60">
