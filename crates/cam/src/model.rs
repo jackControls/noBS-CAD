@@ -17,6 +17,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Facing plunge clearance when a document predates the field.
+fn default_face_safe_distance() -> f64 {
+    5.0
+}
+
 fn one_u8() -> u8 {
     1
 }
@@ -734,6 +739,12 @@ pub enum CamOperationDto {
         target_z: f64,
         step_over: f64,
         step_down: f64,
+        /// Horizontal clearance (mm) the facing plunge keeps from the stock
+        /// boundary: the cutter descends at least this far clear of the
+        /// material, so the entry never becomes plunge-milling. Operator
+        /// field, 5 mm by default.
+        #[serde(default = "default_face_safe_distance")]
+        safe_distance: f64,
         /// Safe travel heights for this operation (setup Z, mm).
         #[serde(default)]
         clearance_z: f64,
@@ -1011,6 +1022,7 @@ impl CamOperationDto {
                 target_z,
                 step_over,
                 step_down,
+                safe_distance,
                 ..
             } => {
                 // Facing enters from outside the stock boundary (the plunge
@@ -1041,6 +1053,11 @@ impl CamOperationDto {
                 if !step_over.is_finite() || *step_over <= 0.0 || *step_over > tool.diameter {
                     return Err(format!(
                         "face operation '{label}' stepover must be positive and no larger than the tool diameter"
+                    ));
+                }
+                if !safe_distance.is_finite() || *safe_distance < 0.0 {
+                    return Err(format!(
+                        "face operation '{label}' safe distance must be zero or positive"
                     ));
                 }
             }
@@ -2125,6 +2142,7 @@ mod tests {
             target_z: -1.0,
             step_over: 3.0,
             step_down: 1.0,
+        safe_distance: 5.0,
             clearance_z,
             retract_z,
             cutting: cutting(),

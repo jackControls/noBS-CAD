@@ -543,7 +543,7 @@ function ToolEditor({
     });
     const first = source
       ? fromCutting('Default preset', source.cutting)
-      : fromCutting('Default preset', { spindle_rpm: 0, feed_xy: 0, feed_z: 0, coolant: 'off' });
+      : fromCutting('Default preset', { spindle_rpm: 0, feed_xy: 0, feed_z: 0, coolant: 'flood' });
     if (!source) {
       first.rpm = '';
       first.feedXy = '';

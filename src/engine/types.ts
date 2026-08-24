@@ -2388,6 +2388,9 @@ export type CamOperationDto =
       target_z: number;
       step_over: number;
       step_down: number;
+      /** Horizontal clearance the facing plunge keeps from the stock
+       *  boundary (model mm), so entry never becomes plunge-milling. */
+      safe_distance: number;
     })
   | (CamOperationBase & {
       kind: 'contour2d';

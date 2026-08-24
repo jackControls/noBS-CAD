@@ -8,11 +8,6 @@ use crate::model::{
 const EPSILON: f64 = 1.0e-9;
 const MAX_GENERATED_STEPS: usize = 250_000;
 const MAX_PROGRAM_COMMANDS: usize = 300_000;
-/// Extra clearance (mm, model units) beyond the cutter radius for the facing
-/// plunge point, so the cutter descends fully clear of the stock instead of
-/// grazing the boundary while tangent — non-center-cutting face mills need
-/// the plunge to happen in free air.
-const FACE_APPROACH_CLEARANCE: f64 = 2.0;
 /// G0 rapid is a full-speed machine move; standard G-code has no programmable
 /// rapid feed. This estimate only feeds the cycle-time statistic.
 pub(crate) const RAPID_FEED_ESTIMATE_MM_PER_MIN: f64 = 8_000.0;
@@ -436,6 +431,7 @@ fn plan_face(
         target_z,
         step_over,
         step_down,
+        safe_distance,
         cutting,
         name,
         ..
@@ -467,7 +463,10 @@ fn plan_face(
             .saturating_mul(rows.len().saturating_mul(2).saturating_add(4)),
         name,
     )?;
-    let start_x = bounds.min.x - radius - FACE_APPROACH_CLEARANCE;
+    // The plunge point sits one radius plus the operator's safe distance
+    // clear of the stock's min-X edge: the cutter always descends in free
+    // air, never into material (no plunge-milling on entry).
+    let start_x = bounds.min.x - radius - safe_distance;
     let end_x = bounds.max.x + radius;
     for depth in depths {
         let first = Point2Dto::new(start_x, rows[0]);
@@ -1236,6 +1235,7 @@ mod tests {
             target_z: -2.0,
             step_over: 3.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1284,6 +1284,7 @@ mod tests {
             target_z: -1.0,
             step_over: 31.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1324,6 +1325,7 @@ mod tests {
             target_z: -1.0,
             step_over: 28.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1361,6 +1363,7 @@ mod tests {
             target_z: -1.0,
             step_over: 31.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1402,6 +1405,7 @@ mod tests {
             target_z: -1.0,
             step_over: 12.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1772,6 +1776,7 @@ mod tests {
             target_z: -1.0,
             step_over: 5.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1829,6 +1834,7 @@ mod tests {
             target_z: -1.0,
             step_over: 0.000_001,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),

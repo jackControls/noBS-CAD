@@ -5,10 +5,8 @@ import {
   addCamOperation,
   camOperationLabel,
   camToolCompatible,
-  importCamToolFromCentral,
   type CamOperationInput,
 } from '../../cam/document';
-import { centralLibraryAvailable, loadCentralLibrary } from '../../cam/library';
 import {
   listSketchLoops,
   listSketchPointRefs,
@@ -35,13 +33,16 @@ import {
   lengthUnit,
   parseDraft,
 } from './camFields';
+import { OP_PAGES, OpSpeedsFeeds, OpToolPicker } from './opShared';
 
 type OperationKind = CamOperationInput['kind'];
 type GeometrySource = 'sketch' | 'manual';
 
-/** Program one operation end to end: the operator picks the tool from the
- *  library, picks the driving geometry (sketch loops/points or explicit
- *  coordinates), and sets heights, passes, and speeds & feeds. */
+/** Program one operation end to end. Every kind shares this single dialog
+ *  scaffold: the tool picker, heights, and speeds & feeds pages are the
+ *  shared components from `opShared.tsx`, and the kind only switches pages
+ *  and fields on through `OP_PAGES`. Geometry, tool, heights, and feeds
+ *  are all explicit; validation in the engine rejects incomplete input. */
 export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const cam = useAppStore((state) => state.camDocument);
   const sketches = useAppStore((state) => state.finishedSketches);
@@ -50,31 +51,16 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const units = cam.units;
   const lu = lengthUnit(units);
   const setup = activeCamSetup(cam);
+  const pages = OP_PAGES[kind];
   // Drill operations pick the cycle before the tool: the cycle decides which
   // tool kinds are compatible (tap -> tap, reaming -> reamer, ...).
   const [drillCycle, setDrillCycle] = useState<CamDrillCycle>('drill');
-  // Operations pick from the project's tool snapshots; compatible tools that
-  // only exist in the central library can be imported in place here.
-  const [centralTools, setCentralTools] = useState<CamToolDto[] | null>(null);
-  useEffect(() => {
-    if (!centralLibraryAvailable()) return;
-    void loadCentralLibrary().then((library) => setCentralTools(library?.tools ?? []));
-  }, []);
-  const tools = useMemo(
+  const projectTools = useMemo(
     () =>
       cam.tools.filter((tool) =>
         camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
       ),
     [cam.tools, kind, drillCycle],
-  );
-  const importable = useMemo(
-    () =>
-      (centralTools ?? []).filter(
-        (tool) =>
-          !cam.tools.some((project) => project.id === tool.id) &&
-          camToolCompatible(kind, tool, kind === 'drill' ? drillCycle : undefined),
-      ),
-    [centralTools, cam.tools, kind, drillCycle],
   );
 
   const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
@@ -82,12 +68,12 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const existingCount = setup?.operations.filter((operation) => operation.kind === kind).length ?? 0;
 
   const [name, setName] = useState(`${camOperationLabel(kind)} ${existingCount + 1}`);
-  const [toolId, setToolId] = useState<number | null>(tools[0]?.id ?? null);
+  const [toolId, setToolId] = useState<number | null>(projectTools[0]?.id ?? null);
   const [presetIndex, setPresetIndex] = useState(0);
   const [rpm, setRpm] = useState('');
   const [feedXy, setFeedXy] = useState('');
   const [feedZ, setFeedZ] = useState('');
-  const [coolant, setCoolant] = useState<CamCoolantMode>('off');
+  const [coolant, setCoolant] = useState<CamCoolantMode>('flood');
   const [feedsTouched, setFeedsTouched] = useState(false);
 
   const [source, setSource] = useState<GeometrySource>(loops.length > 0 ? 'sketch' : 'manual');
@@ -102,6 +88,8 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const [targetZ, setTargetZ] = useState(kind === 'face' ? '0' : '');
   const [stepDown, setStepDown] = useState('');
   const [stepOver, setStepOver] = useState('');
+  // Facing plunge clearance from the stock boundary (see the planner).
+  const [safeDistance, setSafeDistance] = useState(displayLength(5, units).toFixed(4));
   const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
   const [wallSide, setWallSide] = useState<CamContourCompensation>('inside');
   const [chamferWidth, setChamferWidth] = useState('');
@@ -136,7 +124,6 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   // Setup-space Z of the model's top surface; face depths are entered
   // relative to it. Null when the setup references no bodies.
   const modelTop = modelTopZInSetup(scene, setup);
-  const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
 
   /** Copy a library cutting profile (default or a named preset) into the
    *  feeds & speeds drafts. */
@@ -150,11 +137,10 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     setCoolant(data.coolant);
   };
 
-  const chooseTool = (id: number) => {
-    setToolId(id);
+  const chooseTool = (tool: CamToolDto) => {
+    setToolId(tool.id);
     setPresetIndex(0);
-    const tool = cam.tools.find((candidate) => candidate.id === id);
-    if (tool && !feedsTouched) {
+    if (!feedsTouched) {
       applyCutting(tool, 0);
       if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
         setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
@@ -163,19 +149,22 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   };
 
   /** Switch the drill cycle; keeps the selected tool only when it stays
-   *  compatible, otherwise re-selects the first compatible library tool. */
+   *  compatible, otherwise re-selects the first compatible project tool. */
   const changeCycle = (cycle: CamDrillCycle) => {
     setDrillCycle(cycle);
     const compatible = cam.tools.filter((tool) => camToolCompatible('drill', tool, cycle));
     if (!compatible.some((tool) => tool.id === toolId)) {
       setFeedsTouched(false);
-      if (compatible[0]) chooseTool(compatible[0].id);
+      if (compatible[0]) chooseTool(compatible[0]);
       else setToolId(null);
     }
   };
   // Prefill speeds & feeds from the initially selected library tool.
   useEffect(() => {
-    if (toolId !== null && !feedsTouched && rpm === '') chooseTool(toolId);
+    if (toolId !== null && !feedsTouched && rpm === '') {
+      const tool = cam.tools.find((candidate) => candidate.id === toolId);
+      if (tool) chooseTool(tool);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -272,6 +261,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                 : commitLength(parseDraft(targetZ, 'Target Z'), units),
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
             step_down: commitLength(parseDraft(stepDown, 'Stepdown'), units),
+            safe_distance: commitLength(parseDraft(safeDistance, 'Safe distance'), units),
             cutting: cutting(),
           };
           break;
@@ -391,7 +381,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   };
 
   const geometrySection = () => {
-    if (kind === 'drill' || kind === 'thread') {
+    if (pages.geometry === 'holes') {
       return (
         <DialogSection title="HOLE CENTERS · SKETCH POINTS">
           {pointRefs.length > 0 ? (
@@ -433,7 +423,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         </DialogSection>
       );
     }
-    if (kind === 'face') {
+    if (pages.geometry === 'face') {
       return (
         <DialogSection title={`FACE AREA (${lu})`}>
           <label className="flex items-center gap-2 text-[11px] text-ink">
@@ -455,10 +445,8 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         </DialogSection>
       );
     }
-    const pathLabel =
-      kind === 'pocket2d' ? 'Pocket outline' : kind === 'chamfer2d' ? 'Chamfer profile' : 'Contour path';
     return (
-      <DialogSection title={`${pathLabel.toUpperCase()} · OPERATOR SELECTED`}>
+      <DialogSection title={`${(pages.pathLabel ?? 'Path').toUpperCase()} · OPERATOR SELECTED`}>
         <div className="grid grid-cols-2 gap-1.5">
           {(
             [
@@ -541,95 +529,25 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
-          <DialogSection title="TOOL · THIS PROJECT">
-            {tools.length > 0 ? (
-              <>
-                <select
-                  value={toolId ?? ''}
-                  onChange={(event) => {
-                    setFeedsTouched(false);
-                    chooseTool(Number(event.target.value));
-                  }}
-                  className={CAM_DIALOG_INPUT}
-                >
-                  {tools.map((tool) => (
-                    <option key={tool.id} value={tool.id}>
-                      {tool.number != null ? `T${tool.number} · ` : ''}{tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)} {lu}
-                    </option>
-                  ))}
-                </select>
-                {selectedTool && selectedTool.cutting_presets.length > 0 && (
-                  <label className="mt-2 block">
-                    <span className={CAM_DIALOG_LABEL}>Cutting profile</span>
-                    <select
-                      value={presetIndex}
-                      onChange={(event) => {
-                        const index = Number(event.target.value);
-                        setPresetIndex(index);
-                        setFeedsTouched(false);
-                        applyCutting(selectedTool, index);
-                      }}
-                      className={CAM_DIALOG_INPUT}
-                    >
-                      <option value={0}>Default preset</option>
-                      {selectedTool.cutting_presets.map((preset, index) => (
-                        <option key={index + 1} value={index + 1}>
-                          {preset.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-              </>
-            ) : (
-              <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
-                {importable.length > 0
-                  ? 'No compatible tool in this project yet — import one from the central library below.'
-                  : 'No compatible tool in this project. Create one in the Tool Library (ribbon), then it can be imported here.'}
-              </p>
-            )}
-            {importable.length > 0 && (
-              <div className="mt-2 rounded border border-edge/70 bg-header/40 p-1.5">
-                <div className="mb-1 text-[9px] font-semibold uppercase tracking-widest text-mute/60">
-                  In the central library
-                </div>
-                <div className="max-h-24 space-y-0.5 overflow-y-auto">
-                  {importable.map((tool) => (
-                    <div key={tool.id} className="flex items-center gap-1.5 text-[10px] text-mute">
-                      <span className="min-w-0 flex-1 truncate">
-                        {tool.number != null ? `T${tool.number} · ` : ''}
-                        {tool.name} · Ø{displayLength(tool.diameter, units).toFixed(3)}
-                      </span>
-                      <button
-                        type="button"
-                        title="Copy this tool into the project and select it"
-                        onClick={() =>
-                          runCamAction(async () => {
-                            await importCamToolFromCentral(tool.id);
-                            setToolId(tool.id);
-                            setPresetIndex(0);
-                            if (!feedsTouched) {
-                              applyCutting(tool, 0);
-                              if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
-                                setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
-                              }
-                            }
-                          })
-                        }
-                        className="h-5 shrink-0 rounded border border-accent/50 bg-accent/15 px-1.5 text-[9px] font-semibold text-accent hover:bg-accent/25"
-                      >
-                        Import
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </DialogSection>
+          <OpToolPicker
+            kind={kind}
+            drillCycle={kind === 'drill' ? drillCycle : undefined}
+            toolId={toolId}
+            presetIndex={presetIndex}
+            onChoose={(tool) => {
+              setFeedsTouched(false);
+              chooseTool(tool);
+            }}
+            onPreset={(tool, index) => {
+              setPresetIndex(index);
+              setFeedsTouched(false);
+              applyCutting(tool, index);
+            }}
+          />
 
           {geometrySection()}
 
-          {kind === 'thread' && (
+          {pages.threadFields && (
             <DialogSection title="THREAD (INTERNAL)">
               <label className="block">
                 <span className={CAM_DIALOG_LABEL}>Designation</span>
@@ -684,7 +602,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
               <DraftNumber label="Clearance Z" value={clearanceZ} onChange={setClearanceZ} unit={lu} />
               <DraftNumber label="Retract Z" value={retractZ} onChange={setRetractZ} unit={lu} />
               <DraftNumber label="Top Z" value={topZ} onChange={setTopZ} unit={lu} />
-              {kind === 'face' ? (
+              {pages.faceTarget ? (
                 <DraftNumber
                   label={modelTop !== null ? 'Depth below model top (0 = model top)' : 'Target Z'}
                   value={targetZ}
@@ -694,13 +612,16 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
               ) : (
                 <DraftNumber label="Bottom Z" value={bottomZ} onChange={setBottomZ} unit={lu} />
               )}
-              {(kind === 'face' || kind === 'contour2d' || kind === 'pocket2d') && (
+              {pages.safeDistance && (
+                <DraftNumber label="Safe distance" value={safeDistance} onChange={setSafeDistance} unit={lu} />
+              )}
+              {pages.stepDown && (
                 <DraftNumber label="Stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
               )}
-              {(kind === 'face' || kind === 'pocket2d') && (
+              {pages.stepOver && (
                 <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
               )}
-              {kind === 'contour2d' && (
+              {pages.compensation && (
                 <label className="block">
                   <span className={CAM_DIALOG_LABEL}>Tool side</span>
                   <select
@@ -714,7 +635,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                   </select>
                 </label>
               )}
-              {kind === 'chamfer2d' && (
+              {pages.chamferFields && (
                 <>
                   <DraftNumber label="Chamfer width" value={chamferWidth} onChange={setChamferWidth} unit={lu} />
                   <DraftNumber label="Tip offset" value={tipOffset} onChange={setTipOffset} unit={lu} />
@@ -731,7 +652,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                   </label>
                 </>
               )}
-              {kind === 'drill' && (
+              {pages.drillCycle && (
                 <>
                   <label className="block">
                     <span className={CAM_DIALOG_LABEL}>Cycle</span>
@@ -769,25 +690,17 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             </div>
           </DialogSection>
 
-          <DialogSection title={`SPEEDS & FEEDS (${feedUnit(units)})`}>
-            <div className="grid grid-cols-2 gap-2">
-              <DraftNumber label="Spindle" value={rpm} onChange={(v) => { setFeedsTouched(true); setRpm(v); }} unit="rpm" integer />
-              <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Coolant</span>
-                <select
-                  value={coolant}
-                  onChange={(event) => { setFeedsTouched(true); setCoolant(event.target.value as CamCoolantMode); }}
-                  className={CAM_DIALOG_INPUT}
-                >
-                  <option value="off">Off</option>
-                  <option value="mist">Mist</option>
-                  <option value="flood">Flood</option>
-                </select>
-              </label>
-              <DraftNumber label="Cutting feed" value={feedXy} onChange={(v) => { setFeedsTouched(true); setFeedXy(v); }} unit={feedUnit(units)} />
-              <DraftNumber label="Plunge feed" value={feedZ} onChange={(v) => { setFeedsTouched(true); setFeedZ(v); }} unit={feedUnit(units)} />
-            </div>
-          </DialogSection>
+          <OpSpeedsFeeds
+            units={units}
+            rpm={rpm}
+            feedXy={feedXy}
+            feedZ={feedZ}
+            coolant={coolant}
+            onRpm={(v) => { setFeedsTouched(true); setRpm(v); }}
+            onFeedXy={(v) => { setFeedsTouched(true); setFeedXy(v); }}
+            onFeedZ={(v) => { setFeedsTouched(true); setFeedZ(v); }}
+            onCoolant={(v) => { setFeedsTouched(true); setCoolant(v); }}
+          />
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
           <button

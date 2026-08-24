@@ -1125,6 +1125,7 @@ mod tests {
                         target_z: -1.0,
                         step_over: 3.0,
                         step_down: 1.0,
+                        safe_distance: 5.0,
                         clearance_z: 5.0,
                         retract_z: 2.0,
                         cutting,
@@ -1309,6 +1310,7 @@ mod tests {
             target_z: -2.0,
             step_over: 2.0,
             step_down: 1.0,
+            safe_distance: 5.0,
             clearance_z: 5.0,
             retract_z: 2.0,
             cutting: CuttingParametersDto {

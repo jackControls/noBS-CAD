@@ -598,6 +598,7 @@ function FaceFields({ operation, units, update }: { operation: FaceOperation; un
     )}
     <LengthField label="Stepover" valueMm={operation.step_over} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_over = value; })} />
     <LengthField label="Stepdown" valueMm={operation.step_down} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.step_down = value; })} />
+    <LengthField label="Safe distance" valueMm={operation.safe_distance} units={units} onCommit={(value) => update((next) => { if (next.kind === 'face') next.safe_distance = value; })} />
   </div>;
 }
 

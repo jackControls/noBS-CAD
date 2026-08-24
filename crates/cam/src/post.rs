@@ -769,6 +769,7 @@ mod tests {
                     target_z: -1.0,
                     step_over: 3.0,
                     step_down: 1.0,
+                    safe_distance: 5.0,
                     clearance_z: 8.0,
                     retract_z: 2.0,
                     cutting: CuttingParametersDto {
@@ -948,8 +949,8 @@ mod tests {
         assert!(posted.nc.contains("M0"));
         assert!(posted.nc.contains("G1 X"));
         let z_clearance = posted.nc.find("G0 Z8").unwrap();
-        // 3 mm tool radius plus the 2 mm facing approach clearance.
-        let xy_position = posted.nc.find("G0 X-5 Y0").unwrap();
+        // 3 mm tool radius plus the operation's 5 mm facing safe distance.
+        let xy_position = posted.nc.find("G0 X-8 Y0").unwrap();
         assert!(z_clearance < xy_position);
         assert!(posted.nc.ends_with("M30\n"));
     }
