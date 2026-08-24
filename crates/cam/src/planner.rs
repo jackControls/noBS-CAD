@@ -1388,6 +1388,61 @@ mod tests {
     }
 
     #[test]
+    fn face_kind_gate_admits_flat_bottom_mills_only() {
+        let make_op = || CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 19.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 12.0,
+            step_down: 1.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        };
+        // Flat-bottom mills face even without center-cutting inserts.
+        for kind in [
+            CamToolKind::FlatEndMill,
+            CamToolKind::BullNoseEndMill,
+            CamToolKind::FaceMill,
+        ] {
+            let mut milling = tool(1, kind, 16.0);
+            milling.center_cutting = false;
+            if kind == CamToolKind::BullNoseEndMill {
+                milling.corner_radius = Some(3.0);
+            }
+            plan_setup(&document(vec![make_op()], vec![milling]), 1)
+                .unwrap_or_else(|err| panic!("{kind:?} should face: {err}"));
+        }
+        // Everything else is out: scallops, angled edges, non-slotting tooth
+        // profiles, hole-making tools, and turning tools cannot face.
+        for kind in [
+            CamToolKind::BallEndMill,
+            CamToolKind::ChamferMill,
+            CamToolKind::ThreadMill,
+            CamToolKind::Drill,
+            CamToolKind::Tap,
+            CamToolKind::Reamer,
+            CamToolKind::BoringBar,
+            CamToolKind::TurningGeneral,
+        ] {
+            let milling = tool(1, kind, 16.0);
+            let err = plan_setup(&document(vec![make_op()], vec![milling]), 1)
+                .expect_err(&format!("{kind:?} must not face"));
+            assert!(
+                err.to_string().contains("flat, bull-nose, or face mill"),
+                "{kind:?} should hit the kind gate: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn outside_contour_offsets_a_ccw_rectangle_by_tool_radius() {
         let points = vec![
             Point2Dto::new(10.0, 10.0),

@@ -392,9 +392,12 @@ export function camOperationLabel(kind: CamOperationKind): string {
 /** True when an operation kind can use the given tool kind. Drill operations
  *  are cycle-aware: tapping needs a tap, reaming a reamer, boring a boring
  *  bar, and the drilling cycles a drill or any center-cutting tool. Facing
- *  is the exception on plunge capability: the cut enters from outside the
- *  stock boundary, so indexable face mills — rarely center-cutting — are
- *  valid, while pocket/contour entries still plunge into material. */
+ *  enters from outside the stock boundary, so plunge capability is not
+ *  required — but the cutter still needs a flat-ish bottom edge: flat and
+ *  bull-nose end mills and face mills only (ball noses scallop, chamfer
+ *  mills cut on an angled edge, thread mills cannot side-mill at all).
+ *  Pocket/contour entries still plunge into material and keep their
+ *  restrictions. */
 export function camToolCompatible(
   kind: CamOperationKind,
   tool: CamToolDto,
@@ -404,7 +407,6 @@ export function camToolCompatible(
     case 'face':
       return (
         tool.kind === 'flat_end_mill' ||
-        tool.kind === 'ball_end_mill' ||
         tool.kind === 'bull_nose_end_mill' ||
         tool.kind === 'face_mill'
       );

@@ -137,10 +137,15 @@ and the tests, not this document, when they disagree.
   root cause): the planner's entry plunge sits outside the stock boundary —
   one radius plus a 2 mm approach clearance off the min-X edge — so
   indexable face/shell mills, which are rarely center-cutting, are valid.
-  Engine validation and `camToolCompatible` were relaxed for `face` only;
-  pocket/contour entries still plunge into material and keep the
-  center-cutting requirement until ramp/helical/lead-in entries exist.
-  Engine test: `face_accepts_a_non_center_cutting_face_mill`.
+  The kind gate admits flat-bottom mills only: flat end mills, bull-nose
+  end mills, and face mills (ball noses scallop the surface, chamfer mills
+  cut on an angled edge, thread mills cannot side-mill at all, hole-making
+  and turning tools are out). Engine validation and `camToolCompatible`
+  were relaxed for `face` only; pocket/contour entries still plunge into
+  material and keep the center-cutting requirement until ramp/helical/
+  lead-in entries exist. Engine tests:
+  `face_accepts_a_non_center_cutting_face_mill`,
+  `face_kind_gate_admits_flat_bottom_mills_only`.
 - Face operations target the model's top surface: dialogs and the inspector
   enter a depth below model top (0 = model top), converted to absolute
   setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the

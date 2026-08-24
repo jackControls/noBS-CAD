@@ -1015,17 +1015,16 @@ impl CamOperationDto {
             } => {
                 // Facing enters from outside the stock boundary (the plunge
                 // point sits clear of the material), so plunge capability is
-                // not required — indexable face mills are rarely
-                // center-cutting, and facing is exactly what they are for.
+                // not required. But the cutter still needs a flat-ish bottom
+                // edge: flat and bull-nose end mills and face mills only —
+                // ball noses leave scallops, chamfer mills cut on an angled
+                // edge, thread mills cannot side-mill at all.
                 if !matches!(
                     tool.kind,
-                    CamToolKind::FlatEndMill
-                        | CamToolKind::BallEndMill
-                        | CamToolKind::BullNoseEndMill
-                        | CamToolKind::FaceMill
+                    CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::FaceMill
                 ) {
                     return Err(format!(
-                        "face operation '{label}' requires a milling tool (flat, ball, bull-nose, or face mill)"
+                        "face operation '{label}' needs a flat, bull-nose, or face mill"
                     ));
                 }
                 bounds.validate(&format!("face operation '{label}' bounds"))?;
