@@ -21,7 +21,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 117;
+const MODELING_TOOL_COUNT: usize = 119;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -1390,6 +1390,92 @@ fn tool_specs() -> Vec<ToolSpec> {
         }),
         &["translation", "rotation"],
     );
+    let joint_vec3 = json!({
+        "type": "array",
+        "items": {"type": "number"},
+        "minItems": 3,
+        "maxItems": 3
+    });
+    let joint_frame = object_schema(
+        json!({
+            "origin": joint_vec3.clone(),
+            "primary_axis": joint_vec3.clone(),
+            "secondary_axis": joint_vec3.clone()
+        }),
+        &["origin", "primary_axis", "secondary_axis"],
+    );
+    let joint_limits = object_schema(
+        json!({
+            "min": {"type": "number"},
+            "max": {"type": "number"}
+        }),
+        &["min", "max"],
+    );
+    let joint_connector = object_schema(
+        json!({
+            "body_id": {"type": "integer", "minimum": 1},
+            "face_id": {"type": "integer", "minimum": 0},
+            "face_key": {"type": "string"},
+            "edge_id": {"type": ["integer", "null"], "minimum": 1},
+            "edge_key": {"type": ["string", "null"]},
+            "kind": {
+                "type": "string",
+                "enum": ["planar_face", "cylindrical_face", "virtual_circular_face", "circular_edge"]
+            },
+            "radius": {"type": ["number", "null"]},
+            "source_surface_frame": joint_frame.clone(),
+            "frame": joint_frame.clone()
+        }),
+        &["body_id", "face_id", "face_key", "frame"],
+    );
+    let joint_kind = json!({
+        "type": "string",
+        "enum": [
+            "rigid",
+            "revolute",
+            "slider",
+            "cylindrical",
+            "planar",
+            "ball",
+            "pin_slot",
+            "screw",
+            "universal"
+        ]
+    });
+    let joint_advanced = object_schema(
+        json!({
+            "secondary_angle_offset_deg": {"type": "number"},
+            "tertiary_angle_offset_deg": {"type": "number"},
+            "secondary_linear_offset_mm": {"type": "number"},
+            "screw_pitch_mm_per_revolution": {"type": "number"},
+            "connector_a_twist_deg": {"type": "number"},
+            "connector_b_twist_deg": {"type": "number"},
+            "secondary_angle_limits": joint_limits.clone(),
+            "tertiary_angle_limits": joint_limits.clone(),
+            "secondary_linear_limits": joint_limits.clone(),
+            "connector_a_occurrence_id": {"type": ["integer", "null"], "minimum": 1},
+            "connector_b_occurrence_id": {"type": ["integer", "null"], "minimum": 1}
+        }),
+        &[],
+    );
+    let joint_definition = object_schema(
+        json!({
+            "id": {"type": "integer", "minimum": 1},
+            "name": {"type": "string", "minLength": 1},
+            "kind": joint_kind.clone(),
+            "connector_a": joint_connector.clone(),
+            "connector_b": joint_connector.clone(),
+            "flipped": {"type": "boolean"},
+            "angle_offset_deg": {"type": "number"},
+            "linear_offset_mm": {"type": "number"},
+            "limits": joint_limits.clone(),
+            "angle_limits": joint_limits.clone(),
+            "linear_limits": joint_limits.clone(),
+            "advanced": joint_advanced.clone(),
+            "enabled": {"type": "boolean"}
+        }),
+        &["id", "name", "kind", "connector_a", "connector_b"],
+    );
 
     let mut tools = vec![
         ToolSpec::direct(
@@ -2705,6 +2791,46 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::direct(
+            "assembly_create_joint",
+            "Create assembly joint",
+            "Create a host-neutral joint from two topology-backed connectors (CreateJointRequestDto). Query the result with assembly_document.",
+            "assembly_create_joint",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "name": {"type": "string", "minLength": 1},
+                    "kind": joint_kind.clone(),
+                    "connector_a": joint_connector.clone(),
+                    "connector_b": joint_connector.clone(),
+                    "flipped": {"type": "boolean"},
+                    "angle_offset_deg": {"type": "number"},
+                    "linear_offset_mm": {"type": "number"},
+                    "limits": joint_limits.clone(),
+                    "angle_limits": joint_limits.clone(),
+                    "linear_limits": joint_limits.clone(),
+                    "advanced": joint_advanced.clone(),
+                    "grounded_body_id": {"type": ["integer", "null"], "minimum": 1},
+                    "grounded_occurrence_id": {"type": ["integer", "null"], "minimum": 1}
+                }),
+                &["name", "kind", "connector_a", "connector_b"],
+            ),
+        ),
+        ToolSpec::direct(
+            "assembly_update_joint",
+            "Update assembly joint",
+            "Replace an existing joint definition and re-canonicalize connectors against live topology (UpdateJointRequestDto).",
+            "assembly_update_joint",
+            Payload::Object,
+            object_schema(
+                json!({
+                    "joint": joint_definition.clone(),
+                    "grounded_body_id": {"type": ["integer", "null"], "minimum": 1},
+                    "grounded_occurrence_id": {"type": ["integer", "null"], "minimum": 1}
+                }),
+                &["joint"],
+            ),
+        ),
+        ToolSpec::direct(
             "solid_export_step",
             "Export STEP",
             "Export selected or all active bodies as AP242 STEP bytes encoded in base64. Prefer solid_export_3mf for slicers.",
@@ -3502,7 +3628,7 @@ mod tests {
         assert_eq!(
             all_tools.len(),
             MODELING_TOOL_COUNT + 22,
-            "117 modeling tools plus 8 print helpers and 14 control tools"
+            "119 modeling tools plus 8 print helpers and 14 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3600,7 +3726,7 @@ mod tests {
         // Modeling registry covers 9 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 5);
-        assert_eq!(packs["assembly"], 8);
+        assert_eq!(packs["assembly"], 10);
         assert_eq!(packs["sketch"], 50);
         assert_eq!(packs["solid"], 10);
         assert!(packs["modify"] >= 6);
@@ -5799,5 +5925,152 @@ mod tests {
                 spec.name
             );
         }
+    fn planar_connector_from_body(body: &Value) -> Value {
+        let face = body["faces"]
+            .as_array()
+            .expect("body faces")
+            .iter()
+            .find(|face| face.get("plane").is_some() && !face["plane"].is_null())
+            .expect("planar face");
+        let plane = &face["plane"];
+        json!({
+            "body_id": body["id"],
+            "face_id": face["id"],
+            "face_key": face["key"],
+            "kind": "planar_face",
+            "frame": {
+                "origin": plane["origin"],
+                "primary_axis": plane["normal"],
+                "secondary_axis": plane["u"]
+            }
+        })
+    }
+
+    fn extrude_offset_box(server: &mut CadServer, sketch_name: &str, x0: f64, x1: f64) -> Value {
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_rectangle",
+                json!({
+                    "mode": "two_point",
+                    "p1": {"x": x0, "y": -5.0},
+                    "p2": {"x": x1, "y": 5.0},
+                    "ctrl_held": false
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        server
+            .call_tool(
+                "solid_extrude",
+                json!({
+                    "sketch_name": sketch_name,
+                    "profile_indices": [0],
+                    "operation": "new_body",
+                    "extent": {"type": "distance", "distance": 8.0},
+                    "taper_angle_deg": 0.0,
+                    "flip": false,
+                    "target_body_ids": []
+                }),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn assembly_joint_create_update_query_roundtrip() {
+        // Headless: two boxes → create revolute joint → query → update name/limits.
+        // No cad_attach. Uses landed host CreateJointRequestDto / UpdateJointRequestDto.
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        let first = extrude_offset_box(&mut server, "Sketch1", -12.0, -2.0);
+        let second = extrude_offset_box(&mut server, "Sketch2", 2.0, 12.0);
+        let body_b_id = second["scene"]["bodies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|body| body["id"].as_u64().unwrap())
+            .max()
+            .expect("second body id");
+        let scene = server
+            .call_tool("solid_scene", json!({}))
+            .expect("solid scene");
+        let bodies = scene["bodies"].as_array().expect("bodies");
+        assert_eq!(bodies.len(), 2, "expected two extruded bodies: {scene}");
+        let body_a = bodies
+            .iter()
+            .find(|body| body["id"] == first["scene"]["bodies"][0]["id"])
+            .cloned()
+            .expect("body A");
+        let body_b = bodies
+            .iter()
+            .find(|body| body["id"].as_u64() == Some(body_b_id))
+            .cloned()
+            .expect("body B");
+
+        let created = server
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name": "Hinge1",
+                    "kind": "revolute",
+                    "connector_a": planar_connector_from_body(&body_a),
+                    "connector_b": planar_connector_from_body(&body_b),
+                    "grounded_body_id": body_a["id"],
+                    "limits": {"min": -90.0, "max": 90.0}
+                }),
+            )
+            .expect("create joint");
+        assert_eq!(created["name"], "Hinge1");
+        assert_eq!(created["kind"], "revolute");
+        let joint_id = created["id"].as_u64().expect("joint id");
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("query joints");
+        let joints = document["joints"].as_array().expect("joints");
+        assert!(
+            joints
+                .iter()
+                .any(|joint| joint["id"].as_u64() == Some(joint_id)
+                    && joint["name"] == "Hinge1"
+                    && joint["kind"] == "revolute"),
+            "assembly_document missing created joint: {document}"
+        );
+
+        let mut joint = created.clone();
+        if let Some(object) = joint.as_object_mut() {
+            object.remove("_disclosure");
+            object.insert("name".to_string(), json!("Hinge1Renamed"));
+            object.insert("limits".to_string(), json!({"min": -45.0, "max": 45.0}));
+        }
+        let updated = server
+            .call_tool("assembly_update_joint", json!({ "joint": joint }))
+            .expect("update joint");
+        assert_eq!(updated["name"], "Hinge1Renamed");
+        assert_eq!(updated["id"].as_u64(), Some(joint_id));
+
+        let inspect = server
+            .call_tool("assembly_document", json!({}))
+            .expect("re-query joints");
+        let joints = inspect["joints"].as_array().expect("joints after update");
+        let found = joints
+            .iter()
+            .find(|joint| joint["id"].as_u64() == Some(joint_id))
+            .expect("updated joint in document");
+        assert_eq!(found["name"], "Hinge1Renamed");
+        assert!((found["limits"]["min"].as_f64().unwrap() + 45.0).abs() < 1e-9);
+        assert!((found["limits"]["max"].as_f64().unwrap() - 45.0).abs() < 1e-9);
+        let solution = server
+            .call_tool("assembly_solution", json!({}))
+            .expect("assembly solution after joint");
+        assert!(
+            solution.as_object().map(|o| !o.is_empty()).unwrap_or(false),
+            "expected a non-empty assembly solution: {solution}"
+        );
     }
 }

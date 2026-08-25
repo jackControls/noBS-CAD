@@ -517,7 +517,9 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "assembly_create_occurrence"
         | "assembly_update_occurrence"
         | "assembly_set_occurrence_pose"
-        | "assembly_set_occurrence_grounded" => FocusPack::Assembly,
+        | "assembly_set_occurrence_grounded"
+        | "assembly_create_joint"
+        | "assembly_update_joint" => FocusPack::Assembly,
         "sketch_begin"
         | "sketch_finish"
         | "sketch_edit"
@@ -929,11 +931,13 @@ mod tests {
             "assembly_update_occurrence",
             "assembly_set_occurrence_pose",
             "assembly_set_occurrence_grounded",
+            "assembly_create_joint",
+            "assembly_update_joint",
             "cad_document",
             "solid_scene",
             "solid_recompute",
         ];
-        assert_eq!(modeling.len(), 117);
+        assert_eq!(modeling.len(), 119);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(
