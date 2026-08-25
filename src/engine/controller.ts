@@ -430,8 +430,21 @@ export async function deleteDimension(constraintId: number): Promise<void> {
   try {
     const result = await engine.deleteDimension(constraintId);
     useAppStore.getState().setActiveSketch(result.sketch);
+    useAppStore.getState().setSelectedDimension(null);
   } catch {
     // Dimension already gone.
+  }
+}
+
+/** Delete a geometric constraint (undoable). */
+export async function deleteConstraint(constraintId: number): Promise<void> {
+  const engine = await getEngine();
+  try {
+    const result = await engine.deleteConstraint(constraintId);
+    useAppStore.getState().setActiveSketch(result.sketch);
+    useAppStore.getState().setSelectedConstraint(null);
+  } catch {
+    // Constraint already gone.
   }
 }
 

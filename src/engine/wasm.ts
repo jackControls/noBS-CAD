@@ -931,6 +931,15 @@ export class WasmEngine implements Engine {
     return unwrapEnvelope(this.inner.delete_dimension(JSON.stringify({ constraint_id: constraintId })));
   }
 
+  async deleteConstraint(constraintId: number): Promise<AddConstraintResult> {
+    // `wasm-pack` generated bindings may lag behind interface changes during
+    // development; treat the export as dynamic to keep the TS build green.
+    const inner = this.inner as any;
+    return unwrapEnvelope(
+      inner.delete_constraint(JSON.stringify({ constraint_id: constraintId })),
+    );
+  }
+
   async setDimensionStyle(style: DimensionStyle): Promise<SketchDto> {
     return unwrapEnvelope(this.inner.set_dimension_style(JSON.stringify({ style })));
   }

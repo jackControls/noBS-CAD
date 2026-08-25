@@ -8,6 +8,7 @@ import type {
 } from '../../engine/types';
 import type { MoveCopyCommandPreview } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
+import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
 
 export interface NativeCameraState {
   position: [number, number, number];
@@ -81,6 +82,7 @@ interface NativePalette {
   definedSketch: [number, number, number];
   hover: [number, number, number];
   selection: [number, number, number];
+  constraintRelated: [number, number, number];
   finishedSketch: [number, number, number];
   finishedSketchPoint: [number, number, number];
   finishedSketchPointOutline: [number, number, number];
@@ -123,6 +125,8 @@ interface NativePresentation {
   selectedEdgeIds: number[];
   hoveredEdgeId: number | null;
   selectedSketchEntityIds: number[];
+  /** Entities owned by the selected geometric constraint (not true selection). */
+  constraintRelatedSketchEntityIds: number[];
   hoveredSketchEntityId: number | null;
   hiddenBodyIds: number[];
   hiddenDatumPlaneIds: number[];
@@ -175,6 +179,7 @@ export interface NativeViewportAnnotation {
   color: [number, number, number, number];
   text: string;
   kind: 'dimension' | 'constraint';
+  selected?: boolean;
 }
 
 export type NativeViewportSnapKind =
@@ -476,6 +481,7 @@ function collectPalette(): NativePalette {
     definedSketch: cssRgb('--cad-defined', '#e8e9ec'),
     hover: cssRgb('--cad-hover', '#ffd166'),
     selection: cssRgb('--cad-sketch-selected', '#c4b9ff'),
+    constraintRelated: cssRgb('--cad-constraint-related', '#3ecf9a'),
     finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
     finishedSketchPoint: cssRgb('--cad-finished-point', '#ff9f43'),
     finishedSketchPointOutline: cssRgb(
@@ -753,6 +759,19 @@ export function collectNativeViewportPresentation(): NativePresentation {
   ) {
     selectedSketchEntityIds.push(state.selectedEntity);
   }
+  const constraintRelatedSketchEntityIds: number[] = [];
+  if (state.selectedConstraint !== null && state.activeSketch) {
+    const constraint = state.activeSketch.constraints.find(
+      (candidate) => candidate.id === state.selectedConstraint,
+    );
+    if (constraint) {
+      for (const id of constraintReferencedEntityIds(constraint)) {
+        if (!constraintRelatedSketchEntityIds.includes(id)) {
+          constraintRelatedSketchEntityIds.push(id);
+        }
+      }
+    }
+  }
   const browser = state.document?.browser ?? [];
   const solved = state.jointDialogOpen && state.jointPreviewSolution
     ? state.jointPreviewSolution
@@ -786,6 +805,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
     selectedEdgeIds: state.selectedEdges,
     hoveredEdgeId: state.hoveredEdge,
     selectedSketchEntityIds,
+    constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,
     hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
     hiddenDatumPlaneIds: hiddenReferences(
@@ -1613,6 +1633,7 @@ function previewKey(preview: NativeViewportTransient): string {
     annotation.color.forEach(addNumber);
     addString(annotation.text);
     addString(annotation.kind);
+    addNumber(annotation.selected ? 1 : 0);
   }
   preview.marker?.position.forEach(addNumber);
   if (preview.marker) addString(preview.marker.kind);

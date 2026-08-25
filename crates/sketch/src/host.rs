@@ -21,13 +21,13 @@ use crate::constraint::Constraint;
 use crate::dto::{
     err_json, ok_json, Arc3PointRequest, ArcCenterRequest, BeginSketchRequest, BreakRequest,
     ChamferRequest, CircleRequest, CircularPatternRequest, ConstraintBatchRequest,
-    DeleteDimensionRequest, DeleteEntitiesRequest, DeleteEntityRequest, DimensionRequest,
-    EditDimensionRequest, EvalExpressionRequest, ExtendRequest, FilletRequest, LockedCircleRequest,
-    LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest, MirrorRequest,
-    MoveCopyRequest, MoveDimensionRequest, MovePointRequest, OffsetRequest, PointRequest,
-    PolygonRequest, RectangleRequest, RectangularPatternRequest, ScaleRequest, SegmentRequest,
-    SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SlotRequest, SplineRequest,
-    ToggleFixBatchRequest, TrimRequest,
+    DeleteConstraintRequest, DeleteDimensionRequest, DeleteEntitiesRequest, DeleteEntityRequest,
+    DimensionRequest, EditDimensionRequest, EvalExpressionRequest, ExtendRequest, FilletRequest,
+    LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest,
+    MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest, OffsetRequest,
+    PointRequest, PolygonRequest, RectangleRequest, RectangularPatternRequest, ScaleRequest,
+    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SlotRequest,
+    SplineRequest, ToggleFixBatchRequest, TrimRequest,
 };
 use crate::manager::SketchManager;
 use crate::plane::PlaneRef;
@@ -293,6 +293,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         }
         "delete_dimension" => with_payload(payload, |r: DeleteDimensionRequest| {
             manager.delete_dimension(r.constraint_id)
+        }),
+        "delete_constraint" => with_payload(payload, |r: DeleteConstraintRequest| {
+            manager.delete_constraint(r.constraint_id)
         }),
         "set_dimension_style" => with_payload(payload, |r: SetDimensionStyleRequest| {
             manager.set_dimension_style(r)

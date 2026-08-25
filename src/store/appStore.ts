@@ -606,6 +606,8 @@ interface AppState {
   selectedEntities: number[];
   /** Selected dimension (constraint id) for edit/delete/drag (D9). */
   selectedDimension: number | null;
+  /** Selected geometric constraint for highlight/delete. */
+  selectedConstraint: number | null;
   hoveredEntity: number | null;
   /** Inline dimension editor state (double-click a dimension). */
   dimEditor: { dimId: number; initial: string; x: number; y: number } | null;
@@ -824,6 +826,7 @@ interface AppState {
   setSelectedEntity: (id: number | null) => void;
   setSelectedEntities: (ids: number[]) => void;
   setSelectedDimension: (id: number | null) => void;
+  setSelectedConstraint: (id: number | null) => void;
   setDimEditor: (editor: { dimId: number; initial: string; x: number; y: number } | null) => void;
   setHoveredEntity: (id: number | null) => void;
   setShowDof: (show: boolean) => void;
@@ -947,6 +950,7 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedEntity: null,
     selectedEntities: [],
     selectedDimension: null,
+    selectedConstraint: null,
     dimEditor: null,
     hoveredEntity: null,
     dynInput: {
@@ -1062,6 +1066,7 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedEntity: null,
   selectedEntities: [],
   selectedDimension: null,
+  selectedConstraint: null,
   dimEditor: null,
   hoveredEntity: null,
   showDof: false,
@@ -2002,6 +2007,11 @@ export const useAppStore = create<AppState>()((set) => ({
         sketch?.dimensions.some((d) => d.constraint_id === s.selectedDimension)
           ? s.selectedDimension
           : null,
+      selectedConstraint:
+        s.selectedConstraint !== null &&
+        sketch?.constraints.some((c) => c.id === s.selectedConstraint)
+          ? s.selectedConstraint
+          : null,
       hoveredEntity:
         s.hoveredEntity !== null && sketch?.entities.some((e) => e.id === s.hoveredEntity)
           ? s.hoveredEntity
@@ -2031,6 +2041,9 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setSelectedDimension: (id) =>
     set((s) => (s.selectedDimension === id ? s : { selectedDimension: id })),
+
+  setSelectedConstraint: (id) =>
+    set((s) => (s.selectedConstraint === id ? s : { selectedConstraint: id })),
 
   setDimEditor: (editor) => set({ dimEditor: editor }),
 

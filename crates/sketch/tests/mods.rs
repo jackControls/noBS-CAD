@@ -666,6 +666,37 @@ fn trim_ignores_non_intersecting_supporting_segments() {
 }
 
 #[test]
+fn delete_geometric_constraint() {
+    let mut s = session();
+    let line = s.add_line(v(0.0, 0.0), v(40.0, 0.0), true).unwrap();
+    let added = s
+        .add_constraint(Constraint::Horizontal {
+            entity: line.entity_id,
+        })
+        .unwrap();
+    let cid = added.constraint_id;
+    assert!(s.dto().constraints.iter().any(|c| c.id == cid));
+    s.delete_constraint(cid).unwrap();
+    assert!(!s.dto().constraints.iter().any(|c| c.id == cid));
+}
+
+#[test]
+fn delete_constraint_rejects_driving_dimension() {
+    let mut s = session();
+    let l = s.add_line(v(0.0, 0.0), v(40.0, 0.0), true).unwrap();
+    let dim = s
+        .add_dimension(nbcad_sketch::DimensionRequest {
+            entities: vec![l.entity_id],
+            text_pos: v(20.0, 10.0),
+            value_text: Some("40".to_string()),
+        })
+        .unwrap();
+    let cid = dim.sketch.dimensions[0].constraint_id;
+    let err = s.delete_constraint(cid).unwrap_err().to_string();
+    assert!(err.contains("delete_dimension"));
+}
+
+#[test]
 fn extend_uses_the_clicked_end_real_segments_and_adds_coincidence() {
     let mut s = session();
     let source = s.add_line(v(0.0, 0.0), v(10.0, 0.0), true).unwrap();

@@ -407,6 +407,7 @@ engine_command!(engine_add_dimension, "add_dimension");
 engine_command!(engine_edit_dimension, "edit_dimension");
 engine_command!(engine_move_dimension, "move_dimension");
 engine_command!(engine_delete_dimension, "delete_dimension");
+engine_command!(engine_delete_constraint, "delete_constraint");
 engine_command!(engine_set_dimension_style, "set_dimension_style");
 engine_command!(engine_fillet_preview, "fillet_preview");
 engine_command!(engine_fillet_lines, "fillet_lines");
@@ -829,6 +830,7 @@ pub fn run() {
             engine_edit_dimension,
             engine_move_dimension,
             engine_delete_dimension,
+            engine_delete_constraint,
             engine_set_dimension_style,
             engine_fillet_preview,
             engine_fillet_lines,

@@ -76,6 +76,8 @@ pub struct ViewportPalette {
     pub defined_sketch: [f32; 3],
     pub hover: [f32; 3],
     pub selection: [f32; 3],
+    /// Sketch entities referenced by the UI-selected geometric constraint.
+    pub constraint_related: [f32; 3],
     pub finished_sketch: [f32; 3],
     pub finished_sketch_point: [f32; 3],
     pub finished_sketch_point_outline: [f32; 3],
@@ -107,6 +109,7 @@ impl Default for ViewportPalette {
             defined_sketch: [232.0 / 255.0, 233.0 / 255.0, 236.0 / 255.0],
             hover: [1.0, 209.0 / 255.0, 102.0 / 255.0],
             selection: [196.0 / 255.0, 185.0 / 255.0, 1.0],
+            constraint_related: [62.0 / 255.0, 207.0 / 255.0, 154.0 / 255.0],
             finished_sketch: [74.0 / 255.0, 199.0 / 255.0, 1.0],
             finished_sketch_point: [1.0, 159.0 / 255.0, 67.0 / 255.0],
             finished_sketch_point_outline: [21.0 / 255.0, 25.0 / 255.0, 31.0 / 255.0],
@@ -152,6 +155,10 @@ pub struct ViewportPresentation {
     pub hovered_edge_id: Option<u64>,
     #[serde(default)]
     pub selected_sketch_entity_ids: Vec<u64>,
+    /// Entities referenced by the UI-selected geometric constraint. Distinct
+    /// from selection so Bevy can paint a related-highlight color.
+    #[serde(default)]
+    pub constraint_related_sketch_entity_ids: Vec<u64>,
     pub hovered_sketch_entity_id: Option<u64>,
     #[serde(default)]
     pub hidden_body_ids: Vec<u64>,
@@ -355,6 +362,8 @@ pub struct ViewportAnnotation {
     pub text: String,
     #[serde(default)]
     pub kind: ViewportAnnotationKind,
+    #[serde(default)]
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]

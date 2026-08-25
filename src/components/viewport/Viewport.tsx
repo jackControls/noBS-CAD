@@ -70,6 +70,11 @@ import {
   type ViewportCameraApi,
 } from './cameraApi';
 import { computeDimGeometry, formatDimMeasurement } from './dimsRenderer';
+import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
+import {
+  SINGLE_POINT_RELATION_GLYPH,
+  singlePointRelationAnchor,
+} from '../../sketch/constraintGlyphAnchor';
 import {
   adaptiveSketchGridStep,
   DEFAULT_SKETCH_GRID_STEP_MM,
@@ -356,6 +361,10 @@ export function Viewport() {
     const COLOR_SELECTED = interactionThemeColor(
       '--cad-sketch-selected',
       '#c4b9ff',
+    );
+    const COLOR_CONSTRAINT_RELATED = interactionThemeColor(
+      '--cad-constraint-related',
+      '#3ecf9a',
     );
     const COLOR_PREVIEW = interactionThemeColor('--cad-preview', '#8fc4ff');
     const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#4ac7ff');
@@ -949,16 +958,21 @@ export function Viewport() {
     const scaledSprites: Array<{ sprite: CAD.Sprite; px: number }> = [];
 
     const glyphTextureCache = new Map<string, CAD.CanvasTexture>();
-    const glyphTexture = (text: string): CAD.CanvasTexture => {
-      const cached = glyphTextureCache.get(text);
+    const glyphTexture = (text: string, selected = false): CAD.CanvasTexture => {
+      const cacheKey = `${text}|${selected ? 1 : 0}`;
+      const cached = glyphTextureCache.get(cacheKey);
       if (cached) return cached;
       const canvas = window.document.createElement('canvas');
       canvas.width = 64;
       canvas.height = 64;
       const ctx = canvas.getContext('2d')!;
+      if (selected) {
+        ctx.fillStyle = CSS_ACCENT;
+        ctx.fillRect(4, 8, 56, 48);
+      }
       if (text === 'fix') {
         // Padlock glyph for Fix constraints.
-        ctx.strokeStyle = CSS_INK;
+        ctx.strokeStyle = selected ? CSS_GRIP_FILL : CSS_INK;
         ctx.lineWidth = 5;
         ctx.strokeRect(16, 30, 32, 24);
         ctx.beginPath();
@@ -968,11 +982,11 @@ export function Viewport() {
         ctx.font = '600 40px -apple-system, Segoe UI, Roboto, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = CSS_INK;
+        ctx.fillStyle = selected ? CSS_GRIP_FILL : CSS_INK;
         ctx.fillText(text, 32, 34);
       }
       const texture = new CAD.CanvasTexture(canvas);
-      glyphTextureCache.set(text, texture);
+      glyphTextureCache.set(cacheKey, texture);
       return texture;
     };
 
@@ -995,6 +1009,18 @@ export function Viewport() {
     // Midpoint snap marker: green outlined up-triangle.
     const midpointTexture = markerTexture((ctx) => {
       ctx.strokeStyle = CSS_FINISH;
+      ctx.lineWidth = 5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(32, 14);
+      ctx.lineTo(50, 48);
+      ctx.lineTo(14, 48);
+      ctx.closePath();
+      ctx.stroke();
+    });
+    // Selected midpoint snap marker: same geometry, accent stroke.
+    const midpointTextureSelected = markerTexture((ctx) => {
+      ctx.strokeStyle = CSS_DIMENSION_SELECTED;
       ctx.lineWidth = 5;
       ctx.lineJoin = 'round';
       ctx.beginPath();
@@ -1269,6 +1295,7 @@ export function Viewport() {
             object.userData.nativeAnnotationKind === 'constraint'
               ? 'constraint'
               : 'dimension',
+          selected: object.userData.nativeAnnotationSelected === true,
         });
       };
       const collectRoot = (
@@ -3123,26 +3150,80 @@ export function Viewport() {
       return lines;
     };
 
+    const constraintSprites: Array<{
+      sprite: CAD.Sprite;
+      constraintId: number;
+      px: number;
+      label: string;
+    }> = [];
+
+    const entityAnchor = (
+      entity: EntityDto | undefined,
+      lineMap: Map<number, { start: Vec2; end: Vec2 }>,
+    ): Vec2 | null => {
+      if (!entity) return null;
+      switch (entity.kind) {
+        case 'point':
+          return entity.position;
+        case 'line': {
+          const line = lineMap.get(entity.id);
+          if (line) {
+            return {
+              x: (line.start.x + line.end.x) / 2,
+              y: (line.start.y + line.end.y) / 2,
+            };
+          }
+          return {
+            x: (entity.start.x + entity.end.x) / 2,
+            y: (entity.start.y + entity.end.y) / 2,
+          };
+        }
+        case 'circle':
+        case 'arc':
+          return entity.center;
+        case 'spline':
+          return entity.points[0] ?? null;
+        default:
+          return null;
+      }
+    };
+
     const rebuildEntities = (sketch: SketchDto) => {
       clearGroup(entityGroup);
       clearGroup(glyphGroup);
+      constraintSprites.length = 0;
       // Drop per-entity sprite registrations (origin/snap markers persist).
       scaledSprites.length = 2;
-      const { selectedEntity, selectedEntities, hoveredEntity, palette } = store.getState();
+      const {
+        selectedEntity,
+        selectedEntities,
+        hoveredEntity,
+        selectedConstraint,
+        palette,
+      } = store.getState();
       const selectedSet = new Set(selectedEntities);
       if (selectedEntity !== null) selectedSet.add(selectedEntity);
+      const selectedConstraintDef = selectedConstraint != null
+        ? sketch.constraints.find((c) => c.id === selectedConstraint)
+        : undefined;
+      const constraintPartnerIds = new Set(
+        selectedConstraintDef ? constraintReferencedEntityIds(selectedConstraintDef) : [],
+      );
       const showGrips = palette.points; // Palette "Points" visibility toggle
 
+      // Selection (lavender) vs constraint-related (mint): do not overload.
       const colorOf = (id: number, fullyDefined: boolean) =>
         selectedSet.has(id)
           ? COLOR_SELECTED
-          : id === hoveredEntity
-            ? COLOR_HOVER
-            : fullyDefined
-              ? COLOR_DEFINED
-              : COLOR_SKETCH;
+          : constraintPartnerIds.has(id)
+            ? COLOR_CONSTRAINT_RELATED
+            : id === hoveredEntity
+              ? COLOR_HOVER
+              : fullyDefined
+                ? COLOR_DEFINED
+                : COLOR_SKETCH;
       const emphasized = (id: number) =>
-        selectedSet.has(id) || id === hoveredEntity;
+        selectedSet.has(id) || id === hoveredEntity || constraintPartnerIds.has(id);
       const lineWidthOf = (id: number) => (emphasized(id) ? 2 : 1.25);
 
       const lines = new Map<number, { start: Vec2; end: Vec2 }>();
@@ -3246,7 +3327,52 @@ export function Viewport() {
       // triangle at Midpoint) — hidden when the palette "Constraints"
       // toggle is off.
       if (!palette.constraints) return;
+
+      // Keep glyphs a few screen pixels off geometry, not a fixed 7 mm
+      // (which jumps tens of pixels as the camera zooms).
+      const glyphNudge = Math.max(worldPerPixel() * 12, 0.35);
+
+      const registerConstraintSprite = (
+        sprite: CAD.Sprite,
+        constraintId: number,
+        px: number,
+        label: string,
+        selected: boolean,
+        colorHex = new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_INK).getHex(),
+      ) => {
+        sprite.userData.nativeAnnotationText = label;
+        sprite.userData.nativeAnnotationKind = 'constraint';
+        sprite.userData.nativeAnnotationColor = colorHex;
+        sprite.userData.nativeAnnotationSelected = selected;
+        sprite.userData.constraintId = constraintId;
+        glyphGroup.add(sprite);
+        constraintSprites.push({ sprite, constraintId, px, label });
+      };
+
+      const SKIP_CONSTRAINT_TYPES = new Set([
+        'distance',
+        'radius',
+        'diameter',
+        'angle',
+        'arc_endpoint_coincident',
+        'equal_distance',
+        'span_midpoint',
+      ]);
+      const TWO_ENTITY_GLYPH: Record<string, string> = {
+        // Prefer ASCII / basic Latin so Bevy system fonts never tofu.
+        // Single-point relations (coincident/tangent/perpendicular/concentric)
+        // use SINGLE_POINT_RELATION_GLYPH via a dedicated placement path.
+        parallel: '//',
+        equal: '=',
+        collinear: 'Col',
+        symmetry: 'Sym',
+      };
+      const byId = new Map(sketch.entities.map((entity) => [entity.id, entity]));
+
       for (const constraint of sketch.constraints) {
+        if (SKIP_CONSTRAINT_TYPES.has(constraint.type)) continue;
+        const selected = constraint.id === selectedConstraint;
+
         if (
           constraint.type === 'horizontal_points'
           || constraint.type === 'vertical_points'
@@ -3264,22 +3390,17 @@ export function Viewport() {
             y: (a.position.y + b.position.y) / 2,
           };
           const label = horizontal ? 'H' : 'V';
-          const sprite = makeSprite(glyphTexture(label), 15, 7);
+          const glyphPx = selected ? 20 : 15;
+          const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
           sprite.position.set(
-            mid.x + (horizontal ? 0 : 7),
-            mid.y + (horizontal ? -7 : 0),
+            mid.x + (horizontal ? 0 : glyphNudge),
+            mid.y + (horizontal ? -glyphNudge : 0),
             0.2,
           );
-          sprite.userData.nativeAnnotationText = label;
-          sprite.userData.nativeAnnotationKind = 'constraint';
-          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
-          glyphGroup.add(sprite);
+          registerConstraintSprite(sprite, constraint.id, glyphPx, label, selected);
           continue;
         }
         if (constraint.type === 'midpoint') {
-          // Green up-triangle at the host line's midpoint,
-          // nudged off the line along its normal so endpoint grips and H/V
-          // glyphs don't cover it.
           const line = constraint.b != null ? lines.get(constraint.b) : undefined;
           if (!line) continue;
           const mid = {
@@ -3289,72 +3410,138 @@ export function Viewport() {
           const dx = line.end.x - line.start.x;
           const dy = line.end.y - line.start.y;
           const len = Math.hypot(dx, dy) || 1;
-          const sprite = makeSprite(midpointTexture, 13, 7);
-          sprite.position.set(mid.x + (-dy / len) * 6, mid.y + (dx / len) * 6, 0.2);
-          sprite.userData.nativeAnnotationText = '△';
-          sprite.userData.nativeAnnotationKind = 'constraint';
-          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_FINISH).getHex();
-          glyphGroup.add(sprite);
+          const glyphPx = selected ? 18 : 13;
+          const sprite = makeSprite(
+            selected ? midpointTextureSelected : midpointTexture,
+            glyphPx,
+            7,
+          );
+          sprite.position.set(mid.x + (-dy / len) * glyphNudge, mid.y + (dx / len) * glyphNudge, 0.2);
+          registerConstraintSprite(
+            sprite,
+            constraint.id,
+            glyphPx,
+            'Mid',
+            selected,
+            new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
+          );
           continue;
         }
         if (constraint.type === 'reference_midpoint') {
-          // A support-edge midpoint is a persistent external constraint. Its
-          // point stays exactly on the stable OCCT edge midpoint when
-          // dimensions are edited or the supporting face is recomputed.
           const point = sketch.entities.find(
             (entity) => entity.kind === 'point' && entity.id === constraint.point,
           );
           const position =
             point?.kind === 'point' ? point.position : constraint.position;
           if (!position) continue;
-          const sprite = makeSprite(midpointTexture, 13, 7);
-          sprite.position.set(position.x + 5, position.y + 5, 0.2);
-          sprite.userData.nativeAnnotationText = '△';
-          sprite.userData.nativeAnnotationKind = 'constraint';
-          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_FINISH).getHex();
-          glyphGroup.add(sprite);
-          continue;
-        }
-        if (constraint.entity == null) continue;
-        if (constraint.type === 'horizontal' || constraint.type === 'vertical') {
-          const line = lines.get(constraint.entity);
-          if (!line) continue;
-          const mid = {
-            x: (line.start.x + line.end.x) / 2,
-            y: (line.start.y + line.end.y) / 2,
-          };
-          // H below the line, V to its right.
-          const [x, y] =
-            constraint.type === 'horizontal' ? [mid.x, mid.y - 7] : [mid.x + 7, mid.y];
+          const glyphPx = selected ? 18 : 13;
           const sprite = makeSprite(
-            glyphTexture(constraint.type === 'horizontal' ? 'H' : 'V'),
-            15,
+            selected ? midpointTextureSelected : midpointTexture,
+            glyphPx,
             7,
           );
-          sprite.position.set(x, y, 0.2);
-          sprite.userData.nativeAnnotationText =
-            constraint.type === 'horizontal' ? 'H' : 'V';
-          sprite.userData.nativeAnnotationKind = 'constraint';
-          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
-          glyphGroup.add(sprite);
-        } else if (constraint.type === 'fix') {
-          const target = sketch.entities.find((e) => e.id === constraint.entity);
-          if (!target) continue;
-          const at =
-            target.kind === 'point'
-              ? target.position
-              : target.kind === 'circle' || target.kind === 'arc'
-                ? target.center
-                : target.kind === 'spline'
-                  ? (target.points[0] ?? { x: 0, y: 0 })
-                  : { x: (target.start.x + target.end.x) / 2, y: (target.start.y + target.end.y) / 2 };
-          const sprite = makeSprite(glyphTexture('fix'), 16, 7);
-          sprite.position.set(at.x + 6, at.y + 6, 0.2);
-          sprite.userData.nativeAnnotationText = '▣';
-          sprite.userData.nativeAnnotationKind = 'constraint';
-          sprite.userData.nativeAnnotationColor = new CAD.Color(CSS_INK).getHex();
-          glyphGroup.add(sprite);
+          sprite.position.set(position.x + glyphNudge, position.y + glyphNudge, 0.2);
+          registerConstraintSprite(
+            sprite,
+            constraint.id,
+            glyphPx,
+            'Mid',
+            selected,
+            new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
+          );
+          continue;
         }
+        if (constraint.entity != null) {
+          if (constraint.type === 'horizontal' || constraint.type === 'vertical') {
+            const line = lines.get(constraint.entity);
+            if (!line) continue;
+            const mid = {
+              x: (line.start.x + line.end.x) / 2,
+              y: (line.start.y + line.end.y) / 2,
+            };
+            const label = constraint.type === 'horizontal' ? 'H' : 'V';
+            const [x, y] =
+              constraint.type === 'horizontal'
+                ? [mid.x, mid.y - glyphNudge]
+                : [mid.x + glyphNudge, mid.y];
+            const glyphPx = selected ? 20 : 15;
+            const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
+            sprite.position.set(x, y, 0.2);
+            registerConstraintSprite(sprite, constraint.id, glyphPx, label, selected);
+            continue;
+          }
+          if (constraint.type === 'fix') {
+            const target = sketch.entities.find((e) => e.id === constraint.entity);
+            if (!target) continue;
+            const at =
+              target.kind === 'point'
+                ? target.position
+                : target.kind === 'circle' || target.kind === 'arc'
+                  ? target.center
+                  : target.kind === 'spline'
+                    ? (target.points[0] ?? { x: 0, y: 0 })
+                    : {
+                        x: (target.start.x + target.end.x) / 2,
+                        y: (target.start.y + target.end.y) / 2,
+                      };
+            const glyphPx = selected ? 22 : 16;
+            const sprite = makeSprite(glyphTexture('fix', selected), glyphPx, 7);
+            sprite.position.set(at.x + glyphNudge, at.y + glyphNudge, 0.2);
+            registerConstraintSprite(sprite, constraint.id, glyphPx, 'Fix', selected);
+            continue;
+          }
+        }
+
+        // Relations that live at one sketch point: contact / shared endpoint /
+        // intersection / shared center. Fall back to averaged entity anchors
+        // only when the relation point cannot be resolved.
+        const singlePointGlyph = SINGLE_POINT_RELATION_GLYPH[constraint.type];
+        if (singlePointGlyph) {
+          const relationPoint = singlePointRelationAnchor(constraint, byId);
+          const anchors = constraintReferencedEntityIds(constraint)
+            .map((id) => entityAnchor(byId.get(id), lines))
+            .filter((point): point is Vec2 => point != null);
+          const position =
+            relationPoint
+            ?? (anchors.length === 0
+              ? null
+              : anchors.length === 1
+                ? anchors[0]
+                : {
+                    x: anchors.reduce((sum, point) => sum + point.x, 0) / anchors.length,
+                    y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
+                  });
+          if (!position) continue;
+          const glyphPx = selected ? 20 : 15;
+          const sprite = makeSprite(glyphTexture(singlePointGlyph, selected), glyphPx, 7);
+          sprite.position.set(position.x, position.y, 0.2);
+          registerConstraintSprite(
+            sprite,
+            constraint.id,
+            glyphPx,
+            singlePointGlyph,
+            selected,
+          );
+          continue;
+        }
+
+        const glyph = TWO_ENTITY_GLYPH[constraint.type];
+        if (!glyph) continue;
+        const anchors = constraintReferencedEntityIds(constraint)
+          .map((id) => entityAnchor(byId.get(id), lines))
+          .filter((point): point is Vec2 => point != null);
+        if (anchors.length === 0) continue;
+        const position =
+          anchors.length === 1
+            ? anchors[0]
+            : {
+                x: anchors.reduce((sum, point) => sum + point.x, 0) / anchors.length,
+                y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
+              };
+        const glyphPx = selected ? 20 : 15;
+        const sprite = makeSprite(glyphTexture(glyph, selected), glyphPx, 7);
+        sprite.position.set(position.x, position.y, 0.2);
+        registerConstraintSprite(sprite, constraint.id, glyphPx, glyph, selected);
       }
     };
 
@@ -3431,6 +3618,7 @@ export function Viewport() {
       sprite.userData.nativeAnnotationColor = opts.selected
         ? COLOR_DIMENSION_SELECTED
         : COLOR_DIMENSION;
+      sprite.userData.nativeAnnotationSelected = opts.selected;
       sprite.userData.dimensionId = opts.dimId;
       dimSprites.push({
         sprite,
@@ -3628,6 +3816,41 @@ export function Viewport() {
         ? dimensionId
         : null;
     };
+
+    /** Pick a geometric constraint glyph (screen-space hit test).
+     * Only in sketch Select (`activeTool === null`): armed create/edit tools
+     * must receive their clicks even when the pointer is over a badge.
+     * Native labels are centered on the sprite; use a generous CSS-pixel
+     * box so the visible badge is easy to click. */
+    const pickConstraintAtPointer = (event: PointerEvent): number | null => {
+      if (store.getState().activeTool !== null) return null;
+      const entries = constraintSprites.filter(
+        ({ sprite, constraintId }) => constraintId >= 0 && sprite.parent !== null,
+      );
+      if (entries.length === 0) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const world = new CAD.Vector3();
+      scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      let best: { id: number; dist: number } | null = null;
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const { sprite, constraintId, label } = entries[index];
+        const ndc = sprite.getWorldPosition(world).project(camera);
+        if (ndc.z < -1 || ndc.z > 1) continue;
+        const centerX = rect.left + ((ndc.x + 1) / 2) * rect.width;
+        const centerY = rect.top + ((1 - ndc.y) / 2) * rect.height;
+        const dx = event.clientX - centerX;
+        const dy = event.clientY - centerY;
+        const dist = Math.hypot(dx, dy);
+        const halfWidth = Math.max(16, (label?.length ?? 1) * 6) + 6;
+        const halfHeight = 16;
+        if (Math.abs(dx) <= halfWidth && Math.abs(dy) <= halfHeight) {
+          if (!best || dist < best.dist) best = { id: constraintId, dist };
+        }
+      }
+      return best?.id ?? null;
+    };
+
     const setupSketchScene = (sketch: SketchDto) => {
       const { basis } = sketch;
       const u = new CAD.Vector3(...basis.u);
@@ -3657,6 +3880,7 @@ export function Viewport() {
       clearGroup(dimPreviewGroup);
       store.getState().hideDynInput();
       store.getState().setSelectedDimension(null);
+      store.getState().setSelectedConstraint(null);
       store.getState().setDimEditor(null);
     };
 
@@ -4372,8 +4596,13 @@ export function Viewport() {
       ctrlHeld: boolean;
     } | null = null;
     let dragPumpRunning = false;
-    let downInfo: { x: number; y: number; candidate: number | null; dimCandidate: number | null } | null =
-      null;
+    let downInfo: {
+      x: number;
+      y: number;
+      candidate: number | null;
+      dimCandidate: number | null;
+      constraintCandidate: number | null;
+    } | null = null;
     let lastDimensionClick: {
       dimId: number;
       time: number;
@@ -9114,7 +9343,7 @@ export function Viewport() {
             if (entry) {
               dimDragging = { dimId: downInfo.dimCandidate, sprite: entry.sprite };
             }
-          } else if (isPointEntity(downInfo.candidate)) {
+          } else if (downInfo.constraintCandidate == null && isPointEntity(downInfo.candidate)) {
             beginPointDrag(downInfo.candidate!, p, e.ctrlKey);
           }
         }
@@ -9204,9 +9433,17 @@ export function Viewport() {
         return;
       }
 
-      // Hover pre-highlight (select mode only).
+      // Hover pre-highlight (select mode only). Constraint glyphs win over
+      // the geometry underneath them.
+      const constraintHover = pickConstraintAtPointer(e);
+      if (constraintHover !== null) {
+        if (state.hoveredEntity !== null) state.setHoveredEntity(null);
+        surface.domElement.style.cursor = 'pointer';
+        return;
+      }
       const candidate = pickEntity(p);
       if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
+      surface.domElement.style.cursor = candidate !== null ? 'pointer' : '';
     };
 
     const onPointerLeave = () => {
@@ -9586,6 +9823,7 @@ export function Viewport() {
       if (state.mode !== 'sketch') return;
       lastPointerClient = { x: e.clientX, y: e.clientY };
       const annotationScreenHit = pickDimensionAtPointer(e);
+      const constraintScreenHit = pickConstraintAtPointer(e);
       const p = pointerToSketch(e);
 
       // Dimension annotations remain interactive while a sketch tool is
@@ -9598,20 +9836,25 @@ export function Viewport() {
         && state.activeTool !== 'dimension'
       ) {
         state.setSelectedDimension(annotationHit);
+        state.setSelectedConstraint(null);
         state.setSelectedEntity(null);
         state.setSelectedEntities([]);
         return;
       }
-      // A dimension label is screen-space UI. Its click remains valid even
-      // when an oblique/re-entered sketch plane cannot provide a ray-plane
-      // coordinate at this exact pixel.
+      // Constraint glyphs are Select-only (see pickConstraintAtPointer). Do
+      // not intercept create/edit tool clicks the way dimensions do.
+
+      // A dimension/constraint label is screen-space UI. Its click remains
+      // valid even when an oblique/re-entered sketch plane cannot provide a
+      // ray-plane coordinate at this exact pixel.
       if (!p) {
-        if (annotationHit !== null) {
+        if (annotationHit !== null || constraintScreenHit !== null) {
           downInfo = {
             x: e.clientX,
             y: e.clientY,
             candidate: null,
             dimCandidate: annotationHit,
+            constraintCandidate: constraintScreenHit,
           };
         }
         return;
@@ -9706,8 +9949,9 @@ export function Viewport() {
       downInfo = {
         x: e.clientX,
         y: e.clientY,
-        candidate: pickEntity(p),
+        candidate: constraintScreenHit !== null ? null : pickEntity(p),
         dimCandidate: annotationHit,
+        constraintCandidate: constraintScreenHit,
       };
     };
 
@@ -9892,6 +10136,8 @@ export function Viewport() {
         if (moved <= 3) {
           const cand = downInfo.candidate;
           const dimCand = downInfo.dimCandidate;
+          const constraintCand =
+            pickConstraintAtPointer(e) ?? downInfo.constraintCandidate;
           if (dimCand !== null) {
             const now = performance.now();
             const repeated = lastDimensionClick !== null
@@ -9909,6 +10155,7 @@ export function Viewport() {
             } else {
               // Dimension click: select the dimension itself (D9).
               state.setSelectedDimension(dimCand);
+              state.setSelectedConstraint(null);
               state.setSelectedEntity(null);
               state.setSelectedEntities([]);
               lastDimensionClick = {
@@ -9918,6 +10165,12 @@ export function Viewport() {
                 y: e.clientY,
               };
             }
+          } else if (constraintCand !== null) {
+            lastDimensionClick = null;
+            state.setSelectedConstraint(constraintCand);
+            state.setSelectedDimension(null);
+            state.setSelectedEntity(null);
+            state.setSelectedEntities([]);
           } else if (e.shiftKey || e.ctrlKey || e.metaKey) {
             lastDimensionClick = null;
             // Multi-select toggle (constraint application, M1b).
@@ -9939,12 +10192,14 @@ export function Viewport() {
             state.setSelectedEntities([...cur]);
             state.setSelectedEntity(primary);
             state.setSelectedDimension(null);
+            state.setSelectedConstraint(null);
           } else {
             lastDimensionClick = null;
             // Click: select entity, or deselect on empty space.
             state.setSelectedEntity(cand);
             state.setSelectedEntities(cand !== null ? [cand] : []);
             state.setSelectedDimension(null);
+            state.setSelectedConstraint(null);
           }
         }
       }
@@ -10830,11 +11085,13 @@ export function Viewport() {
       multi: string;
       hov: number | null;
       dim: number | null;
+      constraint: number | null;
     } = {
       sel: null,
       multi: '',
       hov: null,
       dim: null,
+      constraint: null,
     };
     let groundFade = 1;
     let sketchFade = 0;
@@ -11098,13 +11355,15 @@ export function Viewport() {
         (s.selectedEntity !== lastSelection.sel ||
           s.selectedEntities.join(',') !== lastSelection.multi ||
           s.hoveredEntity !== lastSelection.hov ||
-          s.selectedDimension !== lastSelection.dim)
+          s.selectedDimension !== lastSelection.dim ||
+          s.selectedConstraint !== lastSelection.constraint)
       ) {
         lastSelection = {
           sel: s.selectedEntity,
           multi: s.selectedEntities.join(','),
           hov: s.hoveredEntity,
           dim: s.selectedDimension,
+          constraint: s.selectedConstraint,
         };
         if (s.activeSketch) {
           rebuildEntities(s.activeSketch);

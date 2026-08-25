@@ -506,6 +506,11 @@ pub struct DeleteDimensionRequest {
     pub constraint_id: ConstraintId,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteConstraintRequest {
+    pub constraint_id: ConstraintId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetDimensionStyleRequest {
     pub style: DimensionStyle,
