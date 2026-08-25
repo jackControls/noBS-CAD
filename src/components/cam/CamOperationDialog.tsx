@@ -5,6 +5,7 @@ import {
   addCamOperation,
   camOperationLabel,
   camToolCompatible,
+  replaceCamOperation,
   type CamOperationInput,
 } from '../../cam/document';
 import {
@@ -28,7 +29,7 @@ import {
   defaultThreadPreset,
   isoMetricGrade6Envelope,
 } from '../../lib/threadStandards';
-import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
+import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
@@ -211,7 +212,17 @@ const OP_TABS: Array<{ id: OpTab; label: string; icon: LucideIcon }> = [
  *  a shared tab (tool picking, heights, feeds) is edited once for all
  *  operation kinds. Geometry, tool, heights, and feeds are all explicit;
  *  validation in the engine rejects incomplete input. */
-export function CamOperationDialog({ kind }: { kind: OperationKind }) {
+export function CamOperationDialog({ kind, editing }: { kind: OperationKind; editing?: CamOperationDto }) {
+  // Editing reuses this exact dialog: every draft below seeds from the stored
+  // operation and Save writes back through the same submit path as Add, so
+  // create and edit can never drift apart.
+  const faceOp = editing?.kind === 'face' ? editing : null;
+  const contourOp = editing?.kind === 'contour2d' ? editing : null;
+  const pocketOp = editing?.kind === 'pocket2d' ? editing : null;
+  const chamferOp = editing?.kind === 'chamfer2d' ? editing : null;
+  const drillOp = editing?.kind === 'drill' ? editing : null;
+  const threadOp = editing?.kind === 'thread' ? editing : null;
+  const pointsOp = drillOp ?? threadOp;
   const cam = useAppStore((state) => state.camDocument);
   const sketches = useAppStore((state) => state.finishedSketches);
   const scene = useAppStore((state) => state.solidScene);
@@ -222,7 +233,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const pages = OP_PAGES[kind];
   // Drill operations pick the cycle before the tool: the cycle decides which
   // tool kinds are compatible (tap -> tap, reaming -> reamer, ...).
-  const [drillCycle, setDrillCycle] = useState<CamDrillCycle>('drill');
+  const [drillCycle, setDrillCycle] = useState<CamDrillCycle>(drillOp?.cycle ?? 'drill');
   const projectTools = useMemo(
     () =>
       cam.tools.filter((tool) =>
@@ -234,85 +245,166 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
   const existingCount = setup?.operations.filter((operation) => operation.kind === kind).length ?? 0;
 
-  const [name, setName] = useState(`${camOperationLabel(kind)} ${existingCount + 1}`);
-  const [toolId, setToolId] = useState<number | null>(projectTools[0]?.id ?? null);
-  const [presetIndex, setPresetIndex] = useState(0);
-  const [rpm, setRpm] = useState('');
-  const [feedXy, setFeedXy] = useState('');
-  const [feedZ, setFeedZ] = useState('');
-  const [coolant, setCoolant] = useState<CamCoolantMode>('flood');
-  const [feedsTouched, setFeedsTouched] = useState(false);
+  // Setup-space model Z extremes seed the height drafts when editing; null
+  // when the setup references no bodies (heights then hang off stock/origin).
+  const modelTop = setup ? modelTopZInSetup(scene, setup) : null;
+  const modelBottom = setup ? modelBottomZInSetup(scene, setup) : null;
 
-  const [source, setSource] = useState<GeometrySource>(loops.length > 0 ? 'sketch' : 'manual');
+  /** Re-express a stored absolute setup Z as reference plane + signed offset,
+   *  picking the plane the value sits closest to so the heights tab re-opens
+   *  with sensible drafts. */
+  const heightDraftFrom = (absZ: number): { from: HeightFrom; off: string } => {
+    const candidates: Array<{ from: HeightFrom; z: number | null }> = [
+      { from: 'model_top', z: modelTop },
+      { from: 'model_bottom', z: modelBottom },
+      { from: 'stock_top', z: setup?.stock.max.z ?? null },
+      { from: 'stock_bottom', z: setup?.stock.min.z ?? null },
+      { from: 'origin', z: 0 },
+    ];
+    let best: { from: HeightFrom; z: number } = { from: 'origin', z: 0 };
+    for (const candidate of candidates) {
+      if (candidate.z === null) continue;
+      if (Math.abs(candidate.z - absZ) < Math.abs(best.z - absZ)) {
+        best = { from: candidate.from, z: candidate.z };
+      }
+    }
+    return { from: best.from, off: String(Number(displayLength(absZ - best.z, units).toFixed(4)) + 0) };
+  };
+
+  const clearanceDraft = editing ? heightDraftFrom(editing.clearance_z) : null;
+  const retractDraft = editing ? heightDraftFrom(editing.retract_z) : null;
+  const topDraft = editing ? heightDraftFrom(editing.top_z) : null;
+  const bottomStored =
+    faceOp?.target_z ?? contourOp?.bottom_z ?? pocketOp?.bottom_z ?? pointsOp?.bottom_z ?? null;
+  const bottomDraft = bottomStored !== null ? heightDraftFrom(bottomStored) : null;
+  const storedStepDown = faceOp?.step_down ?? contourOp?.step_down ?? pocketOp?.step_down ?? null;
+  const depthFull =
+    editing && bottomStored !== null ? Math.abs(editing.top_z - bottomStored) : null;
+  const multipleDepthsInit =
+    storedStepDown !== null && depthFull !== null
+      ? storedStepDown < depthFull - 1e-9
+      : true;
+
+  /** Stored paths/hole centers re-open as manual coordinates (display units),
+   *  one X,Y per line — the same text the create flow would parse. */
+  const initManualPoints = (): string => {
+    const pts = contourOp?.path ?? pocketOp?.outline ?? chamferOp?.path ?? pointsOp?.points;
+    if (!pts) return '';
+    return pts
+      .map(
+        (p) =>
+          `${Number(displayLength(p.x, units).toFixed(4)) + 0}, ${Number(displayLength(p.y, units).toFixed(4)) + 0}`,
+      )
+      .join('\n');
+  };
+  const facePointDraft = (p: CamPoint2Dto) => ({
+    x: String(Number(displayLength(p.x, units).toFixed(4)) + 0),
+    y: String(Number(displayLength(p.y, units).toFixed(4)) + 0),
+  });
+  /** A face bounds that still matches the stock box re-opens with the
+   *  "whole stock top" toggle on; anything else is treated as custom. */
+  const faceBoundsFromStock = (() => {
+    if (!faceOp || !setup) return true;
+    const b = faceOp.bounds;
+    const s = setup.stock;
+    return (
+      Math.abs(b.min.x - s.min.x) < 1e-6 &&
+      Math.abs(b.min.y - s.min.y) < 1e-6 &&
+      Math.abs(b.max.x - s.max.x) < 1e-6 &&
+      Math.abs(b.max.y - s.max.y) < 1e-6
+    );
+  })();
+  const threadPresetInit = threadOp
+    ? (THREAD_PRESETS.find((p) => Math.abs(p.pitchMm - threadOp.pitch) < 1e-9) ?? defaultThreadPreset()).id
+    : defaultThreadPreset().id;
+
+  const [name, setName] = useState(editing?.name ?? `${camOperationLabel(kind)} ${existingCount + 1}`);
+  const [toolId, setToolId] = useState<number | null>(editing?.tool_id ?? projectTools[0]?.id ?? null);
+  const [presetIndex, setPresetIndex] = useState(0);
+  const [rpm, setRpm] = useState(editing ? String(editing.cutting.spindle_rpm) : '');
+  const [feedXy, setFeedXy] = useState(editing ? displayFeed(editing.cutting.feed_xy, units).toFixed(4) : '');
+  const [feedZ, setFeedZ] = useState(editing ? displayFeed(editing.cutting.feed_z, units).toFixed(4) : '');
+  const [coolant, setCoolant] = useState<CamCoolantMode>(editing?.cutting.coolant ?? 'flood');
+  // Editing keeps the operation's own cutting data; picking another tool must
+  // not silently overwrite it.
+  const [feedsTouched, setFeedsTouched] = useState(editing != null);
+
+  const [source, setSource] = useState<GeometrySource>(editing ? 'manual' : loops.length > 0 ? 'sketch' : 'manual');
   const [loopKey, setLoopKey] = useState('');
-  const [manualPoints, setManualPoints] = useState('');
+  const [manualPoints, setManualPoints] = useState(initManualPoints);
   // Drilling/thread: holes are picked as cylindrical faces in the viewport;
   // the session lives in the store so the shared viewport can drive it.
   const holePick = useAppStore((state) => state.camHolePick);
 
-  const [stepDown, setStepDown] = useState('');
-  const [stepOver, setStepOver] = useState('');
+  const [stepDown, setStepDown] = useState(
+    storedStepDown !== null ? displayLength(storedStepDown, units).toFixed(4) : '',
+  );
+  const [stepOver, setStepOver] = useState(() => {
+    const stored = faceOp?.step_over ?? pocketOp?.step_over ?? null;
+    return stored !== null ? displayLength(stored, units).toFixed(4) : '';
+  });
   // Facing plunge clearance from the stock boundary (see the planner).
-  const [safeDistance, setSafeDistance] = useState(displayLength(5, units).toFixed(4));
+  const [safeDistance, setSafeDistance] = useState(
+    faceOp ? displayLength(faceOp.safe_distance, units).toFixed(4) : displayLength(5, units).toFixed(4),
+  );
   // Active tab, structured heights (reference plane + signed offset), and the
   // multiple-depths toggle.
   const [opTab, setOpTab] = useState<OpTab>('tool');
-  const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>('stock_top');
-  const [clearanceOff, setClearanceOff] = useState(displayLength(10, units).toFixed(4));
-  const [retractFrom, setRetractFrom] = useState<HeightFrom>('stock_top');
-  const [retractOff, setRetractOff] = useState(displayLength(3, units).toFixed(4));
+  const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>(clearanceDraft?.from ?? 'stock_top');
+  const [clearanceOff, setClearanceOff] = useState(clearanceDraft?.off ?? displayLength(10, units).toFixed(4));
+  const [retractFrom, setRetractFrom] = useState<HeightFrom>(retractDraft?.from ?? 'stock_top');
+  const [retractOff, setRetractOff] = useState(retractDraft?.off ?? displayLength(3, units).toFixed(4));
   // Facing starts from the stock top; every other kind starts from the model
   // top (a drill/contour rarely begins inside the stock allowance).
-  const [topFrom, setTopFrom] = useState<HeightFrom>(kind === 'face' ? 'stock_top' : 'model_top');
-  const [topOff, setTopOff] = useState('0');
+  const [topFrom, setTopFrom] = useState<HeightFrom>(topDraft?.from ?? (kind === 'face' ? 'stock_top' : 'model_top'));
+  const [topOff, setTopOff] = useState(topDraft?.off ?? '0');
   // Face bottoms ride the model top; hole/path kinds default to the model
   // bottom so a fresh dialog describes a through cut.
   const [bottomFrom, setBottomFrom] = useState<HeightFrom>(
-    kind === 'face' ? 'model_top' : 'model_bottom',
+    bottomDraft?.from ?? (kind === 'face' ? 'model_top' : 'model_bottom'),
   );
-  const [bottomOff, setBottomOff] = useState('0');
-  const [multipleDepths, setMultipleDepths] = useState(true);
-  const [compensation, setCompensation] = useState<CamContourCompensation>('outside');
-  const [wallSide, setWallSide] = useState<CamContourCompensation>('inside');
-  const [chamferWidth, setChamferWidth] = useState('');
-  const [tipOffset, setTipOffset] = useState('');
-  const [peckDepth, setPeckDepth] = useState('');
-  const [peckRetract, setPeckRetract] = useState('');
-  const [threadPitch, setThreadPitch] = useState('');
-  const [feedOut, setFeedOut] = useState('');
-  const [dwell, setDwell] = useState('0');
+  const [bottomOff, setBottomOff] = useState(bottomDraft?.off ?? '0');
+  const [multipleDepths, setMultipleDepths] = useState(multipleDepthsInit);
+  const [compensation, setCompensation] = useState<CamContourCompensation>(contourOp?.compensation ?? 'outside');
+  const [wallSide, setWallSide] = useState<CamContourCompensation>(chamferOp?.wall_side ?? 'inside');
+  const [chamferWidth, setChamferWidth] = useState(chamferOp ? displayLength(chamferOp.chamfer_width, units).toFixed(4) : '');
+  const [tipOffset, setTipOffset] = useState(chamferOp ? displayLength(chamferOp.tip_offset, units).toFixed(4) : '');
+  const [peckDepth, setPeckDepth] = useState(drillOp?.peck_depth != null ? displayLength(drillOp.peck_depth, units).toFixed(4) : '');
+  const [peckRetract, setPeckRetract] = useState(drillOp?.peck_retract != null ? displayLength(drillOp.peck_retract, units).toFixed(4) : '');
+  const [threadPitch, setThreadPitch] = useState(drillOp?.thread_pitch != null ? displayLength(drillOp.thread_pitch, units).toFixed(4) : '');
+  const [feedOut, setFeedOut] = useState(drillOp?.feed_out != null ? displayFeed(drillOp.feed_out, units).toFixed(4) : '');
+  const [dwell, setDwell] = useState(drillOp ? String(drillOp.dwell_seconds) : '0');
   // Thread milling: the designation resolves pitch/major/minor through the
   // standards table; the resolved values are stored on the operation.
-  const [threadPresetId, setThreadPresetId] = useState(defaultThreadPreset().id);
-  const [threadHand, setThreadHand] = useState<CamThreadHand>('right');
-  const [threadDirection, setThreadDirection] = useState<CamMillingDirection>('climb');
-  const [radialPasses, setRadialPasses] = useState('1');
-  const [threadStepOver, setThreadStepOver] = useState('');
-  const [faceMin, setFaceMin] = useState({ x: '', y: '' });
-  const [faceMax, setFaceMax] = useState({ x: '', y: '' });
-  const [faceFromStock, setFaceFromStock] = useState(true);
+  const [threadPresetId, setThreadPresetId] = useState(threadPresetInit);
+  // Editing keeps the stored pitch/diameters until the operator deliberately
+  // picks another designation.
+  const [threadPresetTouched, setThreadPresetTouched] = useState(false);
+  const [threadHand, setThreadHand] = useState<CamThreadHand>(threadOp?.hand ?? 'right');
+  const [threadDirection, setThreadDirection] = useState<CamMillingDirection>(threadOp?.direction ?? 'climb');
+  const [radialPasses, setRadialPasses] = useState(String(threadOp?.radial_passes ?? 1));
+  const [threadStepOver, setThreadStepOver] = useState(threadOp?.step_over != null ? displayLength(threadOp.step_over, units).toFixed(4) : '');
+  const [faceMin, setFaceMin] = useState(faceOp ? facePointDraft(faceOp.bounds.min) : { x: '', y: '' });
+  const [faceMax, setFaceMax] = useState(faceOp ? facePointDraft(faceOp.bounds.max) : { x: '', y: '' });
+  const [faceFromStock, setFaceFromStock] = useState(faceBoundsFromStock);
   const [error, setError] = useState<string | null>(null);
 
-  if (!setup) return null;
-
-  // Setup-space Z of the model's top surface; face depths are entered
-  // relative to it. Null when the setup references no bodies.
-  const modelTop = modelTopZInSetup(scene, setup);
-  const modelBottom = modelBottomZInSetup(scene, setup);
   const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
 
   /** Reference plane of a structured height, as absolute setup Z.
    *  Falls back to the stock plane when the setup references no bodies. */
   const heightRefZ = (from: HeightFrom): number => {
+    const stockMaxZ = setup?.stock.max.z ?? 0;
+    const stockMinZ = setup?.stock.min.z ?? 0;
     switch (from) {
       case 'model_top':
-        return modelTop ?? setup.stock.max.z;
+        return modelTop ?? stockMaxZ;
       case 'model_bottom':
-        return modelBottom ?? setup.stock.min.z;
+        return modelBottom ?? stockMinZ;
       case 'stock_top':
-        return setup.stock.max.z;
+        return stockMaxZ;
       case 'stock_bottom':
-        return setup.stock.min.z;
+        return stockMinZ;
       case 'origin':
         return 0;
     }
@@ -393,6 +485,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
   };
 
   const pathFromLoop = (): CamPoint2Dto[] => {
+    if (!setup) throw new Error('No active CAM setup.');
     const loop = selectedLoop();
     if (!loop) throw new Error('Pick a sketch loop, or switch to manual coordinates.');
     return loopToSetupPath(loop, sketches, setup.wcs);
@@ -418,6 +511,15 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     source === 'sketch' ? pathFromLoop() : parseManualPoints(label);
 
   const resolveDrillPoints = (): CamPoint2Dto[] => {
+    // Fixed-axis planning drills along setup Z only; a picked hole whose axis
+    // tilts away from setup Z needs indexed/5-axis tool orientation, which is
+    // not supported yet — fail closed instead of drilling a wrong hole.
+    const tilted = (holePick?.holes ?? []).filter((hole) => Math.abs(hole.axis[2]) < 1 - 1e-6);
+    if (tilted.length > 0) {
+      throw new Error(
+        `${tilted.length} picked hole${tilted.length > 1 ? 's are' : ' is'} not aligned with setup Z — fixed-axis planning drills along setup Z only; indexed/5-axis tool orientation is not supported yet.`,
+      );
+    }
     const fromPicks = (holePick?.holes ?? []).map((hole) => ({
       x: hole.point.x,
       y: hole.point.y,
@@ -441,10 +543,11 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     event.preventDefault();
     setError(null);
     try {
+      if (!setup) throw new Error('No active CAM setup.');
       if (toolId === null) throw new Error('Pick a tool from the library first.');
       const base = {
         name: name.trim() || camOperationLabel(kind),
-        enabled: true,
+        enabled: editing?.enabled ?? true,
         tool_id: toolId,
         clearance_z: resolveHeight(clearanceFrom, clearanceOff, 'Clearance height'),
         retract_z: resolveHeight(retractFrom, retractOff, 'Retract height'),
@@ -561,7 +664,9 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         }
         case 'thread': {
           // The designation only seeds values here; the stored operation
-          // carries the resolved pitch and diameters explicitly.
+          // carries the resolved pitch and diameters explicitly. Editing keeps
+          // the stored values until the operator picks another designation.
+          const keepStored = threadOp !== null && !threadPresetTouched;
           const preset =
             THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId) ??
             defaultThreadPreset();
@@ -577,9 +682,9 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             points: resolveDrillPoints(),
             top_z: top,
             bottom_z: bottomAbs(),
-            pitch: preset.pitchMm,
-            major_diameter: envelope.modeledMajor,
-            minor_diameter: envelope.modeledMinor,
+            pitch: keepStored ? threadOp.pitch : preset.pitchMm,
+            major_diameter: keepStored ? threadOp.major_diameter : envelope.modeledMajor,
+            minor_diameter: keepStored ? threadOp.minor_diameter : envelope.modeledMinor,
             hand: threadHand,
             direction: threadDirection,
             radial_passes: passes,
@@ -592,19 +697,24 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
           break;
         }
       }
-      runCamAction(() => addCamOperation(operation).then(() => close()));
+      runCamAction(() =>
+        (editing ? replaceCamOperation(editing.id, operation) : addCamOperation(operation)).then(() => close()),
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   const threadReadout = (): string => {
+    const len = (mm: number) => displayLength(mm, units).toFixed(units === 'inches' ? 4 : 3);
+    if (threadOp && !threadPresetTouched) {
+      return `Stored on this operation: pitch ${len(threadOp.pitch)} ${lu}/rev · major Ø${len(threadOp.major_diameter)} · minor Ø${len(threadOp.minor_diameter)} ${lu}. Picking a designation re-resolves these.`;
+    }
     const preset =
       THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId) ??
       defaultThreadPreset();
     const envelope = isoMetricGrade6Envelope(preset.nominalDiameterMm, preset.pitchMm, 'internal');
-    const len = (mm: number) => displayLength(mm, units).toFixed(units === 'inches' ? 4 : 3);
-    return `Pitch ${len(preset.pitchMm)} ${lu}/rev · major Ø${len(envelope.modeledMajor)} · minor Ø${len(envelope.modeledMinor)} ${lu}. Pre-machine the hole to the minor diameter; custom diameters can be edited on the created operation.`;
+    return `Pitch ${len(preset.pitchMm)} ${lu}/rev · major Ø${len(envelope.modeledMajor)} · minor Ø${len(envelope.modeledMinor)} ${lu}. Pre-machine the hole to the minor diameter.`;
   };
 
   const geometrySection = () => {
@@ -613,8 +723,9 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
       return (
         <DialogSection title="HOLES · PICKED IN VIEWPORT">
           <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-            Click cylindrical hole faces in the viewport to toggle them as hole centers; only
-            faces whose axis is parallel to setup Z are pickable.
+            Click any cylindrical face in the viewport to toggle it as a hole center. Holes whose
+            axis is not parallel to setup Z are flagged; fixed-axis planning drills along setup Z
+            only.
           </p>
           {holes.length > 0 && (
             <div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge/70 p-1.5">
@@ -625,6 +736,14 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
                     {displayLength(hole.point.x, units).toFixed(3)} · Y{' '}
                     {displayLength(hole.point.y, units).toFixed(3)}
                   </span>
+                  {Math.abs(hole.axis[2]) < 1 - 1e-6 && (
+                    <span
+                      className="shrink-0 rounded bg-[#d69b45]/20 px-1 text-[8px] font-semibold text-[#e8c589]"
+                      title="Axis is not parallel to setup Z — needs indexed/5-axis orientation"
+                    >
+                      ∠ {((Math.acos(Math.min(1, Math.abs(hole.axis[2]))) * 180) / Math.PI).toFixed(0)}°
+                    </span>
+                  )}
                   <button
                     type="button"
                     title="Remove this hole"
@@ -742,7 +861,10 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         <span className={CAM_DIALOG_LABEL}>Designation</span>
         <select
           value={threadPresetId}
-          onChange={(event) => setThreadPresetId(event.target.value)}
+          onChange={(event) => {
+            setThreadPresetTouched(true);
+            setThreadPresetId(event.target.value);
+          }}
           className={CAM_DIALOG_INPUT}
         >
           {THREAD_PRESETS.map((preset) => (
@@ -1122,6 +1244,8 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
     </>
   );
 
+  if (!setup) return null;
+
   return (
     <div data-native-viewport-dim="0.15" className="pointer-events-none fixed inset-0 z-[70] bg-black/15">
       <form
@@ -1132,7 +1256,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CircleDot size={15} className="text-accent" />
           <span className="flex-1 text-xs font-semibold text-ink">
-            New {camOperationLabel(kind)} operation
+            {editing ? `Edit — ${editing.name}` : `New ${camOperationLabel(kind)} operation`}
           </span>
           <button type="button" onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink">
             <X size={14} />
@@ -1187,7 +1311,7 @@ export function CamOperationDialog({ kind }: { kind: OperationKind }) {
             type="submit"
             className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
           >
-            Add operation
+            {editing ? 'Save changes' : 'Add operation'}
           </button>
         </footer>
       </form>

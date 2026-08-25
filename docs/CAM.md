@@ -80,13 +80,17 @@ operation. The operator programs the job explicitly, in this order:
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
    holes clicked directly on the model's cylindrical faces for drilling and
-   thread milling (hover highlights the face, a click toggles the hole, only
-   faces whose axis is parallel to setup Z are pickable, and explicit
-   coordinates remain available); the stock top or an explicit region for
-   facing. Every operation dialog is the same five-tab scaffold (Tool /
-   Geometry / Heights / Passes / Linking); the kind only switches on the
-   geometry shape and the fields it needs, so a shared tab is edited once for
-   all operation kinds. Heights are entered
+   thread milling (hover highlights the face, a click toggles the hole, ANY
+   cylindrical face is pickable — the pick records the hole axis in setup
+   coordinates, faces not parallel to setup Z are flagged in the dialog and
+   rejected at submit because fixed-axis planning drills along setup Z only,
+   and explicit coordinates remain available); the stock top or an explicit
+   region for facing. Every operation dialog is the same five-tab scaffold
+   (Tool / Geometry / Heights / Passes / Linking); the kind only switches on
+   the geometry shape and the fields it needs, so a shared tab is edited once
+   for all operation kinds. Creating and editing use the identical dialog —
+   editing just seeds the same drafts from the stored operation and saves
+   through the same validation. Heights are entered
    as a reference plane (model/stock top or bottom, or origin) plus a signed
    offset and resolved to absolute setup Z at submit, and the full option set
    of the reference workflow renders with the unplanned entries shown as
@@ -159,10 +163,11 @@ rewrites stored geometry.
   (operations listed with their tool tag, `[T<n>]`/`[name]`), while the tool
   library lives in its own full dialog (table plus tabbed editor, with a
   central/project scope switch in the header), not in the browser tree. There is no side inspector panel: double-clicking a
-  setup or operation row floats its configuration in a dialog, exactly like
-  the modeling feature dialogs; right-clicking an operation row opens a
-  context menu (suppress/resume — suppressed operations are skipped by the
-  planner and the post — edit, delete). The workspace opens directly onto the
+  setup, Stock&WCS, or operation row re-opens the SAME dialog that created it
+  (seeded from the stored values), exactly like the modeling feature dialogs;
+  right-clicking a setup row opens a context menu (edit, delete), an
+  operation row adds suppress/resume — suppressed operations are skipped by
+  the planner and the post — and the Stock&WCS row offers edit. The workspace opens directly onto the
   modeled parts (setups
   are created from a centered dialog via the ribbon, never implicitly), with
   manual setup and operation dialogs, viewport point picking for WCS origins
@@ -175,7 +180,9 @@ rewrites stored geometry.
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
   a translucent ghost of the selected operation's tool parked at its last
-  cutting position (fluted section brighter than the shank),
+  cutting position AND at the entry plunge point (fluted section brighter
+  than the shank) — the entry ghost makes the facing safe distance directly
+  visible as the gap between the tool edge and the stock boundary,
   the simulated remaining stock in green with rapid-collision markers, and
   point-pick candidates (solid discs whose fill density adapts to the pixel
   size, so they read as dots at any zoom). Toolpaths and the simulated stock
@@ -441,10 +448,12 @@ The Siemens post therefore stores two independent settings:
   early `T` call can safely stage the magazine. Carousel/chain/wheel machines
   must not inherit this from their visual style.
 
-The setup inspector renders the exact later-tool-change example for the
+The Post NC dialog renders the exact later-tool-change example for the
 selected strategy and includes the following `T...` preload only when enabled.
 Examples are templates for comparison with the machine manual and a known-good
-program, not universal snippets.
+program, not universal snippets. The same dialog also carries the `.nbpost`
+compatibility inspector (moved here when the side inspector was retired in
+favor of the shared create/edit dialogs).
 
 - [Siemens Fundamentals programming guide (G710 metric mode)](https://support.industry.siemens.com/cs/attachments/48013055/PG_0710_en_en-US.pdf)
 - [Siemens Fundamentals programming guide (G4 dwell with `F` seconds)](https://support.industry.siemens.com/cs/attachments/108679566/PG_1102_en.pdf)

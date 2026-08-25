@@ -66,6 +66,8 @@ const PICK_POINT: Rgba = [0.4, 0.73, 0.94, 0.95];
 const PICK_POINT_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
 /** Picked hole centers in a drill/thread hole-pick session. */
 const HOLE_POINT: Rgba = [0.5, 0.9, 0.55, 0.95];
+/** Picked holes whose axis is not setup-Z: machinable later, not today. */
+const HOLE_POINT_TILTED: Rgba = [0.94, 0.67, 0.29, 0.95];
 const TOOL_FLUTE_FILL: Rgba = [0.78, 0.8, 0.84, 0.55];
 const TOOL_SHANK_FILL: Rgba = [0.62, 0.65, 0.7, 0.3];
 const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
@@ -163,17 +165,26 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   if (!setup) return layers;
 
   // Hole-pick session markers: chosen hole centers, the hovered one
-  // emphasized. The face under the pointer is highlighted by the viewport's
-  // own face-hover channel, so only the chosen set draws here.
+  // emphasized; holes whose axis is not parallel to setup Z draw amber so
+  // the mismatch is visible before submit. The face under the pointer is
+  // highlighted by the viewport's own face-hover channel.
   if (state.camHolePick && state.camHolePick.holes.length > 0) {
     const rest: number[] = [];
+    const tilted: number[] = [];
     const hovered: number[] = [];
     for (const hole of state.camHolePick.holes) {
-      const target = hole.key === state.camHolePick.hoverKey ? hovered : rest;
+      if (hole.key === state.camHolePick.hoverKey) {
+        hovered.push(hole.modelPoint.x, hole.modelPoint.y, hole.modelPoint.z);
+        continue;
+      }
+      const target = Math.abs(hole.axis[2]) > 1 - 1e-6 ? rest : tilted;
       target.push(hole.modelPoint.x, hole.modelPoint.y, hole.modelPoint.z);
     }
     if (rest.length > 0) {
       layers.points.push({ color: HOLE_POINT, radius: markerRadius * 1.2, positions: rest });
+    }
+    if (tilted.length > 0) {
+      layers.points.push({ color: HOLE_POINT_TILTED, radius: markerRadius * 1.2, positions: tilted });
     }
     if (hovered.length > 0) {
       layers.points.push({
@@ -318,9 +329,11 @@ function pushSelectedToolpath(
   }
 }
 
-/** Ghost of the selected operation's tool parked at its last cutting
- *  position: the fluted section opaque enough to read, the shank fainter.
- *  The tool axis is parallel to setup Z (fixed-axis planning). */
+/** Ghost of the selected operation's tool at its last cutting position —
+ *  plus a second ghost at the first plunge point, so entry clearances like
+ *  facing's safe distance read on screen: the cutter's edge stands exactly
+ *  `safe_distance` off the stock boundary there. The tool axis is parallel
+ *  to setup Z (fixed-axis planning). */
 function pushSelectedTool(
   layers: CamOverlayLayers,
   state: CamOverlayState,
@@ -335,10 +348,14 @@ function pushSelectedTool(
   if (!tool) return;
 
   // Walk the operation's sections; duplicated work offsets repeat identical
-  // setup-space motion, so any copy's endpoint positions the ghost.
+  // setup-space motion, so any copy's endpoint positions the ghost. The
+  // first plunge target is tracked too: drawing the tool where it enters
+  // makes the entry clearance (e.g. facing's safe distance) inspectable.
   let inSection = false;
   let cuttingTip: Point3Dto | null = null;
   let anyTip: Point3Dto | null = null;
+  let position: Point3Dto | null = null;
+  let entryTip: Point3Dto | null = null;
   for (const command of program.commands) {
     if (command.kind === 'section_start') {
       inSection = command.operation_id === operationId;
@@ -349,26 +366,40 @@ function pushSelectedTool(
       continue;
     }
     if (!inSection) continue;
-    if (command.kind === 'rapid') anyTip = command.to;
-    if (command.kind === 'linear' || command.kind === 'circular') {
-      cuttingTip = command.to;
+    if (command.kind === 'rapid' || command.kind === 'linear' || command.kind === 'circular') {
+      if (
+        entryTip === null &&
+        command.kind === 'linear' &&
+        position !== null &&
+        Math.abs(command.to.x - position.x) < 1e-9 &&
+        Math.abs(command.to.y - position.y) < 1e-9 &&
+        command.to.z < position.z - 1e-9
+      ) {
+        entryTip = command.to;
+      }
+      position = command.to;
       anyTip = command.to;
+      if (command.kind !== 'rapid') cuttingTip = command.to;
     }
   }
-  const tip = cuttingTip ?? anyTip;
-  if (!tip) return;
-
   const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
-  const ring = regularRing(tip.x, tip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
-  const flutePositions: number[] = [];
-  pushPrism(toModel, ring, tip.z, tip.z + tool.flute_length, flutePositions, []);
-  if (flutePositions.length > 0) {
-    layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
-  }
-  const shankPositions: number[] = [];
-  pushPrism(toModel, ring, tip.z + tool.flute_length, tip.z + tool.overall_length, shankPositions, []);
-  if (shankPositions.length > 0) {
-    layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
+  const ghost = (tip: Point3Dto) => {
+    const ring = regularRing(tip.x, tip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
+    const flutePositions: number[] = [];
+    pushPrism(toModel, ring, tip.z, tip.z + tool.flute_length, flutePositions, []);
+    if (flutePositions.length > 0) {
+      layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
+    }
+    const shankPositions: number[] = [];
+    pushPrism(toModel, ring, tip.z + tool.flute_length, tip.z + tool.overall_length, shankPositions, []);
+    if (shankPositions.length > 0) {
+      layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
+    }
+  };
+  const tip = cuttingTip ?? anyTip;
+  if (entryTip) ghost(entryTip);
+  if (tip && (entryTip === null || Math.hypot(tip.x - entryTip.x, tip.y - entryTip.y, tip.z - entryTip.z) > 1e-9)) {
+    ghost(tip);
   }
 }
 

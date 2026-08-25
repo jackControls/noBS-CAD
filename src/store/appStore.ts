@@ -222,10 +222,8 @@ function jointConnectorIsLive(
  *  variants float the configuration of an existing setup/operation in a
  *  dialog (opened by double-clicking browser rows); there is no sidebar. */
 export type CamDialogState =
-  | { type: 'setup' }
-  | { type: 'setupEdit' }
-  | { type: 'operation'; kind: CamOperationDto['kind'] }
-  | { type: 'operationEdit'; operationId: number }
+  | { type: 'setup'; editId?: number }
+  | { type: 'operation'; kind: CamOperationDto['kind']; editId?: number }
   | {
       type: 'tool';
       toolId: number | null;
@@ -255,8 +253,10 @@ export interface CamPointPickSession {
   hoverKey: string | null;
 }
 
-/** One hole chosen for drilling/thread milling: a cylindrical solid face
- *  whose axis runs parallel to setup Z. */
+/** One hole chosen for drilling/thread milling: any cylindrical solid face.
+ *  The axis is recorded in setup coordinates so tilted holes can be
+ *  reported (fixed-axis planning rejects them at submit; indexed/5-axis
+ *  tool orientation is the roadmap item that consumes the axis). */
 export interface CamHolePickHole {
   /** Stable identity: `${bodyId}:${faceId}`. */
   key: string;
@@ -264,10 +264,13 @@ export interface CamHolePickHole {
   faceId: number;
   /** Cylinder radius, mm — the label reads the drilled diameter from it. */
   radius: number;
-  /** Axis point at the stock top plane, model coordinates (overlay marker). */
+  /** Marker anchor, model coordinates: on the axis at the stock top plane
+   *  for setup-Z holes, the face's axis origin for tilted ones. */
   modelPoint: Point3Dto;
   /** Hole center in setup coordinates (operation input). */
   point: { x: number; y: number };
+  /** Hole axis direction in setup coordinates (unit length). */
+  axis: [number, number, number];
 }
 
 /** Active viewport hole-picking session owned by a drill/thread operation

@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { Download, X } from 'lucide-react';
+import { Download, FileCode2, X } from 'lucide-react';
 import { setCamPostDefaults } from '../../cam/document';
 import { exportActiveCamProgram } from '../../cam/export';
+import { inspectNbPostFile } from '../../cam/nbpost';
 import { commitLength, displayLength } from '../../cam/units';
 import type {
   CamPostConfigDto,
   CamPostDialect,
+  NbPostAnalysisDto,
   Siemens828dPostConfigDto,
 } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
@@ -68,6 +70,10 @@ export function CamPostDialog() {
   const [m1BetweenTools, setM1BetweenTools] = useState(initialSiemens.optional_stop_on_tool_change);
   const [preloadNextTool, setPreloadNextTool] = useState(initialSiemens.preload_next_tool);
   const [error, setError] = useState<string | null>(null);
+  // .nbpost compatibility inspection (moved here from the retired setup
+  // inspector): local, non-executing analysis of a user-supplied post file.
+  const [postAnalysis, setPostAnalysis] = useState<NbPostAnalysisDto | null>(null);
+  const [postAnalysisBusy, setPostAnalysisBusy] = useState(false);
 
   if (!setup) {
     return (
@@ -107,6 +113,16 @@ export function CamPostDialog() {
     station_y: stationY.trim() ? Number(stationY) : null,
     ...profile,
   });
+
+  const inspectPost = async () => {
+    setPostAnalysisBusy(true);
+    try {
+      const analysis = await inspectNbPostFile();
+      if (analysis) setPostAnalysis(analysis);
+    } finally {
+      setPostAnalysisBusy(false);
+    }
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -213,7 +229,8 @@ export function CamPostDialog() {
             <p className="text-[10px] leading-relaxed text-mute">
               This setup posts {setup.work_offset_count}{' '}
               {setup.work_offset_count > 1 ? 'duplicated parts' : 'part'} under{' '}
-              {offsetPreview.join(', ')}. Change the count in the setup inspector.
+              {offsetPreview.join(', ')}. Change the count by editing the setup (double-click it in
+              the browser).
             </p>
           </DialogSection>
 
@@ -319,6 +336,42 @@ export function CamPostDialog() {
               </div>
             </DialogSection>
           )}
+
+          <DialogSection title="CUSTOM POST (.NBPOST)">
+            <button
+              type="button"
+              disabled={postAnalysisBusy}
+              onClick={() => runCamAction(inspectPost)}
+              className="flex h-7 w-full items-center justify-center gap-1.5 rounded border border-edge bg-header/45 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent disabled:opacity-40"
+            >
+              <FileCode2 size={13} /> {postAnalysisBusy ? 'Inspecting…' : 'Inspect .nbpost'}
+            </button>
+            <p className="text-[9px] leading-relaxed text-mute">
+              Rename a post you are entitled to use to{' '}
+              <span className="font-mono text-ink">.nbpost</span>. Inspection is local and
+              non-executing; renaming does not change its license.
+            </p>
+            {postAnalysis && (
+              <div className="rounded border border-edge bg-header/45 p-2 text-[9px] leading-relaxed text-mute">
+                <div className="truncate font-semibold text-ink">{postAnalysis.file_name}</div>
+                <div>
+                  {postAnalysis.source_kind === 'callback_javascript'
+                    ? 'Supported callback shape detected'
+                    : 'Post shape not recognized'}{' '}
+                  · {postAnalysis.callbacks.length} callbacks
+                </div>
+                <div className="mt-1 text-[#e8c589]">
+                  Analysis only—script execution remains disabled until the compatibility sandbox
+                  is complete.
+                </div>
+                {postAnalysis.callbacks_outside_v1_target.length > 0 && (
+                  <div className="mt-1 break-words">
+                    Beyond fixed 3-axis v1: {postAnalysis.callbacks_outside_v1_target.join(', ')}
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogSection>
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
           <button

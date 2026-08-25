@@ -292,21 +292,36 @@ export function modelBottomZInSetup(
  *  (either sense); anything else returns null so the pointer shows the face
  *  as unpickable. The marker point sits on the axis at the stock top plane;
  *  the operation input is the axis position in setup-space X/Y. */
+/** Convert a cylindrical solid face into a pickable hole. Any axis
+ *  direction is accepted — fixed-axis (3-axis) planning can only drill
+ *  holes parallel to setup Z, so the axis travels with the pick and the
+ *  dialog reports tilted holes instead of hiding them. Indexed (4-axis)
+ *  and 5-axis machining will consume the recorded axis via a per-operation
+ *  tool orientation. */
 export function camHoleFromCylinderFace(
   bodyId: number,
   faceId: number,
   cylinder: CylindricalSurfaceDto,
   setup: CamSetupDto,
 ): CamHolePickHole | null {
-  const zAxis = setup.wcs.z_axis;
-  const alignment =
-    cylinder.axis.x * zAxis[0] + cylinder.axis.y * zAxis[1] + cylinder.axis.z * zAxis[2];
-  if (Math.abs(Math.abs(alignment) - 1) > 1e-6) return null;
   const center = modelPointToSetup(cylinder.origin, setup.wcs);
-  const marker = setupPointToModel(
-    { x: center.x, y: center.y, z: setup.stock.max.z },
-    setup.wcs,
-  );
+  // Direction vectors rotate into setup space without the origin shift, using
+  // the same projection as modelPointToSetup: setup[i] = dot(model, axis[i]).
+  const wcs = setup.wcs;
+  const axis: [number, number, number] = [
+    cylinder.axis.x * wcs.x_axis[0] + cylinder.axis.y * wcs.x_axis[1] + cylinder.axis.z * wcs.x_axis[2],
+    cylinder.axis.x * wcs.y_axis[0] + cylinder.axis.y * wcs.y_axis[1] + cylinder.axis.z * wcs.y_axis[2],
+    cylinder.axis.x * wcs.z_axis[0] + cylinder.axis.y * wcs.z_axis[1] + cylinder.axis.z * wcs.z_axis[2],
+  ];
+  const parallel = Math.abs(axis[2]) > 1 - 1e-6;
+  // Setup-Z holes mark at the stock top plane (always visible above the
+  // part); tilted holes mark right at the picked face's axis origin.
+  const marker = parallel
+    ? setupPointToModel(
+        { x: center.x, y: center.y, z: setup.stock.max.z },
+        setup.wcs,
+      )
+    : cylinder.origin;
   return {
     key: `${bodyId}:${faceId}`,
     bodyId,
@@ -314,6 +329,7 @@ export function camHoleFromCylinderFace(
     radius: cylinder.radius,
     modelPoint: marker,
     point: { x: center.x, y: center.y },
+    axis,
   };
 }
 

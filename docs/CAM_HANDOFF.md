@@ -1,9 +1,58 @@
 # CAM branch handoff — 2026-08-24
 
-State of `feature/cam` after ten working rounds, rebased onto current
+State of `feature/cam` after eleven working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 11 (2026-08-24) — one dialog per entity, context menus, tilted holes
+
+- **Create and edit share ONE dialog per entity.** The `setupEdit` /
+  `operationEdit` dialog states and every inspector component
+  (`SetupInspector`, `OperationInspector`, the per-kind `*Fields`, the
+  `Field`/`LengthField`/`CommitPoints` helper family) are DELETED from
+  `CamWorkspace.tsx`. The store's `CamDialogState` is now
+  `{ type:'setup'; editId?: number } | { type:'operation'; kind; editId? } |
+  tool | post`; `CamSetupDialog` and `CamOperationDialog` take an optional
+  `editing` prop, seed every draft from the stored setup/operation (heights
+  re-expressed as nearest reference plane + signed offset via
+  `heightDraftFrom`; paths/points re-open as manual X,Y lines; the WCS
+  orientation is reverse-solved by replaying all 8 dialog orientations
+  against the stored axes; the thread designation keeps the stored
+  pitch/diameters until the operator deliberately changes it via
+  `threadPresetTouched`; `feedsTouched` starts true so picking another tool
+  never silently rewrites cutting data), and submit through
+  `replaceCamSetup` / `replaceCamOperation` (new in `document.ts` — wholesale
+  replace keeping id/enabled/operations, re-resolving stock+WCS against the
+  live scene, fail-closed on kind change / self-referencing rest stock).
+  The dialog host keys dialogs by edit target so switching edits re-seeds.
+- **Context menus on every browser row** (`CamBrowser.tsx`): setup rows (edit
+  / delete), Stock&WCS rows (edit), operation rows (suppress/resume, edit,
+  delete — as before). All carry `data-native-viewport-overlay`.
+- **Hole picking unlocked from setup Z.** `camHoleFromCylinderFace` accepts
+  ANY cylindrical face and records the hole axis in setup coordinates
+  (`axis: [x,y,z]` on `CamHolePickHole`, rotated with the same dot-product
+  convention as `modelPointToSetup` — setup[i] = dot(model, axis[i]); the
+  transposed variant computed the right Z for today's 8 axis-aligned
+  orientations but wrong X/Y for tilted holes, which is exactly what future
+  indexed/5-axis work consumes). Overlay markers: green at the stock-top
+  plane for setup-Z holes, AMBER at the face's axis origin for tilted ones
+  (`HOLE_POINT_TILTED`), hovered enlarged. The dialog lists tilted holes with
+  a ∠ badge and `resolveDrillPoints` fails closed at submit (fixed-axis
+  planning drills along setup Z only). The hover cursor is `crosshair` off
+  holes instead of `not-allowed`.
+- **Facing safe-distance verified against the user's live document.** The
+  engine, overlay, and numbers were proven correct to the pixel (entry X =
+  stock min − radius − safe distance; a Ø63 face mill on a 34 mm stock makes
+  a 36.5 mm approach that LOOKS wrong but is exactly right; the large grey
+  slab in the feedback screenshot was the tool ghost parked at the last
+  cutting position). To make the 5 mm edge gap readable, `pushSelectedTool`
+  in `overlay.ts` now draws the tool ghost at BOTH the entry plunge point
+  (first same-XY descending linear) and the last cutting position.
+- **`.nbpost` inspection moved** from the retired setup inspector into the
+  Post NC dialog (`CamPostDialog`), unchanged otherwise.
+- Verified: `npx tsc --noEmit`, `cargo test --workspace` (464),
+  mcp-server (37), `npm run build`, `npm run smoke:wasm` — all green.
 
 ## What exists now
 
@@ -79,7 +128,8 @@ and the tests, not this document, when they disagree.
   dirty, so no extra invalidation plumbing exists. The old hand-rolled 2D
   canvas (`CamSimulationViewport`) is deleted. Selecting an operation also
   draws a translucent ghost of its tool (fluted section brighter, shank
-  fainter) parked at the operation's last cutting position.
+  fainter) parked at the operation's last cutting position AND at the entry
+  plunge point (round 11 — makes the facing safe-distance gap visible).
 - A machining-time chip sits at the viewport's lower right: the selected
   operation's `h:mm:ss` from `program.per_operation`, or the setup total when
   nothing is selected.
@@ -88,13 +138,15 @@ and the tests, not this document, when they disagree.
   candidates with the live camera (16 px nearest-wins); Escape cancels via a
   `CamWorkspace` listener, and the prompt shows as a DOM banner.
 - Viewport hole picking works the same way for drill/thread dialogs (round
-  10): the dialog opens a `camHolePick` session in the store for its
-  lifetime, pointermove highlights cylindrical faces whose axis is parallel
-  to setup Z (`camHoleFromCylinderFace` in `geometry.ts` converts a face to
-  a setup-space center + radius, marker parked at stock-top height), a click
-  toggles the hole into the dialog's list, and the overlay draws selected
-  holes as green markers (the hovered one enlarged). Manual X,Y entry
-  remains as a fallback. The old sketch-point checkbox menu is gone.
+  10; unlocked from setup Z in round 11): the dialog opens a `camHolePick`
+  session in the store for its lifetime, pointermove highlights ANY
+  cylindrical face (`camHoleFromCylinderFace` in `geometry.ts` converts a
+  face to a setup-space center + radius + axis, marker parked at stock-top
+  height for setup-Z holes and at the face axis origin for tilted ones), a
+  click toggles the hole into the dialog's list, and the overlay draws
+  selected holes as green markers (amber for tilted, hovered enlarged).
+  Tilted holes fail closed at submit. Manual X,Y entry remains as a
+  fallback. The old sketch-point checkbox menu is gone.
 - Round-10 overlay fixes: the filled-disc rasterizer
   (`platform.rs::draw_filled_disc`) takes an adaptive half-step count derived
   from the world-per-pixel size, so pick markers render as solid dots at any
@@ -107,9 +159,10 @@ and the tests, not this document, when they disagree.
 - The browser stays shared too: App renders `BrowserTree` (embedded mode)
   with `CamSetupsPanel` docked below. Operation rows show `[T<n>]`/`[name]`
   tool tags. There is no right sidebar: double-clicking a setup row, the
-  "Stock & WCS" row, or an operation row floats that configuration in a
-  modal (`setupEdit` / `operationEdit` dialog states, reusing the former
-  inspector components inside a feature-dialog shell). The tool library is
+  "Stock & WCS" row, or an operation row re-opens the SAME dialog that
+  created it, seeded from the stored values (`editId` on the `setup` /
+  `operation` dialog states; the inspector components were deleted in round
+  11). Right-click menus cover all three row kinds. The tool library is
   a separate full-size dialog: tool table on the left; the editor is tabbed
   (General / Cutter / Cutting data) and brand-new tools start on a grouped
   type-picker page (Milling / Hole making, plus a disabled Turning tile for
@@ -165,20 +218,20 @@ and the tests, not this document, when they disagree.
   exist. Engine tests: `face_accepts_a_non_center_cutting_face_mill`,
   `face_kind_gate_admits_flat_bottom_mills_only`, and
   `face_entry_moves_outward_with_safe_distance` (round 10, pins that the
-  entry X moves outward by exactly the safe distance); the inspector edits
-  the safe distance like any other face field.
+  entry X moves outward by exactly the safe distance); the safe distance
+  edits on the dialog's Linking tab like any other face field.
 - Operation dialogs share one five-tab scaffold (Tool / Geometry / Heights /
   Passes / Linking) for every kind — round 10 deleted the old flat layout
   along with `OpToolPicker`/`OpSpeedsFeeds`; `opShared.tsx` now carries only
   `OP_PAGES` (per-kind geometry shape + which fields go live), the library
   picker plumbing, and the pick-result hook. New tools and new operations
   default to flood coolant.
-- Face operations target the model's top surface: dialogs and the inspector
-  enter a depth below model top (0 = model top), converted to absolute
-  setup Z via `geometry.ts::modelTopZInSetup` (probe transform through the
-  orthonormal WCS). The stored value stays absolute; editing the model
-  afterwards does not re-resolve (the full From-reference height system is
-  the roadmap item).
+- Face operations target the model's top surface: the dialog enters the
+  bottom as a From-reference height (default model top + 0), resolved to
+  absolute setup Z at submit; `geometry.ts::modelTopZInSetup` provides the
+  model-top plane (probe transform through the orthonormal WCS). The stored
+  value stays absolute; editing the model afterwards does not re-resolve
+  (the full From-reference height system is the roadmap item).
 - `CamOperationDialog` — every kind now runs the five-tab scaffold (round
   10). The Tool tab is shared verbatim (current tool + Select… opening the
   library picker, presets, feed & speed grid with derived surface speed /
@@ -195,10 +248,11 @@ and the tests, not this document, when they disagree.
   radial passes) and renders the rest of the reference option set disabled
   (`NOT_APPLIED_YET` in `camFields.tsx`). The thread designation select plus
   its resolved readout lives on the Geometry tab. Drill cycle changes still
-  filter compatible tools per cycle and scrub inapplicable fields (the
-  inspector's DrillFields does the same). The thread designation resolves to
-  pitch/major/minor through `src/lib/threadStandards.ts`; the resolved
-  numbers persist on the operation, the designation string never does.
+  filter compatible tools per cycle; inapplicable fields are scrubbed at
+  submit because each cycle only writes the fields it consumes. The thread
+  designation resolves to pitch/major/minor through
+  `src/lib/threadStandards.ts`; the resolved numbers persist on the
+  operation, the designation string never does.
   A cutting-profile dropdown appears when the chosen library tool carries
   named profiles and copies the picked profile into the drafts. A live
   "Multiple depths" toggle switches stepdown between the entered maximum and
@@ -221,9 +275,10 @@ and the tests, not this document, when they disagree.
   Pick markers are solid discs with pointer hover highlighting
   (`camPickCandidateKey` + `setCamPointPickHover`; the viewport's pointermove
   does a 16 px projected nearest-candidate hit test and swaps the cursor).
-- `CamBrowser` operation rows carry a right-click context menu:
-  suppress/resume (planner + post skip disabled operations, so suppress is
-  just the `enabled` flag), edit, delete; suppressed rows show a tag.
+- `CamBrowser` rows carry right-click context menus (round 11 generalized):
+  operation rows get suppress/resume (planner + post skip disabled
+  operations, so suppress is just the `enabled` flag), edit, delete; setup
+  rows get edit/delete; Stock&WCS rows get edit; suppressed rows show a tag.
 - `units.ts` — canonical mm inside, display/commit conversion at the edges;
   the document unit switch flips any time, posts emit G21/G20 / G710/G70.
 - All CAM dialogs carry `data-native-viewport-dim` on the backdrop and the
@@ -273,8 +328,12 @@ drill cycles.
    (fixture planes, selected contours, highest/lowest-of) once selection
    plumbing exists.
 7. Geometry picking upgrades: viewport chain selection for
-   contour/pocket/chamfer (sketch loops already supported; hole-face
-   picking for drill/thread landed in round 10).
+   contour/pocket/chamfer (sketch loops already supported; hole-face picking
+   for drill/thread landed in round 10 and accepts ANY cylindrical face since
+   round 11 — the recorded setup-space axis is the seam for indexed/5-axis
+   tool orientation, which fixed-axis planning does not consume yet).
+   Indexed/5-axis work itself (per-operation tool orientation, tilted-hole
+   drilling) is the larger roadmap item that will consume those axes.
 8. The shared Passes/Linking tabs render the reference option set with
    placeholders for every kind; the planner still needs to consume them:
    stock-to-leave

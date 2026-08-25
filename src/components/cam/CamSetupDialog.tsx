@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Crosshair, MousePointer2, X } from 'lucide-react';
-import { createCamSetup, type CamSetupDraft } from '../../cam/document';
+import { createCamSetup, replaceCamSetup, type CamSetupDraft } from '../../cam/document';
 import {
   boxLatticePoints,
   listSketchPointRefs,
@@ -16,6 +16,7 @@ import { cancelCamPointPick, requestCamPointPick } from '../../cam/pointPick';
 import { commitLength, displayLength } from '../../cam/units';
 import type {
   CamBoxAnchor,
+  CamSetupDto,
   CamStockFace,
   CamStockShape,
   CamStockSpecDto,
@@ -55,8 +56,10 @@ const FACE_LABELS: Record<CamStockFace, string> = {
 
 /** Fully operator-driven setup creation: bodies, stock definition, WCS origin
  *  picked on the geometry, orientation, and work offsets. Nothing is derived
- *  silently — every derived value is previewed before the setup is created. */
-export function CamSetupDialog() {
+ *  silently — every derived value is previewed before the setup is created.
+ *  Editing reuses this exact dialog: drafts seed from the stored setup and
+ *  Save writes back through the same validation as Create. */
+export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
   const cam = useAppStore((state) => state.camDocument);
   const scene = useAppStore((state) => state.solidScene);
   const sketches = useAppStore((state) => state.finishedSketches);
@@ -65,12 +68,58 @@ export function CamSetupDialog() {
   const units = cam.units;
   const lu = lengthUnit(units);
 
-  const [name, setName] = useState(`Setup ${cam.setups.length + 1}`);
-  const [bodyIds, setBodyIds] = useState<number[]>(scene.bodies.map((body) => body.id));
+  // --- Editing seeds: re-express the stored spec as dialog drafts ----------
+  const spec = editing?.stock_spec ?? null;
+  const wcsSeed = editing?.wcs_origin ?? null;
+  const seedLen = (mm: number) => String(Number(displayLength(mm, units).toFixed(4)) + 0);
+  // Reverse the stored WCS axes into the (zDown, rotation) pair this dialog
+  // can express, by replaying every orientation and comparing axes.
+  const orientationSeed = (() => {
+    const fallback = { zDown: false, rotation: 0 as 0 | 90 | 180 | 270 };
+    if (!editing) return fallback;
+    const close = (a: [number, number, number], b: [number, number, number]) =>
+      Math.abs(a[0] - b[0]) < 1e-9 &&
+      Math.abs(a[1] - b[1]) < 1e-9 &&
+      Math.abs(a[2] - b[2]) < 1e-9;
+    for (const zd of [false, true]) {
+      for (const rot of [0, 90, 180, 270] as const) {
+        const wcs = wcsFromOrientation(editing.wcs.origin, zd, rot);
+        if (
+          close(wcs.x_axis, editing.wcs.x_axis) &&
+          close(wcs.y_axis, editing.wcs.y_axis) &&
+          close(wcs.z_axis, editing.wcs.z_axis)
+        ) {
+          return { zDown: zd, rotation: rot };
+        }
+      }
+    }
+    return fallback;
+  })();
+  const boxAnchors =
+    wcsSeed?.mode === 'stock_box_point' || wcsSeed?.mode === 'model_box_point' ? wcsSeed : null;
+  // Rest machining must continue from a DIFFERENT setup than the one edited.
+  const restCandidates = cam.setups.filter((setup) => setup.id !== editing?.id);
+
+  const [name, setName] = useState(editing?.name ?? `Setup ${cam.setups.length + 1}`);
+  const [bodyIds, setBodyIds] = useState<number[]>(
+    editing?.body_ids ?? scene.bodies.map((body) => body.id),
+  );
 
   // --- Stock drafts (display units; converted once at submit) --------------
-  const [stockShape, setStockShape] = useState<CamStockShape>('box');
-  const [stockMode, setStockMode] = useState<StockMode>('from_model');
+  const [stockShape, setStockShape] = useState<CamStockShape>(
+    spec?.mode === 'fixed' || spec?.mode === 'from_model'
+      ? spec.shape
+      : spec?.mode === 'model_body'
+        ? 'model_body'
+        : 'box',
+  );
+  const [stockMode, setStockMode] = useState<StockMode>(
+    spec?.mode === 'fixed'
+      ? 'fixed'
+      : spec?.mode === 'rest_from_setup'
+        ? 'rest_from_setup'
+        : 'from_model',
+  );
   const modelBoundsAtMount = useMemo(
     () => modelBoundsOfBodies(scene, scene.bodies.map((body) => body.id)),
     // Prefill only: deliberate mount-time snapshot.
@@ -79,40 +128,56 @@ export function CamSetupDialog() {
   );
   const prefill = (valueMm: number) => displayLength(valueMm, units).toFixed(3);
   const [sizeX, setSizeX] = useState(() =>
-    prefill(modelBoundsAtMount ? modelBoundsAtMount.max.x - modelBoundsAtMount.min.x + 4 : 60),
+    spec?.mode === 'fixed'
+      ? seedLen(spec.size.x)
+      : prefill(modelBoundsAtMount ? modelBoundsAtMount.max.x - modelBoundsAtMount.min.x + 4 : 60),
   );
   const [sizeY, setSizeY] = useState(() =>
-    prefill(modelBoundsAtMount ? modelBoundsAtMount.max.y - modelBoundsAtMount.min.y + 4 : 60),
+    spec?.mode === 'fixed' && spec.shape === 'box'
+      ? seedLen(spec.size.y)
+      : prefill(modelBoundsAtMount ? modelBoundsAtMount.max.y - modelBoundsAtMount.min.y + 4 : 60),
   );
   const [sizeZ, setSizeZ] = useState(() =>
-    prefill(modelBoundsAtMount ? modelBoundsAtMount.max.z - modelBoundsAtMount.min.z + 3 : 30),
+    spec?.mode === 'fixed'
+      ? seedLen(spec.size.z)
+      : prefill(modelBoundsAtMount ? modelBoundsAtMount.max.z - modelBoundsAtMount.min.z + 3 : 30),
   );
-  const [centered, setCentered] = useState(true);
-  const [face, setFace] = useState<CamStockFace>('z_min');
-  const [faceOffset, setFaceOffset] = useState('0');
-  const [offXMin, setOffXMin] = useState(prefill(2));
-  const [offXMax, setOffXMax] = useState(prefill(2));
-  const [offYMin, setOffYMin] = useState(prefill(2));
-  const [offYMax, setOffYMax] = useState(prefill(2));
-  const [offZMin, setOffZMin] = useState(prefill(2));
-  const [offZMax, setOffZMax] = useState(prefill(1));
-  const [radial, setRadial] = useState(prefill(2));
-  const [restSetupId, setRestSetupId] = useState('');
-  const [stockBodyId, setStockBodyId] = useState('');
+  const [centered, setCentered] = useState(spec?.mode === 'fixed' ? spec.placement.center : true);
+  const [face, setFace] = useState<CamStockFace>(
+    spec?.mode === 'fixed' ? (spec.placement.face ?? 'z_min') : 'z_min',
+  );
+  const [faceOffset, setFaceOffset] = useState(
+    spec?.mode === 'fixed' ? seedLen(spec.placement.offset) : '0',
+  );
+  const [offXMin, setOffXMin] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.x_min) : prefill(2));
+  const [offXMax, setOffXMax] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.x_max) : prefill(2));
+  const [offYMin, setOffYMin] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.y_min) : prefill(2));
+  const [offYMax, setOffYMax] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.y_max) : prefill(2));
+  const [offZMin, setOffZMin] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.z_min) : prefill(2));
+  const [offZMax, setOffZMax] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.z_max) : prefill(1));
+  const [radial, setRadial] = useState(spec?.mode === 'from_model' ? seedLen(spec.offsets.x_min) : prefill(2));
+  const [restSetupId, setRestSetupId] = useState(spec?.mode === 'rest_from_setup' ? String(spec.setup_id) : '');
+  const [stockBodyId, setStockBodyId] = useState(spec?.mode === 'model_body' ? String(spec.body_id) : '');
 
   // --- WCS drafts -----------------------------------------------------------
-  const [originMode, setOriginMode] = useState<OriginMode>('stock_box_point');
-  const [anchorX, setAnchorX] = useState<CamBoxAnchor>('min');
-  const [anchorY, setAnchorY] = useState<CamBoxAnchor>('min');
-  const [anchorZ, setAnchorZ] = useState<CamBoxAnchor>('max');
-  const [sketchPointKey, setSketchPointKey] = useState('');
-  const [explicit, setExplicit] = useState({ x: '0', y: '0', z: '0' });
-  const [zDown, setZDown] = useState(false);
-  const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
+  const [originMode, setOriginMode] = useState<OriginMode>(wcsSeed?.mode ?? 'stock_box_point');
+  const [anchorX, setAnchorX] = useState<CamBoxAnchor>(boxAnchors?.x ?? 'min');
+  const [anchorY, setAnchorY] = useState<CamBoxAnchor>(boxAnchors?.y ?? 'min');
+  const [anchorZ, setAnchorZ] = useState<CamBoxAnchor>(boxAnchors?.z ?? 'max');
+  const [sketchPointKey, setSketchPointKey] = useState(
+    wcsSeed?.mode === 'sketch_point' ? `${wcsSeed.sketch}:${wcsSeed.entity_id}` : '',
+  );
+  const [explicit, setExplicit] = useState(
+    editing
+      ? { x: seedLen(editing.wcs.origin.x), y: seedLen(editing.wcs.origin.y), z: seedLen(editing.wcs.origin.z) }
+      : { x: '0', y: '0', z: '0' },
+  );
+  const [zDown, setZDown] = useState(orientationSeed.zDown);
+  const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(orientationSeed.rotation);
 
   // --- Work offsets ----------------------------------------------------------
-  const [workOffset, setWorkOffset] = useState<CamWorkOffset>('g54');
-  const [partCount, setPartCount] = useState('1');
+  const [workOffset, setWorkOffset] = useState<CamWorkOffset>(editing?.work_offset ?? 'g54');
+  const [partCount, setPartCount] = useState(String(editing?.work_offset_count ?? 1));
 
   const [error, setError] = useState<string | null>(null);
 
@@ -173,7 +238,7 @@ export function CamSetupDialog() {
               };
         return { mode: 'from_model', shape: stockShape, offsets };
       }
-      const sourceId = Number(restSetupId || cam.setups[0]?.id);
+      const sourceId = Number(restSetupId || restCandidates[0]?.id);
       if (!sourceId) throw new Error('Pick the earlier setup to continue from.');
       return { mode: 'rest_from_setup', setup_id: sourceId };
     } catch (cause) {
@@ -350,7 +415,9 @@ export function CamSetupDialog() {
         z_down: zDown,
         z_rotation_deg: rotation,
       };
-      runCamAction(() => createCamSetup(draft).then(() => close()));
+      runCamAction(() =>
+        (editing ? replaceCamSetup(editing.id, draft) : createCamSetup(draft)).then(() => close()),
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -395,7 +462,9 @@ export function CamSetupDialog() {
       >
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Crosshair size={15} className="text-accent" />
-          <span className="flex-1 text-xs font-semibold text-ink">New CAM Setup</span>
+          <span className="flex-1 text-xs font-semibold text-ink">
+            {editing ? `Edit — ${editing.name}` : 'New CAM Setup'}
+          </span>
           <button
             type="button"
             onClick={close}
@@ -543,15 +612,15 @@ export function CamSetupDialog() {
 
             {stockShape !== 'model_body' && stockMode === 'rest_from_setup' && (
               <div className="mt-2">
-                {cam.setups.length > 0 ? (
+                {restCandidates.length > 0 ? (
                   <label className="block">
                     <span className={CAM_DIALOG_LABEL}>Continue from</span>
                     <select
-                      value={restSetupId || String(cam.setups[0]?.id ?? '')}
+                      value={restSetupId || String(restCandidates[0]?.id ?? '')}
                       onChange={(event) => setRestSetupId(event.target.value)}
                       className={CAM_DIALOG_INPUT}
                     >
-                      {cam.setups.map((setup) => (
+                      {restCandidates.map((setup) => (
                         <option key={setup.id} value={setup.id}>
                           {setup.name} (remaining stock)
                         </option>
@@ -801,7 +870,7 @@ export function CamSetupDialog() {
             type="submit"
             className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
           >
-            Create empty setup
+            {editing ? 'Save changes' : 'Create empty setup'}
           </button>
         </footer>
       </form>

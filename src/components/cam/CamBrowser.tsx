@@ -45,13 +45,21 @@ export function CamSetupsPanel() {
     return Number.isFinite(saved) && saved >= 140 ? saved : 340;
   });
   const sectionRef = useRef<HTMLElement | null>(null);
-  /** Right-click context menu on an operation row: suppress/resume, edit,
-   *  delete. Position is clamped when rendered. */
-  const [opMenu, setOpMenu] = useState<{ x: number; y: number; operationId: number } | null>(null);
+  /** Right-click context menu on setup / Stock&WCS / operation rows: edit,
+   *  suppress/resume, delete as applicable. Position is clamped when
+   *  rendered. */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    target:
+      | { kind: 'operation'; operationId: number }
+      | { kind: 'setup'; setupId: number }
+      | { kind: 'stock'; setupId: number };
+  } | null>(null);
 
   useEffect(() => {
-    if (!opMenu) return;
-    const closeMenu = () => setOpMenu(null);
+    if (!menu) return;
+    const closeMenu = () => setMenu(null);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeMenu();
     };
@@ -63,7 +71,7 @@ export function CamSetupsPanel() {
       window.removeEventListener('blur', closeMenu);
       window.removeEventListener('keydown', onKey);
     };
-  }, [opMenu]);
+  }, [menu]);
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -131,9 +139,17 @@ export function CamSetupsPanel() {
                 className={`flex h-7 items-center gap-1.5 px-2 ${active ? 'bg-accent/18' : ''}`}
                 onDoubleClick={() => {
                   runCamAction(() => setActiveCamSetup(setup.id));
-                  openDialog({ type: 'setupEdit' });
+                  openDialog({ type: 'setup', editId: setup.id });
                 }}
-                title="Double-click to edit the setup configuration"
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    target: { kind: 'setup', setupId: setup.id },
+                  });
+                }}
+                title="Double-click to edit the setup configuration, right-click for more"
               >
                 <button
                   type="button"
@@ -165,8 +181,18 @@ export function CamSetupsPanel() {
                       selectSetup(setup.id);
                       selectOperation(null);
                     }}
-                    onDoubleClick={() => openDialog({ type: 'setupEdit' })}
-                    title="Stock, WCS, and work offsets — double-click to edit"
+                    onDoubleClick={() => openDialog({ type: 'setup', editId: setup.id })}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      selectSetup(setup.id);
+                      selectOperation(null);
+                      setMenu({
+                        x: event.clientX,
+                        y: event.clientY,
+                        target: { kind: 'stock', setupId: setup.id },
+                      });
+                    }}
+                    title="Stock, WCS, and work offsets — double-click to edit, right-click for more"
                     className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                       selectedOperationId === null
                         ? 'bg-accent/20 text-ink'
@@ -187,13 +213,17 @@ export function CamSetupsPanel() {
                       onDoubleClick={() => {
                         selectSetup(setup.id);
                         selectOperation(operation.id);
-                        openDialog({ type: 'operationEdit', operationId: operation.id });
+                        openDialog({ type: 'operation', kind: operation.kind, editId: operation.id });
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         selectSetup(setup.id);
                         selectOperation(operation.id);
-                        setOpMenu({ x: event.clientX, y: event.clientY, operationId: operation.id });
+                        setMenu({
+                          x: event.clientX,
+                          y: event.clientY,
+                          target: { kind: 'operation', operationId: operation.id },
+                        });
                       }}
                       title="Double-click to edit, right-click for more"
                       className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
@@ -235,15 +265,19 @@ export function CamSetupsPanel() {
           </div>
         )}
       </div>
-      {opMenu &&
+      {menu &&
         (() => {
-          const operation = cam.setups
-            .flatMap((setup) => setup.operations)
-            .find((candidate) => candidate.id === opMenu.operationId);
-          if (!operation) return null;
+          const target = menu.target;
+          const operation =
+            target.kind === 'operation'
+              ? cam.setups
+                  .flatMap((setup) => setup.operations)
+                  .find((candidate) => candidate.id === target.operationId) ?? null
+              : null;
+          if (target.kind === 'operation' && !operation) return null;
           const itemClass =
             'flex h-7 w-full items-center gap-2 px-3 text-left text-[11px] text-mute hover:bg-edge/40 hover:text-ink';
-          const close = () => setOpMenu(null);
+          const close = () => setMenu(null);
           return (
             <div
               role="menu"
@@ -252,48 +286,89 @@ export function CamSetupsPanel() {
               data-native-viewport-overlay
               className="fixed z-[90] w-48 rounded border border-edge bg-panel py-1 shadow-2xl"
               style={{
-                left: Math.min(opMenu.x, window.innerWidth - 200),
-                top: Math.min(opMenu.y, window.innerHeight - 130),
+                left: Math.min(menu.x, window.innerWidth - 200),
+                top: Math.min(menu.y, window.innerHeight - 130),
               }}
               onPointerDown={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <button
-                type="button"
-                className={itemClass}
-                onClick={() => {
-                  close();
-                  runCamAction(() =>
-                    updateCamOperation(operation.id, (next) => {
-                      next.enabled = !operation.enabled;
-                    }),
-                  );
-                }}
-              >
-                {operation.enabled ? <Ban size={12} /> : <Play size={12} />}
-                {operation.enabled ? 'Suppress (skip in post)' : 'Resume'}
-              </button>
-              <button
-                type="button"
-                className={itemClass}
-                onClick={() => {
-                  close();
-                  openDialog({ type: 'operationEdit', operationId: operation.id });
-                }}
-              >
-                <Pencil size={12} /> Edit…
-              </button>
-              <div className="my-1 border-t border-edge/60" />
-              <button
-                type="button"
-                className={`${itemClass} hover:text-warn`}
-                onClick={() => {
-                  close();
-                  runCamAction(() => deleteCamOperation(operation.id));
-                }}
-              >
-                <Trash2 size={12} /> Delete
-              </button>
+              {target.kind === 'operation' && operation && (
+                <>
+                  <button
+                    type="button"
+                    className={itemClass}
+                    onClick={() => {
+                      close();
+                      runCamAction(() =>
+                        updateCamOperation(operation.id, (next) => {
+                          next.enabled = !operation.enabled;
+                        }),
+                      );
+                    }}
+                  >
+                    {operation.enabled ? <Ban size={12} /> : <Play size={12} />}
+                    {operation.enabled ? 'Suppress (skip in post)' : 'Resume'}
+                  </button>
+                  <button
+                    type="button"
+                    className={itemClass}
+                    onClick={() => {
+                      close();
+                      openDialog({ type: 'operation', kind: operation.kind, editId: operation.id });
+                    }}
+                  >
+                    <Pencil size={12} /> Edit…
+                  </button>
+                  <div className="my-1 border-t border-edge/60" />
+                  <button
+                    type="button"
+                    className={`${itemClass} hover:text-warn`}
+                    onClick={() => {
+                      close();
+                      runCamAction(() => deleteCamOperation(operation.id));
+                    }}
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </>
+              )}
+              {target.kind === 'setup' && (
+                <>
+                  <button
+                    type="button"
+                    className={itemClass}
+                    onClick={() => {
+                      close();
+                      openDialog({ type: 'setup', editId: target.setupId });
+                    }}
+                  >
+                    <Pencil size={12} /> Edit…
+                  </button>
+                  <div className="my-1 border-t border-edge/60" />
+                  <button
+                    type="button"
+                    className={`${itemClass} hover:text-warn`}
+                    onClick={() => {
+                      close();
+                      runCamAction(() => deleteCamSetup(target.setupId));
+                    }}
+                  >
+                    <Trash2 size={12} /> Delete setup
+                  </button>
+                </>
+              )}
+              {target.kind === 'stock' && (
+                <button
+                  type="button"
+                  className={itemClass}
+                  onClick={() => {
+                    close();
+                    openDialog({ type: 'setup', editId: target.setupId });
+                  }}
+                >
+                  <Pencil size={12} /> Edit stock &amp; WCS…
+                </button>
+              )}
             </div>
           );
         })()}

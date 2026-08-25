@@ -340,6 +340,100 @@ export function updateCamOperation(
   });
 }
 
+/** Replace an operation wholesale from the shared programming dialog: the
+ *  edit path stores exactly what the create path would, keeping the id and
+ *  the enabled flag. Kind is fixed at creation and cannot change here. */
+export function replaceCamOperation(
+  operationId: number,
+  input: CamOperationInput,
+): Promise<void> {
+  return enqueueCamUpdate((cam) => {
+    const next = structuredClone(cam);
+    for (const setup of next.setups) {
+      const index = setup.operations.findIndex(
+        (candidate) => candidate.id === operationId,
+      );
+      if (index === -1) continue;
+      const existing = setup.operations[index];
+      if (existing.kind !== input.kind) {
+        throw new Error('Operation kind is fixed; delete and recreate to change it.');
+      }
+      setup.operations[index] = {
+        ...input,
+        id: existing.id,
+        enabled: existing.enabled,
+      } as CamOperationDto;
+      return next;
+    }
+    return cam;
+  });
+}
+
+/** Replace a setup's definition wholesale from the shared setup dialog,
+ *  re-resolving stock and WCS against the live scene. Operations on the
+ *  setup are kept; changed heights/stock surface as plan-time validation
+ *  errors (fail-closed) rather than silent re-interpretation. */
+export function replaceCamSetup(setupId: number, draft: CamSetupDraft): Promise<void> {
+  return enqueueCamUpdate((cam, state) => {
+    if (draft.body_ids.length === 0) {
+      throw new Error('A CAM setup needs at least one solid body.');
+    }
+    const existing = cam.setups.find((candidate) => candidate.id === setupId);
+    if (!existing) return cam;
+    if (
+      draft.stock_spec.mode === 'rest_from_setup' &&
+      draft.stock_spec.setup_id === setupId
+    ) {
+      throw new Error('A setup cannot rest-machine its own remaining stock.');
+    }
+    const partBounds = modelBoundsOfBodies(state.solidScene, draft.body_ids);
+    const stockBounds =
+      draft.stock_spec.mode === 'model_body'
+        ? modelBoundsOfBodies(state.solidScene, [draft.stock_spec.body_id])
+        : partBounds;
+    const sourceSetup =
+      draft.stock_spec.mode === 'rest_from_setup'
+        ? cam.setups.find((setup) => setup.id === (draft.stock_spec as { setup_id: number }).setup_id) ?? null
+        : null;
+    const resolved = resolveStock(
+      draft.stock_spec,
+      stockBounds,
+      sourceSetup,
+      draft.z_rotation_deg,
+    );
+    const inheritWcs = draft.stock_spec.mode === 'rest_from_setup' && sourceSetup !== null;
+    const origin =
+      draft.wcs_origin.mode === 'explicit'
+        ? draft.explicit_origin
+        : resolveWcsOrigin(
+            draft.wcs_origin,
+            resolved.modelBox,
+            partBounds,
+            state.finishedSketches,
+          );
+    const wcs = inheritWcs
+      ? sourceSetup.wcs
+      : wcsFromOrientation(origin, draft.z_down, draft.z_rotation_deg);
+    const stock = stockToSetup(resolved.modelBox, wcs);
+    const next = structuredClone(cam);
+    const index = next.setups.findIndex((candidate) => candidate.id === setupId);
+    next.setups[index] = {
+      ...existing,
+      name: draft.name.trim() || existing.name,
+      wcs,
+      wcs_origin: inheritWcs ? sourceSetup.wcs_origin : draft.wcs_origin,
+      work_offset: draft.work_offset,
+      work_offset_count: Math.max(1, Math.min(6, Math.round(draft.work_offset_count))),
+      stock_spec: draft.stock_spec,
+      resolved_stock: resolved.resolve(wcs),
+      stock,
+      stock_model_box: resolved.modelBox,
+      body_ids: draft.body_ids,
+    };
+    return next;
+  });
+}
+
 /** Edit the project's snapshot of a tool. The central library is NOT
  *  touched — syncing back is the operator's explicit choice
  *  (`publishCamToolToCentral`). */
