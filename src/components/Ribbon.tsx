@@ -1,7 +1,9 @@
 /**
  * Ribbon: data-driven panels of icon buttons with dropdown panel menus,
- * driven by src/ribbon/config.ts. In sketch mode a green FINISH SKETCH
- * button docks on the right.
+ * driven by src/ribbon/config.ts. The left cell holds the workspace
+ * switcher (Solid Modeling / Drawing), a dropdown owned by the active
+ * project tab. In sketch mode a green FINISH SKETCH button docks on the
+ * right.
  *
  * Dropdown menus are PORTALED to document.body: the panels row uses
  * `overflow-x-auto` for narrow windows, and CSS computes overflow-y to
@@ -20,7 +22,6 @@ import { dispatchRibbonAction } from '../ribbon/dispatch';
 import { useAppStore } from '../store/appStore';
 import { CONSTRAINT_ICON_IDS, ToolIcon } from './icons';
 import { RibbonMenu } from './RibbonMenu';
-import { AppMenuControls } from './TopBar';
 
 export function Ribbon() {
   const { t } = useTranslation();
@@ -57,35 +58,13 @@ export function Ribbon() {
   return (
     <div
       ref={rootRef}
-      className="relative flex h-[122px] w-full min-w-0 shrink-0 flex-col overflow-hidden"
+      className="relative flex h-[92px] w-full min-w-0 shrink-0 flex-col overflow-hidden"
     >
-      <nav
-        aria-label="Application workspace"
-        className="flex h-[30px] shrink-0 items-end gap-1 border-b border-edge bg-panel px-2"
-      >
-        <span className="mb-1.5 mr-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-mute/70">Workspace</span>
-        <WorkspaceButton
-          active={activeTab === 'solid' || activeTab === 'sketch'}
-          disabled={!documentOpen}
-          icon={<Box size={13} />}
-          label={t('ribbon.tabs.solidModeling')}
-          detail={mode === 'sketch' ? t('ribbon.tabs.sketch') : undefined}
-          onClick={() => dispatchRibbonAction('modelWorkspace')}
-        />
-        <WorkspaceButton
-          active={activeTab === 'drawing'}
-          disabled={!documentOpen || mode === 'sketch'}
-          icon={<FileText size={13} />}
-          label={t('ribbon.tabs.drawingWorkspace')}
-          title={mode === 'sketch' ? 'Finish the active sketch before opening Drawings' : undefined}
-          onClick={() => dispatchRibbonAction('drawingWorkspace')}
-        />
-      </nav>
       <div
         data-testid="ribbon-tools"
         className="flex h-[92px] min-w-0 shrink-0 items-stretch border-b border-edge bg-header"
       >
-        <AppMenuControls />
+        <WorkspaceSwitcher onOpen={() => setOpenPanel(null)} />
         <div
           data-testid="ribbon-command-scroll"
           className="flex min-w-0 flex-1 items-stretch overflow-x-auto overscroll-x-contain"
@@ -121,42 +100,155 @@ export function Ribbon() {
   );
 }
 
-function WorkspaceButton({
-  active,
-  disabled,
+/** Workspace (Solid Modeling / Drawing) dropdown docked at the left edge of
+ * the ribbon. The active project owns this stage, so the switcher lives
+ * inside the ribbon rather than above the project tabs. */
+function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
+  const mode = useAppStore((s) => s.mode);
+  const activeTab = useAppStore((s) => s.activeTab);
+  const documentOpen = useAppStore((s) => s.document !== null);
+  const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.document.addEventListener('pointerdown', onPointerDown);
+    window.document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.document.removeEventListener('pointerdown', onPointerDown);
+      window.document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const sketching = mode === 'sketch';
+  const drawingActive = activeTab === 'drawing';
+  const choose = (action: RibbonAction) => {
+    setOpen(false);
+    dispatchRibbonAction(action);
+  };
+
+  return (
+    <div
+      ref={anchorRef}
+      className="flex h-full w-[108px] shrink-0 flex-col border-r border-edge bg-header pr-1.5 max-[1400px]:w-14 max-[1400px]:pr-0"
+    >
+      <div className="flex h-[62px] w-full items-start pl-1.5 pt-1.5 max-[1400px]:pl-0.5">
+        <button
+          type="button"
+          data-testid="workspace-switcher"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title={t('workspace.switchWorkspace')}
+          aria-label={t('workspace.switchWorkspace')}
+          disabled={!documentOpen}
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              return;
+            }
+            const rect = anchorRef.current?.getBoundingClientRect();
+            if (rect) {
+              // Menus are portaled out of the ribbon clip; keep the root
+              // inside the window like the panel flyouts do.
+              setMenuPos({
+                left: Math.max(8, Math.min(rect.left, window.innerWidth - 264)),
+                top: rect.bottom,
+              });
+            }
+            onOpen();
+            setOpen(true);
+          }}
+          className="flex h-[52px] w-full min-w-0 flex-col items-center justify-center gap-0.5 rounded px-2 text-mute hover:bg-edge hover:text-ink disabled:cursor-default disabled:opacity-50 max-[1400px]:px-1"
+        >
+          <span className="flex h-6 items-center justify-center text-ink">
+            {drawingActive ? <FileText size={20} /> : <Box size={20} />}
+          </span>
+          <span className="flex items-center gap-0.5 whitespace-nowrap text-[9px] leading-tight">
+            <span className="max-[1400px]:hidden">
+              {drawingActive ? t('ribbon.tabs.drawingWorkspace') : t('ribbon.tabs.solidModeling')}
+            </span>
+            {sketching && (
+              <span className="rounded bg-accent/15 px-1 text-[8px] font-medium text-accent max-[1400px]:hidden">
+                {t('ribbon.tabs.sketch')}
+              </span>
+            )}
+            <ChevronDown size={8} />
+          </span>
+        </button>
+      </div>
+      <div className="flex h-5 items-center justify-center text-[10px] tracking-wider text-mute max-[1400px]:text-[8px] max-[1400px]:tracking-normal">
+        {t('ribbon.panels.workspace')}
+      </div>
+      {open && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          data-ribbon-menu
+          data-testid="workspace-menu"
+          className="fixed z-[100] w-56 rounded border border-edge bg-panel py-1 shadow-xl shadow-black/50"
+          style={{ left: menuPos.left, top: menuPos.top }}
+        >
+          <WorkspaceMenuItem
+            icon={<Box size={14} />}
+            label={t('ribbon.tabs.solidModeling')}
+            checked={!drawingActive}
+            onClick={() => choose('modelWorkspace')}
+          />
+          <WorkspaceMenuItem
+            icon={<FileText size={14} />}
+            label={t('ribbon.tabs.drawingWorkspace')}
+            checked={drawingActive}
+            disabled={sketching}
+            title={sketching ? 'Finish the active sketch before opening Drawings' : undefined}
+            onClick={() => choose('drawingWorkspace')}
+          />
+        </div>,
+        window.document.body,
+      )}
+    </div>
+  );
+}
+
+function WorkspaceMenuItem({
   icon,
   label,
-  detail,
+  checked,
+  disabled = false,
   title,
   onClick,
 }: {
-  active: boolean;
-  disabled: boolean;
   icon: ReactNode;
   label: string;
-  detail?: string;
+  checked: boolean;
+  disabled?: boolean;
   title?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      aria-pressed={active}
+      role="menuitemradio"
+      aria-checked={checked}
       disabled={disabled}
       title={title}
       onClick={onClick}
-      className={cx(
-        'relative flex h-[27px] items-center gap-1.5 rounded-t px-3 text-[10px] font-semibold transition-colors',
-        active
-          ? 'bg-header text-ink after:absolute after:inset-x-0 after:bottom-[-1px] after:h-px after:bg-header'
-          : 'text-mute hover:bg-edge/50 hover:text-ink',
-        disabled && 'cursor-not-allowed opacity-40',
-      )}
+      className="flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left text-[11px] text-ink hover:bg-accent hover:text-white focus:bg-accent focus:text-white focus:outline-none disabled:pointer-events-none disabled:cursor-default disabled:opacity-40"
     >
-      {icon}
-      <span>{label}</span>
-      {detail && <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[8px] font-medium text-accent">{detail}</span>}
-      {active && <span className="absolute inset-x-2 top-0 h-0.5 rounded-full bg-accent" />}
+      <span className="text-current">{icon}</span>
+      <span className="flex-1">{label}</span>
+      {checked && <Check size={12} />}
     </button>
   );
 }

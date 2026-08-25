@@ -19,6 +19,7 @@ import type {
 } from '../engine/types';
 import { translate } from '../i18n';
 import { dropApplicationHistory } from '../engine/applicationHistory';
+import { enterDrawingWorkspace } from '../drawing/document';
 import {
   exportProjectModelWithVisibility,
   useAppStore,
@@ -34,6 +35,8 @@ interface ProjectTabRuntime {
   resident: boolean;
   /** Last time this tab stopped being active; used for conservative LRU. */
   lastUsedAt: number;
+  /** Workspace stage (solid/drawing) the project was last viewed in. */
+  workspaceTab: string;
   /** Frontend mirror retained by reference to avoid large mesh JSON on switch. */
   viewState: ProjectTabViewState | null;
 }
@@ -119,6 +122,13 @@ function createTabId(): string {
   return id;
 }
 
+/** Workspace stage of the active document; sketch is a mode inside modeling,
+ * never a restorable workspace. */
+function activeWorkspaceTab(): string {
+  const tab = useAppStore.getState().activeTab;
+  return tab === 'sketch' ? 'solid' : tab;
+}
+
 function summaryFromActiveState(id: string): ProjectTabSummary {
   const state = useAppStore.getState();
   return {
@@ -126,6 +136,7 @@ function summaryFromActiveState(id: string): ProjectTabSummary {
     name: state.document?.name ?? translate('app.untitledDocument'),
     fileName: state.projectFileName,
     dirty: state.dirty,
+    workspaceTab: activeWorkspaceTab(),
   };
 }
 
@@ -189,6 +200,7 @@ async function ensureActiveProjectTab(
     saveTarget: currentProjectTarget,
     resident: false,
     lastUsedAt: Date.now(),
+    workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
   });
   useAppStore.setState({
@@ -217,6 +229,7 @@ async function snapshotActiveProjectTab(): Promise<string> {
     saveTarget: currentProjectTarget,
     resident: runtime?.resident ?? true,
     lastUsedAt: Date.now(),
+    workspaceTab: activeWorkspaceTab(),
     viewState,
   });
   syncActiveSummary();
@@ -313,6 +326,14 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
       activeProjectTabId: tabId,
       dirty: tab.dirty,
     });
+    // The workspace stage is per-project state nested under the project tab:
+    // re-enter the stage this project was last viewed in. If an entry guard
+    // rejects the transition, fall back to plain modeling.
+    try {
+      if (runtime.workspaceTab === 'drawing') await enterDrawingWorkspace();
+    } catch {
+      useAppStore.getState().setActiveTab('solid');
+    }
   } catch (error) {
     // A cold reload is transactional from the user's perspective: keep the
     // outgoing tab active and dispose the partial replacement context.
@@ -372,6 +393,7 @@ export function createProjectTab(): Promise<boolean> {
       saveTarget: null,
       resident: true,
       lastUsedAt: Date.now(),
+      workspaceTab: 'solid',
       viewState: {
         update,
         finishedSketches: [],
@@ -461,6 +483,7 @@ export function closeProjectTab(
       saveTarget: null,
       resident: true,
       lastUsedAt: Date.now(),
+      workspaceTab: 'solid',
       viewState: {
         update,
         finishedSketches: [],
@@ -498,6 +521,7 @@ export async function recordActiveProjectSave(
     saveTarget,
     resident: runtime?.resident ?? true,
     lastUsedAt: runtime?.lastUsedAt ?? Date.now(),
+    workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
   });
   syncActiveSummary();
@@ -519,6 +543,7 @@ export async function recordActiveProjectOpen(
     saveTarget,
     resident: runtime?.resident ?? true,
     lastUsedAt: runtime?.lastUsedAt ?? Date.now(),
+    workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
   });
   syncActiveSummary();
@@ -553,6 +578,7 @@ export async function collectRecoverableProjectTabs(): Promise<{
           resident: runtimes.get(state.activeProjectTabId)?.resident ?? true,
           lastUsedAt:
             runtimes.get(state.activeProjectTabId)?.lastUsedAt ?? Date.now(),
+          workspaceTab: activeWorkspaceTab(),
           viewState: activeViewState(),
         });
       }
@@ -604,6 +630,7 @@ export async function restoreProjectTabs(
       saveTarget: null,
       resident: false,
       lastUsedAt: Date.now(),
+      workspaceTab: 'solid',
       viewState:
         tab.id === active.id
           ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility }
@@ -632,6 +659,7 @@ export async function restoreProjectTabs(
       name: tab.id === active.id ? update.document.name : tab.name,
       fileName: tab.fileName,
       dirty: true,
+      workspaceTab: 'solid',
     })),
   });
   return true;

@@ -61,6 +61,7 @@ import {
   installNativeEditMenu,
   nativeMacMenuOwnsUndoRedo,
 } from './nativeEditMenu';
+import { installNativeFileMenu } from './nativeFileMenu';
 import { isTauriRuntime } from './engine';
 import { requestUnsavedDecision } from './files/unsavedChanges';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
@@ -100,6 +101,8 @@ export default function App() {
   useEffect(() => installProjectTabRetention(), []);
 
   useEffect(() => installNativeEditMenu(), []);
+
+  useEffect(() => installNativeFileMenu(), []);
 
   useEffect(() => {
     const media = window.matchMedia(SYSTEM_DARK_QUERY);
@@ -365,6 +368,9 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
+      {/* Project tabs are the window-level row: each project owns the
+          workspace stage (modeling/drawing) rendered below it. */}
+      <ProjectTabBar />
       <Ribbon />
       <div className="flex min-h-0 flex-1">
         {drawingWorkspace ? (
@@ -375,7 +381,6 @@ export default function App() {
           <BrowserTree />
         )}
         <div className="flex min-w-0 flex-1 flex-col">
-          <ProjectTabBar />
           <main className="relative min-h-0 min-w-0 flex-1">
             {drawingWorkspace ? (
               <DrawingWorkspace />

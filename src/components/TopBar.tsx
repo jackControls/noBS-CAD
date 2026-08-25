@@ -1,5 +1,5 @@
-/** Project controls embedded as the first command-ribbon panel, plus the
- * active project tab rendered directly below that ribbon. */
+/** Window chrome: compact project controls (File menu + New) docked at the
+ * left of the window-level project tab strip rendered above the ribbon. */
 import {
   useCallback,
   useEffect,
@@ -13,8 +13,10 @@ import {
   Box,
   ChevronDown,
   FileDown,
+  FileText,
   FileUp,
   FolderOpen,
+  Loader2,
   Pencil,
   Plus,
   Save,
@@ -35,6 +37,7 @@ import {
 } from '../files/projectFiles';
 import { useAppStore } from '../store/appStore';
 import { switchProjectTab } from '../files/projectTabs';
+import { cx } from '../lib/cx';
 import { exportActiveDrawingDxf } from '../drawing/export';
 import { requestNativeViewportLayout } from './viewport/nativeViewportBridge';
 
@@ -47,7 +50,7 @@ interface FileMenuPosition {
   maxHeight: number;
 }
 
-export function AppMenuControls() {
+export function ProjectMenuControls() {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
   const selectedBody = useAppStore((s) => s.selectedBody);
@@ -157,7 +160,8 @@ export function AppMenuControls() {
   }, [menuOpen, menuPosition]);
 
   const run = (action: () => Promise<unknown>) => {
-    if (useAppStore.getState().projectBusy) return;
+    const state = useAppStore.getState();
+    if (state.projectBusy || state.solidBusy) return;
     setMenuOpen(false);
     setBusy(true);
     setProjectBusy(true);
@@ -184,40 +188,41 @@ export function AppMenuControls() {
       ref={anchorRef}
       data-tauri-drag-region
       data-testid="app-menu-controls"
-      className="flex h-full shrink-0 flex-col border-r border-edge bg-header pr-1.5"
+      className="flex h-full shrink-0 items-stretch border-r border-edge bg-header"
     >
-      <div className="flex h-[62px] items-start gap-0.5 pt-1.5">
-        <div className="relative">
-          <button
-            ref={menuButtonRef}
-            type="button"
-            data-testid="file-menu-button"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            disabled={interactionBusy}
-            onClick={() => {
-              if (menuOpen) {
-                setMenuOpen(false);
-                return;
-              }
-              updateMenuPosition();
-              setMenuOpen(true);
-            }}
-            className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-50 max-[1400px]:w-10"
+      <div className="relative">
+        <button
+          ref={menuButtonRef}
+          type="button"
+          data-testid="file-menu-button"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          disabled={interactionBusy}
+          title={t('file.menu')}
+          onClick={() => {
+            if (menuOpen) {
+              setMenuOpen(false);
+              return;
+            }
+            updateMenuPosition();
+            setMenuOpen(true);
+          }}
+          className="flex h-full w-10 items-center justify-center gap-0.5 text-mute hover:bg-edge hover:text-ink disabled:opacity-50"
+        >
+          <div
+            data-testid="product-mark"
+            title={t('app.name')}
+            aria-label={t('app.name')}
+            className="flex h-4 w-5 shrink-0 items-center justify-center rounded border border-accent/40 bg-accent/10 font-mono text-[7px] font-black tracking-[-0.08em] text-accent"
           >
-            <div
-              data-testid="product-mark"
-              title={t('app.name')}
-              aria-label={t('app.name')}
-              className="flex h-6 w-7 shrink-0 items-center justify-center rounded-md border border-accent/40 bg-accent/10 font-mono text-[9px] font-black tracking-[-0.08em] text-accent"
-            >
-              NB
-            </div>
-            <span className="flex items-center gap-0.5 text-[9px] leading-tight">
-              {busy ? t('file.working') : t('file.menu')}
-              <ChevronDown size={8} />
-            </span>
-          </button>
+            NB
+          </div>
+          {busy ? (
+            <Loader2 size={7} className="animate-spin" />
+          ) : (
+            <ChevronDown size={7} />
+          )}
+        </button>
           {menuOpen && menuPosition && createPortal(
             <div
               ref={menuRef}
@@ -331,26 +336,31 @@ export function AppMenuControls() {
             </div>,
             window.document.body,
           )}
-        </div>
-
-        <button
-          type="button"
-          title={t('topbar.newDesign')}
-          aria-label={t('topbar.newDesign')}
-          disabled={interactionBusy}
-          onClick={() => run(newProject)}
-          className="flex h-[52px] w-11 flex-col items-center justify-center gap-0.5 rounded text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50 max-[1400px]:w-10"
-        >
-          <Plus size={22} />
-          <span className="text-[9px] leading-tight">{t('file.new')}</span>
-        </button>
       </div>
 
-      <div className="flex h-5 items-center justify-center text-[10px] tracking-wider text-mute">
-        {t('file.panel')}
-      </div>
+      <button
+        type="button"
+        title={t('topbar.newDesign')}
+        aria-label={t('topbar.newDesign')}
+        disabled={interactionBusy}
+        onClick={() => run(newProject)}
+        className="flex h-full w-7 items-center justify-center text-mute hover:bg-edge hover:text-ink disabled:cursor-wait disabled:opacity-50"
+      >
+        <Plus size={14} />
+      </button>
     </div>
   );
+}
+
+/** Icon and label for the workspace stage a project tab was last viewed in. */
+function workspaceStagePresentation(
+  stage: string,
+  t: (key: string) => string,
+): { icon: ReactNode; label: string } {
+  if (stage === 'drawing') {
+    return { icon: <FileText size={10} />, label: t('ribbon.tabs.drawingWorkspace') };
+  }
+  return { icon: <Box size={10} />, label: t('ribbon.tabs.solidModeling') };
 }
 
 export function ProjectTabBar() {
@@ -360,6 +370,9 @@ export function ProjectTabBar() {
   const projectFileName = useAppStore((s) => s.projectFileName);
   const projectTabs = useAppStore((s) => s.projectTabs);
   const activeProjectTabId = useAppStore((s) => s.activeProjectTabId);
+  // Live workspace stage of the active project; inactive tabs read their
+  // remembered stage from the tab summary.
+  const activeWorkspaceTab = useAppStore((s) => s.activeTab);
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
   const [busy, setBusy] = useState(false);
@@ -390,18 +403,27 @@ export function ProjectTabBar() {
     <div
       data-testid="project-tabs"
       data-tauri-drag-region
-      data-native-viewport-overlay
-      role="tablist"
-      aria-label={t('file.openDocuments')}
-      className="project-tab-scroll flex h-7 shrink-0 items-stretch overflow-x-auto overflow-y-hidden border-b border-edge bg-panel"
+      className="flex h-7 shrink-0 items-stretch bg-header"
     >
-      {projectTabs.map((tab, index) => {
+      <ProjectMenuControls />
+      <div
+        role="tablist"
+        aria-label={t('file.openDocuments')}
+        className="project-tab-scroll flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+      >
+        {projectTabs.map((tab, index) => {
         const active = tab.id === activeProjectTabId;
         const docName = active
           ? document?.name ?? tab.name
           : tab.name;
         const tabDirty = active ? dirty : tab.dirty;
         const fileName = active ? projectFileName : tab.fileName;
+        // Sketch is a mode inside modeling, never a restorable stage.
+        const liveStage = activeWorkspaceTab === 'sketch' ? 'solid' : activeWorkspaceTab;
+        const stage = workspaceStagePresentation(
+          active ? liveStage : tab.workspaceTab,
+          t,
+        );
         const closeLabel = active
           ? t('topbar.closeDocument')
           : `${t('topbar.closeDocument')}: ${docName}`;
@@ -414,12 +436,19 @@ export function ProjectTabBar() {
             key={tab.id}
             ref={active ? activeTabRef : undefined}
             data-project-tab-id={tab.id}
-            className={`flex min-w-48 max-w-72 shrink-0 items-center gap-1.5 border-r border-t-2 border-edge px-3 text-xs text-ink ${
+            className={cx(
+              'flex min-w-48 max-w-72 shrink-0 items-center gap-1.5 border-r border-t-2 border-edge px-3 text-xs',
               active
-                ? 'border-t-accent bg-header'
-                : 'border-t-transparent bg-panel text-mute hover:bg-header'
-            }`}
+                ? 'border-t-accent bg-panel text-ink'
+                : 'border-t-transparent text-mute hover:bg-panel/60 hover:text-ink',
+            )}
           >
+            <span
+              className={cx('shrink-0', active ? 'text-accent' : 'text-mute/70')}
+              title={stage.label}
+            >
+              {stage.icon}
+            </span>
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                 tabDirty ? 'bg-[#e8963c]' : 'bg-mute/40'
@@ -465,7 +494,8 @@ export function ProjectTabBar() {
             </button>
           </div>
         );
-      })}
+        })}
+      </div>
     </div>
   );
 }

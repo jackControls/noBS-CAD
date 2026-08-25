@@ -192,18 +192,25 @@ try {
   const appControls = await page.getByTestId('app-menu-controls').boundingBox();
   const browserPanel = await page.getByTestId('browser-panel').boundingBox();
   const projectTabs = await page.getByTestId('project-tabs').boundingBox();
+  const workspaceSwitcher = await page.getByTestId('workspace-switcher').boundingBox();
   assert.ok(
     ribbonTools &&
       appControls &&
       browserPanel &&
       projectTabs &&
+      workspaceSwitcher &&
+      projectTabs.x <= 1 &&
+      projectTabs.y <= 1 &&
       appControls.x <= 1 &&
-      Math.abs(appControls.y - ribbonTools.y) <= 1 &&
-      Math.abs(appControls.height - ribbonTools.height) <= 1 &&
-      Math.abs(browserPanel.y - (ribbonTools.y + ribbonTools.height)) <= 1 &&
-      Math.abs(projectTabs.y - browserPanel.y) <= 1 &&
-      Math.abs(projectTabs.x - (browserPanel.x + browserPanel.width)) <= 1,
-    'below the workspace-module row, PROJECT is flush left, Browser starts below the ribbon, and tabs begin at the Browser edge',
+      Math.abs(appControls.y - projectTabs.y) <= 1 &&
+      appControls.y + appControls.height <= projectTabs.y + projectTabs.height + 1 &&
+      Math.abs(ribbonTools.y - (projectTabs.y + projectTabs.height)) <= 1 &&
+      workspaceSwitcher.x <= 8 &&
+      workspaceSwitcher.y >= ribbonTools.y &&
+      workspaceSwitcher.y + workspaceSwitcher.height <=
+        ribbonTools.y + ribbonTools.height + 1 &&
+      Math.abs(browserPanel.y - (ribbonTools.y + ribbonTools.height)) <= 1,
+    'project controls and tabs form the top window row, the workspace switcher docks at the left of the ribbon directly below, and the Browser starts below the ribbon',
   );
   assert.equal(
     await page.getByTestId('main-menu-row').count(),

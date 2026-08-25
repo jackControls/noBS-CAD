@@ -247,7 +247,8 @@ try {
     store.setMode('solid');
   });
 
-  await page.getByRole('button', { name: 'Drawing', exact: true }).click();
+  await page.getByTestId('workspace-switcher').click();
+  await page.getByRole('menuitemradio', { name: 'Drawing', exact: true }).click();
   await page.getByTestId('drawing-sheet-setup').waitFor();
   assert.equal(
     await page.evaluate(() => window.__appStore.getState().drawingDocument.sheets.length),
@@ -1269,7 +1270,8 @@ try {
   await page.waitForFunction(() => window.__appStore.getState().drawingDocument.sheets[1].annotations.some((annotation) => annotation.kind === 'chamfer_note'));
   assert.match(await page.getByTestId('drawing-chamfer-note').textContent(), /3(?:\.0+)? X 45(?:\.0+)?°/);
 
-  await page.getByRole('button', { name: 'Solid Modeling', exact: true }).click();
+  await page.getByTestId('workspace-switcher').click();
+  await page.getByRole('menuitemradio', { name: 'Solid Modeling', exact: true }).click();
   await page.waitForFunction(() => window.__appStore.getState().activeTab === 'solid');
   assert.equal(await page.getByTestId('drawing-workspace').count(), 0);
   assert.deepEqual(pageErrors, []);
