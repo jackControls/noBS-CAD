@@ -302,11 +302,19 @@ dependencies = [
  "base64",
  "nbcad-core",
  "nbcad-export",
+ "nbcad-mcp-mutate",
  "nbcad-occt",
  "nbcad-sketch",
  "nbcad-solid",
  "serde_json",
  "zip",
+]
+
+[[package]]
+name = "nbcad-mcp-mutate"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

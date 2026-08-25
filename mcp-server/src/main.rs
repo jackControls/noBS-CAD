@@ -6,6 +6,7 @@ use std::time::Duration;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use nbcad_core::BodyId;
 use nbcad_export::MeshExportRequest;
+use nbcad_mcp_mutate;
 use nbcad_occt::OcctKernel;
 use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
@@ -165,6 +166,15 @@ impl CadServer {
         let payload_kind = spec.payload;
         let pack = spec.pack;
         let spine = spec.spine;
+
+        // While snapshot-attached, direct mutates are rejected (#55 / Jack #60 §1).
+        // Inspect/export/control (including cad_submit) stay callable.
+        if self.attached_document_id.is_some() && !is_read_safe_while_attached(name) {
+            return Err(session_lock_error(
+                "session_read_only",
+                self.attached_document_id.as_deref(),
+            ));
+        }
 
         if execution == Execution::Control {
             return self.call_control(name, arguments);
@@ -355,6 +365,7 @@ impl CadServer {
             }
             "cad_script" => json!({ "calls": self.tool_trace.clone() }),
             "cad_compare_solids" => compare_solids_summary(&self.manager.solid_scene()),
+            "cad_submit" => self.submit_inbox_op(&arguments)?,
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
@@ -366,7 +377,11 @@ impl CadServer {
         let session_id = arguments
             .get("session_id")
             .or_else(|| arguments.get("document_id"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str);
+        if writeback_requested(arguments) {
+            return Err(session_lock_error("writeback_rejected", session_id));
+        }
+        let session_id = session_id
             .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
         session::require_valid_session_id(session_id)?;
         if !session::list_sessions()?.iter().any(|id| id == session_id) {
@@ -402,6 +417,64 @@ impl CadServer {
             "focus": self.disclosure.active().as_str(),
             "session_mode": "read_only_snapshot",
             "writeback": false,
+        }))
+    }
+
+    /// Submit one modeling mutate into `inbox/<seq>.json`. Does not touch the
+    /// MCP in-memory document; UI/engine applies, then `cad_refresh`.
+    fn submit_inbox_op(&self, arguments: &Value) -> Result<Value, String> {
+        let Some(session_id) = self.attached_document_id.clone() else {
+            return Err(session::not_attached_error());
+        };
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "missing required argument 'name'".to_string())?;
+        let op_arguments = arguments.get("arguments").cloned().unwrap_or(json!({}));
+        let base_generation = arguments
+            .get("base_generation")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "missing required argument 'base_generation'".to_string())?;
+        if !tool_specs().iter().any(|spec| spec.name == name) {
+            return Err(format!("unknown tool: {name}"));
+        }
+        if nbcad_mcp_mutate::lookup_mutate(name).is_none() {
+            return Err(serde_json::to_string(&json!({
+                "code": "unsupported_inbox_mutate",
+                "writeback": false,
+                "session_mode": "ui_owned_apply",
+                "session_id": session_id,
+                "name": name,
+                "hint": "cad_submit only accepts modeling mutates with a shared engine mapping; inspect/export/control stay direct tools",
+            }))
+            .unwrap_or_else(|_| "unsupported inbox mutate".to_string()));
+        }
+        let current = session::read_heartbeat_generation(&session_id)?;
+        if current != base_generation {
+            return Err(session::generation_conflict_error(
+                &session_id,
+                base_generation,
+                Some(current),
+            ));
+        }
+        let seq = session::write_inbox_op(
+            &session_id,
+            &session::InboxOp {
+                name: name.to_string(),
+                arguments: op_arguments,
+                base_generation,
+            },
+        )?;
+        Ok(json!({
+            "submitted": true,
+            "seq": seq,
+            "path": format!("inbox/{seq}.json"),
+            "session_id": session_id,
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+            "applied": false,
+            "base_generation": base_generation,
+            "hint": "UI/engine applies inbox via host::handle; call cad_refresh after the UI publishes",
         }))
     }
 
@@ -755,6 +828,85 @@ fn entity_ids_schema() -> Value {
         "type": "array",
         "items": { "type": "integer", "minimum": 1 },
         "minItems": 1
+    })
+}
+
+/// Tools allowed to run in-process while snapshot-attached (#55 list).
+/// `cad_submit` is the mutate path: only tools *not* on this list.
+fn is_read_safe_while_attached(name: &str) -> bool {
+    matches!(
+        name,
+        "cad_get_focus"
+            | "cad_set_focus"
+            | "cad_list_focus_areas"
+            | "cad_get_tool_disclosure_mode"
+            | "cad_set_tool_disclosure_mode"
+            | "cad_list_all_tools"
+            | "cad_cancel_recompute"
+            | "cad_list_sessions"
+            | "cad_attach"
+            | "cad_refresh"
+            | "cad_detach"
+            | "cad_submit"
+            | "cad_document"
+            | "cad_project_model"
+            | "sketch_active"
+            | "sketch_finished"
+            | "sketch_profiles"
+            | "sketch_preview_line"
+            | "sketch_preview_line_locked"
+            | "sketch_preview_fillet"
+            | "sketch_preview_offset"
+            | "sketch_preview_trim"
+            | "sketch_eval_expression"
+            | "construction_plane_definitions"
+            | "solid_scene"
+            | "assembly_document"
+            | "assembly_solution"
+            | "solid_tessellate"
+            | "solid_extrude_definitions"
+            | "solid_revolve_definitions"
+            | "solid_sweep_definitions"
+            | "solid_loft_definitions"
+            | "solid_rib_definitions"
+            | "solid_fillet_definitions"
+            | "solid_chamfer_definitions"
+            | "solid_hole_definitions"
+            | "solid_body_feature_definitions"
+            | "solid_export_step"
+            | "solid_export_stl"
+            | "solid_export_3mf"
+            | "solid_export_preflight"
+            | "demo_export_pip_3mf"
+            | "material_catalog"
+            | "body_appearances"
+    )
+}
+
+fn is_modeling_mutate(name: &str) -> bool {
+    nbcad_mcp_mutate::is_inbox_mutate(name)
+}
+
+fn writeback_requested(arguments: &Value) -> bool {
+    match arguments.get("writeback") {
+        None => false,
+        Some(Value::Bool(false)) => false,
+        Some(_) => true,
+    }
+}
+
+fn session_lock_error(code: &str, session_id: Option<&str>) -> String {
+    serde_json::to_string(&json!({
+        "code": code,
+        "writeback": false,
+        "session_mode": "read_only_snapshot",
+        "session_id": session_id,
+        "hint": "cad_submit for mutates while attached; cad_refresh to re-read UI; cad_detach to fork headless"
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"{code}\",\"writeback\":false,\"session_mode\":\"read_only_snapshot\"}}"
+        )
     })
 }
 
@@ -2772,7 +2924,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. Never writes back to the session dir.",
+            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir.",
             object_schema(
                 json!({
                     "session_id": {
@@ -2780,6 +2932,16 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "minLength": 36,
                         "maxLength": 36,
                         "description": "UUID v4 session directory name"
+                    },
+                    "document_id": {
+                        "type": "string",
+                        "minLength": 36,
+                        "maxLength": 36,
+                        "description": "Alias for session_id"
+                    },
+                    "writeback": {
+                        "type": "boolean",
+                        "description": "Must be omitted or false. true is rejected; mutates go through cad_submit while attached."
                     }
                 }),
                 &["session_id"],
@@ -2808,6 +2970,30 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Compare solid scene metrics",
             "Summarize active bodies from solid_scene: body count plus per-body bbox, vertex_count, and triangle_count from existing mesh fields. Use to check a rebuilt history against an imported reference solid. Does not invent volume.",
             empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_submit",
+            "Submit modeling op for UI-owned apply",
+            "While attached, write one modeling mutate to inbox/<seq>.json. Does not mutate this MCP process. UI/engine applies via host::handle, then publishes a new snapshot. Rejects if not attached, if base_generation != heartbeat generation, or if the tool is inspect/export/control. Headless (no attach) still calls mutate tools directly.",
+            object_schema(
+                json!({
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "MCP modeling tool name to apply on the live UI document"
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments for the named modeling tool"
+                    },
+                    "base_generation": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Heartbeat generation this op is based on"
+                    }
+                }),
+                &["name", "base_generation"],
+            ),
         ),
     ];
     for tool in &mut tools {
@@ -3315,8 +3501,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 21,
-            "117 modeling tools plus 8 print helpers and 13 control tools"
+            MODELING_TOOL_COUNT + 22,
+            "117 modeling tools plus 8 print helpers and 14 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3345,6 +3531,7 @@ mod tests {
                             | "cad_detach"
                             | "cad_script"
                             | "cad_compare_solids"
+                            | "cad_submit"
                     )
                 )
             })
@@ -3403,6 +3590,7 @@ mod tests {
                     | "cad_detach"
                     | "cad_script"
                     | "cad_compare_solids"
+                    | "cad_submit"
             ) {
                 continue;
             }
@@ -3707,6 +3895,251 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn parse_session_error(error: &str) -> Value {
+        serde_json::from_str(error).unwrap_or_else(|_| json!({ "raw": error }))
+    }
+
+    fn write_box_session(unique: &str) -> (Value, String) {
+        let (mut donor, update) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(unique, "model.json", &model_json).unwrap();
+        session::write_session(
+            unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+        (update, model_json)
+    }
+
+    fn solid_mirror_args(body_id: &Value) -> Value {
+        json!({
+            "body_ids": [body_id],
+            "plane": {"type": "origin_plane", "plane": "xy"}
+        })
+    }
+
+    #[test]
+    fn attach_cad_submit_writes_inbox_without_mutating_memory() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-submit-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let before = server.call_tool("solid_scene", json!({})).unwrap();
+        let before_count = before["bodies"].as_array().unwrap().len();
+
+        let inspect_err = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_scene",
+                    "arguments": {},
+                    "base_generation": 1
+                }),
+            )
+            .expect_err("inspect tools must not be submitted");
+        assert_eq!(
+            parse_session_error(&inspect_err)["code"],
+            "unsupported_inbox_mutate"
+        );
+
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(submitted["submitted"], true);
+        assert_eq!(submitted["seq"], 1);
+        assert_eq!(submitted["applied"], false);
+        assert_eq!(submitted["writeback"], false);
+        assert_eq!(submitted["session_mode"], "ui_owned_apply");
+        let inbox = session::read_session_file(&unique, "inbox/1.json").unwrap();
+        assert!(inbox.contains("solid_mirror"));
+
+        let after = server.call_tool("solid_scene", json!({})).unwrap();
+        assert_eq!(after["bodies"].as_array().unwrap().len(), before_count);
+        let project = server.call_tool("cad_project_model", json!({})).unwrap();
+        let project_text = project
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| project.to_string());
+        assert!(
+            !project_text.to_lowercase().contains("mirror"),
+            "MCP in-memory model must stay unchanged until cad_refresh: {project_text}"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_inbox_helper_on_separate_manager_then_refresh_sees_body() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-apply-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        let before = server.call_tool("solid_scene", json!({})).unwrap();
+        let before_count = before["bodies"].as_array().unwrap().len();
+
+        let applied = session::apply_inbox_op(&unique, |name, arguments| {
+            let mut host = CadServer::new()?;
+            let model = session::require_model_json(&unique)?;
+            host.call_tool("cad_load_project_model", json!({ "model_json": model }))?;
+            let result = host.call_tool(name, arguments)?;
+            let exported = host.call_tool("cad_project_model", json!({}))?;
+            let model_json = exported
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| serde_json::to_string(&exported).unwrap());
+            session::publish_applied_snapshot(&unique, &model_json)?;
+            Ok(result)
+        })
+        .expect("apply helper should run host on a separate SketchManager");
+        assert_eq!(applied.seq, 1);
+        assert_eq!(applied.op.name, "solid_mirror");
+        assert!(
+            applied.host_result.is_object(),
+            "separate host apply should return an engine object"
+        );
+        assert_eq!(session::read_heartbeat_generation(&unique).unwrap(), 2);
+        assert!(session::pending_inbox_seqs(&unique).unwrap().is_empty());
+
+        let still_old = server.call_tool("solid_scene", json!({})).unwrap();
+        assert_eq!(still_old["bodies"].as_array().unwrap().len(), before_count);
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let refreshed = server.call_tool("solid_scene", json!({})).unwrap();
+        let after_count = refreshed["bodies"].as_array().unwrap().len();
+        assert!(
+            after_count > before_count,
+            "cad_refresh must see the applied body (before {before_count}, after {after_count})"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_base_generation_is_generation_conflict_and_does_not_apply() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-stale-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let submit_err = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 99
+                }),
+            )
+            .expect_err("stale cad_submit must fail");
+        let parsed = parse_session_error(&submit_err);
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "ui_owned_apply");
+        assert!(session::pending_inbox_seqs(&unique).unwrap().is_empty());
+
+        session::write_inbox_op(
+            &unique,
+            &session::InboxOp {
+                name: "solid_mirror".to_string(),
+                arguments: solid_mirror_args(&body_id),
+                base_generation: 99,
+            },
+        )
+        .unwrap();
+        let mut applied = false;
+        let apply_err = session::apply_inbox_op(&unique, |_name, _args| {
+            applied = true;
+            Ok(json!({}))
+        })
+        .expect_err("stale apply must fail");
+        assert!(!applied, "host must not run on generation_conflict");
+        let applied_err = parse_session_error(&apply_err);
+        assert_eq!(applied_err["code"], "generation_conflict");
+        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![1]);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cad_submit_without_attach_fails() {
+        let mut server = CadServer::new().unwrap();
+        let err = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": {},
+                    "base_generation": 1
+                }),
+            )
+            .expect_err("cad_submit without attach must fail");
+        let parsed = parse_session_error(&err);
+        assert_eq!(parsed["code"], "not_attached");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "ui_owned_apply");
+    }
+
+    #[test]
+    fn headless_goldens_still_mutate_without_attach() {
+        let (mut server, _) = mcp_box();
+        assert!(server.attached_document_id.is_none());
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let body_id = scene["bodies"][0]["id"].clone();
+        server
+            .call_tool("solid_mirror", solid_mirror_args(&body_id))
+            .expect("headless CadServer with no attach must still mutate");
+        let after = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(after["bodies"].as_array().unwrap().len() > 1);
+    }
+
     #[test]
     fn solid_export_3mf_returns_base64_payload() {
         let (mut server, _) = mcp_box();
@@ -3952,6 +4385,12 @@ mod tests {
             .call_tool("solid_scene", json!({}))
             .expect("attached snapshot has a solid scene");
         let body_id = scene["bodies"][0]["id"].clone();
+        // While attached, direct mutates are session_read_only (UI-owned apply).
+        // Detach to fork headless so cad_script can record a portable mutate
+        // on top of the attach/refresh cad_load_project_model baseline.
+        server
+            .call_tool("cad_detach", json!({}))
+            .expect("detach before headless mutate for script regression");
         let mirrored = server
             .call_tool(
                 "solid_mirror",
@@ -3960,7 +4399,7 @@ mod tests {
                     "plane": {"type": "origin_plane", "plane": "yz"}
                 }),
             )
-            .expect("modeling mutate after attach/refresh");
+            .expect("modeling mutate after attach/refresh/detach");
         assert_eq!(mirrored["scene"]["bodies"].as_array().unwrap().len(), 2);
 
         let script = server
@@ -4963,7 +5402,9 @@ mod tests {
             .unwrap();
         assert_eq!(grounded_occurrence["grounded"], true);
         assert_eq!(
-            grounded_occurrence["local_pose"]["translation"][0].as_f64().unwrap(),
+            grounded_occurrence["local_pose"]["translation"][0]
+                .as_f64()
+                .unwrap(),
             10.0
         );
 
@@ -4982,9 +5423,140 @@ mod tests {
             .call_tool("assembly_solution", json!({}))
             .expect("assembly solution");
         assert!(
-            solution.get("occurrence_poses").is_some() || solution.get("body_poses").is_some()
+            solution.get("occurrence_poses").is_some()
+                || solution.get("body_poses").is_some()
                 || solution.as_object().map(|o| !o.is_empty()).unwrap_or(false),
             "expected a non-empty assembly solution: {solution}"
+        );
+    }
+
+    fn parse_lock_error(error: &str) -> Value {
+        serde_json::from_str(error).unwrap_or_else(|_| json!({ "raw": error }))
+    }
+
+    fn assert_session_read_only(error: &str) {
+        let parsed = parse_lock_error(error);
+        assert_eq!(parsed["code"], "session_read_only");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "read_only_snapshot");
+        assert!(
+            parsed["hint"].as_str().unwrap_or("").contains("cad_submit"),
+            "hint should mention cad_submit: {error}"
+        );
+    }
+
+    #[test]
+    fn attach_direct_mutate_rejected_submit_accepted_detach_restores() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-lock-submit-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        assert!(!scene["bodies"].as_array().unwrap().is_empty());
+
+        let mutate_err = server
+            .call_tool("solid_mirror", solid_mirror_args(&body_id))
+            .expect_err("direct mutate must fail while attached");
+        assert_session_read_only(&mutate_err);
+        assert!(server.attached_document_id.is_some());
+
+        let appearance_err = server
+            .call_tool(
+                "set_body_appearance",
+                json!({"body_id": body_id, "preset_id": "generic.pla"}),
+            )
+            .expect_err("appearance write must fail while attached");
+        assert_session_read_only(&appearance_err);
+
+        let writeback_err = server
+            .call_tool(
+                "cad_attach",
+                json!({"session_id": unique, "writeback": true}),
+            )
+            .expect_err("writeback:true attach must fail");
+        let wb = parse_lock_error(&writeback_err);
+        assert_eq!(wb["code"], "writeback_rejected");
+        assert_eq!(wb["writeback"], false);
+
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .expect("cad_submit must be accepted while attached");
+        assert_eq!(submitted["submitted"], true);
+        assert_eq!(submitted["seq"], 1);
+        assert_eq!(submitted["applied"], false);
+
+        server.call_tool("cad_detach", json!({})).unwrap();
+        assert!(server.attached_document_id.is_none());
+        server
+            .call_tool("solid_mirror", solid_mirror_args(&body_id))
+            .expect("direct mutate must succeed after cad_detach");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_spec_mutates_match_shared_inbox_map() {
+        let mut missing = Vec::new();
+        let mut mismatched = Vec::new();
+        for spec in tool_specs() {
+            if spec.execution == Execution::Control || is_read_safe_while_attached(spec.name) {
+                assert!(
+                    nbcad_mcp_mutate::lookup_mutate(spec.name).is_none(),
+                    "read-safe/control {} must not be an inbox mutate",
+                    spec.name
+                );
+                continue;
+            }
+            let Some(shared) = nbcad_mcp_mutate::lookup_mutate(spec.name) else {
+                missing.push(spec.name);
+                continue;
+            };
+            if shared.engine_method != spec.engine_method {
+                mismatched.push(format!(
+                    "{} engine_method {} != {}",
+                    spec.name, shared.engine_method, spec.engine_method
+                ));
+            }
+            let expected_exec = match spec.execution {
+                Execution::Direct => nbcad_mcp_mutate::ExecutionKind::Direct,
+                Execution::SolidReplay => nbcad_mcp_mutate::ExecutionKind::SolidReplay,
+                Execution::Control => unreachable!(),
+            };
+            if shared.execution != expected_exec {
+                mismatched.push(format!("{} execution mismatch", spec.name));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "ToolSpec mutates missing from shared map: {missing:?}"
+        );
+        assert!(
+            mismatched.is_empty(),
+            "ToolSpec/shared map mismatches: {mismatched:?}"
+        );
+        assert_eq!(
+            nbcad_mcp_mutate::mutate_specs().len(),
+            tool_specs()
+                .iter()
+                .filter(|spec| spec.execution != Execution::Control
+                    && !is_read_safe_while_attached(spec.name))
+                .count()
         );
     }
 
@@ -5211,5 +5783,21 @@ mod tests {
         assert_eq!(occurrence_after["local_pose"], pose_before);
         assert_eq!(occurrence_after["visible"], visible_before);
         assert_eq!(occurrence_after["grounded"], grounded_before);
+    }
+
+    #[test]
+    fn every_shared_mutate_is_accepted_by_cad_submit_classifier() {
+        for spec in nbcad_mcp_mutate::mutate_specs() {
+            assert!(
+                is_modeling_mutate(spec.name),
+                "{} must classify as modeling mutate",
+                spec.name
+            );
+            assert!(
+                !is_read_safe_while_attached(spec.name),
+                "{} must not be read-safe while attached",
+                spec.name
+            );
+        }
     }
 }

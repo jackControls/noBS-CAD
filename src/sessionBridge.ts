@@ -2,10 +2,20 @@
  * Read-only MCP snapshot bridge publisher (Jack §3 model 1).
  *
  * Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,focus.json,heartbeat.json}`
- * via Tauri. Not a live UI co-link — MCP never writebacks these files.
+ * via Tauri. MCP `cad_submit` writes `inbox/<seq>.json`; this module polls
+ * `mcp_session_bridge_apply_inbox` so the live engine applies the op, then
+ * the existing publisher emits a new snapshot.
+ *
+ * Authoritative `engine_revision` advances in native code under the publisher
+ * lock (`run_ui_mutation` / inbox apply) — not via a later JS note — so inbox
+ * OCC cannot race the UI→JS gap. Reserve captures that revision; write rejects
+ * if a mutation landed during export. The bridge is bound to the native
+ * project-session identity on tab transitions. Conflicting/malformed heads
+ * are dead-lettered. Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
+import type { SolidUpdateDto } from './engine/types';
 import {
   exportProjectModelWithVisibility,
   useAppStore,
@@ -78,11 +88,34 @@ function activeSolidDialog(state: ReturnType<typeof useAppStore.getState>): stri
 
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let inboxTimer: ReturnType<typeof setInterval> | null = null;
+let inboxApplying = false;
 let started = false;
+
+interface InboxApplyResult {
+  applied: boolean;
+  dead_lettered?: boolean;
+  reason?: string;
+  seq?: number;
+  name?: string;
+  result?: SolidUpdateDto;
+  pending?: number;
+  error?: string;
+}
 
 interface PublishReservation {
   session_id: string;
   generation: number;
+  engine_revision?: number;
+  project_session_id?: string | null;
+}
+
+interface PublishWriteResult {
+  skipped: boolean;
+  reason?: string;
+  session_id?: string;
+  generation?: number;
+  engine_revision?: number;
 }
 
 async function publishNow(): Promise<void> {
@@ -90,31 +123,71 @@ async function publishNow(): Promise<void> {
   if (state.engineKind !== 'tauri') return;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   try {
-    // Reserve before export so a slower older export cannot overwrite a newer one.
-    // Tauri owns this counter across WebView reloads and scopes it per window.
-    const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
-    const engine = await getEngine();
-    const activeSketch = await engine.activeSketch();
-    let modelJson: string | null = null;
-    try {
-      const model = await exportProjectModelWithVisibility(engine);
-      modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-    } catch (error) {
-      // A half-finished sketch must not enter the persisted project format,
-      // but diagnostics still need the live entity/constraint snapshot. The
-      // native bridge keeps its previous completed model.json beside it.
-      if (activeSketch === null) throw error;
+    // Reserve captures engine_revision and project/session identity before
+    // export. Write carries that identity so a tab switch cannot publish
+    // this snapshot into another session. If a UI mutation lands before
+    // write, native rejects the stale snapshot and we retry.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
+      const engine = await getEngine();
+      const activeSketch = await engine.activeSketch();
+      let modelJson: string | null = null;
+      try {
+        const model = await exportProjectModelWithVisibility(engine);
+        modelJson = typeof model === 'string' ? model : JSON.stringify(model);
+      } catch (error) {
+        // A half-finished sketch must not enter the persisted project format,
+        // but diagnostics still need the live entity/constraint snapshot. The
+        // native bridge keeps its previous completed model.json beside it.
+        if (activeSketch === null) throw error;
+      }
+      const written = await invoke<PublishWriteResult>('mcp_session_bridge_write', {
+        payload: JSON.stringify({
+          focus,
+          model_json: modelJson,
+          active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
+          generation: reservation.generation,
+          session_id: reservation.session_id,
+          project_session_id: reservation.project_session_id ?? null,
+        }),
+      });
+      if (
+        written?.skipped &&
+        (written.reason === 'engine_revision_changed' ||
+          written.reason === 'session_identity_mismatch')
+      ) {
+        continue;
+      }
+      break;
     }
-    await invoke('mcp_session_bridge_write', {
-      payload: JSON.stringify({
-        focus,
-        model_json: modelJson,
-        active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
-        generation: reservation.generation,
-      }),
-    });
   } catch (error) {
     console.debug('[sessionBridge] publish failed', error);
+  }
+}
+
+/** Apply one MCP inbox op on the live engine, then let the publisher run. */
+async function applyInboxNow(): Promise<void> {
+  const state = useAppStore.getState();
+  if (state.engineKind !== 'tauri' || inboxApplying) return;
+  inboxApplying = true;
+  try {
+    const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
+    if (result?.dead_lettered) {
+      console.warn('[sessionBridge] inbox op dead-lettered; queue unblocked', result);
+      // Keep polling so the next sequence can apply on a subsequent tick.
+      return;
+    }
+    if (!result?.applied) return;
+    if (result.result?.scene && result.result.document) {
+      useAppStore.getState().applySolidUpdate(result.result);
+    } else {
+      await useAppStore.getState().loadDocument();
+    }
+    scheduleSessionBridgePublish();
+  } catch (error) {
+    console.debug('[sessionBridge] inbox apply failed', error);
+  } finally {
+    inboxApplying = false;
   }
 }
 
@@ -149,6 +222,9 @@ export function startSessionBridge(): void {
       state.activeTool !== prev.activeTool ||
       activeSolidDialog(state) !== activeSolidDialog(prev)
     ) {
+      // Native engine commands bump engine_revision under the publisher lock
+      // (run_ui_mutation). Do not fire-and-forget a JS note here — that
+      // reopens the UI→JS race and would double-count after native apply.
       scheduleSessionBridgePublish();
     }
   });
@@ -157,4 +233,9 @@ export function startSessionBridge(): void {
   heartbeatTimer = setInterval(() => {
     void heartbeatNow();
   }, 10_000);
+  if (inboxTimer) clearInterval(inboxTimer);
+  inboxTimer = setInterval(() => {
+    void applyInboxNow();
+  }, 250);
+  void applyInboxNow();
 }
