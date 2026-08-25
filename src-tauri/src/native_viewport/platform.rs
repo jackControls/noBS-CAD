@@ -2825,12 +2825,23 @@ fn apply_native_presentation_styles(
         } else {
             body_appearance_color(&model, body.body_id, palette.0.body)
         };
-        material.base_color = color;
-        material.emissive = if selected_body_index.is_some() {
-            color.to_linear() * 0.08
+        // Ghosted bodies (CAM stock-vs-model inspection): faint translucent
+        // shell so the simulated stock underneath stays readable; edges are
+        // forced through-geometry in the gizmo pass below.
+        let ghosted = state.ghosted_body_ids.contains(&body.body_id);
+        if ghosted {
+            material.base_color = color.with_alpha(0.1);
+            material.alpha_mode = AlphaMode::Blend;
+            material.emissive = LinearRgba::BLACK;
         } else {
-            LinearRgba::BLACK
-        };
+            material.base_color = color;
+            material.alpha_mode = AlphaMode::Opaque;
+            material.emissive = if selected_body_index.is_some() {
+                color.to_linear() * 0.08
+            } else {
+                LinearRgba::BLACK
+            };
+        }
     }
 
     for (plane, geometry, handle, mut visibility) in &mut datum_planes {
@@ -3748,12 +3759,16 @@ fn draw_cad_gizmos(
                 body.id.0,
                 occurrence_id,
             );
+            // Ghosted bodies (CAM simulation inspection) always draw their
+            // full wireframe, through geometry, so the part reads over the
+            // remaining-stock mesh.
+            let ghosted_body = state.ghosted_body_ids.contains(&body.id.0);
             let draw_default_edges = occurrence_edges_are_visible(
                 local_bounds,
                 &body_transform,
                 camera.camera,
                 *viewport,
-            );
+            ) || ghosted_body;
 
             if selected_body_index.is_some() || hovered_body {
                 let color = if selected_body_index == Some(0) {
@@ -3792,7 +3807,12 @@ fn draw_cad_gizmos(
                 } else {
                     palette.0.edge
                 };
-                draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                if ghosted_body && !selected && !hovered && selected_body_index.is_none() {
+                    // Through-geometry wireframe for the ghosted part.
+                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
+                } else {
+                    draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                }
                 if selected || hovered {
                     draw_edge_segments(
                         &mut highlights,

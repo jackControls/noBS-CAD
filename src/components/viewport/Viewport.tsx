@@ -9059,10 +9059,10 @@ export function Viewport() {
       // selection, which hides the toolpath/tool/simulation overlays.
       if (state.selectedCamOperationId !== null) state.setSelectedCamOperationId(null);
     };
-    /** CAM hole picking: resolve the pointer to any cylindrical face, or null
-     *  when it is not over one. The face axis is recorded on the pick (setup
-     *  frame); the dialog flags holes not parallel to setup Z so a future
-     *  indexed/5-axis tool orientation can consume them. */
+    /** CAM hole picking: resolve the pointer to a drillable cylindrical face
+     *  (axis parallel to setup Z — fixed-axis constraint), or null when it is
+     *  not over one. The recorded axis on the pick is the seam reserved for
+     *  a future indexed/5-axis tool orientation. */
     const pickCamHole = (e: PointerEvent, state: ViewportState) => {
       const faceHit = pickSolidFace(e);
       if (!faceHit) return null;
@@ -9108,8 +9108,8 @@ export function Viewport() {
         surface.domElement.style.cursor = '';
       }
 
-      // CAM hole-pick sessions: hovering highlights any cylindrical face;
-      // everything else stays inert for the session.
+      // CAM hole-pick sessions: hovering highlights only drillable
+      // cylindrical faces; everything else stays inert for the session.
       if (state.camHolePick) {
         const hole = pickCamHole(e, state);
         state.setCamHolePickHover(hole?.key ?? null);

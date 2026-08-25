@@ -165,8 +165,9 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   if (!setup) return layers;
 
   // Hole-pick session markers: chosen hole centers, the hovered one
-  // emphasized; holes whose axis is not parallel to setup Z draw amber so
-  // the mismatch is visible before submit. The face under the pointer is
+  // emphasized. Picks are constrained to setup-Z-parallel faces today; the
+  // amber "tilted" bucket is the reserved display path for the indexed/5-axis
+  // roadmap (the axis rides on every pick). The face under the pointer is
   // highlighted by the viewport's own face-hover channel.
   if (state.camHolePick && state.camHolePick.holes.length > 0) {
     const rest: number[] = [];
@@ -284,19 +285,21 @@ function pushStockGhost(layers: CamOverlayLayers, setup: CamSetupDto) {
   }
 }
 
-/** The selected operation's motion segments, transformed to model space. */
-function pushSelectedToolpath(
-  layers: CamOverlayLayers,
-  state: CamOverlayState,
-  setup: CamSetupDto,
-) {
-  const operationId = state.selectedCamOperationId;
-  const program = state.camProgram;
-  if (operationId === null || !program || program.setup_id !== setup.id) return;
-  if (!setup.operations.some((operation) => operation.id === operationId)) return;
+/** Entry/exit arrow colors: green marks where cutting starts, red where it
+ *  leaves (machinist convention for static toolpath display). */
+const ENTRY_ARROW: Rgba = [0.32, 0.95, 0.42, 1];
+const EXIT_ARROW: Rgba = [0.98, 0.3, 0.24, 1];
 
-  // Keep only the selected operation's sections. Duplicated work offsets
-  // repeat identical setup-space motions; drawing them again is harmless.
+/** The selected operation's motion commands, in program order. Duplicated
+ *  work offsets repeat identical setup-space motions, so the first copy is
+ *  enough for display. */
+function selectedSectionCommands(
+  program: CamProgramDto,
+  setup: CamSetupDto,
+  operationId: number,
+): CamCommandDto[] {
+  if (program.setup_id !== setup.id) return [];
+  if (!setup.operations.some((operation) => operation.id === operationId)) return [];
   const sectionCommands: CamCommandDto[] = [];
   let inSection = false;
   for (const command of program.commands) {
@@ -310,6 +313,20 @@ function pushSelectedToolpath(
     }
     if (inSection) sectionCommands.push(command);
   }
+  return sectionCommands;
+}
+
+/** The selected operation's motion segments, transformed to model space. */
+function pushSelectedToolpath(
+  layers: CamOverlayLayers,
+  state: CamOverlayState,
+  setup: CamSetupDto,
+) {
+  const operationId = state.selectedCamOperationId;
+  const program = state.camProgram;
+  if (operationId === null || !program) return;
+  const sectionCommands = selectedSectionCommands(program, setup, operationId);
+  if (sectionCommands.length === 0) return;
 
   const rapid: number[] = [];
   const cutting: number[] = [];
@@ -329,11 +346,11 @@ function pushSelectedToolpath(
   }
 }
 
-/** Ghost of the selected operation's tool at its last cutting position —
- *  plus a second ghost at the first plunge point, so entry clearances like
- *  facing's safe distance read on screen: the cutter's edge stands exactly
- *  `safe_distance` off the stock boundary there. The tool axis is parallel
- *  to setup Z (fixed-axis planning). */
+/** Static display of the selected operation's tool and its feed endpoints:
+ *  the tool ghost parks at the START position (the first approach target,
+ *  above the entry point — the XY offset from the stock boundary still reads
+ *  as one radius plus facing's safe distance), and green/red arrows mark
+ *  where the cutting feed starts and leaves, oriented along the cut. */
 function pushSelectedTool(
   layers: CamOverlayLayers,
   state: CamOverlayState,
@@ -341,65 +358,82 @@ function pushSelectedTool(
 ) {
   const operationId = state.selectedCamOperationId;
   const program = state.camProgram;
-  if (operationId === null || !program || program.setup_id !== setup.id) return;
+  if (operationId === null || !program) return;
   const operation = setup.operations.find((candidate) => candidate.id === operationId);
   if (!operation) return;
   const tool = state.camDocument.tools.find((entry) => entry.id === operation.tool_id);
   if (!tool) return;
+  const sectionCommands = selectedSectionCommands(program, setup, operationId);
+  if (sectionCommands.length === 0) return;
 
-  // Walk the operation's sections; duplicated work offsets repeat identical
-  // setup-space motion, so any copy's endpoint positions the ghost. The
-  // first plunge target is tracked too: drawing the tool where it enters
-  // makes the entry clearance (e.g. facing's safe distance) inspectable.
-  let inSection = false;
-  let cuttingTip: Point3Dto | null = null;
-  let anyTip: Point3Dto | null = null;
-  let position: Point3Dto | null = null;
-  let entryTip: Point3Dto | null = null;
-  for (const command of program.commands) {
-    if (command.kind === 'section_start') {
-      inSection = command.operation_id === operationId;
-      continue;
-    }
-    if (command.kind === 'section_end') {
-      inSection = false;
-      continue;
-    }
-    if (!inSection) continue;
+  // Start position: the first motion target of the section (the approach
+  // rapid parks the tool above the entry point at clearance/retract height).
+  let startTip: Point3Dto | null = null;
+  for (const command of sectionCommands) {
     if (command.kind === 'rapid' || command.kind === 'linear' || command.kind === 'circular') {
-      if (
-        entryTip === null &&
-        command.kind === 'linear' &&
-        position !== null &&
-        Math.abs(command.to.x - position.x) < 1e-9 &&
-        Math.abs(command.to.y - position.y) < 1e-9 &&
-        command.to.z < position.z - 1e-9
-      ) {
-        entryTip = command.to;
-      }
-      position = command.to;
-      anyTip = command.to;
-      if (command.kind !== 'rapid') cuttingTip = command.to;
+      startTip = command.to;
+      break;
     }
   }
+
   const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
-  const ghost = (tip: Point3Dto) => {
-    const ring = regularRing(tip.x, tip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
+  if (startTip) {
+    const ring = regularRing(startTip.x, startTip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
     const flutePositions: number[] = [];
-    pushPrism(toModel, ring, tip.z, tip.z + tool.flute_length, flutePositions, []);
+    pushPrism(toModel, ring, startTip.z, startTip.z + tool.flute_length, flutePositions, []);
     if (flutePositions.length > 0) {
       layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
     }
     const shankPositions: number[] = [];
-    pushPrism(toModel, ring, tip.z + tool.flute_length, tip.z + tool.overall_length, shankPositions, []);
+    pushPrism(toModel, ring, startTip.z + tool.flute_length, startTip.z + tool.overall_length, shankPositions, []);
     if (shankPositions.length > 0) {
       layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
     }
+  }
+
+  // Entry/exit arrows on the first and last CUTTING segments, sized against
+  // the tool so they stay readable at the operation's own scale.
+  const cutSegments = buildToolpathSegments(sectionCommands).filter((segment) => !segment.rapid);
+  const arrowLength = Math.max(tool.diameter * 0.9, 1);
+  const pushEndpointArrow = (segment: ToolpathSegment, color: Rgba) => {
+    const dx = segment.to.x - segment.from.x;
+    const dy = segment.to.y - segment.from.y;
+    const dz = segment.to.z - segment.from.z;
+    const length = Math.hypot(dx, dy, dz);
+    if (length < 1e-9) return;
+    const scale = arrowLength / length;
+    const from = toModel(segment.from);
+    const tip = toModel({
+      x: segment.from.x + dx * scale,
+      y: segment.from.y + dy * scale,
+      z: segment.from.z + dz * scale,
+    });
+    layers.arrows.push({
+      start: [from.x, from.y, from.z],
+      end: [tip.x, tip.y, tip.z],
+      color,
+      width: 3,
+      xray: true,
+    });
   };
-  const tip = cuttingTip ?? anyTip;
-  if (entryTip) ghost(entryTip);
-  if (tip && (entryTip === null || Math.hypot(tip.x - entryTip.x, tip.y - entryTip.y, tip.z - entryTip.z) > 1e-9)) {
-    ghost(tip);
+  const first = cutSegments[0];
+  if (first) pushEndpointArrow(first, ENTRY_ARROW);
+  const last = cutSegments[cutSegments.length - 1];
+  if (last && last !== first) {
+    // The exit arrow starts at the final cut point and points along the
+    // leaving direction.
+    pushEndpointArrow(
+      {
+        from: last.to,
+        to: {
+          x: last.to.x + (last.to.x - last.from.x),
+          y: last.to.y + (last.to.y - last.from.y),
+          z: last.to.z + (last.to.z - last.from.z),
+        },
+        rapid: false,
+      },
+      EXIT_ARROW,
+    );
   }
 }
 

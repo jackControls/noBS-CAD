@@ -12,6 +12,7 @@ import {
   listSketchLoops,
   loopToSetupPath,
   modelBottomZInSetup,
+  modelPointToSetup,
   modelTopZInSetup,
   type SketchLoop,
 } from '../../cam/geometry';
@@ -48,37 +49,57 @@ type OperationKind = CamOperationInput['kind'];
 type GeometrySource = 'sketch' | 'manual';
 
 /** Reference planes an operation height can hang off; resolved to absolute
- *  setup Z at submit. The dead entries round out the option set the UI
- *  contract promises; the planner only consumes the live five today. */
-type HeightFrom = 'model_top' | 'model_bottom' | 'stock_top' | 'stock_bottom' | 'origin';
+ *  setup Z at submit. Chain references hang a height off a LOWER height of
+ *  the same operation (fixed resolution order bottom → top → retract →
+ *  clearance, so cycles are impossible by construction); 'selection' reads
+ *  the picked sketch loop's plane Z. The dead entries round out the option
+ *  set the UI contract promises; the planner only consumes the resolved
+ *  absolute values. */
+type HeightFrom =
+  | 'model_top'
+  | 'model_bottom'
+  | 'stock_top'
+  | 'stock_bottom'
+  | 'origin'
+  | 'bottom'
+  | 'top'
+  | 'retract'
+  | 'selection';
 
-const HEIGHT_FROM_LIVE: Array<{ value: HeightFrom; label: string }> = [
+const HEIGHT_PLANES: Array<{ value: HeightFrom; label: string }> = [
   { value: 'model_top', label: 'Model top' },
   { value: 'model_bottom', label: 'Model bottom' },
   { value: 'stock_top', label: 'Stock top' },
   { value: 'stock_bottom', label: 'Stock bottom' },
   { value: 'origin', label: 'Origin (absolute)' },
 ];
+/** Chain references a height row may offer, per the fixed resolution order
+ *  (a row only lists LOWER heights). */
+const HEIGHT_CHAIN_LABELS: Partial<Record<HeightFrom, string>> = {
+  bottom: 'Bottom height',
+  top: 'Top height',
+  retract: 'Retract height',
+};
 const HEIGHT_FROM_DEAD = [
-  'Retract height',
   'Feed height',
-  'Top height',
-  'Bottom height',
   'Fixture top',
   'Fixture bottom',
-  'Selected contour(s)',
-  'Selection',
   'Highest of…',
   'Lowest of…',
 ];
 
-/** One height row: reference plane + signed offset. */
+/** One height row: reference plane + signed offset. `chainBelow` lists the
+ *  lower operation heights this row may reference; the Selection option
+ *  (picked sketch loop's plane Z) is enabled where geometry plumbing gives
+ *  it a value. */
 function HeightField({
   from,
   offset,
   onFrom,
   onOffset,
   unit,
+  chainBelow = [],
+  selectionAvailable = false,
   disabled = false,
 }: {
   from: HeightFrom;
@@ -86,6 +107,8 @@ function HeightField({
   onFrom: (value: HeightFrom) => void;
   onOffset: (value: string) => void;
   unit: string;
+  chainBelow?: HeightFrom[];
+  selectionAvailable?: boolean;
   disabled?: boolean;
 }) {
   return (
@@ -101,11 +124,31 @@ function HeightField({
           onChange={(event) => onFrom(event.target.value as HeightFrom)}
           className={`${CAM_DIALOG_INPUT} ${disabled ? 'cursor-not-allowed' : ''}`}
         >
-          {HEIGHT_FROM_LIVE.map((option) => (
+          {HEIGHT_PLANES.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
           ))}
+          {chainBelow.length > 0 && (
+            <optgroup label="Operation heights">
+              {chainBelow.map((value) => (
+                <option key={value} value={value}>
+                  {HEIGHT_CHAIN_LABELS[value]}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <option
+            value="selection"
+            disabled={!selectionAvailable}
+            title={
+              selectionAvailable
+                ? 'The picked sketch loop’s plane Z'
+                : 'Pick a sketch loop on the Geometry tab first'
+            }
+          >
+            Selection (sketch plane)
+          </option>
           <optgroup label="Not applied yet">
             {HEIGHT_FROM_DEAD.map((text) => (
               <option key={text} disabled>
@@ -252,14 +295,20 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   /** Re-express a stored absolute setup Z as reference plane + signed offset,
    *  picking the plane the value sits closest to so the heights tab re-opens
-   *  with sensible drafts. */
-  const heightDraftFrom = (absZ: number): { from: HeightFrom; off: string } => {
+   *  with sensible drafts. `extra` offers the operation's lower heights as
+   *  chain references (their stored absolute values); planes listed first
+   *  win ties. */
+  const heightDraftFrom = (
+    absZ: number,
+    extra: Array<{ from: HeightFrom; z: number | null }> = [],
+  ): { from: HeightFrom; off: string } => {
     const candidates: Array<{ from: HeightFrom; z: number | null }> = [
       { from: 'model_top', z: modelTop },
       { from: 'model_bottom', z: modelBottom },
       { from: 'stock_top', z: setup?.stock.max.z ?? null },
       { from: 'stock_bottom', z: setup?.stock.min.z ?? null },
       { from: 'origin', z: 0 },
+      ...extra,
     ];
     let best: { from: HeightFrom; z: number } = { from: 'origin', z: 0 };
     for (const candidate of candidates) {
@@ -271,12 +320,25 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     return { from: best.from, off: String(Number(displayLength(absZ - best.z, units).toFixed(4)) + 0) };
   };
 
-  const clearanceDraft = editing ? heightDraftFrom(editing.clearance_z) : null;
-  const retractDraft = editing ? heightDraftFrom(editing.retract_z) : null;
-  const topDraft = editing ? heightDraftFrom(editing.top_z) : null;
   const bottomStored =
     faceOp?.target_z ?? contourOp?.bottom_z ?? pocketOp?.bottom_z ?? pointsOp?.bottom_z ?? null;
   const bottomDraft = bottomStored !== null ? heightDraftFrom(bottomStored) : null;
+  const topDraft = editing
+    ? heightDraftFrom(editing.top_z, [{ from: 'bottom', z: bottomStored }])
+    : null;
+  const retractDraft = editing
+    ? heightDraftFrom(editing.retract_z, [
+        { from: 'top', z: editing.top_z },
+        { from: 'bottom', z: bottomStored },
+      ])
+    : null;
+  const clearanceDraft = editing
+    ? heightDraftFrom(editing.clearance_z, [
+        { from: 'retract', z: editing.retract_z },
+        { from: 'top', z: editing.top_z },
+        { from: 'bottom', z: bottomStored },
+      ])
+    : null;
   const storedStepDown = faceOp?.step_down ?? contourOp?.step_down ?? pocketOp?.step_down ?? null;
   const depthFull =
     editing && bottomStored !== null ? Math.abs(editing.top_z - bottomStored) : null;
@@ -391,9 +453,16 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   const selectedTool = cam.tools.find((candidate) => candidate.id === toolId) ?? null;
 
-  /** Reference plane of a structured height, as absolute setup Z.
-   *  Falls back to the stock plane when the setup references no bodies. */
-  const heightRefZ = (from: HeightFrom): number => {
+  /** Reference plane of a structured height, as absolute setup Z. Planes fall
+   *  back to the stock plane when the setup references no bodies; chain
+   *  references read already-resolved lower heights (resolution order bottom
+   *  → top → retract → clearance); 'selection' reads the picked sketch
+   *  loop's plane Z. */
+  const heightRefZ = (
+    from: HeightFrom,
+    resolved: { bottom?: number; top?: number; retract?: number },
+    label: string,
+  ): number => {
     const stockMaxZ = setup?.stock.max.z ?? 0;
     const stockMinZ = setup?.stock.min.z ?? 0;
     switch (from) {
@@ -407,10 +476,24 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         return stockMinZ;
       case 'origin':
         return 0;
+      case 'selection': {
+        const z = selectionZ();
+        if (z === null) {
+          throw new Error(`${label}: pick a sketch loop on the Geometry tab to use as the selection reference.`);
+        }
+        return z;
+      }
+      case 'bottom':
+      case 'top':
+      case 'retract': {
+        const z = resolved[from];
+        if (z === undefined) {
+          throw new Error(`${label} references the ${HEIGHT_CHAIN_LABELS[from]}, which this operation does not resolve.`);
+        }
+        return z;
+      }
     }
   };
-  const resolveHeight = (from: HeightFrom, offset: string, label: string): number =>
-    heightRefZ(from) + commitLength(parseDraft(offset, `${label} offset`), units);
 
   /** Copy a library cutting profile (default or a named preset) into the
    *  feeds & speeds drafts. */
@@ -479,6 +562,30 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     };
   }, [pages.geometry]);
 
+  /** Setup Z of the picked sketch loop's plane — the live 'Selection' height
+   *  reference (path kinds only; hole picks carry no usable surface Z). */
+  const selectionZ = (): number | null => {
+    if (pages.geometry !== 'path' || source !== 'sketch' || !setup) return null;
+    const loop = selectedLoop();
+    if (!loop) return null;
+    const sketch = sketches.find((candidate) => candidate.name === loop.sketch);
+    if (!sketch) return null;
+    const origin = sketch.basis.origin;
+    return modelPointToSetup({ x: origin[0], y: origin[1], z: origin[2] }, setup.wcs).z;
+  };
+  const selectionAvailable = pages.geometry === 'path' && source === 'sketch' && loops.length > 0;
+
+  // The 'Selection' height reference only exists while a sketch loop is the
+  // geometry source; fall back to the model top when that goes away so the
+  // drafts stay valid instead of erroring at submit.
+  useEffect(() => {
+    if (selectionAvailable) return;
+    setClearanceFrom((from) => (from === 'selection' ? 'model_top' : from));
+    setRetractFrom((from) => (from === 'selection' ? 'model_top' : from));
+    setTopFrom((from) => (from === 'selection' ? 'model_top' : from));
+    setBottomFrom((from) => (from === 'selection' ? 'model_top' : from));
+  }, [selectionAvailable]);
+
   const selectedLoop = (): SketchLoop | null => {
     const loop = loops.find((candidate) => `${candidate.sketch}:${candidate.entityIds.join(',')}` === loopKey);
     return loop ?? loops[0] ?? null;
@@ -545,17 +652,44 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     try {
       if (!setup) throw new Error('No active CAM setup.');
       if (toolId === null) throw new Error('Pick a tool from the library first.');
+      // Heights resolve low to high so chain references (bottom → top →
+      // retract → clearance) read already-resolved values; the stored result
+      // stays absolute setup Z either way.
+      const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
+      const resolveOne = (
+        from: HeightFrom,
+        offset: string,
+        label: string,
+        resolved: { bottom?: number; top?: number; retract?: number },
+      ): number =>
+        heightRefZ(from, resolved, label) + commitLength(parseDraft(offset, `${label} offset`), units);
+      const bottomValue = hasBottomRow
+        ? resolveOne(bottomFrom, bottomOff, 'Bottom height', {})
+        : undefined;
+      const topValue = resolveOne(topFrom, topOff, 'Top height', { bottom: bottomValue });
+      const retractValue = resolveOne(retractFrom, retractOff, 'Retract height', {
+        bottom: bottomValue,
+        top: topValue,
+      });
+      const clearanceValue = resolveOne(clearanceFrom, clearanceOff, 'Clearance height', {
+        bottom: bottomValue,
+        top: topValue,
+        retract: retractValue,
+      });
       const base = {
         name: name.trim() || camOperationLabel(kind),
         enabled: editing?.enabled ?? true,
         tool_id: toolId,
-        clearance_z: resolveHeight(clearanceFrom, clearanceOff, 'Clearance height'),
-        retract_z: resolveHeight(retractFrom, retractOff, 'Retract height'),
+        clearance_z: clearanceValue,
+        retract_z: retractValue,
       };
-      const top = resolveHeight(topFrom, topOff, 'Top height');
+      const top = topValue;
       // Bottom height is a reference plane plus a signed offset, resolved to
       // absolute setup Z for the kinds that cut to a depth.
-      const bottomAbs = () => resolveHeight(bottomFrom, bottomOff, 'Bottom height');
+      const bottomAbs = () => {
+        if (bottomValue === undefined) throw new Error('This operation has no bottom height.');
+        return bottomValue;
+      };
       let operation: CamOperationInput;
       switch (kind) {
         case 'face': {
@@ -723,9 +857,8 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
       return (
         <DialogSection title="HOLES · PICKED IN VIEWPORT">
           <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-            Click any cylindrical face in the viewport to toggle it as a hole center. Holes whose
-            axis is not parallel to setup Z are flagged; fixed-axis planning drills along setup Z
-            only.
+            Click cylindrical hole faces in the viewport to toggle them as hole centers; only
+            faces whose axis is parallel to setup Z are pickable (fixed-axis planning).
           </p>
           {holes.length > 0 && (
             <div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge/70 p-1.5">
@@ -736,14 +869,6 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
                     {displayLength(hole.point.x, units).toFixed(3)} · Y{' '}
                     {displayLength(hole.point.y, units).toFixed(3)}
                   </span>
-                  {Math.abs(hole.axis[2]) < 1 - 1e-6 && (
-                    <span
-                      className="shrink-0 rounded bg-[#d69b45]/20 px-1 text-[8px] font-semibold text-[#e8c589]"
-                      title="Axis is not parallel to setup Z — needs indexed/5-axis orientation"
-                    >
-                      ∠ {((Math.acos(Math.min(1, Math.abs(hole.axis[2]))) * 180) / Math.PI).toFixed(0)}°
-                    </span>
-                  )}
                   <button
                     type="button"
                     title="Remove this hole"
@@ -1003,30 +1128,67 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   };
 
   /** Heights tab: five heights, each a reference plane plus a signed offset.
-   *  Feed height stays a placeholder — the planner approaches at retract
-   *  height today. The bottom height only exists for kinds that cut to a
-   *  depth (facing targets the model top by default). */
-  const heightsTab = () => (
-    <>
-      <DialogSection title="CLEARANCE HEIGHT">
-        <HeightField from={clearanceFrom} offset={clearanceOff} onFrom={setClearanceFrom} onOffset={setClearanceOff} unit={lu} />
-      </DialogSection>
-      <DialogSection title="RETRACT HEIGHT">
-        <HeightField from={retractFrom} offset={retractOff} onFrom={setRetractFrom} onOffset={setRetractOff} unit={lu} />
-      </DialogSection>
-      <DialogSection title="FEED HEIGHT">
-        <HeightField from="model_top" offset={displayLength(5, units).toFixed(4)} onFrom={() => {}} onOffset={() => {}} unit={lu} disabled />
-      </DialogSection>
-      <DialogSection title="TOP HEIGHT">
-        <HeightField from={topFrom} offset={topOff} onFrom={setTopFrom} onOffset={setTopOff} unit={lu} />
-      </DialogSection>
-      {(pages.bottomZ || pages.faceTarget) && (
-        <DialogSection title="BOTTOM HEIGHT">
-          <HeightField from={bottomFrom} offset={bottomOff} onFrom={setBottomFrom} onOffset={setBottomOff} unit={lu} />
+   *  A row may also reference a LOWER operation height (fixed resolution
+   *  order bottom → top → retract → clearance) or the picked sketch loop's
+   *  plane Z ('Selection'). Feed height stays a placeholder — the planner
+   *  approaches at retract height today. The bottom height only exists for
+   *  kinds that cut to a depth (facing targets the model top by default). */
+  const heightsTab = () => {
+    const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
+    const bottomRef: HeightFrom[] = hasBottomRow ? ['bottom'] : [];
+    return (
+      <>
+        <DialogSection title="CLEARANCE HEIGHT">
+          <HeightField
+            from={clearanceFrom}
+            offset={clearanceOff}
+            onFrom={setClearanceFrom}
+            onOffset={setClearanceOff}
+            unit={lu}
+            chainBelow={[...bottomRef, 'top', 'retract']}
+            selectionAvailable={selectionAvailable}
+          />
         </DialogSection>
-      )}
-    </>
-  );
+        <DialogSection title="RETRACT HEIGHT">
+          <HeightField
+            from={retractFrom}
+            offset={retractOff}
+            onFrom={setRetractFrom}
+            onOffset={setRetractOff}
+            unit={lu}
+            chainBelow={[...bottomRef, 'top']}
+            selectionAvailable={selectionAvailable}
+          />
+        </DialogSection>
+        <DialogSection title="FEED HEIGHT">
+          <HeightField from="model_top" offset={displayLength(5, units).toFixed(4)} onFrom={() => {}} onOffset={() => {}} unit={lu} disabled />
+        </DialogSection>
+        <DialogSection title="TOP HEIGHT">
+          <HeightField
+            from={topFrom}
+            offset={topOff}
+            onFrom={setTopFrom}
+            onOffset={setTopOff}
+            unit={lu}
+            chainBelow={bottomRef}
+            selectionAvailable={selectionAvailable}
+          />
+        </DialogSection>
+        {hasBottomRow && (
+          <DialogSection title="BOTTOM HEIGHT">
+            <HeightField
+              from={bottomFrom}
+              offset={bottomOff}
+              onFrom={setBottomFrom}
+              onOffset={setBottomOff}
+              unit={lu}
+              selectionAvailable={selectionAvailable}
+            />
+          </DialogSection>
+        )}
+      </>
+    );
+  };
 
   /** MILLING (face / contour / pocket) · Passes tab: stepover, stepdown,
    *  and tool-side compensation go live per kind; the rest of the option set

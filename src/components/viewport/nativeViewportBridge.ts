@@ -129,6 +129,9 @@ interface NativePresentation {
   constraintRelatedSketchEntityIds: number[];
   hoveredSketchEntityId: number | null;
   hiddenBodyIds: number[];
+  /** Part bodies ghosted to a see-through wireframe shell (CAM stock-vs-model
+   *  inspection while a simulated operation is selected). */
+  ghostedBodyIds: number[];
   hiddenDatumPlaneIds: number[];
   hiddenSketchNames: string[];
   profilePickerActive: boolean;
@@ -787,6 +790,20 @@ export function collectNativeViewportPresentation(): NativePresentation {
     movePreview,
   );
 
+  // CAM stock-vs-model inspection: while a simulated operation is selected
+  // and no CAM dialog is open, the setup's part bodies ghost to a wireframe
+  // shell so the machined stock surface shows through (mirrors the overlay's
+  // simulation-display gate in src/cam/overlay.ts).
+  const ghostedBodyIds = (() => {
+    if (state.activeTab !== 'cam') return [] as number[];
+    if (state.selectedCamOperationId === null || state.camDialog !== null) return [] as number[];
+    const simulation = state.camSimulation;
+    const cam = state.camDocument;
+    const setup = cam.setups.find((candidate) => candidate.id === cam.active_setup_id) ?? null;
+    if (!simulation || !setup || simulation.setup_id !== setup.id) return [] as number[];
+    return setup.body_ids;
+  })();
+
   return {
     mode:
       state.mode === 'pickPlane' ||
@@ -808,6 +825,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
     constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,
     hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
+    ghostedBodyIds,
     hiddenDatumPlaneIds: hiddenReferences(
       browser,
       state.hidden,

@@ -1,11 +1,61 @@
 # CAM branch handoff — 2026-08-24
 
-State of `feature/cam` after eleven working rounds, rebased onto current
+State of `feature/cam` after twelve working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
+## Round 12 (2026-08-24, late) — toolpath display, model ghost, heights refs
+
+Supersedes two round-11 decisions (see below): hole picking is LOCKED to
+setup Z again, and the tool ghost parks at ONE position.
+
+- **Static toolpath display** (`overlay.ts::pushSelectedTool`, reworked): the
+  tool ghost parks at the operation's START position (the first approach
+  target, above the entry point — the reference workflow's convention; the
+  XY offset from the stock boundary still reads as radius + facing safe
+  distance). The round-11 second ghost at the last cutting position is gone.
+  Green/red endpoint arrows (`NativeViewportArrow`, already rendered by the
+  native side) mark where the cutting feed starts and leaves, oriented along
+  the first/last cutting segments, sized from the tool diameter.
+- **Stock-vs-model inspection**: while a simulated operation is selected and
+  no dialog is open, the setup's part bodies ghost to a faint translucent
+  shell (alpha 0.1) with their full wireframe drawn through geometry, so the
+  machined stock surface shows through the model — the display the reference
+  workflow uses when a cut finishes on a model surface. Plumbing:
+  `ViewportPresentation.ghosted_body_ids` (serde-defaulted) →
+  `apply_native_presentation_styles` (blend alpha, restored to opaque when
+  un-ghosted) and the edge gizmo pass (ghosted bodies force all edges via
+  the through-geometry highlight group); collected in
+  `nativeViewportBridge.ts::collectNativeViewportPresentation`, gated
+  exactly like the overlay's simulation display.
+- **Hole picking re-locked to setup Z**: `camHoleFromCylinderFace` returns
+  null for tilted faces again (round 11's any-cylinder picking confused more
+  than it helped before per-operation tool orientation exists). The setup-
+  space axis computation stays on the pick type, projected with the
+  dot-product convention — relaxing that ONE check is the whole future
+  multi-axis change in the picking pipeline; the dialog's tilted submit
+  guard and the overlay's amber bucket stay as dormant defense.
+- **Heights From-reference system extended** (dialog-side; stored values
+  remain absolute setup Z): a height row may reference a plane (model/stock
+  top/bottom, origin), a LOWER height of the same operation (fixed
+  resolution order bottom → top → retract → clearance — cycles impossible
+  by construction, rows only offer lower members, and only when the bottom
+  row exists for the kind), or 'Selection' (the picked sketch loop's plane
+  Z; path kinds with a sketch-loop source only, auto-falls-back to model
+  top when the source changes). Edit-mode seeding (`heightDraftFrom`) now
+  also offers the stored lower heights as chain candidates; planes win
+  ties. Feed height / fixture planes / highest-of / lowest-of stay
+  placeholders.
+- Verified: `npx tsc --noEmit`, `cargo check` (src-tauri, native viewport),
+  `cargo test --workspace` (464), mcp-server (37), `npm run build`,
+  `npm run smoke:wasm` — all green.
+
 ## Round 11 (2026-08-24) — one dialog per entity, context menus, tilted holes
+
+(Round 12 partially supersedes: hole picking is setup-Z-locked again with
+the axis kept as the multi-axis seam; the tool ghost parks at the start
+position only.)
 
 - **Create and edit share ONE dialog per entity.** The `setupEdit` /
   `operationEdit` dialog states and every inspector component

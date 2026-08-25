@@ -162,6 +162,11 @@ pub struct ViewportPresentation {
     pub hovered_sketch_entity_id: Option<u64>,
     #[serde(default)]
     pub hidden_body_ids: Vec<u64>,
+    /// Bodies rendered as a faint shell with see-through wireframe edges:
+    /// the manufacturing simulation ghosts the part bodies so the machined
+    /// stock surface shows through (stock-vs-model inspection).
+    #[serde(default)]
+    pub ghosted_body_ids: Vec<u64>,
     #[serde(default)]
     pub hidden_datum_plane_ids: Vec<u64>,
     #[serde(default)]

@@ -253,10 +253,11 @@ export interface CamPointPickSession {
   hoverKey: string | null;
 }
 
-/** One hole chosen for drilling/thread milling: any cylindrical solid face.
- *  The axis is recorded in setup coordinates so tilted holes can be
- *  reported (fixed-axis planning rejects them at submit; indexed/5-axis
- *  tool orientation is the roadmap item that consumes the axis). */
+/** One hole chosen for drilling/thread milling: a cylindrical solid face
+ *  whose axis is parallel to setup Z (fixed-axis constraint enforced at
+ *  pick time). The axis is still recorded in setup coordinates so a future
+ *  indexed/5-axis tool orientation can consume it without changing the
+ *  picking pipeline. */
 export interface CamHolePickHole {
   /** Stable identity: `${bodyId}:${faceId}`. */
   key: string;
@@ -264,12 +265,12 @@ export interface CamHolePickHole {
   faceId: number;
   /** Cylinder radius, mm — the label reads the drilled diameter from it. */
   radius: number;
-  /** Marker anchor, model coordinates: on the axis at the stock top plane
-   *  for setup-Z holes, the face's axis origin for tilted ones. */
+  /** Marker anchor, model coordinates: on the axis at the stock top plane. */
   modelPoint: Point3Dto;
   /** Hole center in setup coordinates (operation input). */
   point: { x: number; y: number };
-  /** Hole axis direction in setup coordinates (unit length). */
+  /** Hole axis direction in setup coordinates (unit length); reserved for
+   *  future multi-axis orientation, ±setup Z today. */
   axis: [number, number, number];
 }
 

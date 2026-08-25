@@ -287,17 +287,14 @@ export function modelBottomZInSetup(
   return modelPointToSetup({ x: bounds.min.x, y: bounds.min.y, z: bounds.min.z }, setup.wcs).z;
 }
 
-/** Resolve a cylindrical solid face into a drillable hole for the setup.
- *  Fixed-axis drilling requires the cylinder axis parallel to setup Z
- *  (either sense); anything else returns null so the pointer shows the face
- *  as unpickable. The marker point sits on the axis at the stock top plane;
- *  the operation input is the axis position in setup-space X/Y. */
-/** Convert a cylindrical solid face into a pickable hole. Any axis
- *  direction is accepted — fixed-axis (3-axis) planning can only drill
- *  holes parallel to setup Z, so the axis travels with the pick and the
- *  dialog reports tilted holes instead of hiding them. Indexed (4-axis)
- *  and 5-axis machining will consume the recorded axis via a per-operation
- *  tool orientation. */
+/** Convert a cylindrical solid face into a pickable hole, or null when the
+ *  face cannot be drilled in the current fixed-axis frame: only faces whose
+ *  axis is parallel to setup Z are pickable today. The axis is still computed
+ *  (same projection as modelPointToSetup) and recorded on the returned pick,
+ *  so indexed (4-axis) / 5-axis machining can relax this one check and
+ *  consume per-hole tool orientation without touching the picking pipeline.
+ *  The marker point sits on the axis at the stock top plane; the operation
+ *  input is the axis position in setup-space X/Y. */
 export function camHoleFromCylinderFace(
   bodyId: number,
   faceId: number,
@@ -314,14 +311,19 @@ export function camHoleFromCylinderFace(
     cylinder.axis.x * wcs.z_axis[0] + cylinder.axis.y * wcs.z_axis[1] + cylinder.axis.z * wcs.z_axis[2],
   ];
   const parallel = Math.abs(axis[2]) > 1 - 1e-6;
+  // Fixed-axis planning drills along setup Z only: tilted faces are NOT
+  // pickable today. The axis is still computed above (same projection as
+  // modelPointToSetup) and stays on the returned pick, so the indexed/5-axis
+  // roadmap can relax this single check and immediately consume per-hole
+  // tool orientation without touching the picking pipeline.
+  if (!parallel) return null;
   // Setup-Z holes mark at the stock top plane (always visible above the
-  // part); tilted holes mark right at the picked face's axis origin.
-  const marker = parallel
-    ? setupPointToModel(
-        { x: center.x, y: center.y, z: setup.stock.max.z },
-        setup.wcs,
-      )
-    : cylinder.origin;
+  // part); the face's axis origin is the right anchor once tilted holes
+  // become machinable.
+  const marker = setupPointToModel(
+    { x: center.x, y: center.y, z: setup.stock.max.z },
+    setup.wcs,
+  );
   return {
     key: `${bodyId}:${faceId}`,
     bodyId,

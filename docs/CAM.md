@@ -80,21 +80,23 @@ operation. The operator programs the job explicitly, in this order:
 3. **One operation at a time.** Each operation is programmed against geometry
    the operator selects — sketch loops for contours, pockets, and chamfers;
    holes clicked directly on the model's cylindrical faces for drilling and
-   thread milling (hover highlights the face, a click toggles the hole, ANY
-   cylindrical face is pickable — the pick records the hole axis in setup
-   coordinates, faces not parallel to setup Z are flagged in the dialog and
-   rejected at submit because fixed-axis planning drills along setup Z only,
-   and explicit coordinates remain available); the stock top or an explicit
-   region for facing. Every operation dialog is the same five-tab scaffold
+   thread milling (hover highlights the face, a click toggles the hole, only
+   faces whose axis is parallel to setup Z are pickable under fixed-axis
+   planning — the pick still records the hole axis in setup coordinates as
+   the seam for a future indexed/5-axis tool orientation — and explicit
+   coordinates remain available); the stock top or an explicit region for
+   facing. Every operation dialog is the same five-tab scaffold
    (Tool / Geometry / Heights / Passes / Linking); the kind only switches on
    the geometry shape and the fields it needs, so a shared tab is edited once
    for all operation kinds. Creating and editing use the identical dialog —
    editing just seeds the same drafts from the stored operation and saves
    through the same validation. Heights are entered
-   as a reference plane (model/stock top or bottom, or origin) plus a signed
-   offset and resolved to absolute setup Z at submit, and the full option set
-   of the reference workflow renders with the unplanned entries shown as
-   disabled placeholders. Facing targets the
+   as a reference plus a signed
+   offset and resolved to absolute setup Z at submit: the reference can be a
+   plane (model/stock top or bottom, or origin), a LOWER height of the same
+   operation (fixed resolution order bottom → top → retract → clearance, so
+   chains cannot cycle), or the picked sketch loop's plane Z ('Selection');
+   the remaining reference-workflow options render as disabled placeholders. Facing targets the
    model's top surface: the default bottom height is model top + 0. Facing
    also carries a mandatory **safe distance**
    (default 5 mm): the entry plunge happens one cutter radius plus this
@@ -179,11 +181,17 @@ rewrites stored geometry.
   through the viewport's native transient channel (`src/cam/overlay.ts`):
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
-  a translucent ghost of the selected operation's tool parked at its last
-  cutting position AND at the entry plunge point (fluted section brighter
-  than the shank) — the entry ghost makes the facing safe distance directly
-  visible as the gap between the tool edge and the stock boundary,
-  the simulated remaining stock in green with rapid-collision markers, and
+  green/red endpoint arrows marking where the cutting feed starts and leaves
+  (oriented along the cut), and a translucent ghost of the selected
+  operation's tool parked at its START position (the first approach target,
+  above the entry point — the horizontal offset from the stock boundary
+  still reads as one radius plus facing's safe distance), fluted section
+  brighter than the shank. While a simulated operation is selected (and no
+  dialog is open) the part bodies ghost to a faint translucent shell with
+  see-through wireframe edges, so the machined stock surface shows through
+  the model — the same stock-vs-model inspection the reference workflow
+  uses for cuts that finish on a model surface. The simulated remaining
+  stock draws in green with rapid-collision markers, and
   point-pick candidates (solid discs whose fill density adapts to the pixel
   size, so they read as dots at any zoom). Toolpaths and the simulated stock
   only render while an operation is selected and no operation dialog is open
