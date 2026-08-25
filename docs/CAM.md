@@ -78,8 +78,11 @@ operation. The operator programs the job explicitly, in this order:
    property — it is chosen in the Post NC dialog at export time, because the
    planned toolpaths are dialect-neutral and any post can render them.
 3. **One operation at a time.** Each operation is programmed against geometry
-   the operator selects — sketch loops for contours, pockets, and chamfers;
-   holes clicked directly on the model's cylindrical faces for drilling and
+   the operator selects — sketch loops for contours, pockets, and chamfers
+   (clicked directly in the viewport: every closed loop highlights on hover,
+   clicking a segment or inside a profile commits it, never a list of feature
+   labels); holes clicked directly on the model's cylindrical faces for
+   drilling and
    thread milling (hover highlights the face, a click toggles the hole, only
    faces whose axis is parallel to setup Z are pickable under fixed-axis
    planning — the pick still records the hole axis in setup coordinates as
@@ -193,7 +196,11 @@ rewrites stored geometry.
   uses for cuts that finish on a model surface. The simulated remaining
   stock draws in green with rapid-collision markers, and
   point-pick candidates (solid discs whose fill density adapts to the pixel
-  size, so they read as dots at any zoom). Toolpaths and the simulated stock
+  size, so they read as dots at any zoom). The simulation itself is truncated
+  at the selected operation (`through_operation_id` on the simulation
+  request): selecting the second of four operations shows the cumulative
+  result of operations one and two only — later operations have not cut yet,
+  so their removal is not shown. Toolpaths and the simulated stock
   only render while an operation is selected and no operation dialog is open
   — clicking empty space clears the selection and returns the viewport to
   the bare model. A status chip at the viewport's lower right reports

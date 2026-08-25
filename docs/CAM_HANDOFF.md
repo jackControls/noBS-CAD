@@ -1,9 +1,38 @@
-# CAM branch handoff — 2026-08-24
+# CAM branch handoff — 2026-08-25
 
-State of `feature/cam` after twelve working rounds, rebased onto current
+State of `feature/cam` after thirteen working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 13 (2026-08-25) — cumulative simulation, viewport loop picking
+
+- **Simulation is cumulative through the selection**: `CamSimulationRequestDto.through_operation_id`
+  truncates the planned program at the end of the last section whose
+  operation sorts at or before the target in the setup's operation list
+  (`simulation.rs::truncate_program_through`; first work-offset copy bounds
+  the scan — duplicated offsets repeat identical motion against
+  already-removed material). Disabled targets contribute nothing themselves;
+  unknown ids fail closed. The result echoes the target
+  (`through_operation_id`) so the overlay and the ghost-body gate can drop
+  stale results when the selection moves mid-simulation. `CamWorkspace`
+  passes the selected operation id and re-simulates on selection change;
+  with no selection the request still covers the whole setup (collisions,
+  3D Sim button), but nothing renders until an operation is selected.
+  Tests: `simulation_through_first_operation_excludes_later_removal`,
+  `simulation_through_unknown_operation_fails_closed` (cam crate now 67).
+- **2D contour/pocket/chamfer geometry is picked in the viewport**: the
+  sketch-loop dropdown is gone. Path-geometry dialogs (source = sketch) open
+  a `camLoopPick` store session listing every closed sketch loop with
+  model-space outlines; the viewport hit-tests screen-space (inside the
+  projected polygon counts as a hit, else nearest segment within 14 px),
+  hover highlights amber, the committed loop draws green, and a click
+  selects it as the operation's path (`Viewport.tsx::pickCamLoop`, overlay
+  renders candidates/hover/selected as through-geometry line layers). The
+  dialog shows the picked loop's label as a readout; nothing pre-selected —
+  submit fails closed until the operator clicks. The 'Selection' height
+  reference now requires an actually picked loop. Manual X,Y entry remains
+  as the alternative source.
 
 ## Round 12 (2026-08-24, late) — toolpath display, model ghost, heights refs
 

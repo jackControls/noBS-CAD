@@ -3059,6 +3059,7 @@ export function Viewport() {
         camSimulation: transientState.camSimulation,
         camPointPick: transientState.camPointPick,
         camHolePick: transientState.camHolePick,
+        camLoopPick: transientState.camLoopPick,
         camDialogOpen: transientState.camDialog !== null,
         solidScene: transientState.solidScene,
       });
@@ -9074,6 +9075,66 @@ export function Viewport() {
       if (!face?.cylinder) return null;
       return camHoleFromCylinderFace(faceHit.bodyId, faceHit.faceId, face.cylinder, setup);
     };
+    /** CAM loop picking: resolve the pointer to a closed sketch loop by
+     *  screen-space proximity — inside the projected polygon counts as a
+     *  direct hit, otherwise the nearest segment within 14 px wins. Loops
+     *  are few and short, so an exhaustive pass per pointer event is cheap. */
+    const pickCamLoop = (e: PointerEvent, state: ViewportState) => {
+      const session = state.camLoopPick;
+      if (!session) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const px = e.clientX;
+      const py = e.clientY;
+      const projected = new CAD.Vector3();
+      let bestKey: string | null = null;
+      let bestDistance = 14;
+      for (const loop of session.loops) {
+        const screen: Array<{ x: number; y: number }> = [];
+        let clipped = false;
+        for (const point of loop.modelPoints) {
+          projected.set(point.x, point.y, point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) {
+            clipped = true;
+            break;
+          }
+          screen.push({
+            x: rect.left + ((projected.x + 1) * rect.width) / 2,
+            y: rect.top + ((1 - projected.y) * rect.height) / 2,
+          });
+        }
+        if (clipped || screen.length < 3) continue;
+        // Point-in-polygon (even-odd) first: clicking inside a closed profile
+        // selects it without aiming at a segment.
+        let inside = false;
+        for (let i = 0, j = screen.length - 1; i < screen.length; j = i, i += 1) {
+          const a = screen[i];
+          const b = screen[j];
+          if (a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x) {
+            inside = !inside;
+          }
+        }
+        let nearest = inside ? 0 : Infinity;
+        if (!inside) {
+          for (let i = 0; i < screen.length; i += 1) {
+            const a = screen[i];
+            const b = screen[(i + 1) % screen.length];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const lengthSq = dx * dx + dy * dy;
+            const t = lengthSq > 0
+              ? Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSq))
+              : 0;
+            const distance = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
+            if (distance < nearest) nearest = distance;
+          }
+        }
+        if (nearest <= bestDistance) {
+          bestDistance = nearest;
+          bestKey = loop.key;
+        }
+      }
+      return bestKey;
+    };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
@@ -9115,6 +9176,15 @@ export function Viewport() {
         state.setCamHolePickHover(hole?.key ?? null);
         state.setHoveredFace(hole ? hole.faceId : null);
         surface.domElement.style.cursor = hole ? 'pointer' : 'crosshair';
+        return;
+      }
+
+      // CAM loop-pick sessions: hovering highlights the closed sketch loop
+      // under the pointer; navigation and solid hover stay suspended.
+      if (state.camLoopPick) {
+        const key = pickCamLoop(e, state);
+        state.setCamLoopPickHover(key);
+        surface.domElement.style.cursor = key ? 'pointer' : 'crosshair';
         return;
       }
 
@@ -9705,6 +9775,14 @@ export function Viewport() {
       if (state.camHolePick) {
         const hole = pickCamHole(e, state);
         if (hole) state.toggleCamHolePickHole(hole);
+        return;
+      }
+
+      // CAM loop-pick sessions: left-click makes the closed sketch loop under
+      // the pointer the operation's path.
+      if (state.camLoopPick) {
+        const key = pickCamLoop(e, state);
+        if (key) state.selectCamLoopPickLoop(key);
         return;
       }
 

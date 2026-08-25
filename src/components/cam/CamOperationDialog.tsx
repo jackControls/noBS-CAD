@@ -14,6 +14,7 @@ import {
   modelBottomZInSetup,
   modelPointToSetup,
   modelTopZInSetup,
+  sketchUvToModel,
   type SketchLoop,
 } from '../../cam/geometry';
 import {
@@ -47,6 +48,10 @@ import { OP_PAGES, openCamToolPicker, useCamToolPickResult } from './opShared';
 
 type OperationKind = CamOperationInput['kind'];
 type GeometrySource = 'sketch' | 'manual';
+
+/** Stable loop identity shared by the dialog and the viewport loop-pick
+ *  session (`CamLoopPickLoop.key`). */
+const loopKeyOf = (loop: SketchLoop): string => `${loop.sketch}:${loop.entityIds.join(',')}`;
 
 /** Reference planes an operation height can hang off; resolved to absolute
  *  setup Z at submit. Chain references hang a height off a LOWER height of
@@ -392,11 +397,13 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const [feedsTouched, setFeedsTouched] = useState(editing != null);
 
   const [source, setSource] = useState<GeometrySource>(editing ? 'manual' : loops.length > 0 ? 'sketch' : 'manual');
-  const [loopKey, setLoopKey] = useState('');
   const [manualPoints, setManualPoints] = useState(initManualPoints);
   // Drilling/thread: holes are picked as cylindrical faces in the viewport;
   // the session lives in the store so the shared viewport can drive it.
   const holePick = useAppStore((state) => state.camHolePick);
+  // Path kinds: the sketch loop is clicked in the viewport, never chosen
+  // from a list of labels; the session lives in the store for the viewport.
+  const loopPick = useAppStore((state) => state.camLoopPick);
 
   const [stepDown, setStepDown] = useState(
     storedStepDown !== null ? displayLength(storedStepDown, units).toFixed(4) : '',
@@ -562,6 +569,34 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     };
   }, [pages.geometry]);
 
+  // Path kinds with sketch geometry open a viewport loop-pick session: every
+  // closed sketch loop becomes clickable in the viewport. The selection
+  // survives candidate rebuilds (sketch edits) while its key still exists.
+  useEffect(() => {
+    if (pages.geometry !== 'path' || source !== 'sketch') return;
+    const previous = useAppStore.getState().camLoopPick?.selectedKey ?? null;
+    const candidates = loops.flatMap((loop) => {
+      const sketch = sketches.find((candidate) => candidate.name === loop.sketch);
+      if (!sketch) return [];
+      return [{
+        key: loopKeyOf(loop),
+        label: loop.label,
+        modelPoints: loop.points.map((uv) => sketchUvToModel(sketch.basis, uv)),
+      }];
+    });
+    useAppStore.getState().setCamLoopPick({
+      loops: candidates,
+      selectedKey: candidates.some((loop) => loop.key === previous) ? previous : null,
+      hoverKey: null,
+    });
+    return () => {
+      useAppStore.getState().setCamLoopPick(null);
+    };
+  }, [pages.geometry, source, loops, sketches]);
+
+  const selectedLoop = (): SketchLoop | null =>
+    loops.find((candidate) => loopKeyOf(candidate) === loopPick?.selectedKey) ?? null;
+
   /** Setup Z of the picked sketch loop's plane — the live 'Selection' height
    *  reference (path kinds only; hole picks carry no usable surface Z). */
   const selectionZ = (): number | null => {
@@ -573,7 +608,8 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     const origin = sketch.basis.origin;
     return modelPointToSetup({ x: origin[0], y: origin[1], z: origin[2] }, setup.wcs).z;
   };
-  const selectionAvailable = pages.geometry === 'path' && source === 'sketch' && loops.length > 0;
+  const selectionAvailable =
+    pages.geometry === 'path' && source === 'sketch' && selectedLoop() !== null;
 
   // The 'Selection' height reference only exists while a sketch loop is the
   // geometry source; fall back to the model top when that goes away so the
@@ -586,15 +622,12 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     setBottomFrom((from) => (from === 'selection' ? 'model_top' : from));
   }, [selectionAvailable]);
 
-  const selectedLoop = (): SketchLoop | null => {
-    const loop = loops.find((candidate) => `${candidate.sketch}:${candidate.entityIds.join(',')}` === loopKey);
-    return loop ?? loops[0] ?? null;
-  };
-
   const pathFromLoop = (): CamPoint2Dto[] => {
     if (!setup) throw new Error('No active CAM setup.');
     const loop = selectedLoop();
-    if (!loop) throw new Error('Pick a sketch loop, or switch to manual coordinates.');
+    if (!loop) {
+      throw new Error('Click a closed sketch loop in the viewport, or switch to manual coordinates.');
+    }
     return loopToSetupPath(loop, sketches, setup.wcs);
   };
 
@@ -944,20 +977,15 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         </div>
         {source === 'sketch' ? (
           loops.length > 0 ? (
-            <select
-              value={loopKey || (loops[0] ? `${loops[0].sketch}:${loops[0].entityIds.join(',')}` : '')}
-              onChange={(event) => setLoopKey(event.target.value)}
-              className={`${CAM_DIALOG_INPUT} mt-2`}
-            >
-              {loops.map((loop) => {
-                const key = `${loop.sketch}:${loop.entityIds.join(',')}`;
-                return (
-                  <option key={key} value={key}>
-                    {loop.label}
-                  </option>
-                );
-              })}
-            </select>
+            <>
+              <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
+                Click a closed sketch loop in the viewport — hovering highlights it, clicking
+                makes it the operation's path. Clicking inside a profile works too.
+              </p>
+              <div className="mt-2 flex h-7 min-w-0 items-center truncate rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
+                {selectedLoop()?.label ?? 'No loop picked yet'}
+              </div>
+            </>
           ) : (
             <p className="mt-2 text-[10px] italic text-mute">
               No closed sketch loops found. Sketch a closed profile first, or use manual points.

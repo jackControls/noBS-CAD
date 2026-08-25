@@ -57,6 +57,12 @@ pub struct CamSimulationRequestDto {
     /// in model coordinates. Ignored for parametric stock shapes.
     #[serde(default)]
     pub stock_mesh: Option<CamStockMeshDto>,
+    /// Simulate only through this operation (inclusive, in the setup's
+    /// operation order): the remaining-stock view of a selected operation
+    /// must not show material that later operations have not removed yet.
+    /// Omitted simulates the whole program.
+    #[serde(default)]
+    pub through_operation_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +117,9 @@ pub struct CamSimulationResultDto {
     pub steps: Vec<CamSimulationStepDto>,
     pub collisions: Vec<CamSimulationCollisionDto>,
     pub stock_mesh: Option<CamSimulationMeshDto>,
+    /// Echo of the request's truncation target, so the host can keep a stale
+    /// result from painting over a freshly changed operation selection.
+    pub through_operation_id: Option<u64>,
     pub warnings: Vec<String>,
 }
 
@@ -118,11 +127,60 @@ pub fn simulate_setup(
     document: &CamDocumentDto,
     request: &CamSimulationRequestDto,
 ) -> Result<CamSimulationResultDto, CamPlanError> {
-    let program = plan_setup(document, request.setup_id)?;
+    let mut program = plan_setup(document, request.setup_id)?;
     let setup = document
         .setup(request.setup_id)
         .ok_or_else(|| CamPlanError(format!("CAM setup {} does not exist", request.setup_id)))?;
+    if let Some(through) = request.through_operation_id {
+        truncate_program_through(setup, &mut program, through)?;
+    }
     simulate_program(document, setup, &program, request)
+}
+
+/// Cut the program off at the end of the last section whose operation sorts
+/// at or before `through` in the setup's operation list. Sections exist only
+/// for enabled operations, so a disabled target contributes nothing itself;
+/// the first work-offset copy bounds the truncation either way (duplicated
+/// offsets repeat identical motion against already-removed material).
+fn truncate_program_through(
+    setup: &CamSetupDto,
+    program: &mut CamProgramDto,
+    through: u64,
+) -> Result<(), CamPlanError> {
+    let position = |id: u64| setup.operations.iter().position(|op| op.id() == id);
+    let target = position(through).ok_or_else(|| {
+        CamPlanError(format!(
+            "CAM operation {through} does not exist in setup '{}'",
+            setup.name
+        ))
+    })?;
+    let mut end = 0usize;
+    let mut current: Option<usize> = None;
+    let mut offset_copies = 0usize;
+    for (index, command) in program.commands.iter().enumerate() {
+        match command {
+            CamCommandDto::WorkOffset { .. } => {
+                offset_copies += 1;
+                if offset_copies > 1 {
+                    break;
+                }
+            }
+            CamCommandDto::SectionStart { operation_id, .. } => {
+                current = position(*operation_id);
+                if current.is_none_or(|pos| pos > target) {
+                    break;
+                }
+            }
+            CamCommandDto::SectionEnd => {
+                if current.is_some_and(|pos| pos <= target) {
+                    end = index + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    program.commands.truncate(end);
+    Ok(())
 }
 
 fn simulate_program(
@@ -197,6 +255,7 @@ fn simulate_program(
         steps: outcome.steps,
         collisions: outcome.collisions,
         stock_mesh,
+        through_operation_id: request.through_operation_id,
         warnings,
     })
 }
@@ -1184,6 +1243,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .expect("simulation");
@@ -1201,10 +1261,73 @@ mod tests {
             voxel_size: Some(1.5),
             max_voxels: None,
             stock_mesh: None,
+            through_operation_id: None,
         };
         let first = simulate_setup(&document(), &request).expect("first simulation");
         let second = simulate_setup(&document(), &request).expect("second simulation");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn simulation_through_first_operation_excludes_later_removal() {
+        let full = simulate_setup(
+            &document(),
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+                through_operation_id: None,
+            },
+        )
+        .expect("full simulation");
+        let faced_only = simulate_setup(
+            &document(),
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+                through_operation_id: Some(1),
+            },
+        )
+        .expect("truncated simulation");
+        assert_eq!(faced_only.through_operation_id, Some(1));
+        assert_eq!(full.through_operation_id, None);
+        // The face cuts the top layer; the contour then cuts deeper, so the
+        // truncated run must remove strictly less material.
+        assert!(faced_only.removed_voxels > 0);
+        assert!(faced_only.removed_voxels < full.removed_voxels);
+        assert!(faced_only.steps.len() < full.steps.len());
+        // Truncating at the LAST operation reproduces the full removal.
+        let through_last = simulate_setup(
+            &document(),
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+                through_operation_id: Some(2),
+            },
+        )
+        .expect("through-last simulation");
+        assert_eq!(through_last.removed_voxels, full.removed_voxels);
+    }
+
+    #[test]
+    fn simulation_through_unknown_operation_fails_closed() {
+        let error = simulate_setup(
+            &document(),
+            &CamSimulationRequestDto {
+                setup_id: 1,
+                voxel_size: Some(1.0),
+                max_voxels: None,
+                stock_mesh: None,
+                through_operation_id: Some(99),
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not exist"));
     }
 
     #[test]
@@ -1216,6 +1339,7 @@ mod tests {
                 voxel_size: Some(0.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .unwrap_err();
@@ -1240,6 +1364,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .expect("simulation");
@@ -1269,6 +1394,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .expect("simulation");
@@ -1286,6 +1412,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .expect("first setup simulation");
@@ -1334,6 +1461,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .expect("rest simulation");
@@ -1381,6 +1509,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: Some(CamStockMeshDto { positions, indices }),
+                through_operation_id: None,
             },
         )
         .expect("model-body simulation");
@@ -1403,6 +1532,7 @@ mod tests {
                 voxel_size: Some(1.0),
                 max_voxels: None,
                 stock_mesh: None,
+                through_operation_id: None,
             },
         )
         .unwrap_err();

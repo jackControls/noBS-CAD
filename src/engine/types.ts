@@ -2580,6 +2580,10 @@ export interface CamSimulationRequestDto {
   max_voxels?: number | null;
   /** Required when the setup's stock is a modeled body. */
   stock_mesh?: CamStockMeshDto | null;
+  /** Simulate only through this operation (inclusive, in setup order): the
+   *  remaining-stock view of a selected operation must not show material that
+   *  later operations have not removed yet. Omitted simulates everything. */
+  through_operation_id?: number | null;
 }
 
 export type CamSimulationStepKind = 'rapid' | 'linear' | 'circular' | 'dwell';
@@ -2621,6 +2625,9 @@ export interface CamSimulationResultDto {
   steps: CamSimulationStepDto[];
   collisions: CamSimulationCollisionDto[];
   stock_mesh: CamSimulationMeshDto | null;
+  /** Echo of the request's truncation target — the host uses it to keep a
+   *  stale result from painting over a freshly changed operation selection. */
+  through_operation_id: number | null;
   warnings: string[];
 }
 

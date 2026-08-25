@@ -88,7 +88,16 @@ export function CamWorkspace() {
           })()
         : null;
     void getEngine()
-      .then((engine) => engine.camSimulate({ setup_id: setup.id, stock_mesh: stockMesh }))
+      .then((engine) =>
+        // The remaining-stock view of a selected operation must not include
+        // material later operations have not removed yet: simulate only
+        // through the selection (in setup order). No selection → whole setup.
+        engine.camSimulate({
+          setup_id: setup.id,
+          stock_mesh: stockMesh,
+          through_operation_id: selectedOperationId,
+        }),
+      )
       .then((next) => {
         if (cancelled) return;
         setCamSimulation(next);
@@ -105,7 +114,7 @@ export function CamWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, [setup?.id, simulationGeneration, scene]);
+  }, [setup?.id, simulationGeneration, scene, selectedOperationId]);
 
   // Escape cancels an active viewport point-pick session.
   useEffect(() => {

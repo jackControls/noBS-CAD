@@ -281,6 +281,26 @@ export interface CamHolePickSession {
   hoverKey: string | null;
 }
 
+/** One closed sketch loop offered for picking in the CAM viewport (2D
+ *  contour/pocket/chamfer geometry). Points are model coordinates (mm). */
+export interface CamLoopPickLoop {
+  /** Stable identity: `${sketch}:${entityIds.join(',')}` — matches the key
+   *  the operation dialog derives from its chained loop list. */
+  key: string;
+  label: string;
+  /** Closed outline in model coordinates, no duplicated closing point. */
+  modelPoints: Point3Dto[];
+}
+
+/** Active viewport loop-picking session owned by a path-geometry operation
+ *  dialog; null when none is running. Single-select: clicking a loop makes
+ *  it the operation's path. */
+export interface CamLoopPickSession {
+  loops: CamLoopPickLoop[];
+  selectedKey: string | null;
+  hoverKey: string | null;
+}
+
 function emptyCamDocument(): CamDocumentDto {
   return {
     setups: [],
@@ -784,6 +804,9 @@ interface AppState {
   camPointPick: CamPointPickSession | null;
   /** Active viewport hole-face picking session (drill/thread dialogs). */
   camHolePick: CamHolePickSession | null;
+  /** Active viewport sketch-loop picking session (contour/pocket/chamfer
+   *  dialogs with sketch geometry source). */
+  camLoopPick: CamLoopPickSession | null;
   /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
   camProgram: CamProgramDto | null;
   /** Latest volumetric stock simulation; shared-viewport overlay input. */
@@ -927,6 +950,10 @@ interface AppState {
   /** Toggle one hole in the active session (click behavior). */
   toggleCamHolePickHole: (hole: CamHolePickHole) => void;
   setCamHolePickHover: (hoverKey: string | null) => void;
+  setCamLoopPick: (session: CamLoopPickSession | null) => void;
+  /** Make one loop the session's selection (click behavior). */
+  selectCamLoopPickLoop: (key: string) => void;
+  setCamLoopPickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;
   setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
   loadProjectState: (
@@ -1125,6 +1152,7 @@ function resetDocumentUiState(): Partial<AppState> {
     camToolPick: null,
     camPointPick: null,
     camHolePick: null,
+    camLoopPick: null,
     camProgram: null,
     camSimulation: null,
     selectedFace: null,
@@ -1248,6 +1276,7 @@ export const useAppStore = create<AppState>()((set) => ({
   camToolPick: null,
   camPointPick: null,
   camHolePick: null,
+  camLoopPick: null,
   camProgram: null,
   camSimulation: null,
   selectedFace: null,
@@ -2219,6 +2248,22 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) =>
       state.camHolePick && state.camHolePick.hoverKey !== hoverKey
         ? { camHolePick: { ...state.camHolePick, hoverKey } }
+        : {},
+    ),
+
+  setCamLoopPick: (camLoopPick) => set({ camLoopPick }),
+
+  selectCamLoopPickLoop: (key) =>
+    set((state) =>
+      state.camLoopPick && state.camLoopPick.loops.some((loop) => loop.key === key)
+        ? { camLoopPick: { ...state.camLoopPick, selectedKey: key } }
+        : {},
+    ),
+
+  setCamLoopPickHover: (hoverKey) =>
+    set((state) =>
+      state.camLoopPick && state.camLoopPick.hoverKey !== hoverKey
+        ? { camLoopPick: { ...state.camLoopPick, hoverKey } }
         : {},
     ),
 

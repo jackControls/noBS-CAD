@@ -13,7 +13,11 @@ import type {
   NativeViewportPointLayer,
   NativeViewportTriangleLayer,
 } from '../components/viewport/nativeViewportBridge';
-import type { CamHolePickSession, CamPointPickSession } from '../store/appStore';
+import type {
+  CamHolePickSession,
+  CamLoopPickSession,
+  CamPointPickSession,
+} from '../store/appStore';
 import { activeCamSetup } from './document';
 import { modelBoundsOfBodies, setupPointToModel } from './geometry';
 import { camPickCandidateKey } from './pointPick';
@@ -48,6 +52,8 @@ export interface CamOverlayState {
   camPointPick: CamPointPickSession | null;
   /** Active viewport hole-picking session (drill/thread dialogs). */
   camHolePick: CamHolePickSession | null;
+  /** Active viewport loop-picking session (path-geometry dialogs). */
+  camLoopPick: CamLoopPickSession | null;
   /** A manufacturing editor dialog is open — the simulation hides so the
    *  viewport shows the plain model while programming. */
   camDialogOpen: boolean;
@@ -68,6 +74,10 @@ const PICK_POINT_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
 const HOLE_POINT: Rgba = [0.5, 0.9, 0.55, 0.95];
 /** Picked holes whose axis is not setup-Z: machinable later, not today. */
 const HOLE_POINT_TILTED: Rgba = [0.94, 0.67, 0.29, 0.95];
+/** Sketch loops offered in a contour/pocket loop-pick session. */
+const LOOP_LINE: Rgba = [0.4, 0.73, 0.94, 0.8];
+const LOOP_LINE_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
+const LOOP_LINE_SELECTED: Rgba = [0.5, 0.9, 0.55, 1];
 const TOOL_FLUTE_FILL: Rgba = [0.78, 0.8, 0.84, 0.55];
 const TOOL_SHANK_FILL: Rgba = [0.62, 0.65, 0.7, 0.3];
 const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
@@ -193,6 +203,39 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
         radius: markerRadius * 1.6,
         positions: hovered,
       });
+    }
+  }
+
+  // Loop-pick session: every closed sketch loop is a clickable candidate.
+  // The hovered loop reads as the hover accent, the committed loop in the
+  // same green as picked hole centers; width >= 2 draws through geometry so
+  // loops buried in the part stay readable.
+  if (state.camLoopPick && state.camLoopPick.loops.length > 0) {
+    const rest: number[] = [];
+    const hovered: number[] = [];
+    const selected: number[] = [];
+    for (const loop of state.camLoopPick.loops) {
+      const target =
+        loop.key === state.camLoopPick.hoverKey
+          ? hovered
+          : loop.key === state.camLoopPick.selectedKey
+            ? selected
+            : rest;
+      const points = loop.modelPoints;
+      for (let index = 0; index < points.length; index += 1) {
+        const a = points[index];
+        const b = points[(index + 1) % points.length];
+        target.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+    if (rest.length > 0) {
+      layers.lines.push({ color: LOOP_LINE, width: 2, pattern: 'solid', segments: rest });
+    }
+    if (selected.length > 0) {
+      layers.lines.push({ color: LOOP_LINE_SELECTED, width: 3, pattern: 'solid', segments: selected });
+    }
+    if (hovered.length > 0) {
+      layers.lines.push({ color: LOOP_LINE_HOVER, width: 3, pattern: 'solid', segments: hovered });
     }
   }
 
@@ -448,6 +491,9 @@ function pushSimulationStock(
 ) {
   const simulation = state.camSimulation;
   if (!simulation || simulation.setup_id !== setup.id) return;
+  // Only the result truncated at the selected operation may paint: anything
+  // else is stale (the selection moved on while the simulator was running).
+  if (simulation.through_operation_id !== state.selectedCamOperationId) return;
 
   if (simulation.stock_mesh) {
     const layer = transformedStockMeshLayer(simulation);

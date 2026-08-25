@@ -801,6 +801,9 @@ export function collectNativeViewportPresentation(): NativePresentation {
     const cam = state.camDocument;
     const setup = cam.setups.find((candidate) => candidate.id === cam.active_setup_id) ?? null;
     if (!simulation || !setup || simulation.setup_id !== setup.id) return [] as number[];
+    // Same freshness gate as the overlay: the ghost follows the simulation
+    // computed through the currently selected operation, never a stale one.
+    if (simulation.through_operation_id !== state.selectedCamOperationId) return [] as number[];
     return setup.body_ids;
   })();
 
