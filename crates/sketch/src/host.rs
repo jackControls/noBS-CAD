@@ -22,13 +22,12 @@ use crate::dto::{
     err_json, ok_json, Arc3PointRequest, ArcCenterRequest, BeginSketchRequest, BreakRequest,
     ChamferRequest, CircleRequest, CircularPatternRequest, ConstraintBatchRequest,
     DeleteConstraintRequest, DeleteDimensionRequest, DeleteEntitiesRequest, DeleteEntityRequest,
-    DimensionRequest,
-    EditDimensionRequest, EvalExpressionRequest, ExtendRequest, FilletRequest, LockedCircleRequest,
-    LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest, MirrorRequest,
-    MoveCopyRequest, MoveDimensionRequest, MovePointRequest, OffsetRequest, PointRequest,
-    PolygonRequest, RectangleRequest, RectangularPatternRequest, ScaleRequest, SegmentRequest,
-    SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SlotRequest, SplineRequest,
-    ToggleFixBatchRequest, TrimRequest,
+    DimensionRequest, EditDimensionRequest, EvalExpressionRequest, ExtendRequest, FilletRequest,
+    LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest,
+    MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest, OffsetRequest,
+    PointRequest, PolygonRequest, RectangleRequest, RectangularPatternRequest, ScaleRequest,
+    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SlotRequest,
+    SplineRequest, ToggleFixBatchRequest, TrimRequest,
 };
 use crate::manager::SketchManager;
 use crate::plane::PlaneRef;
