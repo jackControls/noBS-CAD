@@ -5511,6 +5511,20 @@ mod tests {
     }
 
     #[test]
+    fn assembly_create_component_accepted_by_cad_submit_classifier() {
+        assert!(
+            nbcad_mcp_mutate::lookup_mutate("assembly_create_component").is_some(),
+            "assembly_create_component must be in shared mutate map"
+        );
+        assert!(is_modeling_mutate("assembly_create_component"));
+        assert!(!is_read_safe_while_attached("assembly_create_component"));
+        assert!(is_read_safe_while_attached("assembly_document"));
+        assert!(is_read_safe_while_attached("assembly_solution"));
+        assert!(!is_modeling_mutate("assembly_document"));
+        assert!(!is_modeling_mutate("assembly_solution"));
+    }
+
+    #[test]
     fn tool_spec_mutates_match_shared_inbox_map() {
         let mut missing = Vec::new();
         let mut mismatched = Vec::new();

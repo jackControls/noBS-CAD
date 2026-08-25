@@ -722,4 +722,23 @@ mod tests {
         let err = encode_payload(PayloadKind::Field("name"), &json!({})).unwrap_err();
         assert!(err.contains("missing required argument 'name'"));
     }
+
+    #[test]
+    fn assembly_create_component_is_in_lookup_mutate() {
+        let spec = lookup_mutate("assembly_create_component").expect("present");
+        assert_eq!(spec.engine_method, "assembly_create_component");
+        assert_eq!(spec.execution, ExecutionKind::Direct);
+        assert_eq!(spec.payload, PayloadKind::Object);
+        assert!(lookup_mutate("assembly_document").is_none());
+        assert!(lookup_mutate("assembly_solution").is_none());
+        for name in [
+            "assembly_update_component",
+            "assembly_create_occurrence",
+            "assembly_update_occurrence",
+            "assembly_set_occurrence_pose",
+            "assembly_set_occurrence_grounded",
+        ] {
+            assert!(lookup_mutate(name).is_some(), "{name}");
+        }
+    }
 }
