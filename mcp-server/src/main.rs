@@ -861,6 +861,8 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "sketch_eval_expression"
             | "construction_plane_definitions"
             | "solid_scene"
+            | "assembly_document"
+            | "assembly_solution"
             | "solid_tessellate"
             | "solid_extrude_definitions"
             | "solid_revolve_definitions"
@@ -3500,7 +3502,7 @@ mod tests {
         assert_eq!(
             all_tools.len(),
             MODELING_TOOL_COUNT + 22,
-            "117 modeling tools plus 8 print helpers and 14 control tools" 
+            "117 modeling tools plus 8 print helpers and 14 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -5400,7 +5402,9 @@ mod tests {
             .unwrap();
         assert_eq!(grounded_occurrence["grounded"], true);
         assert_eq!(
-            grounded_occurrence["local_pose"]["translation"][0].as_f64().unwrap(),
+            grounded_occurrence["local_pose"]["translation"][0]
+                .as_f64()
+                .unwrap(),
             10.0
         );
 
@@ -5419,7 +5423,8 @@ mod tests {
             .call_tool("assembly_solution", json!({}))
             .expect("assembly solution");
         assert!(
-            solution.get("occurrence_poses").is_some() || solution.get("body_poses").is_some()
+            solution.get("occurrence_poses").is_some()
+                || solution.get("body_poses").is_some()
                 || solution.as_object().map(|o| !o.is_empty()).unwrap_or(false),
             "expected a non-empty assembly solution: {solution}"
         );
@@ -5554,7 +5559,6 @@ mod tests {
                 .count()
         );
     }
-
 
     #[test]
     fn assembly_update_component_rename_preserves_bodies_and_lcs() {

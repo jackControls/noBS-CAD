@@ -711,50 +711,73 @@ fn engine_project_new(
 
 #[tauri::command]
 fn engine_project_session_bind(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
     state: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
     session_id: &str,
 ) -> String {
-    let result = state.bind_project_session(session_id);
-    let succeeded = serde_json::from_str::<serde_json::Value>(&result)
-        .ok()
-        .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false);
-    if succeeded {
-        // Recovery can hydrate the bootstrap context before its frontend tab
-        // id is known. Transfer the existing Bevy entities/cache rather than
-        // deleting the solid faces while leaving their edge overlay behind.
-        if let Err(error) =
-            viewport.rebind_model_session(BOOTSTRAP_SESSION_ID.to_string(), session_id.to_string())
-        {
-            eprintln!("could not rebind bootstrap viewport session: {error}");
+    bridge.with_project_session_transition(window.label(), &state, || {
+        let result = state.bind_project_session(session_id);
+        let succeeded = serde_json::from_str::<serde_json::Value>(&result)
+            .ok()
+            .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
+            .unwrap_or(false);
+        if succeeded {
+            // Recovery can hydrate the bootstrap context before its frontend tab
+            // id is known. Transfer the existing Bevy entities/cache rather than
+            // deleting the solid faces while leaving their edge overlay behind.
+            if let Err(error) = viewport
+                .rebind_model_session(BOOTSTRAP_SESSION_ID.to_string(), session_id.to_string())
+            {
+                eprintln!("could not rebind bootstrap viewport session: {error}");
+            }
         }
-    }
-    result
+        result
+    })
 }
 
 #[tauri::command]
-fn engine_project_session_create(state: tauri::State<'_, AppState>, session_id: &str) -> String {
-    state.create_project_session(session_id)
+fn engine_project_session_create(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    session_id: &str,
+) -> String {
+    bridge.with_project_session_transition(window.label(), &state, || {
+        state.create_project_session(session_id)
+    })
 }
 
 #[tauri::command]
-fn engine_project_session_activate(state: tauri::State<'_, AppState>, session_id: &str) -> String {
-    state.activate_project_session(session_id)
+fn engine_project_session_activate(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
+    state: tauri::State<'_, AppState>,
+    session_id: &str,
+) -> String {
+    bridge.with_project_session_transition(window.label(), &state, || {
+        state.activate_project_session(session_id)
+    })
 }
 
 #[tauri::command]
 fn engine_project_session_drop(
+    window: tauri::WebviewWindow,
+    bridge: tauri::State<'_, session_bridge::SessionBridgeState>,
     state: tauri::State<'_, AppState>,
     viewport: tauri::State<'_, NativeViewport>,
     session_id: &str,
 ) -> String {
-    let result = state.drop_project_session(session_id);
+    let result = bridge.with_project_session_transition(window.label(), &state, || {
+        state.drop_project_session(session_id)
+    });
     let succeeded = serde_json::from_str::<serde_json::Value>(&result)
         .ok()
         .and_then(|envelope| envelope.get("ok").and_then(serde_json::Value::as_bool))
         .unwrap_or(false);
     if succeeded {
+        bridge.drop_bound_project_session(window.label(), session_id);
         let _ = viewport.drop_model_session(session_id.to_string());
     }
     result

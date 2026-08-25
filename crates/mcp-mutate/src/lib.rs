@@ -550,6 +550,42 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::SolidReplay,
     },
     MutateSpec {
+        name: "assembly_create_component",
+        engine_method: "assembly_create_component",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_component",
+        engine_method: "assembly_update_component",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_create_occurrence",
+        engine_method: "assembly_create_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_occurrence",
+        engine_method: "assembly_update_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_occurrence_pose",
+        engine_method: "assembly_set_occurrence_pose",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_occurrence_grounded",
+        engine_method: "assembly_set_occurrence_grounded",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "set_body_appearance",
         engine_method: "set_body_appearance",
         payload: PayloadKind::Object,
@@ -670,6 +706,11 @@ mod tests {
         assert_eq!(edit_move.payload, PayloadKind::EditBodyFeature("move_copy"));
         assert!(lookup_mutate("cad_script").is_none());
         assert!(lookup_mutate("cad_compare_solids").is_none());
+        let create = lookup_mutate("assembly_create_component").expect("present");
+        assert_eq!(create.engine_method, "assembly_create_component");
+        assert_eq!(create.execution, ExecutionKind::Direct);
+        assert!(lookup_mutate("assembly_document").is_none());
+        assert!(lookup_mutate("assembly_solution").is_none());
     }
 
     #[test]

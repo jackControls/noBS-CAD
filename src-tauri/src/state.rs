@@ -96,6 +96,16 @@ impl AppState {
         }
     }
 
+    /// Native project-session identity currently targeted by engine commands
+    /// and inbox apply (`active_mut`).
+    pub fn active_project_session_id(&self) -> String {
+        self.inner
+            .lock()
+            .expect("engine lock poisoned")
+            .active_session_id
+            .clone()
+    }
+
     /// Associate the engine created during application bootstrap with the
     /// frontend's first tab. Repeated binding of the active tab is harmless.
     pub fn bind_project_session(&self, session_id: &str) -> String {

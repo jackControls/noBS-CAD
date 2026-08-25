@@ -8,8 +8,10 @@
  *
  * Authoritative `engine_revision` advances in native code under the publisher
  * lock (`run_ui_mutation` / inbox apply) — not via a later JS note — so inbox
- * OCC cannot race the UI→JS gap. Conflicting/malformed heads are dead-lettered.
- * Not in-process shared memory. MCP never writebacks model.json.
+ * OCC cannot race the UI→JS gap. Reserve captures that revision; write rejects
+ * if a mutation landed during export. The bridge is bound to the native
+ * project-session identity on tab transitions. Conflicting/malformed heads
+ * are dead-lettered. Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
@@ -104,6 +106,15 @@ interface InboxApplyResult {
 interface PublishReservation {
   session_id: string;
   generation: number;
+  engine_revision?: number;
+}
+
+interface PublishWriteResult {
+  skipped: boolean;
+  reason?: string;
+  session_id?: string;
+  generation?: number;
+  engine_revision?: number;
 }
 
 async function publishNow(): Promise<void> {
@@ -111,29 +122,35 @@ async function publishNow(): Promise<void> {
   if (state.engineKind !== 'tauri') return;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   try {
-    // Reserve before export so a slower older export cannot overwrite a newer one.
-    // Tauri owns this counter across WebView reloads and scopes it per window.
-    const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
-    const engine = await getEngine();
-    const activeSketch = await engine.activeSketch();
-    let modelJson: string | null = null;
-    try {
-      const model = await exportProjectModelWithVisibility(engine);
-      modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-    } catch (error) {
-      // A half-finished sketch must not enter the persisted project format,
-      // but diagnostics still need the live entity/constraint snapshot. The
-      // native bridge keeps its previous completed model.json beside it.
-      if (activeSketch === null) throw error;
+    // Reserve captures engine_revision before export. If a UI mutation lands
+    // before write, native rejects the stale snapshot and we retry.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
+      const engine = await getEngine();
+      const activeSketch = await engine.activeSketch();
+      let modelJson: string | null = null;
+      try {
+        const model = await exportProjectModelWithVisibility(engine);
+        modelJson = typeof model === 'string' ? model : JSON.stringify(model);
+      } catch (error) {
+        // A half-finished sketch must not enter the persisted project format,
+        // but diagnostics still need the live entity/constraint snapshot. The
+        // native bridge keeps its previous completed model.json beside it.
+        if (activeSketch === null) throw error;
+      }
+      const written = await invoke<PublishWriteResult>('mcp_session_bridge_write', {
+        payload: JSON.stringify({
+          focus,
+          model_json: modelJson,
+          active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
+          generation: reservation.generation,
+        }),
+      });
+      if (written?.skipped && written.reason === 'engine_revision_changed') {
+        continue;
+      }
+      break;
     }
-    await invoke('mcp_session_bridge_write', {
-      payload: JSON.stringify({
-        focus,
-        model_json: modelJson,
-        active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
-        generation: reservation.generation,
-      }),
-    });
   } catch (error) {
     console.debug('[sessionBridge] publish failed', error);
   }
