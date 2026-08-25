@@ -3783,9 +3783,12 @@ export function Viewport() {
     };
 
     /** Pick a geometric constraint glyph (screen-space hit test).
+     * Only in sketch Select (`activeTool === null`): armed create/edit tools
+     * must receive their clicks even when the pointer is over a badge.
      * Native labels are centered on the sprite; use a generous CSS-pixel
      * box so the visible badge is easy to click. */
     const pickConstraintAtPointer = (event: PointerEvent): number | null => {
+      if (store.getState().activeTool !== null) return null;
       const entries = constraintSprites.filter(
         ({ sprite, constraintId }) => constraintId >= 0 && sprite.parent !== null,
       );
@@ -9803,17 +9806,8 @@ export function Viewport() {
         state.setSelectedEntities([]);
         return;
       }
-      if (
-        constraintScreenHit !== null
-        && state.activeTool !== null
-        && state.activeTool !== 'dimension'
-      ) {
-        state.setSelectedConstraint(constraintScreenHit);
-        state.setSelectedDimension(null);
-        state.setSelectedEntity(null);
-        state.setSelectedEntities([]);
-        return;
-      }
+      // Constraint glyphs are Select-only (see pickConstraintAtPointer). Do
+      // not intercept create/edit tool clicks the way dimensions do.
       // A dimension label is screen-space UI. Its click remains valid even
       // when an oblique/re-entered sketch plane cannot provide a ray-plane
       // coordinate at this exact pixel.
