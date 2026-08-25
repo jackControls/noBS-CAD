@@ -72,6 +72,10 @@ import {
 import { computeDimGeometry, formatDimMeasurement } from './dimsRenderer';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
 import {
+  SINGLE_POINT_RELATION_GLYPH,
+  singlePointRelationAnchor,
+} from '../../sketch/constraintGlyphAnchor';
+import {
   adaptiveSketchGridStep,
   DEFAULT_SKETCH_GRID_STEP_MM,
   snapToGrid,
@@ -3356,12 +3360,10 @@ export function Viewport() {
       ]);
       const TWO_ENTITY_GLYPH: Record<string, string> = {
         // Prefer ASCII / basic Latin so Bevy system fonts never tofu.
-        tangent: 'Tg',
+        // Single-point relations (coincident/tangent/perpendicular/concentric)
+        // use SINGLE_POINT_RELATION_GLYPH via a dedicated placement path.
         parallel: '//',
-        perpendicular: 'T',
-        coincident: 'o',
         equal: '=',
-        concentric: 'O',
         collinear: 'Col',
         symmetry: 'Sym',
       };
@@ -3488,6 +3490,39 @@ export function Viewport() {
             registerConstraintSprite(sprite, constraint.id, glyphPx, 'Fix', selected);
             continue;
           }
+        }
+
+        // Relations that live at one sketch point: contact / shared endpoint /
+        // intersection / shared center. Fall back to averaged entity anchors
+        // only when the relation point cannot be resolved.
+        const singlePointGlyph = SINGLE_POINT_RELATION_GLYPH[constraint.type];
+        if (singlePointGlyph) {
+          const relationPoint = singlePointRelationAnchor(constraint, byId);
+          const anchors = constraintReferencedEntityIds(constraint)
+            .map((id) => entityAnchor(byId.get(id), lines))
+            .filter((point): point is Vec2 => point != null);
+          const position =
+            relationPoint
+            ?? (anchors.length === 0
+              ? null
+              : anchors.length === 1
+                ? anchors[0]
+                : {
+                    x: anchors.reduce((sum, point) => sum + point.x, 0) / anchors.length,
+                    y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
+                  });
+          if (!position) continue;
+          const glyphPx = selected ? 20 : 15;
+          const sprite = makeSprite(glyphTexture(singlePointGlyph, selected), glyphPx, 7);
+          sprite.position.set(position.x, position.y, 0.2);
+          registerConstraintSprite(
+            sprite,
+            constraint.id,
+            glyphPx,
+            singlePointGlyph,
+            selected,
+          );
+          continue;
         }
 
         const glyph = TWO_ENTITY_GLYPH[constraint.type];
@@ -9808,9 +9843,10 @@ export function Viewport() {
       }
       // Constraint glyphs are Select-only (see pickConstraintAtPointer). Do
       // not intercept create/edit tool clicks the way dimensions do.
-      // A dimension label is screen-space UI. Its click remains valid even
-      // when an oblique/re-entered sketch plane cannot provide a ray-plane
-      // coordinate at this exact pixel.
+
+      // A dimension/constraint label is screen-space UI. Its click remains
+      // valid even when an oblique/re-entered sketch plane cannot provide a
+      // ray-plane coordinate at this exact pixel.
       if (!p) {
         if (annotationHit !== null || constraintScreenHit !== null) {
           downInfo = {
