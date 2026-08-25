@@ -5814,4 +5814,31 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn assembly_inbox_refresh_clears_joint_motion_preview() {
+        // Viewport prefers jointMotionPreview.solution over assemblySolution.
+        // Targeted inbox refresh must clear the stored preview, not only bump
+        // jointMotionPreviewGeneration.
+        let source = include_str!("../../src/store/appStore.ts");
+        let start = source
+            .find("refreshAfterInboxApply: async (opName)")
+            .expect("refreshAfterInboxApply");
+        let assembly = source[start..]
+            .find("if (opName?.startsWith('assembly_'))")
+            .expect("assembly inbox branch");
+        let branch = &source[start + assembly..];
+        let end = branch
+            .find("const doc = await engine.getDocument()")
+            .expect("end of targeted assembly refresh");
+        let targeted = &branch[..end];
+        assert!(
+            targeted.contains("jointPreviewSolution: null"),
+            "assembly inbox refresh must clear jointPreviewSolution"
+        );
+        assert!(
+            targeted.contains("jointMotionPreview: null"),
+            "assembly inbox refresh must clear jointMotionPreview so a stale motion pose cannot hide the new assemblySolution"
+        );
+    }
 }

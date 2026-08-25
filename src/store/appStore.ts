@@ -1212,6 +1212,9 @@ export const useAppStore = create<AppState>()((set) => ({
         assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
         bodyAppearances: scrubAppearances(state.bodyAppearances, solidScene.bodies),
         jointPreviewSolution: null,
+        // Stale-preview correction: viewport prefers jointMotionPreview.solution
+        // over the refreshed assemblySolution until this is cleared.
+        jointMotionPreview: null,
         mechanismPreview: null,
         dirty: true,
       }));
