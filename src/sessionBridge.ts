@@ -103,6 +103,13 @@ interface InboxApplyResult {
   error?: string;
 }
 
+/** Solid updates have scene+document. Joint DTOs do not — they take the dirty refresh. */
+export function inboxResultIsSolidUpdate(
+  result?: SolidUpdateDto | null,
+): result is SolidUpdateDto {
+  return Boolean(result?.scene && result.document);
+}
+
 interface PublishReservation {
   session_id: string;
   generation: number;
@@ -180,7 +187,7 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
-    if (result.result?.scene && result.result.document) {
+    if (inboxResultIsSolidUpdate(result.result)) {
       useAppStore.getState().applySolidUpdate(result.result);
     } else {
       // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).

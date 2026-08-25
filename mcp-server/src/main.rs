@@ -6116,4 +6116,163 @@ mod tests {
             "expected a non-empty assembly solution: {solution}"
         );
     }
+
+    fn write_two_box_session(unique: &str) -> Value {
+        let mut donor = CadServer::new().unwrap();
+        donor.call_tool("cad_new_project", json!({})).unwrap();
+        extrude_offset_box(&mut donor, "Sketch1", -12.0, -2.0);
+        extrude_offset_box(&mut donor, "Sketch2", 2.0, 12.0);
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(unique, "model.json", &model_json).unwrap();
+        session::write_session(
+            unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+        donor
+            .call_tool("solid_scene", json!({}))
+            .expect("donor scene")
+    }
+
+    fn apply_inbox_on_separate_host(unique: &str) -> session::ApplyResult {
+        session::apply_inbox_op(unique, |name, arguments| {
+            let mut host = CadServer::new()?;
+            let model = session::require_model_json(unique)?;
+            host.call_tool("cad_load_project_model", json!({ "model_json": model }))?;
+            let result = host.call_tool(name, arguments)?;
+            let exported = host.call_tool("cad_project_model", json!({}))?;
+            let model_json = exported
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| serde_json::to_string(&exported).unwrap());
+            session::publish_applied_snapshot(unique, &model_json)?;
+            Ok(result)
+        })
+        .expect("apply helper should run host on a separate SketchManager")
+    }
+
+    /// Joint create/update return a DTO, not a solid update. Old applyInboxNow
+    /// fell through to loadDocument() (dirty:false). refreshAfterInboxApply
+    /// keeps dirty:true for that path.
+    fn assert_joint_dto_keeps_dirty(host_result: &Value, label: &str) {
+        // applyInboxNow: scene+document -> applySolidUpdate (already dirty:true);
+        // otherwise refreshAfterInboxApply (dirty:true). Joint DTOs take the
+        // second path — the old loadDocument() fallback cleared dirty.
+        let is_solid_update =
+            host_result.get("scene").is_some() && host_result.get("document").is_some();
+        assert!(
+            !is_solid_update,
+            "{label}: joint DTO must take refreshAfterInboxApply (dirty:true), not loadDocument: {host_result}"
+        );
+        assert!(
+            host_result.get("id").is_some() && host_result.get("kind").is_some(),
+            "{label}: expected a joint DTO: {host_result}"
+        );
+    }
+
+    fn assert_joint_visible(document: &Value, joint_id: u64, name: &str) {
+        let joints = document["joints"].as_array().expect("joints");
+        assert!(
+            joints
+                .iter()
+                .any(|joint| { joint["id"].as_u64() == Some(joint_id) && joint["name"] == name }),
+            "assembly_document missing {name} ({joint_id}): {document}"
+        );
+    }
+
+    #[test]
+    fn attach_cad_submit_joint_create_update_visible_and_dirty() {
+        // Attached cad_submit: after create AND update, joint is visible and
+        // the inbox result is a joint DTO so applyInboxNow keeps dirty:true.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-submit-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().expect("two bodies");
+        assert_eq!(bodies.len(), 2, "expected two extruded bodies: {scene}");
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+
+        let submitted_create = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "Hinge1",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"],
+                        "limits": {"min": -90.0, "max": 90.0}
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .expect("cad_submit create joint while attached");
+        assert_eq!(submitted_create["submitted"], true);
+        assert_eq!(submitted_create["applied"], false);
+
+        let created = apply_inbox_on_separate_host(&unique);
+        assert_eq!(created.op.name, "assembly_create_joint");
+        assert_eq!(created.host_result["name"], "Hinge1");
+        assert_eq!(created.host_result["kind"], "revolute");
+        let joint_id = created.host_result["id"].as_u64().expect("joint id");
+        assert_joint_dto_keeps_dirty(&created.host_result, "create");
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let after_create = server
+            .call_tool("assembly_document", json!({}))
+            .expect("joints after create apply");
+        assert_joint_visible(&after_create, joint_id, "Hinge1");
+
+        let mut joint = created.host_result.clone();
+        if let Some(object) = joint.as_object_mut() {
+            object.remove("_disclosure");
+            object.insert("name".to_string(), json!("Hinge1Renamed"));
+            object.insert("limits".to_string(), json!({"min": -45.0, "max": 45.0}));
+        }
+        let generation = session::read_heartbeat_generation(&unique).unwrap();
+        let submitted_update = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_update_joint",
+                    "arguments": { "joint": joint },
+                    "base_generation": generation
+                }),
+            )
+            .expect("cad_submit update joint while attached");
+        assert_eq!(submitted_update["submitted"], true);
+        assert_eq!(submitted_update["applied"], false);
+
+        let updated = apply_inbox_on_separate_host(&unique);
+        assert_eq!(updated.op.name, "assembly_update_joint");
+        assert_eq!(updated.host_result["name"], "Hinge1Renamed");
+        assert_eq!(updated.host_result["id"].as_u64(), Some(joint_id));
+        assert_joint_dto_keeps_dirty(&updated.host_result, "update");
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let after_update = server
+            .call_tool("assembly_document", json!({}))
+            .expect("joints after update apply");
+        assert_joint_visible(&after_update, joint_id, "Hinge1Renamed");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

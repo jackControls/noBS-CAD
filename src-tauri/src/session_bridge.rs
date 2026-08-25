@@ -1454,6 +1454,16 @@ mod tests {
                 "set_body_appearance",
                 ExecutionKind::Direct,
             ),
+            (
+                "assembly_create_joint",
+                "assembly_create_joint",
+                ExecutionKind::Direct,
+            ),
+            (
+                "assembly_update_joint",
+                "assembly_update_joint",
+                ExecutionKind::Direct,
+            ),
         ];
         for (name, method, execution) in cases {
             let spec = nbcad_mcp_mutate::lookup_mutate(name).expect(name);
