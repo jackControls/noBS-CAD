@@ -805,6 +805,10 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
     })
 }
 
+fn object_or_null(schema: Value) -> Value {
+    json!({ "oneOf": [schema, { "type": "null" }] })
+}
+
 fn dto_schema(description: &str) -> Value {
     json!({
         "type": "object",
@@ -1423,7 +1427,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "enum": ["planar_face", "cylindrical_face", "virtual_circular_face", "circular_edge"]
             },
             "radius": {"type": ["number", "null"]},
-            "source_surface_frame": joint_frame.clone(),
+            "source_surface_frame": object_or_null(joint_frame.clone()),
             "frame": joint_frame.clone()
         }),
         &["body_id", "face_id", "face_key", "frame"],
@@ -1450,9 +1454,9 @@ fn tool_specs() -> Vec<ToolSpec> {
             "screw_pitch_mm_per_revolution": {"type": "number"},
             "connector_a_twist_deg": {"type": "number"},
             "connector_b_twist_deg": {"type": "number"},
-            "secondary_angle_limits": joint_limits.clone(),
-            "tertiary_angle_limits": joint_limits.clone(),
-            "secondary_linear_limits": joint_limits.clone(),
+            "secondary_angle_limits": object_or_null(joint_limits.clone()),
+            "tertiary_angle_limits": object_or_null(joint_limits.clone()),
+            "secondary_linear_limits": object_or_null(joint_limits.clone()),
             "connector_a_occurrence_id": {"type": ["integer", "null"], "minimum": 1},
             "connector_b_occurrence_id": {"type": ["integer", "null"], "minimum": 1}
         }),
@@ -1468,9 +1472,9 @@ fn tool_specs() -> Vec<ToolSpec> {
             "flipped": {"type": "boolean"},
             "angle_offset_deg": {"type": "number"},
             "linear_offset_mm": {"type": "number"},
-            "limits": joint_limits.clone(),
-            "angle_limits": joint_limits.clone(),
-            "linear_limits": joint_limits.clone(),
+            "limits": object_or_null(joint_limits.clone()),
+            "angle_limits": object_or_null(joint_limits.clone()),
+            "linear_limits": object_or_null(joint_limits.clone()),
             "advanced": joint_advanced.clone(),
             "enabled": {"type": "boolean"}
         }),
@@ -2805,9 +2809,9 @@ fn tool_specs() -> Vec<ToolSpec> {
                     "flipped": {"type": "boolean"},
                     "angle_offset_deg": {"type": "number"},
                     "linear_offset_mm": {"type": "number"},
-                    "limits": joint_limits.clone(),
-                    "angle_limits": joint_limits.clone(),
-                    "linear_limits": joint_limits.clone(),
+                    "limits": object_or_null(joint_limits.clone()),
+                    "angle_limits": object_or_null(joint_limits.clone()),
+                    "linear_limits": object_or_null(joint_limits.clone()),
                     "advanced": joint_advanced.clone(),
                     "grounded_body_id": {"type": ["integer", "null"], "minimum": 1},
                     "grounded_occurrence_id": {"type": ["integer", "null"], "minimum": 1}
@@ -5925,6 +5929,8 @@ mod tests {
                 spec.name
             );
         }
+    }
+
     fn planar_connector_from_body(body: &Value) -> Value {
         let face = body["faces"]
             .as_array()
@@ -6072,5 +6078,220 @@ mod tests {
             solution.as_object().map(|o| !o.is_empty()).unwrap_or(false),
             "expected a non-empty assembly solution: {solution}"
         );
+    }
+
+    #[test]
+    fn assembly_joint_query_validates_against_advertised_update_schema() {
+        // Serialized JointDefinitionDto emits null for absent Option fields.
+        // A strict MCP client validates tools/call arguments against tools/list
+        // inputSchema, so query → update must accept those nulls.
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        let first = extrude_offset_box(&mut server, "Sketch1", -12.0, -2.0);
+        let second = extrude_offset_box(&mut server, "Sketch2", 2.0, 12.0);
+        let body_b_id = second["scene"]["bodies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|body| body["id"].as_u64().unwrap())
+            .max()
+            .expect("second body id");
+        let scene = server
+            .call_tool("solid_scene", json!({}))
+            .expect("solid scene");
+        let bodies = scene["bodies"].as_array().expect("bodies");
+        let body_a = bodies
+            .iter()
+            .find(|body| body["id"] == first["scene"]["bodies"][0]["id"])
+            .cloned()
+            .expect("body A");
+        let body_b = bodies
+            .iter()
+            .find(|body| body["id"].as_u64() == Some(body_b_id))
+            .cloned()
+            .expect("body B");
+
+        let created = server
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name": "HingeSchema",
+                    "kind": "revolute",
+                    "connector_a": planar_connector_from_body(&body_a),
+                    "connector_b": planar_connector_from_body(&body_b),
+                    "grounded_body_id": body_a["id"]
+                }),
+            )
+            .expect("create joint");
+        let joint_id = created["id"].as_u64().expect("joint id");
+
+        let document = server
+            .call_tool("assembly_document", json!({}))
+            .expect("query joints");
+        let mut queried = document["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|joint| joint["id"].as_u64() == Some(joint_id))
+            .cloned()
+            .expect("queried joint");
+        if let Some(object) = queried.as_object_mut() {
+            object.remove("_disclosure");
+        }
+
+        assert!(
+            queried["connector_a"]["source_surface_frame"].is_null(),
+            "planar connectors serialize source_surface_frame as null: {queried}"
+        );
+        assert!(
+            queried["limits"].is_null(),
+            "unset primary limits serialize as null: {queried}"
+        );
+        assert!(
+            queried["angle_limits"].is_null() && queried["linear_limits"].is_null(),
+            "unset primary angle/linear limits serialize as null: {queried}"
+        );
+        assert!(
+            queried["advanced"]["secondary_angle_limits"].is_null()
+                && queried["advanced"]["tertiary_angle_limits"].is_null()
+                && queried["advanced"]["secondary_linear_limits"].is_null(),
+            "unset advanced limits serialize as null: {queried}"
+        );
+
+        server
+            .call_tool(
+                "cad_set_focus",
+                json!({ "focus": "assembly", "explicit": true }),
+            )
+            .unwrap();
+        let listed = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list"
+            }),
+        );
+        let tools = listed
+            .iter()
+            .find(|message| message.get("id") == Some(&json!(1)))
+            .and_then(|message| message.pointer("/result/tools"))
+            .and_then(Value::as_array)
+            .expect("tools/list result");
+        let update_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "assembly_update_joint")
+            .and_then(|tool| tool.get("inputSchema"))
+            .cloned()
+            .expect("advertised assembly_update_joint schema");
+
+        let update_args = json!({ "joint": queried });
+        if let Err(error) = schema_accepts(&update_schema, &update_args) {
+            panic!("queried joint failed advertised assembly_update_joint schema: {error}\n{update_args}");
+        }
+
+        let responses = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "assembly_update_joint",
+                    "arguments": update_args
+                }
+            }),
+        );
+        let result = responses
+            .iter()
+            .find(|message| message.get("id") == Some(&json!(2)))
+            .expect("update response");
+        assert_eq!(
+            result["result"]["isError"], false,
+            "schema-valid queried joint must update: {result}"
+        );
+        assert_eq!(
+            result["result"]["structuredContent"]["id"].as_u64(),
+            Some(joint_id)
+        );
+        assert_eq!(result["result"]["structuredContent"]["name"], "HingeSchema");
+    }
+
+    fn schema_accepts(schema: &Value, value: &Value) -> Result<(), String> {
+        if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+            let mut errors = Vec::new();
+            for (index, alternative) in one_of.iter().enumerate() {
+                match schema_accepts(alternative, value) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => errors.push(format!("[{index}]: {error}")),
+                }
+            }
+            return Err(format!("no oneOf variant matched ({})", errors.join("; ")));
+        }
+
+        if let Some(type_value) = schema.get("type") {
+            let types: Vec<&str> = match type_value {
+                Value::String(name) => vec![name.as_str()],
+                Value::Array(names) => names.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            let matches_type = match value {
+                Value::Null => types.contains(&"null"),
+                Value::Object(_) => types.contains(&"object"),
+                Value::Array(_) => types.contains(&"array"),
+                Value::String(_) => types.contains(&"string"),
+                Value::Bool(_) => types.contains(&"boolean"),
+                Value::Number(number) if number.is_i64() || number.is_u64() => {
+                    types.contains(&"integer") || types.contains(&"number")
+                }
+                Value::Number(_) => types.contains(&"number"),
+            };
+            if !matches_type {
+                return Err(format!("value {value} is not one of {types:?}"));
+            }
+        }
+
+        if let Some(enum_values) = schema.get("enum").and_then(Value::as_array) {
+            if !enum_values.contains(value) {
+                return Err(format!("value {value} is not in enum {enum_values:?}"));
+            }
+        }
+
+        if let Value::Object(object) = value {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                    for key in object.keys() {
+                        if !properties.contains_key(key) {
+                            return Err(format!("additional property {key}"));
+                        }
+                    }
+                }
+                for (key, child) in object {
+                    if let Some(child_schema) = properties.get(key) {
+                        schema_accepts(child_schema, child)
+                            .map_err(|error| format!("{key}: {error}"))?;
+                    }
+                }
+            }
+            if let Some(required) = schema.get("required").and_then(Value::as_array) {
+                for field in required {
+                    let name = field.as_str().unwrap_or_default();
+                    if !object.contains_key(name) {
+                        return Err(format!("missing required {name}"));
+                    }
+                }
+            }
+        }
+
+        if let Value::Array(items) = value {
+            if let Some(item_schema) = schema.get("items") {
+                for (index, item) in items.iter().enumerate() {
+                    schema_accepts(item_schema, item)
+                        .map_err(|error| format!("items[{index}]: {error}"))?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
