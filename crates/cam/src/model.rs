@@ -667,6 +667,11 @@ pub enum ContourCompensation {
     Inside,
     /// Offset away from the polygon interior by the tool radius.
     Outside,
+    /// Offset to the left of the travel direction by the tool radius — the
+    /// only unambiguous side for an OPEN chain (it has no interior).
+    Left,
+    /// Offset to the right of the travel direction by the tool radius.
+    Right,
 }
 
 /// Canned-cycle family of a drill operation. The planner expands every cycle
@@ -759,6 +764,12 @@ pub enum CamOperationDto {
         enabled: bool,
         tool_id: u64,
         path: Vec<Point2Dto>,
+        /// False for an open chain of picked edges: the planner never closes
+        /// it, and compensation reads left/right of travel instead of
+        /// inside/outside (an open chain has no interior). Defaults true so
+        /// documents written before open chains existed keep their behavior.
+        #[serde(default = "default_true")]
+        closed: bool,
         top_z: f64,
         bottom_z: f64,
         step_down: f64,
@@ -1063,9 +1074,11 @@ impl CamOperationDto {
             }
             Self::Contour2d {
                 path,
+                closed,
                 top_z,
                 bottom_z,
                 step_down,
+                compensation,
                 ..
             } => {
                 if tool.kind == CamToolKind::Drill || !tool.center_cutting {
@@ -1073,9 +1086,9 @@ impl CamOperationDto {
                         "contour operation '{label}' requires a center-cutting milling tool until ramp or lead-in entries are supported"
                     ));
                 }
-                if path.len() < 3 || path.len() > MAX_PATH_POINTS {
+                if path.len() < 2 || path.len() > MAX_PATH_POINTS {
                     return Err(format!(
-                        "contour operation '{label}' needs 3..={MAX_PATH_POINTS} path points"
+                        "contour operation '{label}' needs 2..={MAX_PATH_POINTS} path points"
                     ));
                 }
                 if !path.iter().copied().all(within_xy) {
@@ -1083,8 +1096,26 @@ impl CamOperationDto {
                         "contour operation '{label}' path must lie within stock"
                     ));
                 }
-                if signed_area(path).abs() <= EPSILON {
-                    return Err(format!("contour operation '{label}' path has zero area"));
+                if *closed {
+                    if path.len() < 3 {
+                        return Err(format!(
+                            "contour operation '{label}' closed paths need at least 3 points"
+                        ));
+                    }
+                    if signed_area(path).abs() <= EPSILON {
+                        return Err(format!("contour operation '{label}' path has zero area"));
+                    }
+                    if matches!(compensation, ContourCompensation::Left | ContourCompensation::Right)
+                    {
+                        return Err(format!(
+                            "contour operation '{label}' closed paths compensate inside/outside; left/right is for open chains"
+                        ));
+                    }
+                } else if matches!(compensation, ContourCompensation::Inside | ContourCompensation::Outside)
+                {
+                    return Err(format!(
+                        "contour operation '{label}' is an open chain — it has no interior; compensate left/right of travel direction"
+                    ));
                 }
                 validate_depth_range(label, *top_z, *bottom_z, *step_down, within_z)?;
             }
@@ -1257,6 +1288,11 @@ impl CamOperationDto {
                 if matches!(wall_side, ContourCompensation::On) {
                     return Err(format!(
                         "chamfer operation '{label}' must declare which side of the path the material wall is on"
+                    ));
+                }
+                if matches!(wall_side, ContourCompensation::Left | ContourCompensation::Right) {
+                    return Err(format!(
+                        "chamfer operation '{label}' follows a closed path; declare the material wall inside/outside (left/right is for open contour chains)"
                     ));
                 }
                 if path.len() < 3 || path.len() > MAX_PATH_POINTS {

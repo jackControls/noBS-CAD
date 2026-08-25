@@ -78,7 +78,13 @@ operation. The operator programs the job explicitly, in this order:
    property — it is chosen in the Post NC dialog at export time, because the
    planned toolpaths are dialect-neutral and any post can render them.
 3. **One operation at a time.** Each operation is programmed against geometry
-   the operator selects — sketch loops for contours, pockets, and chamfers
+   the operator selects — sketch edges for 2D contours (clicked one by one in
+   the viewport: every picked entity highlights, clicks toggle it, and the
+   picks resolve into one connected chain in click order — a CLOSED loop is
+   not required; open chains plan without a closing cut and compensate
+   left/right of the travel direction, which the first pick anchors and a
+   Reverse button flips; a circle is a complete closed loop on its own);
+   closed sketch loops for pockets and chamfers
    (clicked directly in the viewport: every closed loop highlights on hover,
    clicking a segment or inside a profile commits it, never a list of feature
    labels); holes clicked directly on the model's cylindrical faces for
@@ -184,16 +190,18 @@ rewrites stored geometry.
   through the viewport's native transient channel (`src/cam/overlay.ts`):
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
-  green/red endpoint arrows marking where the cutting feed starts and leaves
-  (oriented along the cut), and a translucent ghost of the selected
+  small green/red endpoint arrows marking where the cutting feed starts and
+  leaves (oriented along the first/last lateral cut — plunge segments are
+  skipped — and length-capped so a large face mill cannot paint an arrow
+  longer than the part), and a translucent ghost of the selected
   operation's tool parked at its START position (the first approach target,
   above the entry point — the horizontal offset from the stock boundary
   still reads as one radius plus facing's safe distance), fluted section
   brighter than the shank. While a simulated operation is selected (and no
-  dialog is open) the part bodies ghost to a faint translucent shell with
-  see-through wireframe edges, so the machined stock surface shows through
-  the model — the same stock-vs-model inspection the reference workflow
-  uses for cuts that finish on a model surface. The simulated remaining
+  dialog is open) the operator may flip the header's X-Ray toggle to ghost
+  the part bodies to a faint translucent shell with see-through wireframe
+  edges, so the machined stock surface shows through the model — off by
+  default; the full-model ghost is an explicit request, never automatic. The simulated remaining
   stock draws in green with rapid-collision markers, and
   point-pick candidates (solid discs whose fill density adapts to the pixel
   size, so they read as dots at any zoom). The simulation itself is truncated

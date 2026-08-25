@@ -790,12 +790,13 @@ export function collectNativeViewportPresentation(): NativePresentation {
     movePreview,
   );
 
-  // CAM stock-vs-model inspection: while a simulated operation is selected
-  // and no CAM dialog is open, the setup's part bodies ghost to a wireframe
-  // shell so the machined stock surface shows through (mirrors the overlay's
-  // simulation-display gate in src/cam/overlay.ts).
+  // CAM stock-vs-model inspection: an explicit operator toggle ghosts the
+  // setup's part bodies to a wireframe shell while a simulated operation is
+  // reviewed, so the machined stock surface shows through on request
+  // (mirrors the overlay's simulation-display gate in src/cam/overlay.ts).
   const ghostedBodyIds = (() => {
     if (state.activeTab !== 'cam') return [] as number[];
+    if (!state.camXrayModel) return [] as number[];
     if (state.selectedCamOperationId === null || state.camDialog !== null) return [] as number[];
     const simulation = state.camSimulation;
     const cam = state.camDocument;

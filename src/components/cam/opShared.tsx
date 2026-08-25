@@ -18,6 +18,9 @@ export interface OpPages {
   geometry: 'holes' | 'face' | 'path';
   /** Section label for the path geometry tab. */
   pathLabel?: string;
+  /** Path geometry is picked edge by edge (viewport chain picking); open
+   *  chains are accepted and compensation reads left/right of travel. */
+  pathChain?: boolean;
   /** Thread-milling parameters (designation on Geometry, passes on Passes). */
   threadFields?: boolean;
   /** Bottom height on the Heights tab. */
@@ -44,6 +47,7 @@ export const OP_PAGES: Record<OperationKind, OpPages> = {
   contour2d: {
     geometry: 'path',
     pathLabel: 'Contour path',
+    pathChain: true,
     bottomZ: true,
     stepDown: true,
     compensation: true,

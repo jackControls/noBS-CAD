@@ -276,6 +276,7 @@ export function CamPostDialog() {
                   value={supaZ}
                   onChange={setSupaZ}
                   unit={`${lu} (machine)`}
+                  disabled={positioning === 'controller_managed'}
                 />
                 <DraftNumber
                   label="Tool edge D"
@@ -283,6 +284,7 @@ export function CamPostDialog() {
                   onChange={setToolEdgeD}
                   integer
                   unit="index"
+                  disabled={positioning === 'controller_managed'}
                 />
               </div>
               {positioning === 'supa_z_then_xy' && (

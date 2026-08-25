@@ -301,6 +301,28 @@ export interface CamLoopPickSession {
   hoverKey: string | null;
 }
 
+/** One sketch curve entity offered for chain picking (2D contour): a line,
+ *  arc, circle, or spline tessellated in model coordinates. */
+export interface CamChainPickEntity {
+  /** Stable identity: `${sketch}:${entityId}`. */
+  key: string;
+  sketch: string;
+  entityId: number;
+  kind: 'line' | 'arc' | 'circle' | 'spline';
+  /** Tessellated outline in model coordinates (mm); circles are closed rings. */
+  modelPoints: Point3Dto[];
+}
+
+/** Active viewport edge-chain picking session owned by a contour operation
+ *  dialog; null when none is running. Clicking toggles entities; the dialog
+ *  resolves the pick order into one connected chain (open or closed). */
+export interface CamChainPickSession {
+  entities: CamChainPickEntity[];
+  /** Click order — the first pick anchors the chain's travel direction. */
+  selectedKeys: string[];
+  hoverKey: string | null;
+}
+
 function emptyCamDocument(): CamDocumentDto {
   return {
     setups: [],
@@ -807,10 +829,17 @@ interface AppState {
   /** Active viewport sketch-loop picking session (contour/pocket/chamfer
    *  dialogs with sketch geometry source). */
   camLoopPick: CamLoopPickSession | null;
+  /** Active viewport edge-chain picking session (contour dialogs with sketch
+   *  geometry source: edges are toggled one by one, open chains allowed). */
+  camChainPick: CamChainPickSession | null;
   /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
   camProgram: CamProgramDto | null;
   /** Latest volumetric stock simulation; shared-viewport overlay input. */
   camSimulation: CamSimulationResultDto | null;
+  /** See-through inspection: ghost the setup's part bodies to a wireframe
+   *  shell while a simulated operation is reviewed. OFF by default — the
+   *  full-model ghost is an operator request, never an automatic display. */
+  camXrayModel: boolean;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -954,8 +983,13 @@ interface AppState {
   /** Make one loop the session's selection (click behavior). */
   selectCamLoopPickLoop: (key: string) => void;
   setCamLoopPickHover: (hoverKey: string | null) => void;
+  setCamChainPick: (session: CamChainPickSession | null) => void;
+  /** Toggle one sketch entity in the chain (click behavior). */
+  toggleCamChainPickEntity: (key: string) => void;
+  setCamChainPickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;
   setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
+  setCamXrayModel: (on: boolean) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -1153,8 +1187,10 @@ function resetDocumentUiState(): Partial<AppState> {
     camPointPick: null,
     camHolePick: null,
     camLoopPick: null,
+    camChainPick: null,
     camProgram: null,
     camSimulation: null,
+    camXrayModel: false,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -1277,8 +1313,10 @@ export const useAppStore = create<AppState>()((set) => ({
   camPointPick: null,
   camHolePick: null,
   camLoopPick: null,
+  camChainPick: null,
   camProgram: null,
   camSimulation: null,
+  camXrayModel: false,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -2267,9 +2305,35 @@ export const useAppStore = create<AppState>()((set) => ({
         : {},
     ),
 
+  setCamChainPick: (camChainPick) => set({ camChainPick }),
+
+  toggleCamChainPickEntity: (key) =>
+    set((state) => {
+      if (!state.camChainPick) return {};
+      if (!state.camChainPick.entities.some((entity) => entity.key === key)) return {};
+      const selected = state.camChainPick.selectedKeys.includes(key);
+      return {
+        camChainPick: {
+          ...state.camChainPick,
+          selectedKeys: selected
+            ? state.camChainPick.selectedKeys.filter((entry) => entry !== key)
+            : [...state.camChainPick.selectedKeys, key],
+        },
+      };
+    }),
+
+  setCamChainPickHover: (hoverKey) =>
+    set((state) =>
+      state.camChainPick && state.camChainPick.hoverKey !== hoverKey
+        ? { camChainPick: { ...state.camChainPick, hoverKey } }
+        : {},
+    ),
+
   setCamProgram: (camProgram) => set({ camProgram }),
 
   setCamSimulation: (camSimulation) => set({ camSimulation }),
+
+  setCamXrayModel: (camXrayModel) => set({ camXrayModel }),
 
   loadProjectState: (
     update,

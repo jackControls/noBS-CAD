@@ -2221,7 +2221,7 @@ export type CamDrillCycle =
   | 'boring';
 export type CamCoolantMode = 'off' | 'mist' | 'flood';
 export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
-export type CamContourCompensation = 'on' | 'inside' | 'outside';
+export type CamContourCompensation = 'on' | 'inside' | 'outside' | 'left' | 'right';
 /** Thread groove hand: a right-hand groove descends in the clockwise
  *  direction viewed along Z- (a nut turned clockwise advances away). */
 export type CamThreadHand = 'right' | 'left';
@@ -2395,6 +2395,10 @@ export type CamOperationDto =
   | (CamOperationBase & {
       kind: 'contour2d';
       path: CamPoint2Dto[];
+      /** False for an open edge chain: the planner never closes it, and
+       *  compensation reads left/right of travel. Omitted = closed (the
+       *  pre-open-chain document behavior). */
+      closed?: boolean;
       top_z: number;
       bottom_z: number;
       step_down: number;

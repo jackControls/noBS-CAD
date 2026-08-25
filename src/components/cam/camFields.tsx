@@ -42,7 +42,10 @@ export function DraftNumber({
   disabled?: boolean;
 }) {
   return (
-    <label className="block" title={disabled ? NOT_APPLIED_YET : undefined}>
+    <label
+      className={`block ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
+      title={disabled ? NOT_APPLIED_YET : undefined}
+    >
       <span className={CAM_DIALOG_LABEL}>{label}</span>
       <span className="relative block">
         <input
@@ -53,7 +56,7 @@ export function DraftNumber({
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           className={`${CAM_DIALOG_INPUT} font-mono ${unit ? 'pr-12' : ''} ${
-            disabled ? 'cursor-not-allowed opacity-45' : ''
+            disabled ? 'cursor-not-allowed' : ''
           }`}
         />
         {unit && (

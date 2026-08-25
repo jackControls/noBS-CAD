@@ -1,9 +1,50 @@
 # CAM branch handoff — 2026-08-25
 
-State of `feature/cam` after thirteen working rounds, rebased onto current
+State of `feature/cam` after fourteen working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 14 (2026-08-25) — display scale, X-ray toggle, open-chain contours
+
+- **Entry/exit arrows are direction cues, not scale drawings**: length is
+  capped (`min(max(diameter*0.4, 2), 8)` mm — a 63 mm face mill no longer
+  paints 57 mm arrows), and pure-Z plunge segments are skipped when a
+  lateral cut exists, so the arrows read as feed direction instead of
+  pointing down the spindle (`overlay.ts::pushSelectedTool`).
+- **Model ghost is an explicit X-Ray toggle**: the automatic wireframe ghost
+  from round 12 is off by default; the CAM header gains an `X-Ray` button
+  (`camXrayModel` store flag) that gates `ghostedBodyIds` in
+  `nativeViewportBridge.ts`. The ideal reveal-only-where-cut display is not
+  implemented (per-body alpha cannot express it); the toggle is the accepted
+  intermediate.
+- **Flat end mills have no corner radius** (`CORNER_RADIUS_KINDS` drops
+  `flat_end_mill`; bull nose and face/shell mills keep it — high-feed
+  effective-diameter math unchanged).
+- **2D contour picks edges, not loops**: `ContourCompensation` gains
+  `Left`/`Right`; `CamOperationDto::Contour2d` gains `closed` (serde-default
+  true — old documents keep closing). Validation: closed paths need ≥3
+  points + area and inside/outside; open chains need ≥2 points and
+  left/right/on (cross-combinations fail closed, chamfer wall_side rejects
+  left/right). Planner: open chains never emit the closing cut, and
+  `offset_polyline_open` miters one-sided offsets (endpoints shift along
+  their single segment normal). Tests: `open_contour_chain_never_closes`,
+  `open_contour_chain_offsets_left_and_right_of_travel`,
+  `open_chain_with_inside_compensation_fails_closed` (cam crate now 70).
+  UI: `camChainPick` store session + `listSketchCurveCandidates` /
+  `resolvePickedChain` in `cam/geometry.ts` (click order anchors travel
+  direction; chaining grows from the first pick's far end then prepends,
+  reversing segments; circles are complete loops alone; broken picks fail
+  with an actionable message). Viewport hit-tests nearest segment within
+  10 px; overlay draws candidates/hover/selected as line layers. The dialog
+  shows the chain readout (N edges · open/closed) with a Reverse button;
+  compensation options follow the resolved openness; manual entry detects
+  closure by a repeated first point. Pocket/chamfer keep closed-loop picking.
+- **Gray-out pass**: placeholder fields now dim the whole label block, not
+  just the input (`camFields.tsx::DraftNumber`, `DeadSelect`) — the old
+  input-only opacity-45 read as live on the dark theme, which is why the
+  dialogs looked un-grayed; Siemens post SUPA Z / Tool edge D gray out when
+  positioning is controller-managed.
 
 ## Round 13 (2026-08-25) — cumulative simulation, viewport loop picking
 

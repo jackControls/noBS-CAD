@@ -14,7 +14,7 @@ import type {
   SketchDto,
   Vec2,
 } from '../engine/types';
-import type { CamHolePickHole } from '../store/appStore';
+import type { CamChainPickEntity, CamHolePickHole } from '../store/appStore';
 
 const CHAIN_TOLERANCE = 1.0e-6;
 const ARC_TESSELLATION_DEGREES = 5;
@@ -231,6 +231,123 @@ export function loopToSetupPath(
   const sketch = sketches.find((candidate) => candidate.name === loop.sketch);
   if (!sketch) throw new Error(`Sketch '${loop.sketch}' no longer exists.`);
   return loop.points.map((uv) => sketchPointToSetup(sketch, uv, wcs));
+}
+
+// --- Edge-chain picking (2D contour) -----------------------------------------
+
+/** Every sketch curve entity the operator can pick for a contour chain,
+ *  tessellated in model coordinates. */
+export function listSketchCurveCandidates(sketches: SketchDto[]): CamChainPickEntity[] {
+  const candidates: CamChainPickEntity[] = [];
+  for (const sketch of sketches) {
+    for (const entity of sketch.entities) {
+      let uv: Vec2[] | null = null;
+      switch (entity.kind) {
+        case 'line':
+          uv = [entity.start, entity.end];
+          break;
+        case 'arc':
+          uv = tessellateArc(entity);
+          break;
+        case 'circle':
+          uv = tessellateCircle(entity.center, entity.radius);
+          break;
+        case 'spline':
+          uv = entity.tessellation.length >= 2 ? entity.tessellation : null;
+          break;
+        default:
+          break;
+      }
+      if (!uv) continue;
+      candidates.push({
+        key: `${sketch.name}:${entity.id}`,
+        sketch: sketch.name,
+        entityId: entity.id,
+        kind: entity.kind as CamChainPickEntity['kind'],
+        modelPoints: uv.map((point) => sketchUvToModel(sketch.basis, point)),
+      });
+    }
+  }
+  return candidates;
+}
+
+export interface ResolvedChain {
+  /** Ordered outline in model coordinates, no duplicated closing point. */
+  modelPoints: Point3Dto[];
+  closed: boolean;
+}
+
+const CHAIN_JOIN_TOLERANCE = 1.0e-4;
+
+function modelDistance(a: Point3Dto, b: Point3Dto): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+/** Resolve the operator's picked edges (click order) into one connected
+ *  polyline. Chaining grows from the first pick's far end, then prepends to
+ *  its start, reversing segments as needed; anything left over means the
+ *  pick is not one chain and fails closed. A circle is a complete closed
+ *  loop on its own — it cannot chain with other entities. */
+export function resolvePickedChain(
+  candidates: CamChainPickEntity[],
+  selectedKeys: string[],
+): ResolvedChain {
+  const picked = selectedKeys.map((key) => {
+    const entity = candidates.find((candidate) => candidate.key === key);
+    if (!entity) throw new Error('A picked edge no longer exists; pick the chain again.');
+    return entity;
+  });
+  if (picked.length === 0) {
+    throw new Error('Click sketch edges in the viewport to build the contour path.');
+  }
+  if (picked.some((entity) => entity.kind === 'circle')) {
+    if (picked.length > 1) {
+      throw new Error('A circle is a complete closed loop — pick it on its own, unchain the rest.');
+    }
+    return { modelPoints: picked[0].modelPoints, closed: true };
+  }
+  const remaining = picked.map((entity) => [...entity.modelPoints]);
+  let chain = remaining.shift() as Point3Dto[];
+  while (remaining.length > 0) {
+    const end = chain[chain.length - 1];
+    const start = chain[0];
+    let advanced = false;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const segment = remaining[index];
+      const segStart = segment[0];
+      const segEnd = segment[segment.length - 1];
+      if (modelDistance(end, segStart) <= CHAIN_JOIN_TOLERANCE) {
+        chain.push(...segment.slice(1));
+      } else if (modelDistance(end, segEnd) <= CHAIN_JOIN_TOLERANCE) {
+        chain.push(...[...segment].reverse().slice(1));
+      } else if (modelDistance(start, segEnd) <= CHAIN_JOIN_TOLERANCE) {
+        chain = [...segment.slice(0, -1), ...chain];
+      } else if (modelDistance(start, segStart) <= CHAIN_JOIN_TOLERANCE) {
+        chain = [...[...segment].reverse().slice(0, -1), ...chain];
+      } else {
+        continue;
+      }
+      remaining.splice(index, 1);
+      advanced = true;
+      break;
+    }
+    if (!advanced) {
+      throw new Error(
+        'The picked edges do not form one connected chain — every edge must touch the next. Click a stray edge again to unchain it.',
+      );
+    }
+  }
+  // Consecutive duplicates would fail the planner's direction check later;
+  // drop them here where the message can name the real cause.
+  chain = chain.filter(
+    (point, index) => index === 0 || modelDistance(point, chain[index - 1]) > CHAIN_JOIN_TOLERANCE,
+  );
+  if (chain.length < 2) {
+    throw new Error('The picked chain collapses to a point — pick longer edges.');
+  }
+  const closed = modelDistance(chain[0], chain[chain.length - 1]) <= CHAIN_JOIN_TOLERANCE;
+  if (closed) chain = chain.slice(0, -1);
+  return { modelPoints: chain, closed };
 }
 
 export interface Bounds3 {

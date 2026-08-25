@@ -9,11 +9,13 @@ import {
   type CamOperationInput,
 } from '../../cam/document';
 import {
+  listSketchCurveCandidates,
   listSketchLoops,
   loopToSetupPath,
   modelBottomZInSetup,
   modelPointToSetup,
   modelTopZInSetup,
+  resolvePickedChain,
   sketchUvToModel,
   type SketchLoop,
 } from '../../cam/geometry';
@@ -199,9 +201,9 @@ function DeadCheck({ label, checked = false }: { label: string; checked?: boolea
 /** Placeholder select pinned to one display value. */
 function DeadSelect({ label, value }: { label: string; value: string }) {
   return (
-    <label className="block" title={NOT_APPLIED_YET}>
+    <label className="block cursor-not-allowed opacity-45" title={NOT_APPLIED_YET}>
       <span className={CAM_DIALOG_LABEL}>{label}</span>
-      <select disabled className={`${CAM_DIALOG_INPUT} cursor-not-allowed opacity-45`}>
+      <select disabled className={`${CAM_DIALOG_INPUT} cursor-not-allowed`}>
         <option>{value}</option>
       </select>
     </label>
@@ -396,7 +398,13 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   // not silently overwrite it.
   const [feedsTouched, setFeedsTouched] = useState(editing != null);
 
-  const [source, setSource] = useState<GeometrySource>(editing ? 'manual' : loops.length > 0 ? 'sketch' : 'manual');
+  const [source, setSource] = useState<GeometrySource>(() => {
+    if (editing) return 'manual';
+    if (pages.pathChain) {
+      return listSketchCurveCandidates(sketches).length > 0 ? 'sketch' : 'manual';
+    }
+    return loops.length > 0 ? 'sketch' : 'manual';
+  });
   const [manualPoints, setManualPoints] = useState(initManualPoints);
   // Drilling/thread: holes are picked as cylindrical faces in the viewport;
   // the session lives in the store so the shared viewport can drive it.
@@ -404,6 +412,9 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   // Path kinds: the sketch loop is clicked in the viewport, never chosen
   // from a list of labels; the session lives in the store for the viewport.
   const loopPick = useAppStore((state) => state.camLoopPick);
+  // Contour: edges are toggled one by one into a chain (open allowed).
+  const chainPick = useAppStore((state) => state.camChainPick);
+  const [chainReversed, setChainReversed] = useState(false);
 
   const [stepDown, setStepDown] = useState(
     storedStepDown !== null ? displayLength(storedStepDown, units).toFixed(4) : '',
@@ -572,8 +583,9 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   // Path kinds with sketch geometry open a viewport loop-pick session: every
   // closed sketch loop becomes clickable in the viewport. The selection
   // survives candidate rebuilds (sketch edits) while its key still exists.
+  // Contour kinds use edge-chain picking instead (see the effect below).
   useEffect(() => {
-    if (pages.geometry !== 'path' || source !== 'sketch') return;
+    if (pages.geometry !== 'path' || source !== 'sketch' || pages.pathChain) return;
     const previous = useAppStore.getState().camLoopPick?.selectedKey ?? null;
     const candidates = loops.flatMap((loop) => {
       const sketch = sketches.find((candidate) => candidate.name === loop.sketch);
@@ -592,7 +604,46 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     return () => {
       useAppStore.getState().setCamLoopPick(null);
     };
-  }, [pages.geometry, source, loops, sketches]);
+  }, [pages.geometry, pages.pathChain, source, loops, sketches]);
+
+  // Contour chain picking: every sketch curve entity is clickable in the
+  // viewport; the dialog resolves the picks into one connected chain (open
+  // or closed) at submit.
+  useEffect(() => {
+    if (!pages.pathChain || source !== 'sketch') return;
+    useAppStore.getState().setCamChainPick({
+      entities: listSketchCurveCandidates(sketches),
+      selectedKeys: [],
+      hoverKey: null,
+    });
+    return () => {
+      useAppStore.getState().setCamChainPick(null);
+    };
+  }, [pages.pathChain, source, sketches]);
+
+  /** The picked chain resolved in click order, or the resolution error —
+   *  kept out of exceptions during render so typing never crashes. */
+  const chainResolution = useMemo(() => {
+    if (!pages.pathChain || source !== 'sketch' || !chainPick) return null;
+    try {
+      return { chain: resolvePickedChain(chainPick.entities, chainPick.selectedKeys), error: null };
+    } catch (cause) {
+      return { chain: null, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }, [pages.pathChain, source, chainPick]);
+  const chainClosed = chainResolution?.chain?.closed ?? null;
+
+  // Compensation follows the resolved chain: open chains read left/right of
+  // travel, closed loops inside/outside — an incompatible draft falls back
+  // instead of failing at submit.
+  useEffect(() => {
+    if (chainClosed === false && (compensation === 'inside' || compensation === 'outside')) {
+      setCompensation('on');
+    }
+    if (chainClosed === true && (compensation === 'left' || compensation === 'right')) {
+      setCompensation('outside');
+    }
+  }, [chainClosed, compensation]);
 
   const selectedLoop = (): SketchLoop | null =>
     loops.find((candidate) => loopKeyOf(candidate) === loopPick?.selectedKey) ?? null;
@@ -649,6 +700,55 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   const resolvePath = (label: string): CamPoint2Dto[] =>
     source === 'sketch' ? pathFromLoop() : parseManualPoints(label);
+
+  /** Contour geometry: the picked chain (open allowed) or manual points,
+   *  with the closed flag the planner needs to decide whether the path may
+   *  close itself. Compensation is validated against openness here so a
+   *  mismatch fails with an actionable message, not a planner rejection. */
+  const resolveContourGeometry = (): { path: CamPoint2Dto[]; closed: boolean } => {
+    const checkCompensation = (closed: boolean) => {
+      if (!closed && (compensation === 'inside' || compensation === 'outside')) {
+        throw new Error(
+          'An open chain has no interior — choose On path, Left, or Right compensation.',
+        );
+      }
+      if (closed && (compensation === 'left' || compensation === 'right')) {
+        throw new Error(
+          'A closed path compensates Inside/Outside; left/right is for open chains.',
+        );
+      }
+    };
+    if (source === 'sketch') {
+      if (!setup) throw new Error('No active CAM setup.');
+      if (!chainResolution?.chain) {
+        throw new Error(chainResolution?.error ?? 'Click sketch edges in the viewport to build the contour path.');
+      }
+      const points = chainResolution.chain.modelPoints.map((point) => {
+        const projected = modelPointToSetup(point, setup.wcs);
+        return { x: projected.x, y: projected.y };
+      });
+      checkCompensation(chainResolution.chain.closed);
+      return {
+        path: chainReversed ? [...points].reverse() : points,
+        closed: chainResolution.chain.closed,
+      };
+    }
+    const manual = parseManualPoints('Contour path');
+    // A manual path whose last point repeats its first is closed; store it
+    // without the duplicate, like every other closed outline.
+    let closed = false;
+    let path = manual;
+    if (manual.length >= 3) {
+      const first = manual[0];
+      const last = manual[manual.length - 1];
+      if (Math.hypot(first.x - last.x, first.y - last.y) <= 1e-6) {
+        closed = true;
+        path = manual.slice(0, -1);
+      }
+    }
+    checkCompensation(closed);
+    return { path, closed };
+  };
 
   const resolveDrillPoints = (): CamPoint2Dto[] => {
     // Fixed-axis planning drills along setup Z only; a picked hole whose axis
@@ -757,10 +857,12 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         }
         case 'contour2d': {
           const bottom = bottomAbs();
+          const geometry = resolveContourGeometry();
           operation = {
             ...base,
             kind,
-            path: resolvePath('Contour path'),
+            path: geometry.path,
+            closed: geometry.closed,
             top_z: top,
             bottom_z: bottom,
             step_down: multipleDepths
@@ -957,7 +1059,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         <div className="grid grid-cols-2 gap-1.5">
           {(
             [
-              ['sketch', `Sketch loop (${loops.length})`],
+              ['sketch', pages.pathChain ? 'Sketch edges' : `Sketch loop (${loops.length})`],
               ['manual', 'Manual points'],
             ] as [GeometrySource, string][]
           ).map(([value, label]) => (
@@ -976,7 +1078,42 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           ))}
         </div>
         {source === 'sketch' ? (
-          loops.length > 0 ? (
+          pages.pathChain ? (
+            <>
+              <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
+                Click sketch edges one by one in the viewport — every edge must touch the
+                next; the first pick anchors the travel direction. Click a picked edge again
+                to unchain it. A circle is a complete closed loop on its own.
+              </p>
+              <div className="mt-2 flex h-7 min-w-0 items-center gap-2 rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
+                <span className="min-w-0 flex-1 truncate">
+                  {chainPick && chainPick.selectedKeys.length > 0
+                    ? `${chainPick.selectedKeys.length} edge${chainPick.selectedKeys.length > 1 ? 's' : ''} · ${
+                        chainResolution?.chain
+                          ? chainResolution.chain.closed
+                            ? 'closed chain'
+                            : 'open chain'
+                          : 'broken chain'
+                      }`
+                    : 'No edges picked yet'}
+                </span>
+                <button
+                  type="button"
+                  disabled={!chainResolution?.chain}
+                  title="Flip the chain's travel direction (swaps left/right compensation sides)"
+                  onClick={() => setChainReversed((value) => !value)}
+                  className="shrink-0 rounded border border-edge px-1.5 py-0.5 text-[9px] font-semibold text-mute hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Reverse{chainReversed ? ' ✓' : ''}
+                </button>
+              </div>
+              {chainResolution?.error && chainPick && chainPick.selectedKeys.length > 0 && (
+                <p className="mt-1.5 rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
+                  {chainResolution.error}
+                </p>
+              )}
+            </>
+          ) : loops.length > 0 ? (
             <>
               <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
                 Click a closed sketch loop in the viewport — hovering highlights it, clicking
@@ -1245,9 +1382,18 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               onChange={(event) => setCompensation(event.target.value as CamContourCompensation)}
               className={CAM_DIALOG_INPUT}
             >
-              <option value="outside">Outside</option>
-              <option value="inside">Inside</option>
-              <option value="on">On path</option>
+              {(chainClosed === false
+                ? ([['on', 'On path'], ['left', 'Left of travel'], ['right', 'Right of travel']] as const)
+                : chainClosed === true
+                  ? ([['outside', 'Outside'], ['inside', 'Inside'], ['on', 'On path']] as const)
+                  // Manual entry: openness is only known at submit, so offer
+                  // every side; submit validates the combination.
+                  : ([['outside', 'Outside'], ['inside', 'Inside'], ['on', 'On path'], ['left', 'Left of travel'], ['right', 'Right of travel']] as const)
+              ).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
           </label>
         ) : (

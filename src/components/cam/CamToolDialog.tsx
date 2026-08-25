@@ -81,8 +81,10 @@ const KIND_GROUPS: Array<{ label: string; kinds: CamToolKind[]; planned?: boolea
  *  not apply to them (it only gates plunge-capable milling/drilling). */
 const HOLE_TOOL_KINDS: CamToolKind[] = ['tap', 'reamer', 'boring_bar', 'thread_mill'];
 
-/** Kinds that carry a corner (nose) radius. */
-const CORNER_RADIUS_KINDS: CamToolKind[] = ['flat_end_mill', 'bull_nose_end_mill', 'face_mill'];
+/** Kinds that carry a corner (nose) radius: bull nose and face/shell mills
+ *  (high-feed inserts included). A flat end mill's corner is sharp by
+ *  definition — wear is not geometry — so it has no radius field. */
+const CORNER_RADIUS_KINDS: CamToolKind[] = ['bull_nose_end_mill', 'face_mill'];
 
 /** Tool library: a full-window dialog with the tool table on the left and a
  *  tabbed editor (General / Cutter / Cutting data) on the right.

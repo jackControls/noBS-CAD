@@ -14,6 +14,7 @@ import type {
   NativeViewportTriangleLayer,
 } from '../components/viewport/nativeViewportBridge';
 import type {
+  CamChainPickSession,
   CamHolePickSession,
   CamLoopPickSession,
   CamPointPickSession,
@@ -54,6 +55,8 @@ export interface CamOverlayState {
   camHolePick: CamHolePickSession | null;
   /** Active viewport loop-picking session (path-geometry dialogs). */
   camLoopPick: CamLoopPickSession | null;
+  /** Active viewport edge-chain picking session (contour dialogs). */
+  camChainPick: CamChainPickSession | null;
   /** A manufacturing editor dialog is open — the simulation hides so the
    *  viewport shows the plain model while programming. */
   camDialogOpen: boolean;
@@ -230,6 +233,40 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
     }
     if (rest.length > 0) {
       layers.lines.push({ color: LOOP_LINE, width: 2, pattern: 'solid', segments: rest });
+    }
+    if (selected.length > 0) {
+      layers.lines.push({ color: LOOP_LINE_SELECTED, width: 3, pattern: 'solid', segments: selected });
+    }
+    if (hovered.length > 0) {
+      layers.lines.push({ color: LOOP_LINE_HOVER, width: 3, pattern: 'solid', segments: hovered });
+    }
+  }
+
+  // Chain-pick session (contour): every sketch curve entity is clickable;
+  // picked edges draw green in their chained polyline, the hovered one
+  // amber. Circles render as closed rings, open entities as polylines.
+  if (state.camChainPick && state.camChainPick.entities.length > 0) {
+    const rest: number[] = [];
+    const hovered: number[] = [];
+    const selected: number[] = [];
+    const selectedKeys = new Set(state.camChainPick.selectedKeys);
+    for (const entity of state.camChainPick.entities) {
+      const target =
+        entity.key === state.camChainPick.hoverKey
+          ? hovered
+          : selectedKeys.has(entity.key)
+            ? selected
+            : rest;
+      const points = entity.modelPoints;
+      const count = entity.kind === 'circle' ? points.length : points.length - 1;
+      for (let index = 0; index < count; index += 1) {
+        const a = points[index];
+        const b = points[(index + 1) % points.length];
+        target.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+    if (rest.length > 0) {
+      layers.lines.push({ color: LOOP_LINE, width: 1.5, pattern: 'solid', segments: rest });
     }
     if (selected.length > 0) {
       layers.lines.push({ color: LOOP_LINE_SELECTED, width: 3, pattern: 'solid', segments: selected });
@@ -434,10 +471,20 @@ function pushSelectedTool(
     }
   }
 
-  // Entry/exit arrows on the first and last CUTTING segments, sized against
-  // the tool so they stay readable at the operation's own scale.
-  const cutSegments = buildToolpathSegments(sectionCommands).filter((segment) => !segment.rapid);
-  const arrowLength = Math.max(tool.diameter * 0.9, 1);
+  // Entry/exit arrows on the first and last CUTTING segments. Length is a
+  // small direction cue, not a scale drawing: capped hard so a big face mill
+  // cannot paint an arrow longer than the part. Pure-Z segments (plunges)
+  // are skipped when a lateral cut exists — the arrow should read as the
+  // feed direction, not straight down the spindle.
+  const allCuts = buildToolpathSegments(sectionCommands).filter((segment) => !segment.rapid);
+  const lateralCuts = allCuts.filter((segment) => {
+    const dx = segment.to.x - segment.from.x;
+    const dy = segment.to.y - segment.from.y;
+    const dz = segment.to.z - segment.from.z;
+    return Math.hypot(dx, dy) > Math.abs(dz) * 0.5;
+  });
+  const cutSegments = lateralCuts.length > 0 ? lateralCuts : allCuts;
+  const arrowLength = Math.min(Math.max(tool.diameter * 0.4, 2), 8);
   const pushEndpointArrow = (segment: ToolpathSegment, color: Rgba) => {
     const dx = segment.to.x - segment.from.x;
     const dy = segment.to.y - segment.from.y;

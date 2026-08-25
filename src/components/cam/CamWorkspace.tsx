@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Clock3, Cuboid, Download, RefreshCw, Route } from 'lucide-react';
+import { AlertTriangle, Clock3, Cuboid, Download, RefreshCw, Route, ScanEye } from 'lucide-react';
 import { activeCamSetup, findCamOperation, setCamUnits } from '../../cam/document';
 import { displayLength, lengthUnitLabel } from '../../cam/units';
 import { getEngine } from '../../engine';
@@ -21,6 +21,7 @@ export function CamWorkspace() {
   // shared viewport's overlay collector can read them between React renders.
   const program = useAppStore((state) => state.camProgram);
   const simulation = useAppStore((state) => state.camSimulation);
+  const xrayModel = useAppStore((state) => state.camXrayModel);
   const resolvedTheme = useAppStore((state) => state.resolvedTheme);
   const pick = useAppStore((state) => state.camPointPick);
   const setup = activeCamSetup(cam);
@@ -183,6 +184,20 @@ export function CamWorkspace() {
               className="flex h-7 items-center gap-1.5 rounded border border-edge bg-panel px-2.5 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Cuboid size={13} className={simulationBusy ? 'animate-pulse' : ''} /> 3D Sim
+            </button>
+            <button
+              type="button"
+              disabled={!setup}
+              title="See-through: ghost the part to a wireframe shell while reviewing a simulated operation, so machined surfaces show through"
+              onClick={() => useAppStore.getState().setCamXrayModel(!xrayModel)}
+              className={`flex h-7 items-center gap-1.5 rounded border px-2.5 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+                xrayModel
+                  ? 'border-accent/50 bg-accent/15 text-accent'
+                  : 'border-edge bg-panel text-mute hover:border-accent/40 hover:text-accent'
+              }`}
+              data-testid="cam-xray-toggle"
+            >
+              <ScanEye size={13} /> X-Ray
             </button>
             <button
               type="button"

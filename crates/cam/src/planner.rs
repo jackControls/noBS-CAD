@@ -490,6 +490,7 @@ fn plan_contour(
 ) -> Result<(), CamPlanError> {
     let CamOperationDto::Contour2d {
         path,
+        closed,
         top_z,
         bottom_z,
         step_down,
@@ -507,6 +508,10 @@ fn plan_contour(
         ContourCompensation::On => source,
         ContourCompensation::Inside => offset_polygon(&source, tool.diameter * 0.5, true)?,
         ContourCompensation::Outside => offset_polygon(&source, tool.diameter * 0.5, false)?,
+        // Validation rejects left/right on closed paths, so an open chain is
+        // the only way these arms are reachable.
+        ContourCompensation::Left => offset_polyline_open(&source, tool.diameter * 0.5, true)?,
+        ContourCompensation::Right => offset_polyline_open(&source, tool.diameter * 0.5, false)?,
     };
     let depths = depth_levels(*top_z, *bottom_z, *step_down)?;
     ensure_program_budget(
@@ -522,7 +527,12 @@ fn plan_contour(
         for point in center_path.iter().copied().skip(1) {
             builder.linear(Point3Dto::new(point.x, point.y, depth), cutting.feed_xy);
         }
-        builder.linear(Point3Dto::new(first.x, first.y, depth), cutting.feed_xy);
+        // A closed contour returns to its start; an open chain ends where the
+        // operator's geometry ends — never invent a closing cut across air
+        // (it would slice the part if the chain straddles a wall).
+        if *closed {
+            builder.linear(Point3Dto::new(first.x, first.y, depth), cutting.feed_xy);
+        }
         builder.retract_to_clearance();
     }
     Ok(())
@@ -1130,6 +1140,64 @@ fn offset_polygon(
     Ok(result)
 }
 
+/// Mitered offset of an OPEN polyline to one side of its travel direction.
+/// `left` picks the left-hand normal (travel-direction +90 degrees); the
+/// endpoints shift along their single segment's normal, interior vertices
+/// miter exactly like the closed-polygon case. Unlike `offset_polygon` there
+/// is no interior to collapse, so the only failure is a degenerate miter.
+fn offset_polyline_open(
+    points: &[Point2Dto],
+    radius: f64,
+    left: bool,
+) -> Result<Vec<Point2Dto>, CamPlanError> {
+    if points.len() < 2 {
+        return Err(CamPlanError(
+            "open contour chains need at least two points".to_string(),
+        ));
+    }
+    let side = if left { 1.0 } else { -1.0 };
+    let offset = radius * side;
+    let segment_direction = |index: usize| unit_direction(points[index], points[index + 1]);
+    let shifted = |point: Point2Dto, direction: Point2Dto| {
+        Point2Dto::new(point.x - direction.y * offset, point.y + direction.x * offset)
+    };
+    let mut result = Vec::with_capacity(points.len());
+    // Start endpoint: the first segment's normal only.
+    result.push(shifted(points[0], segment_direction(0)?));
+    for index in 1..points.len() - 1 {
+        let current = points[index];
+        let first_direction = segment_direction(index - 1)?;
+        let second_direction = segment_direction(index)?;
+        let first_line = shifted(current, first_direction);
+        let second_line = shifted(current, second_direction);
+        let denominator = cross(first_direction, second_direction);
+        let candidate = if denominator.abs() <= EPSILON {
+            Point2Dto::new(
+                (first_line.x + second_line.x) * 0.5,
+                (first_line.y + second_line.y) * 0.5,
+            )
+        } else {
+            let between =
+                Point2Dto::new(second_line.x - first_line.x, second_line.y - first_line.y);
+            let t = cross(between, second_direction) / denominator;
+            Point2Dto::new(
+                first_line.x + first_direction.x * t,
+                first_line.y + first_direction.y * t,
+            )
+        };
+        if !candidate.is_finite() || distance_2d(candidate, current) > radius * 25.0 {
+            return Err(CamPlanError(
+                "contour offset produced an excessive miter; simplify the path or use an on-path contour"
+                    .to_string(),
+            ));
+        }
+        result.push(candidate);
+    }
+    // End endpoint: the last segment's normal only.
+    result.push(shifted(points[points.len() - 1], segment_direction(points.len() - 2)?));
+    Ok(result)
+}
+
 fn unit_direction(from: Point2Dto, to: Point2Dto) -> Result<Point2Dto, CamPlanError> {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
@@ -1561,6 +1629,7 @@ mod tests {
                 Point2Dto::new(35.0, 25.0),
                 Point2Dto::new(5.0, 25.0),
             ],
+            closed: true,
             top_z: 0.0,
             bottom_z: -15.0,
             step_down: 2.0,
@@ -1573,6 +1642,118 @@ mod tests {
         short_tool.flute_length = 10.0;
         let error = plan_setup(&document(vec![operation], vec![short_tool]), 1).unwrap_err();
         assert!(error.0.contains("flute length"));
+    }
+
+    fn open_chain_operation(compensation: ContourCompensation) -> CamOperationDto {
+        CamOperationDto::Contour2d {
+            id: 1,
+            name: "Open wall".into(),
+            enabled: true,
+            tool_id: 1,
+            // An open L: +X leg, then +Y leg.
+            path: vec![
+                Point2Dto::new(5.0, 5.0),
+                Point2Dto::new(30.0, 5.0),
+                Point2Dto::new(30.0, 20.0),
+            ],
+            closed: false,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        }
+    }
+
+    fn cutting_targets(program: &CamProgramDto) -> Vec<Point3Dto> {
+        program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, .. } => Some(*to),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn open_contour_chain_never_closes() {
+        let program = plan_setup(
+            &document(
+                vec![open_chain_operation(ContourCompensation::On)],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .expect("plan");
+        let targets = cutting_targets(&program);
+        let near = |point: Point3Dto, x: f64, y: f64| {
+            (point.x - x).abs() < 1.0e-9 && (point.y - y).abs() < 1.0e-9
+        };
+        // One depth level: exactly one visit to the chain start (the plunge).
+        // A closed contour would cut back to it as the second visit.
+        assert_eq!(
+            targets.iter().filter(|point| near(**point, 5.0, 5.0)).count(),
+            1
+        );
+        // The chain ends at its own last point, not back at the start.
+        let last = targets.last().expect("cutting moves");
+        assert!(near(*last, 30.0, 20.0));
+    }
+
+    #[test]
+    fn open_contour_chain_offsets_left_and_right_of_travel() {
+        // r = 3. Travel +X then +Y: left of +X is +Y, left of +Y is -X.
+        let left = plan_setup(
+            &document(
+                vec![open_chain_operation(ContourCompensation::Left)],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .expect("left plan");
+        let targets = cutting_targets(&left);
+        let bottom = targets
+            .iter()
+            .filter(|point| (point.z + 2.0).abs() < 1.0e-9)
+            .copied()
+            .collect::<Vec<_>>();
+        // Offset path: (5,8) -> (27,8) -> (27,20); the first entry is the
+        // plunge onto the offset start.
+        assert!((bottom[0].x - 5.0).abs() < 1.0e-9 && (bottom[0].y - 8.0).abs() < 1.0e-9);
+        let last = bottom.last().expect("offset moves");
+        assert!((last.x - 27.0).abs() < 1.0e-9 && (last.y - 20.0).abs() < 1.0e-9);
+
+        let right = plan_setup(
+            &document(
+                vec![open_chain_operation(ContourCompensation::Right)],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .expect("right plan");
+        let bottom_right = cutting_targets(&right)
+            .into_iter()
+            .filter(|point| (point.z + 2.0).abs() < 1.0e-9)
+            .collect::<Vec<_>>();
+        assert!((bottom_right[0].x - 5.0).abs() < 1.0e-9 && (bottom_right[0].y - 2.0).abs() < 1.0e-9);
+        let last_right = bottom_right.last().expect("offset moves");
+        assert!((last_right.x - 33.0).abs() < 1.0e-9 && (last_right.y - 20.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn open_chain_with_inside_compensation_fails_closed() {
+        let error = plan_setup(
+            &document(
+                vec![open_chain_operation(ContourCompensation::Inside)],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("no interior"));
     }
 
     #[test]

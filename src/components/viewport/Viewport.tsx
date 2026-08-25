@@ -3060,6 +3060,7 @@ export function Viewport() {
         camPointPick: transientState.camPointPick,
         camHolePick: transientState.camHolePick,
         camLoopPick: transientState.camLoopPick,
+        camChainPick: transientState.camChainPick,
         camDialogOpen: transientState.camDialog !== null,
         solidScene: transientState.solidScene,
       });
@@ -9135,6 +9136,52 @@ export function Viewport() {
       }
       return bestKey;
     };
+    /** CAM chain picking (contour): resolve the pointer to the nearest
+     *  sketch curve entity by screen-space distance to its tessellation —
+     *  10 px, no interior hit (chains are built edge by edge). */
+    const pickCamChainEntity = (e: PointerEvent, state: ViewportState) => {
+      const session = state.camChainPick;
+      if (!session) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const px = e.clientX;
+      const py = e.clientY;
+      const projected = new CAD.Vector3();
+      let bestKey: string | null = null;
+      let bestDistance = 10;
+      for (const entity of session.entities) {
+        const screen: Array<{ x: number; y: number }> = [];
+        let clipped = false;
+        for (const point of entity.modelPoints) {
+          projected.set(point.x, point.y, point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) {
+            clipped = true;
+            break;
+          }
+          screen.push({
+            x: rect.left + ((projected.x + 1) * rect.width) / 2,
+            y: rect.top + ((1 - projected.y) * rect.height) / 2,
+          });
+        }
+        if (clipped || screen.length < 2) continue;
+        const count = entity.kind === 'circle' ? screen.length : screen.length - 1;
+        for (let i = 0; i < count; i += 1) {
+          const a = screen[i];
+          const b = screen[(i + 1) % screen.length];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const lengthSq = dx * dx + dy * dy;
+          const t = lengthSq > 0
+            ? Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSq))
+            : 0;
+          const distance = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
+          if (distance <= bestDistance) {
+            bestDistance = distance;
+            bestKey = entity.key;
+          }
+        }
+      }
+      return bestKey;
+    };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
@@ -9184,6 +9231,15 @@ export function Viewport() {
       if (state.camLoopPick) {
         const key = pickCamLoop(e, state);
         state.setCamLoopPickHover(key);
+        surface.domElement.style.cursor = key ? 'pointer' : 'crosshair';
+        return;
+      }
+
+      // CAM chain-pick sessions (contour): hovering highlights the sketch
+      // curve entity under the pointer.
+      if (state.camChainPick) {
+        const key = pickCamChainEntity(e, state);
+        state.setCamChainPickHover(key);
         surface.domElement.style.cursor = key ? 'pointer' : 'crosshair';
         return;
       }
@@ -9783,6 +9839,14 @@ export function Viewport() {
       if (state.camLoopPick) {
         const key = pickCamLoop(e, state);
         if (key) state.selectCamLoopPickLoop(key);
+        return;
+      }
+
+      // CAM chain-pick sessions (contour): left-click toggles the sketch
+      // curve entity under the pointer into/out of the chain.
+      if (state.camChainPick) {
+        const key = pickCamChainEntity(e, state);
+        if (key) state.toggleCamChainPickEntity(key);
         return;
       }
 

@@ -1200,6 +1200,7 @@ mod tests {
                             Point2Dto::new(15.0, 11.0),
                             Point2Dto::new(5.0, 11.0),
                         ],
+                        closed: true,
                         top_z: -1.0,
                         bottom_z: -4.0,
                         step_down: 1.5,
