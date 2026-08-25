@@ -35,6 +35,14 @@
 //! publisher lock. Per-project MCP sessions are retained, so an inbox op
 //! queued for tab A is never dispatched onto tab B. Apply also rejects a
 //! bound/active mismatch so a bypassed transition cannot retarget the op.
+//!
+//! # Publish reservation identity
+//!
+//! `reserve` returns `session_id` + `project_session_id` with the generation.
+//! `write` must carry that reserved identity and is resolved against the
+//! matching per-project publisher — never `active_mut()` at write time. A
+//! delayed write from tab A cannot consume tab B's reservation or publish
+//! A's model into B's session. Missing or mismatched identity is rejected.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -156,6 +164,14 @@ struct PublishPayload {
     #[serde(default)]
     active_sketch_json: Option<String>,
     generation: u64,
+    /// MCP session UUID captured at reserve. Required so write cannot target
+    /// whichever project is active after a tab switch.
+    #[serde(default)]
+    session_id: Option<String>,
+    /// Native project-session id captured at reserve. When present it must
+    /// match the reserved project; write never falls back to the active tab.
+    #[serde(default)]
+    project_session_id: Option<String>,
 }
 
 fn now_ms() -> u64 {
@@ -250,8 +266,71 @@ impl SessionBridgeState {
         let publisher = publishers
             .get_mut(window_label)
             .ok_or_else(|| "session publish requires a reserved generation".to_string())?;
-        let project_session_id = publisher.active_project_session_id.clone();
-        let project = publisher.active_mut();
+        let reserved_session = parsed
+            .session_id
+            .as_deref()
+            .ok_or_else(|| "session write requires reserved session_id".to_string())?;
+        let target_key = match parsed.project_session_id.as_deref() {
+            Some(project_session_id) => {
+                let Some(project) = publisher.by_project.get(project_session_id) else {
+                    return Ok(json!({
+                        "skipped": true,
+                        "reason": "session_identity_mismatch",
+                        "session_id": reserved_session,
+                        "project_session_id": project_session_id,
+                        "generation": parsed.generation,
+                        "session_mode": "read_only_snapshot",
+                    }));
+                };
+                if project.session_id != reserved_session {
+                    return Ok(json!({
+                        "skipped": true,
+                        "reason": "session_identity_mismatch",
+                        "session_id": reserved_session,
+                        "reserved_session_id": project.session_id,
+                        "project_session_id": project_session_id,
+                        "generation": parsed.generation,
+                        "session_mode": "read_only_snapshot",
+                    }));
+                }
+                project_session_id.to_string()
+            }
+            None => {
+                let matches: Vec<String> = publisher
+                    .by_project
+                    .iter()
+                    .filter(|(_, project)| project.session_id == reserved_session)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                match matches.as_slice() {
+                    [key] => key.clone(),
+                    [] => {
+                        return Ok(json!({
+                            "skipped": true,
+                            "reason": "session_identity_mismatch",
+                            "session_id": reserved_session,
+                            "generation": parsed.generation,
+                            "session_mode": "read_only_snapshot",
+                        }));
+                    }
+                    _ => {
+                        return Err(
+                            "session_id matches multiple projects; project_session_id required"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        };
+        let project_session_id = if target_key == UNBOUND_PROJECT {
+            None
+        } else {
+            Some(target_key.clone())
+        };
+        let project = publisher
+            .by_project
+            .get_mut(&target_key)
+            .ok_or_else(|| format!("session write project '{target_key}' was not reserved"))?;
         if parsed.generation == 0 || parsed.generation > project.next_generation {
             return Err(format!(
                 "session generation {} was not reserved",
@@ -854,7 +933,10 @@ pub fn mcp_session_bridge_reserve(
 
 /// Publish a read-only snapshot for MCP attach.
 ///
-/// Payload JSON: `{ focus, model_json?, active_sketch_json?, generation }`.
+/// Payload JSON: `{ focus, model_json?, active_sketch_json?, generation,
+/// session_id, project_session_id? }`. `session_id` (and project identity
+/// when reserved) must match the reservation; write never targets the
+/// currently active tab by generation alone.
 #[tauri::command]
 pub fn mcp_session_bridge_write(
     window: tauri::WebviewWindow,
@@ -913,13 +995,26 @@ mod tests {
         )
     }
 
-    fn payload(generation: u64, marker: &str) -> PublishPayload {
+    fn payload(session_id: &str, generation: u64, marker: &str) -> PublishPayload {
         PublishPayload {
             focus: "solid".to_string(),
             model_json: Some(format!(r#"{{"version":1,"marker":"{marker}"}}"#)),
             active_sketch_json: None,
             generation,
+            session_id: Some(session_id.to_string()),
+            project_session_id: None,
         }
+    }
+
+    fn payload_on_project(
+        session_id: &str,
+        project_session_id: &str,
+        generation: u64,
+        marker: &str,
+    ) -> PublishPayload {
+        let mut parsed = payload(session_id, generation, marker);
+        parsed.project_session_id = Some(project_session_id.to_string());
+        parsed
     }
 
     #[test]
@@ -934,11 +1029,11 @@ mod tests {
         assert_eq!(older, 1);
         assert_eq!(newer, 2);
         let applied = state
-            .write_for_window("main", payload(newer, "newer"))
+            .write_for_window("main", payload(&session_id, newer, "newer"))
             .unwrap();
         assert_eq!(applied["skipped"], false);
         let stale = state
-            .write_for_window("main", payload(older, "older"))
+            .write_for_window("main", payload(&session_id, older, "older"))
             .unwrap();
         assert_eq!(stale["skipped"], true);
         assert_eq!(stale["reason"], "stale_generation");
@@ -958,14 +1053,14 @@ mod tests {
 
         let (session_id, first) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(first, "before-reload"))
+            .write_for_window("main", payload(&session_id, first, "before-reload"))
             .unwrap();
         // A reloaded WebView asks Tauri for its next ticket instead of resetting locally.
         let (same_session_id, after_reload) = reserve(&state, "main");
         assert_eq!(same_session_id, session_id);
         assert_eq!(after_reload, first + 1);
         let applied = state
-            .write_for_window("main", payload(after_reload, "after-reload"))
+            .write_for_window("main", payload(&session_id, after_reload, "after-reload"))
             .unwrap();
         assert_eq!(applied["skipped"], false);
         let model = fs::read_to_string(dir.join(session_id).join("model.json")).unwrap();
@@ -991,10 +1086,13 @@ mod tests {
         assert_eq!(second_session.as_bytes()[14], b'4');
 
         state
-            .write_for_window("main", payload(main_generation, "main"))
+            .write_for_window("main", payload(&main_session, main_generation, "main"))
             .unwrap();
         state
-            .write_for_window("secondary", payload(second_generation, "secondary"))
+            .write_for_window(
+                "secondary",
+                payload(&second_session, second_generation, "secondary"),
+            )
             .unwrap();
         let main_model = fs::read_to_string(dir.join(main_session).join("model.json")).unwrap();
         let second_model = fs::read_to_string(dir.join(second_session).join("model.json")).unwrap();
@@ -1014,7 +1112,7 @@ mod tests {
 
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "original"))
+            .write_for_window("main", payload(&session_id, generation, "original"))
             .unwrap();
         let before = fs::read_to_string(dir.join(&session_id).join("model.json")).unwrap();
         let result = state.heartbeat_for_window("main").unwrap();
@@ -1039,7 +1137,7 @@ mod tests {
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
 
         let (session_id, first) = reserve(&state, "main");
-        let mut editing = payload(first, "editing");
+        let mut editing = payload(&session_id, first, "editing");
         editing.model_json = None;
         editing.active_sketch_json = Some(r#"{"name":"Sketch1","entities":[]}"#.to_string());
         state.write_for_window("main", editing).unwrap();
@@ -1054,7 +1152,7 @@ mod tests {
 
         let (_, second) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(second, "finished"))
+            .write_for_window("main", payload(&session_id, second, "finished"))
             .unwrap();
         assert!(!sketch_path.exists());
 
@@ -1083,7 +1181,7 @@ mod tests {
         let state = SessionBridgeState::default();
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         write_inbox(
             &session_id,
@@ -1130,7 +1228,7 @@ mod tests {
         let state = SessionBridgeState::default();
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         assert_eq!(
             state.engine_revision_for_window("main").unwrap(),
@@ -1188,7 +1286,7 @@ mod tests {
         let state = SessionBridgeState::default();
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         write_inbox(
             &session_id,
@@ -1242,7 +1340,7 @@ mod tests {
         let state = SessionBridgeState::default();
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         let inbox = session_root().join(&session_id).join("inbox");
         fs::create_dir_all(&inbox).unwrap();
@@ -1281,7 +1379,7 @@ mod tests {
         let state = SessionBridgeState::default();
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         // Unsupported name should have been rejected at cad_submit, but if it
         // reaches the queue it must dead-letter rather than wedge.
@@ -1402,7 +1500,7 @@ mod tests {
 
         let (session_id, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "base"))
+            .write_for_window("main", payload(&session_id, generation, "base"))
             .unwrap();
         let reserved_revision = state.engine_revision_for_window("main").unwrap();
 
@@ -1416,7 +1514,7 @@ mod tests {
         assert_ne!(after_mutation, reserved_revision);
 
         let stale = state
-            .write_for_window("main", payload(in_flight, "stale-export"))
+            .write_for_window("main", payload(&session_id, in_flight, "stale-export"))
             .unwrap();
         assert_eq!(stale["skipped"], true);
         assert_eq!(stale["reason"], "engine_revision_changed");
@@ -1429,7 +1527,7 @@ mod tests {
 
         let (_, fresh) = reserve(&state, "main");
         let applied = state
-            .write_for_window("main", payload(fresh, "fresh"))
+            .write_for_window("main", payload(&session_id, fresh, "fresh"))
             .unwrap();
         assert_eq!(applied["skipped"], false);
         let fresh_model = fs::read_to_string(dir.join(&session_id).join("model.json")).unwrap();
@@ -1455,7 +1553,7 @@ mod tests {
 
         let (session_a, generation) = reserve(&state, "main");
         state
-            .write_for_window("main", payload(generation, "alpha"))
+            .write_for_window("main", payload(&session_a, generation, "alpha"))
             .unwrap();
         let base = state
             .engine_revision_for_window("main")
@@ -1506,7 +1604,7 @@ mod tests {
         }));
         let (session_bypass, gen_bypass) = reserve(&state_bypass, "main");
         state_bypass
-            .write_for_window("main", payload(gen_bypass, "alpha"))
+            .write_for_window("main", payload(&session_bypass, gen_bypass, "alpha"))
             .unwrap();
         let base_bypass = state_bypass
             .engine_revision_for_window("main")
@@ -1525,6 +1623,106 @@ mod tests {
         assert_eq!(mismatch["applied"], false);
         assert_eq!(mismatch["reason"], "project_session_mismatch");
         assert_eq!(engine_bypass.document_snapshot().name, "Beta");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reserve_a_activate_b_reserve_b_write_a_does_not_publish_into_b() {
+        // Race: A reserves generation N, B becomes active and also reserves
+        // generation N, then A's delayed export writes. Without reserved
+        // identity on the write, that payload consumes B's reservation and
+        // publishes A's model into B's session.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-reserve-id-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("tab-a")
+        }));
+
+        let reserved_a = state
+            .reserve_for_window_on_project("main", Some("tab-a"))
+            .unwrap();
+        let session_a = reserved_a["session_id"].as_str().unwrap().to_string();
+        let gen_a = reserved_a["generation"].as_u64().unwrap();
+        let project_a = reserved_a["project_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(project_a, "tab-a");
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.create_project_session("tab-b")
+        }));
+        assert_eq!(engine.active_project_session_id(), "tab-b");
+
+        let reserved_b = state
+            .reserve_for_window_on_project("main", Some("tab-b"))
+            .unwrap();
+        let session_b = reserved_b["session_id"].as_str().unwrap().to_string();
+        let gen_b = reserved_b["generation"].as_u64().unwrap();
+        let project_b = reserved_b["project_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(project_b, "tab-b");
+        assert_ne!(session_a, session_b);
+        assert_eq!(
+            gen_a, gen_b,
+            "both tabs independently reserve generation 1 — the collision window"
+        );
+
+        let no_identity = PublishPayload {
+            focus: "solid".to_string(),
+            model_json: Some(r#"{"version":1,"marker":"no-identity"}"#.to_string()),
+            active_sketch_json: None,
+            generation: gen_a,
+            session_id: None,
+            project_session_id: None,
+        };
+        let rejected = state.write_for_window("main", no_identity);
+        assert!(
+            rejected.is_err(),
+            "generation-only write must not target the active tab: {rejected:?}"
+        );
+
+        let crossed = payload_on_project(&session_a, &project_b, gen_a, "crossed");
+        let mismatch = state.write_for_window("main", crossed).unwrap();
+        assert_eq!(mismatch["skipped"], true);
+        assert_eq!(mismatch["reason"], "session_identity_mismatch");
+
+        let applied_a = state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_a, &project_a, gen_a, "from-a"),
+            )
+            .unwrap();
+        assert_eq!(applied_a["skipped"], false);
+        assert_eq!(applied_a["session_id"], session_a);
+        assert_eq!(applied_a["project_session_id"], project_a);
+        let model_a = fs::read_to_string(dir.join(&session_a).join("model.json")).unwrap();
+        assert!(model_a.contains("\"marker\":\"from-a\""));
+        assert!(
+            !dir.join(&session_b).join("model.json").exists(),
+            "A's delayed write must not publish into B's session"
+        );
+
+        let applied_b = state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_b, &project_b, gen_b, "from-b"),
+            )
+            .unwrap();
+        assert_eq!(applied_b["skipped"], false);
+        assert_eq!(applied_b["session_id"], session_b);
+        let model_b = fs::read_to_string(dir.join(&session_b).join("model.json")).unwrap();
+        assert!(model_b.contains("\"marker\":\"from-b\""));
+        let model_a_after = fs::read_to_string(dir.join(&session_a).join("model.json")).unwrap();
+        assert!(model_a_after.contains("\"marker\":\"from-a\""));
+        assert!(!model_a_after.contains("from-b"));
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

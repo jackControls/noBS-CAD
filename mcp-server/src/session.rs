@@ -9,9 +9,9 @@
 //! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,inbox/<seq>.json}`.
 //! Session ids must be UUID v4 strings.
 
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -348,15 +348,19 @@ fn inbox_seqs_in(dir: &std::path::Path) -> Vec<u64> {
     seqs
 }
 
-/// Next inbox sequence (1-based), considering pending and archived ops.
+/// Next inbox sequence (1-based), considering pending, applied, and failed ops.
 pub fn next_inbox_seq(session_id: &str) -> Result<u64, String> {
     require_valid_session_id(session_id)?;
     let root = session_dir().join(session_id);
+    let inbox = root.join("inbox");
     let mut max = 0u64;
-    for seq in inbox_seqs_in(&root.join("inbox")) {
+    for seq in inbox_seqs_in(&inbox) {
         max = max.max(seq);
     }
-    for seq in inbox_seqs_in(&root.join("inbox").join("applied")) {
+    for seq in inbox_seqs_in(&inbox.join("applied")) {
+        max = max.max(seq);
+    }
+    for seq in inbox_seqs_in(&inbox.join("failed")) {
         max = max.max(seq);
     }
     Ok(max.saturating_add(1))
@@ -368,13 +372,43 @@ pub fn pending_inbox_seqs(session_id: &str) -> Result<Vec<u64>, String> {
     Ok(inbox_seqs_in(&session_dir().join(session_id).join("inbox")))
 }
 
-/// Atomically write `inbox/<seq>.json`. Does not mutate any in-memory document.
+/// Write `inbox/<seq>.json` with an exclusive sequence reservation.
+///
+/// `next_inbox_seq` is only a hint. The durable allocation is `create_new` on
+/// `inbox/<seq>.json` so two `cad_submit` callers cannot share a sequence or
+/// overwrite each other while both report success. On collision the loser
+/// retries the next free sequence.
 pub fn write_inbox_op(session_id: &str, op: &InboxOp) -> Result<u64, String> {
-    let seq = next_inbox_seq(session_id)?;
+    require_valid_session_id(session_id)?;
     let body = serde_json::to_string_pretty(&op.to_json())
         .map_err(|error| format!("encode inbox op: {error}"))?;
-    write_session(session_id, &format!("inbox/{seq}.json"), &body)?;
-    Ok(seq)
+    const MAX_ATTEMPTS: u32 = 1024;
+    for _ in 0..MAX_ATTEMPTS {
+        let seq = next_inbox_seq(session_id)?;
+        let path = session_path(session_id, &format!("inbox/{seq}.json"))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        match exclusive_create_file(&path, &body) {
+            Ok(()) => return Ok(seq),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!("could not create inbox/{seq}.json: {error}"));
+            }
+        }
+    }
+    Err("could not reserve an exclusive inbox sequence".to_string())
+}
+
+fn exclusive_create_file(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let result = file
+        .write_all(content.as_bytes())
+        .and_then(|_| file.sync_all());
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
 }
 
 pub fn read_inbox_op(session_id: &str, seq: u64) -> Result<InboxOp, String> {
@@ -569,6 +603,72 @@ mod tests {
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "ui_owned_apply");
         assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![1]);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_inbox_alloc_gives_distinct_durable_entries() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-inbox-race-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+
+        const THREADS: usize = 16;
+        const PER_THREAD: usize = 8;
+        let session_id = unique.clone();
+        let mut handles = Vec::new();
+        for thread in 0..THREADS {
+            let sid = session_id.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut allocated = Vec::new();
+                for index in 0..PER_THREAD {
+                    let marker = format!("{thread}-{index}");
+                    let seq = write_inbox_op(
+                        &sid,
+                        &InboxOp {
+                            name: "solid_mirror".to_string(),
+                            arguments: json!({"body_ids": [1], "marker": marker}),
+                            base_generation: 1,
+                        },
+                    )
+                    .expect("exclusive inbox reserve must succeed");
+                    allocated.push((seq, format!("{thread}-{index}")));
+                }
+                allocated
+            }));
+        }
+        let mut all = Vec::new();
+        for handle in handles {
+            all.extend(handle.join().expect("inbox alloc thread"));
+        }
+        let expected = THREADS * PER_THREAD;
+        assert_eq!(all.len(), expected);
+        let mut seqs: Vec<u64> = all.iter().map(|(seq, _)| *seq).collect();
+        seqs.sort_unstable();
+        let mut unique_seqs = seqs.clone();
+        unique_seqs.dedup();
+        assert_eq!(
+            unique_seqs.len(),
+            expected,
+            "duplicate inbox seq under contention: {seqs:?}"
+        );
+        for (seq, marker) in &all {
+            let body = read_session_file(&session_id, &format!("inbox/{seq}.json")).unwrap();
+            assert!(
+                body.contains(marker),
+                "seq {seq} lost marker {marker}: {body}"
+            );
+        }
+        assert_eq!(pending_inbox_seqs(&session_id).unwrap().len(), expected);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

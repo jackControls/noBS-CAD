@@ -107,6 +107,7 @@ interface PublishReservation {
   session_id: string;
   generation: number;
   engine_revision?: number;
+  project_session_id?: string | null;
 }
 
 interface PublishWriteResult {
@@ -122,8 +123,10 @@ async function publishNow(): Promise<void> {
   if (state.engineKind !== 'tauri') return;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   try {
-    // Reserve captures engine_revision before export. If a UI mutation lands
-    // before write, native rejects the stale snapshot and we retry.
+    // Reserve captures engine_revision and project/session identity before
+    // export. Write carries that identity so a tab switch cannot publish
+    // this snapshot into another session. If a UI mutation lands before
+    // write, native rejects the stale snapshot and we retry.
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
       const engine = await getEngine();
@@ -144,9 +147,15 @@ async function publishNow(): Promise<void> {
           model_json: modelJson,
           active_sketch_json: activeSketch === null ? null : JSON.stringify(activeSketch),
           generation: reservation.generation,
+          session_id: reservation.session_id,
+          project_session_id: reservation.project_session_id ?? null,
         }),
       });
-      if (written?.skipped && written.reason === 'engine_revision_changed') {
+      if (
+        written?.skipped &&
+        (written.reason === 'engine_revision_changed' ||
+          written.reason === 'session_identity_mismatch')
+      ) {
         continue;
       }
       break;
