@@ -9,6 +9,7 @@ import {
   type CamOperationInput,
 } from '../../cam/document';
 import {
+  listModelEdgeCandidates,
   listSketchCurveCandidates,
   listSketchLoops,
   loopToSetupPath,
@@ -49,7 +50,10 @@ import {
 import { OP_PAGES, openCamToolPicker, useCamToolPickResult } from './opShared';
 
 type OperationKind = CamOperationInput['kind'];
-type GeometrySource = 'sketch' | 'manual';
+/** Geometry input mode. Chain kinds (contour) offer all three — the solid's
+ *  own edges are the primary source; loop kinds (pocket/chamfer) pick closed
+ *  sketch loops or manual coordinates. */
+type GeometrySource = 'model' | 'sketch' | 'manual';
 
 /** Stable loop identity shared by the dialog and the viewport loop-pick
  *  session (`CamLoopPickLoop.key`). */
@@ -293,6 +297,16 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   );
 
   const loops = useMemo(() => listSketchLoops(sketches), [sketches]);
+  // Contour chain-picking candidates: the setup bodies' solid edges (primary
+  // source — no sketch required) and the finished sketches' curve entities.
+  const modelEdges = useMemo(
+    () => (pages.pathChain && setup ? listModelEdgeCandidates(scene, setup) : []),
+    [pages.pathChain, setup, scene],
+  );
+  const sketchCurves = useMemo(
+    () => (pages.pathChain ? listSketchCurveCandidates(sketches) : []),
+    [pages.pathChain, sketches],
+  );
   const existingCount = setup?.operations.filter((operation) => operation.kind === kind).length ?? 0;
 
   // Setup-space model Z extremes seed the height drafts when editing; null
@@ -400,8 +414,12 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   const [source, setSource] = useState<GeometrySource>(() => {
     if (editing) return 'manual';
+    // Contour: the part's own edges are the primary geometry source — the
+    // operator picks the silhouette to machine, no sketch required.
     if (pages.pathChain) {
-      return listSketchCurveCandidates(sketches).length > 0 ? 'sketch' : 'manual';
+      if (modelEdges.length > 0) return 'model';
+      if (sketchCurves.length > 0) return 'sketch';
+      return 'manual';
     }
     return loops.length > 0 ? 'sketch' : 'manual';
   });
@@ -606,25 +624,29 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     };
   }, [pages.geometry, pages.pathChain, source, loops, sketches]);
 
-  // Contour chain picking: every sketch curve entity is clickable in the
-  // viewport; the dialog resolves the picks into one connected chain (open
-  // or closed) at submit.
+  // Contour chain picking: the candidate edges (solid edges or sketch
+  // curves, per the geometry source) are clickable in the viewport; the
+  // dialog resolves the picks into one connected chain (open or closed) at
+  // submit. The selection survives candidate rebuilds (model edits) while
+  // its keys still exist.
   useEffect(() => {
-    if (!pages.pathChain || source !== 'sketch') return;
+    if (!pages.pathChain || (source !== 'model' && source !== 'sketch')) return;
+    const entities = source === 'model' ? modelEdges : sketchCurves;
+    const previous = useAppStore.getState().camChainPick?.selectedKeys ?? [];
     useAppStore.getState().setCamChainPick({
-      entities: listSketchCurveCandidates(sketches),
-      selectedKeys: [],
+      entities,
+      selectedKeys: previous.filter((key) => entities.some((entity) => entity.key === key)),
       hoverKey: null,
     });
     return () => {
       useAppStore.getState().setCamChainPick(null);
     };
-  }, [pages.pathChain, source, sketches]);
+  }, [pages.pathChain, source, modelEdges, sketchCurves]);
 
   /** The picked chain resolved in click order, or the resolution error —
    *  kept out of exceptions during render so typing never crashes. */
   const chainResolution = useMemo(() => {
-    if (!pages.pathChain || source !== 'sketch' || !chainPick) return null;
+    if (!pages.pathChain || (source !== 'model' && source !== 'sketch') || !chainPick) return null;
     try {
       return { chain: resolvePickedChain(chainPick.entities, chainPick.selectedKeys), error: null };
     } catch (cause) {
@@ -718,10 +740,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         );
       }
     };
-    if (source === 'sketch') {
+    if (source === 'model' || source === 'sketch') {
       if (!setup) throw new Error('No active CAM setup.');
       if (!chainResolution?.chain) {
-        throw new Error(chainResolution?.error ?? 'Click sketch edges in the viewport to build the contour path.');
+        throw new Error(chainResolution?.error ?? 'Click edges in the viewport to build the contour path.');
       }
       const points = chainResolution.chain.modelPoints.map((point) => {
         const projected = modelPointToSetup(point, setup.wcs);
@@ -1056,12 +1078,18 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     }
     return (
       <DialogSection title={`${(pages.pathLabel ?? 'Path').toUpperCase()} · OPERATOR SELECTED`}>
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className={`grid ${pages.pathChain ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5`}>
           {(
-            [
-              ['sketch', pages.pathChain ? 'Sketch edges' : `Sketch loop (${loops.length})`],
-              ['manual', 'Manual points'],
-            ] as [GeometrySource, string][]
+            pages.pathChain
+              ? ([
+                  ['model', `Model edges (${modelEdges.length})`],
+                  ['sketch', `Sketch curves (${sketchCurves.length})`],
+                  ['manual', 'Manual points'],
+                ] as Array<[GeometrySource, string]>)
+              : ([
+                  ['sketch', `Sketch loop (${loops.length})`],
+                  ['manual', 'Manual points'],
+                ] as Array<[GeometrySource, string]>)
           ).map(([value, label]) => (
             <button
               key={value}
@@ -1077,14 +1105,19 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             </button>
           ))}
         </div>
-        {source === 'sketch' ? (
+        {source !== 'manual' ? (
           pages.pathChain ? (
             <>
               <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-                Click sketch edges one by one in the viewport — every edge must touch the
-                next; the first pick anchors the travel direction. Click a picked edge again
-                to unchain it. A circle is a complete closed loop on its own.
+                {source === 'model'
+                  ? "Click the part's edges one by one in the viewport — every edge must touch the next; the first pick anchors the travel direction. Click a picked edge again to unchain it. A full circular rim is a complete closed loop on its own."
+                  : 'Click sketch curves one by one in the viewport — every curve must touch the next; the first pick anchors the travel direction. Click a picked curve again to unchain it. A circle is a complete closed loop on its own.'}
               </p>
+              {chainPick && chainPick.entities.length === 0 && (
+                <p className="mt-1.5 text-[10px] italic text-mute">
+                  Nothing to pick for this source — switch to another one above.
+                </p>
+              )}
               <div className="mt-2 flex h-7 min-w-0 items-center gap-2 rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
                 <span className="min-w-0 flex-1 truncate">
                   {chainPick && chainPick.selectedKeys.length > 0
@@ -1129,15 +1162,28 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             </p>
           )
         ) : (
-          <label className="mt-2 block">
-            <span className={CAM_DIALOG_LABEL}>Closed path · one X,Y per line ({lu}, setup frame)</span>
-            <textarea
-              value={manualPoints}
-              onChange={(event) => setManualPoints(event.target.value)}
-              rows={4}
-              className={`${CAM_DIALOG_INPUT} h-auto resize-y font-mono leading-5`}
-            />
-          </label>
+          <div className="mt-2">
+            <label className="block">
+              <span className={CAM_DIALOG_LABEL}>
+                {pages.pathChain
+                  ? `Path coordinates · one X,Y per line (${lu}, setup frame)`
+                  : `Closed path · one X,Y per line (${lu}, setup frame)`}
+              </span>
+              <textarea
+                value={manualPoints}
+                onChange={(event) => setManualPoints(event.target.value)}
+                rows={4}
+                className={`${CAM_DIALOG_INPUT} h-auto resize-y font-mono leading-5`}
+              />
+            </label>
+            {pages.pathChain && (
+              <p className="mt-1.5 text-[9px] leading-relaxed text-mute/80">
+                Typed coordinates in the setup frame — the fallback when there is nothing to
+                pick in the viewport. Repeat the first point at the end for a closed path;
+                leave it open for an open chain.
+              </p>
+            )}
+          </div>
         )}
       </DialogSection>
     );

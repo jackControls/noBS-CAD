@@ -304,12 +304,13 @@ export interface CamLoopPickSession {
 /** One sketch curve entity offered for chain picking (2D contour): a line,
  *  arc, circle, or spline tessellated in model coordinates. */
 export interface CamChainPickEntity {
-  /** Stable identity: `${sketch}:${entityId}`. */
+  /** Stable identity: `sketch:${sketch}:${entityId}` or `edge:${bodyId}:${edgeKey}`. */
   key: string;
-  sketch: string;
-  entityId: number;
+  /** What was picked: a sketch curve entity or a solid-model B-rep edge. */
+  source: 'sketch' | 'model';
   kind: 'line' | 'arc' | 'circle' | 'spline';
-  /** Tessellated outline in model coordinates (mm); circles are closed rings. */
+  /** Tessellated outline in model coordinates (mm); circles are closed rings
+   *  without a duplicated closing point. */
   modelPoints: Point3Dto[];
 }
 
@@ -984,7 +985,7 @@ interface AppState {
   selectCamLoopPickLoop: (key: string) => void;
   setCamLoopPickHover: (hoverKey: string | null) => void;
   setCamChainPick: (session: CamChainPickSession | null) => void;
-  /** Toggle one sketch entity in the chain (click behavior). */
+  /** Toggle one entity in the chain (click behavior). */
   toggleCamChainPickEntity: (key: string) => void;
   setCamChainPickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;

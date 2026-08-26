@@ -242,9 +242,10 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
     }
   }
 
-  // Chain-pick session (contour): every sketch curve entity is clickable;
-  // picked edges draw green in their chained polyline, the hovered one
-  // amber. Circles render as closed rings, open entities as polylines.
+  // Chain-pick session (contour): every candidate edge (solid B-rep edge or
+  // sketch curve) is clickable; picked edges draw green in their chained
+  // polyline, the hovered one amber. Circles render as closed rings, open
+  // entities as polylines.
   if (state.camChainPick && state.camChainPick.entities.length > 0) {
     const rest: number[] = [];
     const hovered: number[] = [];
@@ -471,60 +472,99 @@ function pushSelectedTool(
     }
   }
 
-  // Entry/exit arrows on the first and last CUTTING segments. Length is a
-  // small direction cue, not a scale drawing: capped hard so a big face mill
-  // cannot paint an arrow longer than the part. Pure-Z segments (plunges)
-  // are skipped when a lateral cut exists — the arrow should read as the
-  // feed direction, not straight down the spindle.
-  const allCuts = buildToolpathSegments(sectionCommands).filter((segment) => !segment.rapid);
-  const lateralCuts = allCuts.filter((segment) => {
-    const dx = segment.to.x - segment.from.x;
-    const dy = segment.to.y - segment.from.y;
-    const dz = segment.to.z - segment.from.z;
-    return Math.hypot(dx, dy) > Math.abs(dz) * 0.5;
-  });
-  const cutSegments = lateralCuts.length > 0 ? lateralCuts : allCuts;
+  // Entry/exit arrows — the ironclad display rule for EVERY operation kind:
+  // the green arrow sits at the very start of the first feed (cutting) move,
+  // pointing along the cut; the red arrow sits at the very end of the last
+  // feed move, pointing along the leaving direction. Rapids never carry
+  // arrows. Arc tangents are exact (from the circle geometry, not display
+  // chords), and the arrow length is capped by its own move's length so a
+  // short plunge cannot poke an arrow through the machined surface.
+  interface FeedMove {
+    from: Point3Dto;
+    to: Point3Dto;
+    /** Unit tangent at the move's start / end. */
+    startDir: Point3Dto;
+    endDir: Point3Dto;
+    length: number;
+  }
+  const feedMoves: FeedMove[] = [];
+  let feedPosition: Point3Dto | null = null;
+  for (const command of sectionCommands) {
+    if (command.kind === 'rapid' || command.kind === 'linear') {
+      if (command.kind === 'linear' && feedPosition) {
+        const dx = command.to.x - feedPosition.x;
+        const dy = command.to.y - feedPosition.y;
+        const dz = command.to.z - feedPosition.z;
+        const length = Math.hypot(dx, dy, dz);
+        if (length > 1e-9) {
+          const dir = { x: dx / length, y: dy / length, z: dz / length };
+          feedMoves.push({ from: feedPosition, to: command.to, startDir: dir, endDir: dir, length });
+        }
+      }
+      feedPosition = command.to;
+      continue;
+    }
+    if (command.kind === 'circular') {
+      if (feedPosition) {
+        const startAngle = Math.atan2(
+          feedPosition.y - command.center.y,
+          feedPosition.x - command.center.x,
+        );
+        const endAngle = Math.atan2(command.to.y - command.center.y, command.to.x - command.center.x);
+        let sweep = endAngle - startAngle;
+        if (command.clockwise) {
+          while (sweep >= 0) sweep -= Math.PI * 2;
+        } else {
+          while (sweep <= 0) sweep += Math.PI * 2;
+        }
+        const radius = Math.hypot(feedPosition.x - command.center.x, feedPosition.y - command.center.y);
+        const arc = Math.abs(sweep) * radius;
+        const dz = command.to.z - feedPosition.z;
+        const length = Math.hypot(arc, dz);
+        if (length > 1e-9 && radius > 1e-9) {
+          // Circle tangent: the radial direction rotated ±90 degrees (CCW
+          // motion: (-sin, cos); CW: (sin, -cos)), scaled to the move's
+          // horizontal length; the helical Z rise rides along.
+          const tangentScale = arc / length;
+          const handedness = command.clockwise ? -1 : 1;
+          const tangent = (angle: number): Point3Dto => ({
+            x: -Math.sin(angle) * handedness * tangentScale,
+            y: Math.cos(angle) * handedness * tangentScale,
+            z: dz / length,
+          });
+          feedMoves.push({
+            from: feedPosition,
+            to: command.to,
+            startDir: tangent(startAngle),
+            endDir: tangent(endAngle),
+            length,
+          });
+        }
+      }
+      feedPosition = command.to;
+    }
+  }
   const arrowLength = Math.min(Math.max(tool.diameter * 0.4, 2), 8);
-  const pushEndpointArrow = (segment: ToolpathSegment, color: Rgba) => {
-    const dx = segment.to.x - segment.from.x;
-    const dy = segment.to.y - segment.from.y;
-    const dz = segment.to.z - segment.from.z;
-    const length = Math.hypot(dx, dy, dz);
-    if (length < 1e-9) return;
-    const scale = arrowLength / length;
-    const from = toModel(segment.from);
+  const pushEndpointArrow = (anchor: Point3Dto, dir: Point3Dto, moveLength: number, color: Rgba) => {
+    const drawn = Math.min(arrowLength, moveLength);
+    const start = toModel(anchor);
     const tip = toModel({
-      x: segment.from.x + dx * scale,
-      y: segment.from.y + dy * scale,
-      z: segment.from.z + dz * scale,
+      x: anchor.x + dir.x * drawn,
+      y: anchor.y + dir.y * drawn,
+      z: anchor.z + dir.z * drawn,
     });
     layers.arrows.push({
-      start: [from.x, from.y, from.z],
+      start: [start.x, start.y, start.z],
       end: [tip.x, tip.y, tip.z],
       color,
       width: 3,
       xray: true,
     });
   };
-  const first = cutSegments[0];
-  if (first) pushEndpointArrow(first, ENTRY_ARROW);
-  const last = cutSegments[cutSegments.length - 1];
-  if (last && last !== first) {
-    // The exit arrow starts at the final cut point and points along the
-    // leaving direction.
-    pushEndpointArrow(
-      {
-        from: last.to,
-        to: {
-          x: last.to.x + (last.to.x - last.from.x),
-          y: last.to.y + (last.to.y - last.from.y),
-          z: last.to.z + (last.to.z - last.from.z),
-        },
-        rapid: false,
-      },
-      EXIT_ARROW,
-    );
-  }
+  const firstFeed = feedMoves[0];
+  if (firstFeed) pushEndpointArrow(firstFeed.from, firstFeed.startDir, firstFeed.length, ENTRY_ARROW);
+  const lastFeed = feedMoves[feedMoves.length - 1];
+  if (lastFeed) pushEndpointArrow(lastFeed.to, lastFeed.endDir, lastFeed.length, EXIT_ARROW);
 }
 
 /** Remaining-stock estimate from the voxel simulator, in machinist green,

@@ -12,6 +12,7 @@ import type {
   PlaneBasis,
   Point3Dto,
   SketchDto,
+  SolidSceneDto,
   Vec2,
 } from '../engine/types';
 import type { CamChainPickEntity, CamHolePickHole } from '../store/appStore';
@@ -260,11 +261,63 @@ export function listSketchCurveCandidates(sketches: SketchDto[]): CamChainPickEn
       }
       if (!uv) continue;
       candidates.push({
-        key: `${sketch.name}:${entity.id}`,
-        sketch: sketch.name,
-        entityId: entity.id,
+        key: `sketch:${sketch.name}:${entity.id}`,
+        source: 'sketch',
         kind: entity.kind as CamChainPickEntity['kind'],
         modelPoints: uv.map((point) => sketchUvToModel(sketch.basis, point)),
+      });
+    }
+  }
+  return candidates;
+}
+
+/** Every solid edge of the setup's bodies the operator can pick for a
+ *  contour chain, tessellated in model coordinates. The kernel tessellates a
+ *  closed edge with its seam point duplicated at both ends; the duplicate is
+ *  dropped here so a full-circle rim stays a clean ring. Edges parallel to
+ *  setup Z project to a point on the setup plane and can never form a
+ *  contour — they are excluded so hovering them does not promise a pick the
+ *  planner cannot use. */
+export function listModelEdgeCandidates(
+  scene: SolidSceneDto,
+  setup: CamSetupDto,
+): CamChainPickEntity[] {
+  const wanted = new Set(setup.body_ids);
+  const candidates: CamChainPickEntity[] = [];
+  for (const body of scene.bodies) {
+    if (!wanted.has(body.id)) continue;
+    for (const edge of body.edges) {
+      let points = edge.points;
+      if (points.length < 2) continue;
+      if (modelDistance(points[0], points[points.length - 1]) <= CHAIN_JOIN_TOLERANCE) {
+        points = points.slice(0, -1);
+      }
+      if (points.length < 2) continue;
+      // Fixed-axis contour consumes the edge's footprint on the setup plane.
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const point of points) {
+        const projected = modelPointToSetup(point, setup.wcs);
+        minX = Math.min(minX, projected.x);
+        maxX = Math.max(maxX, projected.x);
+        minY = Math.min(minY, projected.y);
+        maxY = Math.max(maxY, projected.y);
+      }
+      if (Math.hypot(maxX - minX, maxY - minY) <= CHAIN_JOIN_TOLERANCE) continue;
+      candidates.push({
+        key: `edge:${body.id}:${edge.key}`,
+        source: 'model',
+        kind:
+          edge.circle?.closed === true
+            ? 'circle'
+            : edge.circle
+              ? 'arc'
+              : points.length === 2
+                ? 'line'
+                : 'spline',
+        modelPoints: points,
       });
     }
   }
@@ -298,7 +351,7 @@ export function resolvePickedChain(
     return entity;
   });
   if (picked.length === 0) {
-    throw new Error('Click sketch edges in the viewport to build the contour path.');
+    throw new Error('Click edges in the viewport to build the contour path.');
   }
   if (picked.some((entity) => entity.kind === 'circle')) {
     if (picked.length > 1) {
