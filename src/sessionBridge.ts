@@ -180,13 +180,19 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
-    if (result.result?.scene && result.result.document) {
-      useAppStore.getState().applySolidUpdate(result.result);
-    } else {
-      // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
-      await useAppStore.getState().refreshAfterInboxApply(result.name);
+    try {
+      if (result.result?.scene && result.result.document) {
+        useAppStore.getState().applySolidUpdate(result.result);
+      } else {
+        // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
+        await useAppStore.getState().refreshAfterInboxApply(result.name);
+      }
+    } finally {
+      // Native already archived the seq and bumped engine_revision. Publish
+      // even if leftover store refresh throws so cad_refresh sees the live
+      // engine. Next applyInboxNow is a no-op on the archived seq.
+      scheduleSessionBridgePublish();
     }
-    scheduleSessionBridgePublish();
   } catch (error) {
     console.debug('[sessionBridge] inbox apply failed', error);
   } finally {

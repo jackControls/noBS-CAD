@@ -6068,6 +6068,69 @@ mod tests {
                 && leftover.contains("mechanismPreview: null"),
             "leftover assembly refresh must clear all three previews"
         );
+        // Native apply archives + bumps before JS leftover refresh. A throw
+        // after that success must still publish so cad_refresh sees the joint.
+        let publish = body
+            .find("scheduleSessionBridgePublish()")
+            .expect("publish after native apply");
+        assert!(
+            publish > not_applied && publish > solid && publish > refresh,
+            "publish must follow the applied:true leftover refresh, not run on empty/dead-letter"
+        );
+        assert!(
+            body.contains("} finally {")
+                && body[publish..].contains("scheduleSessionBridgePublish()"),
+            "publish must live in a finally so a leftover refresh throw cannot skip it: {body}"
+        );
+    }
+
+    #[test]
+    fn leftover_and_native_apply_share_error_class_and_archive() {
+        // Hunt 2: helper vs native — same archive destination (failed vs applied)
+        // and same user-visible error class. Do not bikeshed wording.
+        let leftover = include_str!("session.rs");
+        let native = include_str!("../../src-tauri/src/session_bridge.rs");
+        for (label, source) in [("leftover", leftover), ("native", native)] {
+            assert!(
+                source.contains("\"code\": \"generation_conflict\"")
+                    && source.contains("\"writeback\": false")
+                    && source.contains("\"session_mode\": \"ui_owned_apply\""),
+                "{label} generation_conflict must be the structured class"
+            );
+            assert!(
+                source.contains("unsupported inbox mutate"),
+                "{label} unsupported mutate must share the class string"
+            );
+            assert!(
+                source.contains("inbox/failed") || source.contains("inbox/failed/"),
+                "{label} must dead-letter into inbox/failed"
+            );
+        }
+        let leftover_apply = leftover
+            .find("pub fn apply_inbox_op")
+            .expect("leftover apply_inbox_op");
+        let leftover_apply_end = leftover[leftover_apply..]
+            .find("pub fn publish_applied_snapshot")
+            .expect("end leftover apply");
+        let leftover_fn = &leftover[leftover_apply..leftover_apply + leftover_apply_end];
+        assert!(
+            leftover_fn.contains("dead_letter_inbox_op")
+                && leftover_fn.matches("dead_letter_inbox_op").count() >= 4,
+            "leftover must dead-letter missing heartbeat, mismatch, unsupported, and host fail"
+        );
+        let native_apply = native
+            .find("fn apply_one_inbox_op(")
+            .expect("native apply_one_inbox_op");
+        let native_apply_end = native[native_apply..]
+            .find("/// Reserve a monotonic generation")
+            .expect("end native apply");
+        let native_fn = &native[native_apply..native_apply + native_apply_end];
+        assert!(
+            native_fn.contains("project.engine_revision")
+                && !native_fn.contains("read_heartbeat_generation")
+                && !native_fn.contains("heartbeat_meta"),
+            "native apply must lock on in-memory engine_revision, not heartbeat.json age/file"
+        );
     }
 
     fn planar_connector_from_body(body: &Value) -> Value {
@@ -7222,12 +7285,118 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn extra_unknown_joint_fields_do_not_change_create_or_update_contract() {
+        // Protocol inputSchema is additionalProperties:false. Inbox apply is
+        // host serde (no deny_unknown_fields). Extra keys must not become new
+        // semantics, a ghost field, or a different joint than the known DTO.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-unknown-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let create_args = json!({
+            "name": "HingeUnknown",
+            "kind": "revolute",
+            "connector_a": planar_connector_from_body(&body_a),
+            "connector_b": planar_connector_from_body(&body_b),
+            "grounded_body_id": body_a["id"],
+            "unknown_contract_field": "must-not-stick",
+            "limits": {"min": -20.0, "max": 20.0, "unknown_limit_field": true}
+        });
+        assert!(
+            schema_accepts(&advertised_create_joint_schema(), &create_args).is_err(),
+            "advertised create schema must reject unknown fields"
+        );
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": create_args,
+                    "base_generation": 1
+                }),
+            )
+            .expect("cad_submit does not re-validate inner additionalProperties");
+        let created = apply_inbox_on_separate_host(&unique);
+        assert_eq!(created.host_result["name"], "HingeUnknown");
+        assert_eq!(created.host_result["kind"], "revolute");
+        assert!(
+            created.host_result.get("unknown_contract_field").is_none(),
+            "extra create field must not stick on the joint DTO: {}",
+            created.host_result
+        );
+        assert!(
+            created.host_result["limits"]
+                .get("unknown_limit_field")
+                .is_none(),
+            "extra limit field must not stick: {}",
+            created.host_result["limits"]
+        );
+        assert!((created.host_result["limits"]["min"].as_f64().unwrap() + 20.0).abs() < 1e-9);
+
+        let mut joint = created.host_result.clone();
+        if let Some(object) = joint.as_object_mut() {
+            object.remove("_disclosure");
+            object.insert("unknown_update_field".into(), json!("must-not-stick"));
+        }
+        let generation = session::read_heartbeat_generation(&unique).unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_update_joint",
+                    "arguments": { "joint": joint, "unknown_update_wrapper": 1 },
+                    "base_generation": generation
+                }),
+            )
+            .expect("submit update with extra fields");
+        let updated = apply_inbox_on_separate_host(&unique);
+        assert_eq!(updated.host_result["id"], created.host_result["id"]);
+        assert_eq!(updated.host_result["name"], "HingeUnknown");
+        assert!(
+            updated.host_result.get("unknown_update_field").is_none()
+                && updated.host_result.get("unknown_update_wrapper").is_none(),
+            "extra update fields must not stick: {}",
+            updated.host_result
+        );
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let after = server.call_tool("assembly_document", json!({})).unwrap();
+        let found = after["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == created.host_result["id"])
+            .expect("joint visible after refresh");
+        assert!(found.get("unknown_contract_field").is_none());
+        assert!(found.get("unknown_update_field").is_none());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn advertised_update_joint_schema() -> Value {
         tool_specs()
             .into_iter()
             .find(|spec| spec.name == "assembly_update_joint")
             .map(|spec| spec.input_schema)
             .expect("assembly_update_joint ToolSpec")
+    }
+
+    fn advertised_create_joint_schema() -> Value {
+        tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "assembly_create_joint")
+            .map(|spec| spec.input_schema)
+            .expect("assembly_create_joint ToolSpec")
     }
 
     fn probe_connector_occurrence_ids(unique: &str, body_a: &Value, body_b: &Value) -> (u64, u64) {

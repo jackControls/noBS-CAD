@@ -1828,4 +1828,72 @@ mod tests {
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn native_apply_uses_engine_revision_not_heartbeat_file() {
+        // Intertwined leftover vs native: leftover apply reads heartbeat.json
+        // generation (and now dead-letters if it is missing). Native apply
+        // locks on in-memory engine_revision. A deleted or age-stale
+        // heartbeat file must not stay pending, apply twice, or skip a
+        // matching-generation head.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-hb-file-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        let hb = session_root().join(&session_id).join("heartbeat.json");
+        assert!(hb.exists(), "publish must write heartbeat.json");
+        fs::remove_file(&hb).unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "NoHbFile"}),
+        );
+        let engine = AppState::new();
+        let applied = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            applied["applied"], true,
+            "native must apply from engine_revision: {applied}"
+        );
+        assert_eq!(applied["seq"], 1);
+        assert_eq!(engine.document_snapshot().name, "NoHbFile");
+        assert_ne!(applied.get("reason"), Some(&json!("generation_conflict")));
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/applied/1.json")
+            .exists());
+
+        // Age-stale heartbeat with matching engine_revision still applies.
+        let stale_ms = now_ms().saturating_sub(30_000 + 5_000);
+        let next_generation = applied["engine_revision"]
+            .as_u64()
+            .expect("engine_revision after first apply");
+        fs::write(
+            &hb,
+            format!(r#"{{"updated_ms":{stale_ms},"generation":{next_generation}}}"#),
+        )
+        .unwrap();
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            next_generation,
+            json!({"name": "AgeStaleOk"}),
+        );
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            second["applied"], true,
+            "age-stale heartbeat must not block native apply: {second}"
+        );
+        assert_eq!(second["seq"], 2);
+        assert_eq!(engine.document_snapshot().name, "AgeStaleOk");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
