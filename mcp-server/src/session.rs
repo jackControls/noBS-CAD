@@ -163,6 +163,17 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
                 "age_ms": age_ms,
                 "stale": age_ms > HEARTBEAT_STALE_MS,
                 "generation": parsed.get("generation").cloned().unwrap_or(Value::Null),
+                "window_id": parsed.get("window_id").cloned().unwrap_or(Value::Null),
+                "document_id": parsed
+                    .get("document_id")
+                    .or_else(|| parsed.get("project_session_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "project_session_id": parsed
+                    .get("project_session_id")
+                    .or_else(|| parsed.get("document_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
             })
         }
         Err(_) => json!({
@@ -170,8 +181,181 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
             "age_ms": null,
             "stale": true,
             "generation": null,
+            "window_id": null,
+            "document_id": null,
+            "project_session_id": null,
         }),
     }
+}
+
+/// Stable identities published beside a session snapshot (UI-owned).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub session_id: String,
+    pub window_id: Option<String>,
+    pub document_id: Option<String>,
+}
+
+fn optional_id(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Read window/document identity from heartbeat (focus.json fallback).
+pub fn session_identity(session_id: &str) -> SessionIdentity {
+    let mut window_id = None;
+    let mut document_id = None;
+    if let Ok(body) = read_session_file(session_id, "heartbeat.json") {
+        let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        window_id = optional_id(&parsed, "window_id");
+        document_id = optional_id(&parsed, "document_id")
+            .or_else(|| optional_id(&parsed, "project_session_id"));
+    }
+    if window_id.is_none() || document_id.is_none() {
+        if let Ok(body) = read_session_file(session_id, "focus.json") {
+            let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+            if window_id.is_none() {
+                window_id = optional_id(&parsed, "window_id");
+            }
+            if document_id.is_none() {
+                document_id = optional_id(&parsed, "document_id")
+                    .or_else(|| optional_id(&parsed, "project_session_id"));
+            }
+        }
+    }
+    SessionIdentity {
+        session_id: session_id.to_string(),
+        window_id,
+        document_id,
+    }
+}
+
+fn find_sessions_by<F>(predicate: F) -> Result<Vec<String>, String>
+where
+    F: Fn(&SessionIdentity) -> bool,
+{
+    let mut matches = Vec::new();
+    for session_id in list_sessions()? {
+        let identity = session_identity(&session_id);
+        if predicate(&identity) {
+            matches.push(session_id);
+        }
+    }
+    matches.sort();
+    Ok(matches)
+}
+
+/// Resolve attach target to a UUID session dir.
+///
+/// Accepts `session_id` (UUID), `window_id` (Tauri label), and/or `document_id`
+/// (native project-session id). UUID `document_id` remains an alias for
+/// `session_id` for compatibility. When multiple keys are supplied they must
+/// agree on one session; ambiguous window/document matches error clearly.
+pub fn resolve_attach_target(
+    session_id: Option<&str>,
+    window_id: Option<&str>,
+    document_id: Option<&str>,
+) -> Result<SessionIdentity, String> {
+    let session_id = session_id.map(str::trim).filter(|s| !s.is_empty());
+    let window_id = window_id.map(str::trim).filter(|s| !s.is_empty());
+    let document_id = document_id.map(str::trim).filter(|s| !s.is_empty());
+    if session_id.is_none() && window_id.is_none() && document_id.is_none() {
+        return Err(
+            "missing attach target: provide session_id, window_id, and/or document_id".to_string(),
+        );
+    }
+
+    let mut resolved: Option<String> = None;
+
+    if let Some(id) = session_id {
+        require_valid_session_id(id)?;
+        if !list_sessions()?.iter().any(|existing| existing == id) {
+            return Err(format!(
+                "session '{id}' was not found under {}",
+                session_dir().display()
+            ));
+        }
+        resolved = Some(id.to_string());
+    }
+
+    if let Some(window) = window_id {
+        let matches = find_sessions_by(|identity| identity.window_id.as_deref() == Some(window))?;
+        match matches.as_slice() {
+            [] => {
+                return Err(format!(
+                    "window_id '{window}' was not found under {}",
+                    session_dir().display()
+                ));
+            }
+            [only] => {
+                if let Some(existing) = resolved.as_deref() {
+                    if existing != only.as_str() {
+                        return Err(format!(
+                            "attach target mismatch: session_id '{existing}' is not window_id '{window}'"
+                        ));
+                    }
+                } else {
+                    resolved = Some(only.clone());
+                }
+            }
+            many => {
+                return Err(format!(
+                    "window_id '{window}' matches multiple sessions ({}); pass session_id",
+                    many.join(", ")
+                ));
+            }
+        }
+    }
+
+    if let Some(document) = document_id {
+        // Compat: UUID document_id still means the session directory name.
+        if is_valid_session_id(document) && list_sessions()?.iter().any(|id| id == document) {
+            if let Some(existing) = resolved.as_deref() {
+                if existing != document {
+                    return Err(format!(
+                        "attach target mismatch: session_id '{existing}' is not document_id '{document}'"
+                    ));
+                }
+            } else {
+                resolved = Some(document.to_string());
+            }
+        } else {
+            let matches =
+                find_sessions_by(|identity| identity.document_id.as_deref() == Some(document))?;
+            match matches.as_slice() {
+                [] => {
+                    return Err(format!(
+                        "document_id '{document}' was not found under {}",
+                        session_dir().display()
+                    ));
+                }
+                [only] => {
+                    if let Some(existing) = resolved.as_deref() {
+                        if existing != only.as_str() {
+                            return Err(format!(
+                                "attach target mismatch: session_id '{existing}' is not document_id '{document}'"
+                            ));
+                        }
+                    } else {
+                        resolved = Some(only.clone());
+                    }
+                }
+                many => {
+                    return Err(format!(
+                        "document_id '{document}' matches multiple sessions ({}); pass session_id or window_id",
+                        many.join(", ")
+                    ));
+                }
+            }
+        }
+    }
+
+    let session_id = resolved.ok_or_else(|| "could not resolve attach target".to_string())?;
+    Ok(session_identity(&session_id))
 }
 
 pub fn sessions_list_json() -> Value {
@@ -183,17 +367,34 @@ pub fn sessions_list_json() -> Value {
                     let has_model = session_path(session_id, "model.json")
                         .map(|path| path.is_file())
                         .unwrap_or(false);
+                    let identity = session_identity(session_id);
                     json!({
                         "session_id": session_id,
+                        "window_id": identity.window_id,
+                        "document_id": identity.document_id,
                         "has_model": has_model,
                         "heartbeat": heartbeat_meta(session_id),
                     })
+                })
+                .collect();
+            let windows: Vec<Value> = detailed
+                .iter()
+                .filter_map(|detail| {
+                    let window_id = detail.get("window_id").and_then(Value::as_str)?;
+                    Some(json!({
+                        "window_id": window_id,
+                        "session_id": detail.get("session_id"),
+                        "document_id": detail.get("document_id"),
+                        "has_model": detail.get("has_model"),
+                        "heartbeat": detail.get("heartbeat"),
+                    }))
                 })
                 .collect();
             json!({
                 "session_mode": "read_only_snapshot",
                 "sessions": sessions,
                 "session_details": detailed,
+                "windows": windows,
                 "session_dir": session_dir().display().to_string(),
                 "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             })
@@ -202,6 +403,7 @@ pub fn sessions_list_json() -> Value {
             "session_mode": "read_only_snapshot",
             "sessions": [],
             "session_details": [],
+            "windows": [],
             "session_dir": session_dir().display().to_string(),
             "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             "error": error,
@@ -577,7 +779,7 @@ mod tests {
         let unique = test_session_uuid();
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-test-{unique}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
-        write_session(&unique, "model.json", "{\"version\":1}").unwrap();
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
         write_session(
             &unique,
             "heartbeat.json",
@@ -595,6 +797,65 @@ mod tests {
         assert_eq!(list["sessions"][0], unique);
         assert_eq!(list["session_details"][0]["has_model"], true);
         assert_eq!(list["session_details"][0]["heartbeat"]["stale"], false);
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_and_resolve_expose_window_and_document_ids() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let other = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(7)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-mw-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}","window_id":"main","document_id":"tab-a","project_session_id":"tab-a"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_session(&other, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &other,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"session_id":"{other}","window_id":"secondary","document_id":"tab-b","project_session_id":"tab-b"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["session_details"].as_array().unwrap().len(), 2);
+        let main = list["session_details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == unique)
+            .cloned()
+            .unwrap();
+        assert_eq!(main["window_id"], "main");
+        assert_eq!(main["document_id"], "tab-a");
+        assert_eq!(list["windows"].as_array().unwrap().len(), 2);
+
+        let by_window = resolve_attach_target(None, Some("main"), None).unwrap();
+        assert_eq!(by_window.session_id, unique);
+        assert_eq!(by_window.window_id.as_deref(), Some("main"));
+        let by_document = resolve_attach_target(None, None, Some("tab-b")).unwrap();
+        assert_eq!(by_document.session_id, other);
+        let by_uuid_document = resolve_attach_target(None, None, Some(&unique)).unwrap();
+        assert_eq!(by_uuid_document.session_id, unique);
+        assert!(resolve_attach_target(Some(&unique), Some("secondary"), None).is_err());
+        assert!(resolve_attach_target(None, Some("missing-window"), None).is_err());
+        assert!(resolve_attach_target(None, None, None).is_err());
+
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }

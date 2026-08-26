@@ -247,9 +247,11 @@ impl SessionBridgeState {
             .insert(project.next_generation, project.engine_revision);
         Ok(json!({
             "session_id": project.session_id,
+            "window_id": window_label,
             "generation": project.next_generation,
             "engine_revision": project.engine_revision,
             "project_session_id": publisher.active_project_session_id,
+            "document_id": publisher.active_project_session_id,
             "session_mode": "read_only_snapshot",
         }))
     }
@@ -373,9 +375,11 @@ impl SessionBridgeState {
         let focus_body = serde_json::to_string_pretty(&json!({
             "focus": parsed.focus,
             "session_id": project.session_id,
+            "window_id": window_label,
             "updated_ms": now_ms(),
             "generation": parsed.generation,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
         }))
         .map_err(|error| format!("encode focus.json: {error}"))?;
@@ -384,7 +388,9 @@ impl SessionBridgeState {
             "updated_ms": now_ms(),
             "generation": parsed.generation,
             "session_id": project.session_id,
+            "window_id": window_label,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
         }))
         .map_err(|error| format!("encode heartbeat.json: {error}"))?;
@@ -410,10 +416,12 @@ impl SessionBridgeState {
         Ok(json!({
             "skipped": false,
             "session_id": project.session_id,
+            "window_id": window_label,
             "session_dir": dir.display().to_string(),
             "generation": parsed.generation,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
@@ -449,7 +457,9 @@ impl SessionBridgeState {
             "updated_ms": now_ms(),
             "generation": project.engine_revision,
             "session_id": project.session_id,
+            "window_id": window_label,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
             "kind": "heartbeat",
         }))
@@ -459,9 +469,11 @@ impl SessionBridgeState {
         Ok(json!({
             "skipped": false,
             "session_id": project.session_id,
+            "window_id": window_label,
             "generation": project.engine_revision,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
@@ -530,13 +542,20 @@ fn parse_engine_envelope(raw: String) -> Result<Value, String> {
     }
 }
 
-fn write_engine_revision_heartbeat(project: &ProjectPublisher) -> Result<(), String> {
+fn write_engine_revision_heartbeat(
+    project: &ProjectPublisher,
+    window_id: &str,
+    project_session_id: Option<&str>,
+) -> Result<(), String> {
     let dir = session_root().join(&project.session_id);
     fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
     let heartbeat_body = serde_json::to_string_pretty(&json!({
         "updated_ms": now_ms(),
         "generation": project.engine_revision,
         "session_id": project.session_id,
+        "window_id": window_id,
+        "project_session_id": project_session_id,
+        "document_id": project_session_id,
         "session_mode": "ui_owned_apply",
         "kind": "engine_revision",
     }))
@@ -607,7 +626,11 @@ fn engine_envelope_ok(raw: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn bump_engine_revision(project: &mut ProjectPublisher) -> Result<(), String> {
+fn bump_engine_revision(
+    project: &mut ProjectPublisher,
+    window_id: &str,
+    project_session_id: Option<&str>,
+) -> Result<(), String> {
     project.engine_revision = project
         .engine_revision
         .checked_add(1)
@@ -615,7 +638,7 @@ fn bump_engine_revision(project: &mut ProjectPublisher) -> Result<(), String> {
     if project.engine_revision > project.next_generation {
         project.next_generation = project.engine_revision;
     }
-    write_engine_revision_heartbeat(project)
+    write_engine_revision_heartbeat(project, window_id, project_session_id)
 }
 
 impl SessionBridgeState {
@@ -643,12 +666,14 @@ impl SessionBridgeState {
             .or_insert_with(WindowPublisher::new);
         let project_session_id = publisher.active_project_session_id.clone();
         let project = publisher.active_mut();
-        bump_engine_revision(project)?;
+        bump_engine_revision(project, window_label, project_session_id.as_deref())?;
         Ok(json!({
             "session_id": project.session_id,
+            "window_id": window_label,
             "engine_revision": project.engine_revision,
             "generation": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "ui_owned_apply",
             "writeback": false,
         }))
@@ -667,9 +692,14 @@ impl SessionBridgeState {
             drop(publishers);
             return mutate();
         };
+        let project_session_id = publisher.active_project_session_id.clone();
         let result = mutate();
         if engine_envelope_ok(&result) {
-            if let Err(error) = bump_engine_revision(publisher.active_mut()) {
+            if let Err(error) = bump_engine_revision(
+                publisher.active_mut(),
+                window_label,
+                project_session_id.as_deref(),
+            ) {
                 eprintln!("session bridge could not bump engine_revision: {error}");
             }
         }
@@ -759,6 +789,7 @@ fn apply_one_inbox_op(
         None => publisher.rebind_to(&engine_active),
         Some(_) => {}
     }
+    let project_session_id = publisher.active_project_session_id.clone();
     let project = publisher.active_mut();
     let session_id = project.session_id.clone();
     let seqs = pending_inbox_seqs(&session_id);
@@ -889,7 +920,7 @@ fn apply_one_inbox_op(
     }
     match dispatch_inbox_on_engine(engine, &name, &arguments) {
         Ok(result) => {
-            bump_engine_revision(project)?;
+            bump_engine_revision(project, window_label, project_session_id.as_deref())?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,
@@ -1065,6 +1096,46 @@ mod tests {
         assert_eq!(applied["skipped"], false);
         let model = fs::read_to_string(dir.join(session_id).join("model.json")).unwrap();
         assert!(model.contains("\"marker\":\"after-reload\""));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn published_heartbeat_carries_stable_window_and_document_ids() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let state = SessionBridgeState::default();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-window-id-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        let reserved = state
+            .reserve_for_window_on_project("main", Some("tab-doc-a"))
+            .unwrap();
+        assert_eq!(reserved["window_id"], "main");
+        assert_eq!(reserved["document_id"], "tab-doc-a");
+        let session_id = reserved["session_id"].as_str().unwrap().to_string();
+        let generation = reserved["generation"].as_u64().unwrap();
+        let applied = state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_id, "tab-doc-a", generation, "main-doc"),
+            )
+            .unwrap();
+        assert_eq!(applied["skipped"], false);
+        assert_eq!(applied["window_id"], "main");
+        assert_eq!(applied["document_id"], "tab-doc-a");
+        let beat = fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap();
+        assert!(
+            beat.contains("\"window_id\": \"main\"") || beat.contains("\"window_id\":\"main\"")
+        );
+        assert!(
+            beat.contains("\"document_id\": \"tab-doc-a\"")
+                || beat.contains("\"document_id\":\"tab-doc-a\"")
+        );
+        let focus = fs::read_to_string(dir.join(&session_id).join("focus.json")).unwrap();
+        assert!(
+            focus.contains("\"window_id\": \"main\"") || focus.contains("\"window_id\":\"main\"")
+        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
