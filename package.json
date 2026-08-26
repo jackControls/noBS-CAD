@@ -26,6 +26,7 @@
     "bundle:windows:portable": "pwsh -NoProfile -File scripts/bundle-windows-portable.ps1",
     "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/engine-wasm/pkg --out-name nbcad_wasm",
     "smoke:wasm": "node scripts/smoke-wasm.mjs",
+    "test:constraint-glyphs": "npx --yes tsx src/sketch/constraintGlyphAnchor.test.ts",
     "check:knowledge": "node scripts/check-knowledge.mjs",
     "audit:icons": "node scripts/audit-icons.mjs",
     "e2e": "node scripts/run-e2e.mjs",

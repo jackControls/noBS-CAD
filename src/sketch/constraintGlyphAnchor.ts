@@ -1,3 +1,20 @@
+/**
+ * Constraint glyph anchors and post-solve UI placement.
+ *
+ * Geometric constraint badges (H/V, coincident, tangent, …) are **not**
+ * solver variables. After the sketch solves, the viewport:
+ *
+ * 1. Resolves a relation **anchor** (contact / shared point / midpoint / …).
+ * 2. Offsets the badge with {@link offsetGlyphFromAnchor} by a screen-pixel
+ *    nudge (`gripHalf + glyphHalf + gap`) so the chip does not cover grips.
+ * 3. Hit-tests badges only in sketch **Select** (`activeTool === null`).
+ *
+ * Pick priority (implemented in `Viewport.tsx` as `pickConstraintOrEntity`):
+ * geometry under the pointer wins over a nearby badge. Clicking a point
+ * selects the point; clicking empty space on the chip selects the constraint.
+ * Badge hit size tracks the visible sprite (`px`), not a large label box.
+ */
+
 import type { ConstraintDto, EntityDto, Vec2 } from '../engine/types';
 import { constraintReferencedEntityIds } from './constraintRefs';
 
@@ -83,12 +100,24 @@ function tangentRelationPoint(a: EntityDto, b: EntityDto): Vec2 | null {
   const dy = cb.center.y - ca.center.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 1e-12) return ca.center;
-  // Point on the first circle toward the second — coincides with the
-  // solved contact for both external and typical internal tangencies.
-  const scale = Math.abs(ca.radius) / dist;
+  const r1 = Math.abs(ca.radius);
+  const r2 = Math.abs(cb.radius);
+  const sum = r1 + r2;
+  const diff = Math.abs(r1 - r2);
+  // Classify by which ideal distance the current pose is closer to so
+  // internal and external contacts stay order-independent.
+  const internal = Math.abs(dist - diff) <= Math.abs(dist - sum);
+  const denom = internal ? r1 - r2 : sum;
+  if (Math.abs(denom) < 1e-12) {
+    return {
+      x: ca.center.x + (dx / dist) * r1,
+      y: ca.center.y + (dy / dist) * r1,
+    };
+  }
+  const t = r1 / denom;
   return {
-    x: ca.center.x + dx * scale,
-    y: ca.center.y + dy * scale,
+    x: ca.center.x + dx * t,
+    y: ca.center.y + dy * t,
   };
 }
 
@@ -137,4 +166,91 @@ export function singlePointRelationAnchor(
     default:
       return null;
   }
+}
+
+/** Default preferred nudge: north-east in sketch UV. */
+export const DEFAULT_GLYPH_DIR: Vec2 = { x: 1, y: 1 };
+
+const CANDIDATE_DIRS: readonly Vec2[] = [
+  { x: 1, y: 1 },
+  { x: 0, y: 1 },
+  { x: 1, y: 0 },
+  { x: -1, y: 1 },
+  { x: 1, y: -1 },
+  { x: -1, y: 0 },
+  { x: 0, y: -1 },
+  { x: -1, y: -1 },
+];
+
+function normalize(dir: Vec2): Vec2 | null {
+  const len = Math.hypot(dir.x, dir.y);
+  if (len < 1e-12) return null;
+  return { x: dir.x / len, y: dir.y / len };
+}
+
+function clearOfObstacles(
+  point: Vec2,
+  obstacles: readonly Vec2[],
+  clearRadius: number,
+): boolean {
+  const clearSq = clearRadius * clearRadius;
+  for (const obstacle of obstacles) {
+    const dx = point.x - obstacle.x;
+    const dy = point.y - obstacle.y;
+    if (dx * dx + dy * dy < clearSq) return false;
+  }
+  return true;
+}
+
+export interface GlyphOffsetOptions {
+  /** Sketch-plane distance from the relation anchor to the badge center. */
+  nudge: number;
+  /** Preferred unit-ish direction; falls back to NE. */
+  preferredDir?: Vec2 | null;
+  /** Points/glyphs the badge should not sit on (sketch-plane). */
+  obstacles?: readonly Vec2[];
+  /** Minimum distance to any obstacle (defaults to nudge). */
+  clearRadius?: number;
+}
+
+/**
+ * Place a constraint glyph near a relation anchor without covering geometry.
+ *
+ * Sketch geometry is already solved; this is a separate UI pass: prefer a
+ * fixed-length offset, then try a few compass directions if that lands on a
+ * grip or another glyph. Pair with geometry-first Select picking in the
+ * viewport so residual overlap still selects points, not badges.
+ */
+export function offsetGlyphFromAnchor(
+  anchor: Vec2,
+  options: GlyphOffsetOptions,
+): Vec2 {
+  const nudge = Math.max(options.nudge, 1e-6);
+  const clearRadius = options.clearRadius ?? nudge;
+  const obstacles = options.obstacles ?? [];
+  const preferred = normalize(options.preferredDir ?? DEFAULT_GLYPH_DIR)
+    ?? normalize(DEFAULT_GLYPH_DIR)!;
+
+  const dirs: Vec2[] = [preferred];
+  for (const candidate of CANDIDATE_DIRS) {
+    const unit = normalize(candidate);
+    if (!unit) continue;
+    if (Math.abs(unit.x - preferred.x) < 1e-9 && Math.abs(unit.y - preferred.y) < 1e-9) {
+      continue;
+    }
+    dirs.push(unit);
+  }
+
+  for (const dir of dirs) {
+    const point = {
+      x: anchor.x + dir.x * nudge,
+      y: anchor.y + dir.y * nudge,
+    };
+    if (clearOfObstacles(point, obstacles, clearRadius)) return point;
+  }
+
+  return {
+    x: anchor.x + preferred.x * nudge,
+    y: anchor.y + preferred.y * nudge,
+  };
 }
