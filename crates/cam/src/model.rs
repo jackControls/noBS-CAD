@@ -674,6 +674,29 @@ pub enum ContourCompensation {
     Right,
 }
 
+/// Who turns the contour into the tool-center path. In control is the
+/// default: the program carries the part contour and the CNC offsets the
+/// tool by its own diameter register, so the shop can fine-tune size and
+/// swap cutter diameters at the machine without reposting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompensationMode {
+    /// The CNC applies the radius offset (posted as G41/G42 activated on the
+    /// lead-in move, cancelled with G40 on the lead-out). The programmed
+    /// path stays the part contour; the simulator still cuts to the contour
+    /// by applying the nominal radius itself.
+    #[default]
+    InControl,
+    /// The planner offsets the path by the tool radius here; the posted
+    /// coordinates are already the tool-center path and no machine
+    /// compensation is used.
+    InSoftware,
+}
+
+fn default_contour_lead() -> f64 {
+    5.0
+}
+
 /// Canned-cycle family of a drill operation. The planner expands every cycle
 /// to explicit longhand motion (plus spindle reversals for tapping), so the
 /// neutral program never depends on a control's canned-cycle dialect.
@@ -774,6 +797,19 @@ pub enum CamOperationDto {
         bottom_z: f64,
         step_down: f64,
         compensation: ContourCompensation,
+        /// Who offsets the tool radius: the machine (default) or the planner.
+        #[serde(default)]
+        compensation_mode: CompensationMode,
+        /// Tangential entry/exit lengths (mm) in the setup plane. A contour
+        /// always reaches the profile through a straight tangential lead —
+        /// it is what lets the tool edge (not the centerline) meet the wall,
+        /// and machine compensation can only activate on a linear move that
+        /// is longer than the tool radius. Defaults keep legacy documents
+        /// plannable; validation enforces the real rules.
+        #[serde(default = "default_contour_lead")]
+        lead_in: f64,
+        #[serde(default = "default_contour_lead")]
+        lead_out: f64,
         #[serde(default)]
         clearance_z: f64,
         #[serde(default)]
@@ -1079,11 +1115,14 @@ impl CamOperationDto {
                 bottom_z,
                 step_down,
                 compensation,
+                compensation_mode,
+                lead_in,
+                lead_out,
                 ..
             } => {
                 if tool.kind == CamToolKind::Drill || !tool.center_cutting {
                     return Err(format!(
-                        "contour operation '{label}' requires a center-cutting milling tool until ramp or lead-in entries are supported"
+                        "contour operation '{label}' requires a center-cutting milling tool: the entry plunges at the lead start, which the operator places"
                     ));
                 }
                 if path.len() < 2 || path.len() > MAX_PATH_POINTS {
@@ -1116,6 +1155,28 @@ impl CamOperationDto {
                     return Err(format!(
                         "contour operation '{label}' is an open chain — it has no interior; compensate left/right of travel direction"
                     ));
+                }
+                if !lead_in.is_finite()
+                    || *lead_in <= 0.0
+                    || !lead_out.is_finite()
+                    || *lead_out <= 0.0
+                {
+                    return Err(format!(
+                        "contour operation '{label}' needs a positive lead-in and lead-out — the tool must reach and leave the profile on a straight tangential move"
+                    ));
+                }
+                if *compensation_mode == CompensationMode::InControl
+                    && !matches!(compensation, ContourCompensation::On)
+                {
+                    // Controls alarm when the compensation activation or
+                    // cancellation move is shorter than the tool radius: the
+                    // offset cannot slide in within the move.
+                    let radius = tool.diameter * 0.5;
+                    if *lead_in <= radius || *lead_out <= radius {
+                        return Err(format!(
+                            "contour operation '{label}' in-control compensation activates and cancels on the lead moves, so both leads must be longer than the tool radius ({radius:.3} mm)"
+                        ));
+                    }
                 }
                 validate_depth_range(label, *top_z, *bottom_z, *step_down, within_z)?;
             }

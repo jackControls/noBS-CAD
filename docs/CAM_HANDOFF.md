@@ -1,9 +1,81 @@
-# CAM branch handoff — 2026-08-25
+# CAM branch handoff — 2026-08-26
 
-State of `feature/cam` after fourteen working rounds, rebased onto current
+State of `feature/cam` after fifteen working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 15 (2026-08-26) — machine-side cutter compensation, tangent leads, cone markers
+
+Three operator-reported issues, all about the contour model being wrong:
+
+1. **Contour compensation was planned tool-center-only.** The planner offset
+   the contour by the tool radius and posted plain coordinates — the CNC had
+   no say. Real shops run contours with machine-side cutter radius
+   compensation so size can be tuned and cutters swapped at the machine.
+   Fixed end to end:
+   - `CompensationMode` on contour operations: `in_control` (default) or
+     `in_software` (`model.rs`). In control, the programmed path IS the part
+     contour; two new neutral IR commands, `CutterCompensationOn { left }` /
+     `CutterCompensationOff`, bracket the compensated region
+     (`planner.rs`). Side resolution: closed CCW loops compensate inside→
+     G41 (left of travel), outside→G42; open chains map left/right directly.
+   - ISO posts (Fanuc-style, LinuxCNC) emit `G41`/`G42 D<tool number>`
+     prepended to the activation linear move and `G40` on the cancellation
+     move; the Siemens profile emits the same words without a `D` (the 828D
+     takes the cutting-edge number from the tool call). GRBL has no radius
+     compensation vocabulary: its post REFUSES in-control programs with an
+     actionable error — fail closed, never emit unoffset motion.
+   - The simulator runs a small compensation state machine: linear moves are
+     buffered while compensation is active, offset as one polyline by the
+     nominal tool radius at `CutterCompensationOff` (mitered corners), then
+     swept; the first move after cancellation sweeps from the compensated
+     endpoint back to the programmed point. Rapids, arcs, Z changes, or an
+     uncancelled section inside the compensated region fail closed. Result:
+     in-control programs simulate cutting exactly TO the contour, verified
+     by a voxel-probe test (material inside the band removed, wall
+     preserved).
+2. **Lead-in/out is real now (straight tangent v1).** Contour operations
+   carry `lead_in`/`lead_out` lengths (default 5 mm; the dialog seeds 1.5x
+   the tool radius and re-seeds on tool picks until touched). Every depth
+   pass approaches at the lead start, activates compensation on the lead-in
+   move, cuts the contour, cancels, and exits along the lead-out. Rule the
+   engine AND the dialog both enforce: in control with compensation active,
+   each lead must EXCEED the tool radius — controls alarm when compensation
+   activates over a shorter move. Closed loops lead out along the closing
+   edge's tangent. Arc/sweep lead shapes and lead corner-clearance checks
+   need robust 2D offset/clip machinery; they are now roadmap item 8 in
+   `CAM.md` ("2D geometry kernel module") together with miter/arc joins and
+   self-intersection cleanup.
+3. **Endpoint markers are identical pure cones.** The shaft-and-head arrows
+   are gone from toolpath display (WCS axes keep theirs). Green cone at the
+   exact start of the first feed move, red cone at the exact end of the last
+   feed move, both oriented along the exact motion tangent, both the SAME
+   size, scaled to the model extent (`clamp(extent*0.025, 1, 12)` mm, base
+   radius 0.35x length, 12 sides), capped by the shorter host move. Built as
+   triangle meshes with `xray: true` (`overlay.ts::pushCone`,
+   `pushSelectedTool`).
+
+Dialog (`CamOperationDialog.tsx` + `opShared.tsx`): the Passes tab gains a
+**Compensation mode** select (In control — G41/G42, default / In software —
+pre-offset path), disabled while tool side is On path (no offset to apply);
+the Linking tab turns the dead lead checkboxes into live lead-in/lead-out
+length fields for contour (`OP_PAGES.contour2d.leads`), everything wired
+through the shared tab scaffold so other kinds can opt in with one flag.
+Legacy documents deserialize with in-control + 5 mm leads via serde
+defaults.
+
+Verification: `cargo test -p nbcad-cam` 78 passed (8 new: comp planning for
+both modes, lead geometry open/closed, Fanuc/Siemens posting with and
+without D, GRBL refusal, voxel-probe simulation); `cargo test --workspace`
+and mcp-server 37 green; `npx tsc --noEmit` clean; `npm run build:wasm` +
+`npm run smoke:wasm` green; `npm run build` green.
+
+Accepted simplifications (documented, not bugs): closed loops simulate the
+compensated region as an open polyline offset (no corner miter at the
+closure point; sub-voxel error); leads are straight tangent moves only;
+in-control compensation is contour-only (other kinds plan tool-center as
+before).
 
 ## Round 14 (2026-08-25) — display scale, X-ray toggle, open-chain contours
 
@@ -428,7 +500,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 65, 464 total), mcp-server 37,
+`cargo test --workspace` (cam 78, 477 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
@@ -459,7 +531,8 @@ drill cycles.
    stock-to-leave
    (radial/axial), finishing passes with separate feed, tolerance/smoothing,
    pass direction + extension, both-ways vs climb/conventional selection,
-   keep-tool-down linking, lead in/out geometry, and the ramp/lead/transition
+   keep-tool-down linking, arc/sweep lead shapes (straight tangent leads
+   landed for contour in round 15), and the ramp/lead/transition
    feedrates. Also drill break-through depth +
    tip-through-bottom.
 9. Ramp/helical entries for pocket and contour — the blocker for

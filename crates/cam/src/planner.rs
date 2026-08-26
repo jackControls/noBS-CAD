@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    signed_area, CamDocumentDto, CamOperationDto, CamToolDto, ContourCompensation, CoolantMode,
-    DrillCycle, MillingDirection, Point2Dto, Point3Dto, SpindleDirection, ThreadHand, WorkOffset,
+    signed_area, CamDocumentDto, CamOperationDto, CamToolDto, CompensationMode,
+    ContourCompensation, CoolantMode, DrillCycle, MillingDirection, Point2Dto, Point3Dto,
+    SpindleDirection, ThreadHand, WorkOffset,
 };
 
 const EPSILON: f64 = 1.0e-9;
@@ -84,6 +85,19 @@ pub enum CamCommandDto {
     Dwell {
         seconds: f64,
     },
+    /// Activates machine-side cutter radius compensation: `left` true means
+    /// the tool shifts left of the programmed travel direction (G41), false
+    /// means right (G42). Takes effect on the LINEAR move that follows — the
+    /// lead-in — and stays active until `CutterCompensationOff`. Only
+    /// emitted for contour operations whose compensation mode is in control;
+    /// the programmed path then stays the part contour and the diameter
+    /// register is a machine-side value the post resolves.
+    CutterCompensationOn {
+        left: bool,
+    },
+    /// Cancels machine-side cutter radius compensation on the LINEAR move
+    /// that follows — the lead-out (G40).
+    CutterCompensationOff,
     SectionEnd,
     ProgramEnd,
 }
@@ -495,6 +509,9 @@ fn plan_contour(
         bottom_z,
         step_down,
         compensation,
+        compensation_mode,
+        lead_in,
+        lead_out,
         cutting,
         name,
         ..
@@ -503,27 +520,78 @@ fn plan_contour(
         unreachable!();
     };
     require_flute_length(tool, top_z - bottom_z, name)?;
+    let radius = tool.diameter * 0.5;
     let source = without_duplicate_closure(path);
-    let center_path = match compensation {
-        ContourCompensation::On => source,
-        ContourCompensation::Inside => offset_polygon(&source, tool.diameter * 0.5, true)?,
-        ContourCompensation::Outside => offset_polygon(&source, tool.diameter * 0.5, false)?,
+    // The tool EDGE tracks the contour, never the centerline. In software the
+    // planner shifts the center path by the radius here; in control the path
+    // stays the part contour and the machine applies the offset — the post
+    // emits G41/G42 on the lead-in and G40 on the lead-out.
+    let center_path = match (compensation_mode, compensation) {
+        (CompensationMode::InControl, _) => source.clone(),
+        (_, ContourCompensation::On) => source.clone(),
+        (_, ContourCompensation::Inside) => offset_polygon(&source, radius, true)?,
+        (_, ContourCompensation::Outside) => offset_polygon(&source, radius, false)?,
         // Validation rejects left/right on closed paths, so an open chain is
         // the only way these arms are reachable.
-        ContourCompensation::Left => offset_polyline_open(&source, tool.diameter * 0.5, true)?,
-        ContourCompensation::Right => offset_polyline_open(&source, tool.diameter * 0.5, false)?,
+        (_, ContourCompensation::Left) => offset_polyline_open(&source, radius, true)?,
+        (_, ContourCompensation::Right) => offset_polyline_open(&source, radius, false)?,
     };
+    // Machine compensation side, resolved to a plain left/right of travel:
+    // G41 is left, G42 is right. For closed loops the loop's winding decides
+    // which side the interior lies on (CCW travel keeps the interior left).
+    let comp_left = match (compensation_mode, compensation) {
+        (CompensationMode::InControl, ContourCompensation::Left) => Some(true),
+        (CompensationMode::InControl, ContourCompensation::Right) => Some(false),
+        (CompensationMode::InControl, ContourCompensation::Inside) => {
+            Some(signed_area(&source) > 0.0)
+        }
+        (CompensationMode::InControl, ContourCompensation::Outside) => {
+            Some(signed_area(&source) <= 0.0)
+        }
+        _ => None,
+    };
+    // Tangential leads on the center path: the entry extends the first
+    // segment backward, the exit extends the last segment forward (the
+    // closing segment for a closed loop). Straight leads are the v1 lead
+    // form; arc/sweep leads need the geometry-kernel roadmap item.
+    let first = center_path[0];
+    let start_tangent = unit_direction(center_path[0], center_path[1])?;
+    let lead_start = Point2Dto::new(
+        first.x - start_tangent.x * lead_in,
+        first.y - start_tangent.y * lead_in,
+    );
+    let last_index = center_path.len() - 1;
+    let (end_anchor, end_tangent) = if *closed {
+        (
+            first,
+            unit_direction(center_path[last_index], first)?,
+        )
+    } else {
+        (
+            center_path[last_index],
+            unit_direction(center_path[last_index - 1], center_path[last_index])?,
+        )
+    };
+    let lead_end = Point2Dto::new(
+        end_anchor.x + end_tangent.x * lead_out,
+        end_anchor.y + end_tangent.y * lead_out,
+    );
     let depths = depth_levels(*top_z, *bottom_z, *step_down)?;
     ensure_program_budget(
         builder.commands.len(),
         depths
             .len()
-            .saturating_mul(center_path.len().saturating_add(5)),
+            .saturating_mul(center_path.len().saturating_add(9)),
         name,
     )?;
     for depth in depths {
-        let first = center_path[0];
-        builder.approach(first, depth, cutting.feed_z);
+        // The plunge happens at the lead start — in free air for compensated
+        // paths — never on the profile itself.
+        builder.approach(lead_start, depth, cutting.feed_z);
+        if let Some(left) = comp_left {
+            builder.commands.push(CamCommandDto::CutterCompensationOn { left });
+        }
+        builder.linear(Point3Dto::new(first.x, first.y, depth), cutting.feed_xy);
         for point in center_path.iter().copied().skip(1) {
             builder.linear(Point3Dto::new(point.x, point.y, depth), cutting.feed_xy);
         }
@@ -533,6 +601,10 @@ fn plan_contour(
         if *closed {
             builder.linear(Point3Dto::new(first.x, first.y, depth), cutting.feed_xy);
         }
+        if comp_left.is_some() {
+            builder.commands.push(CamCommandDto::CutterCompensationOff);
+        }
+        builder.linear(Point3Dto::new(lead_end.x, lead_end.y, depth), cutting.feed_xy);
         builder.retract_to_clearance();
     }
     Ok(())
@@ -1145,7 +1217,9 @@ fn offset_polygon(
 /// endpoints shift along their single segment's normal, interior vertices
 /// miter exactly like the closed-polygon case. Unlike `offset_polygon` there
 /// is no interior to collapse, so the only failure is a degenerate miter.
-fn offset_polyline_open(
+/// Also used by the simulator to reproduce the machine's compensated path
+/// for in-control contour sections.
+pub(crate) fn offset_polyline_open(
     points: &[Point2Dto],
     radius: f64,
     left: bool,
@@ -1634,6 +1708,9 @@ mod tests {
             bottom_z: -15.0,
             step_down: 2.0,
             compensation: ContourCompensation::Outside,
+            compensation_mode: CompensationMode::InSoftware,
+            lead_in: 5.0,
+            lead_out: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1661,6 +1738,9 @@ mod tests {
             bottom_z: -2.0,
             step_down: 2.0,
             compensation,
+            compensation_mode: CompensationMode::InSoftware,
+            lead_in: 5.0,
+            lead_out: 5.0,
             clearance_z: 10.0,
             retract_z: 3.0,
             cutting: cutting(),
@@ -1692,15 +1772,17 @@ mod tests {
         let near = |point: Point3Dto, x: f64, y: f64| {
             (point.x - x).abs() < 1.0e-9 && (point.y - y).abs() < 1.0e-9
         };
-        // One depth level: exactly one visit to the chain start (the plunge).
-        // A closed contour would cut back to it as the second visit.
+        // One depth level: exactly one visit to the chain start (the lead-in
+        // reaches it). A closed contour would cut back to it a second time.
         assert_eq!(
             targets.iter().filter(|point| near(**point, 5.0, 5.0)).count(),
             1
         );
-        // The chain ends at its own last point, not back at the start.
+        // The chain ends at its own last point and leaves on the tangential
+        // lead-out — never back at the start.
         let last = targets.last().expect("cutting moves");
-        assert!(near(*last, 30.0, 20.0));
+        assert!(near(*last, 30.0, 25.0));
+        assert!(near(targets[targets.len() - 2], 30.0, 20.0));
     }
 
     #[test]
@@ -1720,11 +1802,16 @@ mod tests {
             .filter(|point| (point.z + 2.0).abs() < 1.0e-9)
             .copied()
             .collect::<Vec<_>>();
-        // Offset path: (5,8) -> (27,8) -> (27,20); the first entry is the
-        // plunge onto the offset start.
-        assert!((bottom[0].x - 5.0).abs() < 1.0e-9 && (bottom[0].y - 8.0).abs() < 1.0e-9);
+        // Offset path: (5,8) -> (27,8) -> (27,20), wrapped by the tangential
+        // leads: the plunge lands on the lead start (0,8), the lead-in ends
+        // on the offset start, and the lead-out extends past (27,20) to
+        // (27,25).
+        assert!((bottom[0].x - 0.0).abs() < 1.0e-9 && (bottom[0].y - 8.0).abs() < 1.0e-9);
+        assert!((bottom[1].x - 5.0).abs() < 1.0e-9 && (bottom[1].y - 8.0).abs() < 1.0e-9);
         let last = bottom.last().expect("offset moves");
-        assert!((last.x - 27.0).abs() < 1.0e-9 && (last.y - 20.0).abs() < 1.0e-9);
+        assert!((last.x - 27.0).abs() < 1.0e-9 && (last.y - 25.0).abs() < 1.0e-9);
+        let chain_end = bottom[bottom.len() - 2];
+        assert!((chain_end.x - 27.0).abs() < 1.0e-9 && (chain_end.y - 20.0).abs() < 1.0e-9);
 
         let right = plan_setup(
             &document(
@@ -1738,9 +1825,9 @@ mod tests {
             .into_iter()
             .filter(|point| (point.z + 2.0).abs() < 1.0e-9)
             .collect::<Vec<_>>();
-        assert!((bottom_right[0].x - 5.0).abs() < 1.0e-9 && (bottom_right[0].y - 2.0).abs() < 1.0e-9);
-        let last_right = bottom_right.last().expect("offset moves");
-        assert!((last_right.x - 33.0).abs() < 1.0e-9 && (last_right.y - 20.0).abs() < 1.0e-9);
+        assert!((bottom_right[1].x - 5.0).abs() < 1.0e-9 && (bottom_right[1].y - 2.0).abs() < 1.0e-9);
+        let chain_end_right = bottom_right[bottom_right.len() - 2];
+        assert!((chain_end_right.x - 33.0).abs() < 1.0e-9 && (chain_end_right.y - 20.0).abs() < 1.0e-9);
     }
 
     #[test]
@@ -1754,6 +1841,151 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.0.contains("no interior"));
+    }
+
+    fn closed_boss_operation(
+        mode: CompensationMode,
+        compensation: ContourCompensation,
+    ) -> CamOperationDto {
+        CamOperationDto::Contour2d {
+            id: 1,
+            name: "Boss wall".into(),
+            enabled: true,
+            tool_id: 1,
+            // A CCW 10 x 10 square.
+            path: vec![
+                Point2Dto::new(5.0, 5.0),
+                Point2Dto::new(15.0, 5.0),
+                Point2Dto::new(15.0, 15.0),
+                Point2Dto::new(5.0, 15.0),
+            ],
+            closed: true,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation,
+            compensation_mode: mode,
+            lead_in: 5.0,
+            lead_out: 5.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        }
+    }
+
+    #[test]
+    fn in_control_compensation_keeps_the_part_contour_in_the_program() {
+        let program = plan_setup(
+            &document(
+                vec![closed_boss_operation(
+                    CompensationMode::InControl,
+                    ContourCompensation::Outside,
+                )],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .expect("plan");
+        // CCW travel keeps the interior left, so an outside offset is right
+        // of travel: exactly one activation and one cancellation, each
+        // immediately before its linear lead move.
+        let on_index = program
+            .commands
+            .iter()
+            .position(|command| matches!(command, CamCommandDto::CutterCompensationOn { .. }))
+            .expect("activation");
+        let off_index = program
+            .commands
+            .iter()
+            .position(|command| matches!(command, CamCommandDto::CutterCompensationOff))
+            .expect("cancellation");
+        assert!(matches!(
+            program.commands[on_index],
+            CamCommandDto::CutterCompensationOn { left: false }
+        ));
+        assert!(matches!(
+            program.commands[on_index + 1],
+            CamCommandDto::Linear { .. }
+        ));
+        assert!(matches!(
+            program.commands[off_index + 1],
+            CamCommandDto::Linear { .. }
+        ));
+        // The programmed path is the part contour itself — no radius offset —
+        // wrapped by the tangential leads: plunge at the lead start (0,5),
+        // exit along the closing segment to (5,0).
+        let targets = cutting_targets(&program);
+        let near = |point: Point3Dto, x: f64, y: f64| {
+            (point.x - x).abs() < 1.0e-9 && (point.y - y).abs() < 1.0e-9
+        };
+        assert!(near(targets[0], 0.0, 5.0));
+        assert!(targets.iter().any(|point| near(*point, 15.0, 5.0)));
+        assert!(targets.iter().any(|point| near(*point, 15.0, 15.0)));
+        assert!(!targets.iter().any(|point| near(*point, 18.0, 2.0)));
+        assert!(near(*targets.last().expect("cutting moves"), 5.0, 0.0));
+    }
+
+    #[test]
+    fn in_software_compensation_offsets_the_path_and_emits_no_compensation_words() {
+        let program = plan_setup(
+            &document(
+                vec![closed_boss_operation(
+                    CompensationMode::InSoftware,
+                    ContourCompensation::Outside,
+                )],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .expect("plan");
+        assert!(program.commands.iter().all(|command| {
+            !matches!(
+                command,
+                CamCommandDto::CutterCompensationOn { .. } | CamCommandDto::CutterCompensationOff
+            )
+        }));
+        // r = 3 outward: the mitered offset square runs (2,2) -> (18,2) ->
+        // (18,18) -> (2,18).
+        let targets = cutting_targets(&program);
+        let near = |point: Point3Dto, x: f64, y: f64| {
+            (point.x - x).abs() < 1.0e-9 && (point.y - y).abs() < 1.0e-9
+        };
+        assert!(targets.iter().any(|point| near(*point, 18.0, 2.0)));
+        assert!(targets.iter().any(|point| near(*point, 18.0, 18.0)));
+    }
+
+    #[test]
+    fn in_control_compensation_requires_leads_longer_than_the_tool_radius() {
+        let mut operation = closed_boss_operation(
+            CompensationMode::InControl,
+            ContourCompensation::Outside,
+        );
+        if let CamOperationDto::Contour2d { lead_in, .. } = &mut operation {
+            *lead_in = 2.0;
+        }
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("longer than the tool radius"));
+    }
+
+    #[test]
+    fn contour_requires_positive_leads() {
+        let mut operation = closed_boss_operation(
+            CompensationMode::InSoftware,
+            ContourCompensation::On,
+        );
+        if let CamOperationDto::Contour2d { lead_out, .. } = &mut operation {
+            *lead_out = 0.0;
+        }
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("positive lead-in and lead-out"));
     }
 
     #[test]

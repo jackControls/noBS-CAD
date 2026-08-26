@@ -15,7 +15,8 @@ use crate::model::{
     StockBoxDto, WorkCoordinateSystemDto,
 };
 use crate::planner::{
-    plan_setup, CamCommandDto, CamPlanError, CamProgramDto, RAPID_FEED_ESTIMATE_MM_PER_MIN,
+    offset_polyline_open, plan_setup, CamCommandDto, CamPlanError, CamProgramDto,
+    RAPID_FEED_ESTIMATE_MM_PER_MIN,
 };
 
 const DEFAULT_MAX_VOXELS: usize = 750_000;
@@ -283,13 +284,116 @@ fn run_program(
     let mut active_tool: Option<&CamToolDto> = None;
     let mut position: Option<Point3Dto> = None;
     let mut sweep_samples = 0usize;
+    // Machine-side cutter compensation (in-control contour sections): the
+    // programmed path is the part contour, so the compensated centerline is
+    // reconstructed here exactly like the control would — buffered while
+    // compensation is active, offset by the tool radius on cancellation,
+    // then swept. `comp_anchor` is the programmed point where compensation
+    // activated; `comp_tool` is the tool that was active then.
+    let mut comp_side: Option<bool> = None;
+    let mut comp_anchor: Option<Point3Dto> = None;
+    let mut comp_tool: Option<&CamToolDto> = None;
+    let mut comp_buffer: Vec<(usize, Point3Dto, f64)> = Vec::new();
+    // The tool's true position right after a compensation block closes (the
+    // compensated end point): the move that follows — the lead-out — starts
+    // there while the offset slides back to the programmed point.
+    let mut compensated_position: Option<Point3Dto> = None;
 
     for (command_index, command) in program.commands.iter().enumerate() {
         match command {
             CamCommandDto::ToolChange { tool_id, .. } => {
                 active_tool = document.tool(*tool_id);
             }
+            CamCommandDto::CutterCompensationOn { left } => {
+                if comp_side.is_some() {
+                    return Err(CamPlanError(
+                        "simulation: cutter compensation activated twice without cancellation"
+                            .to_string(),
+                    ));
+                }
+                comp_side = Some(*left);
+                comp_anchor = position;
+                comp_tool = active_tool;
+                comp_buffer.clear();
+            }
+            CamCommandDto::CutterCompensationOff => {
+                let left = comp_side.take().ok_or_else(|| {
+                    CamPlanError(
+                        "simulation: cutter compensation cancelled without activation".to_string(),
+                    )
+                })?;
+                let anchor = comp_anchor.take().ok_or_else(|| {
+                    CamPlanError(
+                        "simulation: cutter compensation activated without a known position"
+                            .to_string(),
+                    )
+                })?;
+                let tool = comp_tool.take().ok_or_else(|| {
+                    CamPlanError(
+                        "simulation: cutter compensation activated without a tool".to_string(),
+                    )
+                })?;
+                // The compensated centerline is the buffered polyline offset
+                // by the tool radius. All compensated moves share one depth
+                // (profiling at constant Z); a Z change inside compensation
+                // is not a profiling move and fails closed.
+                let depth = anchor.z;
+                let mut polyline: Vec<crate::model::Point2Dto> =
+                    Vec::with_capacity(comp_buffer.len() + 1);
+                polyline.push(crate::model::Point2Dto::new(anchor.x, anchor.y));
+                for (_, to, _) in &comp_buffer {
+                    if (to.z - depth).abs() > 1.0e-6 {
+                        return Err(CamPlanError(
+                            "simulation: cutter compensation only applies to constant-depth profiling moves"
+                                .to_string(),
+                        ));
+                    }
+                    polyline.push(crate::model::Point2Dto::new(to.x, to.y));
+                }
+                let offset = offset_polyline_open(&polyline, tool.diameter * 0.5, left)?;
+                for (index, (buffered_index, _, feed)) in comp_buffer.iter().enumerate() {
+                    let start = offset[index];
+                    let end = offset[index + 1];
+                    let from3 = Point3Dto::new(start.x, start.y, depth);
+                    let to3 = Point3Dto::new(end.x, end.y, depth);
+                    note_approximation(
+                        tool,
+                        &mut outcome.approximated_drill,
+                        &mut outcome.approximated_chamfer,
+                    );
+                    let removed = stock
+                        .sweep_tool(
+                            tool,
+                            from3,
+                            to3,
+                            SweepMode::RemoveMaterial,
+                            &mut sweep_samples,
+                        )?
+                        .removed;
+                    if collect {
+                        let duration = distance(from3, to3) / *feed * 60.0;
+                        outcome.cumulative_seconds += duration;
+                        outcome.steps.push(CamSimulationStepDto {
+                            command_index: *buffered_index,
+                            kind: CamSimulationStepKind::Linear,
+                            from: Some(from3),
+                            to: Some(to3),
+                            duration_seconds: duration,
+                            cumulative_seconds: outcome.cumulative_seconds,
+                            removed_voxels: removed,
+                        });
+                    }
+                }
+                let last = offset[offset.len() - 1];
+                compensated_position = Some(Point3Dto::new(last.x, last.y, depth));
+                comp_buffer.clear();
+            }
             CamCommandDto::Rapid { to } => {
+                if comp_side.is_some() {
+                    return Err(CamPlanError(
+                        "simulation: rapid motion while cutter compensation is active".to_string(),
+                    ));
+                }
                 let from = position;
                 let duration = from
                     .map(|start| distance(start, *to) / RAPID_FEED_ESTIMATE_MM_PER_MIN * 60.0)
@@ -328,11 +432,24 @@ fn run_program(
                 position = Some(*to);
             }
             CamCommandDto::Linear { to, feed } => {
+                if comp_side.is_some() {
+                    // Compensation activates on this move: the control slides
+                    // from the programmed anchor toward the compensated path.
+                    // The buffer is offset and swept as one polyline when the
+                    // block closes, so corner joins miter exactly.
+                    comp_buffer.push((command_index, *to, *feed));
+                    position = Some(*to);
+                    continue;
+                }
                 let from = position;
+                // The first move after a compensation block (the lead-out)
+                // physically starts at the compensated end point and slides
+                // back to the programmed path as the offset cancels.
+                let sweep_from = compensated_position.take().or(from);
                 let duration = from
                     .map(|start| distance(start, *to) / *feed * 60.0)
                     .unwrap_or(0.0);
-                let removed = if let (Some(start), Some(tool)) = (from, active_tool) {
+                let removed = if let (Some(start), Some(tool)) = (sweep_from, active_tool) {
                     note_approximation(
                         tool,
                         &mut outcome.approximated_drill,
@@ -355,7 +472,7 @@ fn run_program(
                     outcome.steps.push(CamSimulationStepDto {
                         command_index,
                         kind: CamSimulationStepKind::Linear,
-                        from,
+                        from: sweep_from,
                         to: Some(*to),
                         duration_seconds: duration,
                         cumulative_seconds: outcome.cumulative_seconds,
@@ -370,6 +487,12 @@ fn run_program(
                 to,
                 feed,
             } => {
+                if comp_side.is_some() {
+                    return Err(CamPlanError(
+                        "simulation: circular motion while cutter compensation is active"
+                            .to_string(),
+                    ));
+                }
                 let from = position;
                 let (duration, removed) = if let (Some(start), Some(tool)) = (from, active_tool) {
                     note_approximation(
@@ -417,13 +540,19 @@ fn run_program(
                     });
                 }
             }
+            CamCommandDto::SectionEnd | CamCommandDto::ProgramEnd => {
+                if comp_side.is_some() {
+                    return Err(CamPlanError(
+                        "simulation: cutter compensation still active at the end of a section"
+                            .to_string(),
+                    ));
+                }
+            }
             CamCommandDto::ProgramStart { .. }
             | CamCommandDto::WorkOffset { .. }
             | CamCommandDto::SectionStart { .. }
             | CamCommandDto::Spindle { .. }
-            | CamCommandDto::Coolant { .. }
-            | CamCommandDto::SectionEnd
-            | CamCommandDto::ProgramEnd => {}
+            | CamCommandDto::Coolant { .. } => {}
         }
     }
     Ok(outcome)
@@ -1141,8 +1270,9 @@ fn lerp(a: Point3Dto, b: Point3Dto, t: f64) -> Point3Dto {
 mod tests {
     use super::*;
     use crate::model::{
-        CamOperationDto, CamPostConfigDto, CamUnits, ContourCompensation, CoolantMode,
-        CuttingParametersDto, Point2Dto, Rect2Dto, StockBoxDto, WcsOriginSpecDto, WorkOffset,
+        CamOperationDto, CamPostConfigDto, CamUnits, CompensationMode, ContourCompensation,
+        CoolantMode, CuttingParametersDto, Point2Dto, Rect2Dto, StockBoxDto, WcsOriginSpecDto,
+        WorkOffset,
     };
 
     fn document() -> CamDocumentDto {
@@ -1205,6 +1335,9 @@ mod tests {
                         bottom_z: -4.0,
                         step_down: 1.5,
                         compensation: ContourCompensation::On,
+                        compensation_mode: CompensationMode::InSoftware,
+                        lead_in: 5.0,
+                        lead_out: 5.0,
                         clearance_z: 5.0,
                         retract_z: 2.0,
                         cutting,
@@ -1313,6 +1446,69 @@ mod tests {
         )
         .expect("through-last simulation");
         assert_eq!(through_last.removed_voxels, full.removed_voxels);
+    }
+
+    fn contour_document(mode: CompensationMode) -> CamDocumentDto {
+        let mut source = document();
+        source.setups[0].operations = vec![CamOperationDto::Contour2d {
+            id: 1,
+            name: "Boss wall".to_string(),
+            enabled: true,
+            tool_id: 1,
+            // A CCW rectangle; outside compensation tracks the tool's outer
+            // edge along the wall.
+            path: vec![
+                Point2Dto::new(5.0, 5.0),
+                Point2Dto::new(15.0, 5.0),
+                Point2Dto::new(15.0, 11.0),
+                Point2Dto::new(5.0, 11.0),
+            ],
+            closed: true,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation: ContourCompensation::Outside,
+            compensation_mode: mode,
+            lead_in: 5.0,
+            lead_out: 5.0,
+            clearance_z: 5.0,
+            retract_z: 2.0,
+            cutting: CuttingParametersDto {
+                spindle_rpm: 8_000,
+                feed_xy: 600.0,
+                feed_z: 180.0,
+                coolant: CoolantMode::Off,
+            },
+        }];
+        source
+    }
+
+    /// World-space voxel occupancy probe (true when the cell containing the
+    /// point was cut away).
+    fn removed_at(stock: &VoxelStock, x: f64, y: f64, z: f64) -> bool {
+        let ix = ((x - stock.min.x) / stock.cell_size[0]).floor() as isize;
+        let iy = ((y - stock.min.y) / stock.cell_size[1]).floor() as isize;
+        let iz = ((z - stock.min.z) / stock.cell_size[2]).floor() as isize;
+        !stock.occupied_at([ix, iy, iz])
+    }
+
+    #[test]
+    fn in_control_simulation_cuts_to_the_contour_not_past_it() {
+        let document = contour_document(CompensationMode::InControl);
+        let setup = document.setup(1).expect("setup");
+        let spec = GridSpec::for_stock(&setup.stock, Some(0.5), 4_000_000).expect("grid");
+        let mut stock = initial_stock(&document, setup, &spec, None).expect("stock");
+        let program = plan_setup(&document, 1).expect("plan");
+        run_program(&document, &program, &mut stock, true).expect("run");
+        // r = 3 outside the CCW rectangle: the band from the wall (x = 5)
+        // outward is removed...
+        assert!(removed_at(&stock, 3.0, 8.0, -1.0));
+        // ...and the wall is the finish line: everything inside the boss
+        // stays, right up to the wall. A simulation that forgot the machine's
+        // radius offset would sweep the centerline on the contour and cut
+        // this probe away.
+        assert!(!removed_at(&stock, 5.5, 8.0, -1.0));
+        assert!(!removed_at(&stock, 10.0, 8.0, -1.0));
     }
 
     #[test]

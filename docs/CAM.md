@@ -154,7 +154,27 @@ rewrites stored geometry.
   expanded to explicit longhand motion, so posted output never depends on a
   control's canned-cycle dialect. Helical arcs post as plain G2/G3 blocks
   carrying a Z word in every dialect.
-- Multiple depth passes, contour side compensation, stepover, and stepdown.
+- Multiple depth passes, stepover, and stepdown. Contour radius compensation
+  runs in one of two explicit modes. In control (the default) posts the part
+  contour as-is and activates machine-side cutter radius compensation
+  (G41/G42 with the tool's diameter register on controls that take one,
+  cancelled with G40) on the lead-in and lead-out moves, so the shop can
+  fine-tune size and swap cutter diameters at the machine without reposting;
+  the posted coordinates are the part geometry, not the tool-center path.
+  In software offsets the path in the planner and posts plain tool-center
+  coordinates with no machine compensation. GRBL has no cutter radius
+  compensation vocabulary, so the GRBL post refuses in-control programs —
+  fail closed with an actionable message rather than emit unoffset motion.
+  The simulator honors both modes: in-control programs are offset by the
+  nominal tool radius during simulation (buffered between the activation and
+  cancellation markers, mitered at corners), so the preview still cuts
+  exactly to the contour and never past it.
+- Straight tangent lead-in/lead-out on contour operations, with
+  operator-set lengths. In control mode with compensation active, both leads
+  must exceed the tool radius — controls alarm when radius compensation
+  activates over a shorter move — and the dialog and the engine both enforce
+  this. Leads are straight moves along the exact end tangents; arc and sweep
+  lead shapes are a documented next slice.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
   confirmed machine-coordinate `SUPA` retract. The post configuration
@@ -190,10 +210,15 @@ rewrites stored geometry.
   through the viewport's native transient channel (`src/cam/overlay.ts`):
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
-  small green/red endpoint arrows marking where the cutting feed starts and
-  leaves (oriented along the first/last lateral cut — plunge segments are
-  skipped — and length-capped so a large face mill cannot paint an arrow
-  longer than the part), and a translucent ghost of the selected
+  identical pure-cone direction markers — green where the cutting feed
+  starts, red where it leaves — planted at the exact start of the first feed
+  move and the exact end of the last feed move of every operation kind,
+  oriented along the exact motion tangent (arc tangents from the circle
+  geometry, not display chords; rapids never carry markers). Cone size
+  follows the model extent, a fixed short marker that grows and shrinks with
+  the part and stays identical at both ends, capped by the shorter of the
+  two host moves so a short plunge cannot poke a cone through the machined
+  surface, and a translucent ghost of the selected
   operation's tool parked at its START position (the first approach target,
   above the entry point — the horizontal offset from the stock boundary
   still reads as one radius plus facing's safe distance), fluted section
@@ -516,6 +541,16 @@ model, machine definitions, cycles, and verification layer are mature.
    viewport's transient channel.
 5. Tool-length compensation, machine limits, safe tool-change/home policies,
    and configurable controller capabilities.
-6. Ramp/helical entries, tabs, lead-in/out, and arc fitting.
+6. Ramp/helical entries, tabs, arc/sweep lead shapes (beyond the straight
+   tangent leads contours already plan), lead corner-clearance validation,
+   and arc fitting.
 7. Parse and simulate final posted NC, compare it with pre-post motion, and add
    per-command inspection plus golden controller tests.
+8. A 2D geometry kernel module: robust polygon offsetting with miter/arc
+   joins and self-intersection cleanup, polygon clipping and boolean ops, and
+   tangent-arc fitting between arbitrary segment pairs. Today's offsets are
+   single-polylines with miter joins — enough for straight-led contours, not
+   for what comes next. This kernel is the prerequisite for arc and sweep
+   lead shapes, validating that a lead cannot gouge the part on approach,
+   rest machining against exact boundaries, and the future 3D toolpath
+   families; build it before those slices rather than inside them.

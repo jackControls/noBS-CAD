@@ -34,7 +34,7 @@ import {
   defaultThreadPreset,
   isoMetricGrade6Envelope,
 } from '../../lib/threadStandards';
-import type { CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
+import type { CamCompensationMode, CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
@@ -464,6 +464,24 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const [bottomOff, setBottomOff] = useState(bottomDraft?.off ?? '0');
   const [multipleDepths, setMultipleDepths] = useState(multipleDepthsInit);
   const [compensation, setCompensation] = useState<CamContourCompensation>(contourOp?.compensation ?? 'outside');
+  // Who applies the radius offset: the control (G41/G42 on the lead-in,
+  // default) or pre-offset coordinates planned here. On-path compensation
+  // has no offset to apply, so the mode is irrelevant there.
+  const [compensationMode, setCompensationMode] = useState<CamCompensationMode>(
+    contourOp?.compensation_mode ?? 'in_control',
+  );
+  // Straight tangent lead lengths. Fresh dialogs seed at 1.5x the radius of
+  // the initially selected tool (5 mm fallback) and re-seed on tool picks
+  // until the operator touches them; editing keeps the stored values.
+  const [leadsTouched, setLeadsTouched] = useState(editing != null);
+  const seedLead = (stored: number | undefined): string => {
+    if (stored != null) return displayLength(stored, units).toFixed(4);
+    const tool =
+      cam.tools.find((candidate) => candidate.id === editing?.tool_id) ?? projectTools[0] ?? null;
+    return displayLength(tool ? tool.diameter * 0.75 : 5, units).toFixed(4);
+  };
+  const [leadIn, setLeadIn] = useState(() => seedLead(contourOp?.lead_in));
+  const [leadOut, setLeadOut] = useState(() => seedLead(contourOp?.lead_out));
   const [wallSide, setWallSide] = useState<CamContourCompensation>(chamferOp?.wall_side ?? 'inside');
   const [chamferWidth, setChamferWidth] = useState(chamferOp ? displayLength(chamferOp.chamfer_width, units).toFixed(4) : '');
   const [tipOffset, setTipOffset] = useState(chamferOp ? displayLength(chamferOp.tip_offset, units).toFixed(4) : '');
@@ -551,6 +569,13 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
       if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
         setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
       }
+    }
+    // Leads track 1.5x the tool radius until the operator edits them, so an
+    // in-control contour always activates over a long-enough move.
+    if (kind === 'contour2d' && !leadsTouched) {
+      const lead = displayLength(tool.diameter * 0.75, units).toFixed(4);
+      setLeadIn(lead);
+      setLeadOut(lead);
     }
   };
 
@@ -880,6 +905,22 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         case 'contour2d': {
           const bottom = bottomAbs();
           const geometry = resolveContourGeometry();
+          const leadInMm = commitLength(parseDraft(leadIn, 'Lead-in length'), units);
+          const leadOutMm = commitLength(parseDraft(leadOut, 'Lead-out length'), units);
+          if (leadInMm <= 0 || leadOutMm <= 0) {
+            throw new Error('Lead lengths must be positive.');
+          }
+          // The control activates radius compensation on the lead-in move and
+          // alarms when that move does not clear the tool radius; pre-offset
+          // (in software) paths carry no such rule.
+          if (compensationMode === 'in_control' && compensation !== 'on' && selectedTool) {
+            const radius = selectedTool.diameter / 2;
+            if (leadInMm <= radius || leadOutMm <= radius) {
+              throw new Error(
+                `In-control compensation activates on the lead-in: both leads must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Lengthen the leads on the Linking tab, or switch the mode to In software.`,
+              );
+            }
+          }
           operation = {
             ...base,
             kind,
@@ -891,6 +932,9 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
               : Math.max(Math.abs(top - bottom), 0.001),
             compensation,
+            compensation_mode: compensationMode,
+            lead_in: leadInMm,
+            lead_out: leadOutMm,
             cutting: cutting(),
           };
           break;
@@ -1445,6 +1489,27 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         ) : (
           <DeadSelect label="Direction" value="Both ways" />
         )}
+        {pages.compensation && (
+          <label
+            className={`block ${compensation === 'on' ? 'opacity-45' : ''}`}
+            title={
+              compensation === 'on'
+                ? 'On path means no radius offset, so there is nothing to apply'
+                : 'Who turns the contour into the tool-center path'
+            }
+          >
+            <span className={CAM_DIALOG_LABEL}>Compensation mode</span>
+            <select
+              value={compensationMode}
+              disabled={compensation === 'on'}
+              onChange={(event) => setCompensationMode(event.target.value as CamCompensationMode)}
+              className={`${CAM_DIALOG_INPUT} ${compensation === 'on' ? 'cursor-not-allowed' : ''}`}
+            >
+              <option value="in_control">In control — machine offsets (G41/G42)</option>
+              <option value="in_software">In software — pre-offset path</option>
+            </select>
+          </label>
+        )}
       </div>
       {kind === 'face' && (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1">
@@ -1613,15 +1678,44 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         <DeadCheck label="Extend before retract" />
       </DialogSection>
       <DialogSection title="LEADS & TRANSITIONS">
-        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-          <DeadCheck label="Lead-in (entry)" checked />
-          <DeadCheck label="Lead-out (exit)" checked />
-          <DeadCheck label="Same as lead-in" checked />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <DraftNumber label="Vertical lead-in radius" value="2" onChange={() => {}} unit={lu} disabled />
-          <DeadSelect label="Transition type" value="Smooth" />
-        </div>
+        {pages.leads ? (
+          <>
+            <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
+              Straight tangent leads. In-control compensation activates on the lead-in move, so
+              each lead must exceed the tool radius or the control alarms.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber
+                label="Lead-in length"
+                value={leadIn}
+                onChange={(v) => { setLeadsTouched(true); setLeadIn(v); }}
+                unit={lu}
+              />
+              <DraftNumber
+                label="Lead-out length"
+                value={leadOut}
+                onChange={(v) => { setLeadsTouched(true); setLeadOut(v); }}
+                unit={lu}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <DeadSelect label="Lead shape" value="Straight tangent" />
+              <DraftNumber label="Vertical lead-in radius" value="2" onChange={() => {}} unit={lu} disabled />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+              <DeadCheck label="Lead-in (entry)" checked />
+              <DeadCheck label="Lead-out (exit)" checked />
+              <DeadCheck label="Same as lead-in" checked />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber label="Vertical lead-in radius" value="2" onChange={() => {}} unit={lu} disabled />
+              <DeadSelect label="Transition type" value="Smooth" />
+            </div>
+          </>
+        )}
       </DialogSection>
     </>
   );

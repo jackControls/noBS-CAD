@@ -29,6 +29,10 @@ export interface OpPages {
   faceTarget?: boolean;
   /** Facing plunge clearance from the stock boundary (Linking tab). */
   safeDistance?: boolean;
+  /** Live straight lead-in/out lengths on the Linking tab (contour): in
+   *  control compensation activates on the lead-in, so the leads must
+   *  exceed the tool radius. */
+  leads?: boolean;
   stepDown?: boolean;
   stepOver?: boolean;
   compensation?: boolean;
@@ -51,6 +55,7 @@ export const OP_PAGES: Record<OperationKind, OpPages> = {
     bottomZ: true,
     stepDown: true,
     compensation: true,
+    leads: true,
   },
   pocket2d: {
     geometry: 'path',

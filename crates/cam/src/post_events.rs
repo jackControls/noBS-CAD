@@ -63,6 +63,16 @@ pub enum PostEventDto {
     OnDwell {
         seconds: f64,
     },
+    /// Machine-side cutter radius compensation activates on the linear move
+    /// that follows (`left` true = tool left of travel, G41; false = G42).
+    /// Only present for in-control contour sections; adapters that cannot
+    /// drive machine compensation must reject the stream, not drop the word.
+    OnCutterCompensationOn {
+        left: bool,
+    },
+    /// Machine-side cutter radius compensation cancels (G40) on the linear
+    /// move that follows.
+    OnCutterCompensationOff,
     OnSectionEnd,
     OnClose,
 }
@@ -119,6 +129,10 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
                 feedrate: *feed,
             },
             CamCommandDto::Dwell { seconds } => PostEventDto::OnDwell { seconds: *seconds },
+            CamCommandDto::CutterCompensationOn { left } => {
+                PostEventDto::OnCutterCompensationOn { left: *left }
+            }
+            CamCommandDto::CutterCompensationOff => PostEventDto::OnCutterCompensationOff,
             CamCommandDto::SectionEnd => PostEventDto::OnSectionEnd,
             CamCommandDto::ProgramEnd => PostEventDto::OnClose,
         });

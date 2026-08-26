@@ -366,10 +366,44 @@ function pushStockGhost(layers: CamOverlayLayers, setup: CamSetupDto) {
   }
 }
 
-/** Entry/exit arrow colors: green marks where cutting starts, red where it
+/** Entry/exit cone colors: green marks where cutting starts, red where it
  *  leaves (machinist convention for static toolpath display). */
 const ENTRY_ARROW: Rgba = [0.32, 0.95, 0.42, 1];
 const EXIT_ARROW: Rgba = [0.98, 0.3, 0.24, 1];
+
+/** Append a pure-cone direction marker to `positions` (model space): the
+ *  base disc sits at `anchor`, the apex at anchor + dir*len, base radius
+ *  0.35x the length, 12 sides. Pure cones read as direction markers at any
+ *  zoom without a shaft dominating small parts. */
+function pushCone(positions: number[], anchor: Point3Dto, dir: Point3Dto, len: number) {
+  const sides = 12;
+  const baseRadius = len * 0.35;
+  // Orthonormal basis (u, v) perpendicular to dir.
+  const ref = Math.abs(dir.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const ux = dir.y * ref.z - dir.z * ref.y;
+  const uy = dir.z * ref.x - dir.x * ref.z;
+  const uz = dir.x * ref.y - dir.y * ref.x;
+  const uLen = Math.hypot(ux, uy, uz) || 1;
+  const u = { x: ux / uLen, y: uy / uLen, z: uz / uLen };
+  const v = {
+    x: dir.y * u.z - dir.z * u.y,
+    y: dir.z * u.x - dir.x * u.z,
+    z: dir.x * u.y - dir.y * u.x,
+  };
+  const apex = { x: anchor.x + dir.x * len, y: anchor.y + dir.y * len, z: anchor.z + dir.z * len };
+  const rim = (angle: number): Point3Dto => ({
+    x: anchor.x + (u.x * Math.cos(angle) + v.x * Math.sin(angle)) * baseRadius,
+    y: anchor.y + (u.y * Math.cos(angle) + v.y * Math.sin(angle)) * baseRadius,
+    z: anchor.z + (u.z * Math.cos(angle) + v.z * Math.sin(angle)) * baseRadius,
+  });
+  for (let index = 0; index < sides; index += 1) {
+    const p0 = rim((index / sides) * Math.PI * 2);
+    const p1 = rim(((index + 1) / sides) * Math.PI * 2);
+    // Side face (apex fan) and the base cap facing away from the apex.
+    positions.push(apex.x, apex.y, apex.z, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+    positions.push(anchor.x, anchor.y, anchor.z, p1.x, p1.y, p1.z, p0.x, p0.y, p0.z);
+  }
+}
 
 /** The selected operation's motion commands, in program order. Duplicated
  *  work offsets repeat identical setup-space motions, so the first copy is
@@ -430,7 +464,7 @@ function pushSelectedToolpath(
 /** Static display of the selected operation's tool and its feed endpoints:
  *  the tool ghost parks at the START position (the first approach target,
  *  above the entry point — the XY offset from the stock boundary still reads
- *  as one radius plus facing's safe distance), and green/red arrows mark
+ *  as one radius plus facing's safe distance), and green/red cones mark
  *  where the cutting feed starts and leaves, oriented along the cut. */
 function pushSelectedTool(
   layers: CamOverlayLayers,
@@ -472,13 +506,6 @@ function pushSelectedTool(
     }
   }
 
-  // Entry/exit arrows — the ironclad display rule for EVERY operation kind:
-  // the green arrow sits at the very start of the first feed (cutting) move,
-  // pointing along the cut; the red arrow sits at the very end of the last
-  // feed move, pointing along the leaving direction. Rapids never carry
-  // arrows. Arc tangents are exact (from the circle geometry, not display
-  // chords), and the arrow length is capped by its own move's length so a
-  // short plunge cannot poke an arrow through the machined surface.
   interface FeedMove {
     from: Point3Dto;
     to: Point3Dto;
@@ -544,27 +571,51 @@ function pushSelectedTool(
       feedPosition = command.to;
     }
   }
-  const arrowLength = Math.min(Math.max(tool.diameter * 0.4, 2), 8);
-  const pushEndpointArrow = (anchor: Point3Dto, dir: Point3Dto, moveLength: number, color: Rgba) => {
-    const drawn = Math.min(arrowLength, moveLength);
+
+  // Entry/exit direction markers — the ironclad display rule for EVERY
+  // operation kind: identical pure cones, one planted at the very start of
+  // the first feed (cutting) move pointing along the cut, one at the very
+  // end of the last feed move pointing along the leaving direction. Rapids
+  // never carry markers. Arc tangents are exact (from the circle geometry,
+  // not display chords). Cone size follows the MODEL extent — a fixed short
+  // marker that grows and shrinks with the part, identical at both ends —
+  // capped by the shorter of the two host moves so a short plunge cannot
+  // poke a cone through the machined surface.
+  const firstFeed = feedMoves[0];
+  const lastFeed = feedMoves[feedMoves.length - 1];
+  const modelBounds = modelBoundsOfBodies(state.solidScene, setup.body_ids);
+  const modelExtent = modelBounds
+    ? Math.max(
+        modelBounds.max.x - modelBounds.min.x,
+        modelBounds.max.y - modelBounds.min.y,
+        modelBounds.max.z - modelBounds.min.z,
+        1,
+      )
+    : 100;
+  const moveCap = Math.min(firstFeed?.length ?? Infinity, lastFeed?.length ?? Infinity);
+  const coneLength = Math.min(clamp(modelExtent * 0.025, 1, 12), moveCap);
+  const pushEndpointCone = (anchor: Point3Dto, dir: Point3Dto, color: Rgba) => {
+    if (coneLength <= 1e-9) return;
     const start = toModel(anchor);
     const tip = toModel({
-      x: anchor.x + dir.x * drawn,
-      y: anchor.y + dir.y * drawn,
-      z: anchor.z + dir.z * drawn,
+      x: anchor.x + dir.x * coneLength,
+      y: anchor.y + dir.y * coneLength,
+      z: anchor.z + dir.z * coneLength,
     });
-    layers.arrows.push({
-      start: [start.x, start.y, start.z],
-      end: [tip.x, tip.y, tip.z],
-      color,
-      width: 3,
-      xray: true,
-    });
+    const axis = { x: tip.x - start.x, y: tip.y - start.y, z: tip.z - start.z };
+    const axisLength = Math.hypot(axis.x, axis.y, axis.z);
+    if (axisLength <= 1e-9) return;
+    const positions: number[] = [];
+    pushCone(
+      positions,
+      start,
+      { x: axis.x / axisLength, y: axis.y / axisLength, z: axis.z / axisLength },
+      axisLength,
+    );
+    layers.triangles.push({ color, positions, xray: true });
   };
-  const firstFeed = feedMoves[0];
-  if (firstFeed) pushEndpointArrow(firstFeed.from, firstFeed.startDir, firstFeed.length, ENTRY_ARROW);
-  const lastFeed = feedMoves[feedMoves.length - 1];
-  if (lastFeed) pushEndpointArrow(lastFeed.to, lastFeed.endDir, lastFeed.length, EXIT_ARROW);
+  if (firstFeed) pushEndpointCone(firstFeed.from, firstFeed.startDir, ENTRY_ARROW);
+  if (lastFeed) pushEndpointCone(lastFeed.to, lastFeed.endDir, EXIT_ARROW);
 }
 
 /** Remaining-stock estimate from the voxel simulator, in machinist green,

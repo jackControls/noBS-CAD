@@ -210,6 +210,11 @@ fn render_program(
     }
     let mut writer = NcWriter::new(sequence_numbers, 10);
     let mut position: Option<Point3Dto> = None;
+    // Machine-side cutter compensation words pending attachment to the next
+    // linear block (G41/G42 activate on the lead-in, G40 cancels on the
+    // lead-out); the diameter register follows the active tool number.
+    let mut comp_words: Option<String> = None;
+    let mut active_tool_number: Option<u32> = None;
     for command in &program.commands {
         match command {
             CamCommandDto::ProgramStart { .. } => {
@@ -243,6 +248,7 @@ fn render_program(
                         "tool '{tool_name}' has no tool number, but this post calls tools numerically; assign a number in the tool library or post with a name-capable control"
                     )));
                 };
+                active_tool_number = Some(*tool_number);
                 match dialect {
                     PostDialect::Grbl => {
                         writer.block("M5");
@@ -285,8 +291,12 @@ fn render_program(
                 position = Some(*to);
             }
             CamCommandDto::Linear { to, feed } => {
+                let words = comp_words
+                    .take()
+                    .map(|pending| format!("{pending} "))
+                    .unwrap_or_default();
                 writer.block(&format!(
-                    "G1 X{} Y{} Z{} F{}",
+                    "G1 {words}X{} Y{} Z{} F{}",
                     units.len(to.x),
                     units.len(to.y),
                     units.len(to.z),
@@ -325,6 +335,28 @@ fn render_program(
                 };
                 writer.block(&format!("G4 {value}"));
             }
+            CamCommandDto::CutterCompensationOn { left } => {
+                if dialect == PostDialect::Grbl {
+                    return Err(CamPlanError(
+                        "GRBL has no cutter radius compensation (G41/G42); switch the contour operation's compensation mode to in software, or post for a control with radius compensation"
+                            .to_string(),
+                    ));
+                }
+                let Some(tool_number) = active_tool_number else {
+                    return Err(CamPlanError(
+                        "cutter compensation needs an active numbered tool for the diameter register"
+                            .to_string(),
+                    ));
+                };
+                comp_words = Some(format!(
+                    "{} D{}",
+                    if *left { "G41" } else { "G42" },
+                    tool_number
+                ));
+            }
+            CamCommandDto::CutterCompensationOff => {
+                comp_words = Some("G40".to_string());
+            }
             CamCommandDto::SectionEnd => {}
             CamCommandDto::ProgramEnd => {
                 writer.block("M30");
@@ -360,6 +392,10 @@ fn render_siemens828d_program(
     let mut work_offset = WorkOffset::G54;
     let mut pending_section: Option<String> = None;
     let mut tool_change_count = 0_u32;
+    // Radius compensation words pending attachment to the next linear block;
+    // SINUMERIK applies the active cutting edge (D from the tool change), so
+    // G41/G42/G40 carry no register word here.
+    let mut comp_words: Option<&'static str> = None;
 
     for (index, command) in program.commands.iter().enumerate() {
         match command {
@@ -454,8 +490,12 @@ fn render_siemens828d_program(
                 position = Some(*to);
             }
             CamCommandDto::Linear { to, feed } => {
+                let words = comp_words
+                    .take()
+                    .map(|pending| format!("{pending} "))
+                    .unwrap_or_default();
                 writer.block(&format!(
-                    "G1 X{} Y{} Z{} F{}",
+                    "G1 {words}X{} Y{} Z{} F{}",
                     units.siemens_len(to.x),
                     units.siemens_len(to.y),
                     units.siemens_len(to.z),
@@ -491,6 +531,12 @@ fn render_siemens828d_program(
                 // applies to this dwell block only and does not replace the
                 // modal machining feed.
                 writer.block(&format!("G4 F{}", siemens_coordinate(*seconds)));
+            }
+            CamCommandDto::CutterCompensationOn { left } => {
+                comp_words = Some(if *left { "G41" } else { "G42" });
+            }
+            CamCommandDto::CutterCompensationOff => {
+                comp_words = Some("G40");
             }
             CamCommandDto::SectionEnd => {
                 pending_section = None;
@@ -732,9 +778,9 @@ mod tests {
     use super::*;
     use crate::model::{
         CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CamUnits,
-        CuttingParametersDto, DrillCycle, MillingDirection, Point2Dto, Rect2Dto,
-        Siemens828dAtcStyle, StockBoxDto, ThreadHand, WcsOriginSpecDto, WorkCoordinateSystemDto,
-        WorkOffset,
+        CompensationMode, ContourCompensation, CuttingParametersDto, DrillCycle, MillingDirection,
+        Point2Dto, Rect2Dto, Siemens828dAtcStyle, StockBoxDto, ThreadHand, WcsOriginSpecDto,
+        WorkCoordinateSystemDto, WorkOffset,
     };
 
     fn document(dialect: PostDialect) -> CamDocumentDto {
@@ -969,6 +1015,87 @@ mod tests {
         assert!(posted.nc.starts_with("%\nO0042\n"));
         assert!(posted.nc.contains("T1 M6"));
         assert!(posted.nc.ends_with("M30\n%\n"));
+    }
+
+    fn contour_document(dialect: PostDialect) -> CamDocumentDto {
+        let mut source = document(dialect);
+        source.setups[0].operations = vec![CamOperationDto::Contour2d {
+            id: 1,
+            name: "Boss wall".into(),
+            enabled: true,
+            tool_id: 1,
+            // A CCW 10 x 10 square; outside compensation on CCW travel is
+            // right of travel (G42).
+            path: vec![
+                Point2Dto::new(5.0, 5.0),
+                Point2Dto::new(15.0, 5.0),
+                Point2Dto::new(15.0, 15.0),
+                Point2Dto::new(5.0, 15.0),
+            ],
+            closed: true,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation: ContourCompensation::Outside,
+            compensation_mode: CompensationMode::InControl,
+            lead_in: 5.0,
+            lead_out: 5.0,
+            clearance_z: 8.0,
+            retract_z: 2.0,
+            cutting: CuttingParametersDto {
+                spindle_rpm: 10_000,
+                feed_xy: 600.0,
+                feed_z: 150.0,
+                coolant: CoolantMode::Flood,
+            },
+        }];
+        source
+    }
+
+    #[test]
+    fn in_control_contour_posts_g42_with_the_tool_register_and_cancels_with_g40() {
+        let posted = post_setup(
+            &contour_document(PostDialect::Fanuc),
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        // Activation rides the lead-in linear with the tool's diameter
+        // register; cancellation rides the lead-out.
+        assert!(posted.nc.contains("G1 G42 D1 X5 Y5 Z-2 F600"));
+        assert!(posted.nc.contains("G1 G40 X5 Y0 Z-2 F600"));
+    }
+
+    #[test]
+    fn siemens_post_applies_radius_compensation_without_a_register_word() {
+        let posted = post_setup(
+            &contour_document(PostDialect::Siemens828d),
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: Some("comp".into()),
+            },
+        )
+        .unwrap();
+        assert!(posted.nc.contains("G1 G42 X5 Y5 Z-2 F600"));
+        assert!(posted.nc.contains("G1 G40 X5 Y0 Z-2 F600"));
+    }
+
+    #[test]
+    fn grbl_post_fails_closed_on_machine_cutter_compensation() {
+        let error = post_setup(
+            &contour_document(PostDialect::Grbl),
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.0.contains("no cutter radius compensation"));
     }
 
     #[test]

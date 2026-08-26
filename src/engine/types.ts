@@ -2222,6 +2222,11 @@ export type CamDrillCycle =
 export type CamCoolantMode = 'off' | 'mist' | 'flood';
 export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
 export type CamContourCompensation = 'on' | 'inside' | 'outside' | 'left' | 'right';
+/** Who turns the contour into the tool-center path. In control is the
+ *  default: the program carries the part contour and the CNC offsets the
+ *  tool by its own diameter register (G41/G42). In software offsets the
+ *  path here and posts plain tool-center coordinates. */
+export type CamCompensationMode = 'in_control' | 'in_software';
 /** Thread groove hand: a right-hand groove descends in the clockwise
  *  direction viewed along Z- (a nut turned clockwise advances away). */
 export type CamThreadHand = 'right' | 'left';
@@ -2403,6 +2408,13 @@ export type CamOperationDto =
       bottom_z: number;
       step_down: number;
       compensation: CamContourCompensation;
+      /** Who applies the radius offset; omitted = in control. */
+      compensation_mode?: CamCompensationMode;
+      /** Straight tangent lead-in/out lengths (mm). In control with
+       *  compensation active they must exceed the tool radius, or the
+       *  control alarms on activation. Omitted = planner default. */
+      lead_in?: number;
+      lead_out?: number;
     })
   | (CamOperationBase & {
       kind: 'drill';
@@ -2503,6 +2515,12 @@ export type CamCommandDto =
   | { kind: 'linear'; to: Point3Dto; feed: number }
   | { kind: 'circular'; clockwise: boolean; center: Point3Dto; to: Point3Dto; feed: number }
   | { kind: 'dwell'; seconds: number }
+  /** Activates machine-side cutter radius compensation on the linear move
+   *  that follows (the lead-in); `left` true posts G41, false posts G42. */
+  | { kind: 'cutter_compensation_on'; left: boolean }
+  /** Cancels machine-side cutter radius compensation on the linear move
+   *  that follows (the lead-out); posts G40. */
+  | { kind: 'cutter_compensation_off' }
   | { kind: 'section_end' }
   | { kind: 'program_end' };
 
