@@ -586,6 +586,18 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "assembly_create_joint",
+        engine_method: "assembly_create_joint",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_joint",
+        engine_method: "assembly_update_joint",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "set_body_appearance",
         engine_method: "set_body_appearance",
         payload: PayloadKind::Object,
@@ -709,6 +721,20 @@ mod tests {
         let create = lookup_mutate("assembly_create_component").expect("present");
         assert_eq!(create.engine_method, "assembly_create_component");
         assert_eq!(create.execution, ExecutionKind::Direct);
+        assert!(lookup_mutate("assembly_document").is_none());
+        assert!(lookup_mutate("assembly_solution").is_none());
+    }
+
+    #[test]
+    fn assembly_create_joint_is_in_lookup_mutate() {
+        let create = lookup_mutate("assembly_create_joint").expect("present");
+        assert_eq!(create.engine_method, "assembly_create_joint");
+        assert_eq!(create.execution, ExecutionKind::Direct);
+        assert_eq!(create.payload, PayloadKind::Object);
+        let update = lookup_mutate("assembly_update_joint").expect("present");
+        assert_eq!(update.engine_method, "assembly_update_joint");
+        assert_eq!(update.execution, ExecutionKind::Direct);
+        assert_eq!(update.payload, PayloadKind::Object);
         assert!(lookup_mutate("assembly_document").is_none());
         assert!(lookup_mutate("assembly_solution").is_none());
     }
