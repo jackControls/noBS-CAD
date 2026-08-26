@@ -645,15 +645,28 @@ mod tests {
             &format!(r#"{{"updated_ms":{},"generation":4}}"#, now_ms()),
         )
         .unwrap();
+        // Valid follow-up at the new generation. After seq 1 dead-letters,
+        // the next apply_inbox_op must take the lowest remaining pending.
+        let seq2 = write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterStaleHead"}),
+                base_generation: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(seq2, 2);
         let err = apply_inbox_op(&unique, |_name, _args| Ok(json!({"applied": true})))
             .expect_err("stale base_generation must not apply");
         let parsed: Value = serde_json::from_str(&err).unwrap();
         assert_eq!(parsed["code"], "generation_conflict");
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "ui_owned_apply");
-        assert!(
-            pending_inbox_seqs(&unique).unwrap().is_empty(),
-            "stale head must dead-letter so later seqs can apply"
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "stale head must dead-letter so seq 2 can apply"
         );
         let failed = session_dir().join(&unique).join("inbox/failed/1.json");
         assert!(failed.exists(), "expected inbox/failed/1.json");
@@ -662,6 +675,15 @@ mod tests {
             failed_body.contains("generation_conflict"),
             "dead-letter must record the conflict reason: {failed_body}"
         );
+
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterStaleHead");
+            Ok(json!({"name": "AfterStaleHead"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

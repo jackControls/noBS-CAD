@@ -5947,6 +5947,87 @@ mod tests {
     }
 
     #[test]
+    fn occurrence_rename_after_joint_create_keeps_occurrence_ids() {
+        // Joints name occurrence ids, not display names. A later occurrence
+        // rename must not retarget or drop the joint.
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        let first = extrude_offset_box(&mut server, "Sketch1", -12.0, -2.0);
+        let _second = extrude_offset_box(&mut server, "Sketch2", 2.0, 12.0);
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies
+            .iter()
+            .find(|body| body["id"] == first["scene"]["bodies"][0]["id"])
+            .cloned()
+            .expect("body A");
+        let body_b = bodies
+            .iter()
+            .find(|body| body["id"] != body_a["id"])
+            .cloned()
+            .expect("body B");
+        let created = server
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name": "HingeOccRename",
+                    "kind": "revolute",
+                    "connector_a": planar_connector_from_body(&body_a),
+                    "connector_b": planar_connector_from_body(&body_b),
+                    "grounded_body_id": body_a["id"]
+                }),
+            )
+            .unwrap();
+        let joint_id = created["id"].as_u64().expect("joint id");
+        let occ_a = created["advanced"]["connector_a_occurrence_id"]
+            .as_u64()
+            .expect("occ A");
+        let occ_b = created["advanced"]["connector_b_occurrence_id"]
+            .as_u64()
+            .expect("occ B");
+        assert_ne!(occ_a, occ_b);
+
+        server
+            .call_tool(
+                "assembly_update_occurrence",
+                json!({"occurrence": {"id": occ_a, "name": "RenamedA"}}),
+            )
+            .expect("rename occ A");
+        server
+            .call_tool(
+                "assembly_update_occurrence",
+                json!({"occurrence": {"id": occ_b, "name": "RenamedB"}}),
+            )
+            .expect("rename occ B");
+
+        let document = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_joint_visible(&document, joint_id, "HingeOccRename");
+        let joint = document["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|joint| joint["id"].as_u64() == Some(joint_id))
+            .expect("joint after rename");
+        assert_eq!(joint["advanced"]["connector_a_occurrence_id"], occ_a);
+        assert_eq!(joint["advanced"]["connector_b_occurrence_id"], occ_b);
+        let names: Vec<&str> = document["component_structure"]["occurrences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|occurrence| occurrence["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|name| *name == "RenamedA")
+                && names.iter().any(|name| *name == "RenamedB"),
+            "occurrence display names must change: {names:?}"
+        );
+        assert_ne!(
+            joint["name"], "RenamedA",
+            "joint must keep its own name, not the occurrence display name"
+        );
+    }
+
+    #[test]
     fn every_shared_mutate_is_accepted_by_cad_submit_classifier() {
         for spec in nbcad_mcp_mutate::mutate_specs() {
             assert!(
@@ -6081,6 +6162,49 @@ mod tests {
             body.contains("} finally {")
                 && body[publish..].contains("scheduleSessionBridgePublish()"),
             "publish must live in a finally so a leftover refresh throw cannot skip it: {body}"
+        );
+        let dead = body
+            .find("if (result?.dead_lettered)")
+            .expect("dead-lettered return");
+        assert!(
+            dead < publish,
+            "dead-letter must return before finally publish so the next applyInboxNow tick can take seq 2"
+        );
+        assert!(
+            body.contains("queue unblocked"),
+            "dead-letter path must leave the poller free to apply the lowest remaining pending seq"
+        );
+        // Pass 7 moved publish into finally. Write must still carry the
+        // reserved session/project identity — never active_mut() / later attach.
+        let publish_now = source
+            .find("async function publishNow()")
+            .expect("publishNow");
+        let publish_now_end = source[publish_now..]
+            .find("async function applyInboxNow()")
+            .expect("end publishNow");
+        let publish_body = &source[publish_now..publish_now + publish_now_end];
+        assert!(
+            publish_body.contains("session_id: reservation.session_id")
+                && publish_body.contains("project_session_id: reservation.project_session_id"),
+            "finally publish must write reserved session_id + project_session_id: {publish_body}"
+        );
+        assert!(
+            !publish_body.contains("active_mut"),
+            "JS publish must not target active_mut(): {publish_body}"
+        );
+        let native = include_str!("../../src-tauri/src/session_bridge.rs");
+        let write_start = native
+            .find("fn write_for_window(")
+            .expect("write_for_window");
+        let write_end = native[write_start..]
+            .find("fn heartbeat_for_window(")
+            .expect("end write_for_window");
+        let write_fn = &native[write_start..write_start + write_end];
+        assert!(
+            write_fn.contains("session write requires reserved session_id")
+                && write_fn.contains("session_identity_mismatch")
+                && !write_fn.contains("active_mut()"),
+            "native write must resolve reserved identity, never active_mut(): {write_fn}"
         );
     }
 
@@ -7797,6 +7921,175 @@ mod tests {
     }
 
     #[test]
+    fn attach_detach_reattach_same_then_apply_does_not_fork() {
+        // Pass 2 locked detach-then-apply. This is reattach-then-apply:
+        // pending must not run against the reattached manager (fork).
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-reattach-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "HingeReattach",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![1]);
+        server.call_tool("cad_detach", json!({})).unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let before = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            before["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(true),
+            "reattach loads the published snapshot; pending must not apply yet: {before}"
+        );
+
+        let created = apply_inbox_on_separate_host(&unique);
+        assert_eq!(created.op.name, "assembly_create_joint");
+        assert_eq!(created.host_result["name"], "HingeReattach");
+        let joint_id = created.host_result["id"].as_u64().unwrap();
+        assert_joint_dto_keeps_dirty(&created.host_result, "apply-after-reattach");
+
+        let attached = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            attached["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(true),
+            "apply after reattach must not mutate the attached manager: {attached}"
+        );
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let live = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_joint_visible(&live, joint_id, "HingeReattach");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_detach_reattach_other_then_apply_stays_identity_bound() {
+        // Pending on A must not apply against a later attach of B.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let session_a = session::test_session_uuid();
+        let session_b = loop {
+            let candidate = session::test_session_uuid();
+            if candidate != session_a {
+                break candidate;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-rebind-{session_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene_a = write_two_box_session(&session_a);
+        write_two_box_session(&session_b);
+        let bodies = scene_a["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": session_a}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "HingeOnA",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(session::pending_inbox_seqs(&session_a).unwrap(), vec![1]);
+        server.call_tool("cad_detach", json!({})).unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": session_b}))
+            .unwrap();
+        assert!(
+            session::pending_inbox_seqs(&session_b).unwrap().is_empty(),
+            "B must not inherit A's pending inbox"
+        );
+        let b_before = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            b_before["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(true),
+            "B snapshot must stay joint-free: {b_before}"
+        );
+
+        let created = apply_inbox_on_separate_host(&session_a);
+        assert_eq!(created.op.name, "assembly_create_joint");
+        assert_eq!(created.host_result["name"], "HingeOnA");
+        let joint_id = created.host_result["id"].as_u64().unwrap();
+
+        let b_after = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            b_after["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(true),
+            "A's apply must not mutate the B attach: {b_after}"
+        );
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let b_refresh = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            b_refresh["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(true),
+            "refresh of B must not pick up A's joint: {b_refresh}"
+        );
+        assert!(session::pending_inbox_seqs(&session_b).unwrap().is_empty());
+        let no_b = session::apply_inbox_op(&session_b, |_name, _args| {
+            panic!("B has no pending inbox op")
+        })
+        .expect_err("B apply must stay empty");
+        assert!(
+            no_b.contains("no pending inbox op"),
+            "expected empty B inbox, got {no_b}"
+        );
+
+        server.call_tool("cad_detach", json!({})).unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": session_a}))
+            .unwrap();
+        let a_live = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_joint_visible(&a_live, joint_id, "HingeOnA");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn attach_cad_submit_wrong_component_is_dead_lettered() {
         // Schema-valid joint against a missing/wrong occurrence (component
         // instance) must be a typed host error, dead-lettered, queue unblocked.
@@ -7921,6 +8214,91 @@ mod tests {
         let renamed = apply_inbox_on_separate_host(&unique);
         assert_eq!(renamed.op.name, "cad_set_document_name");
         assert_eq!(renamed.host_result["name"], "AfterWrongComponent");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_whitespace_only_joint_name_is_typed_reject() {
+        // Schema minLength:1 accepts "   "; host validate_joint treats trim-empty
+        // as a typed reject. Do not invent a max-length or schema pattern.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-ws-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let spec = tool_specs()
+            .into_iter()
+            .find(|spec| spec.name == "assembly_create_joint")
+            .expect("create spec");
+        assert_eq!(
+            spec.input_schema["properties"]["name"]["minLength"], 1,
+            "empty name is schema-invalid; whitespace is not"
+        );
+        assert!(
+            spec.input_schema["properties"]["name"]
+                .get("maxLength")
+                .is_none()
+                && spec.input_schema["properties"]["name"]
+                    .get("pattern")
+                    .is_none(),
+            "do not invent max-length/pattern on joint names: {}",
+            spec.input_schema["properties"]["name"]
+        );
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "   ",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .expect("schema-valid whitespace name still queues");
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "cad_set_document_name",
+                    "arguments": {"name": "AfterWhitespaceName"},
+                    "base_generation": 1
+                }),
+            )
+            .expect("follow-up queues behind whitespace name");
+
+        let err = session::apply_inbox_op(&unique, |name, arguments| {
+            let mut host = CadServer::new()?;
+            let model = session::require_model_json(&unique)?;
+            host.call_tool("cad_load_project_model", json!({ "model_json": model }))?;
+            host.call_tool(name, arguments)
+        })
+        .expect_err("whitespace-only joint name must typed-reject");
+        assert!(
+            err.contains("requires a name") || err.contains("name"),
+            "expected typed empty-name reject, got {err}"
+        );
+        assert_eq!(
+            session::pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "whitespace-name head must dead-letter so seq 2 can apply"
+        );
+        let renamed = apply_inbox_on_separate_host(&unique);
+        assert_eq!(renamed.op.name, "cad_set_document_name");
+        assert_eq!(renamed.host_result["name"], "AfterWhitespaceName");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);

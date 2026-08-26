@@ -1686,6 +1686,99 @@ mod tests {
     }
 
     #[test]
+    fn pending_inbox_applies_after_switch_back_to_same_project() {
+        // Reattach-then-apply (native): pending on A stays put while B is
+        // active, then applies against A after switch-back — never B.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-switch-back-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("tab-a")
+        }));
+        envelope_ok(&state.run_ui_mutation("main", || {
+            engine.engine_call("document_set_name", r#""Alpha""#)
+        }));
+
+        let (session_a, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_a, generation, "alpha"))
+            .unwrap();
+        let base = state
+            .engine_revision_for_window("main")
+            .unwrap()
+            .expect("tab A revision");
+        write_inbox(
+            &session_a,
+            1,
+            "cad_set_document_name",
+            base,
+            json!({"name": "FromA"}),
+        );
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.create_project_session("tab-b")
+        }));
+        envelope_ok(&state.run_ui_mutation("main", || {
+            engine.engine_call("document_set_name", r#""Beta""#)
+        }));
+        let reserved_b = state
+            .reserve_for_window_on_project("main", Some("tab-b"))
+            .unwrap();
+        let session_b = reserved_b["session_id"].as_str().unwrap().to_string();
+        assert_ne!(session_a, session_b);
+
+        let blocked = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            blocked["applied"], false,
+            "A inbox must not apply on B: {blocked}"
+        );
+        assert_eq!(engine.document_snapshot().name, "Beta");
+        assert!(
+            session_root()
+                .join(&session_a)
+                .join("inbox/1.json")
+                .exists(),
+            "A pending must survive the B tab"
+        );
+        assert!(
+            !session_root()
+                .join(&session_b)
+                .join("inbox/1.json")
+                .exists(),
+            "A pending must not land in B's inbox"
+        );
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.activate_project_session("tab-a")
+        }));
+        assert_eq!(engine.active_project_session_id(), "tab-a");
+        assert_eq!(engine.document_snapshot().name, "Alpha");
+
+        let applied = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            applied["applied"], true,
+            "switch-back must apply A's pending: {applied}"
+        );
+        assert_eq!(applied["seq"], 1);
+        assert_eq!(applied["session_id"], session_a);
+        assert_eq!(engine.document_snapshot().name, "FromA");
+        assert!(session_root()
+            .join(&session_a)
+            .join("inbox/applied/1.json")
+            .exists());
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.activate_project_session("tab-b")
+        }));
+        assert_eq!(engine.document_snapshot().name, "Beta");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn reserve_a_activate_b_reserve_b_write_a_does_not_publish_into_b() {
         // Race: A reserves generation N, B becomes active and also reserves
         // generation N, then A's delayed export writes. Without reserved
