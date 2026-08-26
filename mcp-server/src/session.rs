@@ -924,4 +924,64 @@ mod tests {
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn already_applied_inbox_seq_second_apply_is_noop() {
+        // applyInboxNow of an already-archived seq must not call host again.
+        // Native returns applied:false / empty; helper errors "no pending".
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-already-applied-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "Once"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        let mut host_calls = 0u32;
+        let first = apply_inbox_op(&unique, |name, arguments| {
+            host_calls += 1;
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "Once");
+            Ok(json!({"name": "Once"}))
+        })
+        .unwrap();
+        assert_eq!(first.seq, 1);
+        assert_eq!(host_calls, 1);
+        assert!(
+            pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "applied seq must leave the pending queue"
+        );
+        let applied_path = session_dir().join(&unique).join("inbox/applied/1.json");
+        assert!(applied_path.exists(), "expected inbox/applied/1.json");
+
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            host_calls += 1;
+            panic!("host must not run on already-applied seq")
+        })
+        .expect_err("already-applied seq must be a no-op");
+        assert!(
+            err.contains("no pending inbox op"),
+            "expected empty-inbox no-op, got {err}"
+        );
+        assert_eq!(
+            host_calls, 1,
+            "already-applied seq must not host-apply again"
+        );
+        assert!(pending_inbox_seqs(&unique).unwrap().is_empty());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

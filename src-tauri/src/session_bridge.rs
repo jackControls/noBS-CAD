@@ -1784,4 +1784,48 @@ mod tests {
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn already_applied_inbox_seq_second_apply_is_noop() {
+        // applyInboxNow polls native apply. After the head is archived, a
+        // second poll must not re-dispatch the host mutate or advance
+        // revision (JS then returns on !applied — no dirty flip).
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-already-applied-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "Once"}),
+        );
+        let engine = AppState::new();
+        let first = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(first["applied"], true);
+        assert_eq!(first["seq"], 1);
+        assert_eq!(engine.document_snapshot().name, "Once");
+        let revision = first["engine_revision"].clone();
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/applied/1.json")
+            .exists());
+        assert!(pending_inbox_seqs(&session_id).is_empty());
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], false);
+        assert_eq!(second["reason"], "empty");
+        assert_ne!(second.get("dead_lettered"), Some(&json!(true)));
+        assert_eq!(engine.document_snapshot().name, "Once");
+        assert_eq!(second["engine_revision"], revision);
+        assert!(pending_inbox_seqs(&session_id).is_empty());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

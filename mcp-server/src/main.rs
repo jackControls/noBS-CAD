@@ -5964,9 +5964,10 @@ mod tests {
 
     #[test]
     fn assembly_inbox_refresh_clears_joint_motion_preview() {
-        // Viewport prefers jointMotionPreview.solution over assemblySolution.
-        // Targeted inbox refresh must clear the stored preview, not only bump
-        // jointMotionPreviewGeneration.
+        // Viewport prefers jointPreviewSolution, then mechanismPreview.solution,
+        // then jointMotionPreview.solution, over assemblySolution. Targeted
+        // inbox refresh must clear all three stored previews, not only bump
+        // their generation counters.
         let source = include_str!("../../src/store/appStore.ts");
         let start = source
             .find("refreshAfterInboxApply: async (opName)")
@@ -5986,6 +5987,49 @@ mod tests {
         assert!(
             targeted.contains("jointMotionPreview: null"),
             "assembly inbox refresh must clear jointMotionPreview so a stale motion pose cannot hide the new assemblySolution"
+        );
+        assert!(
+            targeted.contains("mechanismPreview: null"),
+            "assembly inbox refresh must clear mechanismPreview; viewport prefers it over jointMotionPreview and assemblySolution"
+        );
+        assert!(
+            targeted.contains("dirty: true"),
+            "assembly inbox refresh must keep dirty:true (never loadDocument)"
+        );
+    }
+
+    #[test]
+    fn apply_inbox_now_never_falls_through_to_load_document() {
+        // applyInboxNow: dead-letter / !applied return before any store write.
+        // scene+document -> applySolidUpdate (dirty:true). Else
+        // refreshAfterInboxApply (dirty:true). The old loadDocument() else
+        // branch cleared dirty and left previews in place.
+        let source = include_str!("../../src/sessionBridge.ts");
+        let start = source
+            .find("async function applyInboxNow()")
+            .expect("applyInboxNow");
+        let end = source[start..]
+            .find("async function heartbeatNow()")
+            .expect("end of applyInboxNow");
+        let body = &source[start..start + end];
+        assert!(
+            !body.contains("loadDocument("),
+            "applyInboxNow must not call loadDocument (dirty:false): {body}"
+        );
+        let not_applied = body
+            .find("if (!result?.applied) return;")
+            .expect("early return when not applied");
+        let solid = body.find("applySolidUpdate").expect("solid-update path");
+        let refresh = body
+            .find("refreshAfterInboxApply")
+            .expect("dirty refresh path");
+        assert!(
+            not_applied < solid && not_applied < refresh,
+            "already-applied / empty inbox must no-op before any store mutation"
+        );
+        assert!(
+            body.contains("refreshAfterInboxApply(result.name)"),
+            "non-solid inbox results (joint DTO, assembly document) must take refreshAfterInboxApply"
         );
     }
 
