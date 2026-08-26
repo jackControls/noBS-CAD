@@ -737,6 +737,10 @@ mod tests {
         assert_eq!(update.payload, PayloadKind::Object);
         assert!(lookup_mutate("assembly_document").is_none());
         assert!(lookup_mutate("assembly_solution").is_none());
+        assert!(
+            lookup_mutate("assembly_delete_joint").is_none(),
+            "do not invent assembly_delete_joint; host delete is not an MCP mutate"
+        );
     }
 
     #[test]
