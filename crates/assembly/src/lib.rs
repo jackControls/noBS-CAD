@@ -5130,6 +5130,68 @@ mod tests {
     }
 
     #[test]
+    fn deleting_an_unrelated_body_leaves_the_joint_unchanged() {
+        // Host delete is body-delete cleanup of joints that reference the
+        // deleted body. A third body must not drop an unrelated joint.
+        let scene = SolidSceneDto {
+            bodies: [1_u64, 2, 3]
+                .into_iter()
+                .map(|id| BodyDto {
+                    id: BodyId(id),
+                    name: format!("Body{id}"),
+                    feature_id: FeatureId(id),
+                    mesh: MeshDto {
+                        positions: Vec::new(),
+                        normals: Vec::new(),
+                        indices: Vec::new(),
+                    },
+                    faces: vec![FaceDto {
+                        id: FaceId(id * 10),
+                        key: format!("face-{id}"),
+                        first_index: 0,
+                        index_count: 0,
+                        plane: Some(PlaneBasis {
+                            origin: [id as f64, 0.0, 0.0],
+                            u: [1.0, 0.0, 0.0],
+                            v: [0.0, 1.0, 0.0],
+                            normal: [0.0, 0.0, 1.0],
+                        }),
+                        signature: None,
+                        cylinder: None,
+                    }],
+                    edges: Vec::new(),
+                })
+                .collect(),
+            errors: Vec::new(),
+        };
+        let mut document = AssemblyDocumentDto::default();
+        let joint = document.create(request(&scene), &scene).unwrap();
+        let before = document.clone();
+        let removed = document
+            .remove_joints_for_deleted_bodies(&HashSet::from([BodyId(3)]))
+            .unwrap();
+        assert!(removed.is_empty(), "unrelated body must not cascade joints");
+        assert_eq!(document.joints.len(), 1);
+        assert_eq!(document.joints[0].id, joint.id);
+        assert_eq!(
+            document.joints[0].connector_a.body_id,
+            joint.connector_a.body_id
+        );
+        assert_eq!(
+            document.joints[0].connector_b.body_id,
+            joint.connector_b.body_id
+        );
+        assert_eq!(
+            document.joints[0].advanced.connector_a_occurrence_id,
+            before.joints[0].advanced.connector_a_occurrence_id
+        );
+        assert_eq!(
+            document.joints[0].advanced.connector_b_occurrence_id,
+            before.joints[0].advanced.connector_b_occurrence_id
+        );
+    }
+
+    #[test]
     fn undo_projection_ignores_inactive_bodies_without_destroying_redo_intent() {
         let scene = scene();
         let mut document = AssemblyDocumentDto::default();
