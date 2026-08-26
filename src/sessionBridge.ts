@@ -169,6 +169,8 @@ async function publishNow(): Promise<void> {
 async function applyInboxNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri' || inboxApplying) return;
+  // inboxApplying also suppresses a second engine_revision bump if any store
+  // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
   try {
     const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
@@ -178,12 +180,19 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
-    if (result.result?.scene && result.result.document) {
-      useAppStore.getState().applySolidUpdate(result.result);
-    } else {
-      await useAppStore.getState().loadDocument();
+    try {
+      if (result.result?.scene && result.result.document) {
+        useAppStore.getState().applySolidUpdate(result.result);
+      } else {
+        // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
+        await useAppStore.getState().refreshAfterInboxApply(result.name);
+      }
+    } finally {
+      // Native already archived the seq and bumped engine_revision. Publish
+      // even if leftover store refresh throws so cad_refresh sees the live
+      // engine. Next applyInboxNow is a no-op on the archived seq.
+      scheduleSessionBridgePublish();
     }
-    scheduleSessionBridgePublish();
   } catch (error) {
     console.debug('[sessionBridge] inbox apply failed', error);
   } finally {
@@ -225,6 +234,8 @@ export function startSessionBridge(): void {
       // Native engine commands bump engine_revision under the publisher lock
       // (run_ui_mutation). Do not fire-and-forget a JS note here — that
       // reopens the UI→JS race and would double-count after native apply.
+      // inboxApplying still guards applyInboxNow re-entry; refreshAfterInboxApply
+      // keeps dirty:true (never loadDocument).
       scheduleSessionBridgePublish();
     }
   });

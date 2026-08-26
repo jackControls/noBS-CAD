@@ -731,6 +731,8 @@ interface AppState {
   setMode: (mode: AppMode) => void;
   setActiveTab: (tab: string) => void;
   loadDocument: () => Promise<void>;
+  /** Refresh live engine state after MCP inbox apply without clearing dirty. */
+  refreshAfterInboxApply: (opName?: string) => Promise<void>;
   setDocument: (doc: DocumentDto) => void;
   setActiveSketch: (sketch: SketchDto | null) => void;
   setFinishedSketches: (sketches: SketchDto[]) => void;
@@ -1185,6 +1187,65 @@ export const useAppStore = create<AppState>()((set) => ({
       hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
       projectVisibility,
       dirty: false,
+    });
+  },
+
+  refreshAfterInboxApply: async (opName) => {
+    const engine = await getEngine();
+    // Assembly-only inbox ops: targeted refresh — keep dirty:true so MCP live
+    // edits are treated as unsaved (never loadDocument's dirty:false).
+    if (opName?.startsWith('assembly_')) {
+      jointPreviewGeneration += 1;
+      jointMotionPreviewGeneration += 1;
+      mechanismPreviewGeneration += 1;
+      const [assemblyDocument, assemblySolution, solidScene, doc] = await Promise.all([
+        engine.assemblyDocument(),
+        engine.assemblySolution(),
+        engine.solidScene(),
+        engine.getDocument(),
+      ]);
+      set((state) => ({
+        document: doc,
+        solidScene,
+        assemblyDocument,
+        assemblySolution,
+        assemblySolidSyncRevision: state.assemblySolidSyncRevision + 1,
+        bodyAppearances: scrubAppearances(state.bodyAppearances, solidScene.bodies),
+        jointPreviewSolution: null,
+        // Stale-preview correction: viewport prefers jointMotionPreview.solution
+        // over the refreshed assemblySolution until this is cleared.
+        jointMotionPreview: null,
+        mechanismPreview: null,
+        dirty: true,
+      }));
+      return;
+    }
+    const doc = await engine.getDocument();
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, activeSketch] = await Promise.all([
+      engine.finishedSketches(),
+      engine.solidScene(),
+      engine.datumPlaneDefinitions(),
+      engine.bodyAppearances(),
+      engine.drawingDocument(),
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+      engine.projectVisibility(),
+      engine.activeSketch(),
+    ]);
+    set({
+      document: doc,
+      engineKind: engine.kind,
+      finishedSketches,
+      solidScene,
+      datumPlanes,
+      bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
+      drawingDocument,
+      assemblyDocument,
+      assemblySolution,
+      activeSketch,
+      hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
+      projectVisibility,
+      dirty: true,
     });
   },
 

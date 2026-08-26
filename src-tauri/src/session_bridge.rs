@@ -1411,6 +1411,53 @@ mod tests {
     }
 
     #[test]
+    fn malformed_joint_inbox_payload_is_dead_lettered_and_unblocks_queue() {
+        // Valid mutate name, invalid CreateJointRequestDto — dispatch fails
+        // and must dead-letter so a later op can apply.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-joint-malformed-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "assembly_create_joint",
+            generation,
+            json!({"name": "Broken"}),
+        );
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "AfterJointFail"}),
+        );
+        let engine = AppState::new();
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["seq"], 1);
+        assert_eq!(dead["name"], "assembly_create_joint");
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/failed/1.json")
+            .exists());
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], true);
+        assert_eq!(second["seq"], 2);
+        assert_eq!(engine.document_snapshot().name, "AfterJointFail");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn shared_mutate_map_covers_every_inbox_dispatch() {
         for spec in nbcad_mcp_mutate::mutate_specs() {
             assert!(!spec.name.is_empty());
@@ -1452,6 +1499,16 @@ mod tests {
             (
                 "set_body_appearance",
                 "set_body_appearance",
+                ExecutionKind::Direct,
+            ),
+            (
+                "assembly_create_joint",
+                "assembly_create_joint",
+                ExecutionKind::Direct,
+            ),
+            (
+                "assembly_update_joint",
+                "assembly_update_joint",
                 ExecutionKind::Direct,
             ),
         ];
@@ -1629,6 +1686,99 @@ mod tests {
     }
 
     #[test]
+    fn pending_inbox_applies_after_switch_back_to_same_project() {
+        // Reattach-then-apply (native): pending on A stays put while B is
+        // active, then applies against A after switch-back — never B.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-switch-back-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("tab-a")
+        }));
+        envelope_ok(&state.run_ui_mutation("main", || {
+            engine.engine_call("document_set_name", r#""Alpha""#)
+        }));
+
+        let (session_a, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_a, generation, "alpha"))
+            .unwrap();
+        let base = state
+            .engine_revision_for_window("main")
+            .unwrap()
+            .expect("tab A revision");
+        write_inbox(
+            &session_a,
+            1,
+            "cad_set_document_name",
+            base,
+            json!({"name": "FromA"}),
+        );
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.create_project_session("tab-b")
+        }));
+        envelope_ok(&state.run_ui_mutation("main", || {
+            engine.engine_call("document_set_name", r#""Beta""#)
+        }));
+        let reserved_b = state
+            .reserve_for_window_on_project("main", Some("tab-b"))
+            .unwrap();
+        let session_b = reserved_b["session_id"].as_str().unwrap().to_string();
+        assert_ne!(session_a, session_b);
+
+        let blocked = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            blocked["applied"], false,
+            "A inbox must not apply on B: {blocked}"
+        );
+        assert_eq!(engine.document_snapshot().name, "Beta");
+        assert!(
+            session_root()
+                .join(&session_a)
+                .join("inbox/1.json")
+                .exists(),
+            "A pending must survive the B tab"
+        );
+        assert!(
+            !session_root()
+                .join(&session_b)
+                .join("inbox/1.json")
+                .exists(),
+            "A pending must not land in B's inbox"
+        );
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.activate_project_session("tab-a")
+        }));
+        assert_eq!(engine.active_project_session_id(), "tab-a");
+        assert_eq!(engine.document_snapshot().name, "Alpha");
+
+        let applied = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            applied["applied"], true,
+            "switch-back must apply A's pending: {applied}"
+        );
+        assert_eq!(applied["seq"], 1);
+        assert_eq!(applied["session_id"], session_a);
+        assert_eq!(engine.document_snapshot().name, "FromA");
+        assert!(session_root()
+            .join(&session_a)
+            .join("inbox/applied/1.json")
+            .exists());
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.activate_project_session("tab-b")
+        }));
+        assert_eq!(engine.document_snapshot().name, "Beta");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn reserve_a_activate_b_reserve_b_write_a_does_not_publish_into_b() {
         // Race: A reserves generation N, B becomes active and also reserves
         // generation N, then A's delayed export writes. Without reserved
@@ -1723,6 +1873,118 @@ mod tests {
         let model_a_after = fs::read_to_string(dir.join(&session_a).join("model.json")).unwrap();
         assert!(model_a_after.contains("\"marker\":\"from-a\""));
         assert!(!model_a_after.contains("from-b"));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn already_applied_inbox_seq_second_apply_is_noop() {
+        // applyInboxNow polls native apply. After the head is archived, a
+        // second poll must not re-dispatch the host mutate or advance
+        // revision (JS then returns on !applied — no dirty flip).
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-already-applied-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "Once"}),
+        );
+        let engine = AppState::new();
+        let first = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(first["applied"], true);
+        assert_eq!(first["seq"], 1);
+        assert_eq!(engine.document_snapshot().name, "Once");
+        let revision = first["engine_revision"].clone();
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/applied/1.json")
+            .exists());
+        assert!(pending_inbox_seqs(&session_id).is_empty());
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], false);
+        assert_eq!(second["reason"], "empty");
+        assert_ne!(second.get("dead_lettered"), Some(&json!(true)));
+        assert_eq!(engine.document_snapshot().name, "Once");
+        assert_eq!(second["engine_revision"], revision);
+        assert!(pending_inbox_seqs(&session_id).is_empty());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_apply_uses_engine_revision_not_heartbeat_file() {
+        // Intertwined leftover vs native: leftover apply reads heartbeat.json
+        // generation (and now dead-letters if it is missing). Native apply
+        // locks on in-memory engine_revision. A deleted or age-stale
+        // heartbeat file must not stay pending, apply twice, or skip a
+        // matching-generation head.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-hb-file-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        let hb = session_root().join(&session_id).join("heartbeat.json");
+        assert!(hb.exists(), "publish must write heartbeat.json");
+        fs::remove_file(&hb).unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "NoHbFile"}),
+        );
+        let engine = AppState::new();
+        let applied = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            applied["applied"], true,
+            "native must apply from engine_revision: {applied}"
+        );
+        assert_eq!(applied["seq"], 1);
+        assert_eq!(engine.document_snapshot().name, "NoHbFile");
+        assert_ne!(applied.get("reason"), Some(&json!("generation_conflict")));
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/applied/1.json")
+            .exists());
+
+        // Age-stale heartbeat with matching engine_revision still applies.
+        let stale_ms = now_ms().saturating_sub(30_000 + 5_000);
+        let next_generation = applied["engine_revision"]
+            .as_u64()
+            .expect("engine_revision after first apply");
+        fs::write(
+            &hb,
+            format!(r#"{{"updated_ms":{stale_ms},"generation":{next_generation}}}"#),
+        )
+        .unwrap();
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            next_generation,
+            json!({"name": "AgeStaleOk"}),
+        );
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(
+            second["applied"], true,
+            "age-stale heartbeat must not block native apply: {second}"
+        );
+        assert_eq!(second["seq"], 2);
+        assert_eq!(engine.document_snapshot().name, "AgeStaleOk");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

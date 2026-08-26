@@ -435,6 +435,34 @@ fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     }
 }
 
+fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), String> {
+    let src = session_path(session_id, &format!("inbox/{seq}.json"))?;
+    if let Some(parent) = session_path(session_id, "inbox/failed")?.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let original = fs::read_to_string(&src).unwrap_or_default();
+    let body = match serde_json::from_str::<Value>(&original) {
+        Ok(mut parsed) => {
+            if let Some(object) = parsed.as_object_mut() {
+                object.insert("error".to_string(), Value::String(error.to_string()));
+                object.insert("failed_ms".to_string(), json!(now_ms()));
+            }
+            serde_json::to_string_pretty(&parsed).unwrap_or(original.clone())
+        }
+        Err(_) => serde_json::to_string_pretty(&json!({
+            "error": error,
+            "failed_ms": now_ms(),
+            "raw": original,
+        }))
+        .map_err(|e| e.to_string())?,
+    };
+    write_session(session_id, &format!("inbox/failed/{seq}.json"), &body)?;
+    if src.exists() {
+        fs::remove_file(&src).map_err(|e| format!("remove dead-lettered inbox op: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Read the lowest pending inbox op, check `base_generation` against heartbeat,
 /// call `host_apply`, then archive the op. Does **not** write model.json —
 /// the caller (UI publisher or test) publishes the new snapshot.
@@ -452,25 +480,46 @@ where
         .first()
         .copied()
         .ok_or_else(|| format!("session '{session_id}' has no pending inbox op"))?;
-    let op = read_inbox_op(session_id, seq)?;
+    let op = match read_inbox_op(session_id, seq) {
+        Ok(op) => op,
+        Err(error) => {
+            dead_letter_inbox_op(session_id, seq, &error)?;
+            return Err(error);
+        }
+    };
     let current = match read_heartbeat_generation(session_id) {
         Ok(generation) => generation,
         Err(_) => {
-            return Err(generation_conflict_error(
-                session_id,
-                op.base_generation,
-                None,
-            ));
+            let error = generation_conflict_error(session_id, op.base_generation, None);
+            // Match native apply: generation_conflict (including a missing /
+            // unreadable heartbeat generation) must not wedge later seqs.
+            // Age-only stale heartbeats still apply when generation matches —
+            // listing staleness is not a writer lock.
+            dead_letter_inbox_op(session_id, seq, &error)?;
+            return Err(error);
         }
     };
     if op.base_generation != current {
-        return Err(generation_conflict_error(
-            session_id,
-            op.base_generation,
-            Some(current),
-        ));
+        let error = generation_conflict_error(session_id, op.base_generation, Some(current));
+        // Match native apply: a stale head must not wedge later seqs.
+        dead_letter_inbox_op(session_id, seq, &error)?;
+        return Err(error);
     }
-    let host_result = host_apply(&op.name, op.arguments.clone())?;
+    if nbcad_mcp_mutate::lookup_mutate(&op.name).is_none() {
+        let error = format!("unsupported inbox mutate '{}'", op.name);
+        // Match native apply: reject before host so inspect/unknown names
+        // cannot archive as applied.
+        dead_letter_inbox_op(session_id, seq, &error)?;
+        return Err(error);
+    }
+    let host_result = match host_apply(&op.name, op.arguments.clone()) {
+        Ok(result) => result,
+        Err(error) => {
+            // Match native apply: a failed head must not wedge later seqs.
+            dead_letter_inbox_op(session_id, seq, &error)?;
+            return Err(error);
+        }
+    };
     archive_inbox_op(session_id, seq)?;
     Ok(ApplyResult {
         seq,
@@ -596,13 +645,45 @@ mod tests {
             &format!(r#"{{"updated_ms":{},"generation":4}}"#, now_ms()),
         )
         .unwrap();
+        // Valid follow-up at the new generation. After seq 1 dead-letters,
+        // the next apply_inbox_op must take the lowest remaining pending.
+        let seq2 = write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterStaleHead"}),
+                base_generation: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(seq2, 2);
         let err = apply_inbox_op(&unique, |_name, _args| Ok(json!({"applied": true})))
             .expect_err("stale base_generation must not apply");
         let parsed: Value = serde_json::from_str(&err).unwrap();
         assert_eq!(parsed["code"], "generation_conflict");
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "ui_owned_apply");
-        assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![1]);
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "stale head must dead-letter so seq 2 can apply"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("generation_conflict"),
+            "dead-letter must record the conflict reason: {failed_body}"
+        );
+
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterStaleHead");
+            Ok(json!({"name": "AfterStaleHead"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
@@ -669,6 +750,435 @@ mod tests {
             );
         }
         assert_eq!(pending_inbox_seqs(&session_id).unwrap().len(), expected);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_inbox_json_is_dead_lettered_and_unblocks_queue() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-badjson-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        let inbox = session_dir().join(&unique).join("inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(inbox.join("1.json"), "{not-json").unwrap();
+        let seq = write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterBadJson"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(seq, 2);
+        let err = apply_inbox_op(&unique, |_name, _args| Ok(json!({"applied": true})))
+            .expect_err("malformed json must fail apply");
+        assert!(
+            err.contains("invalid inbox") || err.contains("expected"),
+            "expected a JSON parse error, got {err}"
+        );
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "malformed head must dead-letter so seq 2 can apply"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("raw") && failed_body.contains("{not-json"),
+            "dead-letter must keep the raw malformed bytes: {failed_body}"
+        );
+
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterBadJson");
+            Ok(json!({"name": "AfterBadJson"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn same_base_generation_second_op_is_dead_lettered() {
+        // Match native: first apply + publish advances generation; the leftover
+        // same-base head dead-letters with a reason so later seqs can run.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-samebase-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "First"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "Second"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        let first = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "First");
+            Ok(json!({"name": "First"}))
+        })
+        .unwrap();
+        assert_eq!(first.seq, 1);
+        publish_applied_snapshot(&unique, r#"{"version":1,"name":"First"}"#).unwrap();
+        assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![2]);
+
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run on generation_conflict")
+        })
+        .expect_err("same-base leftover must conflict");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert!(
+            pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "conflicted same-base head must dead-letter"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/2.json");
+        assert!(failed.exists(), "expected inbox/failed/2.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("generation_conflict"),
+            "dead-letter must record the reason: {failed_body}"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unsupported_inbox_mutate_is_dead_lettered_and_unblocks_queue() {
+        // Match native: a head that is not in the shared mutate map must
+        // dead-letter before host_apply so later seqs can run.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-unsupported-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "assembly_document".to_string(),
+                arguments: json!({}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterUnsupported"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        assert!(
+            nbcad_mcp_mutate::lookup_mutate("assembly_document").is_none(),
+            "assembly_document is inspect-only and must not be an inbox mutate"
+        );
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run on unsupported inbox mutate")
+        })
+        .expect_err("unsupported mutate must fail apply");
+        assert!(
+            err.contains("unsupported inbox mutate") && err.contains("assembly_document"),
+            "expected unsupported mutate error, got {err}"
+        );
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "unsupported head must dead-letter so seq 2 can apply"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("unsupported inbox mutate"),
+            "dead-letter must record the reason: {failed_body}"
+        );
+
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterUnsupported");
+            Ok(json!({"name": "AfterUnsupported"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn already_applied_inbox_seq_second_apply_is_noop() {
+        // applyInboxNow of an already-archived seq must not call host again.
+        // Native returns applied:false / empty; helper errors "no pending".
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-already-applied-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "Once"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        let mut host_calls = 0u32;
+        let first = apply_inbox_op(&unique, |name, arguments| {
+            host_calls += 1;
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "Once");
+            Ok(json!({"name": "Once"}))
+        })
+        .unwrap();
+        assert_eq!(first.seq, 1);
+        assert_eq!(host_calls, 1);
+        assert!(
+            pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "applied seq must leave the pending queue"
+        );
+        let applied_path = session_dir().join(&unique).join("inbox/applied/1.json");
+        assert!(applied_path.exists(), "expected inbox/applied/1.json");
+
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            host_calls += 1;
+            panic!("host must not run on already-applied seq")
+        })
+        .expect_err("already-applied seq must be a no-op");
+        assert!(
+            err.contains("no pending inbox op"),
+            "expected empty-inbox no-op, got {err}"
+        );
+        assert_eq!(
+            host_calls, 1,
+            "already-applied seq must not host-apply again"
+        );
+        assert!(pending_inbox_seqs(&unique).unwrap().is_empty());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_heartbeat_generation_is_dead_lettered_and_unblocks_queue() {
+        // Leftover apply reads heartbeat.json generation. If that source is
+        // missing/unreadable, treat it as generation_conflict and dead-letter
+        // so later seqs are not wedged. Native apply uses in-memory
+        // engine_revision and never waits on the file.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-no-hb-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "MissingHb"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterMissingHb"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        let hb = session_dir().join(&unique).join("heartbeat.json");
+        fs::remove_file(&hb).unwrap();
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run without a heartbeat generation")
+        })
+        .expect_err("missing heartbeat must generation_conflict");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "ui_owned_apply");
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "missing-heartbeat head must dead-letter so seq 2 can apply"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("generation_conflict"),
+            "dead-letter must record the reason: {failed_body}"
+        );
+
+        // Restore a matching generation so the leftover helper can apply seq 2.
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterMissingHb");
+            Ok(json!({"name": "AfterMissingHb"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn age_stale_heartbeat_with_matching_generation_still_applies() {
+        // Listing staleness (age > HEARTBEAT_STALE_MS) is not a writer lock.
+        // Matching generation must apply, leftover and native alike.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-age-stale-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        let stale_ms = now_ms().saturating_sub(HEARTBEAT_STALE_MS + 5_000);
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{stale_ms},"generation":1}}"#),
+        )
+        .unwrap();
+        let meta = heartbeat_meta(&unique);
+        assert_eq!(meta["stale"], true, "fixture must be age-stale: {meta}");
+        assert_eq!(meta["generation"], 1);
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AgeStaleOk"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AgeStaleOk");
+            Ok(json!({"name": "AgeStaleOk"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 1);
+        assert!(
+            pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "matching generation must archive, not dead-letter on age"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(
+            !failed.exists(),
+            "age-stale matching gen must not dead-letter"
+        );
+        let archived = session_dir().join(&unique).join("inbox/applied/1.json");
+        assert!(archived.exists(), "expected inbox/applied/1.json");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_takes_lowest_pending_seq_even_when_higher_exists() {
+        // Out-of-order: seq 2 must not apply while seq 1 is still pending.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-seq-order-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "First"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "Second"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![1, 2]);
+        let first = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "First");
+            Ok(json!({"name": "First"}))
+        })
+        .unwrap();
+        assert_eq!(first.seq, 1);
+        assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![2]);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
