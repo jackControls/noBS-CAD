@@ -1411,6 +1411,53 @@ mod tests {
     }
 
     #[test]
+    fn malformed_joint_inbox_payload_is_dead_lettered_and_unblocks_queue() {
+        // Valid mutate name, invalid CreateJointRequestDto — dispatch fails
+        // and must dead-letter so a later op can apply.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-joint-malformed-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_id, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_id, generation, "base"))
+            .unwrap();
+        write_inbox(
+            &session_id,
+            1,
+            "assembly_create_joint",
+            generation,
+            json!({"name": "Broken"}),
+        );
+        write_inbox(
+            &session_id,
+            2,
+            "cad_set_document_name",
+            generation,
+            json!({"name": "AfterJointFail"}),
+        );
+        let engine = AppState::new();
+        let dead = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(dead["applied"], false);
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["seq"], 1);
+        assert_eq!(dead["name"], "assembly_create_joint");
+        assert!(session_root()
+            .join(&session_id)
+            .join("inbox/failed/1.json")
+            .exists());
+        assert_eq!(pending_inbox_seqs(&session_id), vec![2]);
+
+        let second = apply_one_inbox_op(&state, "main", &engine).unwrap();
+        assert_eq!(second["applied"], true);
+        assert_eq!(second["seq"], 2);
+        assert_eq!(engine.document_snapshot().name, "AfterJointFail");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn shared_mutate_map_covers_every_inbox_dispatch() {
         for spec in nbcad_mcp_mutate::mutate_specs() {
             assert!(!spec.name.is_empty());

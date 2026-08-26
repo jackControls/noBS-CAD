@@ -435,6 +435,34 @@ fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     }
 }
 
+fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), String> {
+    let src = session_path(session_id, &format!("inbox/{seq}.json"))?;
+    if let Some(parent) = session_path(session_id, "inbox/failed")?.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let original = fs::read_to_string(&src).unwrap_or_default();
+    let body = match serde_json::from_str::<Value>(&original) {
+        Ok(mut parsed) => {
+            if let Some(object) = parsed.as_object_mut() {
+                object.insert("error".to_string(), Value::String(error.to_string()));
+                object.insert("failed_ms".to_string(), json!(now_ms()));
+            }
+            serde_json::to_string_pretty(&parsed).unwrap_or(original.clone())
+        }
+        Err(_) => serde_json::to_string_pretty(&json!({
+            "error": error,
+            "failed_ms": now_ms(),
+            "raw": original,
+        }))
+        .map_err(|e| e.to_string())?,
+    };
+    write_session(session_id, &format!("inbox/failed/{seq}.json"), &body)?;
+    if src.exists() {
+        fs::remove_file(&src).map_err(|e| format!("remove dead-lettered inbox op: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Read the lowest pending inbox op, check `base_generation` against heartbeat,
 /// call `host_apply`, then archive the op. Does **not** write model.json —
 /// the caller (UI publisher or test) publishes the new snapshot.
@@ -452,7 +480,13 @@ where
         .first()
         .copied()
         .ok_or_else(|| format!("session '{session_id}' has no pending inbox op"))?;
-    let op = read_inbox_op(session_id, seq)?;
+    let op = match read_inbox_op(session_id, seq) {
+        Ok(op) => op,
+        Err(error) => {
+            dead_letter_inbox_op(session_id, seq, &error)?;
+            return Err(error);
+        }
+    };
     let current = match read_heartbeat_generation(session_id) {
         Ok(generation) => generation,
         Err(_) => {
@@ -470,7 +504,14 @@ where
             Some(current),
         ));
     }
-    let host_result = host_apply(&op.name, op.arguments.clone())?;
+    let host_result = match host_apply(&op.name, op.arguments.clone()) {
+        Ok(result) => result,
+        Err(error) => {
+            // Match native apply: a failed head must not wedge later seqs.
+            dead_letter_inbox_op(session_id, seq, &error)?;
+            return Err(error);
+        }
+    };
     archive_inbox_op(session_id, seq)?;
     Ok(ApplyResult {
         seq,
