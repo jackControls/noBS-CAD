@@ -4239,7 +4239,17 @@ mod tests {
         assert!(!applied, "host must not run on generation_conflict");
         let applied_err = parse_session_error(&apply_err);
         assert_eq!(applied_err["code"], "generation_conflict");
-        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![1]);
+        assert!(
+            session::pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "stale head must dead-letter so later seqs can apply"
+        );
+        assert!(
+            std::path::Path::new(&dir)
+                .join(&unique)
+                .join("inbox/failed/1.json")
+                .exists(),
+            "expected inbox/failed/1.json"
+        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
@@ -7436,6 +7446,533 @@ mod tests {
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn assert_solution_has_joint_occurrences(solution: &Value, occ_a: u64, occ_b: u64) {
+        assert!(
+            solution.get("body_poses").is_some() && solution.get("occurrence_poses").is_some(),
+            "assembly_solution must return pose arrays: {solution}"
+        );
+        assert!(
+            solution.get("solved").and_then(Value::as_bool).is_some(),
+            "assembly_solution must report solved: {solution}"
+        );
+        assert!(
+            solution
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .is_some(),
+            "assembly_solution must return diagnostics even if unsolved: {solution}"
+        );
+        let poses = solution["occurrence_poses"].as_array().unwrap();
+        for occ in [occ_a, occ_b] {
+            assert!(
+                poses
+                    .iter()
+                    .any(|pose| pose["occurrence_id"].as_u64() == Some(occ)),
+                "assembly_solution missing occurrence {occ}: {solution}"
+            );
+        }
+    }
+
+    #[test]
+    fn attach_cad_submit_create_joint_then_assembly_solution() {
+        // After inbox create + refresh, assembly_solution must include the
+        // jointed occurrences and must not crash if the graph is unsolved.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-sol-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let empty = server
+            .call_tool("assembly_solution", json!({}))
+            .expect("assembly_solution before any joint must not crash");
+        assert!(
+            empty.get("diagnostics").and_then(Value::as_array).is_some()
+                && empty.get("solved").and_then(Value::as_bool).is_some(),
+            "empty-graph solution must still be a DTO: {empty}"
+        );
+
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "HingeSolved",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        let created = apply_inbox_on_separate_host(&unique);
+        assert_eq!(created.op.name, "assembly_create_joint");
+        let joint_id = created.host_result["id"].as_u64().unwrap();
+        let occ_a = created.host_result["advanced"]["connector_a_occurrence_id"]
+            .as_u64()
+            .expect("occ A");
+        let occ_b = created.host_result["advanced"]["connector_b_occurrence_id"]
+            .as_u64()
+            .expect("occ B");
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        assert_joint_visible(
+            &server.call_tool("assembly_document", json!({})).unwrap(),
+            joint_id,
+            "HingeSolved",
+        );
+        let solution = server
+            .call_tool("assembly_solution", json!({}))
+            .expect("assembly_solution after inbox create must not crash");
+        assert_solution_has_joint_occurrences(&solution, occ_a, occ_b);
+        if solution["solved"] == false {
+            assert!(
+                !solution["diagnostics"].as_array().unwrap().is_empty(),
+                "unsolved solution must carry diagnostics: {solution}"
+            );
+        }
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_cad_submit_two_joints_same_occurrence_pair() {
+        // Two different joints on the same occurrence pair: host either keeps
+        // both or rejects the second with a typed error. Queue must not wedge.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-pair-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let connector_a = planar_connector_from_body(&body_a);
+        let connector_b = planar_connector_from_body(&body_b);
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "PairRevolute",
+                        "kind": "revolute",
+                        "connector_a": connector_a,
+                        "connector_b": connector_b,
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        let first = apply_inbox_on_separate_host(&unique);
+        assert_eq!(first.host_result["name"], "PairRevolute");
+        let first_id = first.host_result["id"].as_u64().unwrap();
+        server.call_tool("cad_refresh", json!({})).unwrap();
+
+        let generation = session::read_heartbeat_generation(&unique).unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "PairSlider",
+                        "kind": "slider",
+                        "connector_a": connector_a,
+                        "connector_b": connector_b,
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": generation
+                }),
+            )
+            .unwrap();
+        let second = session::apply_inbox_op(&unique, |name, arguments| {
+            let mut host = CadServer::new()?;
+            let model = session::require_model_json(&unique)?;
+            host.call_tool("cad_load_project_model", json!({ "model_json": model }))?;
+            let result = host.call_tool(name, arguments)?;
+            let exported = host.call_tool("cad_project_model", json!({}))?;
+            let model_json = exported
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| serde_json::to_string(&exported).unwrap());
+            session::publish_applied_snapshot(&unique, &model_json)?;
+            Ok(result)
+        });
+        match second {
+            Ok(applied) => {
+                assert_eq!(applied.op.name, "assembly_create_joint");
+                assert_eq!(applied.host_result["name"], "PairSlider");
+                let second_id = applied.host_result["id"].as_u64().unwrap();
+                assert_ne!(first_id, second_id);
+                server.call_tool("cad_refresh", json!({})).unwrap();
+                let document = server.call_tool("assembly_document", json!({})).unwrap();
+                assert_joint_visible(&document, first_id, "PairRevolute");
+                assert_joint_visible(&document, second_id, "PairSlider");
+                let solution = server
+                    .call_tool("assembly_solution", json!({}))
+                    .expect("two-joint solution must not crash");
+                assert!(
+                    solution.get("solved").and_then(Value::as_bool).is_some(),
+                    "two-joint solution must stay a DTO: {solution}"
+                );
+            }
+            Err(error) => {
+                assert!(
+                    error.contains("joint")
+                        || error.contains("occurrence")
+                        || error.contains("duplicate")
+                        || error.contains("conflict")
+                        || error.contains("overconstrain"),
+                    "second same-pair joint must be a typed reject, got {error}"
+                );
+                assert!(
+                    session::pending_inbox_seqs(&unique).unwrap().is_empty(),
+                    "rejected same-pair joint must dead-letter: {error}"
+                );
+            }
+        }
+
+        let follow = session::read_heartbeat_generation(&unique).unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "cad_set_document_name",
+                    "arguments": {"name": "AfterPair"},
+                    "base_generation": follow
+                }),
+            )
+            .expect("queue must accept a follow-up after the same-pair outcome");
+        let renamed = apply_inbox_on_separate_host(&unique);
+        assert_eq!(renamed.op.name, "cad_set_document_name");
+        assert_eq!(renamed.host_result["name"], "AfterPair");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_cad_submit_create_update_same_base_generation() {
+        // Rapid create + update sharing one base_generation: create applies,
+        // leftover same-base update dead-letters with a reason (never silent
+        // drop), and a rebased follow-up still applies.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-samebase-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let scene = write_two_box_session(&unique);
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies[0].clone();
+        let body_b = bodies[1].clone();
+        let mut probe = CadServer::new().unwrap();
+        probe
+            .call_tool(
+                "cad_load_project_model",
+                json!({ "model_json": session::require_model_json(&unique).unwrap() }),
+            )
+            .unwrap();
+        let probed = probe
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name": "HingeSameBase",
+                    "kind": "revolute",
+                    "connector_a": planar_connector_from_body(&body_a),
+                    "connector_b": planar_connector_from_body(&body_b),
+                    "grounded_body_id": body_a["id"]
+                }),
+            )
+            .unwrap();
+        let mut update_joint = probed.clone();
+        if let Some(object) = update_joint.as_object_mut() {
+            object.remove("_disclosure");
+            object.insert("name".into(), json!("HingeSameBaseRenamed"));
+        }
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let created_submit = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {
+                        "name": "HingeSameBase",
+                        "kind": "revolute",
+                        "connector_a": planar_connector_from_body(&body_a),
+                        "connector_b": planar_connector_from_body(&body_b),
+                        "grounded_body_id": body_a["id"]
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        let update_submit = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_update_joint",
+                    "arguments": { "joint": update_joint },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(created_submit["submitted"], true);
+        assert_eq!(update_submit["submitted"], true);
+        assert_ne!(created_submit["seq"], update_submit["seq"]);
+        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![1, 2]);
+
+        let created = apply_inbox_on_separate_host(&unique);
+        assert_eq!(created.op.name, "assembly_create_joint");
+        assert_eq!(created.host_result["name"], "HingeSameBase");
+        let joint_id = created.host_result["id"].as_u64().unwrap();
+        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![2]);
+
+        let conflict = session::apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run on generation_conflict")
+        })
+        .expect_err("same-base update must not apply after create advanced generation");
+        let parsed = parse_session_error(&conflict);
+        assert_eq!(parsed["code"], "generation_conflict");
+        assert!(
+            session::pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "same-base leftover must dead-letter, not silently drop or wedge"
+        );
+        let failed = std::path::Path::new(&dir)
+            .join(&unique)
+            .join("inbox/failed/2.json");
+        assert!(failed.exists(), "expected inbox/failed/2.json");
+        let failed_body = std::fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("generation_conflict"),
+            "dead-letter must record the reason: {failed_body}"
+        );
+
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let after_create = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_joint_visible(&after_create, joint_id, "HingeSameBase");
+        assert_ne!(
+            after_create["joints"][0]["name"], "HingeSameBaseRenamed",
+            "dead-lettered update must not rename: {after_create}"
+        );
+
+        let generation = session::read_heartbeat_generation(&unique).unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "cad_set_document_name",
+                    "arguments": {"name": "AfterSameBase"},
+                    "base_generation": generation
+                }),
+            )
+            .unwrap();
+        let renamed = apply_inbox_on_separate_host(&unique);
+        assert_eq!(renamed.op.name, "cad_set_document_name");
+        assert_eq!(renamed.host_result["name"], "AfterSameBase");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_malformed_inbox_json_is_dead_lettered() {
+        // Raw invalid JSON (not just a bad joint DTO) must dead-letter so the
+        // next queued mutate can apply.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-badjson-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_two_box_session(&unique);
+        let inbox = std::path::Path::new(&dir).join(&unique).join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("1.json"), "{not-json").unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "cad_set_document_name",
+                    "arguments": {"name": "AfterMalformedJson"},
+                    "base_generation": 1
+                }),
+            )
+            .expect("valid op queues behind malformed JSON");
+        assert_eq!(session::pending_inbox_seqs(&unique).unwrap(), vec![1, 2]);
+
+        let err = session::apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run on malformed inbox JSON")
+        })
+        .expect_err("malformed inbox JSON must fail apply");
+        assert!(
+            err.contains("invalid inbox") || err.contains("expected"),
+            "expected a JSON parse error, got {err}"
+        );
+        assert_eq!(
+            session::pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "malformed JSON must dead-letter so seq 2 can apply"
+        );
+        let failed = std::path::Path::new(&dir)
+            .join(&unique)
+            .join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = std::fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("{not-json"),
+            "dead-letter must keep the raw bytes: {failed_body}"
+        );
+
+        let renamed = apply_inbox_on_separate_host(&unique);
+        assert_eq!(renamed.op.name, "cad_set_document_name");
+        assert_eq!(renamed.host_result["name"], "AfterMalformedJson");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assembly_update_joint_swapped_connector_occurrence_ids() {
+        // Swap-only occurrence ids (bodies stay) is a typed reject. Swapping
+        // the whole connectors (bodies + occurrence ids) is legal and query
+        // must match.
+        let mut server = CadServer::new().unwrap();
+        server.call_tool("cad_new_project", json!({})).unwrap();
+        let first = extrude_offset_box(&mut server, "Sketch1", -12.0, -2.0);
+        let _second = extrude_offset_box(&mut server, "Sketch2", 2.0, 12.0);
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let bodies = scene["bodies"].as_array().unwrap();
+        let body_a = bodies
+            .iter()
+            .find(|body| body["id"] == first["scene"]["bodies"][0]["id"])
+            .cloned()
+            .expect("body A");
+        let body_b = bodies
+            .iter()
+            .find(|body| body["id"] != body_a["id"])
+            .cloned()
+            .expect("body B");
+        let created = server
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name": "HingeSwap",
+                    "kind": "revolute",
+                    "connector_a": planar_connector_from_body(&body_a),
+                    "connector_b": planar_connector_from_body(&body_b),
+                    "grounded_body_id": body_a["id"]
+                }),
+            )
+            .unwrap();
+        let joint_id = created["id"].as_u64().unwrap();
+        let occ_a = created["advanced"]["connector_a_occurrence_id"]
+            .as_u64()
+            .unwrap();
+        let occ_b = created["advanced"]["connector_b_occurrence_id"]
+            .as_u64()
+            .unwrap();
+        assert_ne!(occ_a, occ_b);
+
+        let mut swapped_ids = created.clone();
+        if let Some(object) = swapped_ids.as_object_mut() {
+            object.remove("_disclosure");
+            object["advanced"]["connector_a_occurrence_id"] = json!(occ_b);
+            object["advanced"]["connector_b_occurrence_id"] = json!(occ_a);
+        }
+        let err = server
+            .call_tool("assembly_update_joint", json!({ "joint": swapped_ids }))
+            .expect_err("swap-only occurrence ids must be a typed reject");
+        assert!(
+            err.contains("occurrence")
+                && (err.contains("does not contain")
+                    || err.contains("binding")
+                    || err.contains("connector body")),
+            "expected typed occurrence/body mismatch, got {err}"
+        );
+        let inspect = server.call_tool("assembly_document", json!({})).unwrap();
+        let found = inspect["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|joint| joint["id"].as_u64() == Some(joint_id))
+            .unwrap();
+        assert_eq!(
+            found["advanced"]["connector_a_occurrence_id"].as_u64(),
+            Some(occ_a),
+            "rejected swap-only ids must not persist: {found}"
+        );
+        assert_eq!(
+            found["advanced"]["connector_b_occurrence_id"].as_u64(),
+            Some(occ_b)
+        );
+
+        let mut swapped_connectors = created.clone();
+        if let Some(object) = swapped_connectors.as_object_mut() {
+            object.remove("_disclosure");
+            let connector_a = object["connector_a"].clone();
+            let connector_b = object["connector_b"].clone();
+            object.insert("connector_a".into(), connector_b);
+            object.insert("connector_b".into(), connector_a);
+            object["advanced"]["connector_a_occurrence_id"] = json!(occ_b);
+            object["advanced"]["connector_b_occurrence_id"] = json!(occ_a);
+        }
+        let updated = server
+            .call_tool(
+                "assembly_update_joint",
+                json!({ "joint": swapped_connectors }),
+            )
+            .expect("swapping both connectors including occurrence ids is legal");
+        assert_eq!(updated["id"].as_u64(), Some(joint_id));
+        assert_eq!(
+            updated["advanced"]["connector_a_occurrence_id"].as_u64(),
+            Some(occ_b)
+        );
+        assert_eq!(
+            updated["advanced"]["connector_b_occurrence_id"].as_u64(),
+            Some(occ_a)
+        );
+        let queried = server.call_tool("assembly_document", json!({})).unwrap();
+        let found = queried["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|joint| joint["id"].as_u64() == Some(joint_id))
+            .unwrap();
+        assert_eq!(
+            found["advanced"]["connector_a_occurrence_id"].as_u64(),
+            Some(occ_b),
+            "document query must match swapped connectors: {found}"
+        );
+        assert_eq!(
+            found["advanced"]["connector_b_occurrence_id"].as_u64(),
+            Some(occ_a)
+        );
+        assert_eq!(found["connector_a"]["body_id"], body_b["id"]);
+        assert_eq!(found["connector_b"]["body_id"], body_a["id"]);
     }
 
     fn schema_accepts(schema: &Value, value: &Value) -> Result<(), String> {
