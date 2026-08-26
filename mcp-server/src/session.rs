@@ -503,6 +503,13 @@ where
         dead_letter_inbox_op(session_id, seq, &error)?;
         return Err(error);
     }
+    if nbcad_mcp_mutate::lookup_mutate(&op.name).is_none() {
+        let error = format!("unsupported inbox mutate '{}'", op.name);
+        // Match native apply: reject before host so inspect/unknown names
+        // cannot archive as applied.
+        dead_letter_inbox_op(session_id, seq, &error)?;
+        return Err(error);
+    }
     let host_result = match host_apply(&op.name, op.arguments.clone()) {
         Ok(result) => result,
         Err(error) => {
@@ -842,6 +849,77 @@ mod tests {
             failed_body.contains("generation_conflict"),
             "dead-letter must record the reason: {failed_body}"
         );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unsupported_inbox_mutate_is_dead_lettered_and_unblocks_queue() {
+        // Match native: a head that is not in the shared mutate map must
+        // dead-letter before host_apply so later seqs can run.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-unsupported-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(r#"{{"updated_ms":{},"generation":1}}"#, now_ms()),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "assembly_document".to_string(),
+                arguments: json!({}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp {
+                name: "cad_set_document_name".to_string(),
+                arguments: json!({"name": "AfterUnsupported"}),
+                base_generation: 1,
+            },
+        )
+        .unwrap();
+        assert!(
+            nbcad_mcp_mutate::lookup_mutate("assembly_document").is_none(),
+            "assembly_document is inspect-only and must not be an inbox mutate"
+        );
+        let err = apply_inbox_op(&unique, |_name, _args| {
+            panic!("host must not run on unsupported inbox mutate")
+        })
+        .expect_err("unsupported mutate must fail apply");
+        assert!(
+            err.contains("unsupported inbox mutate") && err.contains("assembly_document"),
+            "expected unsupported mutate error, got {err}"
+        );
+        assert_eq!(
+            pending_inbox_seqs(&unique).unwrap(),
+            vec![2],
+            "unsupported head must dead-letter so seq 2 can apply"
+        );
+        let failed = session_dir().join(&unique).join("inbox/failed/1.json");
+        assert!(failed.exists(), "expected inbox/failed/1.json");
+        let failed_body = fs::read_to_string(&failed).unwrap();
+        assert!(
+            failed_body.contains("unsupported inbox mutate"),
+            "dead-letter must record the reason: {failed_body}"
+        );
+
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "AfterUnsupported");
+            Ok(json!({"name": "AfterUnsupported"}))
+        })
+        .unwrap();
+        assert_eq!(applied.seq, 2);
+        assert_eq!(applied.op.name, "cad_set_document_name");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

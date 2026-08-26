@@ -6819,6 +6819,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn failed_joint_create_leaves_no_ghost_in_assembly_document() {
+        // Dead-lettered create must not mint a joint id on the attached
+        // snapshot or the published model.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-joint-ghost-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_two_box_session(&unique);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let before = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            before["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(false),
+            "precondition: no joints: {before}"
+        );
+        let before_next = before["next_joint_id"].as_u64();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "assembly_create_joint",
+                    "arguments": {"name": "GhostHinge"},
+                    "base_generation": 1
+                }),
+            )
+            .expect("cad_submit accepts the op; apply validates");
+        let err = session::apply_inbox_op(&unique, |name, arguments| {
+            let mut host = CadServer::new()?;
+            let model = session::require_model_json(&unique)?;
+            host.call_tool("cad_load_project_model", json!({ "model_json": model }))?;
+            host.call_tool(name, arguments)
+        })
+        .expect_err("malformed joint must fail apply");
+        assert!(
+            err.contains("missing") || err.contains("connector") || err.contains("invalid"),
+            "expected a deserialize/validate error, got {err}"
+        );
+        assert!(
+            session::pending_inbox_seqs(&unique).unwrap().is_empty(),
+            "failed create must dead-letter"
+        );
+        let attached = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            attached["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(false),
+            "attached memory must not grow a ghost joint: {attached}"
+        );
+        assert_eq!(
+            attached["next_joint_id"].as_u64(),
+            before_next,
+            "failed create must not consume a joint id on the attached snapshot"
+        );
+        server.call_tool("cad_refresh", json!({})).unwrap();
+        let refreshed = server.call_tool("assembly_document", json!({})).unwrap();
+        assert!(
+            refreshed["joints"]
+                .as_array()
+                .map(|joints| joints.is_empty())
+                .unwrap_or(false),
+            "published snapshot must not contain a ghost joint: {refreshed}"
+        );
+        assert_eq!(
+            refreshed["next_joint_id"].as_u64(),
+            before_next,
+            "failed create must not consume a joint id on disk: {refreshed}"
+        );
+        assert!(
+            refreshed["joints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|joint| joint["name"] != "GhostHinge"),
+            "no ghost joint name for failed create: {refreshed}"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn advertised_update_joint_schema() -> Value {
         tool_specs()
             .into_iter()
