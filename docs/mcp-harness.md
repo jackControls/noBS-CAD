@@ -63,8 +63,8 @@ read-only entity/constraint snapshot so a desktop failure can still be
 inspected without admitting half-finished history into the project format.
 (atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
-1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`, plus `window_id` / `document_id` when published and a `windows[]` projection.
-2. `cad_attach` — target by `session_id` and/or `window_id` and/or `document_id` (UUID `document_id` remains a session alias); requires valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
+1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`, plus `window_id` / `document_id` when published. `windows[]` is **one entry per live window** with `documents[]` + `active_document_id` (not one row per tab). Live = not `closed.json`, and when `_ui/process.json` exists matching `process_instance_id` (inactive open tabs stay listed even if heartbeat is stale; prior-run / closed tabs do not).
+2. `cad_attach` — target by `session_id` and/or `window_id` and/or `document_id` (UUID `document_id` remains a session alias). All provided selectors are **intersected** before ambiguity is reported. Requires valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
 3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Direct mutates while attached return structured `session_read_only`; inspect/export/control stay callable. Only names in the shared `nbcad-mcp-mutate` map are accepted.
 4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge.
 5. `cad_refresh` — explicit re-read of the attached session from disk (needed after apply+publish).

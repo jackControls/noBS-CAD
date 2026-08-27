@@ -6,7 +6,8 @@
 //! Tauri IPC, then the existing publisher writes a new snapshot. This is still
 //! **not** in-process shared memory.
 //!
-//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,inbox/<seq>.json}`.
+//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json}`.
+//! Live window projection also reads `<session_dir>/_ui/process.json` (desktop process instance).
 //! Session ids must be UUID v4 strings.
 
 use std::fs::{self, OpenOptions};
@@ -234,27 +235,71 @@ pub fn session_identity(session_id: &str) -> SessionIdentity {
     }
 }
 
-fn find_sessions_by<F>(predicate: F) -> Result<Vec<String>, String>
-where
-    F: Fn(&SessionIdentity) -> bool,
-{
-    let mut matches = Vec::new();
-    for session_id in list_sessions()? {
-        let identity = session_identity(&session_id);
-        if predicate(&identity) {
-            matches.push(session_id);
-        }
+/// Explicit close marker written when the UI drops a tab's publisher.
+pub const CLOSED_TOMBSTONE: &str = "closed.json";
+
+pub fn is_session_closed(session_id: &str) -> bool {
+    session_path(session_id, CLOSED_TOMBSTONE)
+        .map(|path| path.is_file())
+        .unwrap_or(false)
+}
+
+/// Mark a session directory closed so it leaves the live `windows[]` set.
+pub fn write_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let body = serde_json::to_string_pretty(&json!({
+        "closed_ms": now_ms(),
+        "session_id": session_id,
+    }))
+    .map_err(|error| error.to_string())?;
+    write_session(session_id, CLOSED_TOMBSTONE, &body)
+}
+
+/// Clear a close marker when the same session UUID is republished.
+pub fn clear_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let path = session_path(session_id, CLOSED_TOMBSTONE)?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
     }
-    matches.sort();
-    Ok(matches)
+    Ok(())
+}
+
+/// Current desktop process instance from `_ui/process.json`, if the UI wrote one.
+pub fn current_process_instance_id() -> Option<String> {
+    let path = session_dir().join("_ui").join("process.json");
+    let body = fs::read_to_string(path).ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    optional_id(&parsed, "process_instance_id")
+}
+
+fn heartbeat_process_instance_id(session_id: &str) -> Option<String> {
+    let body = read_session_file(session_id, "heartbeat.json").ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    optional_id(&parsed, "process_instance_id")
+}
+
+/// Live for window projection: not closed, and (when a process file exists)
+/// stamped with the current desktop process instance. Stale heartbeats still
+/// count — inactive open tabs must remain visible.
+fn is_live_for_windows(session_id: &str) -> bool {
+    if is_session_closed(session_id) {
+        return false;
+    }
+    match current_process_instance_id() {
+        Some(current) => {
+            heartbeat_process_instance_id(session_id).as_deref() == Some(current.as_str())
+        }
+        None => true,
+    }
 }
 
 /// Resolve attach target to a UUID session dir.
 ///
 /// Accepts `session_id` (UUID), `window_id` (Tauri label), and/or `document_id`
 /// (native project-session id). UUID `document_id` remains an alias for
-/// `session_id` for compatibility. When multiple keys are supplied they must
-/// agree on one session; ambiguous window/document matches error clearly.
+/// `session_id` for compatibility. All provided selectors are intersected;
+/// ambiguity is reported only after every supplied filter is applied. Closed
+/// sessions are excluded from window/document matching (explicit `session_id`
+/// still resolves for recovery).
 pub fn resolve_attach_target(
     session_id: Option<&str>,
     window_id: Option<&str>,
@@ -269,9 +314,7 @@ pub fn resolve_attach_target(
         );
     }
 
-    let mut resolved: Option<String> = None;
-
-    if let Some(id) = session_id {
+    let mut candidates: Vec<String> = if let Some(id) = session_id {
         require_valid_session_id(id)?;
         if !list_sessions()?.iter().any(|existing| existing == id) {
             return Err(format!(
@@ -279,88 +322,122 @@ pub fn resolve_attach_target(
                 session_dir().display()
             ));
         }
-        resolved = Some(id.to_string());
-    }
+        vec![id.to_string()]
+    } else {
+        // Window/document matching uses the live set only (not closed, and when
+        // `_ui/process.json` exists only the current desktop process instance).
+        list_sessions()?
+            .into_iter()
+            .filter(|id| is_live_for_windows(id))
+            .collect()
+    };
 
     if let Some(window) = window_id {
-        let matches = find_sessions_by(|identity| identity.window_id.as_deref() == Some(window))?;
-        match matches.as_slice() {
-            [] => {
-                return Err(format!(
-                    "window_id '{window}' was not found under {}",
-                    session_dir().display()
-                ));
-            }
-            [only] => {
-                if let Some(existing) = resolved.as_deref() {
-                    if existing != only.as_str() {
-                        return Err(format!(
-                            "attach target mismatch: session_id '{existing}' is not window_id '{window}'"
-                        ));
-                    }
-                } else {
-                    resolved = Some(only.clone());
-                }
-            }
-            many => {
-                return Err(format!(
-                    "window_id '{window}' matches multiple sessions ({}); pass session_id",
-                    many.join(", ")
-                ));
-            }
+        candidates.retain(|id| session_identity(id).window_id.as_deref() == Some(window));
+        if candidates.is_empty() {
+            return Err(format!(
+                "window_id '{window}' was not found under {}",
+                session_dir().display()
+            ));
         }
     }
 
     if let Some(document) = document_id {
         // Compat: UUID document_id still means the session directory name.
         if is_valid_session_id(document) && list_sessions()?.iter().any(|id| id == document) {
-            if let Some(existing) = resolved.as_deref() {
-                if existing != document {
-                    return Err(format!(
-                        "attach target mismatch: session_id '{existing}' is not document_id '{document}'"
-                    ));
-                }
-            } else {
-                resolved = Some(document.to_string());
-            }
+            candidates.retain(|id| id == document);
         } else {
-            let matches =
-                find_sessions_by(|identity| identity.document_id.as_deref() == Some(document))?;
-            match matches.as_slice() {
-                [] => {
-                    return Err(format!(
-                        "document_id '{document}' was not found under {}",
-                        session_dir().display()
-                    ));
-                }
-                [only] => {
-                    if let Some(existing) = resolved.as_deref() {
-                        if existing != only.as_str() {
-                            return Err(format!(
-                                "attach target mismatch: session_id '{existing}' is not document_id '{document}'"
-                            ));
-                        }
-                    } else {
-                        resolved = Some(only.clone());
-                    }
-                }
-                many => {
-                    return Err(format!(
-                        "document_id '{document}' matches multiple sessions ({}); pass session_id or window_id",
-                        many.join(", ")
-                    ));
-                }
-            }
+            candidates.retain(|id| session_identity(id).document_id.as_deref() == Some(document));
+        }
+        if candidates.is_empty() {
+            return Err(format!(
+                "document_id '{document}' was not found under {}",
+                session_dir().display()
+            ));
         }
     }
 
-    let session_id = resolved.ok_or_else(|| "could not resolve attach target".to_string())?;
-    Ok(session_identity(&session_id))
+    candidates.sort();
+    candidates.dedup();
+    match candidates.as_slice() {
+        [] => Err("could not resolve attach target".to_string()),
+        [only] => Ok(session_identity(only)),
+        many => {
+            let labels: Vec<&str> = [
+                session_id.map(|_| "session_id"),
+                window_id.map(|_| "window_id"),
+                document_id.map(|_| "document_id"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            Err(format!(
+                "attach target is ambiguous after filters ({}); matches {} ({})",
+                labels.join("+"),
+                many.len(),
+                many.join(", ")
+            ))
+        }
+    }
+}
+
+fn windows_projection(detailed: &[Value]) -> Vec<Value> {
+    use std::collections::BTreeMap;
+    let mut by_window: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for detail in detailed {
+        if detail.get("closed").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if detail.get("live_for_windows").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let Some(window_id) = detail.get("window_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let doc = json!({
+            "session_id": detail.get("session_id"),
+            "document_id": detail.get("document_id"),
+            "has_model": detail.get("has_model"),
+            "heartbeat": detail.get("heartbeat"),
+        });
+        by_window
+            .entry(window_id.to_string())
+            .or_default()
+            .push(doc);
+    }
+
+    by_window
+        .into_iter()
+        .map(|(window_id, mut documents)| {
+            documents.sort_by(|a, b| {
+                let a_id = a.get("document_id").and_then(Value::as_str).unwrap_or("");
+                let b_id = b.get("document_id").and_then(Value::as_str).unwrap_or("");
+                a_id.cmp(b_id)
+            });
+            // Active = freshest heartbeat among this window's documents.
+            let active = documents
+                .iter()
+                .max_by_key(|doc| {
+                    doc.get("heartbeat")
+                        .and_then(|hb| hb.get("updated_ms"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                })
+                .cloned();
+            json!({
+                "window_id": window_id,
+                "active_document_id": active.as_ref().and_then(|d| d.get("document_id").cloned()).unwrap_or(Value::Null),
+                "active_session_id": active.as_ref().and_then(|d| d.get("session_id").cloned()).unwrap_or(Value::Null),
+                "documents": documents,
+            })
+        })
+        .collect()
 }
 
 pub fn sessions_list_json() -> Value {
     match list_sessions() {
         Ok(sessions) => {
+            let process_instance_id = current_process_instance_id();
             let detailed: Vec<Value> = sessions
                 .iter()
                 .map(|session_id| {
@@ -368,33 +445,27 @@ pub fn sessions_list_json() -> Value {
                         .map(|path| path.is_file())
                         .unwrap_or(false);
                     let identity = session_identity(session_id);
+                    let closed = is_session_closed(session_id);
+                    let live = is_live_for_windows(session_id);
                     json!({
                         "session_id": session_id,
                         "window_id": identity.window_id,
                         "document_id": identity.document_id,
                         "has_model": has_model,
+                        "closed": closed,
+                        "live_for_windows": live,
+                        "process_instance_id": heartbeat_process_instance_id(session_id),
                         "heartbeat": heartbeat_meta(session_id),
                     })
                 })
                 .collect();
-            let windows: Vec<Value> = detailed
-                .iter()
-                .filter_map(|detail| {
-                    let window_id = detail.get("window_id").and_then(Value::as_str)?;
-                    Some(json!({
-                        "window_id": window_id,
-                        "session_id": detail.get("session_id"),
-                        "document_id": detail.get("document_id"),
-                        "has_model": detail.get("has_model"),
-                        "heartbeat": detail.get("heartbeat"),
-                    }))
-                })
-                .collect();
+            let windows = windows_projection(&detailed);
             json!({
                 "session_mode": "read_only_snapshot",
                 "sessions": sessions,
                 "session_details": detailed,
                 "windows": windows,
+                "process_instance_id": process_instance_id,
                 "session_dir": session_dir().display().to_string(),
                 "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             })
@@ -404,6 +475,7 @@ pub fn sessions_list_json() -> Value {
             "sessions": [],
             "session_details": [],
             "windows": [],
+            "process_instance_id": null,
             "session_dir": session_dir().display().to_string(),
             "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             "error": error,
@@ -844,6 +916,15 @@ mod tests {
         assert_eq!(main["window_id"], "main");
         assert_eq!(main["document_id"], "tab-a");
         assert_eq!(list["windows"].as_array().unwrap().len(), 2);
+        let main_window = list["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["window_id"] == "main")
+            .cloned()
+            .unwrap();
+        assert_eq!(main_window["documents"].as_array().unwrap().len(), 1);
+        assert_eq!(main_window["active_document_id"], "tab-a");
 
         let by_window = resolve_attach_target(None, Some("main"), None).unwrap();
         assert_eq!(by_window.session_id, unique);
@@ -855,6 +936,123 @@ mod tests {
         assert!(resolve_attach_target(Some(&unique), Some("secondary"), None).is_err());
         assert!(resolve_attach_target(None, Some("missing-window"), None).is_err());
         assert!(resolve_attach_target(None, None, None).is_err());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_intersects_window_and_document_before_ambiguity() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tab_a = test_session_uuid();
+        let tab_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(11)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-intersect-{tab_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        for (sid, doc) in [(&tab_a, "tab-a"), (&tab_b, "tab-b")] {
+            write_session(sid, "model.json", r#"{"version":1}"#).unwrap();
+            write_session(
+                sid,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":1,"session_id":"{sid}","window_id":"main","document_id":"{doc}","project_session_id":"{doc}"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+        }
+
+        // window_id alone is ambiguous with two tabs in main.
+        let err = resolve_attach_target(None, Some("main"), None).expect_err("ambiguous window");
+        assert!(err.contains("ambiguous"), "{err}");
+
+        // Combined window + document selects exactly one.
+        let hit = resolve_attach_target(None, Some("main"), Some("tab-a")).unwrap();
+        assert_eq!(hit.session_id, tab_a);
+        assert_eq!(hit.document_id.as_deref(), Some("tab-a"));
+
+        let list = sessions_list_json();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        let main = &list["windows"][0];
+        assert_eq!(main["window_id"], "main");
+        assert_eq!(main["documents"].as_array().unwrap().len(), 2);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn closed_tombstone_and_process_instance_shape_live_windows() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let live = test_session_uuid();
+        let closed = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(13)) & 0xffffffffffff
+        );
+        let prior = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(17)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-tombstone-{live}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join("_ui")).unwrap();
+        fs::write(
+            dir.join("_ui").join("process.json"),
+            r#"{"process_instance_id":"proc-live"}"#,
+        )
+        .unwrap();
+
+        write_session(&live, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &live,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{live}","window_id":"main","document_id":"open","project_session_id":"open","process_instance_id":"proc-live"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        write_session(&closed, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &closed,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{closed}","window_id":"main","document_id":"gone","project_session_id":"gone","process_instance_id":"proc-live"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_closed_tombstone(&closed).unwrap();
+
+        write_session(&prior, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &prior,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{prior}","window_id":"main","document_id":"old-run","project_session_id":"old-run","process_instance_id":"proc-old"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["process_instance_id"], "proc-live");
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        assert_eq!(list["windows"][0]["documents"].as_array().unwrap().len(), 1);
+        assert_eq!(list["windows"][0]["active_document_id"], "open");
+
+        // Closed / prior-run tabs are not window-selectable.
+        assert!(resolve_attach_target(None, Some("main"), Some("gone")).is_err());
+        assert!(resolve_attach_target(None, None, Some("old-run")).is_err());
+        // Explicit session_id still resolves the closed dir for recovery.
+        let recovered = resolve_attach_target(Some(&closed), None, None).unwrap();
+        assert_eq!(recovered.session_id, closed);
+
+        clear_closed_tombstone(&closed).unwrap();
+        assert!(!is_session_closed(&closed));
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
