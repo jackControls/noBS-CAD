@@ -995,8 +995,10 @@ mod tests {
         assert!(posted.nc.contains("M0"));
         assert!(posted.nc.contains("G1 X"));
         let z_clearance = posted.nc.find("G0 Z8").unwrap();
-        // 3 mm tool radius plus the operation's 5 mm facing safe distance.
-        let xy_position = posted.nc.find("G0 X-8 Y0").unwrap();
+        // 3 mm tool radius plus the operation's 5 mm facing safe distance;
+        // the first row is centered on the 20 mm face (y = 2.5 with 3 mm
+        // stepover across six centered rows).
+        let xy_position = posted.nc.find("G0 X-8 Y2.5").unwrap();
         assert!(z_clearance < xy_position);
         assert!(posted.nc.ends_with("M30\n"));
     }

@@ -5,6 +5,43 @@ State of `feature/cam` after fifteen working rounds, rebased onto current
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
 
+## Round 15b (2026-08-26) — compensation field fixes
+
+Operator testing of round 15 surfaced three real defects, all fixed with
+regression tests:
+
+1. **Inside-compensated closed loops gouged on entry.** Tangent leads extend
+   the first/last segments straight — correct for outside compensation and
+   open chains, but on an inside ring (pocket/slot wall finish) the lead
+   tangent runs along the wall past the corner, so the entry plunge and the
+   compensation-activation move cut through the material OUTSIDE the ring.
+   A new simulation matrix test (winding × inside/outside × open-chain
+   left/right × both modes, voxel-probed) caught it; the planner now sends
+   inside-closed leads along the start corner's interior angle bisector into
+   the already-cleared pocket interior (`plan_contour`), and both modes
+   enforce lead > tool radius there so the bisector plunge clears the walls
+   (`model.rs` validation + dialog submit check). The matrix suite also
+   pins that in-control and in-software remove the identical band.
+2. **The dialog silently snapped an open chain's tool side to "On path".**
+   On path rides the tool CENTER on the contour — cutting a radius into
+   both sides — which is how an operator expecting the tool to hug the edge
+   destroyed a part; it also disabled the compensation-mode select, which
+   read as a stuck dropdown. The snap now lands on Left of travel (a real
+   edge-hugging side), an amber hint under Tool side spells out the choice
+   on open chains (pick the material side; Reverse flips travel), and the
+   mode select is always enabled (On path simply applies no offset either
+   way).
+3. **Facing rows hugged the near stock edge.** Rows were anchored at
+   `bounds.min.y`; a face narrower than one cutter band put its single pass
+   ON the edge instead of through the middle. Rows are now centered on the
+   face with the minimal count that spans it (`plan_face`): one covering
+   band = one pass through the middle; multi-row layouts stay symmetric
+   (e.g. 30 mm face / 10 mm tool / 8 mm stepover → rows at 3/11/19/27).
+
+Verification: cam 84 passed (5 new matrix tests + rebuilt face layout
+tests), workspace 26 suites green, `npx tsc --noEmit` clean,
+`build:wasm` + `smoke:wasm` + `build` green.
+
 ## Round 15 (2026-08-26) — machine-side cutter compensation, tangent leads, cone markers
 
 Three operator-reported issues, all about the contour model being wrong:
@@ -500,7 +537,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 78, 477 total), mcp-server 37,
+`cargo test --workspace` (cam 84, 483 total), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 

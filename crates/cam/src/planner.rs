@@ -455,20 +455,25 @@ fn plan_face(
     };
     require_flute_length(tool, top_z - target_z, name)?;
     let radius = tool.diameter * 0.5;
-    // Rows advance from the near edge by the stepover; a further row is
-    // only added while the previous row's cutter band leaves material uncut
-    // at the far edge. When one band already spans the face the tool makes
-    // exactly one pass — never a redundant return trip.
-    let mut rows = vec![bounds.min.y];
-    while rows[rows.len() - 1] + radius < bounds.max.y - EPSILON {
-        if rows.len() >= MAX_GENERATED_STEPS {
+    // Rows are centered on the face: cutter bands extend one radius past
+    // each row's center, so the minimal row count spans the face, and a
+    // face one band already covers gets exactly one pass through the
+    // middle — never a row hugging the near edge.
+    let width = bounds.max.y - bounds.min.y;
+    let span_needed = (width - tool.diameter).max(0.0);
+    let mut row_count = 1usize;
+    while span_needed > EPSILON && (row_count - 1) as f64 * step_over < span_needed - EPSILON {
+        row_count += 1;
+        if row_count >= MAX_GENERATED_STEPS {
             return Err(CamPlanError(format!(
                 "toolpath needs more than {MAX_GENERATED_STEPS} stepover rows; increase the stepover"
             )));
         }
-        let last = rows[rows.len() - 1];
-        rows.push((last + step_over).min(bounds.max.y));
     }
+    let center_y = (bounds.min.y + bounds.max.y) * 0.5;
+    let rows: Vec<f64> = (0..row_count)
+        .map(|index| center_y + (index as f64 - (row_count - 1) as f64 * 0.5) * step_over)
+        .collect();
     let depths = depth_levels(*top_z, *target_z, *step_down)?;
     ensure_program_budget(
         builder.commands.len(),
@@ -550,16 +555,17 @@ fn plan_contour(
         }
         _ => None,
     };
-    // Tangential leads on the center path: the entry extends the first
-    // segment backward, the exit extends the last segment forward (the
-    // closing segment for a closed loop). Straight leads are the v1 lead
-    // form; arc/sweep leads need the geometry-kernel roadmap item.
+    // Lead geometry. Tangent leads extend the end segments straight — safe
+    // for outside compensation and open chains, where the extension reaches
+    // into free air. A closed loop compensated INSIDE (pocket and slot
+    // walls) cannot use them: the tangent runs along the wall past the
+    // corner, so the entry plunge and the compensation-activation move
+    // would cut through the material outside the ring. Inside-closed leads
+    // instead leave the start corner along the interior angle bisector,
+    // into the region a roughing pass has already cleared. Arc/sweep leads
+    // remain the proper long-term answer (geometry-kernel roadmap item).
     let first = center_path[0];
     let start_tangent = unit_direction(center_path[0], center_path[1])?;
-    let lead_start = Point2Dto::new(
-        first.x - start_tangent.x * lead_in,
-        first.y - start_tangent.y * lead_in,
-    );
     let last_index = center_path.len() - 1;
     let (end_anchor, end_tangent) = if *closed {
         (
@@ -572,10 +578,39 @@ fn plan_contour(
             unit_direction(center_path[last_index - 1], center_path[last_index])?,
         )
     };
-    let lead_end = Point2Dto::new(
-        end_anchor.x + end_tangent.x * lead_out,
-        end_anchor.y + end_tangent.y * lead_out,
-    );
+    let inside_closed = *closed && matches!(compensation, ContourCompensation::Inside);
+    let (lead_start, lead_end) = if inside_closed {
+        // Interior angle bisector at the start corner. The ring's interior
+        // lies left of CCW travel, right of CW travel.
+        let inward = if signed_area(&center_path) > 0.0 { 1.0 } else { -1.0 };
+        let inward_normal = |direction: Point2Dto| {
+            Point2Dto::new(-direction.y * inward, direction.x * inward)
+        };
+        let normal_in = inward_normal(end_tangent);
+        let normal_out = inward_normal(start_tangent);
+        let raw = Point2Dto::new(normal_in.x + normal_out.x, normal_in.y + normal_out.y);
+        let length = (raw.x * raw.x + raw.y * raw.y).sqrt();
+        // Collinear adjacent edges (a straight "corner") leave no bisector;
+        // the edge's inward normal is the safe direction then.
+        let bisector = if length <= EPSILON { normal_out } else {
+            Point2Dto::new(raw.x / length, raw.y / length)
+        };
+        (
+            Point2Dto::new(first.x + bisector.x * lead_in, first.y + bisector.y * lead_in),
+            Point2Dto::new(first.x + bisector.x * lead_out, first.y + bisector.y * lead_out),
+        )
+    } else {
+        (
+            Point2Dto::new(
+                first.x - start_tangent.x * lead_in,
+                first.y - start_tangent.y * lead_in,
+            ),
+            Point2Dto::new(
+                end_anchor.x + end_tangent.x * lead_out,
+                end_anchor.y + end_tangent.y * lead_out,
+            ),
+        )
+    };
     let depths = depth_levels(*top_z, *bottom_z, *step_down)?;
     ensure_program_budget(
         builder.commands.len(),
@@ -1444,9 +1479,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // The plunge plus exactly one stroke across X, both on the first row.
+        // The plunge plus exactly one stroke across X, both on the single
+        // row — centered on the 19 mm face (y = 9.5), not hugging an edge.
         assert_eq!(cuts.len(), 2);
-        assert!(cuts.iter().all(|point| point.y.abs() < 1.0e-9));
+        assert!(cuts.iter().all(|point| (point.y - 9.5).abs() < 1.0e-9));
     }
 
     #[test]
@@ -1495,10 +1531,9 @@ mod tests {
     }
 
     #[test]
-    fn face_skips_the_far_edge_row_when_coverage_already_reaches_it() {
-        // 30 mm wide strip, 28 mm stepover, 32 mm tool: rows at 0 and 28;
-        // the 28 row's band reaches past 30, so no third row is forced onto
-        // the far edge.
+    fn face_centers_a_single_row_when_one_band_spans_the_strip() {
+        // 30 mm wide strip, 28 mm stepover, 32 mm tool: one centered band
+        // (y = 15) already reaches both edges, so no second row is forced.
         let operation = CamOperationDto::Face {
             id: 1,
             name: "Face".into(),
@@ -1530,7 +1565,47 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(row_ys, vec![0.0, 0.0, 28.0, 28.0]);
+        assert_eq!(row_ys, vec![15.0, 15.0]);
+    }
+
+    #[test]
+    fn face_centers_multi_row_layouts_on_the_face() {
+        // 30 mm face (the test stock's full depth), 10 mm tool, 8 mm
+        // stepover: four centered rows at 3 / 11 / 19 / 27 — the outer bands
+        // reach past both edges (3-5 < 0, 27+5 > 30) with even overlap and
+        // no edge hugging.
+        let operation = CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 30.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 8.0,
+            step_down: 1.0,
+            safe_distance: 5.0,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            cutting: cutting(),
+        };
+        let program = plan_setup(
+            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 10.0)]),
+            1,
+        )
+        .unwrap();
+        let row_ys: Vec<f64> = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, .. } if to.z < 0.0 => Some(to.y),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(row_ys, vec![3.0, 3.0, 11.0, 11.0, 19.0, 19.0, 27.0, 27.0]);
     }
 
     #[test]

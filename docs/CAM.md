@@ -169,12 +169,21 @@ rewrites stored geometry.
   nominal tool radius during simulation (buffered between the activation and
   cancellation markers, mitered at corners), so the preview still cuts
   exactly to the contour and never past it.
-- Straight tangent lead-in/lead-out on contour operations, with
-  operator-set lengths. In control mode with compensation active, both leads
-  must exceed the tool radius — controls alarm when radius compensation
-  activates over a shorter move — and the dialog and the engine both enforce
-  this. Leads are straight moves along the exact end tangents; arc and sweep
-  lead shapes are a documented next slice.
+- Straight lead-in/lead-out on contour operations, with operator-set
+  lengths. Leads extend the end tangents for outside compensation and open
+  chains; a closed loop compensated INSIDE (pocket/slot walls) instead
+  enters and leaves along the start corner's interior angle bisector, so the
+  entry plunge and the compensation-activation move never cross the wall
+  into the material outside the ring. In control mode with compensation
+  active, both leads must exceed the tool radius — controls alarm when
+  radius compensation activates over a shorter move — and inside-profile
+  leads carry the same floor in both modes so the bisector plunge clears
+  the adjacent walls. The dialog and the engine both enforce this. Arc and
+  sweep lead shapes are a documented next slice.
+- Facing rows are centered on the face: cutter bands extend one radius past
+  each row's center, so the minimal row count spans the face and a face one
+  band covers gets exactly one pass through the middle — never a row
+  hugging the near edge.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
   confirmed machine-coordinate `SUPA` retract. The post configuration

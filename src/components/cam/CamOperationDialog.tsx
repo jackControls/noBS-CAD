@@ -681,11 +681,14 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const chainClosed = chainResolution?.chain?.closed ?? null;
 
   // Compensation follows the resolved chain: open chains read left/right of
-  // travel, closed loops inside/outside — an incompatible draft falls back
-  // instead of failing at submit.
+  // travel, closed loops inside/outside. An incompatible draft snaps to the
+  // nearest edge-hugging side — never to 'on': on-path rides the tool center
+  // on the contour and cuts a radius into both sides, which destroys the
+  // part wall when the operator expected the tool to hug the edge. The
+  // passes tab shows a loud hint for open chains so the snap is seen.
   useEffect(() => {
     if (chainClosed === false && (compensation === 'inside' || compensation === 'outside')) {
-      setCompensation('on');
+      setCompensation('left');
     }
     if (chainClosed === true && (compensation === 'left' || compensation === 'right')) {
       setCompensation('outside');
@@ -910,14 +913,21 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           if (leadInMm <= 0 || leadOutMm <= 0) {
             throw new Error('Lead lengths must be positive.');
           }
-          // The control activates radius compensation on the lead-in move and
-          // alarms when that move does not clear the tool radius; pre-offset
-          // (in software) paths carry no such rule.
-          if (compensationMode === 'in_control' && compensation !== 'on' && selectedTool) {
+          // Two long-lead rules: in-control compensation activates on the
+          // lead-in move and the control alarms when that move does not
+          // clear the tool radius; and leads into an inside profile plunge
+          // on the corner bisector, which must clear the adjacent walls.
+          if (selectedTool) {
             const radius = selectedTool.diameter / 2;
-            if (leadInMm <= radius || leadOutMm <= radius) {
+            const shortLeads = leadInMm <= radius || leadOutMm <= radius;
+            if (shortLeads && compensationMode === 'in_control' && compensation !== 'on') {
               throw new Error(
                 `In-control compensation activates on the lead-in: both leads must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Lengthen the leads on the Linking tab, or switch the mode to In software.`,
+              );
+            }
+            if (shortLeads && geometry.closed && compensation === 'inside') {
+              throw new Error(
+                `Leads into an inside profile must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) so the entry plunge clears the walls.`,
               );
             }
           }
@@ -1489,21 +1499,27 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         ) : (
           <DeadSelect label="Direction" value="Both ways" />
         )}
+        {pages.compensation && chainClosed === false && (
+          <p className="col-span-2 rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
+            Open chain — choose the side the MATERIAL is on (Left/Right of travel; flip travel
+            with Reverse on the Geometry tab). “On path” rides the tool center on the edge and
+            cuts one radius into BOTH sides of it.
+          </p>
+        )}
         {pages.compensation && (
           <label
-            className={`block ${compensation === 'on' ? 'opacity-45' : ''}`}
+            className="block"
             title={
               compensation === 'on'
-                ? 'On path means no radius offset, so there is nothing to apply'
+                ? 'On path applies no radius offset in either mode'
                 : 'Who turns the contour into the tool-center path'
             }
           >
             <span className={CAM_DIALOG_LABEL}>Compensation mode</span>
             <select
               value={compensationMode}
-              disabled={compensation === 'on'}
               onChange={(event) => setCompensationMode(event.target.value as CamCompensationMode)}
-              className={`${CAM_DIALOG_INPUT} ${compensation === 'on' ? 'cursor-not-allowed' : ''}`}
+              className={CAM_DIALOG_INPUT}
             >
               <option value="in_control">In control — machine offsets (G41/G42)</option>
               <option value="in_software">In software — pre-offset path</option>

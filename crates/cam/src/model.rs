@@ -1178,6 +1178,20 @@ impl CamOperationDto {
                         ));
                     }
                 }
+                if *closed
+                    && matches!(compensation, ContourCompensation::Inside)
+                    && *compensation_mode == CompensationMode::InSoftware
+                {
+                    // Inside-closed leads plunge on the corner bisector
+                    // inside the pocket; shorter than the radius the plunge
+                    // point nicks the adjacent walls.
+                    let radius = tool.diameter * 0.5;
+                    if *lead_in <= radius || *lead_out <= radius {
+                        return Err(format!(
+                            "contour operation '{label}' leads into an inside profile must be longer than the tool radius ({radius:.3} mm) so the entry plunge clears the walls"
+                        ));
+                    }
+                }
                 validate_depth_range(label, *top_z, *bottom_z, *step_down, within_z)?;
             }
             Self::Drill {

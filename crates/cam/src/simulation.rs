@@ -1511,6 +1511,160 @@ mod tests {
         assert!(!removed_at(&stock, 10.0, 8.0, -1.0));
     }
 
+    /// Contour-only document for the compensation matrix tests: one contour
+    /// op with the given mode/side on an arbitrary path (r = 3 tool, stock
+    /// 0..20 x 0..16 x -6..0, probes read at z = -1).
+    fn contour_case_document(
+        mode: CompensationMode,
+        compensation: ContourCompensation,
+        path: Vec<Point2Dto>,
+        closed: bool,
+    ) -> CamDocumentDto {
+        let mut source = document();
+        source.setups[0].operations = vec![CamOperationDto::Contour2d {
+            id: 1,
+            name: "Contour case".to_string(),
+            enabled: true,
+            tool_id: 1,
+            path,
+            closed,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation,
+            compensation_mode: mode,
+            lead_in: 5.0,
+            lead_out: 5.0,
+            clearance_z: 5.0,
+            retract_z: 2.0,
+            cutting: CuttingParametersDto {
+                spindle_rpm: 8_000,
+                feed_xy: 600.0,
+                feed_z: 180.0,
+                coolant: CoolantMode::Off,
+            },
+        }];
+        source
+    }
+
+    fn run_contour_case(document: &CamDocumentDto) -> VoxelStock {
+        let setup = document.setup(1).expect("setup");
+        let spec = GridSpec::for_stock(&setup.stock, Some(0.5), 4_000_000).expect("grid");
+        let mut stock = initial_stock(document, setup, &spec, None).expect("stock");
+        let program = plan_setup(document, 1).expect("plan");
+        run_program(document, &program, &mut stock, true).expect("run");
+        stock
+    }
+
+    // Mathematically CW winding of the (5,5)-(15,5)-(15,11)-(5,11) rectangle.
+    fn cw_boss_rect() -> Vec<Point2Dto> {
+        vec![
+            Point2Dto::new(5.0, 5.0),
+            Point2Dto::new(5.0, 11.0),
+            Point2Dto::new(15.0, 11.0),
+            Point2Dto::new(15.0, 5.0),
+        ]
+    }
+
+    // A wide CCW ring (2,1)-(18,1)-(18,15)-(2,15) whose inside band leaves
+    // the middle of the interior standing (the ring is taller than 4r, so
+    // the top and bottom wall bands cannot meet in the middle).
+    fn ccw_wide_ring() -> Vec<Point2Dto> {
+        vec![
+            Point2Dto::new(2.0, 1.0),
+            Point2Dto::new(18.0, 1.0),
+            Point2Dto::new(18.0, 15.0),
+            Point2Dto::new(2.0, 15.0),
+        ]
+    }
+
+    fn assert_outside_band_removed(stock: &VoxelStock) {
+        // r = 3 outside the wall (x = 5): the exterior band is removed, the
+        // interior survives right up to the wall.
+        assert!(removed_at(stock, 3.0, 8.0, -1.0));
+        assert!(!removed_at(stock, 5.5, 8.0, -1.0));
+        assert!(!removed_at(stock, 10.0, 8.0, -1.0));
+    }
+
+    fn assert_inside_band_removed(stock: &VoxelStock) {
+        // r = 3 inside the wide ring: the wall band (x in 2..8) is cleared,
+        // the middle of the interior and the exterior stock survive.
+        assert!(removed_at(stock, 4.0, 8.0, -1.0));
+        assert!(!removed_at(stock, 10.0, 8.0, -1.0));
+        assert!(!removed_at(stock, 0.5, 12.0, -1.0));
+    }
+
+    #[test]
+    fn in_control_simulation_offsets_outside_for_cw_winding() {
+        let stock = run_contour_case(&contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Outside,
+            cw_boss_rect(),
+            true,
+        ));
+        assert_outside_band_removed(&stock);
+    }
+
+    #[test]
+    fn in_control_simulation_offsets_inside_for_ccw_winding() {
+        let stock = run_contour_case(&contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Inside,
+            ccw_wide_ring(),
+            true,
+        ));
+        assert_inside_band_removed(&stock);
+    }
+
+    #[test]
+    fn in_control_simulation_offsets_inside_for_cw_winding() {
+        let mut ring = ccw_wide_ring();
+        ring.reverse();
+        let stock = run_contour_case(&contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Inside,
+            ring,
+            true,
+        ));
+        assert_inside_band_removed(&stock);
+    }
+
+    #[test]
+    fn in_control_simulation_offsets_open_chains_to_their_side() {
+        let chain = || vec![Point2Dto::new(5.0, 8.0), Point2Dto::new(15.0, 8.0)];
+        // Left of +X travel is +Y: the band above the chain is removed, the
+        // material below survives.
+        let left = run_contour_case(&contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Left,
+            chain(),
+            false,
+        ));
+        assert!(removed_at(&left, 10.0, 10.0, -1.0));
+        assert!(!removed_at(&left, 10.0, 6.0, -1.0));
+        let right = run_contour_case(&contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Right,
+            chain(),
+            false,
+        ));
+        assert!(removed_at(&right, 10.0, 6.0, -1.0));
+        assert!(!removed_at(&right, 10.0, 10.0, -1.0));
+    }
+
+    #[test]
+    fn in_software_and_in_control_remove_the_same_band() {
+        // The planner offsets in software mode, the control offsets in
+        // control mode — either way the same material must go.
+        let software = run_contour_case(&contour_case_document(
+            CompensationMode::InSoftware,
+            ContourCompensation::Outside,
+            cw_boss_rect(),
+            true,
+        ));
+        assert_outside_band_removed(&software);
+    }
+
     #[test]
     fn simulation_through_unknown_operation_fails_closed() {
         let error = simulate_setup(
