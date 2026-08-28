@@ -1,9 +1,70 @@
-# CAM branch handoff — 2026-08-27
+# CAM branch handoff — 2026-08-28
 
-State of `feature/cam` after sixteen working rounds, rebased onto current
+State of `feature/cam` after seventeen working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 17 (2026-08-28) — per-hole spans, tip-through, uniform markers
+
+Four operator requests from testing the door-block project, all landed end
+to end:
+
+1. **Direction cones are one size per model.** The overlay's entry/exit
+   cones used to be capped by the shorter host move (`moveCap`), so a
+   drill's short plunge shrank its cones next to a facing pass's long rows.
+   The cap is gone: `coneLength = clamp(modelExtent * 0.025, 1, 12)` is the
+   only sizing rule, so every operation on the same model shows identical
+   green/red cones.
+2. **Per-kind height defaults + hole references.** Fresh dialogs seed from
+   a `HEIGHT_DEFAULTS` table (per-kind plane + offset) instead of one
+   generic set: facing starts a skin (0.2 mm) above the stock top and
+   targets the model top; contours run stock top → stock bottom − 1 mm;
+   pockets stock/model-bracketed with a 0.2 mm floor break-through; drills
+   hang clearance/retract/feed off the model top with the bottom at the
+   stock bottom; threads default top/bottom to the picked holes' own span.
+   `HeightFrom` gained `hole_top`/`hole_bottom` (drill/thread only —
+   highest picked top / lowest picked bottom), with an actionable submit
+   error when no holes are picked. Editing still re-opens stored absolute
+   values.
+3. **Picked holes carry their own span.** `CamHoleDto { point, top_z,
+   bottom_z, axis, face_key }` rides the drill/thread operation next to
+   manual `points`; the pick pipeline (`camHoleFromCylinderFace` +
+   `faceVerticesOfRange`) reads the face's triangle vertices so a stepped
+   boss or blind bore machines across exactly its own height — the planner
+   pecks/feeds per hole (`plan_drill`/`plan_thread` targets are
+   (center, top, bottom) tuples; flute checks use the deepest travel).
+   Editing re-seeds the viewport pick session from `face_key`, rebuilt
+   against the CURRENT model; a hole whose face vanished degrades to a
+   manual center line instead of dropping out. The simulator's drill cone
+   now reads the tool's stored point angle (the 118° fallback warning only
+   fires when the angle is unset).
+4. **Drill tip-through.** Drilling-family cycles (drill / chip breaking /
+   deep hole) carry `drill_tip_through` (default on) + `breakthrough_depth`
+   (default 1 mm): the cut bottom extends past the bottom plane by the
+   point length — computed from the tool's stored point angle — plus the
+   allowance, so the full diameter clears the hole bottom. Tapping/reaming/
+   boring reject tip-through at validation.
+5. **Lead lengths decoupled from the tool diameter.** The hard floors
+   (in-control lead > radius, arc radius ≥ radius, inside-closed bisector
+   floor) are deleted in the engine and the dialog; the 1.5× radius seeding
+   stays as a comfortable default. With machine-side compensation the
+   control owns its activation travel — a short lead is not a plan-time
+   error.
+
+**The "rest stock looks dished" report was verified NOT a bug**: a
+diagnostic run on the door-block project (stock 34×19×14, face target 2 mm
+above the model top) confirmed removed volume 3681 mm³ matches theory and a
+0.5 mm raster of the remaining-stock triangles shows a flat interior at the
+face target — the dished look is translucency stacking (face skin + contour
+slot + chamfer wedge), not missing material. Making the remaining stock
+opaque is a rendering option, not a correctness fix.
+
+Verification: cam 104 passed (new: per-hole peck levels, per-hole thread
+spans, tip-through tip lengths at 118°/90°, empty-target/tilted-axis/
+negative-breakthrough/wrong-cycle rejections, short-lead acceptance),
+workspace suites green, mcp-server 37, `npx tsc --noEmit` clean,
+`build:wasm` + `smoke-wasm` + `build` green.
 
 ## Round 16 (2026-08-27) — feed plane, contour passes, lead arcs, directions
 
@@ -658,14 +719,17 @@ drill cycles.
    (The central/project two-scope model, named cutting-data profiles, the
    Vc/fz calculator, and planner-step defaults are landed.)
 6. Heights "From"-references: landed for every operation kind, feed height
-   included (round 16 — the five-tab scaffold is universal). Remaining: the
-   additional references (fixture planes, selected contours,
+   included (round 16 — the five-tab scaffold is universal); per-kind
+   defaults plus the hole top/bottom references landed in round 17.
+   Remaining: the additional references (fixture planes, selected contours,
    highest/lowest-of) once selection plumbing exists.
 7. Geometry picking upgrades: viewport chain selection for
    contour/pocket/chamfer (sketch loops already supported; hole-face picking
    for drill/thread landed in round 10 and accepts ANY cylindrical face since
-   round 11 — the recorded setup-space axis is the seam for indexed/5-axis
-   tool orientation, which fixed-axis planning does not consume yet).
+   round 11, and since round 17 each pick carries the face's real top/bottom
+   span in setup Z — the recorded setup-space axis is the seam for
+   indexed/5-axis tool orientation, which fixed-axis planning does not
+   consume yet).
    Indexed/5-axis work itself (per-operation tool orientation, tilted-hole
    drilling) is the larger roadmap item that will consume those axes.
 8. The shared Passes/Linking tabs render the reference option set with
@@ -674,10 +738,12 @@ drill cycles.
    (radial/axial), tolerance/smoothing,
    pass direction + extension,
    keep-tool-down linking, vertical lead radii, and the
-   ramp/lead/transition feedrates. Also drill break-through depth +
-   tip-through-bottom. (Landed in round 16: feed height, face/pocket/chamfer/
-   contour direction selection, contour radial multi-pass + finishing +
-   spring pass, horizontal arc leads for contour.)
+   ramp/lead/transition feedrates. (Landed in round 16: feed height,
+   face/pocket/chamfer/contour direction selection, contour radial
+   multi-pass + finishing + spring pass, horizontal arc leads for contour.
+   Landed in round 17: drill break-through depth + tip-through-bottom, and
+   the lead/arc-radius tool-diameter floors are GONE — the control owns its
+   activation travel.)
 9. Ramp/helical entries for pocket and contour — the blocker for
    non-center-cutting tools there (facing is already exempt).
 

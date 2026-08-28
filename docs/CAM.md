@@ -190,12 +190,12 @@ rewrites stored geometry.
   enters and leaves along the start corner's interior angle bisector, so the
   entry plunge and the compensation-activation move never cross the wall
   into the material outside the ring (arc leads need swing room a closed
-  inside profile does not have, so they are straight there). In control mode
-  with compensation active, a straight lead must exceed the tool radius and
-  an arc lead's radius must at least match it — controls alarm when radius
-  compensation activates over a shorter move — and inside-profile
-  leads carry the same floor in both modes so the bisector plunge clears
-  the adjacent walls. The dialog and the engine both enforce this.
+  inside profile does not have, so they are straight there). Lead lengths
+  and the arc radius carry no tool-diameter floor: with machine-side
+  compensation the control owns its activation travel (short leads are its
+  problem to solve, not a plan-time error), and with software compensation
+  the planner offsets the programmed path directly. The dialog seeds leads
+  at 1.5x the tool radius as a comfortable default, never a limit.
   Vertical lead radii are a documented next slice.
 - Contour cuts climb or conventional (the planner re-winds the stored path
   around its start; open chains reverse with the physical side preserved),
@@ -218,9 +218,34 @@ rewrites stored geometry.
 - Every operation carries five resolved heights: clearance, retract, feed,
   top, and (for depth-cutting kinds) bottom — each a reference plane plus a
   signed offset, resolved in the fixed order bottom → top → feed → retract →
-  clearance so a row may chain off any lower row. Rapids stop at the feed
-  plane; everything below runs at feed rate. Peck re-entries rapid only to
-  just above the last depth, capped at the feed plane.
+  clearance so a row may chain off any lower row. Reference planes cover
+  model/stock extremes and the absolute origin; drill and thread operations
+  may also hang heights off the picked holes' own span (Hole top = highest
+  picked top, Hole bottom = lowest picked bottom). Fresh dialogs seed
+  per-kind defaults modeled on established CAM workflows (facing starts a
+  skin above the stock top and targets the model top; contours run stock
+  top to just below the stock bottom; hole kinds ride the model top or the
+  picked holes' span); editing always re-opens the stored absolute values.
+  Rapids stop at the feed plane; everything below runs at feed rate. Peck
+  re-entries rapid only to just above the last depth, capped at the feed
+  plane.
+- Viewport-picked holes carry their own geometry: each pick records the
+  center in setup XY, the cylindrical face's real top/bottom span in setup
+  Z (from the face's own mesh vertices, so stepped bosses and blind bores
+  machine across exactly their height), and the unit axis — validated
+  parallel to setup Z for fixed-axis planning, with the record kept
+  seam-ready for a future indexed/5-axis tool orientation. Manual center
+  coordinates still machine across the operation's top/bottom planes; the
+  two kinds of targets mix freely in one operation. Editing a drill/thread
+  operation re-selects the same faces in the viewport (rebuilt from the
+  current model, so edited geometry refreshes the spans); a hole whose face
+  vanished degrades to a manual center line instead of dropping out.
+  Drilling-family cycles offer Drill tip through bottom with a break-through
+  depth: the planner drives the point length (from the tool's stored point
+  angle, the conventional 118° when unset) plus the allowance past the
+  bottom plane so the full diameter clears the hole bottom. Tapping,
+  reaming, and boring stop at the bottom plane by definition and reject
+  tip-through at validation.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
   confirmed machine-coordinate `SUPA` retract. The post configuration
@@ -264,10 +289,10 @@ rewrites stored geometry.
   rides the exact end of the last feed move,
   oriented along the exact motion tangent (arc tangents from the circle
   geometry, not display chords; rapids never carry markers). Cone size
-  follows the model extent, a fixed short marker that grows and shrinks with
-  the part and stays identical at both ends, capped by the shorter of the
-  two host moves so a short plunge cannot poke a cone through the machined
-  surface, and a translucent ghost of the selected
+  follows the model extent alone — a fixed short marker that grows and
+  shrinks with the part, identical at both ends of every operation on the
+  same model (a drill's short plunge and a facing pass show the same
+  cone), and a translucent ghost of the selected
   operation's tool parked at its START position (the first approach target,
   above the entry point — the horizontal offset from the stock boundary
   still reads as one radius plus facing's safe distance), fluted section
