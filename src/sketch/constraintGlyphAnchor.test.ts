@@ -9,6 +9,7 @@
  */
 import type { ConstraintDto, EntityDto, Vec2 } from '../engine/types';
 import {
+  layoutConstraintGlyphs,
   offsetGlyphFromAnchor,
   singlePointRelationAnchor,
 } from './constraintGlyphAnchor';
@@ -177,6 +178,46 @@ console.log('constraint glyph offsets');
     'size-based nudge clears grip + half badge + gap',
     Math.abs(placed.x - nudge) < 1e-9 && Math.abs(placed.y) < 1e-9,
     JSON.stringify({ placed, nudge }),
+  );
+}
+
+{
+  const glyphPx = 15;
+  const gripHalfPx = 4;
+  const gapPx = 10;
+  const expectedScreenOffset = gripHalfPx + glyphPx * 0.5 + gapPx;
+  const item = {
+    anchor: { x: 0, y: 0 },
+    glyphPx,
+    preferredDir: { x: 1, y: 0 },
+  };
+  const zoomedOutWorldPerPixel = 2;
+  const zoomedInWorldPerPixel = 0.25;
+  const [zoomedOut] = layoutConstraintGlyphs([item], {
+    worldPerPixel: zoomedOutWorldPerPixel,
+    gripHalfPx,
+    gapPx,
+    obstacles: [item.anchor],
+  });
+  const [zoomedIn] = layoutConstraintGlyphs([item], {
+    worldPerPixel: zoomedInWorldPerPixel,
+    gripHalfPx,
+    gapPx,
+    obstacles: [item.anchor],
+  });
+  check(
+    'zoom refresh preserves badge-to-anchor screen gap',
+    Math.abs(zoomedOut.x / zoomedOutWorldPerPixel - expectedScreenOffset) < 1e-9
+      && Math.abs(zoomedIn.x / zoomedInWorldPerPixel - expectedScreenOffset) < 1e-9,
+    JSON.stringify({ zoomedOut, zoomedIn, expectedScreenOffset }),
+  );
+  check(
+    'zoom refresh changes only the camera-dependent world offset',
+    near(zoomedOut, {
+      x: zoomedIn.x * (zoomedOutWorldPerPixel / zoomedInWorldPerPixel),
+      y: zoomedIn.y * (zoomedOutWorldPerPixel / zoomedInWorldPerPixel),
+    }),
+    JSON.stringify({ zoomedOut, zoomedIn }),
   );
 }
 

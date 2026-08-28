@@ -213,6 +213,26 @@ export interface GlyphOffsetOptions {
   clearRadius?: number;
 }
 
+export interface ConstraintGlyphLayoutItem {
+  /** Solved sketch-plane point the badge describes. */
+  anchor: Vec2;
+  /** Visible badge size in CSS pixels. */
+  glyphPx: number;
+  /** Preferred sketch-plane direction away from the anchor. */
+  preferredDir?: Vec2 | null;
+}
+
+export interface ConstraintGlyphLayoutOptions {
+  /** Sketch-plane world units covered by one CSS pixel for the current camera. */
+  worldPerPixel: number;
+  /** Half-size of a visible point grip in CSS pixels. */
+  gripHalfPx: number;
+  /** Desired empty screen-space gap around grips and badges. */
+  gapPx: number;
+  /** Solved sketch points that badges must avoid. */
+  obstacles?: readonly Vec2[];
+}
+
 /**
  * Place a constraint glyph near a relation anchor without covering geometry.
  *
@@ -253,4 +273,40 @@ export function offsetGlyphFromAnchor(
     x: anchor.x + preferred.x * nudge,
     y: anchor.y + preferred.y * nudge,
   };
+}
+
+/**
+ * Lay out all constraint badges for the current camera scale.
+ *
+ * Keeping the scale as an input is important: the solved relation anchors do
+ * not change while zooming, but the world-space offset that represents (for
+ * example) 20 screen pixels does. Callers can therefore refresh only badge
+ * positions on camera changes without rebuilding sketch geometry.
+ */
+export function layoutConstraintGlyphs(
+  items: readonly ConstraintGlyphLayoutItem[],
+  options: ConstraintGlyphLayoutOptions,
+): Vec2[] {
+  const worldPerPixel = Math.max(Math.abs(options.worldPerPixel), Number.EPSILON);
+  const obstacles = (options.obstacles ?? []).map((point) => ({ ...point }));
+  const positions: Vec2[] = [];
+
+  for (const item of items) {
+    const glyphHalfPx = item.glyphPx * 0.5;
+    const nudgePx = options.gripHalfPx + glyphHalfPx + options.gapPx;
+    const clearPx = Math.max(
+      nudgePx,
+      glyphHalfPx * 2 + options.gapPx,
+    );
+    const placed = offsetGlyphFromAnchor(item.anchor, {
+      nudge: worldPerPixel * nudgePx,
+      preferredDir: item.preferredDir,
+      obstacles,
+      clearRadius: worldPerPixel * clearPx,
+    });
+    positions.push(placed);
+    obstacles.push(placed);
+  }
+
+  return positions;
 }
