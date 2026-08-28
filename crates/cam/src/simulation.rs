@@ -211,7 +211,7 @@ fn simulate_program(
     let mut warnings = program.warnings.clone();
     if outcome.approximated_drill {
         warnings.push(
-            "Drill stock removal uses a conventional 118-degree point because tool point angle is not yet stored."
+            "Drill stock removal assumes a conventional 118-degree point because the tool point angle is not set."
                 .to_string(),
         );
     }
@@ -882,7 +882,13 @@ fn voxelize_mesh_stock(
 
 fn note_approximation(tool: &CamToolDto, drill: &mut bool, chamfer: &mut bool) {
     match tool.kind {
-        CamToolKind::Drill => *drill = true,
+        // Only flag the drill approximation when the point angle is not
+        // stored; a known angle sweeps the exact cone in `cutter_contains`.
+        CamToolKind::Drill => {
+            if tool.point_angle_degrees.is_none() {
+                *drill = true;
+            }
+        }
         CamToolKind::ChamferMill => *chamfer = true,
         // Taps, reamers, boring bars, thread mills, and face mills sweep as
         // plain cylinders, like end mills, so they need no
@@ -1247,7 +1253,10 @@ fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool 
             }
         }
         CamToolKind::Drill => {
-            let tangent = 59.0_f64.to_radians().tan();
+            // Cone point driven by the tool's stored point angle; falls back
+            // to the conventional 118-degree jobber point when unset.
+            let half_angle = tool.point_angle_degrees.unwrap_or(118.0) * 0.5;
+            let tangent = half_angle.to_radians().tan();
             let point_length = radius / tangent;
             let local_radius = if dz < point_length {
                 (dz.max(0.0) * tangent).min(radius)

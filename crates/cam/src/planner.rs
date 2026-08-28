@@ -959,6 +959,7 @@ fn plan_drill(
 ) -> Result<(), CamPlanError> {
     let CamOperationDto::Drill {
         points,
+        holes,
         top_z,
         bottom_z,
         retract_z,
@@ -968,6 +969,8 @@ fn plan_drill(
         thread_pitch,
         feed_out,
         dwell_seconds,
+        drill_tip_through,
+        breakthrough_depth,
         cutting,
         name,
         ..
@@ -975,7 +978,32 @@ fn plan_drill(
     else {
         unreachable!();
     };
-    require_flute_length(tool, top_z - bottom_z, name)?;
+    // Every target is (center, cut top, cut bottom): viewport-picked holes
+    // bring their own face heights, manual centers use the operation planes.
+    let mut targets: Vec<(Point2Dto, f64, f64)> = holes
+        .iter()
+        .map(|hole| (hole.point, hole.top_z, hole.bottom_z))
+        .collect();
+    targets.extend(points.iter().map(|point| (*point, *top_z, *bottom_z)));
+    // Tip-through travels the point length plus the break-through allowance
+    // past the bottom plane so the drill's full diameter clears the hole
+    // bottom; the point length follows the stored point angle (118 degrees
+    // when the tool does not record one).
+    let tip_length = if *drill_tip_through {
+        let half_angle = tool
+            .point_angle_degrees
+            .unwrap_or(118.0)
+            .to_radians()
+            * 0.5;
+        (tool.diameter * 0.5) / half_angle.tan().max(1.0e-6) + *breakthrough_depth
+    } else {
+        0.0
+    };
+    let deepest_travel = targets
+        .iter()
+        .map(|(_, top, bottom)| top - bottom + tip_length)
+        .fold(0.0_f64, f64::max);
+    require_flute_length(tool, deepest_travel, name)?;
     let pecking = matches!(cycle, DrillCycle::ChipBreaking | DrillCycle::DeepHole);
     // Validation already enforces these invariants; fail closed here too so a
     // mis-built operation can never reach motion generation.
@@ -988,13 +1016,11 @@ fn plan_drill(
     } else {
         None
     };
-    let depths = match peck {
-        Some(peck) => depth_levels(*top_z, *bottom_z, peck)?,
-        None => vec![*bottom_z],
-    };
     let partial_retract = match cycle {
         // Default partial retract: 0.5 mm, never more than half the peck.
-        DrillCycle::ChipBreaking => Some(peck_retract.unwrap_or(0.5).min(peck.expect("pecking cycle") * 0.5)),
+        DrillCycle::ChipBreaking => {
+            Some(peck_retract.unwrap_or(0.5).min(peck.expect("pecking cycle") * 0.5))
+        }
         _ => None,
     };
     let tap_feed = match cycle {
@@ -1007,20 +1033,25 @@ fn plan_drill(
         }
         _ => None,
     };
-    ensure_program_budget(
-        builder.commands.len(),
-        points
-            .len()
-            .saturating_mul(depths.len().saturating_mul(3).saturating_add(5)),
-        name,
-    )?;
-    for point in points {
+    for (point, hole_top, hole_bottom) in targets {
+        // Peck levels descend from THIS hole's top; the cut bottom rides the
+        // point past the bottom plane when tip-through is on.
+        let cut_bottom = hole_bottom - tip_length;
+        let depths = match peck {
+            Some(peck) => depth_levels(hole_top, cut_bottom, peck)?,
+            None => vec![cut_bottom],
+        };
+        ensure_program_budget(
+            builder.commands.len(),
+            depths.len().saturating_mul(3).saturating_add(5),
+            name,
+        )?;
         builder.retract_to_clearance();
         builder.rapid(Point3Dto::new(point.x, point.y, builder.clearance_z));
         builder.rapid(Point3Dto::new(point.x, point.y, *retract_z));
         // Rapids stop at the feed-engagement plane; from there every move
         // down runs at feed rate.
-        let first_depth = depths.first().copied().unwrap_or(*bottom_z);
+        let first_depth = depths.first().copied().unwrap_or(cut_bottom);
         builder.rapid(Point3Dto::new(
             point.x,
             point.y,
@@ -1028,7 +1059,7 @@ fn plan_drill(
         ));
         match cycle {
             DrillCycle::Drill => {
-                builder.linear(Point3Dto::new(point.x, point.y, *bottom_z), cutting.feed_z);
+                builder.linear(Point3Dto::new(point.x, point.y, cut_bottom), cutting.feed_z);
                 builder.dwell(*dwell_seconds);
                 builder.rapid(Point3Dto::new(point.x, point.y, *retract_z));
             }
@@ -1067,7 +1098,7 @@ fn plan_drill(
                     ),
                 };
                 builder.spindle(in_direction, cutting.spindle_rpm);
-                builder.linear(Point3Dto::new(point.x, point.y, *bottom_z), feed);
+                builder.linear(Point3Dto::new(point.x, point.y, cut_bottom), feed);
                 builder.spindle(out_direction, cutting.spindle_rpm);
                 builder.linear(Point3Dto::new(point.x, point.y, *retract_z), feed);
                 // Restore the section's clockwise spindle so following
@@ -1075,7 +1106,7 @@ fn plan_drill(
                 builder.spindle(SpindleDirection::Clockwise, cutting.spindle_rpm);
             }
             DrillCycle::Reaming | DrillCycle::Boring => {
-                builder.linear(Point3Dto::new(point.x, point.y, *bottom_z), cutting.feed_z);
+                builder.linear(Point3Dto::new(point.x, point.y, cut_bottom), cutting.feed_z);
                 builder.dwell(*dwell_seconds);
                 builder.linear(
                     Point3Dto::new(point.x, point.y, *retract_z),
@@ -1350,6 +1381,7 @@ fn plan_thread(
 ) -> Result<(), CamPlanError> {
     let CamOperationDto::Thread {
         points,
+        holes,
         top_z,
         bottom_z,
         pitch,
@@ -1365,7 +1397,18 @@ fn plan_thread(
     else {
         unreachable!();
     };
-    require_flute_length(tool, top_z - bottom_z + pitch, name)?;
+    // Every target is (center, cut top, cut bottom): viewport-picked holes
+    // bring their own face heights, manual centers use the operation planes.
+    let mut targets: Vec<(Point2Dto, f64, f64)> = holes
+        .iter()
+        .map(|hole| (hole.point, hole.top_z, hole.bottom_z))
+        .collect();
+    targets.extend(points.iter().map(|point| (*point, *top_z, *bottom_z)));
+    let deepest_travel = targets
+        .iter()
+        .map(|(_, top, bottom)| top - bottom + pitch)
+        .fold(0.0_f64, f64::max);
+    require_flute_length(tool, deepest_travel, name)?;
     let orbit = (major_diameter - tool.diameter) * 0.5;
     if orbit <= EPSILON {
         return Err(CamPlanError(format!(
@@ -1390,22 +1433,27 @@ fn plan_thread(
         (clockwise, hand),
         (true, ThreadHand::Right) | (false, ThreadHand::Left)
     );
-    let (z_start, z_end) = if descending {
-        (top_z + pitch * 0.5, bottom_z - pitch * 0.5)
-    } else {
-        (bottom_z - pitch * 0.5, top_z + pitch * 0.5)
-    };
-    let revolutions = (z_end - z_start).abs() / pitch;
-    let arcs_per_pass = (revolutions * 2.0).ceil() as usize + 2;
     ensure_program_budget(
         builder.commands.len(),
-        points
+        targets
             .len()
             .saturating_mul(radii.len())
-            .saturating_mul(arcs_per_pass.saturating_add(3)),
+            .saturating_mul(4),
         name,
     )?;
-    for point in points {
+    for (point, hole_top, hole_bottom) in targets {
+        let (z_start, z_end) = if descending {
+            (hole_top + pitch * 0.5, hole_bottom - pitch * 0.5)
+        } else {
+            (hole_bottom - pitch * 0.5, hole_top + pitch * 0.5)
+        };
+        let revolutions = (z_end - z_start).abs() / pitch;
+        let arcs_per_pass = (revolutions * 2.0).ceil() as usize + 2;
+        ensure_program_budget(
+            builder.commands.len(),
+            radii.len().saturating_mul(arcs_per_pass.saturating_add(3)),
+            name,
+        )?;
         let center = Point2Dto {
             x: point.x,
             y: point.y,
@@ -1682,8 +1730,8 @@ fn distance(a: Point3Dto, b: Point3Dto) -> f64 {
 mod tests {
     use super::*;
     use crate::model::{
-        CamResolvedStockDto, CamSetupDto, CamStockSpecDto, CamToolKind, CuttingParametersDto,
-        Rect2Dto, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto,
+        CamHoleDto, CamResolvedStockDto, CamSetupDto, CamStockSpecDto, CamToolKind,
+        CuttingParametersDto, Rect2Dto, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto,
     };
 
     fn cutting() -> CuttingParametersDto {
@@ -2095,9 +2143,12 @@ mod tests {
             enabled: true,
             tool_id: 2,
             points: vec![Point2Dto::new(20.0, 15.0)],
+            holes: Vec::new(),
             top_z: 0.0,
             bottom_z: -7.0,
             retract_z: 3.0,
+            drill_tip_through: false,
+            breakthrough_depth: 0.0,
             peck_depth: Some(3.0),
             dwell_seconds: 0.1,
             clearance_z: 10.0,
@@ -2435,7 +2486,11 @@ mod tests {
     }
 
     #[test]
-    fn in_control_compensation_requires_leads_longer_than_the_tool_radius() {
+    fn in_control_compensation_allows_leads_shorter_than_the_tool_radius() {
+        // Leads carry no tool-diameter rule: a short lead with in-control
+        // compensation is the operator's call (the control owns its own
+        // activation minimum), so planning must still succeed with the
+        // compensation move riding the short lead.
         let mut operation = closed_boss_operation(
             CompensationMode::InControl,
             ContourCompensation::Outside,
@@ -2443,12 +2498,15 @@ mod tests {
         if let CamOperationDto::Contour2d { lead_in, .. } = &mut operation {
             *lead_in = 2.0;
         }
-        let error = plan_setup(
+        let program = plan_setup(
             &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
             1,
         )
-        .unwrap_err();
-        assert!(error.0.contains("longer than the tool radius"));
+        .unwrap();
+        assert!(program
+            .commands
+            .iter()
+            .any(|command| matches!(command, CamCommandDto::CutterCompensationOn { .. })));
     }
 
     #[test]
@@ -2477,9 +2535,12 @@ mod tests {
             enabled: true,
             tool_id: 2,
             points: vec![Point2Dto::new(20.0, 15.0)],
+            holes: Vec::new(),
             top_z: -5.0,
             bottom_z: -10.0,
             retract_z: -6.0,
+            drill_tip_through: false,
+            breakthrough_depth: 0.0,
             peck_depth: Some(2.0),
             dwell_seconds: 0.0,
             clearance_z: 10.0,
@@ -2504,7 +2565,10 @@ mod tests {
             name: "Hole cycle".into(),
             enabled: true,
             tool_id: 2,
+            drill_tip_through: false,
+            breakthrough_depth: 0.0,
             points: vec![Point2Dto::new(20.0, 15.0)],
+            holes: Vec::new(),
             top_z: 0.0,
             bottom_z: -7.0,
             retract_z: 3.0,
@@ -2523,6 +2587,185 @@ mod tests {
                 coolant: CoolantMode::Off,
             },
         }
+    }
+
+    fn picked_hole(x: f64, y: f64, top: f64, bottom: f64) -> CamHoleDto {
+        CamHoleDto {
+            point: Point2Dto::new(x, y),
+            top_z: top,
+            bottom_z: bottom,
+            axis: [0.0, 0.0, -1.0],
+            face_key: Some("hole-face".into()),
+        }
+    }
+
+    /// Z targets of every feed-rate descent, in program order.
+    fn drill_cut_depths(program: &CamProgramDto, feed_z: f64) -> Vec<f64> {
+        program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, feed } if (*feed - feed_z).abs() < 1.0e-9 => {
+                    Some(to.z)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn picked_holes_peck_from_their_own_top_and_bottom_planes() {
+        let mut operation = drill_operation(DrillCycle::ChipBreaking);
+        let CamOperationDto::Drill {
+            points,
+            holes,
+            peck_depth,
+            ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        points.clear();
+        holes.push(picked_hole(10.0, 10.0, 0.0, -5.0));
+        holes.push(picked_hole(30.0, 20.0, -2.0, -9.0));
+        *peck_depth = Some(4.0);
+        let program = plan_setup(
+            &document(vec![operation], vec![tool(2, CamToolKind::Drill, 5.0)]),
+            1,
+        )
+        .unwrap();
+        // Peck levels descend from each hole's own top: 0 -> -4, -5 then
+        // -2 -> -6, -9. Operation-plane heights never enter the picture.
+        assert_eq!(drill_cut_depths(&program, 120.0), [-4.0, -5.0, -6.0, -9.0]);
+    }
+
+    #[test]
+    fn tip_through_drives_the_point_below_the_hole_bottom() {
+        let mut operation = drill_operation(DrillCycle::Drill);
+        let CamOperationDto::Drill {
+            points,
+            holes,
+            drill_tip_through,
+            breakthrough_depth,
+            ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        points.clear();
+        holes.push(picked_hole(20.0, 15.0, 0.0, -7.0));
+        *drill_tip_through = true;
+        *breakthrough_depth = 1.0;
+        // 10 mm drill, conventional 118-degree point: tip 5 / tan(59 deg).
+        let program = plan_setup(
+            &document(vec![operation.clone()], vec![tool(2, CamToolKind::Drill, 10.0)]),
+            1,
+        )
+        .unwrap();
+        let expected = -7.0 - 5.0 / 59.0_f64.to_radians().tan() - 1.0;
+        let depths = drill_cut_depths(&program, 120.0);
+        assert_eq!(depths.len(), 1);
+        assert!(
+            (depths[0] - expected).abs() < 1.0e-9,
+            "cut bottom {} should be {expected}",
+            depths[0]
+        );
+        // A stored 90-degree point lengthens the tip exactly.
+        let mut flat = tool(2, CamToolKind::Drill, 10.0);
+        flat.point_angle_degrees = Some(90.0);
+        let program = plan_setup(&document(vec![operation], vec![flat]), 1).unwrap();
+        let depths = drill_cut_depths(&program, 120.0);
+        assert_eq!(depths.len(), 1);
+        assert!(
+            (depths[0] - -13.0).abs() < 1.0e-9,
+            "cut bottom {} should be -13",
+            depths[0]
+        );
+    }
+
+    #[test]
+    fn drill_without_any_target_is_rejected() {
+        let mut operation = drill_operation(DrillCycle::Drill);
+        let CamOperationDto::Drill { points, holes, .. } = &mut operation else {
+            unreachable!();
+        };
+        points.clear();
+        holes.clear();
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(2, CamToolKind::Drill, 5.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("needs 1..="),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn tip_through_is_rejected_outside_the_drilling_cycle_family() {
+        let mut operation = drill_operation(DrillCycle::TappingRight);
+        let CamOperationDto::Drill {
+            drill_tip_through,
+            thread_pitch,
+            ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        *drill_tip_through = true;
+        *thread_pitch = Some(1.0);
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(2, CamToolKind::Tap, 5.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("tip-through applies to the drilling cycle family"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn negative_breakthrough_depth_is_rejected() {
+        let mut operation = drill_operation(DrillCycle::Drill);
+        let CamOperationDto::Drill {
+            breakthrough_depth, ..
+        } = &mut operation
+        else {
+            unreachable!();
+        };
+        *breakthrough_depth = -0.5;
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(2, CamToolKind::Drill, 5.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("break-through depth must be zero or positive"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn picked_hole_with_tilted_axis_is_rejected() {
+        let mut operation = drill_operation(DrillCycle::Drill);
+        let CamOperationDto::Drill { points, holes, .. } = &mut operation else {
+            unreachable!();
+        };
+        points.clear();
+        let mut hole = picked_hole(20.0, 15.0, 0.0, -7.0);
+        hole.axis = [0.0, 0.5, -0.866];
+        holes.push(hole);
+        let error = plan_setup(
+            &document(vec![operation], vec![tool(2, CamToolKind::Drill, 5.0)]),
+            1,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("parallel to setup Z"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -2976,6 +3219,7 @@ mod tests {
             enabled: true,
             tool_id: 7,
             points: vec![Point2Dto::new(20.0, 15.0)],
+            holes: Vec::new(),
             top_z: 0.0,
             bottom_z: -8.0,
             pitch: 1.0,
@@ -2994,6 +3238,49 @@ mod tests {
 
     fn thread_program(operation: CamOperationDto, tool: CamToolDto) -> CamProgramDto {
         plan_setup(&document(vec![operation], vec![tool]), 1).unwrap()
+    }
+
+    #[test]
+    fn picked_holes_thread_from_their_own_top_and_bottom_planes() {
+        let mut operation = thread_operation(ThreadHand::Right, MillingDirection::Climb);
+        let CamOperationDto::Thread { points, holes, .. } = &mut operation else {
+            unreachable!();
+        };
+        points.clear();
+        holes.push(picked_hole(10.0, 10.0, 0.0, -6.0));
+        holes.push(picked_hole(30.0, 20.0, -1.0, -8.0));
+        let program = thread_program(operation, tool(7, CamToolKind::ThreadMill, 4.8));
+        // Descending right-hand/climb spirals start half a pitch above each
+        // hole's own top: 0.5 and -0.5. Plunges run at feed_z.
+        let plunge_zs: Vec<f64> = program
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Linear { to, feed } if (*feed - 200.0).abs() < 1.0e-9 => {
+                    Some(to.z)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(plunge_zs, [0.5, -0.5]);
+        // Each spiral bottoms out half a pitch below its own hole bottom.
+        let arcs = circular_moves(&program);
+        let deepest = |center_x: f64| {
+            arcs.iter()
+                .filter(|(_, command, _)| match command {
+                    CamCommandDto::Circular { center, .. } => {
+                        (center.x - center_x).abs() < 1.0e-9
+                    }
+                    _ => false,
+                })
+                .map(|(_, command, _)| match command {
+                    CamCommandDto::Circular { to, .. } => to.z,
+                    _ => unreachable!(),
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!((deepest(10.0) - -6.5).abs() < 1.0e-9);
+        assert!((deepest(30.0) - -8.5).abs() < 1.0e-9);
     }
 
     /// Circular commands with their start points and sweep angles, walking the

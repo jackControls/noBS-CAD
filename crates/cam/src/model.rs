@@ -822,6 +822,24 @@ pub struct CamChainRefDto {
     pub reversed: bool,
 }
 
+/// One hole picked as a cylindrical solid face in the viewport: the center in
+/// setup XY plus the face's own top/bottom in setup Z, so hole-making
+/// operations cut each hole between its true opening and its true depth
+/// instead of one operation-wide pair of planes. `axis` (unit length, setup
+/// space) is reserved for indexed/5-axis tool orientation; fixed-axis picking
+/// only offers ±Z faces today. `face_key` (`bodyId:faceId`) is pure
+/// provenance — the planner never reads it; the host uses it to re-select the
+/// same faces when the operation is edited.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CamHoleDto {
+    pub point: Point2Dto,
+    pub top_z: f64,
+    pub bottom_z: f64,
+    pub axis: [f64; 3],
+    #[serde(default)]
+    pub face_key: Option<String>,
+}
+
 fn default_radial_passes() -> u32 {
     1
 }
@@ -884,10 +902,11 @@ pub enum CamOperationDto {
         compensation_mode: CompensationMode,
         /// Tangential entry/exit lengths (mm) in the setup plane. A contour
         /// always reaches the profile through a straight tangential lead —
-        /// it is what lets the tool edge (not the centerline) meet the wall,
-        /// and machine compensation can only activate on a linear move that
-        /// is longer than the tool radius. Defaults keep legacy documents
-        /// plannable; validation enforces the real rules.
+        /// it is what lets the tool edge (not the centerline) meet the wall.
+        /// Leads carry no tool-diameter rule; controls that activate radius
+        /// compensation on the lead may demand their own minimum run, which
+        /// is the control's business, not this document's. Defaults keep
+        /// legacy documents plannable.
         #[serde(default = "default_contour_lead")]
         lead_in: f64,
         #[serde(default = "default_contour_lead")]
@@ -962,6 +981,25 @@ pub enum CamOperationDto {
         /// rapid time instead of feed time.
         #[serde(default)]
         feed_height_z: f64,
+        /// Viewport-picked holes carrying their own top/bottom (setup Z).
+        /// Empty for manual-center operations written before per-hole heights
+        /// existed; those cut every point between the operation's top and
+        /// bottom. When both picked holes and manual centers exist, each kind
+        /// is cut with its own heights.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        holes: Vec<CamHoleDto>,
+        /// Drill past the bottom height so the full diameter (the lip, not
+        /// the point) clears the hole bottom: the tip travels the point
+        /// length plus `breakthrough_depth` beyond the bottom plane. Applies
+        /// to the drilling cycle family (drill/chip-breaking/deep-hole);
+        /// defaults off so documents written before it existed keep cutting
+        /// exactly tip-to-bottom.
+        #[serde(default)]
+        drill_tip_through: bool,
+        /// Extra distance the drill lip passes the bottom height when
+        /// tip-through is enabled (setup Z, mm).
+        #[serde(default)]
+        breakthrough_depth: f64,
         /// Hole-machining cycle family; see `DrillCycle`.
         #[serde(default)]
         cycle: DrillCycle,
@@ -1052,6 +1090,11 @@ pub enum CamOperationDto {
         points: Vec<Point2Dto>,
         top_z: f64,
         bottom_z: f64,
+        /// Viewport-picked holes carrying their own top/bottom (setup Z);
+        /// see the drill operation. Empty falls back to the operation-wide
+        /// top/bottom for every center.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        holes: Vec<CamHoleDto>,
         /// Thread pitch (mm/rev). The host resolves it from the chosen
         /// designation and stores it explicitly; the planner never derives it.
         pitch: f64,
@@ -1402,33 +1445,12 @@ impl CamOperationDto {
                         "contour operation '{label}' needs a positive lead-in and lead-out — the tool must reach and leave the profile on a straight tangential move"
                     ));
                 }
-                if *compensation_mode == CompensationMode::InControl
-                    && !matches!(compensation, ContourCompensation::On)
-                {
-                    // Controls alarm when the compensation activation or
-                    // cancellation move is shorter than the tool radius: the
-                    // offset cannot slide in within the move.
-                    let radius = tool.diameter * 0.5;
-                    if *lead_in <= radius || *lead_out <= radius {
-                        return Err(format!(
-                            "contour operation '{label}' in-control compensation activates and cancels on the lead moves, so both leads must be longer than the tool radius ({radius:.3} mm)"
-                        ));
-                    }
-                }
-                if *closed
-                    && matches!(compensation, ContourCompensation::Inside)
-                    && *compensation_mode == CompensationMode::InSoftware
-                {
-                    // Inside-closed leads plunge on the corner bisector
-                    // inside the pocket; shorter than the radius the plunge
-                    // point nicks the adjacent walls.
-                    let radius = tool.diameter * 0.5;
-                    if *lead_in <= radius || *lead_out <= radius {
-                        return Err(format!(
-                            "contour operation '{label}' leads into an inside profile must be longer than the tool radius ({radius:.3} mm) so the entry plunge clears the walls"
-                        ));
-                    }
-                }
+                // Leads carry no tool-diameter rule: how much tangential run
+                // a control needs to activate or cancel compensation is the
+                // control's business, and leads into an inside profile just
+                // need to be positive. (Very short in-control leads may alarm
+                // a real control; that is accepted operator intent, not a
+                // geometry error.)
                 if let Some(arc_radius) = lead_arc_radius {
                     if !arc_radius.is_finite() || *arc_radius <= 0.0 {
                         return Err(format!(
@@ -1486,6 +1508,7 @@ impl CamOperationDto {
             }
             Self::Drill {
                 points,
+                holes,
                 top_z,
                 bottom_z,
                 cycle,
@@ -1494,6 +1517,8 @@ impl CamOperationDto {
                 thread_pitch,
                 feed_out,
                 dwell_seconds,
+                drill_tip_through,
+                breakthrough_depth,
                 ..
             } => {
                 match cycle {
@@ -1526,14 +1551,52 @@ impl CamOperationDto {
                         }
                     }
                 }
-                if points.is_empty() || points.len() > MAX_PATH_POINTS {
+                if points.len() + holes.len() > MAX_PATH_POINTS
+                    || (points.is_empty() && holes.is_empty())
+                {
                     return Err(format!(
                         "drill operation '{label}' needs 1..={MAX_PATH_POINTS} points"
                     ));
                 }
-                if !points.iter().copied().all(within_xy) {
+                if !points.iter().copied().all(within_xy)
+                    || !holes.iter().all(|hole| within_xy(hole.point))
+                {
                     return Err(format!(
                         "drill operation '{label}' points must lie within stock"
+                    ));
+                }
+                for hole in holes {
+                    if !within_z(hole.top_z)
+                        || !within_z(hole.bottom_z)
+                        || hole.bottom_z >= hole.top_z - EPSILON
+                    {
+                        return Err(format!(
+                            "drill operation '{label}' picked holes must descend within the stock"
+                        ));
+                    }
+                    let axis_len = hole.axis.iter().map(|a| a * a).sum::<f64>().sqrt();
+                    if !hole.axis.iter().all(|a| a.is_finite())
+                        || (axis_len - 1.0).abs() > 1.0e-3
+                        || hole.axis[2].abs() <= 1.0 - 1.0e-3
+                    {
+                        return Err(format!(
+                            "drill operation '{label}' picked holes must have a unit axis parallel to setup Z (fixed-axis planning)"
+                        ));
+                    }
+                }
+                if !breakthrough_depth.is_finite() || *breakthrough_depth < 0.0 {
+                    return Err(format!(
+                        "drill operation '{label}' break-through depth must be zero or positive"
+                    ));
+                }
+                if *drill_tip_through
+                    && !matches!(
+                        cycle,
+                        DrillCycle::Drill | DrillCycle::ChipBreaking | DrillCycle::DeepHole
+                    )
+                {
+                    return Err(format!(
+                        "drill operation '{label}' tip-through applies to the drilling cycle family (drill, chip breaking, deep hole)"
                     ));
                 }
                 validate_depth_range(label, *top_z, *bottom_z, *top_z - *bottom_z, within_z)?;
@@ -1702,6 +1765,7 @@ impl CamOperationDto {
             }
             Self::Thread {
                 points,
+                holes,
                 top_z,
                 bottom_z,
                 pitch,
@@ -1716,15 +1780,29 @@ impl CamOperationDto {
                         "thread operation '{label}' requires a thread mill tool"
                     ));
                 }
-                if points.is_empty() || points.len() > MAX_PATH_POINTS {
+                if points.len() + holes.len() > MAX_PATH_POINTS
+                    || (points.is_empty() && holes.is_empty())
+                {
                     return Err(format!(
                         "thread operation '{label}' needs 1..={MAX_PATH_POINTS} hole centers"
                     ));
                 }
-                if !points.iter().copied().all(within_xy) {
+                if !points.iter().copied().all(within_xy)
+                    || !holes.iter().all(|hole| within_xy(hole.point))
+                {
                     return Err(format!(
                         "thread operation '{label}' hole centers must lie within stock"
                     ));
+                }
+                for hole in holes {
+                    if !within_z(hole.top_z)
+                        || !within_z(hole.bottom_z)
+                        || hole.bottom_z >= hole.top_z - EPSILON
+                    {
+                        return Err(format!(
+                            "thread operation '{label}' picked holes must descend within the stock"
+                        ));
+                    }
                 }
                 if !within_z(*top_z) || !within_z(*bottom_z) || *bottom_z >= *top_z - EPSILON {
                     return Err(format!(
