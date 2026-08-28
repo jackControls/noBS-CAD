@@ -853,7 +853,14 @@ pub fn run() {
         .manage(native_menu::NativeEditMenuState::default())
         .manage(native_menu::NativeFileMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
-        .manage(SixDofMouseState::default());
+        .manage(SixDofMouseState::default())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<session_bridge::SessionBridgeState>()
+                    .drop_window(window.label());
+            }
+        });
     #[cfg(target_os = "macos")]
     let builder = builder
         .menu(native_menu::build)
