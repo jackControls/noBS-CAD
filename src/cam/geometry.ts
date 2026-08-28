@@ -464,12 +464,16 @@ export function modelBottomZInSetup(
  *  so indexed (4-axis) / 5-axis machining can relax this one check and
  *  consume per-hole tool orientation without touching the picking pipeline.
  *  The marker point sits on the axis at the stock top plane; the operation
- *  input is the axis position in setup-space X/Y. */
+ *  input is the axis position in setup-space X/Y. `faceVertices` are the
+ *  face's own triangle vertices (model coordinates): their setup-Z span is
+ *  the hole's real top/bottom, so stepped bosses and blind bores machine
+ *  across exactly their own height without manual plane entry. */
 export function camHoleFromCylinderFace(
   bodyId: number,
   faceId: number,
   cylinder: CylindricalSurfaceDto,
   setup: CamSetupDto,
+  faceVertices: Point3Dto[],
 ): CamHolePickHole | null {
   const center = modelPointToSetup(cylinder.origin, setup.wcs);
   // Direction vectors rotate into setup space without the origin shift, using
@@ -487,6 +491,16 @@ export function camHoleFromCylinderFace(
   // roadmap can relax this single check and immediately consume per-hole
   // tool orientation without touching the picking pipeline.
   if (!parallel) return null;
+  // The hole's real span in setup Z comes from the face's own vertices; a
+  // degenerate (empty/flat) range means the mesh gave us nothing to trust.
+  let topZ = -Infinity;
+  let bottomZ = Infinity;
+  for (const vertex of faceVertices) {
+    const z = modelPointToSetup(vertex, wcs).z;
+    if (z > topZ) topZ = z;
+    if (z < bottomZ) bottomZ = z;
+  }
+  if (!Number.isFinite(topZ) || !(topZ > bottomZ)) return null;
   // Setup-Z holes mark at the stock top plane (always visible above the
   // part); the face's axis origin is the right anchor once tilted holes
   // become machinable.
@@ -502,7 +516,33 @@ export function camHoleFromCylinderFace(
     modelPoint: marker,
     point: { x: center.x, y: center.y },
     axis,
+    topZ,
+    bottomZ,
   };
+}
+
+/** Unique vertex positions (model coordinates) covered by a face's triangle
+ *  range — the input `camHoleFromCylinderFace` spans for hole top/bottom. */
+export function faceVerticesOfRange(
+  positions: number[],
+  indices: number[],
+  firstIndex: number,
+  indexCount: number,
+): Point3Dto[] {
+  const seen = new Set<number>();
+  const vertices: Point3Dto[] = [];
+  for (let slot = firstIndex; slot < firstIndex + indexCount; slot += 1) {
+    const vertex = indices[slot];
+    if (vertex === undefined || seen.has(vertex)) continue;
+    seen.add(vertex);
+    const base = vertex * 3;
+    const x = positions[base];
+    const y = positions[base + 1];
+    const z = positions[base + 2];
+    if (x === undefined || y === undefined || z === undefined) continue;
+    vertices.push({ x, y, z });
+  }
+  return vertices;
 }
 
 function anchorValue(min: number, max: number, anchor: 'min' | 'center' | 'max'): number {

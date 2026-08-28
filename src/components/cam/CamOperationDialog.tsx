@@ -9,6 +9,8 @@ import {
   type CamOperationInput,
 } from '../../cam/document';
 import {
+  camHoleFromCylinderFace,
+  faceVerticesOfRange,
   listModelEdgeCandidates,
   listSketchCurveCandidates,
   listSketchLoops,
@@ -34,8 +36,8 @@ import {
   defaultThreadPreset,
   isoMetricGrade6Envelope,
 } from '../../lib/threadStandards';
-import type { CamCompensationMode, CamContourCompensation, CamCoolantMode, CamDrillCycle, CamFaceDirection, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
-import { useAppStore } from '../../store/appStore';
+import type { CamCompensationMode, CamContourCompensation, CamCoolantMode, CamDrillCycle, CamFaceDirection, CamHoleDto, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
+import { useAppStore, type CamHolePickHole } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
   CAM_DIALOG_INPUT,
@@ -63,15 +65,19 @@ const loopKeyOf = (loop: SketchLoop): string => `${loop.sketch}:${loop.entityIds
  *  setup Z at submit. Chain references hang a height off a LOWER height of
  *  the same operation (fixed resolution order bottom → top → feed → retract
  *  → clearance, so cycles are impossible by construction); 'selection' reads
- *  the picked sketch loop's plane Z. The dead entries round out the option
- *  set the UI contract promises; the planner only consumes the resolved
- *  absolute values. */
+ *  the picked sketch loop's plane Z. 'hole_top'/'hole_bottom' read the picked
+ *  hole faces' own span (highest top / lowest bottom across the pick set;
+ *  drill/thread only). The dead entries round out the option set the UI
+ *  contract promises; the planner only consumes the resolved absolute
+ *  values. */
 type HeightFrom =
   | 'model_top'
   | 'model_bottom'
   | 'stock_top'
   | 'stock_bottom'
   | 'origin'
+  | 'hole_top'
+  | 'hole_bottom'
   | 'bottom'
   | 'top'
   | 'feed'
@@ -100,10 +106,71 @@ const HEIGHT_FROM_DEAD = [
   'Lowest of…',
 ];
 
+/** Fresh-dialog height defaults per operation kind (offsets in mm, converted
+ *  to the display unit at seed time). Established CAM workflows default these
+ *  planes differently per kind: facing starts a skin above the stock top and
+ *  cuts to the model top; contours run stock-to-stock with a break-through;
+ *  hole kinds hang off the model top / stock bottom or the picked holes' own
+ *  span. Editing always re-opens the stored absolute values instead. */
+const HEIGHT_DEFAULTS: Record<
+  OperationKind,
+  {
+    clearance: [HeightFrom, number];
+    retract: [HeightFrom, number];
+    feed: [HeightFrom, number];
+    top: [HeightFrom, number];
+    bottom: [HeightFrom, number];
+  }
+> = {
+  face: {
+    clearance: ['model_top', 10],
+    retract: ['model_top', 5],
+    feed: ['model_top', 5],
+    top: ['stock_top', 0.2],
+    bottom: ['model_top', 0],
+  },
+  contour2d: {
+    clearance: ['retract', 10],
+    retract: ['stock_top', 5],
+    feed: ['stock_top', 5],
+    top: ['stock_top', 0],
+    bottom: ['stock_bottom', -1],
+  },
+  pocket2d: {
+    clearance: ['stock_top', 10],
+    retract: ['stock_top', 5],
+    feed: ['model_top', 5],
+    top: ['model_top', 0],
+    bottom: ['model_bottom', -0.2],
+  },
+  chamfer2d: {
+    clearance: ['model_top', 10],
+    retract: ['model_top', 5],
+    feed: ['model_top', 5],
+    top: ['model_top', 0],
+    bottom: ['selection', 0],
+  },
+  drill: {
+    clearance: ['model_top', 10],
+    retract: ['model_top', 5],
+    feed: ['model_top', 5],
+    top: ['model_top', 0],
+    bottom: ['stock_bottom', 0],
+  },
+  thread: {
+    clearance: ['stock_top', 10],
+    retract: ['stock_top', 5],
+    feed: ['model_top', 5],
+    top: ['hole_top', 0],
+    bottom: ['hole_bottom', 0],
+  },
+};
+
 /** One height row: reference plane + signed offset. `chainBelow` lists the
  *  lower operation heights this row may reference; the Selection option
  *  (picked sketch loop's plane Z) is enabled where geometry plumbing gives
- *  it a value. */
+ *  it a value; `holeRefsAvailable` (drill/thread) unlocks the picked hole
+ *  faces' own top/bottom references. */
 function HeightField({
   from,
   offset,
@@ -112,6 +179,7 @@ function HeightField({
   unit,
   chainBelow = [],
   selectionAvailable = false,
+  holeRefsAvailable = false,
   disabled = false,
 }: {
   from: HeightFrom;
@@ -121,6 +189,7 @@ function HeightField({
   unit: string;
   chainBelow?: HeightFrom[];
   selectionAvailable?: boolean;
+  holeRefsAvailable?: boolean;
   disabled?: boolean;
 }) {
   return (
@@ -141,6 +210,12 @@ function HeightField({
               {option.label}
             </option>
           ))}
+          {holeRefsAvailable && (
+            <optgroup label="Picked holes">
+              <option value="hole_top">Hole top</option>
+              <option value="hole_bottom">Hole bottom</option>
+            </optgroup>
+          )}
           {chainBelow.length > 0 && (
             <optgroup label="Operation heights">
               {chainBelow.map((value) => (
@@ -454,6 +529,11 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   // entity keys (consumed once — afterwards the live session owns the
   // selection, so switching sources and back keeps the operator's picks).
   const chainSeedRef = useRef(contourOp?.chain_ref ?? null);
+  // Editing drill/thread: the first hole-pick session re-seeds from the
+  // stored holes, rebuilt from the CURRENT model faces so edited geometry
+  // refreshes each hole's span; holes whose face vanished degrade to manual
+  // center lines below instead of silently dropping out of the operation.
+  const holeSeedRef = useRef<CamHoleDto[] | null>(drillOp?.holes ?? threadOp?.holes ?? null);
 
   const [stepDown, setStepDown] = useState(
     storedStepDown !== null ? displayLength(storedStepDown, units).toFixed(4) : '',
@@ -467,26 +547,35 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     faceOp ? displayLength(faceOp.safe_distance, units).toFixed(4) : displayLength(5, units).toFixed(4),
   );
   // Active tab, structured heights (reference plane + signed offset), and the
-  // multiple-depths toggle.
+  // multiple-depths toggle. Fresh dialogs seed from the per-kind default
+  // table; editing re-opens the stored absolute Z as the nearest plane.
+  const heightDefaults = HEIGHT_DEFAULTS[kind];
+  const heightOffsetSeed = (mm: number): string =>
+    mm === 0 ? '0' : displayLength(mm, units).toFixed(4);
   const [opTab, setOpTab] = useState<OpTab>('tool');
-  const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>(clearanceDraft?.from ?? 'stock_top');
-  const [clearanceOff, setClearanceOff] = useState(clearanceDraft?.off ?? displayLength(10, units).toFixed(4));
-  const [retractFrom, setRetractFrom] = useState<HeightFrom>(retractDraft?.from ?? 'stock_top');
-  const [retractOff, setRetractOff] = useState(retractDraft?.off ?? displayLength(3, units).toFixed(4));
-  // Feed height: rapids stop here, everything below runs at feed rate.
-  // Defaults to a small step above the cut top.
-  const [feedFrom, setFeedFrom] = useState<HeightFrom>(feedDraft?.from ?? 'top');
-  const [feedOff, setFeedOff] = useState(feedDraft?.off ?? displayLength(2, units).toFixed(4));
-  // Facing starts from the stock top; every other kind starts from the model
-  // top (a drill/contour rarely begins inside the stock allowance).
-  const [topFrom, setTopFrom] = useState<HeightFrom>(topDraft?.from ?? (kind === 'face' ? 'stock_top' : 'model_top'));
-  const [topOff, setTopOff] = useState(topDraft?.off ?? '0');
-  // Face bottoms ride the model top; hole/path kinds default to the model
-  // bottom so a fresh dialog describes a through cut.
-  const [bottomFrom, setBottomFrom] = useState<HeightFrom>(
-    bottomDraft?.from ?? (kind === 'face' ? 'model_top' : 'model_bottom'),
+  const [clearanceFrom, setClearanceFrom] = useState<HeightFrom>(
+    clearanceDraft?.from ?? heightDefaults.clearance[0],
   );
-  const [bottomOff, setBottomOff] = useState(bottomDraft?.off ?? '0');
+  const [clearanceOff, setClearanceOff] = useState(
+    clearanceDraft?.off ?? heightOffsetSeed(heightDefaults.clearance[1]),
+  );
+  const [retractFrom, setRetractFrom] = useState<HeightFrom>(
+    retractDraft?.from ?? heightDefaults.retract[0],
+  );
+  const [retractOff, setRetractOff] = useState(
+    retractDraft?.off ?? heightOffsetSeed(heightDefaults.retract[1]),
+  );
+  // Feed height: rapids stop here, everything below runs at feed rate.
+  const [feedFrom, setFeedFrom] = useState<HeightFrom>(feedDraft?.from ?? heightDefaults.feed[0]);
+  const [feedOff, setFeedOff] = useState(feedDraft?.off ?? heightOffsetSeed(heightDefaults.feed[1]));
+  const [topFrom, setTopFrom] = useState<HeightFrom>(topDraft?.from ?? heightDefaults.top[0]);
+  const [topOff, setTopOff] = useState(topDraft?.off ?? heightOffsetSeed(heightDefaults.top[1]));
+  const [bottomFrom, setBottomFrom] = useState<HeightFrom>(
+    bottomDraft?.from ?? heightDefaults.bottom[0],
+  );
+  const [bottomOff, setBottomOff] = useState(
+    bottomDraft?.off ?? heightOffsetSeed(heightDefaults.bottom[1]),
+  );
   const [multipleDepths, setMultipleDepths] = useState(multipleDepthsInit);
   // Cutting direction: facing rows zigzag by default or run one way
   // (climb/conventional); contour/pocket/chamfer travel climb or
@@ -549,6 +638,14 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const [threadPitch, setThreadPitch] = useState(drillOp?.thread_pitch != null ? displayLength(drillOp.thread_pitch, units).toFixed(4) : '');
   const [feedOut, setFeedOut] = useState(drillOp?.feed_out != null ? displayFeed(drillOp.feed_out, units).toFixed(4) : '');
   const [dwell, setDwell] = useState(drillOp ? String(drillOp.dwell_seconds) : '0');
+  // Drilling-family cycles: drive the point past the bottom plane so the
+  // full diameter clears the hole bottom (point length + break-through).
+  const [tipThrough, setTipThrough] = useState(drillOp?.drill_tip_through ?? true);
+  const [breakthrough, setBreakthrough] = useState(
+    drillOp?.breakthrough_depth != null && drillOp.breakthrough_depth > 0
+      ? displayLength(drillOp.breakthrough_depth, units).toFixed(4)
+      : displayLength(1, units).toFixed(4),
+  );
   // Thread milling: the designation resolves pitch/major/minor through the
   // standards table; the resolved values are stored on the operation.
   const [threadPresetId, setThreadPresetId] = useState(threadPresetInit);
@@ -589,6 +686,21 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         return stockMinZ;
       case 'origin':
         return 0;
+      case 'hole_top':
+      case 'hole_bottom': {
+        // Highest picked hole top / lowest picked hole bottom: the heights
+        // bracket every picked hole so rapids and feeds never start inside
+        // a deeper face's span.
+        const holes = holePick?.holes ?? [];
+        if (holes.length === 0) {
+          throw new Error(
+            `${label}: pick hole faces in the viewport to use the hole top/bottom reference.`,
+          );
+        }
+        return from === 'hole_top'
+          ? Math.max(...holes.map((hole) => hole.topZ))
+          : Math.min(...holes.map((hole) => hole.bottomZ));
+      }
       case 'selection': {
         const z = selectionZ();
         if (z === null) {
@@ -639,13 +751,15 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     if (kind === 'contour2d' && !roughingStepOver && tool.default_step_over != null) {
       setRoughingStepOver(displayLength(tool.default_step_over, units).toFixed(4));
     }
-    // Leads track 1.5x the tool radius until the operator edits them, so an
-    // in-control contour always activates over a long-enough move.
+    // Leads seed at 1.5x the tool radius until the operator edits them — a
+    // comfortable entry move, not a requirement: lead lengths carry no
+    // tool-diameter floor (the control owns its compensation activation).
     if (kind === 'contour2d' && !leadsTouched) {
       const lead = displayLength(tool.diameter * 0.75, units).toFixed(4);
       setLeadIn(lead);
       setLeadOut(lead);
-      // Arc leads need at least the tool radius to activate in control.
+      // The arc radius seeds the same way; a tangential arc meet is the
+      // comfortable default, never a hard floor.
       if (!leadArcRadius) {
         setLeadArcRadius(displayLength(tool.diameter * 0.75, units).toFixed(4));
       }
@@ -686,14 +800,56 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   // Hole-geometry kinds open a viewport hole-pick session for the dialog's
   // lifetime; closing the dialog ends picking and clears the hover state.
+  // An edit session re-seeds from the stored holes (rebuilt against the
+  // current model so a changed face refreshes the span); holes whose face
+  // vanished degrade to manual center lines so they are never silently lost.
   useEffect(() => {
     if (pages.geometry !== 'holes') return;
-    useAppStore.getState().setCamHolePick({ holes: [], hoverKey: null });
+    const seed = holeSeedRef.current;
+    holeSeedRef.current = null;
+    const seeded: CamHolePickHole[] = [];
+    const leftover: CamHoleDto[] = [];
+    if (seed && setup) {
+      for (const stored of seed) {
+        const [bodyText, faceText] = (stored.face_key ?? '').split(':');
+        const body = scene.bodies.find((candidate) => candidate.id === Number(bodyText));
+        const face = body?.faces.find((candidate) => candidate.id === Number(faceText));
+        const rebuilt =
+          body && face?.cylinder
+            ? camHoleFromCylinderFace(
+                body.id,
+                face.id,
+                face.cylinder,
+                setup,
+                faceVerticesOfRange(
+                  body.mesh.positions,
+                  body.mesh.indices,
+                  face.first_index,
+                  face.index_count,
+                ),
+              )
+            : null;
+        if (rebuilt) seeded.push(rebuilt);
+        else leftover.push(stored);
+      }
+    }
+    if (leftover.length > 0) {
+      const lines = leftover
+        .map(
+          (hole) =>
+            `${Number(displayLength(hole.point.x, units).toFixed(4)) + 0}, ${Number(displayLength(hole.point.y, units).toFixed(4)) + 0}`,
+        )
+        .join('\n');
+      setManualPoints((text) => (text.trim() ? `${text.trimEnd()}\n${lines}` : lines));
+    }
+    useAppStore.getState().setCamHolePick({ holes: seeded, hoverKey: null });
     return () => {
       const state = useAppStore.getState();
       state.setCamHolePick(null);
       state.setHoveredFace(null);
     };
+    // Seeding consumes mount-time scene/setup; the session then owns itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages.geometry]);
 
   // Path kinds with sketch geometry open a viewport loop-pick session: every
@@ -888,7 +1044,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     return { path, closed };
   };
 
-  const resolveDrillPoints = (): CamPoint2Dto[] => {
+  /** Hole targets: viewport-picked holes carry their own top/bottom span and
+   *  axis (each machines across exactly its face's height); manual centers
+   *  use the operation's top/bottom planes. */
+  const resolveDrillTargets = (): { points: CamPoint2Dto[]; holes: CamHoleDto[] } => {
     // Fixed-axis planning drills along setup Z only; a picked hole whose axis
     // tilts away from setup Z needs indexed/5-axis tool orientation, which is
     // not supported yet — fail closed instead of drilling a wrong hole.
@@ -898,16 +1057,18 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         `${tilted.length} picked hole${tilted.length > 1 ? 's are' : ' is'} not aligned with setup Z — fixed-axis planning drills along setup Z only; indexed/5-axis tool orientation is not supported yet.`,
       );
     }
-    const fromPicks = (holePick?.holes ?? []).map((hole) => ({
-      x: hole.point.x,
-      y: hole.point.y,
+    const holes: CamHoleDto[] = (holePick?.holes ?? []).map((hole) => ({
+      point: { x: hole.point.x, y: hole.point.y },
+      top_z: hole.topZ,
+      bottom_z: hole.bottomZ,
+      axis: hole.axis,
+      face_key: hole.key,
     }));
-    const manual = manualPoints.trim() ? parseManualPoints('Hole centers') : [];
-    const points = [...fromPicks, ...manual];
-    if (points.length === 0) {
+    const points = manualPoints.trim() ? parseManualPoints('Hole centers') : [];
+    if (holes.length === 0 && points.length === 0) {
       throw new Error('Click hole faces in the viewport, or enter hole centers manually.');
     }
-    return points;
+    return { points, holes };
   };
 
   const cutting = () => ({
@@ -1020,34 +1181,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           if (arcMm !== null && arcMm <= 0) {
             throw new Error('Lead arc radius must be positive.');
           }
-          // Lead geometry rules: in-control compensation activates on the
-          // lead-in, so a straight lead must clear the tool radius and an
-          // arc lead's radius must at least match it; and straight leads
-          // into an inside profile plunge on the corner bisector, which
-          // must clear the adjacent walls. (Arc leads never reach an inside
-          // closed profile — the field is disabled for that combination.)
-          if (selectedTool) {
-            const radius = selectedTool.diameter / 2;
-            if (arcMm !== null) {
-              if (compensationMode === 'in_control' && compensation !== 'on' && arcMm < radius - 1e-9) {
-                throw new Error(
-                  `In-control compensation activates on the lead arc: the arc radius must be at least the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Grow the arc on the Linking tab, or switch the mode to In software.`,
-                );
-              }
-            } else {
-              const shortLeads = leadInMm <= radius || leadOutMm <= radius;
-              if (shortLeads && compensationMode === 'in_control' && compensation !== 'on') {
-                throw new Error(
-                  `In-control compensation activates on the lead-in: both leads must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Lengthen the leads on the Linking tab, give them an arc radius, or switch the mode to In software.`,
-                );
-              }
-              if (shortLeads && geometry.closed && compensation === 'inside') {
-                throw new Error(
-                  `Leads into an inside profile must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) so the entry plunge clears the walls.`,
-                );
-              }
-            }
-          }
+          // Lead lengths and arc radius carry no tool-diameter floor: short
+          // leads are legal — with machine-side compensation the control owns
+          // its activation travel, and with software compensation the planner
+          // offsets the programmed path directly.
           const passes = Math.max(1, Math.round(parseDraft(roughingPasses, 'Roughing passes')));
           let roughStepMm: number | null = null;
           if (passes > 1) {
@@ -1143,10 +1280,14 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           const pecking = drillCycle === 'chip_breaking' || drillCycle === 'deep_hole';
           const tapping = drillCycle === 'tapping_right' || drillCycle === 'tapping_left';
           const feedingOut = drillCycle === 'reaming' || drillCycle === 'boring';
+          // Tip-through belongs to the drilling family; tapping/reaming/
+          // boring stop at the bottom plane by definition.
+          const tipFamily = drillCycle === 'drill' || pecking;
+          const tipThroughOn = tipFamily && tipThrough;
           operation = {
             ...base,
             kind,
-            points: resolveDrillPoints(),
+            ...resolveDrillTargets(),
             top_z: top,
             bottom_z: bottomAbs(),
             cycle: drillCycle,
@@ -1165,6 +1306,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
                 ? commitFeed(parseDraft(feedOut, 'Feed out'), units)
                 : null,
             dwell_seconds: tapping ? 0 : parseDraft(dwell, 'Dwell'),
+            drill_tip_through: tipThroughOn,
+            breakthrough_depth: tipThroughOn
+              ? commitLength(parseDraft(breakthrough, 'Break-through depth'), units)
+              : 0,
             cutting: cutting(),
           };
           break;
@@ -1186,7 +1331,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           operation = {
             ...base,
             kind,
-            points: resolveDrillPoints(),
+            ...resolveDrillTargets(),
             top_z: top,
             bottom_z: bottomAbs(),
             pitch: keepStored ? threadOp.pitch : preset.pitchMm,
@@ -1556,13 +1701,19 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   /** Heights tab: five heights, each a reference plane plus a signed offset.
    *  A row may also reference a LOWER operation height (fixed resolution
-   *  order bottom → top → feed → retract → clearance) or the picked sketch
-   *  loop's plane Z ('Selection'). Rapids stop at the feed plane — below it
-   *  the tool moves at feed rate. The bottom height only exists for kinds
-   *  that cut to a depth (facing targets the model top by default). */
+   *  order bottom → top → feed → retract → clearance), the picked sketch
+   *  loop's plane Z ('Selection'), or — drill/thread — the picked hole
+   *  faces' own top/bottom. Rapids stop at the feed plane: below it the tool
+   *  moves at feed rate. The bottom height only exists for kinds that cut to
+   *  a depth (facing targets the model top by default). Drilling-family
+   *  cycles add the tip-through controls here, next to the bottom plane they
+   *  extend past. */
   const heightsTab = () => {
     const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
     const bottomRef: HeightFrom[] = hasBottomRow ? ['bottom'] : [];
+    const holeRefs = pages.geometry === 'holes';
+    const tipFamily =
+      drillCycle === 'drill' || drillCycle === 'chip_breaking' || drillCycle === 'deep_hole';
     return (
       <>
         <DialogSection title="CLEARANCE HEIGHT">
@@ -1574,6 +1725,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             unit={lu}
             chainBelow={[...bottomRef, 'top', 'feed', 'retract']}
             selectionAvailable={selectionAvailable}
+            holeRefsAvailable={holeRefs}
           />
         </DialogSection>
         <DialogSection title="RETRACT HEIGHT">
@@ -1585,6 +1737,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             unit={lu}
             chainBelow={[...bottomRef, 'top', 'feed']}
             selectionAvailable={selectionAvailable}
+            holeRefsAvailable={holeRefs}
           />
         </DialogSection>
         <DialogSection title="FEED HEIGHT">
@@ -1596,6 +1749,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             unit={lu}
             chainBelow={[...bottomRef, 'top']}
             selectionAvailable={selectionAvailable}
+            holeRefsAvailable={holeRefs}
           />
         </DialogSection>
         <DialogSection title="TOP HEIGHT">
@@ -1607,6 +1761,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             unit={lu}
             chainBelow={bottomRef}
             selectionAvailable={selectionAvailable}
+            holeRefsAvailable={holeRefs}
           />
         </DialogSection>
         {hasBottomRow && (
@@ -1618,7 +1773,36 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               onOffset={setBottomOff}
               unit={lu}
               selectionAvailable={selectionAvailable}
+              holeRefsAvailable={holeRefs}
             />
+          </DialogSection>
+        )}
+        {kind === 'drill' && (
+          <DialogSection title="DRILL TIP">
+            <label
+              className={`flex items-center gap-2 text-[11px] ${tipFamily ? 'text-ink' : 'text-mute'}`}
+              title={
+                tipFamily
+                  ? 'Drive the drill point past the bottom plane so the full diameter clears the hole bottom'
+                  : 'Tip-through applies to the drilling family (drill, chip breaking, deep hole); tapping, reaming, and boring stop at the bottom plane'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={tipFamily && tipThrough}
+                disabled={!tipFamily}
+                onChange={(event) => setTipThrough(event.target.checked)}
+              />
+              Drill tip through bottom
+            </label>
+            {(tipFamily && tipThrough) && (
+              <DraftNumber
+                label="Break-through depth"
+                value={breakthrough}
+                onChange={setBreakthrough}
+                unit={lu}
+              />
+            )}
           </DialogSection>
         )}
       </>
@@ -1991,9 +2175,8 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
               Leads meet the profile tangentially — straight, or rounded into an arc when a
               radius is given (the arc swings in from the non-material side, so the cut never
-              gouges the entry corner). In-control compensation activates on the lead-in: a
-              straight lead must exceed the tool radius; an arc lead's radius must at least
-              match it.
+              gouges the entry corner). Lead lengths carry no tool-diameter floor: with
+              machine-side compensation the control owns its activation travel.
             </p>
             <div className="grid grid-cols-2 gap-2">
               <DraftNumber

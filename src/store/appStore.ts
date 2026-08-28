@@ -272,6 +272,11 @@ export interface CamHolePickHole {
   /** Hole axis direction in setup coordinates (unit length); reserved for
    *  future multi-axis orientation, ±setup Z today. */
   axis: [number, number, number];
+  /** Cylindrical face's own top/bottom in setup Z: the hole machines across
+   *  exactly this span, so stepped bosses and deep faces need no manual
+   *  top/bottom entry. */
+  topZ: number;
+  bottomZ: number;
 }
 
 /** Active viewport hole-picking session owned by a drill/thread operation

@@ -581,15 +581,13 @@ function pushSelectedTool(
   // above the feed height), so the red cone parks at the retract target
   // pointing up instead of pointing down into the hole bottom. Arc tangents
   // are exact (from the circle geometry, not display chords). Cone size
-  // follows the MODEL extent — a fixed short marker that grows and shrinks
-  // with the part, identical at both ends — capped by the shorter of the
-  // two host moves so a short plunge cannot poke a cone through the
-  // machined surface.
+  // follows the MODEL extent alone — a fixed short marker that grows and
+  // shrinks with the part — so every operation on the same model carries
+  // identically sized cones; host-move length never scales them.
   const firstFeed = feedMoves[0];
   const lastFeed = feedMoves[feedMoves.length - 1];
   let exitAnchor = lastFeed?.to ?? null;
   let exitDir = lastFeed?.endDir ?? null;
-  let exitHost = lastFeed?.length ?? Infinity;
   {
     const motions = sectionCommands.filter(
       (command) =>
@@ -605,11 +603,6 @@ function pushSelectedTool(
     ) {
       exitAnchor = lastMotion.to;
       exitDir = { x: 0, y: 0, z: 1 };
-      exitHost = Math.hypot(
-        lastMotion.to.x - previousMotion.to.x,
-        lastMotion.to.y - previousMotion.to.y,
-        lastMotion.to.z - previousMotion.to.z,
-      );
     }
   }
   const modelBounds = modelBoundsOfBodies(state.solidScene, setup.body_ids);
@@ -621,8 +614,7 @@ function pushSelectedTool(
         1,
       )
     : 100;
-  const moveCap = Math.min(firstFeed?.length ?? Infinity, exitHost);
-  const coneLength = Math.min(clamp(modelExtent * 0.025, 1, 12), moveCap);
+  const coneLength = clamp(modelExtent * 0.025, 1, 12);
   const pushEndpointCone = (anchor: Point3Dto, dir: Point3Dto, color: Rgba) => {
     if (coneLength <= 1e-9) return;
     const start = toModel(anchor);

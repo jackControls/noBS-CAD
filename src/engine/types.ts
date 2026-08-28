@@ -2247,6 +2247,18 @@ export interface CamChainRefDto {
   /** True when the stored path walks the chain opposite to entity order. */
   reversed: boolean;
 }
+
+/** A viewport-picked cylindrical hole: center in setup XY plus the face's
+ *  own top/bottom in setup Z, so every hole machines across its real span.
+ *  `axis` must be unit and parallel to setup Z (fixed-axis planning);
+ *  `face_key` re-seeds the pick session when the operation is re-edited. */
+export interface CamHoleDto {
+  point: CamPoint2Dto;
+  top_z: number;
+  bottom_z: number;
+  axis: [number, number, number];
+  face_key?: string | null;
+}
 /** Operator-facing units. Persisted geometry and planned motion stay mm. */
 export type CamUnits = 'millimeters' | 'inches';
 export type CamBoxAnchor = 'min' | 'center' | 'max';
@@ -2433,9 +2445,9 @@ export type CamOperationDto =
       compensation: CamContourCompensation;
       /** Who applies the radius offset; omitted = in control. */
       compensation_mode?: CamCompensationMode;
-      /** Straight tangent lead-in/out lengths (mm). In control with
-       *  compensation active they must exceed the tool radius, or the
-       *  control alarms on activation. Omitted = planner default. */
+      /** Straight tangent lead-in/out lengths (mm). Kept short of the tool
+       *  radius is legal; with machine-side compensation the control owns
+       *  its activation travel. Omitted = planner default. */
       lead_in?: number;
       lead_out?: number;
       /** Optional horizontal arc radius (mm) rounding each straight lead
@@ -2463,6 +2475,9 @@ export type CamOperationDto =
   | (CamOperationBase & {
       kind: 'drill';
       points: CamPoint2Dto[];
+      /** Viewport-picked holes carrying their own top/bottom (setup Z).
+       *  Both lists may mix; each entry machines across its own span. */
+      holes?: CamHoleDto[];
       top_z: number;
       bottom_z: number;
       /** Hole-machining cycle family; defaults to plain 'drill'. */
@@ -2475,6 +2490,12 @@ export type CamOperationDto =
       /** Reaming/boring feed-out (mm/min); defaults to the plunge feed. */
       feed_out: number | null;
       dwell_seconds: number;
+      /** Drill/chip-breaking/deep-hole only: drive the tip past the bottom
+       *  plane by the point length plus `breakthrough_depth` so the full
+       *  diameter clears the hole bottom. */
+      drill_tip_through?: boolean;
+      /** Extra travel (mm) past the bottom plane when tip-through is on. */
+      breakthrough_depth?: number;
     })
   | (CamOperationBase & {
       kind: 'pocket2d';
@@ -2503,6 +2524,9 @@ export type CamOperationDto =
       kind: 'thread';
       /** Hole centers the threads are milled into, in setup XY. */
       points: CamPoint2Dto[];
+      /** Viewport-picked holes carrying their own top/bottom (setup Z);
+       *  each entry threads across its own span. */
+      holes?: CamHoleDto[];
       top_z: number;
       bottom_z: number;
       /** Pitch (mm/rev), resolved by the host from the chosen designation

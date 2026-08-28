@@ -114,7 +114,7 @@ import { triangulateProfileRegion } from './profileTriangulation';
 import { collectCamOverlay } from '../../cam/overlay';
 import { camPickCandidateKey, completeCamPointPick } from '../../cam/pointPick';
 import { activeCamSetup } from '../../cam/document';
-import { camHoleFromCylinderFace } from '../../cam/geometry';
+import { camHoleFromCylinderFace, faceVerticesOfRange } from '../../cam/geometry';
 
 function hasMovableJointPath(
   joints: JointDefinitionDto[],
@@ -9070,11 +9070,19 @@ export function Viewport() {
       if (!faceHit) return null;
       const setup = activeCamSetup(state.camDocument);
       if (!setup) return null;
-      const face = state.solidScene.bodies
-        .find((body) => body.id === faceHit.bodyId)
-        ?.faces.find((candidate) => candidate.id === faceHit.faceId);
-      if (!face?.cylinder) return null;
-      return camHoleFromCylinderFace(faceHit.bodyId, faceHit.faceId, face.cylinder, setup);
+      const body = state.solidScene.bodies.find((candidate) => candidate.id === faceHit.bodyId);
+      const face = body?.faces.find((candidate) => candidate.id === faceHit.faceId);
+      if (!body || !face?.cylinder) return null;
+      // The face's own triangle vertices span the hole's real top/bottom in
+      // setup Z — stepped bosses and blind bores machine across exactly
+      // their own height.
+      const faceVertices = faceVerticesOfRange(
+        body.mesh.positions,
+        body.mesh.indices,
+        face.first_index,
+        face.index_count,
+      );
+      return camHoleFromCylinderFace(faceHit.bodyId, faceHit.faceId, face.cylinder, setup, faceVertices);
     };
     /** CAM loop picking: resolve the pointer to a closed sketch loop by
      *  screen-space proximity — inside the projected polygon counts as a
