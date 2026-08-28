@@ -1360,6 +1360,7 @@ mod tests {
             coolant: CoolantMode::Off,
         };
         CamDocumentDto {
+            load_warnings: Vec::new(),
             setups: vec![CamSetupDto {
                 id: 1,
                 name: "Voxel test".to_string(),

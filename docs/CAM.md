@@ -121,6 +121,15 @@ The same document is fully scriptable through the MCP `cam_*` tools
 (`cam_get_document`, `cam_set_document`, `cam_plan_setup`, `cam_post_setup`,
 `cam_simulate_setup`), which run the same validation as the UI.
 
+Loading is deliberately softer than editing: `decode_project` runs a
+softening pass (`CamDocumentDto::soften_for_load`) that migrates legacy
+fields (e.g. pre-feed-plane documents get their feed height clamped into
+the valid band), repairs stale ids, and force-disables any operation that
+still fails validation instead of refusing to open the project. Parked
+operations surface as amber warning badges in the browser
+(`load_warnings`); fixing and re-saving clears them. A project file can
+therefore never be made unopenable by CAM content.
+
 ## Units
 
 Persisted geometry, planned motion, and simulation are always canonical

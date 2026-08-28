@@ -1717,6 +1717,7 @@ mod tests {
 
     fn document(operations: Vec<CamOperationDto>, tools: Vec<CamToolDto>) -> CamDocumentDto {
         CamDocumentDto {
+            load_warnings: Vec::new(),
             setups: vec![CamSetupDto {
                 id: 1,
                 name: "Setup 1".into(),

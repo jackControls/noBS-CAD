@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Ban,
   Box,
   ChevronDown,
@@ -56,6 +57,20 @@ export function CamSetupsPanel() {
       | { kind: 'setup'; setupId: number }
       | { kind: 'stock'; setupId: number };
   } | null>(null);
+
+  // Load-time issues: a project file always opens — operations that failed
+  // validation are parked (disabled) and badged with the reason until the
+  // operator fixes and re-saves them. Warnings clear on the next write.
+  const loadWarnings = cam.load_warnings ?? [];
+  const operationWarning = (operationId: number): string | null =>
+    loadWarnings.find((warning) => warning.operation_id === operationId)?.message ?? null;
+  const setupWarning = (setupId: number): string | null =>
+    loadWarnings.find(
+      (warning) => warning.setup_id === setupId && (warning.operation_id ?? null) === null,
+    )?.message ?? null;
+  const documentWarnings = loadWarnings.filter(
+    (warning) => (warning.setup_id ?? null) === null && (warning.operation_id ?? null) === null,
+  );
 
   useEffect(() => {
     if (!menu) return;
@@ -131,8 +146,19 @@ export function CamSetupsPanel() {
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
+        {documentWarnings.length > 0 && (
+          <div className="mx-2 mb-1 rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
+            {documentWarnings.map((warning, index) => (
+              <div key={index} className="flex items-start gap-1">
+                <AlertTriangle size={10} className="mt-0.5 shrink-0" />
+                <span>{warning.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {cam.setups.map((setup) => {
           const active = setup.id === cam.active_setup_id;
+          const setupIssue = setupWarning(setup.id);
           return (
             <section key={setup.id}>
               <div
@@ -160,6 +186,11 @@ export function CamSetupsPanel() {
                 >
                   {active ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   <span className="min-w-0 flex-1 truncate text-[12px]">{setup.name}</span>
+                  {setupIssue && (
+                    <span title={setupIssue} className="shrink-0 text-[#e8c589]">
+                      <AlertTriangle size={11} />
+                    </span>
+                  )}
                   <span className="font-mono text-[9px] uppercase text-mute/70">
                     {setup.work_offset}
                   </span>
@@ -244,6 +275,14 @@ export function CamSetupsPanel() {
                           </span>
                         )}
                       </span>
+                      {operationWarning(operation.id) && (
+                        <span
+                          title={operationWarning(operation.id)!}
+                          className="shrink-0 text-[#e8c589]"
+                        >
+                          <AlertTriangle size={11} />
+                        </span>
+                      )}
                       <span className="text-[8px] uppercase opacity-60">
                         {camOperationLabel(operation.kind)}
                       </span>

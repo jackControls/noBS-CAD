@@ -2545,12 +2545,25 @@ export interface CamDocumentDto {
   setups: CamSetupDto[];
   active_setup_id: number | null;
   tools: CamToolDto[];
+  /** Non-fatal issues found at load time. A project file always opens:
+   *  operations that fail validation are parked (disabled) with a warning
+   *  here until the operator fixes and re-saves them; fixed entries clear on
+   *  the next validated write. */
+  load_warnings?: CamLoadWarningDto[];
   units: CamUnits;
   /** Post settings remembered from the last export; pre-fill only. */
   post_defaults: CamPostConfigDto;
   next_setup_id: number;
   next_operation_id: number;
   next_tool_id: number;
+}
+
+/** A non-fatal CAM document issue found at load time. Both ids null means a
+ *  document/tool-level issue. */
+export interface CamLoadWarningDto {
+  setup_id?: number | null;
+  operation_id?: number | null;
+  message: string;
 }
 
 export type CamCommandDto =

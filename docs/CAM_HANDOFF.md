@@ -59,6 +59,47 @@ correctly clears most of the stock while the part interior stays intact.
 Verification: cam 94 passed, workspace all suites green, mcp-server 37,
 `npx tsc --noEmit` clean, `build:wasm` + `smoke-wasm` + `build` green.
 
+## Round 16b (2026-08-27, late) — projects never refuse to open
+
+A project saved before round 16 (`doorBlock.nbcad`) failed to open at all:
+`decode_project` ran `CamDocumentDto::validate` hard, and the new
+`feed_height_z` field deserialized as 0.0 — below the stored cut top — so
+the whole file load aborted with a validation dialog. Fixed as a load-time
+softening pipeline; opening a project can no longer be blocked by CAM
+content:
+
+1. **`CamDocumentDto::soften_for_load`** (called from `decode_project`)
+   runs `migrate_legacy` first — legacy feed heights clamp into
+   `[top, retract]` (NaN → top), so pre-feed-plane documents open with a
+   sane feed plane and no warning at all. It then repairs a stale
+   `active_setup_id` (falls back to the first setup) and pushes the id
+   counters past any stored ids.
+2. **Invalid operations are parked, not rejected.** Whatever still fails
+   validation is force-disabled and recorded in the new
+   `CamDocumentDto::load_warnings` (`CamLoadWarningDto` with optional
+   setup/operation ids). `CamSetupDto::validate` was split into
+   `validate_structure` + per-operation checks that skip disabled
+   operations (planner and post already skip them, so the semantics match).
+   Re-enabling a parked operation re-validates and reports the concrete
+   reason; fixing and saving clears the badge via `refresh_load_warnings`
+   in `set_cam_document`.
+3. **Browser badges.** Amber warning triangles on parked operations and
+   damaged setups (tooltip carries the message), plus a document-level
+   banner for tool/reference warnings.
+
+`validate_project` no longer validates CAM at all (the loader softens).
+Drawings and assembly still hard-fail there — they gained no new fields
+this round so no existing file trips them, but softening them is the
+follow-up if their schema evolves.
+
+Verification: cam 97 passed (new: legacy-without-feed-height opens clean,
+invalid ops parked + warnings cleared after repair, stale-id repair),
+sketch end-to-end `legacy_cam_document_without_feed_height_opens_clean`
+(exports a project, strips every `feed_height_z` key, reloads through the
+real decode path, asserts the operation survived enabled with the feed
+clamped to the cut top), workspace suites green, mcp-server 37,
+`npx tsc --noEmit` clean, `build:wasm` + `smoke-wasm` + `build` green.
+
 ## Round 15b (2026-08-26) — compensation field fixes
 
 Operator testing of round 15 surfaced three real defects, all fixed with

@@ -1115,6 +1115,62 @@ impl CamOperationDto {
         }
     }
 
+    /// Load-time leniency uses this to park an invalid operation: disabled
+    /// operations are skipped by the planner, the post, and strict
+    /// validation until the operator fixes and resumes them.
+    pub(crate) fn set_enabled(&mut self, value: bool) {
+        match self {
+            Self::Face { enabled, .. }
+            | Self::Contour2d { enabled, .. }
+            | Self::Drill { enabled, .. }
+            | Self::Pocket2d { enabled, .. }
+            | Self::Chamfer2d { enabled, .. }
+            | Self::Thread { enabled, .. } => *enabled = value,
+        }
+    }
+
+    /// Mutable (cut top, retract, feed plane) triple for legacy migration.
+    pub(crate) fn feed_plane_parts_mut(&mut self) -> (&mut f64, &mut f64, &mut f64) {
+        match self {
+            Self::Face {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            }
+            | Self::Contour2d {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            }
+            | Self::Drill {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            }
+            | Self::Pocket2d {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            }
+            | Self::Chamfer2d {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            }
+            | Self::Thread {
+                top_z,
+                retract_z,
+                feed_height_z,
+                ..
+            } => (top_z, retract_z, feed_height_z),
+        }
+    }
+
     pub fn tool_id(&self) -> u64 {
         match self {
             Self::Face { tool_id, .. }
@@ -1984,6 +2040,21 @@ impl CamSetupDto {
     }
 
     fn validate(&self, tools: &[CamToolDto]) -> Result<(), String> {
+        self.validate_structure()?;
+        for operation in &self.operations {
+            // Disabled operations are inert — the planner and the post skip
+            // them, so strict validation does too. A disabled operation only
+            // comes back through an explicit resume, which re-validates.
+            if operation.enabled() {
+                operation.validate(self, tools)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything except the operation checks. Load-time leniency reports
+    /// structural issues as warnings instead of blocking the open.
+    pub(crate) fn validate_structure(&self) -> Result<(), String> {
         if self.id == 0 {
             return Err("CAM setup ids must be non-zero".to_string());
         }
@@ -2026,9 +2097,6 @@ impl CamSetupDto {
                     self.name
                 ));
             }
-        }
-        for operation in &self.operations {
-            operation.validate(self, tools)?;
         }
         Ok(())
     }
@@ -2198,6 +2266,13 @@ pub struct CamDocumentDto {
     pub active_setup_id: Option<u64>,
     #[serde(default)]
     pub tools: Vec<CamToolDto>,
+    /// Non-fatal issues found when the document was loaded. A project file
+    /// must always open: operations that fail validation are disabled (the
+    /// planner and post skip them) and carry a warning here until the
+    /// operator fixes and re-saves them. Recomputed on every validated
+    /// write, so fixed entries clear immediately.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load_warnings: Vec<CamLoadWarningDto>,
     /// Operator-facing unit system. Persisted geometry and planned motion
     /// remain canonical millimetres; posts convert controller words when
     /// this is inches.
@@ -2216,12 +2291,26 @@ pub struct CamDocumentDto {
     pub next_tool_id: u64,
 }
 
+/// A non-fatal CAM document issue found at load time. `setup_id` /
+/// `operation_id` locate the row the host badges; both `None` means a
+/// document/tool-level issue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CamLoadWarningDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<u64>,
+    /// Human-readable, actionable description (the validation message).
+    pub message: String,
+}
+
 impl Default for CamDocumentDto {
     fn default() -> Self {
         Self {
             setups: Vec::new(),
             active_setup_id: None,
             tools: Vec::new(),
+            load_warnings: Vec::new(),
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto::default(),
             next_setup_id: 1,
@@ -2241,61 +2330,195 @@ impl CamDocumentDto {
         for setup in &mut self.setups {
             let legacy_clearance = setup.legacy_clearance_z.take();
             let legacy_retract = setup.legacy_retract_z.take();
-            if legacy_clearance.is_none() && legacy_retract.is_none() {
-                continue;
-            }
+            let has_legacy_heights = legacy_clearance.is_some() || legacy_retract.is_some();
             for operation in &mut setup.operations {
-                match operation {
-                    CamOperationDto::Face {
-                        clearance_z,
-                        retract_z,
-                        ..
-                    }
-                    | CamOperationDto::Contour2d {
-                        clearance_z,
-                        retract_z,
-                        ..
-                    }
-                    | CamOperationDto::Pocket2d {
-                        clearance_z,
-                        retract_z,
-                        ..
-                    }
-                    | CamOperationDto::Chamfer2d {
-                        clearance_z,
-                        retract_z,
-                        ..
-                    }
-                    // Thread operations postdate legacy heights; listed here
-                    // only to keep the match exhaustive.
-                    | CamOperationDto::Thread {
-                        clearance_z,
-                        retract_z,
-                        ..
-                    } => {
-                        if *clearance_z == 0.0 {
-                            if let Some(value) = legacy_clearance {
-                                *clearance_z = value;
+                if has_legacy_heights {
+                    match operation {
+                        CamOperationDto::Face {
+                            clearance_z,
+                            retract_z,
+                            ..
+                        }
+                        | CamOperationDto::Contour2d {
+                            clearance_z,
+                            retract_z,
+                            ..
+                        }
+                        | CamOperationDto::Pocket2d {
+                            clearance_z,
+                            retract_z,
+                            ..
+                        }
+                        | CamOperationDto::Chamfer2d {
+                            clearance_z,
+                            retract_z,
+                            ..
+                        }
+                        // Thread operations postdate legacy heights; listed here
+                        // only to keep the match exhaustive.
+                        | CamOperationDto::Thread {
+                            clearance_z,
+                            retract_z,
+                            ..
+                        } => {
+                            if *clearance_z == 0.0 {
+                                if let Some(value) = legacy_clearance {
+                                    *clearance_z = value;
+                                }
+                            }
+                            if *retract_z == 0.0 {
+                                if let Some(value) = legacy_retract {
+                                    *retract_z = value;
+                                }
                             }
                         }
-                        if *retract_z == 0.0 {
-                            if let Some(value) = legacy_retract {
-                                *retract_z = value;
-                            }
-                        }
-                    }
-                    // Drill operations always carried their own retract
-                    // plane; only the clearance plane is new to them.
-                    CamOperationDto::Drill { clearance_z, .. } => {
-                        if *clearance_z == 0.0 {
-                            if let Some(value) = legacy_clearance {
-                                *clearance_z = value;
+                        // Drill operations always carried their own retract
+                        // plane; only the clearance plane is new to them.
+                        CamOperationDto::Drill { clearance_z, .. } => {
+                            if *clearance_z == 0.0 {
+                                if let Some(value) = legacy_clearance {
+                                    *clearance_z = value;
+                                }
                             }
                         }
                     }
                 }
+                // Documents saved before the feed-engagement plane existed
+                // deserialize it as zero, which fails the [cut top, retract]
+                // range check; clamp any out-of-range (or non-finite) plane
+                // into the range so the operation opens clean. Feeding from
+                // the cut top is the safe bound — the old planner approached
+                // at retract, which only adds air travel.
+                let (top_z, retract_z, feed_height_z) = operation.feed_plane_parts_mut();
+                if top_z.is_finite() && retract_z.is_finite() && *top_z <= *retract_z {
+                    let clamped = feed_height_z.clamp(*top_z, *retract_z);
+                    *feed_height_z = if clamped.is_finite() { clamped } else { *top_z };
+                }
             }
         }
+    }
+
+    /// Load-time leniency: a project file must ALWAYS open. Migrations and
+    /// safe auto-fixes run first (a stale active-setup pointer selects the
+    /// first setup; id counters move past every saved id); operations that
+    /// still fail validation are parked — disabled, so the planner, the
+    /// post, and strict validation skip them — and every remaining issue
+    /// lands in `load_warnings` for the host to badge. Warnings clear on the
+    /// next validated write (`refresh_load_warnings`).
+    pub fn soften_for_load(&mut self) {
+        self.migrate_legacy();
+        if !self.setups.is_empty()
+            && self
+                .active_setup_id
+                .map_or(true, |active| !self.setups.iter().any(|setup| setup.id == active))
+        {
+            self.active_setup_id = Some(self.setups[0].id);
+        }
+        let max_setup_id = self.setups.iter().map(|setup| setup.id).max().unwrap_or(0);
+        let max_operation_id = self
+            .setups
+            .iter()
+            .flat_map(|setup| setup.operations.iter().map(|operation| operation.id()))
+            .max()
+            .unwrap_or(0);
+        let max_tool_id = self.tools.iter().map(|tool| tool.id).max().unwrap_or(0);
+        self.next_setup_id = self.next_setup_id.max(max_setup_id + 1).max(1);
+        self.next_operation_id = self.next_operation_id.max(max_operation_id + 1).max(1);
+        self.next_tool_id = self.next_tool_id.max(max_tool_id + 1).max(1);
+        let tools = self.tools.clone();
+        for setup in &mut self.setups {
+            // Validate with an immutable borrow, then park the failures.
+            let failing: Vec<usize> = setup
+                .operations
+                .iter()
+                .enumerate()
+                .filter(|(_, operation)| operation.validate(setup, &tools).is_err())
+                .map(|(index, _)| index)
+                .collect();
+            for index in failing {
+                setup.operations[index].set_enabled(false);
+            }
+        }
+        self.load_warnings = self.collect_load_warnings();
+    }
+
+    /// Recompute non-fatal issues after a validated write: warnings for
+    /// fixed operations clear, still-broken disabled operations keep theirs.
+    pub fn refresh_load_warnings(&mut self) {
+        self.load_warnings = self.collect_load_warnings();
+    }
+
+    /// Every currently detectable non-fatal issue, without mutating anything.
+    /// Structural corruption that strict validation rejects on writes (id
+    /// collisions, rest-link breaks) is reported here so a loaded file can
+    /// still be inspected and repaired piece by piece.
+    fn collect_load_warnings(&self) -> Vec<CamLoadWarningDto> {
+        let mut warnings = Vec::new();
+        let document_warning = |message: String| CamLoadWarningDto {
+            setup_id: None,
+            operation_id: None,
+            message,
+        };
+        let mut tool_ids = HashSet::new();
+        let mut tool_numbers = HashSet::new();
+        for tool in &self.tools {
+            if let Err(message) = tool.validate() {
+                warnings.push(document_warning(format!(
+                    "tool '{}' library entry: {message}",
+                    tool.name
+                )));
+            }
+            if !tool_ids.insert(tool.id) {
+                warnings.push(document_warning(format!(
+                    "duplicate CAM tool id {}",
+                    tool.id
+                )));
+            }
+            if let Some(number) = tool.number {
+                if !tool_numbers.insert(number) {
+                    warnings.push(document_warning(format!(
+                        "duplicate CAM tool number {number}"
+                    )));
+                }
+            }
+        }
+        let mut setup_ids = HashSet::new();
+        let mut operation_ids = HashSet::new();
+        for setup in &self.setups {
+            if !setup_ids.insert(setup.id) {
+                warnings.push(document_warning(format!(
+                    "duplicate CAM setup id {}",
+                    setup.id
+                )));
+            }
+            if let Err(message) = setup.validate_structure() {
+                warnings.push(CamLoadWarningDto {
+                    setup_id: Some(setup.id),
+                    operation_id: None,
+                    message,
+                });
+            }
+            for operation in &setup.operations {
+                if !operation_ids.insert(operation.id()) {
+                    warnings.push(CamLoadWarningDto {
+                        setup_id: Some(setup.id),
+                        operation_id: None,
+                        message: format!("duplicate CAM operation id {}", operation.id()),
+                    });
+                }
+                if let Err(message) = operation.validate(setup, &self.tools) {
+                    warnings.push(CamLoadWarningDto {
+                        setup_id: Some(setup.id),
+                        operation_id: Some(operation.id()),
+                        message,
+                    });
+                }
+            }
+        }
+        if let Err(message) = self.validate_rest_links() {
+            warnings.push(document_warning(message));
+        }
+        warnings
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -2363,9 +2586,13 @@ impl CamDocumentDto {
             profile.validate()?;
         }
 
-        // Rest-stock links between setups: the source setup must exist with
-        // the same WCS (same clamping) and the same stock envelope, and the
-        // link graph must be acyclic so simulation can resolve it.
+        self.validate_rest_links()
+    }
+
+    /// Rest-stock links between setups: the source setup must exist with
+    /// the same WCS (same clamping) and the same stock envelope, and the
+    /// link graph must be acyclic so simulation can resolve it.
+    fn validate_rest_links(&self) -> Result<(), String> {
         for setup in &self.setups {
             let CamResolvedStockDto::Rest { source_setup_id } = &setup.resolved_stock else {
                 continue;
@@ -2770,5 +2997,122 @@ mod tests {
         };
         let error = document_with(vec![setup]).validate().unwrap_err();
         assert!(error.contains("inside the stock envelope"));
+    }
+
+    #[test]
+    fn legacy_document_without_feed_height_opens_clean() {
+        // Round-15 documents predate the feed-engagement plane: it
+        // deserializes as zero, which falls out of [cut top, retract]
+        // whenever the cut top sits above the WCS origin. soften_for_load
+        // clamps it to the cut top, so the file opens with no warnings and
+        // no parked operations.
+        let legacy = r#"{
+            "setups": [{
+                "id": 1,
+                "name": "Setup 1",
+                "wcs": {
+                    "origin": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "x_axis": [1.0, 0.0, 0.0],
+                    "y_axis": [0.0, 1.0, 0.0],
+                    "z_axis": [0.0, 0.0, 1.0]
+                },
+                "work_offset": "g54",
+                "stock": {
+                    "min": {"x": -17.0, "y": -9.5, "z": 0.0},
+                    "max": {"x": 17.0, "y": 9.5, "z": 14.0}
+                },
+                "operations": [{
+                    "kind": "face",
+                    "id": 1,
+                    "name": "Face 1",
+                    "enabled": true,
+                    "tool_id": 1,
+                    "bounds": {"min": {"x": -17.0, "y": -9.5}, "max": {"x": 17.0, "y": 9.5}},
+                    "top_z": 14.0,
+                    "target_z": 12.0,
+                    "step_over": 3.0,
+                    "step_down": 0.5,
+                    "safe_distance": 5.0,
+                    "clearance_z": 24.0,
+                    "retract_z": 17.0,
+                    "cutting": {"spindle_rpm": 606, "feed_xy": 121.2, "feed_z": 300.0, "coolant": "flood"}
+                }]
+            }],
+            "active_setup_id": 1,
+            "tools": [{
+                "id": 1,
+                "number": 1,
+                "name": "63 mm face mill",
+                "kind": "face_mill",
+                "diameter": 63.0,
+                "flute_length": 30.0,
+                "overall_length": 80.0,
+                "flute_count": 5
+            }],
+            "next_setup_id": 2,
+            "next_operation_id": 2,
+            "next_tool_id": 2
+        }"#;
+        let mut document: CamDocumentDto = serde_json::from_str(legacy).unwrap();
+        // Strict validation rejects the document as saved — this is the
+        // failure that used to block the open.
+        assert!(document.validate().is_err());
+        document.soften_for_load();
+        document.validate().unwrap();
+        let operation = &document.setups[0].operations[0];
+        assert!(operation.enabled());
+        assert_eq!(operation.feed_height_z(), 14.0);
+        assert!(document.load_warnings.is_empty());
+    }
+
+    #[test]
+    fn invalid_operations_are_parked_with_warnings_not_rejected() {
+        // A stepover wider than the tool diameter fails validation. On load
+        // the operation is parked (disabled — planner/post skip it) with a
+        // warning instead of rejecting the document.
+        let mut document = document_with(vec![setup(
+            1,
+            CamStockSpecDto::LegacyBox,
+            CamResolvedStockDto::Box,
+        )]);
+        if let CamOperationDto::Face { step_over, .. } = &mut document.setups[0].operations[0] {
+            *step_over = 12.0; // the tool is 6 mm
+        }
+        assert!(document.validate().is_err());
+        document.soften_for_load();
+        document.validate().unwrap();
+        let operation = &document.setups[0].operations[0];
+        assert!(!operation.enabled());
+        assert_eq!(document.load_warnings.len(), 1);
+        assert_eq!(document.load_warnings[0].operation_id, Some(operation.id()));
+        assert_eq!(document.load_warnings[0].setup_id, Some(1));
+        assert!(document.load_warnings[0].message.contains("stepover"));
+
+        // Fixing the operation and re-validating clears the warning.
+        if let CamOperationDto::Face {
+            step_over, enabled, ..
+        } = &mut document.setups[0].operations[0]
+        {
+            *step_over = 3.0;
+            *enabled = true;
+        }
+        document.validate().unwrap();
+        document.refresh_load_warnings();
+        assert!(document.load_warnings.is_empty());
+    }
+
+    #[test]
+    fn soften_repairs_stale_active_setup_and_id_counters() {
+        let mut document = document_with(vec![setup(
+            1,
+            CamStockSpecDto::LegacyBox,
+            CamResolvedStockDto::Box,
+        )]);
+        document.active_setup_id = Some(99);
+        document.next_setup_id = 1; // collides with the existing setup
+        document.soften_for_load();
+        assert_eq!(document.active_setup_id, Some(1));
+        assert!(document.next_setup_id > 1);
+        document.validate().unwrap();
     }
 }

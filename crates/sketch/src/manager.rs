@@ -1244,6 +1244,10 @@ impl SketchManager {
     ) -> Result<CamDocumentDto, SessionError> {
         cam.migrate_legacy();
         cam.validate().map_err(SessionError::Solid)?;
+        // Strict validation passed; recompute the non-fatal load warnings so
+        // fixed operations clear their badge and still-broken disabled ones
+        // keep theirs.
+        cam.refresh_load_warnings();
         self.cam = cam;
         Ok(self.cam.clone())
     }
@@ -4860,6 +4864,7 @@ mod project_tests {
     #[test]
     fn project_roundtrip_preserves_cam_intent_and_regenerates_motion() {
         let cam = CamDocumentDto {
+            load_warnings: Vec::new(),
             setups: vec![CamSetupDto {
                 id: 3,
                 name: "Top setup".to_string(),
@@ -4956,6 +4961,135 @@ mod project_tests {
             })
             .unwrap();
         assert!(posted.nc.contains("G55"));
+    }
+
+    /// Recursively remove every object entry named `key`, simulating a project
+    /// written before that field existed.
+    fn strip_json_key(value: &mut serde_json::Value, key: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove(key);
+                for child in map.values_mut() {
+                    strip_json_key(child, key);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    strip_json_key(child, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // A project saved before the per-operation feed plane existed must still
+    // open: the legacy default (0.0) migrates into the valid band instead of
+    // failing the whole load.
+    #[test]
+    fn legacy_cam_document_without_feed_height_opens_clean() {
+        let cam = CamDocumentDto {
+            load_warnings: Vec::new(),
+            setups: vec![CamSetupDto {
+                id: 3,
+                name: "Top setup".to_string(),
+                wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
+                work_offset: WorkOffset::G54,
+                work_offset_count: 1,
+                stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+                resolved_stock: nbcad_cam::CamResolvedStockDto::Box,
+                stock: StockBoxDto {
+                    min: CamPoint3Dto::new(0.0, 0.0, 0.0),
+                    max: CamPoint3Dto::new(30.0, 20.0, 14.0),
+                },
+                stock_model_box: None,
+                body_ids: vec![],
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
+                operations: vec![CamOperationDto::Face {
+                    id: 7,
+                    name: "Face stock".to_string(),
+                    enabled: true,
+                    tool_id: 5,
+                    bounds: CamRect2Dto {
+                        min: CamPoint2Dto::new(0.0, 0.0),
+                        max: CamPoint2Dto::new(30.0, 20.0),
+                    },
+                    top_z: 14.0,
+                    target_z: 13.0,
+                    step_over: 3.0,
+                    step_down: 1.0,
+                    safe_distance: 5.0,
+                    direction: nbcad_cam::FaceDirection::BothWays,
+                    clearance_z: 20.0,
+                    retract_z: 17.0,
+                    feed_height_z: 15.0,
+                    cutting: CuttingParametersDto {
+                        spindle_rpm: 12_000,
+                        feed_xy: 800.0,
+                        feed_z: 200.0,
+                        coolant: CoolantMode::Flood,
+                    },
+                }],
+            }],
+            active_setup_id: Some(3),
+            tools: vec![CamToolDto {
+                id: 5,
+                number: Some(1),
+                name: "6 mm flat end mill".to_string(),
+                kind: CamToolKind::FlatEndMill,
+                diameter: 6.0,
+                flute_length: 20.0,
+                overall_length: 50.0,
+                center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                corner_radius: None,
+                cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
+                default_step_down: None,
+                default_step_over: None,
+            }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto::default(),
+            next_setup_id: 4,
+            next_operation_id: 8,
+            next_tool_id: 6,
+        };
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam).unwrap();
+
+        let json = manager.export_project_model().unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        strip_json_key(&mut legacy, "feed_height_z");
+        let legacy_json = serde_json::to_string(&legacy).unwrap();
+
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(legacy_json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto::default(),
+            })
+            .unwrap();
+
+        let reopened = loaded.cam_document();
+        assert!(reopened.load_warnings.is_empty());
+        let CamOperationDto::Face {
+            enabled,
+            feed_height_z,
+            ..
+        } = &reopened.setups[0].operations[0]
+        else {
+            panic!("expected the face operation to survive the legacy load");
+        };
+        assert!(enabled);
+        // Legacy default 0.0 is below the cut top, so the migration clamps it
+        // onto the top of the cut.
+        assert_eq!(*feed_height_z, 14.0);
+        let program = loaded.cam_plan(3).unwrap();
+        assert_eq!(program.stats.operation_count, 1);
     }
 
     #[test]

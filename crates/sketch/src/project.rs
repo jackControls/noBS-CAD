@@ -143,7 +143,10 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV2, String> {
 
     let mut model: ProjectModelV2 = serde_json::from_value(header)
         .map_err(|error| format!("invalid project model: {error}"))?;
-    model.cam.migrate_legacy();
+    // A project file must always open: CAM content migrates what it can and
+    // parks what it cannot as disabled operations with load warnings,
+    // instead of rejecting the whole file.
+    model.cam.soften_for_load();
     validate_project(&model)?;
     Ok(model)
 }
@@ -200,7 +203,9 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
     }
     model.drawings.validate()?;
     model.assembly.validate()?;
-    model.cam.validate()?;
+    // CAM content never blocks the open: decode_project already ran
+    // soften_for_load, which migrates what's migratable and parks the rest
+    // as disabled operations with load warnings.
 
     let mut feature_ids = HashSet::new();
     for feature in &model.document.history.features {
