@@ -73,6 +73,7 @@ import { computeDimGeometry, formatDimMeasurement } from './dimsRenderer';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
 import {
   SINGLE_POINT_RELATION_GLYPH,
+  layoutConstraintGlyphs,
   singlePointRelationAnchor,
 } from '../../sketch/constraintGlyphAnchor';
 import {
@@ -3155,7 +3156,47 @@ export function Viewport() {
       constraintId: number;
       px: number;
       label: string;
+      anchor: Vec2;
+      preferredDir: Vec2 | null;
     }> = [];
+    const CONSTRAINT_GRIP_HALF_PX = 4;
+    const CONSTRAINT_GLYPH_GAP_PX = 10;
+    let constraintGlyphGripObstacles: Vec2[] = [];
+    let constraintGlyphLayoutWorldPerPixel = Number.NaN;
+
+    /** Refresh only badge positions when zoom/camera fitting changes scale. */
+    const refreshConstraintGlyphLayout = (
+      currentWorldPerPixel: number,
+      force = false,
+    ) => {
+      if (constraintSprites.length === 0) {
+        constraintGlyphLayoutWorldPerPixel = currentWorldPerPixel;
+        return;
+      }
+      const relativeScaleChange = Number.isFinite(constraintGlyphLayoutWorldPerPixel)
+        ? Math.abs(currentWorldPerPixel - constraintGlyphLayoutWorldPerPixel)
+          / Math.max(Math.abs(constraintGlyphLayoutWorldPerPixel), Number.EPSILON)
+        : Number.POSITIVE_INFINITY;
+      if (!force && relativeScaleChange < 1e-6) return;
+
+      const positions = layoutConstraintGlyphs(
+        constraintSprites.map(({ anchor, px, preferredDir }) => ({
+          anchor,
+          glyphPx: px,
+          preferredDir,
+        })),
+        {
+          worldPerPixel: currentWorldPerPixel,
+          gripHalfPx: CONSTRAINT_GRIP_HALF_PX,
+          gapPx: CONSTRAINT_GLYPH_GAP_PX,
+          obstacles: constraintGlyphGripObstacles,
+        },
+      );
+      positions.forEach((position, index) => {
+        constraintSprites[index].sprite.position.set(position.x, position.y, 0.2);
+      });
+      constraintGlyphLayoutWorldPerPixel = currentWorldPerPixel;
+    };
 
     const entityAnchor = (
       entity: EntityDto | undefined,
@@ -3192,6 +3233,8 @@ export function Viewport() {
       clearGroup(entityGroup);
       clearGroup(glyphGroup);
       constraintSprites.length = 0;
+      constraintGlyphGripObstacles = [];
+      constraintGlyphLayoutWorldPerPixel = Number.NaN;
       // Drop per-entity sprite registrations (origin/snap markers persist).
       scaledSprites.length = 2;
       const {
@@ -3328,9 +3371,13 @@ export function Viewport() {
       // toggle is off.
       if (!palette.constraints) return;
 
-      // Keep glyphs a few screen pixels off geometry, not a fixed 7 mm
-      // (which jumps tens of pixels as the camera zooms).
-      const glyphNudge = Math.max(worldPerPixel() * 12, 0.35);
+      // Retain solved anchors separately from camera-dependent badge positions.
+      // The event-driven render loop reflows these when zoom/camera fitting
+      // changes world-per-pixel, without rebuilding any sketch geometry.
+      constraintGlyphGripObstacles = gripPoints.map((point) => ({
+        x: point.x,
+        y: point.y,
+      }));
 
       const registerConstraintSprite = (
         sprite: CAD.Sprite,
@@ -3338,6 +3385,8 @@ export function Viewport() {
         px: number,
         label: string,
         selected: boolean,
+        anchor: Vec2,
+        preferredDir: Vec2 | null = null,
         colorHex = new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_INK).getHex(),
       ) => {
         sprite.userData.nativeAnnotationText = label;
@@ -3345,8 +3394,16 @@ export function Viewport() {
         sprite.userData.nativeAnnotationColor = colorHex;
         sprite.userData.nativeAnnotationSelected = selected;
         sprite.userData.constraintId = constraintId;
+        sprite.position.set(anchor.x, anchor.y, 0.2);
         glyphGroup.add(sprite);
-        constraintSprites.push({ sprite, constraintId, px, label });
+        constraintSprites.push({
+          sprite,
+          constraintId,
+          px,
+          label,
+          anchor: { ...anchor },
+          preferredDir: preferredDir ? { ...preferredDir } : null,
+        });
       };
 
       const SKIP_CONSTRAINT_TYPES = new Set([
@@ -3391,13 +3448,17 @@ export function Viewport() {
           };
           const label = horizontal ? 'H' : 'V';
           const glyphPx = selected ? 20 : 15;
+          const preferredDir = horizontal ? { x: 0, y: -1 } : { x: 1, y: 0 };
           const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
-          sprite.position.set(
-            mid.x + (horizontal ? 0 : glyphNudge),
-            mid.y + (horizontal ? -glyphNudge : 0),
-            0.2,
+          registerConstraintSprite(
+            sprite,
+            constraint.id,
+            glyphPx,
+            label,
+            selected,
+            mid,
+            preferredDir,
           );
-          registerConstraintSprite(sprite, constraint.id, glyphPx, label, selected);
           continue;
         }
         if (constraint.type === 'midpoint') {
@@ -3411,18 +3472,20 @@ export function Viewport() {
           const dy = line.end.y - line.start.y;
           const len = Math.hypot(dx, dy) || 1;
           const glyphPx = selected ? 18 : 13;
+          const preferredDir = { x: -dy / len, y: dx / len };
           const sprite = makeSprite(
             selected ? midpointTextureSelected : midpointTexture,
             glyphPx,
             7,
           );
-          sprite.position.set(mid.x + (-dy / len) * glyphNudge, mid.y + (dx / len) * glyphNudge, 0.2);
           registerConstraintSprite(
             sprite,
             constraint.id,
             glyphPx,
             'Mid',
             selected,
+            mid,
+            preferredDir,
             new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
           );
           continue;
@@ -3440,13 +3503,14 @@ export function Viewport() {
             glyphPx,
             7,
           );
-          sprite.position.set(position.x + glyphNudge, position.y + glyphNudge, 0.2);
           registerConstraintSprite(
             sprite,
             constraint.id,
             glyphPx,
             'Mid',
             selected,
+            position,
+            null,
             new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
           );
           continue;
@@ -3460,20 +3524,26 @@ export function Viewport() {
               y: (line.start.y + line.end.y) / 2,
             };
             const label = constraint.type === 'horizontal' ? 'H' : 'V';
-            const [x, y] =
-              constraint.type === 'horizontal'
-                ? [mid.x, mid.y - glyphNudge]
-                : [mid.x + glyphNudge, mid.y];
             const glyphPx = selected ? 20 : 15;
+            const preferredDir = constraint.type === 'horizontal'
+              ? { x: 0, y: -1 }
+              : { x: 1, y: 0 };
             const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
-            sprite.position.set(x, y, 0.2);
-            registerConstraintSprite(sprite, constraint.id, glyphPx, label, selected);
+            registerConstraintSprite(
+              sprite,
+              constraint.id,
+              glyphPx,
+              label,
+              selected,
+              mid,
+              preferredDir,
+            );
             continue;
           }
           if (constraint.type === 'fix') {
             const target = sketch.entities.find((e) => e.id === constraint.entity);
             if (!target) continue;
-            const at =
+            const anchor =
               target.kind === 'point'
                 ? target.position
                 : target.kind === 'circle' || target.kind === 'arc'
@@ -3486,8 +3556,14 @@ export function Viewport() {
                       };
             const glyphPx = selected ? 22 : 16;
             const sprite = makeSprite(glyphTexture('fix', selected), glyphPx, 7);
-            sprite.position.set(at.x + glyphNudge, at.y + glyphNudge, 0.2);
-            registerConstraintSprite(sprite, constraint.id, glyphPx, 'Fix', selected);
+            registerConstraintSprite(
+              sprite,
+              constraint.id,
+              glyphPx,
+              'Fix',
+              selected,
+              anchor,
+            );
             continue;
           }
         }
@@ -3501,7 +3577,7 @@ export function Viewport() {
           const anchors = constraintReferencedEntityIds(constraint)
             .map((id) => entityAnchor(byId.get(id), lines))
             .filter((point): point is Vec2 => point != null);
-          const position =
+          const anchor =
             relationPoint
             ?? (anchors.length === 0
               ? null
@@ -3511,16 +3587,16 @@ export function Viewport() {
                     x: anchors.reduce((sum, point) => sum + point.x, 0) / anchors.length,
                     y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
                   });
-          if (!position) continue;
+          if (!anchor) continue;
           const glyphPx = selected ? 20 : 15;
           const sprite = makeSprite(glyphTexture(singlePointGlyph, selected), glyphPx, 7);
-          sprite.position.set(position.x, position.y, 0.2);
           registerConstraintSprite(
             sprite,
             constraint.id,
             glyphPx,
             singlePointGlyph,
             selected,
+            anchor,
           );
           continue;
         }
@@ -3531,7 +3607,7 @@ export function Viewport() {
           .map((id) => entityAnchor(byId.get(id), lines))
           .filter((point): point is Vec2 => point != null);
         if (anchors.length === 0) continue;
-        const position =
+        const anchor =
           anchors.length === 1
             ? anchors[0]
             : {
@@ -3540,9 +3616,16 @@ export function Viewport() {
               };
         const glyphPx = selected ? 20 : 15;
         const sprite = makeSprite(glyphTexture(glyph, selected), glyphPx, 7);
-        sprite.position.set(position.x, position.y, 0.2);
-        registerConstraintSprite(sprite, constraint.id, glyphPx, glyph, selected);
+        registerConstraintSprite(
+          sprite,
+          constraint.id,
+          glyphPx,
+          glyph,
+          selected,
+          anchor,
+        );
       }
+      refreshConstraintGlyphLayout(worldPerPixel(), true);
     };
 
     // --- Dimension annotations (D9, driven by the selected document style) ---
@@ -3820,8 +3903,8 @@ export function Viewport() {
     /** Pick a geometric constraint glyph (screen-space hit test).
      * Only in sketch Select (`activeTool === null`): armed create/edit tools
      * must receive their clicks even when the pointer is over a badge.
-     * Native labels are centered on the sprite; use a generous CSS-pixel
-     * box so the visible badge is easy to click. */
+     * Hit size tracks the visible badge (`px`), not a large label box — so
+     * nearby points stay pickable after the badge is offset off the anchor. */
     const pickConstraintAtPointer = (event: PointerEvent): number | null => {
       if (store.getState().activeTool !== null) return null;
       const entries = constraintSprites.filter(
@@ -3834,7 +3917,7 @@ export function Viewport() {
       camera.updateMatrixWorld(true);
       let best: { id: number; dist: number } | null = null;
       for (let index = entries.length - 1; index >= 0; index -= 1) {
-        const { sprite, constraintId, label } = entries[index];
+        const { sprite, constraintId, px } = entries[index];
         const ndc = sprite.getWorldPosition(world).project(camera);
         if (ndc.z < -1 || ndc.z > 1) continue;
         const centerX = rect.left + ((ndc.x + 1) / 2) * rect.width;
@@ -3842,13 +3925,31 @@ export function Viewport() {
         const dx = event.clientX - centerX;
         const dy = event.clientY - centerY;
         const dist = Math.hypot(dx, dy);
-        const halfWidth = Math.max(16, (label?.length ?? 1) * 6) + 6;
-        const halfHeight = 16;
-        if (Math.abs(dx) <= halfWidth && Math.abs(dy) <= halfHeight) {
+        const half = Math.max(px, 12) * 0.5 + 2;
+        if (Math.abs(dx) <= half && Math.abs(dy) <= half) {
           if (!best || dist < best.dist) best = { id: constraintId, dist };
         }
       }
       return best?.id ?? null;
+    };
+
+    /**
+     * Select-state disambiguation for constraint glyphs vs sketch geometry.
+     *
+     * Badges are offset off grips by `layoutConstraintGlyphs`, but their
+     * hit boxes can still overlap points. Prefer any entity in pick range so
+     * clicking a coincident/tangent point selects the point; only when no
+     * entity is in range does the badge win. Select-only (`activeTool` null)
+     * is enforced inside `pickConstraintAtPointer`.
+     */
+    const pickConstraintOrEntity = (
+      event: PointerEvent,
+      sketchPoint: Vec2 | null,
+    ): { entityId: number | null; constraintId: number | null } => {
+      const entityId = sketchPoint ? pickEntity(sketchPoint) : null;
+      const constraintId = pickConstraintAtPointer(event);
+      if (entityId !== null) return { entityId, constraintId: null };
+      return { entityId: null, constraintId };
     };
 
     const setupSketchScene = (sketch: SketchDto) => {
@@ -9433,17 +9534,18 @@ export function Viewport() {
         return;
       }
 
-      // Hover pre-highlight (select mode only). Constraint glyphs win over
-      // the geometry underneath them.
-      const constraintHover = pickConstraintAtPointer(e);
-      if (constraintHover !== null) {
+      // Hover pre-highlight (select mode only). Geometry under the pointer
+      // wins over a nearby constraint badge.
+      const hoverPick = pickConstraintOrEntity(e, p);
+      if (hoverPick.constraintId !== null) {
         if (state.hoveredEntity !== null) state.setHoveredEntity(null);
         surface.domElement.style.cursor = 'pointer';
         return;
       }
-      const candidate = pickEntity(p);
-      if (candidate !== state.hoveredEntity) state.setHoveredEntity(candidate);
-      surface.domElement.style.cursor = candidate !== null ? 'pointer' : '';
+      if (hoverPick.entityId !== state.hoveredEntity) {
+        state.setHoveredEntity(hoverPick.entityId);
+      }
+      surface.domElement.style.cursor = hoverPick.entityId !== null ? 'pointer' : '';
     };
 
     const onPointerLeave = () => {
@@ -9823,8 +9925,8 @@ export function Viewport() {
       if (state.mode !== 'sketch') return;
       lastPointerClient = { x: e.clientX, y: e.clientY };
       const annotationScreenHit = pickDimensionAtPointer(e);
-      const constraintScreenHit = pickConstraintAtPointer(e);
       const p = pointerToSketch(e);
+      const selectPick = pickConstraintOrEntity(e, p);
 
       // Dimension annotations remain interactive while a sketch tool is
       // armed. This prevents the first click of a double-click from creating
@@ -9848,13 +9950,13 @@ export function Viewport() {
       // valid even when an oblique/re-entered sketch plane cannot provide a
       // ray-plane coordinate at this exact pixel.
       if (!p) {
-        if (annotationHit !== null || constraintScreenHit !== null) {
+        if (annotationHit !== null || selectPick.constraintId !== null) {
           downInfo = {
             x: e.clientX,
             y: e.clientY,
             candidate: null,
             dimCandidate: annotationHit,
-            constraintCandidate: constraintScreenHit,
+            constraintCandidate: selectPick.constraintId,
           };
         }
         return;
@@ -9949,9 +10051,9 @@ export function Viewport() {
       downInfo = {
         x: e.clientX,
         y: e.clientY,
-        candidate: constraintScreenHit !== null ? null : pickEntity(p),
+        candidate: selectPick.entityId,
         dimCandidate: annotationHit,
-        constraintCandidate: constraintScreenHit,
+        constraintCandidate: selectPick.constraintId,
       };
     };
 
@@ -10134,10 +10236,13 @@ export function Viewport() {
       if (state.mode === 'sketch' && downInfo && state.activeTool === null) {
         const moved = Math.hypot(e.clientX - downInfo.x, e.clientY - downInfo.y);
         if (moved <= 3) {
-          const cand = downInfo.candidate;
+          const releasePick = pickConstraintOrEntity(e, pointerToSketch(e));
+          const cand = releasePick.entityId ?? downInfo.candidate;
           const dimCand = downInfo.dimCandidate;
           const constraintCand =
-            pickConstraintAtPointer(e) ?? downInfo.constraintCandidate;
+            releasePick.entityId !== null
+              ? null
+              : (releasePick.constraintId ?? downInfo.constraintCandidate);
           if (dimCand !== null) {
             const now = performance.now();
             const repeated = lastDimensionClick !== null
@@ -11511,6 +11616,10 @@ export function Viewport() {
       }
 
       // Constant screen-size sprites (glyphs, markers).
+      // Constraint badges also need a camera-scale-dependent position: their
+      // solved anchors stay fixed, while the world offset representing a
+      // constant pixel gap changes during zoom and the entry fit animation.
+      refreshConstraintGlyphLayout(wpp);
       for (const { sprite, px } of scaledSprites) {
         sprite.scale.setScalar(wpp * px);
       }

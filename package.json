@@ -26,6 +26,7 @@
     "bundle:windows:portable": "pwsh -NoProfile -File scripts/bundle-windows-portable.ps1",
     "build:wasm": "wasm-pack build crates/wasm --target web --out-dir ../../src/engine-wasm/pkg --out-name nbcad_wasm",
     "smoke:wasm": "node scripts/smoke-wasm.mjs",
+    "test:constraint-glyphs": "tsx src/sketch/constraintGlyphAnchor.test.ts",
     "check:knowledge": "node scripts/check-knowledge.mjs",
     "audit:icons": "node scripts/audit-icons.mjs",
     "e2e": "node scripts/run-e2e.mjs",
@@ -84,6 +85,7 @@
     "playwright": "^1.61.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
+    "tsx": "4.23.12",
     "typescript": "~5.7.2",
     "vite": "^6.0.7"
   }

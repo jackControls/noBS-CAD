@@ -27,6 +27,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend_regressions:
+    name: Frontend regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install pinned frontend dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Test constraint glyph anchors and camera-scale layout
+        run: npm run test:constraint-glyphs
+
   classify_changes:
     name: Classify desktop build inputs
     runs-on: ubuntu-latest
