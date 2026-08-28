@@ -1,6 +1,8 @@
 //! Desktop → disk snapshot publisher and UI-owned inbox apply for MCP.
 //!
-//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
+//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?}`
+//! and `<NBCAD_SESSION_DIR>/_ui/processes/<process-instance>.json` for each
+//! live desktop process,
 //! with atomic temp+rename. MCP `cad_submit` drops `inbox/<seq>.json`; this
 //! module applies those ops on the live SketchManager (shared
 //! `nbcad_mcp_mutate` name→engine-method map + solid replay) and then the
@@ -144,9 +146,30 @@ impl WindowPublisher {
 }
 
 /// Process-lifetime bridge state. Tauri keeps this alive across WebView reloads.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SessionBridgeState {
     publishers: Mutex<HashMap<String, WindowPublisher>>,
+    /// Stable for this desktop process; stamped into heartbeats and its lease.
+    process_instance_id: String,
+    /// Serializes lease snapshots/writes and remembers the last path so normal
+    /// shutdown removes exactly this process's lease (including tests that
+    /// change `NBCAD_SESSION_DIR` after constructing the state).
+    process_lease_path: Mutex<Option<PathBuf>>,
+}
+
+impl Default for SessionBridgeState {
+    fn default() -> Self {
+        let process_instance_id = Uuid::new_v4().to_string();
+        let state = Self {
+            publishers: Mutex::new(HashMap::new()),
+            process_instance_id: process_instance_id.clone(),
+            process_lease_path: Mutex::new(None),
+        };
+        if let Err(error) = state.write_process_instance_file() {
+            eprintln!("session bridge could not write process instance: {error}");
+        }
+        state
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +208,29 @@ fn session_root() -> PathBuf {
     std::env::var_os("NBCAD_SESSION_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("nbcad-sessions"))
+}
+
+fn closed_tombstone_path(session_id: &str) -> PathBuf {
+    session_root().join(session_id).join("closed.json")
+}
+
+fn write_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let dir = session_root().join(session_id);
+    fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
+    let body = serde_json::to_string_pretty(&json!({
+        "closed_ms": now_ms(),
+        "session_id": session_id,
+    }))
+    .map_err(|error| format!("encode closed.json: {error}"))?;
+    atomic_write(&closed_tombstone_path(session_id), &body)
+}
+
+fn clear_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let path = closed_tombstone_path(session_id);
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| format!("remove closed.json: {error}"))?;
+    }
+    Ok(())
 }
 
 fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
@@ -245,13 +291,18 @@ impl SessionBridgeState {
         project
             .pending_exports
             .insert(project.next_generation, project.engine_revision);
-        Ok(json!({
+        let result = json!({
             "session_id": project.session_id,
+            "window_id": window_label,
             "generation": project.next_generation,
             "engine_revision": project.engine_revision,
             "project_session_id": publisher.active_project_session_id,
+            "document_id": publisher.active_project_session_id,
             "session_mode": "read_only_snapshot",
-        }))
+        });
+        drop(publishers);
+        let _ = self.write_process_instance_file();
+        Ok(result)
     }
 
     fn write_for_window(
@@ -259,6 +310,8 @@ impl SessionBridgeState {
         window_label: &str,
         parsed: PublishPayload,
     ) -> Result<serde_json::Value, String> {
+        let process_instance_id = self.process_instance_id.clone();
+        let _ = self.write_process_instance_file();
         let mut publishers = self
             .publishers
             .lock()
@@ -369,13 +422,17 @@ impl SessionBridgeState {
 
         let dir = session_root().join(&project.session_id);
         fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
+        let _ = clear_closed_tombstone(&project.session_id);
 
         let focus_body = serde_json::to_string_pretty(&json!({
             "focus": parsed.focus,
             "session_id": project.session_id,
+            "window_id": window_label,
             "updated_ms": now_ms(),
             "generation": parsed.generation,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
+            "process_instance_id": process_instance_id,
             "session_mode": "read_only_snapshot",
         }))
         .map_err(|error| format!("encode focus.json: {error}"))?;
@@ -384,7 +441,10 @@ impl SessionBridgeState {
             "updated_ms": now_ms(),
             "generation": parsed.generation,
             "session_id": project.session_id,
+            "window_id": window_label,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
+            "process_instance_id": process_instance_id,
             "session_mode": "read_only_snapshot",
         }))
         .map_err(|error| format!("encode heartbeat.json: {error}"))?;
@@ -410,16 +470,20 @@ impl SessionBridgeState {
         Ok(json!({
             "skipped": false,
             "session_id": project.session_id,
+            "window_id": window_label,
             "session_dir": dir.display().to_string(),
             "generation": parsed.generation,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
     }
 
     fn heartbeat_for_window(&self, window_label: &str) -> Result<serde_json::Value, String> {
+        let process_instance_id = self.process_instance_id.clone();
+        let _ = self.write_process_instance_file();
         let mut publishers = self
             .publishers
             .lock()
@@ -445,11 +509,15 @@ impl SessionBridgeState {
             }));
         }
 
+        let _ = clear_closed_tombstone(&project.session_id);
         let heartbeat_body = serde_json::to_string_pretty(&json!({
             "updated_ms": now_ms(),
             "generation": project.engine_revision,
             "session_id": project.session_id,
+            "window_id": window_label,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
+            "process_instance_id": process_instance_id,
             "session_mode": "read_only_snapshot",
             "kind": "heartbeat",
         }))
@@ -459,9 +527,11 @@ impl SessionBridgeState {
         Ok(json!({
             "skipped": false,
             "session_id": project.session_id,
+            "window_id": window_label,
             "generation": project.engine_revision,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "read_only_snapshot",
             "writeback": false,
         }))
@@ -530,13 +600,23 @@ fn parse_engine_envelope(raw: String) -> Result<Value, String> {
     }
 }
 
-fn write_engine_revision_heartbeat(project: &ProjectPublisher) -> Result<(), String> {
+fn write_engine_revision_heartbeat(
+    project: &ProjectPublisher,
+    window_id: &str,
+    project_session_id: Option<&str>,
+    process_instance_id: &str,
+) -> Result<(), String> {
     let dir = session_root().join(&project.session_id);
     fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
+    let _ = clear_closed_tombstone(&project.session_id);
     let heartbeat_body = serde_json::to_string_pretty(&json!({
         "updated_ms": now_ms(),
         "generation": project.engine_revision,
         "session_id": project.session_id,
+        "window_id": window_id,
+        "project_session_id": project_session_id,
+        "document_id": project_session_id,
+        "process_instance_id": process_instance_id,
         "session_mode": "ui_owned_apply",
         "kind": "engine_revision",
     }))
@@ -607,7 +687,12 @@ fn engine_envelope_ok(raw: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn bump_engine_revision(project: &mut ProjectPublisher) -> Result<(), String> {
+fn bump_engine_revision(
+    project: &mut ProjectPublisher,
+    window_id: &str,
+    project_session_id: Option<&str>,
+    process_instance_id: &str,
+) -> Result<(), String> {
     project.engine_revision = project
         .engine_revision
         .checked_add(1)
@@ -615,7 +700,7 @@ fn bump_engine_revision(project: &mut ProjectPublisher) -> Result<(), String> {
     if project.engine_revision > project.next_generation {
         project.next_generation = project.engine_revision;
     }
-    write_engine_revision_heartbeat(project)
+    write_engine_revision_heartbeat(project, window_id, project_session_id, process_instance_id)
 }
 
 impl SessionBridgeState {
@@ -634,6 +719,8 @@ impl SessionBridgeState {
     /// Prefer [`Self::run_ui_mutation`] so the bump shares the publisher lock
     /// with the live engine call; this remains for tests and rare callers.
     fn note_mutation_for_window(&self, window_label: &str) -> Result<Value, String> {
+        let process_instance_id = self.process_instance_id.clone();
+        let _ = self.write_process_instance_file();
         let mut publishers = self
             .publishers
             .lock()
@@ -643,12 +730,19 @@ impl SessionBridgeState {
             .or_insert_with(WindowPublisher::new);
         let project_session_id = publisher.active_project_session_id.clone();
         let project = publisher.active_mut();
-        bump_engine_revision(project)?;
+        bump_engine_revision(
+            project,
+            window_label,
+            project_session_id.as_deref(),
+            &process_instance_id,
+        )?;
         Ok(json!({
             "session_id": project.session_id,
+            "window_id": window_label,
             "engine_revision": project.engine_revision,
             "generation": project.engine_revision,
             "project_session_id": project_session_id,
+            "document_id": project_session_id,
             "session_mode": "ui_owned_apply",
             "writeback": false,
         }))
@@ -660,6 +754,8 @@ impl SessionBridgeState {
     /// If this window has no publisher yet (MCP session never reserved), the
     /// mutate still runs but revision is not tracked (no inbox race).
     pub fn run_ui_mutation(&self, window_label: &str, mutate: impl FnOnce() -> String) -> String {
+        let process_instance_id = self.process_instance_id.clone();
+        let _ = self.write_process_instance_file();
         let Ok(mut publishers) = self.publishers.lock() else {
             return mutate();
         };
@@ -667,9 +763,15 @@ impl SessionBridgeState {
             drop(publishers);
             return mutate();
         };
+        let project_session_id = publisher.active_project_session_id.clone();
         let result = mutate();
         if engine_envelope_ok(&result) {
-            if let Err(error) = bump_engine_revision(publisher.active_mut()) {
+            if let Err(error) = bump_engine_revision(
+                publisher.active_mut(),
+                window_label,
+                project_session_id.as_deref(),
+                &process_instance_id,
+            ) {
                 eprintln!("session bridge could not bump engine_revision: {error}");
             }
         }
@@ -711,14 +813,112 @@ impl SessionBridgeState {
         if previous != next || publisher.active_project_session_id.is_none() {
             publisher.rebind_to(&next);
         }
+        drop(publishers);
+        let _ = self.write_process_instance_file();
         result
     }
 
-    /// Drop a retained inactive project's MCP publisher (inbox + revision).
+    /// Drop a retained inactive project's MCP publisher (inbox + revision)
+    /// and tombstone its on-disk session so it leaves live `windows[]`.
     pub fn drop_bound_project_session(&self, window_label: &str, project_session_id: &str) {
         if let Ok(mut publishers) = self.publishers.lock() {
             if let Some(publisher) = publishers.get_mut(window_label) {
+                if let Some(project) = publisher.by_project.get(project_session_id) {
+                    let session_id = project.session_id.clone();
+                    if let Err(error) = write_closed_tombstone(&session_id) {
+                        eprintln!(
+                            "session bridge could not tombstone closed tab {session_id}: {error}"
+                        );
+                    }
+                }
                 publisher.drop_project(project_session_id);
+            }
+        }
+        let _ = self.write_process_instance_file();
+    }
+
+    /// Remove a destroyed window from the process lease immediately. Retained
+    /// tab publishers are tombstoned so their directories remain recoverable
+    /// by explicit UUID but cannot be mistaken for live windows.
+    pub fn drop_window(&self, window_label: &str) {
+        let removed = self
+            .publishers
+            .lock()
+            .ok()
+            .and_then(|mut publishers| publishers.remove(window_label));
+        if let Some(publisher) = removed {
+            for project in publisher.by_project.values() {
+                if let Err(error) = write_closed_tombstone(&project.session_id) {
+                    eprintln!(
+                        "session bridge could not tombstone destroyed window session {}: {error}",
+                        project.session_id
+                    );
+                }
+            }
+        }
+        let _ = self.write_process_instance_file();
+    }
+
+    fn write_process_instance_file(&self) -> Result<(), String> {
+        // Take this lock before the publisher snapshot. Otherwise an older
+        // snapshot can finish writing after a newer tab transition.
+        let mut remembered_path = self
+            .process_lease_path
+            .lock()
+            .map_err(|_| "session process lease lock poisoned".to_string())?;
+        let mut windows = {
+            let publishers = self
+                .publishers
+                .lock()
+                .map_err(|_| "session publisher lock poisoned".to_string())?;
+            publishers
+                .iter()
+                .filter_map(|(window_id, publisher)| {
+                    let document_id = publisher.active_project_session_id.as_ref()?;
+                    let project = publisher.by_project.get(document_id)?;
+                    Some(json!({
+                        "window_id": window_id,
+                        "active_document_id": document_id,
+                        "active_session_id": project.session_id,
+                    }))
+                })
+                .collect::<Vec<_>>()
+        };
+        windows.sort_by(|a, b| {
+            a.get("window_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .cmp(b.get("window_id").and_then(Value::as_str).unwrap_or(""))
+        });
+
+        let dir = session_root().join("_ui").join("processes");
+        fs::create_dir_all(&dir).map_err(|error| format!("create process lease dir: {error}"))?;
+        let path = dir.join(format!("{}.json", self.process_instance_id));
+        if remembered_path
+            .as_ref()
+            .is_some_and(|previous| previous != &path)
+        {
+            if let Some(previous) = remembered_path.as_ref() {
+                let _ = fs::remove_file(previous);
+            }
+        }
+        let body = serde_json::to_string_pretty(&json!({
+            "process_instance_id": self.process_instance_id,
+            "updated_ms": now_ms(),
+            "windows": windows,
+        }))
+        .map_err(|error| format!("encode process lease: {error}"))?;
+        atomic_write(&path, &body)?;
+        *remembered_path = Some(path);
+        Ok(())
+    }
+}
+
+impl Drop for SessionBridgeState {
+    fn drop(&mut self) {
+        if let Ok(path) = self.process_lease_path.get_mut() {
+            if let Some(path) = path.take() {
+                let _ = fs::remove_file(path);
             }
         }
     }
@@ -732,6 +932,8 @@ fn apply_one_inbox_op(
     window_label: &str,
     engine: &AppState,
 ) -> Result<Value, String> {
+    let process_instance_id = state.process_instance_id.clone();
+    let _ = state.write_process_instance_file();
     let mut publishers = state
         .publishers
         .lock()
@@ -759,6 +961,7 @@ fn apply_one_inbox_op(
         None => publisher.rebind_to(&engine_active),
         Some(_) => {}
     }
+    let project_session_id = publisher.active_project_session_id.clone();
     let project = publisher.active_mut();
     let session_id = project.session_id.clone();
     let seqs = pending_inbox_seqs(&session_id);
@@ -889,7 +1092,12 @@ fn apply_one_inbox_op(
     }
     match dispatch_inbox_on_engine(engine, &name, &arguments) {
         Ok(result) => {
-            bump_engine_revision(project)?;
+            bump_engine_revision(
+                project,
+                window_label,
+                project_session_id.as_deref(),
+                &process_instance_id,
+            )?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,
@@ -1017,6 +1225,82 @@ mod tests {
         parsed
     }
 
+    fn read_process_lease(state: &SessionBridgeState, root: &Path) -> Value {
+        let path = root
+            .join("_ui")
+            .join("processes")
+            .join(format!("{}.json", state.process_instance_id));
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn process_lease_tracks_active_document_and_is_removed_on_drop() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-lease-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let lease_path;
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            lease_path = dir
+                .join("_ui")
+                .join("processes")
+                .join(format!("{}.json", state.process_instance_id));
+            assert!(lease_path.exists());
+            assert!(read_process_lease(&state, &dir)["windows"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("tab-a")
+            }));
+            let reserved_a = state
+                .reserve_for_window_on_project("main", Some("tab-a"))
+                .unwrap();
+            let lease_a = read_process_lease(&state, &dir);
+            assert_eq!(lease_a["windows"][0]["active_document_id"], "tab-a");
+            assert_eq!(
+                lease_a["windows"][0]["active_session_id"],
+                reserved_a["session_id"]
+            );
+
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.create_project_session("tab-b")
+            }));
+            let reserved_b = state
+                .reserve_for_window_on_project("main", Some("tab-b"))
+                .unwrap();
+            let lease_b = read_process_lease(&state, &dir);
+            assert_eq!(lease_b["windows"][0]["active_document_id"], "tab-b");
+            assert_eq!(
+                lease_b["windows"][0]["active_session_id"],
+                reserved_b["session_id"]
+            );
+
+            state.drop_window("main");
+            assert!(read_process_lease(&state, &dir)["windows"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            assert!(dir
+                .join(reserved_a["session_id"].as_str().unwrap())
+                .join("closed.json")
+                .exists());
+            assert!(dir
+                .join(reserved_b["session_id"].as_str().unwrap())
+                .join("closed.json")
+                .exists());
+        }
+        assert!(
+            !lease_path.exists(),
+            "normal process shutdown must remove its own lease"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn older_reserved_publish_cannot_overwrite_newer_snapshot() {
         let _test = TEST_LOCK.lock().unwrap();
@@ -1065,6 +1349,46 @@ mod tests {
         assert_eq!(applied["skipped"], false);
         let model = fs::read_to_string(dir.join(session_id).join("model.json")).unwrap();
         assert!(model.contains("\"marker\":\"after-reload\""));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn published_heartbeat_carries_stable_window_and_document_ids() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let state = SessionBridgeState::default();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-window-id-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        let reserved = state
+            .reserve_for_window_on_project("main", Some("tab-doc-a"))
+            .unwrap();
+        assert_eq!(reserved["window_id"], "main");
+        assert_eq!(reserved["document_id"], "tab-doc-a");
+        let session_id = reserved["session_id"].as_str().unwrap().to_string();
+        let generation = reserved["generation"].as_u64().unwrap();
+        let applied = state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_id, "tab-doc-a", generation, "main-doc"),
+            )
+            .unwrap();
+        assert_eq!(applied["skipped"], false);
+        assert_eq!(applied["window_id"], "main");
+        assert_eq!(applied["document_id"], "tab-doc-a");
+        let beat = fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap();
+        assert!(
+            beat.contains("\"window_id\": \"main\"") || beat.contains("\"window_id\":\"main\"")
+        );
+        assert!(
+            beat.contains("\"document_id\": \"tab-doc-a\"")
+                || beat.contains("\"document_id\":\"tab-doc-a\"")
+        );
+        let focus = fs::read_to_string(dir.join(&session_id).join("focus.json")).unwrap();
+        assert!(
+            focus.contains("\"window_id\": \"main\"") || focus.contains("\"window_id\":\"main\"")
+        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
@@ -1873,6 +2197,13 @@ mod tests {
         let model_a_after = fs::read_to_string(dir.join(&session_a).join("model.json")).unwrap();
         assert!(model_a_after.contains("\"marker\":\"from-a\""));
         assert!(!model_a_after.contains("from-b"));
+
+        let lease = read_process_lease(&state, &dir);
+        assert_eq!(
+            lease["windows"][0]["active_document_id"], "tab-b",
+            "a delayed tab A publish must not steal the authoritative active document"
+        );
+        assert_eq!(lease["windows"][0]["active_session_id"], session_b);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

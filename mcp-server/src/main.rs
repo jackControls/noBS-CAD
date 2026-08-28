@@ -373,30 +373,25 @@ impl CadServer {
 
     /// Load `model.json` (+ optional `focus.json`) into this process.
     /// Marks attached only after a successful model load (Jack §3).
+    /// Target by `session_id` (UUID), `window_id`, and/or `document_id`.
     fn attach_read_only_snapshot(&mut self, arguments: &Value) -> Result<Value, String> {
-        let session_id = arguments
-            .get("session_id")
-            .or_else(|| arguments.get("document_id"))
-            .and_then(Value::as_str);
+        let session_arg = arguments.get("session_id").and_then(Value::as_str);
+        let window_arg = arguments.get("window_id").and_then(Value::as_str);
+        let document_arg = arguments.get("document_id").and_then(Value::as_str);
         if writeback_requested(arguments) {
-            return Err(session_lock_error("writeback_rejected", session_id));
+            let preview = session_arg.or(document_arg).or(window_arg);
+            return Err(session_lock_error("writeback_rejected", preview));
         }
-        let session_id = session_id
-            .ok_or_else(|| "missing required argument 'session_id' (or document_id)".to_string())?;
-        session::require_valid_session_id(session_id)?;
-        if !session::list_sessions()?.iter().any(|id| id == session_id) {
-            return Err(format!(
-                "session '{session_id}' was not found under {}",
-                session::session_dir().display()
-            ));
-        }
+        let identity = session::resolve_attach_target(session_arg, window_arg, document_arg)?;
+        let session_id = identity.session_id.as_str();
         self.load_snapshot_model(session_id)?;
         self.apply_snapshot_focus(session_id);
         self.attached_document_id = Some(session_id.to_string());
         Ok(json!({
             "attached": true,
             "session_id": session_id,
-            "document_id": session_id,
+            "window_id": identity.window_id,
+            "document_id": identity.document_id.clone().unwrap_or_else(|| session_id.to_string()),
             "focus": self.disclosure.active().as_str(),
             "session_mode": "read_only_snapshot",
             "writeback": false,
@@ -3054,13 +3049,13 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_list_sessions",
             "List read-only session snapshots",
-            "List UUID v4 session directories under NBCAD_SESSION_DIR (skips _* control dirs and non-UUID names). Includes heartbeat age/stale metadata. Use with cad_attach. Snapshot bridge — not a live UI co-link.",
+            "List UUID v4 session directories under NBCAD_SESSION_DIR (skips _* control dirs and non-UUID names). Includes stable window_id / document_id when the UI publisher wrote them, heartbeat age/stale metadata, expiring desktop process leases, and a windows[] projection with authoritative active documents. Use with cad_attach. Snapshot bridge — not a live UI co-link. Stdio headless sessions without UI identity still list.",
             empty_schema(),
         ),
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Require UUID v4 session_id and valid model.json; load into this MCP process; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the id/model is missing or invalid. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir.",
+            "Load a published snapshot into this MCP process by session_id (UUID), window_id (Tauri label), and/or document_id (native project-session id; UUID still aliases session_id). Requires valid model.json; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the target/model is missing, invalid, or ambiguous. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir. Headless goldens skip attach.",
             object_schema(
                 json!({
                     "session_id": {
@@ -3069,18 +3064,22 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "maxLength": 36,
                         "description": "UUID v4 session directory name"
                     },
+                    "window_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable Tauri window label published in heartbeat/focus"
+                    },
                     "document_id": {
                         "type": "string",
-                        "minLength": 36,
-                        "maxLength": 36,
-                        "description": "Alias for session_id"
+                        "minLength": 1,
+                        "description": "Native project-session / document id from heartbeat, or UUID alias for session_id"
                     },
                     "writeback": {
                         "type": "boolean",
                         "description": "Must be omitted or false. true is rejected; mutates go through cad_submit while attached."
                     }
                 }),
-                &["session_id"],
+                &[],
             ),
         ),
         ToolSpec::control(
@@ -4027,6 +4026,73 @@ mod tests {
         assert_eq!(detached["detached"], true);
         assert!(server.attached_document_id.is_none());
         assert!(server.call_tool("cad_refresh", json!({})).is_err());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_targets_window_id_and_document_id() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-attach-mw-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (mut donor, _) = mcp_box();
+        let model = donor.call_tool("cad_project_model", json!({})).unwrap();
+        let model_json = model
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| serde_json::to_string(&model).unwrap());
+        session::write_session(&unique, "model.json", &model_json).unwrap();
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}","window_id":"main","document_id":"tab-a","project_session_id":"tab-a"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        let listed = server.call_tool("cad_list_sessions", json!({})).unwrap();
+        assert_eq!(listed["session_details"][0]["window_id"], "main");
+        assert_eq!(listed["session_details"][0]["document_id"], "tab-a");
+        assert_eq!(listed["windows"][0]["window_id"], "main");
+
+        let by_window = server
+            .call_tool("cad_attach", json!({"window_id": "main"}))
+            .unwrap();
+        assert_eq!(by_window["attached"], true);
+        assert_eq!(by_window["session_id"], unique);
+        assert_eq!(by_window["window_id"], "main");
+        assert_eq!(by_window["document_id"], "tab-a");
+        server.call_tool("cad_detach", json!({})).unwrap();
+
+        let by_document = server
+            .call_tool("cad_attach", json!({"document_id": "tab-a"}))
+            .unwrap();
+        assert_eq!(by_document["attached"], true);
+        assert_eq!(by_document["session_id"], unique);
+        server.call_tool("cad_detach", json!({})).unwrap();
+
+        // Headless path: UUID document_id alias still works without window identity.
+        let headless = session::test_session_uuid();
+        session::write_session(&headless, "model.json", &model_json).unwrap();
+        session::write_session(
+            &headless,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{headless}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+        let by_uuid_doc = server
+            .call_tool("cad_attach", json!({"document_id": headless}))
+            .unwrap();
+        assert_eq!(by_uuid_doc["attached"], true);
+        assert_eq!(by_uuid_doc["session_id"], headless);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);

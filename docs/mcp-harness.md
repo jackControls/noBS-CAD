@@ -46,6 +46,10 @@ Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 Headless goldens work **without** attach (they still mutate the MCP process directly).
 Desktop UI (Tauri) publishes:
 `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
+with **identity-bound** fields `session_id` (UUID), `window_id` (Tauri label),
+and `document_id` / `project_session_id` (native project tab). Publish write
+still requires the reserved identity — a delayed write from tab/window A cannot
+land in B's session.
 MCP `cad_submit` (attached only) writes `inbox/<seq>.json` with
 `{ name, arguments, base_generation }`. A stale `base_generation` is
 `generation_conflict` (`writeback: false`, `session_mode: ui_owned_apply`).
@@ -59,8 +63,8 @@ read-only entity/constraint snapshot so a desktop failure can still be
 inspected without admitting half-finished history into the project format.
 (atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
-1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`.
-2. `cad_attach` — **requires** UUID v4 + valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
+1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`, plus `window_id` / `document_id` when published. `windows[]` is **one entry per live process/window pair** with `documents[]` plus an authoritative `active_document_id` recorded by the native tab transition (never inferred from heartbeat order). Desktop processes renew independent leases under `_ui/processes/`; a process/window disappears after the lease expires or is removed at shutdown. Inactive tabs stay listed regardless of their own heartbeat age while their owning process lease is fresh; prior-run and closed tabs do not. Multiple concurrently running desktop processes remain independently visible.
+2. `cad_attach` — target by `session_id` and/or `window_id` and/or `document_id` (UUID `document_id` remains a session alias). All provided selectors are **intersected** before ambiguity is reported. Requires valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
 3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Direct mutates while attached return structured `session_read_only`; inspect/export/control stay callable. Only names in the shared `nbcad-mcp-mutate` map are accepted.
 4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge.
 5. `cad_refresh` — explicit re-read of the attached session from disk (needed after apply+publish).
@@ -68,6 +72,17 @@ With attach:
 This is **UI-owned apply**, not in-process shared memory. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
+
+### Stdio vs broker matrix ([#12](https://github.com/jackControls/noBS-CAD/issues/12) first slice)
+| Mode | Transport | Document scope | How to target |
+|------|-----------|----------------|---------------|
+| **Stdio headless (CI/goldens)** | one `nbcad-mcp` process | one in-memory document | no attach; call modeling tools directly |
+| **Stdio + snapshot attach** | one `nbcad-mcp` process | one attached snapshot at a time | `cad_list_sessions` → `cad_attach` by `session_id` / `window_id` / `document_id` |
+| **Broker (not shipped)** | future router over windows | many live windows | Option B product lean; still TBD |
+
+Stdio remains the supported offline path. This slice lists/targets published
+window/document identities; it is **not** a live multi-window broker and does
+not require UI changes beyond the existing identity-bound publisher.
 
 ### Stdio (current supported path)
 Agents and CI spawn `nbcad-mcp` as an MCP stdio server. One process owns one
@@ -100,7 +115,7 @@ counts so a rebuilt history can be checked against the imported solid.
 |------------|-------|--------|-------|
 | Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
-| Multi-window agent control | **No.** One MCP process, one document | Broker / `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
+| Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id` on the snapshot bridge; stdio still one doc per process | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
 
 ## Proposed (not shipped here)

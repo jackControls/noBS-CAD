@@ -6,9 +6,12 @@
 //! Tauri IPC, then the existing publisher writes a new snapshot. This is still
 //! **not** in-process shared memory.
 //!
-//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,inbox/<seq>.json}`.
+//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json}`.
+//! Live window projection reads expiring per-process leases under
+//! `<session_dir>/_ui/processes/`.
 //! Session ids must be UUID v4 strings.
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +21,10 @@ use serde_json::{json, Value};
 
 /// Heartbeats older than this are marked `stale` in list metadata (no auto-delete).
 pub const HEARTBEAT_STALE_MS: u64 = 30_000;
+/// A desktop process disappears from `windows[]` after three missed 10 s UI
+/// keep-alives. Session heartbeat age is deliberately independent: inactive
+/// tabs stay live while their owning process lease is fresh.
+pub const PROCESS_LEASE_STALE_MS: u64 = 90_000;
 
 pub fn session_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("NBCAD_SESSION_DIR") {
@@ -163,6 +170,17 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
                 "age_ms": age_ms,
                 "stale": age_ms > HEARTBEAT_STALE_MS,
                 "generation": parsed.get("generation").cloned().unwrap_or(Value::Null),
+                "window_id": parsed.get("window_id").cloned().unwrap_or(Value::Null),
+                "document_id": parsed
+                    .get("document_id")
+                    .or_else(|| parsed.get("project_session_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "project_session_id": parsed
+                    .get("project_session_id")
+                    .or_else(|| parsed.get("document_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
             })
         }
         Err(_) => json!({
@@ -170,23 +188,428 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
             "age_ms": null,
             "stale": true,
             "generation": null,
+            "window_id": null,
+            "document_id": null,
+            "project_session_id": null,
         }),
     }
+}
+
+/// Stable identities published beside a session snapshot (UI-owned).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub session_id: String,
+    pub window_id: Option<String>,
+    pub document_id: Option<String>,
+}
+
+fn optional_id(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Read window/document identity from heartbeat (focus.json fallback).
+pub fn session_identity(session_id: &str) -> SessionIdentity {
+    let mut window_id = None;
+    let mut document_id = None;
+    if let Ok(body) = read_session_file(session_id, "heartbeat.json") {
+        let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+        window_id = optional_id(&parsed, "window_id");
+        document_id = optional_id(&parsed, "document_id")
+            .or_else(|| optional_id(&parsed, "project_session_id"));
+    }
+    if window_id.is_none() || document_id.is_none() {
+        if let Ok(body) = read_session_file(session_id, "focus.json") {
+            let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+            if window_id.is_none() {
+                window_id = optional_id(&parsed, "window_id");
+            }
+            if document_id.is_none() {
+                document_id = optional_id(&parsed, "document_id")
+                    .or_else(|| optional_id(&parsed, "project_session_id"));
+            }
+        }
+    }
+    SessionIdentity {
+        session_id: session_id.to_string(),
+        window_id,
+        document_id,
+    }
+}
+
+/// Explicit close marker written when the UI drops a tab's publisher.
+pub const CLOSED_TOMBSTONE: &str = "closed.json";
+
+pub fn is_session_closed(session_id: &str) -> bool {
+    session_path(session_id, CLOSED_TOMBSTONE)
+        .map(|path| path.is_file())
+        .unwrap_or(false)
+}
+
+/// Mark a session directory closed so it leaves the live `windows[]` set.
+pub fn write_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let body = serde_json::to_string_pretty(&json!({
+        "closed_ms": now_ms(),
+        "session_id": session_id,
+    }))
+    .map_err(|error| error.to_string())?;
+    write_session(session_id, CLOSED_TOMBSTONE, &body)
+}
+
+/// Clear a close marker when the same session UUID is republished.
+pub fn clear_closed_tombstone(session_id: &str) -> Result<(), String> {
+    let path = session_path(session_id, CLOSED_TOMBSTONE)?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveWindowLease {
+    active_document_id: String,
+    active_session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessLease {
+    process_instance_id: String,
+    updated_ms: u64,
+    windows: BTreeMap<String, ActiveWindowLease>,
+    /// Old `_ui/process.json` files did not include a window inventory. Keep
+    /// those usable during migration, but never grant this wildcard to the
+    /// new per-process format (where an empty list means no live windows).
+    accepts_unlisted_windows: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProcessRegistry {
+    /// Distinguishes a legacy/headless session root from a UI-managed root
+    /// whose last process has exited and removed its lease.
+    present: bool,
+    leases: BTreeMap<String, ProcessLease>,
+}
+
+fn parse_process_lease(parsed: &Value, accepts_unlisted_windows: bool) -> Option<ProcessLease> {
+    let process_instance_id = optional_id(parsed, "process_instance_id")?;
+    let updated_ms = parsed.get("updated_ms").and_then(Value::as_u64)?;
+    if now_ms().saturating_sub(updated_ms) > PROCESS_LEASE_STALE_MS {
+        return None;
+    }
+    let mut windows = BTreeMap::new();
+    for value in parsed
+        .get("windows")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(window_id) = optional_id(value, "window_id") else {
+            continue;
+        };
+        let Some(active_document_id) = optional_id(value, "active_document_id") else {
+            continue;
+        };
+        let Some(active_session_id) = optional_id(value, "active_session_id") else {
+            continue;
+        };
+        windows.insert(
+            window_id.clone(),
+            ActiveWindowLease {
+                active_document_id,
+                active_session_id,
+            },
+        );
+    }
+    Some(ProcessLease {
+        process_instance_id,
+        updated_ms,
+        windows,
+        accepts_unlisted_windows,
+    })
+}
+
+fn read_process_lease(path: &Path, accepts_unlisted_windows: bool) -> Option<ProcessLease> {
+    let body = fs::read_to_string(path).ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    parse_process_lease(&parsed, accepts_unlisted_windows)
+}
+
+fn process_registry() -> ProcessRegistry {
+    let ui_dir = session_dir().join("_ui");
+    let processes_dir = ui_dir.join("processes");
+    let legacy_path = ui_dir.join("process.json");
+    let mut registry = ProcessRegistry {
+        present: processes_dir.is_dir() || legacy_path.is_file(),
+        leases: BTreeMap::new(),
+    };
+
+    if let Ok(entries) = fs::read_dir(&processes_dir) {
+        for entry in entries.flatten() {
+            if !entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if let Some(lease) = read_process_lease(&entry.path(), false) {
+                let replace = registry
+                    .leases
+                    .get(&lease.process_instance_id)
+                    .map(|existing| existing.updated_ms < lease.updated_ms)
+                    .unwrap_or(true);
+                if replace {
+                    registry
+                        .leases
+                        .insert(lease.process_instance_id.clone(), lease);
+                }
+            }
+        }
+    }
+
+    // Read the old singleton only as a migration fallback. Its timestamp must
+    // be fresh, so a pre-registry crash cannot keep sessions live forever.
+    if let Some(lease) = read_process_lease(&legacy_path, true) {
+        let replace = registry
+            .leases
+            .get(&lease.process_instance_id)
+            .map(|existing| existing.updated_ms < lease.updated_ms)
+            .unwrap_or(true);
+        if replace {
+            registry
+                .leases
+                .insert(lease.process_instance_id.clone(), lease);
+        }
+    }
+    registry
+}
+
+fn heartbeat_process_instance_id(session_id: &str) -> Option<String> {
+    let body = read_session_file(session_id, "heartbeat.json").ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    optional_id(&parsed, "process_instance_id")
+}
+
+fn heartbeat_process_window(session_id: &str) -> Option<(String, String)> {
+    let body = read_session_file(session_id, "heartbeat.json").ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    Some((
+        optional_id(&parsed, "process_instance_id")?,
+        optional_id(&parsed, "window_id")?,
+    ))
+}
+
+/// Live for window projection: not closed and owned by a non-expired process
+/// lease. Stale per-tab heartbeats still count — inactive open tabs remain
+/// visible while their owning process is alive.
+fn is_live_for_windows(session_id: &str, registry: &ProcessRegistry) -> bool {
+    if is_session_closed(session_id) {
+        return false;
+    }
+    if !registry.present {
+        // Backward-compatible headless/legacy roots have no UI lease registry.
+        return true;
+    }
+    heartbeat_process_window(session_id).is_some_and(|(process_id, window_id)| {
+        registry.leases.get(&process_id).is_some_and(|lease| {
+            lease.accepts_unlisted_windows || lease.windows.contains_key(&window_id)
+        })
+    })
+}
+
+/// Resolve attach target to a UUID session dir.
+///
+/// Accepts `session_id` (UUID), `window_id` (Tauri label), and/or `document_id`
+/// (native project-session id). UUID `document_id` remains an alias for
+/// `session_id` for compatibility. All provided selectors are intersected;
+/// ambiguity is reported only after every supplied filter is applied. Closed
+/// sessions are excluded from window/document matching (explicit `session_id`
+/// still resolves for recovery).
+pub fn resolve_attach_target(
+    session_id: Option<&str>,
+    window_id: Option<&str>,
+    document_id: Option<&str>,
+) -> Result<SessionIdentity, String> {
+    let session_id = session_id.map(str::trim).filter(|s| !s.is_empty());
+    let window_id = window_id.map(str::trim).filter(|s| !s.is_empty());
+    let document_id = document_id.map(str::trim).filter(|s| !s.is_empty());
+    if session_id.is_none() && window_id.is_none() && document_id.is_none() {
+        return Err(
+            "missing attach target: provide session_id, window_id, and/or document_id".to_string(),
+        );
+    }
+
+    let mut candidates: Vec<String> = if let Some(id) = session_id {
+        require_valid_session_id(id)?;
+        if !list_sessions()?.iter().any(|existing| existing == id) {
+            return Err(format!(
+                "session '{id}' was not found under {}",
+                session_dir().display()
+            ));
+        }
+        vec![id.to_string()]
+    } else {
+        // Window/document matching uses the live set only. UI-managed roots
+        // require a fresh owning process lease; explicit UUID remains the
+        // recovery path for closed or prior-run sessions.
+        let registry = process_registry();
+        list_sessions()?
+            .into_iter()
+            .filter(|id| is_live_for_windows(id, &registry))
+            .collect()
+    };
+
+    if let Some(window) = window_id {
+        candidates.retain(|id| session_identity(id).window_id.as_deref() == Some(window));
+        if candidates.is_empty() {
+            return Err(format!(
+                "window_id '{window}' was not found under {}",
+                session_dir().display()
+            ));
+        }
+    }
+
+    if let Some(document) = document_id {
+        // Compat: UUID document_id still means the session directory name.
+        if is_valid_session_id(document) && list_sessions()?.iter().any(|id| id == document) {
+            candidates.retain(|id| id == document);
+        } else {
+            candidates.retain(|id| session_identity(id).document_id.as_deref() == Some(document));
+        }
+        if candidates.is_empty() {
+            return Err(format!(
+                "document_id '{document}' was not found under {}",
+                session_dir().display()
+            ));
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    match candidates.as_slice() {
+        [] => Err("could not resolve attach target".to_string()),
+        [only] => Ok(session_identity(only)),
+        many => {
+            let labels: Vec<&str> = [
+                session_id.map(|_| "session_id"),
+                window_id.map(|_| "window_id"),
+                document_id.map(|_| "document_id"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            Err(format!(
+                "attach target is ambiguous after filters ({}); matches {} ({})",
+                labels.join("+"),
+                many.len(),
+                many.join(", ")
+            ))
+        }
+    }
+}
+
+fn windows_projection(detailed: &[Value], registry: &ProcessRegistry) -> Vec<Value> {
+    let mut by_window: BTreeMap<(Option<String>, String), Vec<Value>> = BTreeMap::new();
+    for detail in detailed {
+        if detail.get("closed").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if detail.get("live_for_windows").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let Some(window_id) = detail.get("window_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let process_instance_id = detail
+            .get("process_instance_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let doc = json!({
+            "session_id": detail.get("session_id"),
+            "document_id": detail.get("document_id"),
+            "has_model": detail.get("has_model"),
+            "heartbeat": detail.get("heartbeat"),
+        });
+        by_window
+            .entry((process_instance_id, window_id.to_string()))
+            .or_default()
+            .push(doc);
+    }
+
+    by_window
+        .into_iter()
+        .map(|((process_instance_id, window_id), mut documents)| {
+            documents.sort_by(|a, b| {
+                let a_id = a.get("document_id").and_then(Value::as_str).unwrap_or("");
+                let b_id = b.get("document_id").and_then(Value::as_str).unwrap_or("");
+                a_id.cmp(b_id)
+            });
+            let authoritative = process_instance_id
+                .as_ref()
+                .and_then(|id| registry.leases.get(id))
+                .and_then(|lease| lease.windows.get(&window_id));
+            let active = authoritative.and_then(|active| {
+                documents.iter().find(|doc| {
+                    doc.get("session_id").and_then(Value::as_str)
+                        == Some(active.active_session_id.as_str())
+                        && doc.get("document_id").and_then(Value::as_str)
+                            == Some(active.active_document_id.as_str())
+                })
+            });
+            json!({
+                "window_id": window_id,
+                "process_instance_id": process_instance_id,
+                "active_document_id": active.as_ref().and_then(|d| d.get("document_id").cloned()).unwrap_or(Value::Null),
+                "active_session_id": active.as_ref().and_then(|d| d.get("session_id").cloned()).unwrap_or(Value::Null),
+                "documents": documents,
+            })
+        })
+        .collect()
 }
 
 pub fn sessions_list_json() -> Value {
     match list_sessions() {
         Ok(sessions) => {
+            let registry = process_registry();
+            let process_instance_id = match registry.leases.keys().collect::<Vec<_>>().as_slice() {
+                [only] => Some((*only).clone()),
+                _ => None,
+            };
+            let process_instance_ids: Vec<String> = registry.leases.keys().cloned().collect();
             let detailed: Vec<Value> = sessions
                 .iter()
                 .map(|session_id| {
                     let has_model = session_path(session_id, "model.json")
                         .map(|path| path.is_file())
                         .unwrap_or(false);
+                    let identity = session_identity(session_id);
+                    let closed = is_session_closed(session_id);
+                    let live = is_live_for_windows(session_id, &registry);
                     json!({
                         "session_id": session_id,
+                        "window_id": identity.window_id,
+                        "document_id": identity.document_id,
                         "has_model": has_model,
+                        "closed": closed,
+                        "live_for_windows": live,
+                        "process_instance_id": heartbeat_process_instance_id(session_id),
                         "heartbeat": heartbeat_meta(session_id),
+                    })
+                })
+                .collect();
+            let windows = windows_projection(&detailed, &registry);
+            let process_instances: Vec<Value> = registry
+                .leases
+                .values()
+                .map(|lease| {
+                    json!({
+                        "process_instance_id": lease.process_instance_id,
+                        "updated_ms": lease.updated_ms,
+                        "age_ms": now_ms().saturating_sub(lease.updated_ms),
                     })
                 })
                 .collect();
@@ -194,16 +617,28 @@ pub fn sessions_list_json() -> Value {
                 "session_mode": "read_only_snapshot",
                 "sessions": sessions,
                 "session_details": detailed,
+                "windows": windows,
+                "process_instance_id": process_instance_id,
+                "process_instance_ids": process_instance_ids,
+                "process_instances": process_instances,
                 "session_dir": session_dir().display().to_string(),
                 "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
+                "process_lease_ms": PROCESS_LEASE_STALE_MS,
+                "process_lease_stale_ms": PROCESS_LEASE_STALE_MS,
             })
         }
         Err(error) => json!({
             "session_mode": "read_only_snapshot",
             "sessions": [],
             "session_details": [],
+            "windows": [],
+            "process_instance_id": null,
+            "process_instance_ids": [],
+            "process_instances": [],
             "session_dir": session_dir().display().to_string(),
             "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
+            "process_lease_ms": PROCESS_LEASE_STALE_MS,
+            "process_lease_stale_ms": PROCESS_LEASE_STALE_MS,
             "error": error,
         }),
     }
@@ -562,6 +997,21 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     use super::*;
 
+    fn write_process_lease(root: &Path, process_id: &str, updated_ms: u64, windows: Value) {
+        let processes = root.join("_ui").join("processes");
+        fs::create_dir_all(&processes).unwrap();
+        fs::write(
+            processes.join(format!("{process_id}.json")),
+            serde_json::to_string_pretty(&json!({
+                "process_instance_id": process_id,
+                "updated_ms": updated_ms,
+                "windows": windows,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn uuid_v4_validation_accepts_and_rejects() {
         assert!(is_valid_session_id("123e4567-e89b-42d3-a456-426614174000"));
@@ -577,7 +1027,7 @@ mod tests {
         let unique = test_session_uuid();
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-test-{unique}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
-        write_session(&unique, "model.json", "{\"version\":1}").unwrap();
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
         write_session(
             &unique,
             "heartbeat.json",
@@ -595,6 +1045,413 @@ mod tests {
         assert_eq!(list["sessions"][0], unique);
         assert_eq!(list["session_details"][0]["has_model"], true);
         assert_eq!(list["session_details"][0]["heartbeat"]["stale"], false);
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_and_resolve_expose_window_and_document_ids() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let other = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(7)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-mw-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_process_lease(
+            &dir,
+            "proc-list",
+            now_ms(),
+            json!([
+                {
+                    "window_id": "main",
+                    "active_document_id": "tab-a",
+                    "active_session_id": unique,
+                },
+                {
+                    "window_id": "secondary",
+                    "active_document_id": "tab-b",
+                    "active_session_id": other,
+                }
+            ]),
+        );
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}","window_id":"main","document_id":"tab-a","project_session_id":"tab-a","process_instance_id":"proc-list"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_session(&other, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &other,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"session_id":"{other}","window_id":"secondary","document_id":"tab-b","project_session_id":"tab-b","process_instance_id":"proc-list"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["session_details"].as_array().unwrap().len(), 2);
+        let main = list["session_details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == unique)
+            .cloned()
+            .unwrap();
+        assert_eq!(main["window_id"], "main");
+        assert_eq!(main["document_id"], "tab-a");
+        assert_eq!(list["windows"].as_array().unwrap().len(), 2);
+        let main_window = list["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["window_id"] == "main")
+            .cloned()
+            .unwrap();
+        assert_eq!(main_window["documents"].as_array().unwrap().len(), 1);
+        assert_eq!(main_window["active_document_id"], "tab-a");
+
+        let by_window = resolve_attach_target(None, Some("main"), None).unwrap();
+        assert_eq!(by_window.session_id, unique);
+        assert_eq!(by_window.window_id.as_deref(), Some("main"));
+        let by_document = resolve_attach_target(None, None, Some("tab-b")).unwrap();
+        assert_eq!(by_document.session_id, other);
+        let by_uuid_document = resolve_attach_target(None, None, Some(&unique)).unwrap();
+        assert_eq!(by_uuid_document.session_id, unique);
+        assert!(resolve_attach_target(Some(&unique), Some("secondary"), None).is_err());
+        assert!(resolve_attach_target(None, Some("missing-window"), None).is_err());
+        assert!(resolve_attach_target(None, None, None).is_err());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_intersects_window_and_document_before_ambiguity() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tab_a = test_session_uuid();
+        let tab_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(11)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-intersect-{tab_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        for (sid, doc) in [(&tab_a, "tab-a"), (&tab_b, "tab-b")] {
+            write_session(sid, "model.json", r#"{"version":1}"#).unwrap();
+            write_session(
+                sid,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":1,"session_id":"{sid}","window_id":"main","document_id":"{doc}","project_session_id":"{doc}"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+        }
+
+        // window_id alone is ambiguous with two tabs in main.
+        let err = resolve_attach_target(None, Some("main"), None).expect_err("ambiguous window");
+        assert!(err.contains("ambiguous"), "{err}");
+
+        // Combined window + document selects exactly one.
+        let hit = resolve_attach_target(None, Some("main"), Some("tab-a")).unwrap();
+        assert_eq!(hit.session_id, tab_a);
+        assert_eq!(hit.document_id.as_deref(), Some("tab-a"));
+
+        let list = sessions_list_json();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        let main = &list["windows"][0];
+        assert_eq!(main["window_id"], "main");
+        assert_eq!(main["documents"].as_array().unwrap().len(), 2);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn closed_tombstone_and_process_instance_shape_live_windows() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let live = test_session_uuid();
+        let closed = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(13)) & 0xffffffffffff
+        );
+        let prior = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(17)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-tombstone-{live}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_process_lease(
+            &dir,
+            "proc-live",
+            now_ms(),
+            json!([{
+                "window_id": "main",
+                "active_document_id": "open",
+                "active_session_id": live,
+            }]),
+        );
+
+        write_session(&live, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &live,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{live}","window_id":"main","document_id":"open","project_session_id":"open","process_instance_id":"proc-live"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        write_session(&closed, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &closed,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{closed}","window_id":"main","document_id":"gone","project_session_id":"gone","process_instance_id":"proc-live"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_closed_tombstone(&closed).unwrap();
+
+        write_session(&prior, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &prior,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{prior}","window_id":"main","document_id":"old-run","project_session_id":"old-run","process_instance_id":"proc-old"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["process_instance_id"], "proc-live");
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        assert_eq!(list["windows"][0]["documents"].as_array().unwrap().len(), 1);
+        assert_eq!(list["windows"][0]["active_document_id"], "open");
+
+        // Closed / prior-run tabs are not window-selectable.
+        assert!(resolve_attach_target(None, Some("main"), Some("gone")).is_err());
+        assert!(resolve_attach_target(None, None, Some("old-run")).is_err());
+        // Explicit session_id still resolves the closed dir for recovery.
+        let recovered = resolve_attach_target(Some(&closed), None, None).unwrap();
+        assert_eq!(recovered.session_id, closed);
+
+        clear_closed_tombstone(&closed).unwrap();
+        assert!(!is_session_closed(&closed));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn process_lease_owns_liveness_without_expiring_inactive_tabs() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let active = test_session_uuid();
+        let inactive = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(19)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-lease-{active}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        write_process_lease(
+            &dir,
+            "proc-tabs",
+            now_ms(),
+            json!([{
+                "window_id": "main",
+                "active_document_id": "tab-a",
+                "active_session_id": active,
+            }]),
+        );
+        for (session_id, document_id, updated_ms) in [
+            (&active, "tab-a", now_ms().saturating_sub(120_000)),
+            (&inactive, "tab-b", now_ms()),
+        ] {
+            write_session(session_id, "model.json", r#"{"version":1}"#).unwrap();
+            write_session(
+                session_id,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{updated_ms},"generation":1,"session_id":"{session_id}","window_id":"main","document_id":"{document_id}","project_session_id":"{document_id}","process_instance_id":"proc-tabs"}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        let list = sessions_list_json();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        let main = &list["windows"][0];
+        assert_eq!(main["documents"].as_array().unwrap().len(), 2);
+        assert_eq!(main["active_document_id"], "tab-a");
+        assert_eq!(main["active_session_id"], active);
+        assert!(list["session_details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|detail| detail["live_for_windows"] == true));
+
+        // The active document is authoritative state in the process lease. A
+        // newer inactive-tab heartbeat must never steal it.
+        let picked = resolve_attach_target(None, Some("main"), Some("tab-a")).unwrap();
+        assert_eq!(picked.session_id, active);
+
+        // A live process with no lease entry for this window means the window
+        // was destroyed; its retained session directories must not reappear.
+        write_process_lease(&dir, "proc-tabs", now_ms(), json!([]));
+        assert!(sessions_list_json()["windows"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        write_process_lease(
+            &dir,
+            "proc-tabs",
+            now_ms().saturating_sub(PROCESS_LEASE_STALE_MS + 1),
+            json!([{
+                "window_id": "main",
+                "active_document_id": "tab-a",
+                "active_session_id": active,
+            }]),
+        );
+        let expired = sessions_list_json();
+        assert!(expired["windows"].as_array().unwrap().is_empty());
+        assert!(resolve_attach_target(None, Some("main"), Some("tab-a")).is_err());
+        // Explicit UUID remains a recovery path after process exit/crash.
+        assert_eq!(
+            resolve_attach_target(Some(&active), None, None)
+                .unwrap()
+                .session_id,
+            active
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multiple_process_leases_are_projected_independently() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let first = test_session_uuid();
+        let second = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(23)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-processes-{first}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        for (process_id, session_id, document_id) in
+            [("proc-a", &first, "doc-a"), ("proc-b", &second, "doc-b")]
+        {
+            write_process_lease(
+                &dir,
+                process_id,
+                now_ms(),
+                json!([{
+                    "window_id": "main",
+                    "active_document_id": document_id,
+                    "active_session_id": session_id,
+                }]),
+            );
+            write_session(session_id, "model.json", r#"{"version":1}"#).unwrap();
+            write_session(
+                session_id,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":1,"session_id":"{session_id}","window_id":"main","document_id":"{document_id}","project_session_id":"{document_id}","process_instance_id":"{process_id}"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+        }
+
+        let list = sessions_list_json();
+        assert_eq!(list["process_instance_id"], Value::Null);
+        assert_eq!(list["process_instance_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(list["process_instances"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            list["process_lease_ms"].as_u64(),
+            Some(PROCESS_LEASE_STALE_MS)
+        );
+        assert_eq!(list["windows"].as_array().unwrap().len(), 2);
+        let projected: BTreeMap<_, _> = list["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|window| {
+                (
+                    window["process_instance_id"].as_str().unwrap(),
+                    window["active_document_id"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(projected.get("proc-a"), Some(&"doc-a"));
+        assert_eq!(projected.get("proc-b"), Some(&"doc-b"));
+        assert!(resolve_attach_target(None, Some("main"), None)
+            .unwrap_err()
+            .contains("ambiguous"));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_singleton_is_a_freshness_checked_migration_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let session_id = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-legacy-{session_id}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join("_ui")).unwrap();
+        fs::write(
+            dir.join("_ui").join("process.json"),
+            serde_json::to_string(&json!({
+                "process_instance_id": "proc-legacy",
+                "updated_ms": now_ms(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        write_session(&session_id, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &session_id,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{session_id}","window_id":"main","document_id":"legacy-tab","project_session_id":"legacy-tab","process_instance_id":"proc-legacy"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let fresh = sessions_list_json();
+        assert_eq!(fresh["windows"].as_array().unwrap().len(), 1);
+        assert_eq!(fresh["windows"][0]["active_document_id"], Value::Null);
+
+        fs::write(
+            dir.join("_ui").join("process.json"),
+            serde_json::to_string(&json!({
+                "process_instance_id": "proc-legacy",
+                "updated_ms": now_ms().saturating_sub(PROCESS_LEASE_STALE_MS + 1),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(sessions_list_json()["windows"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
