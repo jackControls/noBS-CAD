@@ -1,8 +1,9 @@
 //! Desktop → disk snapshot publisher and UI-owned inbox apply for MCP.
 //!
-//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?}`
-//! and `<NBCAD_SESSION_DIR>/_ui/process.json` for the live desktop process instance,
-//! with atomic temp+rename. MCP `cad_submit` drops `inbox/<seq>.json`; this
+//! Writes `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?}`,
+//! `_ui/process.json` plus `_ui/processes/<id>.json` (expiring process leases),
+//! and `_ui/windows/<window_id>.json` (explicit active tab) with atomic temp+rename.
+//! MCP `cad_submit` drops `inbox/<seq>.json`; this
 //! module applies those ops on the live SketchManager (shared
 //! `nbcad_mcp_mutate` name→engine-method map + solid replay) and then the
 //! existing TS publisher emits a new snapshot. MCP never writes model.json
@@ -148,7 +149,8 @@ impl WindowPublisher {
 #[derive(Debug)]
 pub struct SessionBridgeState {
     publishers: Mutex<HashMap<String, WindowPublisher>>,
-    /// Stable for this desktop process; stamped into heartbeats and `_ui/process.json`.
+    /// Stable for this desktop process; stamped into heartbeats, `_ui/process.json`,
+    /// and `_ui/processes/<id>.json`.
     process_instance_id: String,
 }
 
@@ -163,6 +165,30 @@ impl Default for SessionBridgeState {
             eprintln!("session bridge could not write process instance: {error}");
         }
         state
+    }
+}
+
+impl Drop for SessionBridgeState {
+    fn drop(&mut self) {
+        let ui = session_root().join("_ui");
+        if is_safe_ui_id(&self.process_instance_id) {
+            let registry = ui
+                .join("processes")
+                .join(format!("{}.json", self.process_instance_id));
+            let _ = fs::remove_file(registry);
+        }
+        let process_path = ui.join("process.json");
+        if let Ok(body) = fs::read_to_string(&process_path) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+                if parsed
+                    .get("process_instance_id")
+                    .and_then(Value::as_str)
+                    == Some(self.process_instance_id.as_str())
+                {
+                    let _ = fs::remove_file(&process_path);
+                }
+            }
+        }
     }
 }
 
@@ -202,6 +228,35 @@ fn session_root() -> PathBuf {
     std::env::var_os("NBCAD_SESSION_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("nbcad-sessions"))
+}
+
+fn is_safe_ui_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+}
+
+fn write_active_window_file(
+    window_id: &str,
+    active_document_id: &str,
+    active_session_id: &str,
+) -> Result<(), String> {
+    if !is_safe_ui_id(window_id) {
+        return Ok(());
+    }
+    let path = session_root()
+        .join("_ui")
+        .join("windows")
+        .join(format!("{window_id}.json"));
+    let body = serde_json::to_string_pretty(&json!({
+        "window_id": window_id,
+        "active_document_id": active_document_id,
+        "active_session_id": active_session_id,
+        "updated_ms": now_ms(),
+    }))
+    .map_err(|error| format!("encode window active file: {error}"))?;
+    atomic_write(&path, &body)
 }
 
 fn closed_tombstone_path(session_id: &str) -> PathBuf {
@@ -803,6 +858,16 @@ impl SessionBridgeState {
             .or_insert_with(WindowPublisher::new);
         if previous != next || publisher.active_project_session_id.is_none() {
             publisher.rebind_to(&next);
+            let session_id = publisher
+                .by_project
+                .get(&next)
+                .map(|project| project.session_id.as_str())
+                .unwrap_or("");
+            if let Err(error) = write_active_window_file(window_label, &next, session_id) {
+                eprintln!(
+                    "session bridge could not persist active window {window_label}: {error}"
+                );
+            }
         }
         result
     }
@@ -833,7 +898,17 @@ impl SessionBridgeState {
             "updated_ms": now_ms(),
         }))
         .map_err(|error| format!("encode process.json: {error}"))?;
-        atomic_write(&dir.join("process.json"), &body)
+        atomic_write(&dir.join("process.json"), &body)?;
+        if is_safe_ui_id(&self.process_instance_id) {
+            let registry = dir.join("processes");
+            fs::create_dir_all(&registry)
+                .map_err(|error| format!("create _ui/processes dir: {error}"))?;
+            atomic_write(
+                &registry.join(format!("{}.json", self.process_instance_id)),
+                &body,
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -2146,6 +2221,102 @@ mod tests {
         );
         assert_eq!(second["seq"], 2);
         assert_eq!(engine.document_snapshot().name, "AgeStaleOk");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_transition_persists_active_window_file_not_delayed_publish() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-active-window-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("tab-a")
+        }));
+
+        let reserved_a = state
+            .reserve_for_window_on_project("main", Some("tab-a"))
+            .unwrap();
+        let session_a = reserved_a["session_id"].as_str().unwrap().to_string();
+        let gen_a = reserved_a["generation"].as_u64().unwrap();
+        state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_a, "tab-a", gen_a, "from-a"),
+            )
+            .unwrap();
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.create_project_session("tab-b")
+        }));
+        let window_path = dir.join("_ui").join("windows").join("main.json");
+        let after_b: Value =
+            serde_json::from_str(&fs::read_to_string(&window_path).unwrap()).unwrap();
+        assert_eq!(after_b["active_document_id"], "tab-b");
+        let session_b = after_b["active_session_id"].as_str().unwrap().to_string();
+        assert_ne!(session_a, session_b);
+
+        let reserved_b = state
+            .reserve_for_window_on_project("main", Some("tab-b"))
+            .unwrap();
+        let gen_b = reserved_b["generation"].as_u64().unwrap();
+        assert_eq!(reserved_b["session_id"], session_b);
+
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.activate_project_session("tab-a")
+        }));
+        let after_a: Value =
+            serde_json::from_str(&fs::read_to_string(&window_path).unwrap()).unwrap();
+        assert_eq!(after_a["active_document_id"], "tab-a");
+        assert_eq!(after_a["active_session_id"], session_a);
+
+        let delayed = state
+            .write_for_window(
+                "main",
+                payload_on_project(&session_b, "tab-b", gen_b, "delayed-b"),
+            )
+            .unwrap();
+        assert_eq!(delayed["skipped"], false);
+        let after_delayed: Value =
+            serde_json::from_str(&fs::read_to_string(&window_path).unwrap()).unwrap();
+        assert_eq!(
+            after_delayed["active_document_id"], "tab-a",
+            "delayed B publish must not steal the active tab: {after_delayed}"
+        );
+        assert_eq!(after_delayed["active_session_id"], session_a);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drop_removes_this_process_registry_and_matching_process_json() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-drop-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let process_path = dir.join("_ui").join("process.json");
+        assert!(process_path.exists(), "Default must write _ui/process.json");
+        let parsed: Value =
+            serde_json::from_str(&fs::read_to_string(&process_path).unwrap()).unwrap();
+        let id = parsed["process_instance_id"].as_str().unwrap().to_string();
+        let registry_path = dir.join("_ui").join("processes").join(format!("{id}.json"));
+        assert!(
+            registry_path.exists(),
+            "Default must write _ui/processes/<id>.json"
+        );
+        drop(state);
+        assert!(
+            !registry_path.exists(),
+            "Drop must remove this process registry file"
+        );
+        assert!(
+            !process_path.exists(),
+            "Drop must remove matching process.json"
+        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

@@ -7,9 +7,11 @@
 //! **not** in-process shared memory.
 //!
 //! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json}`.
-//! Live window projection also reads `<session_dir>/_ui/process.json` (desktop process instance).
+//! Live window projection also reads `<session_dir>/_ui/process.json`, `_ui/processes/<id>.json`
+//! (expiring per-process leases), and `_ui/windows/<window_id>.json` (explicit active tab).
 //! Session ids must be UUID v4 strings.
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +21,10 @@ use serde_json::{json, Value};
 
 /// Heartbeats older than this are marked `stale` in list metadata (no auto-delete).
 pub const HEARTBEAT_STALE_MS: u64 = 30_000;
+
+/// Desktop process leases older than this drop matching sessions from `windows[]`.
+/// Independent from per-tab `HEARTBEAT_STALE_MS` so inactive-but-open tabs stay listed.
+pub const PROCESS_LEASE_MS: u64 = 90_000;
 
 pub fn session_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("NBCAD_SESSION_DIR") {
@@ -263,12 +269,97 @@ pub fn clear_closed_tombstone(session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Current desktop process instance from `_ui/process.json`, if the UI wrote one.
-pub fn current_process_instance_id() -> Option<String> {
+/// Filenames under `_ui/processes/` and `_ui/windows/` allow `[A-Za-z0-9._-]` only.
+fn is_safe_ui_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+}
+
+fn process_lease_from_value(parsed: &Value, now: u64) -> Option<(String, u64)> {
+    let id = optional_id(parsed, "process_instance_id")?;
+    let updated_ms = parsed.get("updated_ms").and_then(Value::as_u64)?;
+    if now.saturating_sub(updated_ms) <= PROCESS_LEASE_MS {
+        Some((id, updated_ms))
+    } else {
+        None
+    }
+}
+
+fn merge_live_lease(leases: &mut BTreeMap<String, u64>, parsed: &Value, now: u64) {
+    if let Some((id, updated_ms)) = process_lease_from_value(parsed, now) {
+        leases
+            .entry(id)
+            .and_modify(|existing| *existing = (*existing).max(updated_ms))
+            .or_insert(updated_ms);
+    }
+}
+
+/// Unexpired process leases: union of `_ui/processes/*.json` and `_ui/process.json`.
+/// A lease is live iff `updated_ms` is present and `now_ms - updated_ms <= PROCESS_LEASE_MS`.
+fn live_process_leases() -> BTreeMap<String, u64> {
+    let now = now_ms();
+    let mut leases = BTreeMap::new();
+    let processes_dir = session_dir().join("_ui").join("processes");
+    if let Ok(entries) = fs::read_dir(&processes_dir) {
+        for entry in entries.flatten() {
+            if !entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_suffix(".json") else {
+                continue;
+            };
+            if !is_safe_ui_id(stem) {
+                continue;
+            }
+            let Ok(body) = fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let Ok(parsed) = serde_json::from_str::<Value>(&body) else {
+                continue;
+            };
+            merge_live_lease(&mut leases, &parsed, now);
+        }
+    }
+    let process_path = session_dir().join("_ui").join("process.json");
+    if let Ok(body) = fs::read_to_string(process_path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+            merge_live_lease(&mut leases, &parsed, now);
+        }
+    }
+    leases
+}
+
+fn live_process_instance_ids() -> Vec<String> {
+    live_process_leases().into_keys().collect()
+}
+
+fn advertised_process_instance_id(leases: &BTreeMap<String, u64>) -> Option<String> {
     let path = session_dir().join("_ui").join("process.json");
-    let body = fs::read_to_string(path).ok()?;
-    let parsed: Value = serde_json::from_str(&body).ok()?;
-    optional_id(&parsed, "process_instance_id")
+    if let Ok(body) = fs::read_to_string(path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+            if let Some((id, _)) = process_lease_from_value(&parsed, now_ms()) {
+                if leases.contains_key(&id) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    leases
+        .iter()
+        .max_by_key(|(_, updated_ms)| *updated_ms)
+        .map(|(id, _)| id.clone())
+}
+
+/// Newest live process instance id (legacy `_ui/process.json` if still live).
+pub fn current_process_instance_id() -> Option<String> {
+    advertised_process_instance_id(&live_process_leases())
 }
 
 fn heartbeat_process_instance_id(session_id: &str) -> Option<String> {
@@ -277,17 +368,20 @@ fn heartbeat_process_instance_id(session_id: &str) -> Option<String> {
     optional_id(&parsed, "process_instance_id")
 }
 
-/// Live for window projection: not closed, and (when a process file exists)
-/// stamped with the current desktop process instance. Stale heartbeats still
-/// count — inactive open tabs must remain visible.
+/// Live for window projection: not closed, and if the heartbeat names a
+/// `process_instance_id` that id must have an unexpired process lease.
+/// Heartbeats without a process id (headless/tests) stay live when not closed.
+/// Stale heartbeats still count — inactive open tabs must remain visible.
 fn is_live_for_windows(session_id: &str) -> bool {
+    is_live_for_windows_with(&live_process_instance_ids(), session_id)
+}
+
+fn is_live_for_windows_with(live_ids: &[String], session_id: &str) -> bool {
     if is_session_closed(session_id) {
         return false;
     }
-    match current_process_instance_id() {
-        Some(current) => {
-            heartbeat_process_instance_id(session_id).as_deref() == Some(current.as_str())
-        }
+    match heartbeat_process_instance_id(session_id) {
+        Some(id) => live_ids.iter().any(|live| live == &id),
         None => true,
     }
 }
@@ -325,10 +419,11 @@ pub fn resolve_attach_target(
         vec![id.to_string()]
     } else {
         // Window/document matching uses the live set only (not closed, and when
-        // `_ui/process.json` exists only the current desktop process instance).
+        // a heartbeat names a process_instance_id it must have an unexpired lease).
+        let live_ids = live_process_instance_ids();
         list_sessions()?
             .into_iter()
-            .filter(|id| is_live_for_windows(id))
+            .filter(|id| is_live_for_windows_with(&live_ids, id))
             .collect()
     };
 
@@ -381,8 +476,57 @@ pub fn resolve_attach_target(
     }
 }
 
+fn read_window_active(window_id: &str) -> Option<(String, Option<String>)> {
+    if !is_safe_ui_id(window_id) {
+        return None;
+    }
+    let path = session_dir()
+        .join("_ui")
+        .join("windows")
+        .join(format!("{window_id}.json"));
+    let body = fs::read_to_string(path).ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    let document_id = optional_id(&parsed, "active_document_id")?;
+    let session_id = optional_id(&parsed, "active_session_id");
+    Some((document_id, session_id))
+}
+
+fn document_in_list(documents: &[Value], key: &str, value: &str) -> bool {
+    documents
+        .iter()
+        .any(|doc| doc.get(key).and_then(Value::as_str) == Some(value))
+}
+
+/// Active tab comes from `_ui/windows/<window_id>.json` when that document is
+/// still listed. Do not infer from heartbeat recency. Missing file: one
+/// document is unambiguous; multiple documents leave active ids null.
+fn window_active_ids(window_id: &str, documents: &[Value]) -> (Value, Value) {
+    if let Some((document_id, session_id)) = read_window_active(window_id) {
+        if document_in_list(documents, "document_id", &document_id) {
+            let active_session = session_id
+                .filter(|sid| document_in_list(documents, "session_id", sid))
+                .map(Value::String)
+                .unwrap_or(Value::Null);
+            return (Value::String(document_id), active_session);
+        }
+    }
+    if documents.len() == 1 {
+        (
+            documents[0]
+                .get("document_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+            documents[0]
+                .get("session_id")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )
+    } else {
+        (Value::Null, Value::Null)
+    }
+}
+
 fn windows_projection(detailed: &[Value]) -> Vec<Value> {
-    use std::collections::BTreeMap;
     let mut by_window: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for detail in detailed {
         if detail.get("closed").and_then(Value::as_bool) == Some(true) {
@@ -414,20 +558,12 @@ fn windows_projection(detailed: &[Value]) -> Vec<Value> {
                 let b_id = b.get("document_id").and_then(Value::as_str).unwrap_or("");
                 a_id.cmp(b_id)
             });
-            // Active = freshest heartbeat among this window's documents.
-            let active = documents
-                .iter()
-                .max_by_key(|doc| {
-                    doc.get("heartbeat")
-                        .and_then(|hb| hb.get("updated_ms"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                })
-                .cloned();
+            let (active_document_id, active_session_id) =
+                window_active_ids(&window_id, &documents);
             json!({
                 "window_id": window_id,
-                "active_document_id": active.as_ref().and_then(|d| d.get("document_id").cloned()).unwrap_or(Value::Null),
-                "active_session_id": active.as_ref().and_then(|d| d.get("session_id").cloned()).unwrap_or(Value::Null),
+                "active_document_id": active_document_id,
+                "active_session_id": active_session_id,
                 "documents": documents,
             })
         })
@@ -437,7 +573,10 @@ fn windows_projection(detailed: &[Value]) -> Vec<Value> {
 pub fn sessions_list_json() -> Value {
     match list_sessions() {
         Ok(sessions) => {
+            let leases = live_process_leases();
+            let live_ids: Vec<String> = leases.keys().cloned().collect();
             let process_instance_id = current_process_instance_id();
+            let process_instance_ids: Vec<String> = live_ids.clone();
             let detailed: Vec<Value> = sessions
                 .iter()
                 .map(|session_id| {
@@ -446,7 +585,7 @@ pub fn sessions_list_json() -> Value {
                         .unwrap_or(false);
                     let identity = session_identity(session_id);
                     let closed = is_session_closed(session_id);
-                    let live = is_live_for_windows(session_id);
+                    let live = is_live_for_windows_with(&live_ids, session_id);
                     json!({
                         "session_id": session_id,
                         "window_id": identity.window_id,
@@ -466,6 +605,8 @@ pub fn sessions_list_json() -> Value {
                 "session_details": detailed,
                 "windows": windows,
                 "process_instance_id": process_instance_id,
+                "process_instance_ids": process_instance_ids,
+                "process_lease_ms": PROCESS_LEASE_MS,
                 "session_dir": session_dir().display().to_string(),
                 "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             })
@@ -476,6 +617,8 @@ pub fn sessions_list_json() -> Value {
             "session_details": [],
             "windows": [],
             "process_instance_id": null,
+            "process_instance_ids": [],
+            "process_lease_ms": PROCESS_LEASE_MS,
             "session_dir": session_dir().display().to_string(),
             "heartbeat_stale_ms": HEARTBEAT_STALE_MS,
             "error": error,
@@ -998,11 +1141,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-tombstone-{live}"));
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
         fs::create_dir_all(dir.join("_ui")).unwrap();
-        fs::write(
-            dir.join("_ui").join("process.json"),
-            r#"{"process_instance_id":"proc-live"}"#,
-        )
-        .unwrap();
+        let lease = format!(
+            r#"{{"process_instance_id":"proc-live","updated_ms":{}}}"#,
+            now_ms()
+        );
+        fs::write(dir.join("_ui").join("process.json"), &lease).unwrap();
 
         write_session(&live, "model.json", r#"{"version":1}"#).unwrap();
         write_session(
@@ -1040,6 +1183,7 @@ mod tests {
 
         let list = sessions_list_json();
         assert_eq!(list["process_instance_id"], "proc-live");
+        assert_eq!(list["process_lease_ms"], PROCESS_LEASE_MS);
         assert_eq!(list["windows"].as_array().unwrap().len(), 1);
         assert_eq!(list["windows"][0]["documents"].as_array().unwrap().len(), 1);
         assert_eq!(list["windows"][0]["active_document_id"], "open");
@@ -1053,6 +1197,216 @@ mod tests {
 
         clear_closed_tombstone(&closed).unwrap();
         assert!(!is_session_closed(&closed));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn expired_process_lease_drops_windows_but_explicit_session_still_resolves() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let leftover = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-expired-lease-{leftover}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join("_ui").join("processes")).unwrap();
+        let expired_ms = now_ms().saturating_sub(PROCESS_LEASE_MS + 5_000);
+        let lease = format!(
+            r#"{{"process_instance_id":"proc-dead","updated_ms":{expired_ms}}}"#
+        );
+        fs::write(dir.join("_ui").join("process.json"), &lease).unwrap();
+        fs::write(
+            dir.join("_ui").join("processes").join("proc-dead.json"),
+            &lease,
+        )
+        .unwrap();
+
+        write_session(&leftover, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &leftover,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{leftover}","window_id":"main","document_id":"tab-a","project_session_id":"tab-a","process_instance_id":"proc-dead"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert!(
+            list["windows"].as_array().unwrap().is_empty(),
+            "expired process lease must drop windows even with a fresh heartbeat: {list}"
+        );
+        assert!(!is_live_for_windows(&leftover));
+        assert!(list["process_instance_id"].is_null());
+        assert_eq!(list["process_instance_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(list["process_lease_ms"], PROCESS_LEASE_MS);
+        assert!(
+            resolve_attach_target(None, Some("main"), None).is_err(),
+            "window attach must not target an expired-process session"
+        );
+        assert!(
+            resolve_attach_target(None, None, Some("tab-a")).is_err(),
+            "document attach must not target an expired-process session"
+        );
+        let recovered = resolve_attach_target(Some(&leftover), None, None).unwrap();
+        assert_eq!(recovered.session_id, leftover);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_live_process_leases_keep_both_windows_despite_global_marker() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let session_a = test_session_uuid();
+        let session_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(19)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-two-proc-{session_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join("_ui").join("processes")).unwrap();
+        let now = now_ms();
+        let lease_a = format!(r#"{{"process_instance_id":"proc-a","updated_ms":{now}}}"#);
+        let lease_b = format!(r#"{{"process_instance_id":"proc-b","updated_ms":{now}}}"#);
+        fs::write(
+            dir.join("_ui").join("processes").join("proc-a.json"),
+            &lease_a,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("_ui").join("processes").join("proc-b.json"),
+            &lease_b,
+        )
+        .unwrap();
+        // Legacy single-file marker points only at proc-b and must not hide proc-a.
+        fs::write(dir.join("_ui").join("process.json"), &lease_b).unwrap();
+
+        write_session(&session_a, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &session_a,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{now},"generation":1,"session_id":"{session_a}","window_id":"win-a","document_id":"doc-a","project_session_id":"doc-a","process_instance_id":"proc-a"}}"#
+            ),
+        )
+        .unwrap();
+        write_session(&session_b, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &session_b,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{now},"generation":1,"session_id":"{session_b}","window_id":"win-b","document_id":"doc-b","project_session_id":"doc-b","process_instance_id":"proc-b"}}"#
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["process_instance_id"], "proc-b");
+        let ids = list["process_instance_ids"].as_array().unwrap();
+        assert!(ids.iter().any(|id| id == "proc-a"), "{list}");
+        assert!(ids.iter().any(|id| id == "proc-b"), "{list}");
+        let windows = list["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 2, "{list}");
+        assert!(windows.iter().any(|row| row["window_id"] == "win-a"));
+        assert!(windows.iter().any(|row| row["window_id"] == "win-b"));
+        let by_a = resolve_attach_target(None, Some("win-a"), None).unwrap();
+        assert_eq!(by_a.session_id, session_a);
+        let by_b = resolve_attach_target(None, Some("win-b"), None).unwrap();
+        assert_eq!(by_b.session_id, session_b);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn window_file_active_document_wins_over_newer_heartbeat() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tab_a = test_session_uuid();
+        let tab_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(23)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-active-file-{tab_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let older = now_ms().saturating_sub(5_000);
+        let newer = now_ms();
+        write_session(&tab_a, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &tab_a,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{newer},"generation":1,"session_id":"{tab_a}","window_id":"main","document_id":"tab-a","project_session_id":"tab-a"}}"#
+            ),
+        )
+        .unwrap();
+        write_session(&tab_b, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &tab_b,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{older},"generation":1,"session_id":"{tab_b}","window_id":"main","document_id":"tab-b","project_session_id":"tab-b"}}"#
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("_ui").join("windows")).unwrap();
+        fs::write(
+            dir.join("_ui").join("windows").join("main.json"),
+            format!(
+                r#"{{"window_id":"main","active_document_id":"tab-b","active_session_id":"{tab_b}","updated_ms":{newer}}}"#
+            ),
+        )
+        .unwrap();
+
+        let list = sessions_list_json();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        let main = &list["windows"][0];
+        assert_eq!(main["window_id"], "main");
+        assert_eq!(main["documents"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            main["active_document_id"], "tab-b",
+            "persisted active tab must not yield to a newer heartbeat: {main}"
+        );
+        assert_eq!(main["active_session_id"], tab_b);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_window_file_with_two_tabs_leaves_active_null() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tab_a = test_session_uuid();
+        let tab_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(29)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-no-window-file-{tab_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        for (sid, doc, hb) in [
+            (&tab_a, "tab-a", now_ms()),
+            (&tab_b, "tab-b", now_ms().saturating_sub(1_000)),
+        ] {
+            write_session(sid, "model.json", r#"{"version":1}"#).unwrap();
+            write_session(
+                sid,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{hb},"generation":1,"session_id":"{sid}","window_id":"main","document_id":"{doc}","project_session_id":"{doc}"}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        let list = sessions_list_json();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 1);
+        let main = &list["windows"][0];
+        assert_eq!(main["documents"].as_array().unwrap().len(), 2);
+        assert!(
+            main["active_document_id"].is_null(),
+            "must not infer active tab from heartbeat recency: {main}"
+        );
+        assert!(main["active_session_id"].is_null());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
