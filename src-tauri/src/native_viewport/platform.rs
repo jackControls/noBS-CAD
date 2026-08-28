@@ -3849,8 +3849,6 @@ fn draw_cad_gizmos(
         if state.hidden_sketch_names.contains(&sketch.name) {
             continue;
         }
-        let origin = basis_vector(sketch.basis.origin);
-        let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, origin);
         let curve_color = rgba(palette.0.finished_sketch, 0.58);
         let point_color = rgb(palette.0.finished_sketch_point);
         let point_outline_color = rgba(palette.0.finished_sketch_point_outline, 0.96);
@@ -3860,14 +3858,18 @@ fn draw_cad_gizmos(
                 &mut sketch_point_outlines,
                 &sketch.basis,
                 entity,
-                world_per_pixel * SKETCH_POINT_OUTLINE_RADIUS_PX,
+                camera.camera,
+                *viewport,
+                SKETCH_POINT_OUTLINE_RADIUS_PX,
                 point_outline_color,
             );
             draw_sketch_entity_grips(
                 &mut sketch_points,
                 &sketch.basis,
                 entity,
-                world_per_pixel * SKETCH_POINT_RADIUS_PX,
+                camera.camera,
+                *viewport,
+                SKETCH_POINT_RADIUS_PX,
                 point_color,
             );
         }
@@ -3928,12 +3930,12 @@ fn draw_cad_gizmos(
     }
 
     if let Some(sketch) = &model.active_sketch {
-        let origin = basis_vector(sketch.basis.origin);
-        let point_pixel_size = world_per_pixel_at(camera.camera, *viewport, origin);
         draw_sketch(
             &mut sketch_gizmos,
             sketch,
-            point_pixel_size * 3.5,
+            camera.camera,
+            *viewport,
+            3.5,
             |entity| {
                 let (id, fully_defined) = sketch_entity_style(entity);
                 Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
@@ -3949,18 +3951,25 @@ fn draw_cad_gizmos(
                 }))
             },
         );
-        draw_sketch(&mut highlights, sketch, point_pixel_size * 5.0, |entity| {
-            let (id, _) = sketch_entity_style(entity);
-            if state.selected_sketch_entity_ids.contains(&id) {
-                Some(rgb(palette.0.selection))
-            } else if state.constraint_related_sketch_entity_ids.contains(&id) {
-                Some(rgb(palette.0.constraint_related))
-            } else if state.hovered_sketch_entity_id == Some(id) {
-                Some(rgb(palette.0.hover))
-            } else {
-                None
-            }
-        });
+        draw_sketch(
+            &mut highlights,
+            sketch,
+            camera.camera,
+            *viewport,
+            5.0,
+            |entity| {
+                let (id, _) = sketch_entity_style(entity);
+                if state.selected_sketch_entity_ids.contains(&id) {
+                    Some(rgb(palette.0.selection))
+                } else if state.constraint_related_sketch_entity_ids.contains(&id) {
+                    Some(rgb(palette.0.constraint_related))
+                } else if state.hovered_sketch_entity_id == Some(id) {
+                    Some(rgb(palette.0.hover))
+                } else {
+                    None
+                }
+            },
+        );
     }
 
     for layer in &preview.value.lines {
@@ -4033,7 +4042,11 @@ fn draw_cad_gizmos(
             let right = forward.cross(up_hint).normalize_or_zero();
             let right = if right == Vec3::ZERO { Vec3::X } else { right };
             let up = right.cross(forward).normalize_or_zero();
-            draw_filled_disc(&mut highlights, center, right, up, radius, color);
+            // One chord row per logical pixel keeps large markers solid;
+            // small ones bottom out at the cheap sketch-grip density.
+            let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
+            let half_steps = ((radius / world_per_pixel.max(0.001)).ceil() as i32).clamp(4, 96);
+            draw_filled_disc(&mut highlights, center, right, up, radius, color, half_steps);
         }
     }
 
@@ -4307,7 +4320,9 @@ fn sketch_entity_style(entity: &EntityDto) -> (u64, bool) {
 fn draw_sketch<Config, ColorFor>(
     gizmos: &mut Gizmos<Config>,
     sketch: &SketchDto,
-    point_radius: f32,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    point_radius_px: f32,
     mut color_for: ColorFor,
 ) where
     Config: GizmoConfigGroup,
@@ -4318,7 +4333,15 @@ fn draw_sketch<Config, ColorFor>(
             continue;
         };
         draw_sketch_curve(gizmos, &sketch.basis, entity, color);
-        draw_sketch_entity_grips(gizmos, &sketch.basis, entity, point_radius, color);
+        draw_sketch_entity_grips(
+            gizmos,
+            &sketch.basis,
+            entity,
+            camera,
+            viewport,
+            point_radius_px,
+            color,
+        );
     }
 }
 
@@ -4386,11 +4409,21 @@ fn draw_sketch_entity_grips<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     basis: &PlaneBasis,
     entity: &EntityDto,
-    point_radius: f32,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    point_radius_px: f32,
     color: Color,
 ) {
     for position in sketch_grip_positions(entity) {
-        draw_sketch_grip(gizmos, basis, position, point_radius, color);
+        draw_sketch_grip(
+            gizmos,
+            basis,
+            position,
+            camera,
+            viewport,
+            point_radius_px,
+            color,
+        );
     }
 }
 
@@ -4409,25 +4442,23 @@ fn draw_sketch_grip<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     basis: &PlaneBasis,
     position: &SketchVec2,
-    point_radius: f32,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    point_radius_px: f32,
     color: Color,
 ) {
     let point = sketch_world(basis, position.x, position.y, 0.05);
-    let radius = point_radius.max(0.03);
-    draw_filled_disc(
-        gizmos,
-        point,
-        basis_vector(basis.u),
-        basis_vector(basis.v),
-        radius,
-        color,
-    );
+    let radius = screen_space_disc_radius(camera, viewport, point, point_radius_px);
+    let (right, up) = camera_facing_axes(camera);
+    draw_filled_disc(gizmos, point, right, up, radius, color, 4);
 }
 
 /// Gizmos do not expose a filled world-space disc primitive. A handful of
 /// parallel chords gives sketch points a true round-dot silhouette while
 /// keeping their physical diameter tied to line weight on Retina and
-/// standard-density displays.
+/// standard-density displays. `half_steps` controls chord density: small
+/// sketch grips stay cheap at 4, while large CAM pick markers pass one row
+/// per logical pixel so the fill reads solid instead of striped.
 fn draw_filled_disc<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     center: Vec3,
@@ -4435,15 +4466,15 @@ fn draw_filled_disc<Config: GizmoConfigGroup>(
     v_axis: Vec3,
     radius: f32,
     color: Color,
+    half_steps: i32,
 ) {
-    const HALF_STEPS: i32 = 4;
     let u = u_axis.normalize_or_zero();
     let v = v_axis.normalize_or_zero();
     if u == Vec3::ZERO || v == Vec3::ZERO {
         return;
     }
-    for step in -HALF_STEPS..=HALF_STEPS {
-        let ratio = step as f32 / HALF_STEPS as f32;
+    for step in -half_steps..=half_steps {
+        let ratio = step as f32 / half_steps as f32;
         let along_v = ratio * radius;
         let half_chord = (radius * radius - along_v * along_v).max(0.0).sqrt();
         let row_center = center + v * along_v;
@@ -4453,6 +4484,31 @@ fn draw_filled_disc<Config: GizmoConfigGroup>(
             color,
         );
     }
+}
+
+fn camera_facing_axes(camera: ViewportCamera) -> (Vec3, Vec3) {
+    let camera_position = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - camera_position).normalize_or_zero();
+    let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
+    let mut right = forward.cross(up_hint).normalize_or_zero();
+    if right.length_squared() < 1.0e-8 {
+        right = Vec3::X;
+    }
+    let mut up = right.cross(forward).normalize_or_zero();
+    if up.length_squared() < 1.0e-8 {
+        up = Vec3::Y;
+    }
+    (right, up)
+}
+
+fn screen_space_disc_radius(
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    center: Vec3,
+    radius_px: f32,
+) -> f32 {
+    let world_per_pixel = world_per_pixel_at(camera, viewport, center);
+    world_per_pixel * radius_px.max(1.0)
 }
 
 fn draw_parametric_curve(
@@ -5610,6 +5666,42 @@ mod tests {
         assert!(SKETCH_POINT_OUTLINE_RADIUS_PX > SKETCH_POINT_RADIUS_PX);
         assert!(SKETCH_POINT_OUTLINE_RADIUS_PX < 3.5);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
+    }
+
+    #[test]
+    fn sketch_point_radius_stays_constant_in_screen_space_at_different_depths() {
+        let camera = ViewportCamera {
+            position: [0.0, 0.0, 10.0],
+            target: [0.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            vertical_fov_degrees: 45.0,
+        };
+        let viewport = ViewportSizeResource {
+            logical_width: 1_200.0,
+            logical_height: 800.0,
+        };
+        let near = Vec3::ZERO;
+        let far = Vec3::new(0.0, 0.0, -90.0);
+
+        let near_radius =
+            screen_space_disc_radius(camera, viewport, near, SKETCH_POINT_RADIUS_PX);
+        let far_radius =
+            screen_space_disc_radius(camera, viewport, far, SKETCH_POINT_RADIUS_PX);
+        let near_world_per_pixel = world_per_pixel_at(camera, viewport, near);
+        let far_world_per_pixel = world_per_pixel_at(camera, viewport, far);
+
+        assert!((near_radius / near_world_per_pixel - SKETCH_POINT_RADIUS_PX).abs() < 1.0e-5);
+        assert!((far_radius / far_world_per_pixel - SKETCH_POINT_RADIUS_PX).abs() < 1.0e-5);
+        assert!(far_radius > near_radius);
+    }
+
+    #[test]
+    fn sketch_point_billboard_axes_are_orthonormal() {
+        let (right, up) = camera_facing_axes(ViewportCamera::default());
+
+        assert!((right.length() - 1.0).abs() < 1.0e-5);
+        assert!((up.length() - 1.0).abs() < 1.0e-5);
+        assert!(right.dot(up).abs() < 1.0e-5);
     }
 
     #[test]
