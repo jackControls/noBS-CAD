@@ -14,12 +14,13 @@ mod post_events;
 mod simulation;
 
 pub use model::{
-    BoxAnchor, CamDocumentDto, CamOperationDto, CamPostConfigDto, CamResolvedStockDto,
-    CamSetupDto, CamStockFace, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape,
-    CamStockSpecDto, CamToolDto, CamToolKind, CamUnits, CompensationMode, ContourCompensation,
-    CoolantMode, CuttingParametersDto, Point2Dto, Point3Dto, PostDialect, Rect2Dto,
-    Siemens828dAtcStyle, Siemens828dPostConfigDto, Siemens828dToolChangePositioning,
-    SpindleDirection, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
+    BoxAnchor, CamChainRefDto, CamChainSource, CamDocumentDto, CamOperationDto, CamPostConfigDto,
+    CamResolvedStockDto, CamSetupDto, CamStockFace, CamStockOffsetsDto, CamStockPlacementDto,
+    CamStockShape, CamStockSpecDto, CamToolDto, CamToolKind, CamUnits, CompensationMode,
+    ContourCompensation, CoolantMode, CuttingParametersDto, FaceDirection, MillingDirection,
+    Point2Dto, Point3Dto, PostDialect, Rect2Dto, Siemens828dAtcStyle, Siemens828dPostConfigDto,
+    Siemens828dToolChangePositioning, SpindleDirection, StockBoxDto, WcsOriginSpecDto,
+    WorkCoordinateSystemDto, WorkOffset,
 };
 pub use nbpost::{
     analyze_nbpost, NbPostAnalysisDto, NbPostAnalysisRequestDto, NbPostCompatibilityLevel,

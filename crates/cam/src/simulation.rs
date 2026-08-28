@@ -270,6 +270,19 @@ struct ProgramRunOutcome {
     approximated_chamfer: bool,
 }
 
+/// A motion buffered while machine cutter compensation is active. Lines
+/// buffer as-is; arcs tessellate into chords when the block closes so the
+/// compensated centerline can be rebuilt as one offset polyline (offsetting
+/// the chords approximates offsetting the arc within the chord deviation).
+enum CompMove {
+    Line(Point3Dto),
+    Arc {
+        center: crate::model::Point2Dto,
+        clockwise: bool,
+        to: Point3Dto,
+    },
+}
+
 /// Sweep the program through the stock. With `collect` false (evaluating a
 /// rest-stock source setup) only material removal runs: steps, collision
 /// reporting, and rapid sweeps are skipped because the source setup's own
@@ -293,7 +306,7 @@ fn run_program(
     let mut comp_side: Option<bool> = None;
     let mut comp_anchor: Option<Point3Dto> = None;
     let mut comp_tool: Option<&CamToolDto> = None;
-    let mut comp_buffer: Vec<(usize, Point3Dto, f64)> = Vec::new();
+    let mut comp_buffer: Vec<(usize, CompMove, f64)> = Vec::new();
     // The tool's true position right after a compensation block closes (the
     // compensated end point): the move that follows — the lead-out — starts
     // there while the offset slides back to the programmed point.
@@ -336,22 +349,72 @@ fn run_program(
                 // The compensated centerline is the buffered polyline offset
                 // by the tool radius. All compensated moves share one depth
                 // (profiling at constant Z); a Z change inside compensation
-                // is not a profiling move and fails closed.
+                // is not a profiling move and fails closed. Arcs tessellate
+                // into chords (about 0.5 mm of arc length each) so the
+                // polyline offset approximates the offset arc.
                 let depth = anchor.z;
-                let mut polyline: Vec<crate::model::Point2Dto> =
-                    Vec::with_capacity(comp_buffer.len() + 1);
+                let mut polyline: Vec<crate::model::Point2Dto> = Vec::new();
                 polyline.push(crate::model::Point2Dto::new(anchor.x, anchor.y));
-                for (_, to, _) in &comp_buffer {
-                    if (to.z - depth).abs() > 1.0e-6 {
+                // One entry per generated polyline segment, keeping the
+                // originating command index and feed for step reporting.
+                let mut seg_meta: Vec<(usize, f64)> = Vec::new();
+                for (buffered_index, buffered, feed) in &comp_buffer {
+                    let (move_end, arc) = match buffered {
+                        CompMove::Line(to) => (*to, None),
+                        CompMove::Arc {
+                            center,
+                            clockwise,
+                            to,
+                        } => (*to, Some((*center, *clockwise))),
+                    };
+                    if (move_end.z - depth).abs() > 1.0e-6 {
                         return Err(CamPlanError(
                             "simulation: cutter compensation only applies to constant-depth profiling moves"
                                 .to_string(),
                         ));
                     }
-                    polyline.push(crate::model::Point2Dto::new(to.x, to.y));
+                    match arc {
+                        None => {
+                            polyline.push(crate::model::Point2Dto::new(move_end.x, move_end.y));
+                            seg_meta.push((*buffered_index, *feed));
+                        }
+                        Some((center, clockwise)) => {
+                            let from = *polyline.last().expect("anchor is always present");
+                            let arc_radius = distance_2d(from, center);
+                            if arc_radius <= 1.0e-9 {
+                                return Err(CamPlanError(
+                                    "simulation: compensated arc has no radius".to_string(),
+                                ));
+                            }
+                            let start_angle = (from.y - center.y).atan2(from.x - center.x);
+                            let end_angle =
+                                (move_end.y - center.y).atan2(move_end.x - center.x);
+                            let mut sweep = end_angle - start_angle;
+                            if clockwise {
+                                while sweep >= 0.0 {
+                                    sweep -= std::f64::consts::TAU;
+                                }
+                            } else {
+                                while sweep <= 0.0 {
+                                    sweep += std::f64::consts::TAU;
+                                }
+                            }
+                            let chords = ((sweep.abs() * arc_radius) / 0.5).ceil() as usize;
+                            let chords = chords.clamp(1, 64);
+                            for chord in 1..=chords {
+                                let angle =
+                                    start_angle + sweep * (chord as f64 / chords as f64);
+                                polyline.push(crate::model::Point2Dto::new(
+                                    center.x + arc_radius * angle.cos(),
+                                    center.y + arc_radius * angle.sin(),
+                                ));
+                                seg_meta.push((*buffered_index, *feed));
+                            }
+                        }
+                    }
                 }
                 let offset = offset_polyline_open(&polyline, tool.diameter * 0.5, left)?;
-                for (index, (buffered_index, _, feed)) in comp_buffer.iter().enumerate() {
+                for (index, (buffered_index, feed)) in seg_meta.iter().enumerate() {
                     let start = offset[index];
                     let end = offset[index + 1];
                     let from3 = Point3Dto::new(start.x, start.y, depth);
@@ -437,7 +500,7 @@ fn run_program(
                     // from the programmed anchor toward the compensated path.
                     // The buffer is offset and swept as one polyline when the
                     // block closes, so corner joins miter exactly.
-                    comp_buffer.push((command_index, *to, *feed));
+                    comp_buffer.push((command_index, CompMove::Line(*to), *feed));
                     position = Some(*to);
                     continue;
                 }
@@ -488,10 +551,20 @@ fn run_program(
                 feed,
             } => {
                 if comp_side.is_some() {
-                    return Err(CamPlanError(
-                        "simulation: circular motion while cutter compensation is active"
-                            .to_string(),
+                    // Arc leads run with compensation already active; the
+                    // move buffers and tessellates into chords when the
+                    // block closes.
+                    comp_buffer.push((
+                        command_index,
+                        CompMove::Arc {
+                            center: crate::model::Point2Dto::new(center.x, center.y),
+                            clockwise: *clockwise,
+                            to: *to,
+                        },
+                        *feed,
                     ));
+                    position = Some(*to);
+                    continue;
                 }
                 let from = position;
                 let (duration, removed) = if let (Some(start), Some(tool)) = (from, active_tool) {
@@ -1258,6 +1331,10 @@ fn distance(a: Point3Dto, b: Point3Dto) -> f64 {
     ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt()
 }
 
+fn distance_2d(a: crate::model::Point2Dto, b: crate::model::Point2Dto) -> f64 {
+    ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt()
+}
+
 fn lerp(a: Point3Dto, b: Point3Dto, t: f64) -> Point3Dto {
     Point3Dto::new(
         a.x + (b.x - a.x) * t,
@@ -1271,8 +1348,8 @@ mod tests {
     use super::*;
     use crate::model::{
         CamOperationDto, CamPostConfigDto, CamUnits, CompensationMode, ContourCompensation,
-        CoolantMode, CuttingParametersDto, Point2Dto, Rect2Dto, StockBoxDto, WcsOriginSpecDto,
-        WorkOffset,
+        CoolantMode, CuttingParametersDto, FaceDirection, MillingDirection, Point2Dto, Rect2Dto,
+        StockBoxDto, WcsOriginSpecDto, WorkOffset,
     };
 
     fn document() -> CamDocumentDto {
@@ -1315,8 +1392,10 @@ mod tests {
                         step_over: 3.0,
                         step_down: 1.0,
                         safe_distance: 5.0,
+                        direction: FaceDirection::BothWays,
                         clearance_z: 5.0,
                         retract_z: 2.0,
+                        feed_height_z: 1.0,
                         cutting,
                     },
                     CamOperationDto::Contour2d {
@@ -1338,8 +1417,18 @@ mod tests {
                         compensation_mode: CompensationMode::InSoftware,
                         lead_in: 5.0,
                         lead_out: 5.0,
+                        lead_arc_radius: None,
+                        direction: MillingDirection::Climb,
+                        roughing_passes: 1,
+                        roughing_step_over: None,
+                        finishing_pass: false,
+                        finish_allowance: 0.0,
+                        finish_feed: None,
+                        spring_pass: false,
+                        chain_ref: None,
                         clearance_z: 5.0,
                         retract_z: 2.0,
+                        feed_height_z: 1.0,
                         cutting,
                     },
                 ],
@@ -1359,6 +1448,8 @@ mod tests {
                 corner_radius: None,
                 cutting: CuttingParametersDto::default(),
                 cutting_presets: vec![],
+                default_step_down: None,
+                default_step_over: None,
             }],
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto::default(),
@@ -1471,8 +1562,18 @@ mod tests {
             compensation_mode: mode,
             lead_in: 5.0,
             lead_out: 5.0,
+            lead_arc_radius: None,
+            direction: MillingDirection::Climb,
+            roughing_passes: 1,
+            roughing_step_over: None,
+            finishing_pass: false,
+            finish_allowance: 0.0,
+            finish_feed: None,
+            spring_pass: false,
+            chain_ref: None,
             clearance_z: 5.0,
             retract_z: 2.0,
+            feed_height_z: 1.0,
             cutting: CuttingParametersDto {
                 spindle_rpm: 8_000,
                 feed_xy: 600.0,
@@ -1535,8 +1636,18 @@ mod tests {
             compensation_mode: mode,
             lead_in: 5.0,
             lead_out: 5.0,
+            lead_arc_radius: None,
+            direction: MillingDirection::Climb,
+            roughing_passes: 1,
+            roughing_step_over: None,
+            finishing_pass: false,
+            finish_allowance: 0.0,
+            finish_feed: None,
+            spring_pass: false,
+            chain_ref: None,
             clearance_z: 5.0,
             retract_z: 2.0,
+            feed_height_z: 1.0,
             cutting: CuttingParametersDto {
                 spindle_rpm: 8_000,
                 feed_xy: 600.0,
@@ -1665,6 +1776,88 @@ mod tests {
         assert_outside_band_removed(&software);
     }
 
+    /// Arc leads keep the tool off the wall line on entry; with machine
+    /// compensation active the simulator tessellates the arcs into chords
+    /// inside the buffered compensation block. The removed band must still
+    /// be exactly the diameter-wide strip outside the wall.
+    #[test]
+    fn in_control_arc_leads_remove_the_same_band() {
+        let mut document = contour_document(CompensationMode::InControl);
+        if let CamOperationDto::Contour2d {
+            lead_arc_radius, ..
+        } = &mut document.setups[0].operations[0]
+        {
+            *lead_arc_radius = Some(1.5);
+        }
+        let stock = run_contour_case(&document);
+        assert_outside_band_removed(&stock);
+    }
+
+    /// Regression probe for a reported "overcut": a face-mill-class Ø63 tool
+    /// contouring a 20 x 12 boss. The compensated band around a profile is
+    /// exactly one tool DIAMETER wide (the inner edge finishes on the wall,
+    /// the outer edge reaches one diameter out), so with a cutter much larger
+    /// than the part the simulation legitimately clears most of the
+    /// surrounding stock. What must never happen is cutting into the part
+    /// itself, and stock beyond the band must survive.
+    #[test]
+    fn in_control_large_tool_clears_a_diameter_wide_band_not_the_part() {
+        let mut document = contour_case_document(
+            CompensationMode::InControl,
+            ContourCompensation::Outside,
+            vec![
+                Point2Dto::new(90.0, 70.0),
+                Point2Dto::new(110.0, 70.0),
+                Point2Dto::new(110.0, 82.0),
+                Point2Dto::new(90.0, 82.0),
+            ],
+            true,
+        );
+        document.setups[0].stock = StockBoxDto {
+            min: Point3Dto::new(0.0, 0.0, -6.0),
+            max: Point3Dto::new(200.0, 160.0, 0.0),
+        };
+        document.tools[0] = CamToolDto {
+            id: 1,
+            number: Some(1),
+            name: "63 mm face mill".to_string(),
+            kind: CamToolKind::FaceMill,
+            diameter: 63.0,
+            flute_length: 12.0,
+            overall_length: 60.0,
+            center_cutting: true,
+            flute_count: 6,
+            point_angle_degrees: None,
+            corner_radius: None,
+            cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
+        };
+        // In-control activation requires leads longer than the tool radius.
+        if let CamOperationDto::Contour2d {
+            lead_in, lead_out, ..
+        } = &mut document.setups[0].operations[0]
+        {
+            *lead_in = 40.0;
+            *lead_out = 40.0;
+        }
+        let stock = run_contour_case(&document);
+        // The diameter-wide band outside the walls is removed...
+        assert!(removed_at(&stock, 88.0, 76.0, -1.0));
+        assert!(removed_at(&stock, 95.0, 30.0, -1.0));
+        // ...the part survives right up to its walls (probes kept clear of the
+        // lead-corner neighbourhood, where the straight-lead compensation
+        // slide is known to shave the corner with very large tools — arc
+        // leads are the answer, see the operation's lead options)...
+        assert!(!removed_at(&stock, 105.0, 76.0, -1.0));
+        assert!(!removed_at(&stock, 109.0, 76.0, -1.0));
+        assert!(!removed_at(&stock, 95.0, 81.0, -1.0));
+        // ...and stock well beyond the band is untouched.
+        assert!(!removed_at(&stock, 10.0, 10.0, -1.0));
+        assert!(!removed_at(&stock, 190.0, 76.0, -1.0));
+    }
+
     #[test]
     fn simulation_through_unknown_operation_fails_closed() {
         let error = simulate_setup(
@@ -1789,8 +1982,10 @@ mod tests {
             step_over: 2.0,
             step_down: 1.0,
             safe_distance: 5.0,
+            direction: FaceDirection::BothWays,
             clearance_z: 5.0,
             retract_z: 2.0,
+            feed_height_z: 1.0,
             cutting: CuttingParametersDto {
                 spindle_rpm: 8_000,
                 feed_xy: 600.0,

@@ -816,8 +816,10 @@ mod tests {
                     step_over: 3.0,
                     step_down: 1.0,
                     safe_distance: 5.0,
+                    direction: crate::model::FaceDirection::BothWays,
                     clearance_z: 8.0,
                     retract_z: 2.0,
+                    feed_height_z: 1.0,
                     cutting: CuttingParametersDto {
                         spindle_rpm: 10_000,
                         feed_xy: 600.0,
@@ -841,6 +843,8 @@ mod tests {
                 corner_radius: None,
                 cutting: CuttingParametersDto::default(),
                 cutting_presets: vec![],
+                default_step_down: None,
+                default_step_over: None,
             }],
             units: CamUnits::Millimeters,
             post_defaults: CamPostConfigDto {
@@ -872,6 +876,8 @@ mod tests {
             corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
         });
         source.setups[0].operations.push(CamOperationDto::Drill {
             id: 2,
@@ -883,6 +889,7 @@ mod tests {
             bottom_z: -3.0,
             retract_z: 2.0,
             clearance_z: 8.0,
+            feed_height_z: 1.0,
             peck_depth: None,
             dwell_seconds: 0.25,
             cycle: DrillCycle::Drill,
@@ -917,6 +924,8 @@ mod tests {
             corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
         });
         source.setups[0].operations = vec![CamOperationDto::Thread {
             id: 3,
@@ -935,6 +944,7 @@ mod tests {
             step_over: None,
             clearance_z: 8.0,
             retract_z: 2.0,
+            feed_height_z: 1.0,
             cutting: CuttingParametersDto {
                 spindle_rpm: 8_000,
                 feed_xy: 500.0,
@@ -1042,8 +1052,18 @@ mod tests {
             compensation_mode: CompensationMode::InControl,
             lead_in: 5.0,
             lead_out: 5.0,
+            lead_arc_radius: None,
+            direction: MillingDirection::Climb,
+            roughing_passes: 1,
+            roughing_step_over: None,
+            finishing_pass: false,
+            finish_allowance: 0.0,
+            finish_feed: None,
+            spring_pass: false,
+            chain_ref: None,
             clearance_z: 8.0,
             retract_z: 2.0,
+            feed_height_z: 1.0,
             cutting: CuttingParametersDto {
                 spindle_rpm: 10_000,
                 feed_xy: 600.0,

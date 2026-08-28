@@ -482,6 +482,14 @@ pub struct CamToolDto {
     /// the operator pick any profile and copies its values.
     #[serde(default)]
     pub cutting_presets: Vec<CamCuttingPresetDto>,
+    /// Planner-step defaults captured with the tool. Creating an operation
+    /// copies them into the operation's own step-down / step-over fields when
+    /// the operator has not typed a value; the planner only ever reads the
+    /// operation's numbers, so later library edits never rewrite motion.
+    #[serde(default)]
+    pub default_step_down: Option<f64>,
+    #[serde(default)]
+    pub default_step_over: Option<f64>,
 }
 
 /// A named cutting-data profile on a library tool.
@@ -595,6 +603,27 @@ impl CamToolDto {
             if !seen.insert(preset.name.trim().to_string()) {
                 return Err(format!(
                     "tool '{}' cutting-data profile names must be unique",
+                    self.name
+                ));
+            }
+        }
+        for (label, value) in [
+            ("default step-down", self.default_step_down),
+            ("default step-over", self.default_step_over),
+        ] {
+            if let Some(value) = value {
+                if !value.is_finite() || value <= 0.0 {
+                    return Err(format!(
+                        "tool '{}' {label} must be positive when set",
+                        self.name
+                    ));
+                }
+            }
+        }
+        if let Some(step_over) = self.default_step_over {
+            if step_over > self.diameter {
+                return Err(format!(
+                    "tool '{}' default step-over cannot exceed the tool diameter",
                     self.name
                 ));
             }
@@ -737,16 +766,60 @@ pub enum ThreadHand {
     Left,
 }
 
-/// Orbit direction of a milling pass relative to the tool's own rotation.
+/// Cutting direction of a milling pass relative to the tool's own rotation.
+/// The planner assumes a clockwise spindle (M3); counter-clockwise spindles
+/// flip every case and are a documented limitation of this round.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MillingDirection {
-    /// Tool rotation matches the orbital feed direction at the contact point.
-    /// With a clockwise spindle this means a clockwise orbit viewed from
-    /// above.
+    /// Tool rotation matches the feed direction at the contact point. With a
+    /// clockwise spindle this means counter-clockwise travel around an
+    /// outside profile (clockwise around an inside one), and a clockwise
+    /// orbit in thread milling.
     #[default]
     Climb,
     Conventional,
+}
+
+/// Row-to-row cutting direction of a facing operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaceDirection {
+    /// Alternate directions row to row (zigzag): fastest, mixes climb and
+    /// conventional engagement.
+    #[default]
+    BothWays,
+    /// Every row cuts in the climb direction; the tool repositions above the
+    /// feed plane between rows.
+    Climb,
+    /// Every row cuts in the conventional direction, same repositioning.
+    Conventional,
+}
+
+/// Where a picked edge/curve chain lives, recorded so an edit session can
+/// re-resolve the same geometry instead of dropping to raw coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CamChainSource {
+    /// Solid model edges.
+    Model,
+    /// Sketch curves.
+    Sketch,
+}
+
+/// Provenance of a contour/chamfer profile picked in the viewport. The
+/// planner only reads the baked point list; this reference lets the host
+/// re-select the same chain when the operation is edited, and re-resolve
+/// coordinates after the underlying geometry moved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CamChainRefDto {
+    pub source: CamChainSource,
+    /// Stable keys of the picked entities, in chain order.
+    pub keys: Vec<String>,
+    /// True when the stored path walks the chain opposite to its natural
+    /// entity order.
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 fn default_radial_passes() -> u32 {
@@ -773,11 +846,20 @@ pub enum CamOperationDto {
         /// field, 5 mm by default.
         #[serde(default = "default_face_safe_distance")]
         safe_distance: f64,
+        /// Row direction: zigzag (default) or single-direction climb /
+        /// conventional with a reposition above the feed plane between rows.
+        #[serde(default)]
+        direction: FaceDirection,
         /// Safe travel heights for this operation (setup Z, mm).
         #[serde(default)]
         clearance_z: f64,
         #[serde(default)]
         retract_z: f64,
+        /// Feed-engagement plane (setup Z, mm): rapids reach down to this
+        /// height, everything below happens at feed rate. Sits between the
+        /// cut top and the retract plane.
+        #[serde(default)]
+        feed_height_z: f64,
         cutting: CuttingParametersDto,
     },
     Contour2d {
@@ -810,10 +892,57 @@ pub enum CamOperationDto {
         lead_in: f64,
         #[serde(default = "default_contour_lead")]
         lead_out: f64,
+        /// Optional horizontal arc (mm radius) that rounds the end of the
+        /// straight lead into a tangential meet with the profile: the lead
+        /// becomes line + 90 degree arc, so the tool reaches the wall already
+        /// at full offset instead of sliding in along the wall line. `None`
+        /// keeps the plain straight lead. Inside-compensated closed loops
+        /// keep their bisector leads regardless (arc leads into a pocket
+        /// corner are a later round).
+        #[serde(default)]
+        lead_arc_radius: Option<f64>,
+        /// Climb/conventional travel direction. Closed loops are re-wound
+        /// around their start point when the stored winding does not match;
+        /// open chains reverse (with the compensation side reinterpreted so
+        /// the physical tool side never changes).
+        #[serde(default)]
+        direction: MillingDirection,
+        /// Number of radial roughing passes stepping toward the wall, before
+        /// the finish pass. 1 (default) means straight to the finish offset.
+        #[serde(default = "default_radial_passes")]
+        roughing_passes: u32,
+        /// Radial step between roughing passes (mm); required when
+        /// `roughing_passes` is greater than 1.
+        #[serde(default)]
+        roughing_step_over: Option<f64>,
+        /// Separate finishing pass at the final offset: the roughing passes
+        /// stop `finish_allowance` short of the wall and the finish pass
+        /// takes that allowance at `finish_feed`.
+        #[serde(default)]
+        finishing_pass: bool,
+        /// Radial stock (mm) the roughing passes leave for the finish pass.
+        #[serde(default)]
+        finish_allowance: f64,
+        /// Feed rate (mm/min) of the finish pass; defaults to the XY feed.
+        #[serde(default)]
+        finish_feed: Option<f64>,
+        /// Repeat the last profile lap once (spring pass): with the finishing
+        /// pass enabled it repeats the finish lap, otherwise it repeats the
+        /// last roughing lap. Closed loops only — an open chain cannot re-lap
+        /// without a return move.
+        #[serde(default)]
+        spring_pass: bool,
+        /// Provenance of a viewport-picked chain, so editing the operation
+        /// can re-select the same geometry. The planner never reads this.
+        #[serde(default)]
+        chain_ref: Option<CamChainRefDto>,
         #[serde(default)]
         clearance_z: f64,
         #[serde(default)]
         retract_z: f64,
+        /// Feed-engagement plane (setup Z, mm); see the face operation.
+        #[serde(default)]
+        feed_height_z: f64,
         cutting: CuttingParametersDto,
     },
     Drill {
@@ -828,6 +957,11 @@ pub enum CamOperationDto {
         retract_z: f64,
         #[serde(default)]
         clearance_z: f64,
+        /// Feed-engagement plane (setup Z, mm): the tool rapids down to this
+        /// height and feeds from here, so air cutting above the part costs
+        /// rapid time instead of feed time.
+        #[serde(default)]
+        feed_height_z: f64,
         /// Hole-machining cycle family; see `DrillCycle`.
         #[serde(default)]
         cycle: DrillCycle,
@@ -860,10 +994,17 @@ pub enum CamOperationDto {
         bottom_z: f64,
         step_down: f64,
         step_over: f64,
+        /// Climb/conventional direction of the wall finish pass; the zigzag
+        /// clearing itself always alternates.
+        #[serde(default)]
+        direction: MillingDirection,
         #[serde(default)]
         clearance_z: f64,
         #[serde(default)]
         retract_z: f64,
+        /// Feed-engagement plane (setup Z, mm); see the face operation.
+        #[serde(default)]
+        feed_height_z: f64,
         cutting: CuttingParametersDto,
     },
     Chamfer2d {
@@ -884,10 +1025,16 @@ pub enum CamOperationDto {
         tip_offset: f64,
         /// Which side of the path the remaining material wall is on.
         wall_side: ContourCompensation,
+        /// Climb/conventional travel direction along the profile.
+        #[serde(default)]
+        direction: MillingDirection,
         #[serde(default)]
         clearance_z: f64,
         #[serde(default)]
         retract_z: f64,
+        /// Feed-engagement plane (setup Z, mm); see the face operation.
+        #[serde(default)]
+        feed_height_z: f64,
         cutting: CuttingParametersDto,
     },
     /// Helical thread milling of pre-machined internal threads — a
@@ -927,6 +1074,9 @@ pub enum CamOperationDto {
         clearance_z: f64,
         #[serde(default)]
         retract_z: f64,
+        /// Feed-engagement plane (setup Z, mm); see the face operation.
+        #[serde(default)]
+        feed_height_z: f64,
         cutting: CuttingParametersDto,
     },
 }
@@ -1011,6 +1161,19 @@ impl CamOperationDto {
         }
     }
 
+    /// Per-operation feed-engagement plane (setup Z, mm): rapids stop here,
+    /// everything below runs at feed rate.
+    pub fn feed_height_z(&self) -> f64 {
+        match self {
+            Self::Face { feed_height_z, .. }
+            | Self::Contour2d { feed_height_z, .. }
+            | Self::Drill { feed_height_z, .. }
+            | Self::Pocket2d { feed_height_z, .. }
+            | Self::Chamfer2d { feed_height_z, .. }
+            | Self::Thread { feed_height_z, .. } => *feed_height_z,
+        }
+    }
+
     fn validate(&self, setup: &CamSetupDto, tools: &[CamToolDto]) -> Result<(), String> {
         let label = self.name().trim();
         if self.id() == 0 {
@@ -1046,6 +1209,17 @@ impl CamOperationDto {
         if !retract_z.is_finite() || retract_z <= cut_top || retract_z > clearance_z {
             return Err(format!(
                 "operation '{label}' retract Z must be above the cut top and no higher than its clearance Z"
+            ));
+        }
+        // The feed-engagement plane sits between the cut top and the retract
+        // plane: rapids may reach it freely, everything below is feed rate.
+        let feed_height_z = self.feed_height_z();
+        if !feed_height_z.is_finite()
+            || feed_height_z < cut_top - EPSILON
+            || feed_height_z > retract_z + EPSILON
+        {
+            return Err(format!(
+                "operation '{label}' feed height Z must sit between the cut top and the retract plane"
             ));
         }
 
@@ -1118,6 +1292,13 @@ impl CamOperationDto {
                 compensation_mode,
                 lead_in,
                 lead_out,
+                lead_arc_radius,
+                roughing_passes,
+                roughing_step_over,
+                finishing_pass,
+                finish_allowance,
+                finish_feed,
+                spring_pass,
                 ..
             } => {
                 if tool.kind == CamToolKind::Drill || !tool.center_cutting {
@@ -1191,6 +1372,59 @@ impl CamOperationDto {
                             "contour operation '{label}' leads into an inside profile must be longer than the tool radius ({radius:.3} mm) so the entry plunge clears the walls"
                         ));
                     }
+                }
+                if let Some(arc_radius) = lead_arc_radius {
+                    if !arc_radius.is_finite() || *arc_radius <= 0.0 {
+                        return Err(format!(
+                            "contour operation '{label}' lead arc radius must be positive when set"
+                        ));
+                    }
+                    if *closed && matches!(compensation, ContourCompensation::Inside) {
+                        return Err(format!(
+                            "contour operation '{label}' arc leads are not supported into an inside closed profile yet — clear the arc radius for the straight bisector lead"
+                        ));
+                    }
+                }
+                if *roughing_passes == 0 || *roughing_passes > 64 {
+                    return Err(format!(
+                        "contour operation '{label}' roughing passes must be between 1 and 64"
+                    ));
+                }
+                if *roughing_passes > 1 {
+                    match roughing_step_over {
+                        Some(step) if step.is_finite() && *step > 0.0 && *step <= tool.diameter => {}
+                        _ => {
+                            return Err(format!(
+                                "contour operation '{label}' with multiple roughing passes needs a radial step-over that is positive and no larger than the tool diameter"
+                            ));
+                        }
+                    }
+                }
+                if *finishing_pass {
+                    if !finish_allowance.is_finite() || *finish_allowance <= 0.0 {
+                        return Err(format!(
+                            "contour operation '{label}' with a finishing pass needs a positive finish allowance"
+                        ));
+                    }
+                    if let Some(feed) = finish_feed {
+                        if !feed.is_finite() || *feed <= 0.0 {
+                            return Err(format!(
+                                "contour operation '{label}' finish feed must be positive when set"
+                            ));
+                        }
+                    }
+                }
+                if *spring_pass && !closed {
+                    return Err(format!(
+                        "contour operation '{label}' spring pass repeats the final profile lap, which only closed loops support — an open chain would need a return move"
+                    ));
+                }
+                if matches!(compensation, ContourCompensation::On)
+                    && (*roughing_passes > 1 || *finishing_pass)
+                {
+                    return Err(format!(
+                        "contour operation '{label}' follows the stored centerline (compensation on-path): radial roughing passes and a finishing pass need a material side — pick inside/outside (closed) or left/right (open)"
+                    ));
                 }
                 validate_depth_range(label, *top_z, *bottom_z, *step_down, within_z)?;
             }
@@ -2236,6 +2470,8 @@ mod tests {
             corner_radius: None,
             cutting: CuttingParametersDto::default(),
             cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
         }
     }
 
@@ -2254,8 +2490,10 @@ mod tests {
             step_over: 3.0,
             step_down: 1.0,
         safe_distance: 5.0,
+            direction: FaceDirection::BothWays,
             clearance_z,
             retract_z,
+            feed_height_z: 0.5,
             cutting: cutting(),
         }
     }
