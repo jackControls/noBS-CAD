@@ -35,6 +35,7 @@
     "export3mfSelected": "Ausgewählten Körper als 3MF exportieren…",
     "exportDrawingDxf": "Aktive Zeichnung als DXF exportieren…",
     "exportManufacturingProfileDxf": "Fertigungsprofil 1:1 als DXF exportieren…",
+    "exportCamNc": "Aktives CAM-Setup als NC ausgeben…",
     "stlDropsAppearance": "STL enthält keine Materialien oder Farben – die Darstellung wird weggelassen.",
     "zipHint": ".nbcad ist ein versioniertes ZIP-Archiv, das manifest.json und model.json enthält.",
     "unsaved": "Ungespeicherte Änderungen",
@@ -115,7 +116,9 @@
       "drawing": "ZEICHNUNG",
       "drawingWorkspace": "Zeichnung",
       "assembly": "BAUGRUPPE",
-      "assemblyWorkspace": "Baugruppe"
+      "assemblyWorkspace": "Baugruppe",
+      "cam": "FERTIGUNG",
+      "camWorkspace": "Fertigung"
     },
     "panels": {
       "profile": "PROFIL",
@@ -138,7 +141,11 @@
       "symbols": "SYMBOLS",
       "output": "AUSGABE",
       "sheet": "BLATT",
-      "joints": "VERBINDUNGEN"
+      "joints": "VERBINDUNGEN",
+      "manufacturing": "FERTIGUNG",
+      "toolpaths": "WERKZEUGWEGE",
+      "setup": "SETUP",
+      "manage": "VERWALTEN"
     },
     "finishSketch": "SKIZZE ABSCHLIESSEN",
     "solid": {
@@ -225,6 +232,20 @@
       "exportDxf": "DXF exportieren",
       "exportProfileDxf": "Profil DXF",
       "print": "Drucken / PDF"
+    },
+    "cam": {
+      "open": "CAM",
+      "model": "3D-Modell",
+      "newSetup": "Neues Setup",
+      "toolLibrary": "Werkzeugbibliothek",
+      "face": "Planfräsen",
+      "contour": "2D-Kontur",
+      "pocket": "2D-Tasche",
+      "chamfer": "2D-Fase",
+      "drill": "Bohren",
+      "thread": "Gewindefräsen",
+      "post": "NC postprozessieren",
+      "events": "Postprozessor-Ereignisse"
     },
     "sketch": {
       "line": "Linie",

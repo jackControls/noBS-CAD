@@ -881,6 +881,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "demo_export_pip_3mf"
             | "material_catalog"
             | "body_appearances"
+            | "cam_get_document"
     )
 }
 

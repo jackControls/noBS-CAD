@@ -1388,7 +1388,6 @@ impl CamOperationDto {
                 bottom_z,
                 step_down,
                 compensation,
-                compensation_mode,
                 lead_in,
                 lead_out,
                 lead_arc_radius,
@@ -1398,6 +1397,8 @@ impl CamOperationDto {
                 finish_allowance,
                 finish_feed,
                 spring_pass,
+                // compensation_mode: no validation rules of its own — lead
+                // lengths carry no tool-diameter floor in either mode.
                 ..
             } => {
                 if tool.kind == CamToolKind::Drill || !tool.center_cutting {

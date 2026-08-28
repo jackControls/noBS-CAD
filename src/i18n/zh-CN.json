@@ -35,6 +35,7 @@
     "export3mfSelected": "导出选中的实体为 3MF…",
     "exportDrawingDxf": "导出当前工程图为 DXF…",
     "exportManufacturingProfileDxf": "导出 1:1 制造轮廓 DXF…",
+    "exportCamNc": "输出当前 Setup 的 NC 程序…",
     "stlDropsAppearance": "STL 不包含材料或颜色——外观将被忽略。",
     "zipHint": ".nbcad 是一个包含 manifest.json 和 model.json 的版本化 ZIP 归档。",
     "unsaved": "未保存的更改",
@@ -115,7 +116,9 @@
       "drawing": "工程图",
       "drawingWorkspace": "工程图",
       "assembly": "装配",
-      "assemblyWorkspace": "装配"
+      "assemblyWorkspace": "装配",
+      "cam": "制造",
+      "camWorkspace": "制造"
     },
     "panels": {
       "profile": "轮廓",
@@ -138,7 +141,11 @@
       "symbols": "符号",
       "output": "输出",
       "sheet": "图纸",
-      "joints": "连接"
+      "joints": "连接",
+      "manufacturing": "制造",
+      "toolpaths": "刀路",
+      "setup": "装夹",
+      "manage": "管理"
     },
     "finishSketch": "完成草图",
     "solid": {
@@ -225,6 +232,20 @@
       "exportDxf": "导出 DXF",
       "exportProfileDxf": "轮廓 DXF",
       "print": "打印 / PDF"
+    },
+    "cam": {
+      "open": "制造",
+      "model": "3D 模型",
+      "newSetup": "新建 Setup",
+      "toolLibrary": "刀具库",
+      "face": "平面铣",
+      "contour": "2D 轮廓",
+      "pocket": "2D 型腔",
+      "chamfer": "2D 倒角",
+      "drill": "钻孔",
+      "thread": "铣螺纹",
+      "post": "后处理 NC",
+      "events": "后处理事件"
     },
     "sketch": {
       "line": "直线",

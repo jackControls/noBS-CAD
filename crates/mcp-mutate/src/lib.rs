@@ -603,6 +603,34 @@ pub static MUTATES: &[MutateSpec] = &[
         payload: PayloadKind::Object,
         execution: ExecutionKind::Direct,
     },
+    // CAM: writing the machining document mutates the project; plan/post/
+    // simulate read live engine state through the same inbox so an attached
+    // session always works on the current document. cam_get_document is a
+    // pure read and lives on the read-safe list instead.
+    MutateSpec {
+        name: "cam_set_document",
+        engine_method: "cam_set_document",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "cam_plan_setup",
+        engine_method: "cam_plan",
+        payload: PayloadKind::Field("setup_id"),
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "cam_post_setup",
+        engine_method: "cam_post",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "cam_simulate_setup",
+        engine_method: "cam_simulate",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
 ];
 
 pub fn mutate_specs() -> &'static [MutateSpec] {
