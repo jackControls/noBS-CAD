@@ -2233,6 +2233,20 @@ export type CamThreadHand = 'right' | 'left';
 /** Orbital direction of a thread mill pass. Climb orbits clockwise with a
  *  clockwise spindle; conventional reverses the orbit. */
 export type CamMillingDirection = 'climb' | 'conventional';
+/** Row-to-row cutting direction of a facing operation. */
+export type CamFaceDirection = 'both_ways' | 'climb' | 'conventional';
+/** Where a viewport-picked edge/curve chain lives. */
+export type CamChainSource = 'model' | 'sketch';
+/** Provenance of a picked profile chain: lets an edit session re-select the
+ *  same geometry instead of dropping to raw coordinates. The planner only
+ *  ever reads the baked point list. */
+export interface CamChainRefDto {
+  source: CamChainSource;
+  /** Stable keys of the picked entities, in chain order. */
+  keys: string[];
+  /** True when the stored path walks the chain opposite to entity order. */
+  reversed: boolean;
+}
 /** Operator-facing units. Persisted geometry and planned motion stay mm. */
 export type CamUnits = 'millimeters' | 'inches';
 export type CamBoxAnchor = 'min' | 'center' | 'max';
@@ -2358,6 +2372,10 @@ export interface CamToolDto {
    *  above is the default profile. Operation creation can pick any profile
    *  and copies its values. */
   cutting_presets: CamCuttingPresetDto[];
+  /** Planner-step defaults copied into new operations when the operator has
+   *  not typed a step-down / step-over. Null leaves operation defaults. */
+  default_step_down?: number | null;
+  default_step_over?: number | null;
 }
 
 /** A named cutting-data profile on a library tool. */
@@ -2382,6 +2400,9 @@ interface CamOperationBase {
   clearance_z: number;
   /** Approach / peck-return plane, between the cut top and clearance. */
   retract_z: number;
+  /** Feed-engagement plane between the cut top and retract: rapids stop
+   *  here, everything below runs at feed rate. Omitted = cut top level. */
+  feed_height_z?: number;
   cutting: CamCuttingParametersDto;
 }
 
@@ -2396,6 +2417,8 @@ export type CamOperationDto =
       /** Horizontal clearance the facing plunge keeps from the stock
        *  boundary (model mm), so entry never becomes plunge-milling. */
       safe_distance: number;
+      /** Row direction; omitted = zigzag both ways. */
+      direction?: CamFaceDirection;
     })
   | (CamOperationBase & {
       kind: 'contour2d';
@@ -2415,6 +2438,27 @@ export type CamOperationDto =
        *  control alarms on activation. Omitted = planner default. */
       lead_in?: number;
       lead_out?: number;
+      /** Optional horizontal arc radius (mm) rounding each straight lead
+       *  into a tangential meet with the profile; null = straight leads. */
+      lead_arc_radius?: number | null;
+      /** Climb/conventional travel; the planner re-winds the stored path
+       *  around its start when the winding does not match. Omitted = climb. */
+      direction?: CamMillingDirection;
+      /** Radial roughing passes stepping toward the wall; omitted = 1
+       *  (straight to the finish offset). */
+      roughing_passes?: number;
+      /** Radial step between roughing passes; required with > 1 passes. */
+      roughing_step_over?: number | null;
+      /** Separate finishing pass at the final offset. */
+      finishing_pass?: boolean;
+      /** Radial stock (mm) roughing leaves for the finishing pass. */
+      finish_allowance?: number;
+      /** Finish pass feed (mm/min); null = the XY feed. */
+      finish_feed?: number | null;
+      /** Repeat the final profile lap once (closed loops only). */
+      spring_pass?: boolean;
+      /** Viewport-picked chain provenance for edit re-selection. */
+      chain_ref?: CamChainRefDto | null;
     })
   | (CamOperationBase & {
       kind: 'drill';
@@ -2439,6 +2483,9 @@ export type CamOperationDto =
       bottom_z: number;
       step_down: number;
       step_over: number;
+      /** Wall finish pass direction; the zigzag clearing always alternates.
+       *  Omitted = climb. */
+      direction?: CamMillingDirection;
     })
   | (CamOperationBase & {
       kind: 'chamfer2d';
@@ -2449,6 +2496,8 @@ export type CamOperationDto =
       tip_offset: number;
       /** Which side of the path the material wall is on (never 'on'). */
       wall_side: CamContourCompensation;
+      /** Climb/conventional travel along the profile; omitted = climb. */
+      direction?: CamMillingDirection;
     })
   | (CamOperationBase & {
       kind: 'thread';

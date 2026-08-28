@@ -135,7 +135,9 @@ rewrites stored geometry.
 - Persistent manufacturing intent in `.nbcad`: setups, WCS (with origin
   provenance), G54-G59 work offset plus duplicate-part count, stock
   definitions (box/cylinder/hex/modeled body; fixed size, model-grown
-  allowances, or rest from an earlier setup), tool library with cutting data,
+  allowances, or rest from an earlier setup), tool library with cutting data
+  and planner-step defaults (default step-down / step-over seed new
+  operations),
   operations with per-operation safe heights, unit preference, and post
   defaults used only to pre-fill the export dialog.
 - Deterministic controller-neutral motion planning in millimetres, with
@@ -167,23 +169,49 @@ rewrites stored geometry.
   fail closed with an actionable message rather than emit unoffset motion.
   The simulator honors both modes: in-control programs are offset by the
   nominal tool radius during simulation (buffered between the activation and
-  cancellation markers, mitered at corners), so the preview still cuts
+  cancellation markers, mitered at corners; compensated arcs tessellate into
+  short chords at cancellation), so the preview still cuts
   exactly to the contour and never past it.
-- Straight lead-in/lead-out on contour operations, with operator-set
-  lengths. Leads extend the end tangents for outside compensation and open
+- Straight or arc lead-in/lead-out on contour operations, with
+  operator-set lengths and an optional horizontal arc radius that rounds
+  each straight lead into a tangential 90° meet with the profile, swinging
+  in from the non-material side so the entry corner is never scuffed.
+  Leads extend the end tangents for outside compensation and open
   chains; a closed loop compensated INSIDE (pocket/slot walls) instead
   enters and leaves along the start corner's interior angle bisector, so the
   entry plunge and the compensation-activation move never cross the wall
-  into the material outside the ring. In control mode with compensation
-  active, both leads must exceed the tool radius — controls alarm when
-  radius compensation activates over a shorter move — and inside-profile
+  into the material outside the ring (arc leads need swing room a closed
+  inside profile does not have, so they are straight there). In control mode
+  with compensation active, a straight lead must exceed the tool radius and
+  an arc lead's radius must at least match it — controls alarm when radius
+  compensation activates over a shorter move — and inside-profile
   leads carry the same floor in both modes so the bisector plunge clears
-  the adjacent walls. The dialog and the engine both enforce this. Arc and
-  sweep lead shapes are a documented next slice.
+  the adjacent walls. The dialog and the engine both enforce this.
+  Vertical lead radii are a documented next slice.
+- Contour cuts climb or conventional (the planner re-winds the stored path
+  around its start; open chains reverse with the physical side preserved),
+  and supports radial multi-pass roughing: `roughing_passes` step toward the
+  wall at the roughing stepover leaving the finish allowance, an optional
+  finishing pass takes the wall to size at its own feed, and a spring pass
+  repeats the final lap once (closed loops) so tool deflection relaxes. In
+  control mode only the final profile lap carries G41/G42 — roughing laps
+  are pre-offset by the planner. Switching compensation modes never touches
+  the picked edge chain: the operation stores its `chain_ref` provenance and
+  edit sessions re-select the same viewport entities. Maximum stepdown is
+  always on for contour (no multiple-depths toggle).
 - Facing rows are centered on the face: cutter bands extend one radius past
   each row's center, so the minimal row count spans the face and a face one
   band covers gets exactly one pass through the middle — never a row
-  hugging the near edge.
+  hugging the near edge. Rows zigzag both ways by default; climb or
+  conventional runs one way, repositioning at the feed plane above the
+  stock between rows. Pocket and chamfer travel climb or conventional
+  likewise.
+- Every operation carries five resolved heights: clearance, retract, feed,
+  top, and (for depth-cutting kinds) bottom — each a reference plane plus a
+  signed offset, resolved in the fixed order bottom → top → feed → retract →
+  clearance so a row may chain off any lower row. Rapids stop at the feed
+  plane; everything below runs at feed rate. Peck re-entries rapid only to
+  just above the last depth, capped at the feed plane.
 - Built-in conservative posts for GRBL, LinuxCNC, a generic Fanuc-style
   subset, and a native Siemens 828D reference profile with an explicitly
   confirmed machine-coordinate `SUPA` retract. The post configuration
@@ -220,8 +248,11 @@ rewrites stored geometry.
   a translucent stock ghost with envelope edges, RGB WCS axes, the selected
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
   identical pure-cone direction markers — green where the cutting feed
-  starts, red where it leaves — planted at the exact start of the first feed
-  move and the exact end of the last feed move of every operation kind,
+  starts, red where the tool leaves the work — planted at the exact start of
+  the first feed move of every operation kind; the exit cone lifts to the
+  retract target pointing up when the section closes with an upward rapid
+  (the only safe rapid level, at or above the feed height), otherwise it
+  rides the exact end of the last feed move,
   oriented along the exact motion tangent (arc tangents from the circle
   geometry, not display chords; rapids never carry markers). Cone size
   follows the model extent, a fixed short marker that grows and shrinks with

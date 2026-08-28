@@ -647,6 +647,14 @@ function ToolEditor({
   const [pointAngle, setPointAngle] = useState(
     source?.point_angle_degrees != null ? String(source.point_angle_degrees) : '90',
   );
+  // Planner-step defaults: operations that pick this tool seed their
+  // passes tab from these until the operator types a value.
+  const [defaultStepDown, setDefaultStepDown] = useState(
+    source?.default_step_down != null ? String(displayLength(source.default_step_down, units)) : '',
+  );
+  const [defaultStepOver, setDefaultStepOver] = useState(
+    source?.default_step_over != null ? String(displayLength(source.default_step_over, units)) : '',
+  );
   const [error, setError] = useState<string | null>(null);
 
   // --- Geometry parsing shared by the calculator and submit ---------------
@@ -891,6 +899,24 @@ function ToolEditor({
       if (new Set(presetNames).size !== presetNames.length) {
         throw new Error('Cutting-data profile names must be unique.');
       }
+      // Optional planner-step defaults: positive, and a step-over past the
+      // diameter can never clear the web between passes.
+      const stepDownDefault = defaultStepDown.trim()
+        ? commitLength(parseDraft(defaultStepDown, 'Default step-down'), units)
+        : null;
+      const stepOverDefault = defaultStepOver.trim()
+        ? commitLength(parseDraft(defaultStepOver, 'Default step-over'), units)
+        : null;
+      if (stepDownDefault !== null && stepDownDefault <= 0) {
+        throw new Error('Default step-down must be positive.');
+      }
+      if (stepOverDefault !== null && stepOverDefault <= 0) {
+        throw new Error('Default step-over must be positive.');
+      }
+      const diameterMmForSteps = commitLength(parseDraft(diameter, 'Diameter'), units);
+      if (stepOverDefault !== null && stepOverDefault > diameterMmForSteps + 1e-9) {
+        throw new Error('Default step-over must not exceed the tool diameter.');
+      }
       const draft: CamToolDraft = {
         number: toolNumber,
         name: name.trim() || `${KIND_LABELS[kind]}${toolNumber !== null ? ` T${toolNumber}` : ''}`,
@@ -906,6 +932,8 @@ function ToolEditor({
         flute_count: Math.round(parseDraft(fluteCount, 'Flute count')),
         point_angle_degrees:
           kind === 'chamfer_mill' ? parseDraft(pointAngle, 'Point angle') : null,
+        default_step_down: stepDownDefault,
+        default_step_over: stepOverDefault,
         cutting: cuttingOf(profiles[0]),
         cutting_presets: profiles.slice(1).map((profile) => ({
           name: profile.name.trim(),
@@ -1101,6 +1129,7 @@ function ToolEditor({
         )}
 
         {tab === 'cutting' && (
+          <>
           <DialogSection title={`CUTTING DATA (${fu})`}>
             <div className="flex flex-wrap items-center gap-1">
               {profiles.map((candidate, index) => (
@@ -1245,6 +1274,27 @@ function ToolEditor({
               Editing the library later never rewrites existing operations.
             </p>
           </DialogSection>
+          <DialogSection title="STEP DEFAULTS">
+            <div className="grid grid-cols-2 gap-2">
+              <DraftNumber
+                label="Default step-down (empty = none)"
+                value={defaultStepDown}
+                onChange={setDefaultStepDown}
+                unit={lu}
+              />
+              <DraftNumber
+                label="Default step-over (empty = none)"
+                value={defaultStepOver}
+                onChange={setDefaultStepOver}
+                unit={lu}
+              />
+            </div>
+            <p className="text-[9px] leading-relaxed text-mute">
+              New operations that pick this tool seed their stepdown / stepover from these
+              values until the operator types one. A step-over past the diameter is rejected.
+            </p>
+          </DialogSection>
+          </>
         )}
       </div>
       <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">

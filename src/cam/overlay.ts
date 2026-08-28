@@ -574,15 +574,44 @@ function pushSelectedTool(
 
   // Entry/exit direction markers — the ironclad display rule for EVERY
   // operation kind: identical pure cones, one planted at the very start of
-  // the first feed (cutting) move pointing along the cut, one at the very
-  // end of the last feed move pointing along the leaving direction. Rapids
-  // never carry markers. Arc tangents are exact (from the circle geometry,
-  // not display chords). Cone size follows the MODEL extent — a fixed short
-  // marker that grows and shrinks with the part, identical at both ends —
-  // capped by the shorter of the two host moves so a short plunge cannot
-  // poke a cone through the machined surface.
+  // the first feed (cutting) move pointing along the cut, one marking where
+  // the tool leaves the work. Rapids never carry markers of their own, but
+  // the exit cone lifts off the last cut when the section closes with an
+  // upward rapid: the retract plane is the only safe rapid level (at or
+  // above the feed height), so the red cone parks at the retract target
+  // pointing up instead of pointing down into the hole bottom. Arc tangents
+  // are exact (from the circle geometry, not display chords). Cone size
+  // follows the MODEL extent — a fixed short marker that grows and shrinks
+  // with the part, identical at both ends — capped by the shorter of the
+  // two host moves so a short plunge cannot poke a cone through the
+  // machined surface.
   const firstFeed = feedMoves[0];
   const lastFeed = feedMoves[feedMoves.length - 1];
+  let exitAnchor = lastFeed?.to ?? null;
+  let exitDir = lastFeed?.endDir ?? null;
+  let exitHost = lastFeed?.length ?? Infinity;
+  {
+    const motions = sectionCommands.filter(
+      (command) =>
+        command.kind === 'rapid' || command.kind === 'linear' || command.kind === 'circular',
+    );
+    const lastMotion = motions[motions.length - 1];
+    const previousMotion = motions[motions.length - 2];
+    if (
+      lastMotion &&
+      previousMotion &&
+      lastMotion.kind === 'rapid' &&
+      lastMotion.to.z > previousMotion.to.z + 1e-9
+    ) {
+      exitAnchor = lastMotion.to;
+      exitDir = { x: 0, y: 0, z: 1 };
+      exitHost = Math.hypot(
+        lastMotion.to.x - previousMotion.to.x,
+        lastMotion.to.y - previousMotion.to.y,
+        lastMotion.to.z - previousMotion.to.z,
+      );
+    }
+  }
   const modelBounds = modelBoundsOfBodies(state.solidScene, setup.body_ids);
   const modelExtent = modelBounds
     ? Math.max(
@@ -592,7 +621,7 @@ function pushSelectedTool(
         1,
       )
     : 100;
-  const moveCap = Math.min(firstFeed?.length ?? Infinity, lastFeed?.length ?? Infinity);
+  const moveCap = Math.min(firstFeed?.length ?? Infinity, exitHost);
   const coneLength = Math.min(clamp(modelExtent * 0.025, 1, 12), moveCap);
   const pushEndpointCone = (anchor: Point3Dto, dir: Point3Dto, color: Rgba) => {
     if (coneLength <= 1e-9) return;
@@ -615,7 +644,7 @@ function pushSelectedTool(
     layers.triangles.push({ color, positions, xray: true });
   };
   if (firstFeed) pushEndpointCone(firstFeed.from, firstFeed.startDir, ENTRY_ARROW);
-  if (lastFeed) pushEndpointCone(lastFeed.to, lastFeed.endDir, EXIT_ARROW);
+  if (exitAnchor && exitDir) pushEndpointCone(exitAnchor, exitDir, EXIT_ARROW);
 }
 
 /** Remaining-stock estimate from the voxel simulator, in machinist green,

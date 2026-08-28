@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowUpDown, Box, CircleDot, Layers, Link2, Wrench, X, type LucideIcon } from 'lucide-react';
 import {
   activeCamSetup,
@@ -34,7 +34,7 @@ import {
   defaultThreadPreset,
   isoMetricGrade6Envelope,
 } from '../../lib/threadStandards';
-import type { CamCompensationMode, CamContourCompensation, CamCoolantMode, CamDrillCycle, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
+import type { CamCompensationMode, CamContourCompensation, CamCoolantMode, CamDrillCycle, CamFaceDirection, CamMillingDirection, CamOperationDto, CamPoint2Dto, CamThreadHand, CamToolDto } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
 import { runCamAction } from './CamBrowser';
 import {
@@ -61,8 +61,8 @@ const loopKeyOf = (loop: SketchLoop): string => `${loop.sketch}:${loop.entityIds
 
 /** Reference planes an operation height can hang off; resolved to absolute
  *  setup Z at submit. Chain references hang a height off a LOWER height of
- *  the same operation (fixed resolution order bottom → top → retract →
- *  clearance, so cycles are impossible by construction); 'selection' reads
+ *  the same operation (fixed resolution order bottom → top → feed → retract
+ *  → clearance, so cycles are impossible by construction); 'selection' reads
  *  the picked sketch loop's plane Z. The dead entries round out the option
  *  set the UI contract promises; the planner only consumes the resolved
  *  absolute values. */
@@ -74,6 +74,7 @@ type HeightFrom =
   | 'origin'
   | 'bottom'
   | 'top'
+  | 'feed'
   | 'retract'
   | 'selection';
 
@@ -89,10 +90,10 @@ const HEIGHT_PLANES: Array<{ value: HeightFrom; label: string }> = [
 const HEIGHT_CHAIN_LABELS: Partial<Record<HeightFrom, string>> = {
   bottom: 'Bottom height',
   top: 'Top height',
+  feed: 'Feed height',
   retract: 'Retract height',
 };
 const HEIGHT_FROM_DEAD = [
-  'Feed height',
   'Fixture top',
   'Fixture bottom',
   'Highest of…',
@@ -347,8 +348,17 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const topDraft = editing
     ? heightDraftFrom(editing.top_z, [{ from: 'bottom', z: bottomStored }])
     : null;
+  const feedStored = editing?.feed_height_z ?? null;
+  const feedDraft =
+    feedStored !== null
+      ? heightDraftFrom(feedStored, [
+          { from: 'top', z: editing?.top_z ?? null },
+          { from: 'bottom', z: bottomStored },
+        ])
+      : null;
   const retractDraft = editing
     ? heightDraftFrom(editing.retract_z, [
+        { from: 'feed', z: feedStored },
         { from: 'top', z: editing.top_z },
         { from: 'bottom', z: bottomStored },
       ])
@@ -356,6 +366,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const clearanceDraft = editing
     ? heightDraftFrom(editing.clearance_z, [
         { from: 'retract', z: editing.retract_z },
+        { from: 'feed', z: feedStored },
         { from: 'top', z: editing.top_z },
         { from: 'bottom', z: bottomStored },
       ])
@@ -413,7 +424,13 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const [feedsTouched, setFeedsTouched] = useState(editing != null);
 
   const [source, setSource] = useState<GeometrySource>(() => {
-    if (editing) return 'manual';
+    if (editing) {
+      // A viewport-picked chain re-opens on its own source so the edit
+      // session re-selects the same entities instead of dropping to raw
+      // coordinates (the keys are seeded into the pick session below).
+      if (contourOp?.chain_ref) return contourOp.chain_ref.source;
+      return 'manual';
+    }
     // Contour: the part's own edges are the primary geometry source — the
     // operator picks the silhouette to machine, no sketch required.
     if (pages.pathChain) {
@@ -432,7 +449,11 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const loopPick = useAppStore((state) => state.camLoopPick);
   // Contour: edges are toggled one by one into a chain (open allowed).
   const chainPick = useAppStore((state) => state.camChainPick);
-  const [chainReversed, setChainReversed] = useState(false);
+  const [chainReversed, setChainReversed] = useState(contourOp?.chain_ref?.reversed ?? false);
+  // Editing a picked chain: the first pick session seeds from the stored
+  // entity keys (consumed once — afterwards the live session owns the
+  // selection, so switching sources and back keeps the operator's picks).
+  const chainSeedRef = useRef(contourOp?.chain_ref ?? null);
 
   const [stepDown, setStepDown] = useState(
     storedStepDown !== null ? displayLength(storedStepDown, units).toFixed(4) : '',
@@ -452,6 +473,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   const [clearanceOff, setClearanceOff] = useState(clearanceDraft?.off ?? displayLength(10, units).toFixed(4));
   const [retractFrom, setRetractFrom] = useState<HeightFrom>(retractDraft?.from ?? 'stock_top');
   const [retractOff, setRetractOff] = useState(retractDraft?.off ?? displayLength(3, units).toFixed(4));
+  // Feed height: rapids stop here, everything below runs at feed rate.
+  // Defaults to a small step above the cut top.
+  const [feedFrom, setFeedFrom] = useState<HeightFrom>(feedDraft?.from ?? 'top');
+  const [feedOff, setFeedOff] = useState(feedDraft?.off ?? displayLength(2, units).toFixed(4));
   // Facing starts from the stock top; every other kind starts from the model
   // top (a drill/contour rarely begins inside the stock allowance).
   const [topFrom, setTopFrom] = useState<HeightFrom>(topDraft?.from ?? (kind === 'face' ? 'stock_top' : 'model_top'));
@@ -463,6 +488,33 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   );
   const [bottomOff, setBottomOff] = useState(bottomDraft?.off ?? '0');
   const [multipleDepths, setMultipleDepths] = useState(multipleDepthsInit);
+  // Cutting direction: facing rows zigzag by default or run one way
+  // (climb/conventional); contour/pocket/chamfer travel climb or
+  // conventional along the profile.
+  const [faceDirection, setFaceDirection] = useState<CamFaceDirection>(faceOp?.direction ?? 'both_ways');
+  const [millingDirection, setMillingDirection] = useState<CamMillingDirection>(
+    contourOp?.direction ?? pocketOp?.direction ?? chamferOp?.direction ?? 'climb',
+  );
+  // Contour radial multi-pass: roughing passes step toward the wall leaving
+  // the finish allowance; the finishing pass takes the wall to size,
+  // optionally at a reduced feed; a spring pass repeats the final lap so
+  // tool deflection relaxes (closed loops only).
+  const [roughingPasses, setRoughingPasses] = useState(String(contourOp?.roughing_passes ?? 1));
+  const [roughingStepOver, setRoughingStepOver] = useState(
+    contourOp?.roughing_step_over != null
+      ? displayLength(contourOp.roughing_step_over, units).toFixed(4)
+      : '',
+  );
+  const [finishingPass, setFinishingPass] = useState(contourOp?.finishing_pass ?? false);
+  const [finishAllowance, setFinishAllowance] = useState(
+    contourOp?.finish_allowance != null
+      ? displayLength(contourOp.finish_allowance, units).toFixed(4)
+      : '',
+  );
+  const [finishFeed, setFinishFeed] = useState(
+    contourOp?.finish_feed != null ? displayFeed(contourOp.finish_feed, units).toFixed(4) : '',
+  );
+  const [springPass, setSpringPass] = useState(contourOp?.spring_pass ?? false);
   const [compensation, setCompensation] = useState<CamContourCompensation>(contourOp?.compensation ?? 'outside');
   // Who applies the radius offset: the control (G41/G42 on the lead-in,
   // default) or pre-offset coordinates planned here. On-path compensation
@@ -482,6 +534,13 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   };
   const [leadIn, setLeadIn] = useState(() => seedLead(contourOp?.lead_in));
   const [leadOut, setLeadOut] = useState(() => seedLead(contourOp?.lead_out));
+  // Optional arc radius rounding each straight lead into a tangential meet
+  // with the profile (empty = straight leads).
+  const [leadArcRadius, setLeadArcRadius] = useState(
+    contourOp?.lead_arc_radius != null
+      ? displayLength(contourOp.lead_arc_radius, units).toFixed(4)
+      : '',
+  );
   const [wallSide, setWallSide] = useState<CamContourCompensation>(chamferOp?.wall_side ?? 'inside');
   const [chamferWidth, setChamferWidth] = useState(chamferOp ? displayLength(chamferOp.chamfer_width, units).toFixed(4) : '');
   const [tipOffset, setTipOffset] = useState(chamferOp ? displayLength(chamferOp.tip_offset, units).toFixed(4) : '');
@@ -510,11 +569,11 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   /** Reference plane of a structured height, as absolute setup Z. Planes fall
    *  back to the stock plane when the setup references no bodies; chain
    *  references read already-resolved lower heights (resolution order bottom
-   *  → top → retract → clearance); 'selection' reads the picked sketch
-   *  loop's plane Z. */
+   *  → top → feed → retract → clearance); 'selection' reads the picked
+   *  sketch loop's plane Z. */
   const heightRefZ = (
     from: HeightFrom,
-    resolved: { bottom?: number; top?: number; retract?: number },
+    resolved: { bottom?: number; top?: number; feed?: number; retract?: number },
     label: string,
   ): number => {
     const stockMaxZ = setup?.stock.max.z ?? 0;
@@ -539,6 +598,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
       }
       case 'bottom':
       case 'top':
+      case 'feed':
       case 'retract': {
         const z = resolved[from];
         if (z === undefined) {
@@ -567,8 +627,17 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     if (!feedsTouched) {
       applyCutting(tool, 0);
       if ((kind === 'face' || kind === 'pocket2d') && !stepOver) {
-        setStepOver(displayLength(tool.diameter * 0.5, units).toFixed(4));
+        // Library step defaults win; half the diameter is the fallback.
+        const seed = tool.default_step_over ?? tool.diameter * 0.5;
+        setStepOver(displayLength(seed, units).toFixed(4));
       }
+    }
+    // Library step defaults seed the passes tab until the operator types one.
+    if (!stepDown && tool.default_step_down != null) {
+      setStepDown(displayLength(tool.default_step_down, units).toFixed(4));
+    }
+    if (kind === 'contour2d' && !roughingStepOver && tool.default_step_over != null) {
+      setRoughingStepOver(displayLength(tool.default_step_over, units).toFixed(4));
     }
     // Leads track 1.5x the tool radius until the operator edits them, so an
     // in-control contour always activates over a long-enough move.
@@ -576,6 +645,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
       const lead = displayLength(tool.diameter * 0.75, units).toFixed(4);
       setLeadIn(lead);
       setLeadOut(lead);
+      // Arc leads need at least the tool radius to activate in control.
+      if (!leadArcRadius) {
+        setLeadArcRadius(displayLength(tool.diameter * 0.75, units).toFixed(4));
+      }
     }
   };
 
@@ -653,11 +726,17 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   // curves, per the geometry source) are clickable in the viewport; the
   // dialog resolves the picks into one connected chain (open or closed) at
   // submit. The selection survives candidate rebuilds (model edits) while
-  // its keys still exist.
+  // its keys still exist. An edit session seeds the first session from the
+  // operation's stored chain reference.
   useEffect(() => {
     if (!pages.pathChain || (source !== 'model' && source !== 'sketch')) return;
     const entities = source === 'model' ? modelEdges : sketchCurves;
-    const previous = useAppStore.getState().camChainPick?.selectedKeys ?? [];
+    let previous = useAppStore.getState().camChainPick?.selectedKeys;
+    if (previous === undefined) {
+      const seed = chainSeedRef.current;
+      previous = seed && seed.source === source ? seed.keys : [];
+      chainSeedRef.current = null;
+    }
     useAppStore.getState().setCamChainPick({
       entities,
       selectedKeys: previous.filter((key) => entities.some((entity) => entity.key === key)),
@@ -695,6 +774,14 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     }
   }, [chainClosed, compensation]);
 
+  // Arc leads need swing room an inside closed profile does not have; drop
+  // the radius while that combination holds so submit plans straight leads.
+  useEffect(() => {
+    if (chainClosed === true && compensation === 'inside' && leadArcRadius) {
+      setLeadArcRadius('');
+    }
+  }, [chainClosed, compensation, leadArcRadius]);
+
   const selectedLoop = (): SketchLoop | null =>
     loops.find((candidate) => loopKeyOf(candidate) === loopPick?.selectedKey) ?? null;
 
@@ -719,6 +806,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     if (selectionAvailable) return;
     setClearanceFrom((from) => (from === 'selection' ? 'model_top' : from));
     setRetractFrom((from) => (from === 'selection' ? 'model_top' : from));
+    setFeedFrom((from) => (from === 'selection' ? 'model_top' : from));
     setTopFrom((from) => (from === 'selection' ? 'model_top' : from));
     setBottomFrom((from) => (from === 'selection' ? 'model_top' : from));
   }, [selectionAvailable]);
@@ -836,27 +924,38 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
       if (!setup) throw new Error('No active CAM setup.');
       if (toolId === null) throw new Error('Pick a tool from the library first.');
       // Heights resolve low to high so chain references (bottom → top →
-      // retract → clearance) read already-resolved values; the stored result
-      // stays absolute setup Z either way.
+      // feed → retract → clearance) read already-resolved values; the
+      // stored result stays absolute setup Z either way.
       const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
       const resolveOne = (
         from: HeightFrom,
         offset: string,
         label: string,
-        resolved: { bottom?: number; top?: number; retract?: number },
+        resolved: { bottom?: number; top?: number; feed?: number; retract?: number },
       ): number =>
         heightRefZ(from, resolved, label) + commitLength(parseDraft(offset, `${label} offset`), units);
       const bottomValue = hasBottomRow
         ? resolveOne(bottomFrom, bottomOff, 'Bottom height', {})
         : undefined;
       const topValue = resolveOne(topFrom, topOff, 'Top height', { bottom: bottomValue });
-      const retractValue = resolveOne(retractFrom, retractOff, 'Retract height', {
+      const feedValue = resolveOne(feedFrom, feedOff, 'Feed height', {
         bottom: bottomValue,
         top: topValue,
       });
+      const retractValue = resolveOne(retractFrom, retractOff, 'Retract height', {
+        bottom: bottomValue,
+        top: topValue,
+        feed: feedValue,
+      });
+      // Rapids stop at the feed plane: below it everything runs at feed
+      // rate, so it must sit between the cut top and the retract plane.
+      if (feedValue < topValue - 1e-9 || feedValue > retractValue + 1e-9) {
+        throw new Error('Feed height must sit between the top and retract heights.');
+      }
       const clearanceValue = resolveOne(clearanceFrom, clearanceOff, 'Clearance height', {
         bottom: bottomValue,
         top: topValue,
+        feed: feedValue,
         retract: retractValue,
       });
       const base = {
@@ -865,6 +964,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         tool_id: toolId,
         clearance_z: clearanceValue,
         retract_z: retractValue,
+        feed_height_z: feedValue,
       };
       const top = topValue;
       // Bottom height is a reference plane plus a signed offset, resolved to
@@ -901,6 +1001,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
               : Math.max(Math.abs(top - target), 0.001),
             safe_distance: commitLength(parseDraft(safeDistance, 'Safe distance'), units),
+            direction: faceDirection,
             cutting: cutting(),
           };
           break;
@@ -913,23 +1014,68 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           if (leadInMm <= 0 || leadOutMm <= 0) {
             throw new Error('Lead lengths must be positive.');
           }
-          // Two long-lead rules: in-control compensation activates on the
-          // lead-in move and the control alarms when that move does not
-          // clear the tool radius; and leads into an inside profile plunge
-          // on the corner bisector, which must clear the adjacent walls.
+          const arcMm = leadArcRadius.trim()
+            ? commitLength(parseDraft(leadArcRadius, 'Lead arc radius'), units)
+            : null;
+          if (arcMm !== null && arcMm <= 0) {
+            throw new Error('Lead arc radius must be positive.');
+          }
+          // Lead geometry rules: in-control compensation activates on the
+          // lead-in, so a straight lead must clear the tool radius and an
+          // arc lead's radius must at least match it; and straight leads
+          // into an inside profile plunge on the corner bisector, which
+          // must clear the adjacent walls. (Arc leads never reach an inside
+          // closed profile — the field is disabled for that combination.)
           if (selectedTool) {
             const radius = selectedTool.diameter / 2;
-            const shortLeads = leadInMm <= radius || leadOutMm <= radius;
-            if (shortLeads && compensationMode === 'in_control' && compensation !== 'on') {
-              throw new Error(
-                `In-control compensation activates on the lead-in: both leads must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Lengthen the leads on the Linking tab, or switch the mode to In software.`,
-              );
+            if (arcMm !== null) {
+              if (compensationMode === 'in_control' && compensation !== 'on' && arcMm < radius - 1e-9) {
+                throw new Error(
+                  `In-control compensation activates on the lead arc: the arc radius must be at least the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Grow the arc on the Linking tab, or switch the mode to In software.`,
+                );
+              }
+            } else {
+              const shortLeads = leadInMm <= radius || leadOutMm <= radius;
+              if (shortLeads && compensationMode === 'in_control' && compensation !== 'on') {
+                throw new Error(
+                  `In-control compensation activates on the lead-in: both leads must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) or the control alarms. Lengthen the leads on the Linking tab, give them an arc radius, or switch the mode to In software.`,
+                );
+              }
+              if (shortLeads && geometry.closed && compensation === 'inside') {
+                throw new Error(
+                  `Leads into an inside profile must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) so the entry plunge clears the walls.`,
+                );
+              }
             }
-            if (shortLeads && geometry.closed && compensation === 'inside') {
-              throw new Error(
-                `Leads into an inside profile must exceed the tool radius (${displayLength(radius, units).toFixed(4)} ${lu}) so the entry plunge clears the walls.`,
-              );
+          }
+          const passes = Math.max(1, Math.round(parseDraft(roughingPasses, 'Roughing passes')));
+          let roughStepMm: number | null = null;
+          if (passes > 1) {
+            roughStepMm = commitLength(parseDraft(roughingStepOver, 'Roughing stepover'), units);
+            if (roughStepMm <= 0) throw new Error('Roughing stepover must be positive.');
+            if (selectedTool && roughStepMm > selectedTool.diameter + 1e-9) {
+              throw new Error('Roughing stepover must not exceed the tool diameter.');
             }
+          }
+          let allowanceMm = 0;
+          let finishFeedMm: number | null = null;
+          if (finishingPass) {
+            allowanceMm = commitLength(parseDraft(finishAllowance, 'Finish allowance'), units);
+            if (allowanceMm <= 0) throw new Error('Finish allowance must be positive.');
+            finishFeedMm = finishFeed.trim()
+              ? commitFeed(parseDraft(finishFeed, 'Finish feed'), units)
+              : null;
+          }
+          if (springPass && !geometry.closed) {
+            throw new Error('A spring pass repeats the final lap, which needs a closed path.');
+          }
+          // On-path compensation rides the tool center on the contour — no
+          // offset to step, so radial passes and a finishing pass have no
+          // meaning (the engine rejects the combination too).
+          if (compensation === 'on' && (passes > 1 || finishingPass)) {
+            throw new Error(
+              'On-path compensation has no wall offset to step — multi-pass roughing and a finishing pass need Inside/Outside (or Left/Right on open chains).',
+            );
           }
           operation = {
             ...base,
@@ -938,13 +1084,27 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             closed: geometry.closed,
             top_z: top,
             bottom_z: bottom,
-            step_down: multipleDepths
-              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
-              : Math.max(Math.abs(top - bottom), 0.001),
+            step_down: commitLength(parseDraft(stepDown, 'Maximum stepdown'), units),
             compensation,
             compensation_mode: compensationMode,
+            direction: millingDirection,
             lead_in: leadInMm,
             lead_out: leadOutMm,
+            lead_arc_radius: arcMm,
+            roughing_passes: passes,
+            roughing_step_over: roughStepMm,
+            finishing_pass: finishingPass,
+            finish_allowance: allowanceMm,
+            finish_feed: finishFeedMm,
+            spring_pass: springPass,
+            // Viewport-picked chains store their provenance so an edit
+            // session re-selects the same entities; the planner only reads
+            // the baked point list above.
+            chain_ref:
+              (source === 'model' || source === 'sketch') &&
+              (chainPick?.selectedKeys.length ?? 0) > 0
+                ? { source, keys: [...(chainPick?.selectedKeys ?? [])], reversed: chainReversed }
+                : null,
             cutting: cutting(),
           };
           break;
@@ -961,6 +1121,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
               : Math.max(Math.abs(top - bottom), 0.001),
             step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
+            direction: millingDirection,
             cutting: cutting(),
           };
           break;
@@ -974,6 +1135,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             chamfer_width: commitLength(parseDraft(chamferWidth, 'Chamfer width'), units),
             tip_offset: commitLength(parseDraft(tipOffset, 'Tip offset'), units),
             wall_side: wallSide,
+            direction: millingDirection,
             cutting: cutting(),
           };
           break;
@@ -1394,10 +1556,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
 
   /** Heights tab: five heights, each a reference plane plus a signed offset.
    *  A row may also reference a LOWER operation height (fixed resolution
-   *  order bottom → top → retract → clearance) or the picked sketch loop's
-   *  plane Z ('Selection'). Feed height stays a placeholder — the planner
-   *  approaches at retract height today. The bottom height only exists for
-   *  kinds that cut to a depth (facing targets the model top by default). */
+   *  order bottom → top → feed → retract → clearance) or the picked sketch
+   *  loop's plane Z ('Selection'). Rapids stop at the feed plane — below it
+   *  the tool moves at feed rate. The bottom height only exists for kinds
+   *  that cut to a depth (facing targets the model top by default). */
   const heightsTab = () => {
     const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
     const bottomRef: HeightFrom[] = hasBottomRow ? ['bottom'] : [];
@@ -1410,7 +1572,7 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             onFrom={setClearanceFrom}
             onOffset={setClearanceOff}
             unit={lu}
-            chainBelow={[...bottomRef, 'top', 'retract']}
+            chainBelow={[...bottomRef, 'top', 'feed', 'retract']}
             selectionAvailable={selectionAvailable}
           />
         </DialogSection>
@@ -1421,12 +1583,20 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             onFrom={setRetractFrom}
             onOffset={setRetractOff}
             unit={lu}
-            chainBelow={[...bottomRef, 'top']}
+            chainBelow={[...bottomRef, 'top', 'feed']}
             selectionAvailable={selectionAvailable}
           />
         </DialogSection>
         <DialogSection title="FEED HEIGHT">
-          <HeightField from="model_top" offset={displayLength(5, units).toFixed(4)} onFrom={() => {}} onOffset={() => {}} unit={lu} disabled />
+          <HeightField
+            from={feedFrom}
+            offset={feedOff}
+            onFrom={setFeedFrom}
+            onOffset={setFeedOff}
+            unit={lu}
+            chainBelow={[...bottomRef, 'top']}
+            selectionAvailable={selectionAvailable}
+          />
         </DialogSection>
         <DialogSection title="TOP HEIGHT">
           <HeightField
@@ -1497,7 +1667,38 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             </select>
           </label>
         ) : (
-          <DeadSelect label="Direction" value="Both ways" />
+          <label
+            className="block"
+            title={
+              kind === 'face'
+                ? 'Row-to-row cutting direction; one-way rows reposition at the feed plane'
+                : 'Finishing-lap travel direction along the wall'
+            }
+          >
+            <span className={CAM_DIALOG_LABEL}>Direction</span>
+            <select
+              value={kind === 'face' ? faceDirection : millingDirection}
+              onChange={(event) =>
+                kind === 'face'
+                  ? setFaceDirection(event.target.value as CamFaceDirection)
+                  : setMillingDirection(event.target.value as CamMillingDirection)
+              }
+              className={CAM_DIALOG_INPUT}
+            >
+              {kind === 'face' ? (
+                <>
+                  <option value="both_ways">Both ways (zigzag)</option>
+                  <option value="climb">Climb (one way)</option>
+                  <option value="conventional">Conventional (one way)</option>
+                </>
+              ) : (
+                <>
+                  <option value="climb">Climb</option>
+                  <option value="conventional">Conventional</option>
+                </>
+              )}
+            </select>
+          </label>
         )}
         {pages.compensation && chainClosed === false && (
           <p className="col-span-2 rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
@@ -1526,6 +1727,19 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             </select>
           </label>
         )}
+        {kind === 'contour2d' && (
+          <label className="block" title="Travel direction along the profile">
+            <span className={CAM_DIALOG_LABEL}>Milling direction</span>
+            <select
+              value={millingDirection}
+              onChange={(event) => setMillingDirection(event.target.value as CamMillingDirection)}
+              className={CAM_DIALOG_INPUT}
+            >
+              <option value="climb">Climb</option>
+              <option value="conventional">Conventional</option>
+            </select>
+          </label>
+        )}
       </div>
       {kind === 'face' && (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1">
@@ -1535,21 +1749,29 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         </div>
       )}
       {pages.stepDown && (
-        <>
-          <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
-            <input
-              type="checkbox"
-              checked={multipleDepths}
-              onChange={(event) => setMultipleDepths(event.target.checked)}
-            />
-            Multiple depths
-          </label>
-          {multipleDepths && (
-            <div className="grid grid-cols-2 gap-2">
-              <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
-            </div>
-          )}
-        </>
+        kind === 'contour2d' ? (
+          // Contour slices by a plain maximum stepdown — no toggle; a value
+          // past the full depth simply cuts in one pass.
+          <div className="grid grid-cols-2 gap-2">
+            <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+          </div>
+        ) : (
+          <>
+            <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
+              <input
+                type="checkbox"
+                checked={multipleDepths}
+                onChange={(event) => setMultipleDepths(event.target.checked)}
+              />
+              Multiple depths
+            </label>
+            {multipleDepths && (
+              <div className="grid grid-cols-2 gap-2">
+                <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+              </div>
+            )}
+          </>
+        )
       )}
       {kind === 'face' && (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1">
@@ -1655,7 +1877,69 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
             <option value="outside">Outside path (hole edge)</option>
           </select>
         </label>
+        <label className="block" title="Travel direction along the profile">
+          <span className={CAM_DIALOG_LABEL}>Milling direction</span>
+          <select
+            value={millingDirection}
+            onChange={(event) => setMillingDirection(event.target.value as CamMillingDirection)}
+            className={CAM_DIALOG_INPUT}
+          >
+            <option value="climb">Climb</option>
+            <option value="conventional">Conventional</option>
+          </select>
+        </label>
       </div>
+    </DialogSection>
+  );
+
+  /** CONTOUR · radial multi-pass: roughing passes step toward the wall at
+   *  the roughing stepover, leaving the finish allowance; the finishing
+   *  pass takes the wall to size (optionally at a reduced feed); a spring
+   *  pass repeats the final lap so tool deflection relaxes. */
+  const contourPassesSection = () => (
+    <DialogSection title="RADIAL PASSES">
+      <div className="grid grid-cols-2 gap-2">
+        <DraftNumber label="Roughing passes" value={roughingPasses} onChange={setRoughingPasses} unit="passes" integer />
+        {Number(roughingPasses) > 1 && (
+          <DraftNumber label="Roughing stepover" value={roughingStepOver} onChange={setRoughingStepOver} unit={lu} />
+        )}
+      </div>
+      <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
+        <input
+          type="checkbox"
+          checked={finishingPass}
+          onChange={(event) => {
+            setFinishingPass(event.target.checked);
+            if (event.target.checked && !finishAllowance) {
+              setFinishAllowance(displayLength(0.2, units).toFixed(4));
+            }
+          }}
+        />
+        Separate finishing pass
+      </label>
+      {finishingPass && (
+        <div className="grid grid-cols-2 gap-2">
+          <DraftNumber label="Finish allowance" value={finishAllowance} onChange={setFinishAllowance} unit={lu} />
+          <DraftNumber label="Finish feed (empty = cutting feed)" value={finishFeed} onChange={setFinishFeed} unit={feedUnit(units)} />
+        </div>
+      )}
+      <label
+        className="flex items-center gap-2 text-[11px] text-ink"
+        title="Repeat the final profile lap once so tool deflection relaxes (closed paths only)"
+      >
+        <input
+          type="checkbox"
+          checked={springPass}
+          onChange={(event) => setSpringPass(event.target.checked)}
+        />
+        Spring pass (repeat the final lap)
+      </label>
+      {compensation === 'on' && (Number(roughingPasses) > 1 || finishingPass) && (
+        <p className="rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
+          On-path compensation has no wall offset to step — multi-pass roughing and a finishing
+          pass need Inside/Outside (or Left/Right on open chains).
+        </p>
+      )}
     </DialogSection>
   );
 
@@ -1664,6 +1948,14 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
     if (kind === 'drill') return drillCycleSection();
     if (pages.threadFields) return threadPassesSection();
     if (pages.chamferFields) return chamferSection();
+    if (kind === 'contour2d') {
+      return (
+        <>
+          {millingPassesSection()}
+          {contourPassesSection()}
+        </>
+      );
+    }
     return millingPassesSection();
   };
 
@@ -1697,8 +1989,11 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
         {pages.leads ? (
           <>
             <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-              Straight tangent leads. In-control compensation activates on the lead-in move, so
-              each lead must exceed the tool radius or the control alarms.
+              Leads meet the profile tangentially — straight, or rounded into an arc when a
+              radius is given (the arc swings in from the non-material side, so the cut never
+              gouges the entry corner). In-control compensation activates on the lead-in: a
+              straight lead must exceed the tool radius; an arc lead's radius must at least
+              match it.
             </p>
             <div className="grid grid-cols-2 gap-2">
               <DraftNumber
@@ -1715,7 +2010,23 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <DeadSelect label="Lead shape" value="Straight tangent" />
+              {chainClosed === true && compensation === 'inside' ? (
+                <DraftNumber
+                  label="Lead arc radius"
+                  value=""
+                  onChange={() => {}}
+                  unit={lu}
+                  disabled
+                  placeholder="straight only (inside closed)"
+                />
+              ) : (
+                <DraftNumber
+                  label="Lead arc radius (empty = straight)"
+                  value={leadArcRadius}
+                  onChange={(v) => { setLeadsTouched(true); setLeadArcRadius(v); }}
+                  unit={lu}
+                />
+              )}
               <DraftNumber label="Vertical lead-in radius" value="2" onChange={() => {}} unit={lu} disabled />
             </div>
           </>

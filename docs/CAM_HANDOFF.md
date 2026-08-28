@@ -1,9 +1,63 @@
-# CAM branch handoff — 2026-08-26
+# CAM branch handoff — 2026-08-27
 
-State of `feature/cam` after fifteen working rounds, rebased onto current
+State of `feature/cam` after sixteen working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 16 (2026-08-27) — feed plane, contour passes, lead arcs, directions
+
+Four operator requests, all landed end to end:
+
+1. **Feed height is live everywhere.** Every operation carries
+   `feed_height_z` (validated: cut top ≤ feed ≤ retract). The planner rapids
+   to the feed plane, then feeds down (`ProgramBuilder::feed_plane`); peck
+   re-entries rapid only to the last depth + 0.5 mm, capped at the feed
+   plane. The dialog's Heights tab resolves five real heights in the fixed
+   order bottom → top → feed → retract → clearance, each a reference plane
+   plus offset, chain-referencing lower rows. Old documents default to 0
+   (their top ≤ 0 keeps validation green); new operations always send it.
+2. **Contour: radial multi-pass + finishing + spring pass + direction.**
+   `roughing_passes`/`roughing_step_over` step from the outside toward the
+   wall leaving `finish_allowance`; `finishing_pass` (with optional
+   `finish_feed`) takes the wall to size; `spring_pass` repeats the final
+   lap once (closed loops only — if no finishing pass, it repeats the last
+   profile lap). In-control mode only the final profile lap carries
+   G41/G42; roughing laps are pre-offset by the planner. `direction`
+   (climb/conventional) re-winds the stored path around its start point;
+   open chains reverse with the physical side preserved. The dialog's
+   multiple-depths toggle is gone for contour — Maximum stepdown is always
+   on. Switching compensation mode never touches the picked edge chain
+   (`chain_ref` persists source/keys/reversed; edit sessions re-select the
+   same entities in the viewport).
+3. **Arc leads.** `lead_arc_radius` rounds each straight lead into a
+   tangential 90° arc swinging in from the non-material side — this is the
+   fix for the entry-corner scuff a straight lead's compensation-activation
+   slide leaves (a real machine does the same; the arc eliminates it).
+   Banned for inside closed profiles (no swing room); the dialog disables
+   the field there. In control, the arc radius must be ≥ the tool radius
+   (activation rides the arc). The simulator tessellates compensated arcs
+   into ~0.5 mm chords at comp-off (`CompMove::Arc`).
+4. **Cutting direction on every milling op.** Face: `both_ways` (zigzag,
+   default) / `climb` / `conventional` — one-way rows reposition at the
+   feed plane above the stock, entering from free air. Pocket/chamfer:
+   climb/conventional re-winds the finishing lap / path. Drill is exempt
+   (no lateral cut).
+
+Also: the exit cone marker now parks at the retract target pointing up when
+the section closes with an upward rapid (the only safe rapid level) instead
+of pointing down into a hole bottom; entry cone is unchanged. Tool library
+gained `default_step_down`/`default_step_over` (validated: positive,
+step-over ≤ diameter) which seed new operations' passes tabs.
+
+**The "overcut" report was verified NOT a bug**: the regression test
+`in_control_large_tool_clears_a_diameter_wide_band_not_the_part` probes the
+voxels — the compensated band is exactly one tool diameter wide (edge
+hugging the wall, outer edge at 2r), so a Ø63 face mill on a small part
+correctly clears most of the stock while the part interior stays intact.
+
+Verification: cam 94 passed, workspace all suites green, mcp-server 37,
+`npx tsc --noEmit` clean, `build:wasm` + `smoke-wasm` + `build` green.
 
 ## Round 15b (2026-08-26) — compensation field fixes
 
@@ -309,7 +363,15 @@ position only.)
   plus `hand`, `direction`, `radial_passes`, and `step_over`, all validated
   fail-closed (tool must be a thread mill smaller than the minor diameter;
   depth + one pitch of overtravel must fit the flute length; multi-pass
-  stepovers must leave a finishing orbit).
+  stepovers must leave a finishing orbit). Every operation carries
+  `feed_height_z` (cut top ≤ feed ≤ retract). Facing carries `direction`
+  (both_ways/climb/conventional) and `safe_distance`; contour carries
+  `direction`, `lead_arc_radius`, radial multi-pass fields
+  (`roughing_passes`/`roughing_step_over`/`finishing_pass`/
+  `finish_allowance`/`finish_feed`/`spring_pass`), and `chain_ref`
+  (picked-chain provenance for edit re-selection); pocket/chamfer carry
+  `direction`. Tools carry optional `default_step_down`/`default_step_over`
+  seeding new operations' passes.
 - `planner.rs` — controller-neutral motion. Every drill cycle is expanded to
   longhand moves (no canned-cycle dialects). Tapping emits pitch-synchronised
   feeds (pitch x rpm) with spindle reversal via the builder's deduped
@@ -357,8 +419,10 @@ position only.)
   dirty, so no extra invalidation plumbing exists. The old hand-rolled 2D
   canvas (`CamSimulationViewport`) is deleted. Selecting an operation also
   draws a translucent ghost of its tool (fluted section brighter, shank
-  fainter) parked at the operation's last cutting position AND at the entry
-  plunge point (round 11 — makes the facing safe-distance gap visible).
+  fainter) parked at the operation's START position (the first approach
+  target), plus green/red pure-cone markers at the feed start and at the
+  exit — the exit cone lifts to the retract target pointing up when the
+  section closes with an upward rapid (round 16).
 - A machining-time chip sits at the viewport's lower right: the selected
   operation's `h:mm:ss` from `program.per_operation`, or the setup total when
   nothing is selected.
@@ -537,7 +601,7 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 84, 483 total), mcp-server 37,
+`cargo test --workspace` (cam 94), mcp-server 37,
 `npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
 `node scripts/bundle-macos.mjs`.
 
@@ -550,12 +614,12 @@ drill cycles.
 4. Thread milling round 2: helical lead-in/out arcs (line leads today),
    external threads, multi-start, tool-pitch matching against the operation.
 5. Tool library: holders/shafts, central-library file import/export.
-   (The central/project two-scope model, named cutting-data profiles, and
-   the Vc/fz calculator are landed.)
-6. Heights "From"-references: landed for every operation kind (round 10 —
-   the five-tab scaffold is universal). Remaining: the additional references
-   (fixture planes, selected contours, highest/lowest-of) once selection
-   plumbing exists.
+   (The central/project two-scope model, named cutting-data profiles, the
+   Vc/fz calculator, and planner-step defaults are landed.)
+6. Heights "From"-references: landed for every operation kind, feed height
+   included (round 16 — the five-tab scaffold is universal). Remaining: the
+   additional references (fixture planes, selected contours,
+   highest/lowest-of) once selection plumbing exists.
 7. Geometry picking upgrades: viewport chain selection for
    contour/pocket/chamfer (sketch loops already supported; hole-face picking
    for drill/thread landed in round 10 and accepts ANY cylindrical face since
@@ -566,12 +630,13 @@ drill cycles.
 8. The shared Passes/Linking tabs render the reference option set with
    placeholders for every kind; the planner still needs to consume them:
    stock-to-leave
-   (radial/axial), finishing passes with separate feed, tolerance/smoothing,
-   pass direction + extension, both-ways vs climb/conventional selection,
-   keep-tool-down linking, arc/sweep lead shapes (straight tangent leads
-   landed for contour in round 15), and the ramp/lead/transition
-   feedrates. Also drill break-through depth +
-   tip-through-bottom.
+   (radial/axial), tolerance/smoothing,
+   pass direction + extension,
+   keep-tool-down linking, vertical lead radii, and the
+   ramp/lead/transition feedrates. Also drill break-through depth +
+   tip-through-bottom. (Landed in round 16: feed height, face/pocket/chamfer/
+   contour direction selection, contour radial multi-pass + finishing +
+   spring pass, horizontal arc leads for contour.)
 9. Ramp/helical entries for pocket and contour — the blocker for
    non-center-cutting tools there (facing is already exempt).
 
