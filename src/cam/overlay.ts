@@ -576,33 +576,37 @@ function pushSelectedTool(
   // operation kind: identical pure cones, one planted at the very start of
   // the first feed (cutting) move pointing along the cut, one marking where
   // the tool leaves the work. Rapids never carry markers of their own, but
-  // the exit cone lifts off the last cut when the section closes with an
-  // upward rapid: the retract plane is the only safe rapid level (at or
-  // above the feed height), so the red cone parks at the retract target
-  // pointing up instead of pointing down into the hole bottom. Arc tangents
-  // are exact (from the circle geometry, not display chords). Cone size
-  // follows the MODEL extent alone — a fixed short marker that grows and
-  // shrinks with the part — so every operation on the same model carries
-  // identically sized cones; host-move length never scales them.
+  // the exit cone parks at the last actual motion endpoint on the operation's
+  // configured retract plane. That covers rapid retraction after milling or
+  // drilling and feed retraction after tapping/reaming without mistaking the
+  // later clearance move for the operation exit. Arc tangents are exact
+  // (from the circle geometry, not display chords). Cone size follows the
+  // MODEL extent alone — a fixed short marker that grows and shrinks with the
+  // part — so every operation on the same model carries identically sized
+  // cones; host-move length never scales them.
   const firstFeed = feedMoves[0];
   const lastFeed = feedMoves[feedMoves.length - 1];
   let exitAnchor = lastFeed?.to ?? null;
   let exitDir = lastFeed?.endDir ?? null;
-  {
-    const motions = sectionCommands.filter(
-      (command) =>
-        command.kind === 'rapid' || command.kind === 'linear' || command.kind === 'circular',
-    );
-    const lastMotion = motions[motions.length - 1];
-    const previousMotion = motions[motions.length - 2];
-    if (
-      lastMotion &&
-      previousMotion &&
-      lastMotion.kind === 'rapid' &&
-      lastMotion.to.z > previousMotion.to.z + 1e-9
-    ) {
-      exitAnchor = lastMotion.to;
-      exitDir = { x: 0, y: 0, z: 1 };
+  if (lastFeed) {
+    let lastFeedCommandIndex = -1;
+    for (let index = sectionCommands.length - 1; index >= 0; index -= 1) {
+      const command = sectionCommands[index];
+      if (command.kind === 'linear' || command.kind === 'circular') {
+        lastFeedCommandIndex = index;
+        break;
+      }
+    }
+    for (let index = sectionCommands.length - 1; index >= lastFeedCommandIndex; index -= 1) {
+      const command = sectionCommands[index];
+      if (
+        (command.kind === 'rapid' || command.kind === 'linear' || command.kind === 'circular')
+        && Math.abs(command.to.z - operation.retract_z) <= 1e-9
+      ) {
+        exitAnchor = command.to;
+        exitDir = { x: 0, y: 0, z: 1 };
+        break;
+      }
     }
   }
   const modelBounds = modelBoundsOfBodies(state.solidScene, setup.body_ids);

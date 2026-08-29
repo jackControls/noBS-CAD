@@ -900,9 +900,10 @@ pub enum CamOperationDto {
         /// Who offsets the tool radius: the machine (default) or the planner.
         #[serde(default)]
         compensation_mode: CompensationMode,
-        /// Tangential entry/exit lengths (mm) in the setup plane. A contour
-        /// always reaches the profile through a straight tangential lead —
-        /// it is what lets the tool edge (not the centerline) meet the wall.
+        /// Physical cutter-center entry/exit lengths (mm) in the setup plane.
+        /// A contour always reaches the profile through a straight tangential
+        /// lead — it is what lets the tool edge (not the centerline) meet the
+        /// wall.
         /// Leads carry no tool-diameter rule; controls that activate radius
         /// compensation on the lead may demand their own minimum run, which
         /// is the control's business, not this document's. Defaults keep
@@ -911,13 +912,14 @@ pub enum CamOperationDto {
         lead_in: f64,
         #[serde(default = "default_contour_lead")]
         lead_out: f64,
-        /// Optional horizontal arc (mm radius) that rounds the end of the
-        /// straight lead into a tangential meet with the profile: the lead
-        /// becomes line + 90 degree arc, so the tool reaches the wall already
-        /// at full offset instead of sliding in along the wall line. `None`
+        /// Optional physical cutter-center radius (mm) for a horizontal arc
+        /// that rounds the end of the straight lead into a tangential meet
+        /// with the profile. With machine-side compensation the planner
+        /// enlarges the programmed arc by the active tool radius, so the
+        /// controller reconstructs this requested center-path radius. `None`
         /// keeps the plain straight lead. Inside-compensated closed loops
-        /// keep their bisector leads regardless (arc leads into a pocket
-        /// corner are a later round).
+        /// keep straight leads on a split wall segment (arc leads into a
+        /// pocket are a later round).
         #[serde(default)]
         lead_arc_radius: Option<f64>,
         /// Climb/conventional travel direction. Closed loops are re-wound
@@ -1425,14 +1427,18 @@ impl CamOperationDto {
                     if signed_area(path).abs() <= EPSILON {
                         return Err(format!("contour operation '{label}' path has zero area"));
                     }
-                    if matches!(compensation, ContourCompensation::Left | ContourCompensation::Right)
-                    {
+                    if matches!(
+                        compensation,
+                        ContourCompensation::Left | ContourCompensation::Right
+                    ) {
                         return Err(format!(
                             "contour operation '{label}' closed paths compensate inside/outside; left/right is for open chains"
                         ));
                     }
-                } else if matches!(compensation, ContourCompensation::Inside | ContourCompensation::Outside)
-                {
+                } else if matches!(
+                    compensation,
+                    ContourCompensation::Inside | ContourCompensation::Outside
+                ) {
                     return Err(format!(
                         "contour operation '{label}' is an open chain — it has no interior; compensate left/right of travel direction"
                     ));
@@ -1471,7 +1477,8 @@ impl CamOperationDto {
                 }
                 if *roughing_passes > 1 {
                     match roughing_step_over {
-                        Some(step) if step.is_finite() && *step > 0.0 && *step <= tool.diameter => {}
+                        Some(step) if step.is_finite() && *step > 0.0 && *step <= tool.diameter => {
+                        }
                         _ => {
                             return Err(format!(
                                 "contour operation '{label}' with multiple roughing passes needs a radial step-over that is positive and no larger than the tool diameter"
@@ -1532,9 +1539,7 @@ impl CamOperationDto {
                     }
                     DrillCycle::TappingRight | DrillCycle::TappingLeft => {
                         if tool.kind != CamToolKind::Tap {
-                            return Err(format!(
-                                "tapping operation '{label}' requires a tap tool"
-                            ));
+                            return Err(format!("tapping operation '{label}' requires a tap tool"));
                         }
                     }
                     DrillCycle::Reaming => {
@@ -1648,8 +1653,7 @@ impl CamOperationDto {
                     }
                 }
                 if let Some(out) = feed_out {
-                    let feeds_out =
-                        matches!(cycle, DrillCycle::Reaming | DrillCycle::Boring);
+                    let feeds_out = matches!(cycle, DrillCycle::Reaming | DrillCycle::Boring);
                     if !feeds_out || !out.is_finite() || *out <= 0.0 {
                         return Err(format!(
                             "drill operation '{label}' feed-out only applies to reaming/boring and must be positive"
@@ -1719,7 +1723,10 @@ impl CamOperationDto {
                         "chamfer operation '{label}' must declare which side of the path the material wall is on"
                     ));
                 }
-                if matches!(wall_side, ContourCompensation::Left | ContourCompensation::Right) {
+                if matches!(
+                    wall_side,
+                    ContourCompensation::Left | ContourCompensation::Right
+                ) {
                     return Err(format!(
                         "chamfer operation '{label}' follows a closed path; declare the material wall inside/outside (left/right is for open contour chains)"
                     ));
@@ -2005,13 +2012,9 @@ pub enum CamStockSpecDto {
     },
     /// Continue from the remaining stock of an earlier setup that shares
     /// this setup's WCS (same clamping, second operation group).
-    RestFromSetup {
-        setup_id: u64,
-    },
+    RestFromSetup { setup_id: u64 },
     /// A modeled body used as the stock solid.
-    ModelBody {
-        body_id: u64,
-    },
+    ModelBody { body_id: u64 },
     /// Legacy documents predate the spec; the resolved box in `stock` is
     /// authoritative for them.
     #[default]
@@ -2029,7 +2032,10 @@ pub enum CamResolvedStockDto {
     /// Cylinder along setup Z within the `stock` Z range.
     Cylinder { center: Point2Dto, radius: f64 },
     /// Hexagonal bar along setup Z within the `stock` Z range.
-    Hex { center: Point2Dto, across_flats: f64 },
+    Hex {
+        center: Point2Dto,
+        across_flats: f64,
+    },
     /// Remaining stock inherited from another setup's simulation. The
     /// `stock` box equals the source setup's envelope.
     Rest { source_setup_id: u64 },
@@ -2149,9 +2155,7 @@ impl CamSetupDto {
                 ));
             }
         }
-        if self.work_offset_count == 0
-            || self.work_offset.index() + self.work_offset_count > 6
-        {
+        if self.work_offset_count == 0 || self.work_offset.index() + self.work_offset_count > 6 {
             return Err(format!(
                 "setup '{}' work offsets must stay within G54..=G59",
                 self.name
@@ -2187,13 +2191,20 @@ impl CamSetupDto {
         let consistent = match (&self.stock_spec, &self.resolved_stock) {
             (CamStockSpecDto::LegacyBox, CamResolvedStockDto::Box) => true,
             (
-                CamStockSpecDto::Fixed { shape, size, placement },
+                CamStockSpecDto::Fixed {
+                    shape,
+                    size,
+                    placement,
+                },
                 resolved,
             ) => {
                 let shape_matches = matches!(
                     (shape, resolved),
                     (CamStockShape::Box, CamResolvedStockDto::Box)
-                        | (CamStockShape::Cylinder, CamResolvedStockDto::Cylinder { .. })
+                        | (
+                            CamStockShape::Cylinder,
+                            CamResolvedStockDto::Cylinder { .. }
+                        )
                         | (CamStockShape::Hex, CamResolvedStockDto::Hex { .. })
                 );
                 if !shape_matches || !size.is_finite() || size.x <= 0.0 || size.z <= 0.0 {
@@ -2221,7 +2232,10 @@ impl CamSetupDto {
                 let shape_matches = matches!(
                     (shape, resolved),
                     (CamStockShape::Box, CamResolvedStockDto::Box)
-                        | (CamStockShape::Cylinder, CamResolvedStockDto::Cylinder { .. })
+                        | (
+                            CamStockShape::Cylinder,
+                            CamResolvedStockDto::Cylinder { .. }
+                        )
                         | (CamStockShape::Hex, CamResolvedStockDto::Hex { .. })
                 );
                 if !shape_matches {
@@ -2267,7 +2281,9 @@ impl CamSetupDto {
             }
             (
                 CamStockSpecDto::ModelBody { body_id },
-                CamResolvedStockDto::ModelBody { body_id: resolved_body },
+                CamResolvedStockDto::ModelBody {
+                    body_id: resolved_body,
+                },
             ) => {
                 if body_id != resolved_body || *body_id == 0 {
                     return Err(format!(
@@ -2489,7 +2505,7 @@ impl CamDocumentDto {
         if !self.setups.is_empty()
             && self
                 .active_setup_id
-                .map_or(true, |active| !self.setups.iter().any(|setup| setup.id == active))
+                .is_none_or(|active| !self.setups.iter().any(|setup| setup.id == active))
         {
             self.active_setup_id = Some(self.setups[0].id);
         }
@@ -2795,7 +2811,7 @@ mod tests {
             target_z: -1.0,
             step_over: 3.0,
             step_down: 1.0,
-        safe_distance: 5.0,
+            safe_distance: 5.0,
             direction: FaceDirection::BothWays,
             clearance_z,
             retract_z,
@@ -2804,7 +2820,11 @@ mod tests {
         }
     }
 
-    fn setup(id: u64, stock_spec: CamStockSpecDto, resolved_stock: CamResolvedStockDto) -> CamSetupDto {
+    fn setup(
+        id: u64,
+        stock_spec: CamStockSpecDto,
+        resolved_stock: CamResolvedStockDto,
+    ) -> CamSetupDto {
         CamSetupDto {
             id,
             name: format!("Setup {id}"),
@@ -2911,9 +2931,13 @@ mod tests {
         // Documents written before profiles existed load with none.
         let base = tool();
         assert!(base.cutting_presets.is_empty());
-        document_with(vec![setup(1, CamStockSpecDto::LegacyBox, CamResolvedStockDto::Box)])
-            .validate()
-            .unwrap();
+        document_with(vec![setup(
+            1,
+            CamStockSpecDto::LegacyBox,
+            CamResolvedStockDto::Box,
+        )])
+        .validate()
+        .unwrap();
 
         // A valid named profile passes.
         let mut profiled = tool();
@@ -2991,11 +3015,11 @@ mod tests {
         let mut second = setup(
             2,
             CamStockSpecDto::RestFromSetup { setup_id: 1 },
-            CamResolvedStockDto::Rest {
-                source_setup_id: 1,
-            },
+            CamResolvedStockDto::Rest { source_setup_id: 1 },
         );
-        document_with(vec![first.clone(), second.clone()]).validate().unwrap();
+        document_with(vec![first.clone(), second.clone()])
+            .validate()
+            .unwrap();
 
         // Same clamping only: a different WCS breaks the rest link.
         second.wcs.origin = Point3Dto::new(1.0, 0.0, 0.0);
@@ -3016,17 +3040,13 @@ mod tests {
         let mut looping_a = setup(
             1,
             CamStockSpecDto::RestFromSetup { setup_id: 2 },
-            CamResolvedStockDto::Rest {
-                source_setup_id: 2,
-            },
+            CamResolvedStockDto::Rest { source_setup_id: 2 },
         );
         looping_a.operations = vec![face(1, 8.0, 2.0)];
         let looping_b = setup(
             2,
             CamStockSpecDto::RestFromSetup { setup_id: 1 },
-            CamResolvedStockDto::Rest {
-                source_setup_id: 1,
-            },
+            CamResolvedStockDto::Rest { source_setup_id: 1 },
         );
         let error = document_with(vec![looping_a, looping_b])
             .validate()

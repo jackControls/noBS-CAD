@@ -391,7 +391,13 @@ impl ProgramBuilder {
         if from == to {
             return;
         }
-        let radius = distance_2d(Point2Dto { x: from.x, y: from.y }, center);
+        let radius = distance_2d(
+            Point2Dto {
+                x: from.x,
+                y: from.y,
+            },
+            center,
+        );
         let start_angle = (from.y - center.y).atan2(from.x - center.x);
         let end_angle = (to.y - center.y).atan2(to.x - center.x);
         let mut sweep = end_angle - start_angle;
@@ -424,7 +430,8 @@ impl ProgramBuilder {
         if self.spindle == Some((direction, rpm)) {
             return;
         }
-        self.commands.push(CamCommandDto::Spindle { direction, rpm });
+        self.commands
+            .push(CamCommandDto::Spindle { direction, rpm });
         self.spindle = Some((direction, rpm));
     }
 
@@ -432,6 +439,15 @@ impl ProgramBuilder {
         let Some(position) = self.position else {
             return;
         };
+        // Leave the part in two stages: a rapid up to the retract plane first
+        // (that is the height the tool moves up to before the next pass), then
+        // on to clearance for travel. Rapids may never stop below the retract
+        // plane, so a single straight shot to clearance from cut depth would
+        // skip the documented retract stop.
+        if position.z < self.retract_z - EPSILON {
+            self.rapid(Point3Dto::new(position.x, position.y, self.retract_z));
+        }
+        let position = self.position.expect("position set by the rapid above");
         if (position.z - self.clearance_z).abs() > EPSILON {
             self.rapid(Point3Dto::new(position.x, position.y, self.clearance_z));
         }
@@ -661,6 +677,22 @@ fn plan_contour(
     }
 
     let inside_closed = *closed && matches!(compensation, ContourCompensation::Inside);
+    // Normal compensation at a sharp inside corner positions the cutter
+    // against only the outgoing edge and can overlap the preceding wall.
+    // Start machine-side inside profiles on a long straight edge instead,
+    // leaving room for both physical leads and one tool radius at each
+    // adjacent corner.
+    let control_profile_path = if comp_left.is_some() && inside_closed {
+        Some(inside_control_profile_path(
+            &oriented, radius, *lead_in, *lead_out, name,
+        )?)
+    } else {
+        None
+    };
+    let profile_point_count = control_profile_path
+        .as_ref()
+        .map_or(source.len(), |path| path.len())
+        .max(source.len());
     // The side the lead arc bends toward is the side AWAY from the material:
     // the outside of an outside-compensated ring, or the tool side of an
     // open chain. (Inside-compensated closed loops keep their bisector
@@ -679,7 +711,7 @@ fn plan_contour(
         depths.len().saturating_mul(
             extras
                 .len()
-                .saturating_mul(source.len().saturating_add(14)),
+                .saturating_mul(profile_point_count.saturating_add(14)),
         ),
         name,
     )?;
@@ -691,14 +723,14 @@ fn plan_contour(
             // Center path of this pass: the machine-compensated profile pass
             // programs the part contour itself; every other pass is offset
             // here by the tool radius plus the pass's extra allowance.
-            let center_path = if use_comp || matches!(compensation, ContourCompensation::On) {
+            let center_path = if use_comp {
+                control_profile_path.as_ref().unwrap_or(&oriented).clone()
+            } else if matches!(compensation, ContourCompensation::On) {
                 oriented.clone()
             } else {
                 match compensation {
                     ContourCompensation::On => unreachable!(),
-                    ContourCompensation::Inside => {
-                        offset_polygon(&oriented, radius + extra, true)?
-                    }
+                    ContourCompensation::Inside => offset_polygon(&oriented, radius + extra, true)?,
                     ContourCompensation::Outside => {
                         offset_polygon(&oriented, radius + extra, false)?
                     }
@@ -712,19 +744,23 @@ fn plan_contour(
             } else {
                 cutting.feed_xy
             };
+            let pass_comp = comp_left.filter(|_| use_comp);
             let leads = contour_leads(
                 &center_path,
-                *closed,
-                inside_closed,
-                *lead_in,
-                *lead_out,
-                *lead_arc_radius,
-                bend_left,
+                ContourLeadOptions {
+                    closed: *closed,
+                    inside_closed,
+                    lead_in: *lead_in,
+                    lead_out: *lead_out,
+                    arc_radius: *lead_arc_radius,
+                    bend_left,
+                    control_compensation: pass_comp.map(|left| (left, radius)),
+                },
             )?;
             // The plunge happens at the lead start — in free air for
             // compensated paths — never on the profile itself.
             builder.approach(leads.start, depth, cutting.feed_z);
-            if let Some(left) = comp_left.filter(|_| use_comp) {
+            if let Some(left) = pass_comp {
                 builder
                     .commands
                     .push(CamCommandDto::CutterCompensationOn { left });
@@ -787,6 +823,63 @@ fn emit_profile_lap(
     }
 }
 
+/// Rotate a closed inside profile onto a straight edge that has room for the
+/// cutter and both physical leads. Activating compensation at a
+/// polygon vertex is ambiguous under normal controller approach behavior:
+/// the offset is normal to the outgoing edge and the cutter can overlap the
+/// incoming wall before the first contour block runs.
+fn inside_control_profile_path(
+    points: &[Point2Dto],
+    tool_radius: f64,
+    lead_in: f64,
+    lead_out: f64,
+    operation_name: &str,
+) -> Result<Vec<Point2Dto>, CamPlanError> {
+    let Some((edge_index, edge_length)) = (0..points.len())
+        .map(|index| {
+            let next = (index + 1) % points.len();
+            (index, distance_2d(points[index], points[next]))
+        })
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+    else {
+        return Err(CamPlanError(format!(
+            "contour operation '{operation_name}' has no edge for cutter compensation activation"
+        )));
+    };
+    // The physical lead-in runs backward from the split and the lead-out runs
+    // forward. Keep each cutter center at least one radius from the adjacent
+    // corner for the entire transition, otherwise its circular footprint can
+    // cross the neighboring wall even though the nominal split is on-edge.
+    let required_length = tool_radius * 2.0 + lead_in + lead_out;
+    if edge_length < required_length - EPSILON {
+        return Err(CamPlanError(format!(
+            "contour operation '{operation_name}' needs a straight edge at least {required_length:.3} mm long to fit its inside machine-compensation leads and cutter safely; shorten the leads, use software compensation, or use a smaller tool"
+        )));
+    }
+    let next_index = (edge_index + 1) % points.len();
+    let edge_start = points[edge_index];
+    let edge_end = points[next_index];
+    let tangent = Point2Dto::new(
+        (edge_end.x - edge_start.x) / edge_length,
+        (edge_end.y - edge_start.y) / edge_length,
+    );
+    let spare = edge_length - required_length;
+    let start_distance = tool_radius + lead_in + spare * 0.5;
+    let start = Point2Dto::new(
+        edge_start.x + tangent.x * start_distance,
+        edge_start.y + tangent.y * start_distance,
+    );
+    let mut result = Vec::with_capacity(points.len() + 1);
+    result.push(start);
+    let mut index = next_index;
+    while index != edge_index {
+        result.push(points[index]);
+        index = (index + 1) % points.len();
+    }
+    result.push(points[edge_index]);
+    Ok(result)
+}
+
 /// A 90 degree horizontal arc closing a lead onto (or off) the profile.
 struct LeadArc {
     center: Point2Dto,
@@ -800,15 +893,27 @@ struct LeadArc {
 /// (carrying the compensation activation/cancellation), optionally rounded
 /// into a 90 degree tangential arc, and the endpoints.
 struct ContourLeads {
-    /// Plunge point: the far end of the straight lead-in.
+    /// Plunge point: the uncompensated position from which the controller's
+    /// activation move reaches the compensated lead/profile start.
     start: Point2Dto,
     /// Where the straight lead-in ends: the arc start, or the profile start
     /// when no arc is used.
     line_end: Point2Dto,
     start_arc: Option<LeadArc>,
     end_arc: Option<LeadArc>,
-    /// Final lead-out point.
+    /// Final uncompensated point reached while compensation is cancelled.
     end: Point2Dto,
+}
+
+#[derive(Clone, Copy)]
+struct ContourLeadOptions {
+    closed: bool,
+    inside_closed: bool,
+    lead_in: f64,
+    lead_out: f64,
+    arc_radius: Option<f64>,
+    bend_left: bool,
+    control_compensation: Option<(bool, f64)>,
 }
 
 /// Build the lead geometry for one contour pass. Tangent leads extend the
@@ -821,37 +926,79 @@ struct ContourLeads {
 /// angle bisector, into the region a roughing pass has already cleared.
 /// Everywhere else an optional 90 degree arc rounds the straight lead into
 /// a tangential meet with the profile, so the tool arrives (and leaves) at
-/// full offset without sliding along the wall line.
+/// full offset without sliding along the wall line. For machine-side
+/// compensation, lead lengths and arc radius describe the physical cutter-
+/// center path. The programmed arc is enlarged by the tool radius and the
+/// uncompensated entry/exit points are shifted onto that center path; the
+/// controller's normal approach/retract behavior then reconstructs exactly
+/// the requested safe motion without gouging the profile corner.
 fn contour_leads(
     center_path: &[Point2Dto],
-    closed: bool,
-    inside_closed: bool,
-    lead_in: f64,
-    lead_out: f64,
-    lead_arc_radius: Option<f64>,
-    bend_left: bool,
+    options: ContourLeadOptions,
 ) -> Result<ContourLeads, CamPlanError> {
+    let ContourLeadOptions {
+        closed,
+        inside_closed,
+        lead_in,
+        lead_out,
+        arc_radius,
+        bend_left,
+        control_compensation,
+    } = options;
     let first = center_path[0];
     let start_tangent = unit_direction(center_path[0], center_path[1])?;
     let last_index = center_path.len() - 1;
     let (end_anchor, end_tangent) = if closed {
-        (
-            first,
-            unit_direction(center_path[last_index], first)?,
-        )
+        (first, unit_direction(center_path[last_index], first)?)
     } else {
         (
             center_path[last_index],
             unit_direction(center_path[last_index - 1], center_path[last_index])?,
         )
     };
+    let compensated_point = |point: Point2Dto, tangent: Point2Dto| {
+        let Some((left, radius)) = control_compensation else {
+            return point;
+        };
+        let normal = if left {
+            Point2Dto::new(-tangent.y, tangent.x)
+        } else {
+            Point2Dto::new(tangent.y, -tangent.x)
+        };
+        Point2Dto::new(point.x + normal.x * radius, point.y + normal.y * radius)
+    };
     if inside_closed {
+        let compensated_start = compensated_point(first, start_tangent);
+        let compensated_end = compensated_point(first, end_tangent);
+        let straight_start = (start_tangent.x - end_tangent.x).abs() <= EPSILON
+            && (start_tangent.y - end_tangent.y).abs() <= EPSILON;
+        if straight_start {
+            // Machine-side inside profiles are deliberately split in the
+            // middle of an edge. Stay in the wall band for activation and
+            // cancellation instead of driving the lead across the pocket.
+            return Ok(ContourLeads {
+                start: Point2Dto::new(
+                    compensated_start.x - start_tangent.x * lead_in,
+                    compensated_start.y - start_tangent.y * lead_in,
+                ),
+                line_end: first,
+                start_arc: None,
+                end_arc: None,
+                end: Point2Dto::new(
+                    compensated_end.x + end_tangent.x * lead_out,
+                    compensated_end.y + end_tangent.y * lead_out,
+                ),
+            });
+        }
         // Interior angle bisector at the start corner. The ring's interior
         // lies left of CCW travel, right of CW travel.
-        let inward = if signed_area(center_path) > 0.0 { 1.0 } else { -1.0 };
-        let inward_normal = |direction: Point2Dto| {
-            Point2Dto::new(-direction.y * inward, direction.x * inward)
+        let inward = if signed_area(center_path) > 0.0 {
+            1.0
+        } else {
+            -1.0
         };
+        let inward_normal =
+            |direction: Point2Dto| Point2Dto::new(-direction.y * inward, direction.x * inward);
         let normal_in = inward_normal(end_tangent);
         let normal_out = inward_normal(start_tangent);
         let raw = Point2Dto::new(normal_in.x + normal_out.x, normal_in.y + normal_out.y);
@@ -864,14 +1011,29 @@ fn contour_leads(
             Point2Dto::new(raw.x / length, raw.y / length)
         };
         return Ok(ContourLeads {
-            start: Point2Dto::new(first.x + bisector.x * lead_in, first.y + bisector.y * lead_in),
+            start: Point2Dto::new(
+                compensated_start.x + bisector.x * lead_in,
+                compensated_start.y + bisector.y * lead_in,
+            ),
             line_end: first,
             start_arc: None,
             end_arc: None,
-            end: Point2Dto::new(first.x + bisector.x * lead_out, first.y + bisector.y * lead_out),
+            end: Point2Dto::new(
+                compensated_end.x + bisector.x * lead_out,
+                compensated_end.y + bisector.y * lead_out,
+            ),
         });
     }
-    let arc = lead_arc_radius.filter(|radius| radius.is_finite() && *radius > EPSILON);
+    let arc = arc_radius
+        .filter(|radius| radius.is_finite() && *radius > EPSILON)
+        .map(|radius| {
+            if let Some((left, tool_radius)) = control_compensation {
+                debug_assert_eq!(left, bend_left);
+                radius + tool_radius
+            } else {
+                radius
+            }
+        });
     let normal = |tangent: Point2Dto| {
         // Unit normal on the side the arc bends toward.
         if bend_left {
@@ -895,8 +1057,13 @@ fn contour_leads(
                 Point2Dto::new(-v0.y, v0.x)
             };
             let arc_start = Point2Dto::new(center.x + vs.x, center.y + vs.y);
+            let tangent = Point2Dto::new(-n.x, -n.y);
+            let compensated_start = compensated_point(arc_start, tangent);
             (
-                Point2Dto::new(arc_start.x + n.x * lead_in, arc_start.y + n.y * lead_in),
+                Point2Dto::new(
+                    compensated_start.x + n.x * lead_in,
+                    compensated_start.y + n.y * lead_in,
+                ),
                 arc_start,
                 Some(LeadArc {
                     center,
@@ -905,19 +1072,22 @@ fn contour_leads(
                 }),
             )
         }
-        None => (
-            Point2Dto::new(first.x - start_tangent.x * lead_in, first.y - start_tangent.y * lead_in),
-            first,
-            None,
-        ),
+        None => {
+            let compensated_start = compensated_point(first, start_tangent);
+            (
+                Point2Dto::new(
+                    compensated_start.x - start_tangent.x * lead_in,
+                    compensated_start.y - start_tangent.y * lead_in,
+                ),
+                first,
+                None,
+            )
+        }
     };
     let (end, end_arc) = match arc {
         Some(radius) => {
             let n = normal(end_tangent);
-            let center = Point2Dto::new(
-                end_anchor.x + n.x * radius,
-                end_anchor.y + n.y * radius,
-            );
+            let center = Point2Dto::new(end_anchor.x + n.x * radius, end_anchor.y + n.y * radius);
             let w0 = Point2Dto::new(end_anchor.x - center.x, end_anchor.y - center.y);
             // One quarter turn forwards along the arc finds its end.
             let w1 = if bend_left {
@@ -926,8 +1096,12 @@ fn contour_leads(
                 Point2Dto::new(w0.y, -w0.x)
             };
             let arc_end = Point2Dto::new(center.x + w1.x, center.y + w1.y);
+            let compensated_end = compensated_point(arc_end, n);
             (
-                Point2Dto::new(arc_end.x + n.x * lead_out, arc_end.y + n.y * lead_out),
+                Point2Dto::new(
+                    compensated_end.x + n.x * lead_out,
+                    compensated_end.y + n.y * lead_out,
+                ),
                 Some(LeadArc {
                     center,
                     clockwise: !bend_left,
@@ -935,13 +1109,16 @@ fn contour_leads(
                 }),
             )
         }
-        None => (
-            Point2Dto::new(
-                end_anchor.x + end_tangent.x * lead_out,
-                end_anchor.y + end_tangent.y * lead_out,
-            ),
-            None,
-        ),
+        None => {
+            let compensated_end = compensated_point(end_anchor, end_tangent);
+            (
+                Point2Dto::new(
+                    compensated_end.x + end_tangent.x * lead_out,
+                    compensated_end.y + end_tangent.y * lead_out,
+                ),
+                None,
+            )
+        }
     };
     Ok(ContourLeads {
         start,
@@ -990,11 +1167,7 @@ fn plan_drill(
     // bottom; the point length follows the stored point angle (118 degrees
     // when the tool does not record one).
     let tip_length = if *drill_tip_through {
-        let half_angle = tool
-            .point_angle_degrees
-            .unwrap_or(118.0)
-            .to_radians()
-            * 0.5;
+        let half_angle = tool.point_angle_degrees.unwrap_or(118.0).to_radians() * 0.5;
         (tool.diameter * 0.5) / half_angle.tan().max(1.0e-6) + *breakthrough_depth
     } else {
         0.0
@@ -1018,15 +1191,19 @@ fn plan_drill(
     };
     let partial_retract = match cycle {
         // Default partial retract: 0.5 mm, never more than half the peck.
-        DrillCycle::ChipBreaking => {
-            Some(peck_retract.unwrap_or(0.5).min(peck.expect("pecking cycle") * 0.5))
-        }
+        DrillCycle::ChipBreaking => Some(
+            peck_retract
+                .unwrap_or(0.5)
+                .min(peck.expect("pecking cycle") * 0.5),
+        ),
         _ => None,
     };
     let tap_feed = match cycle {
         DrillCycle::TappingRight | DrillCycle::TappingLeft => {
             let pitch = thread_pitch.ok_or_else(|| {
-                CamPlanError(format!("tapping operation '{name}' requires a thread pitch"))
+                CamPlanError(format!(
+                    "tapping operation '{name}' requires a thread pitch"
+                ))
             })?;
             // Tapping feeds are pitch-synchronised: mm/rev x rpm = mm/min.
             Some(pitch * f64::from(cutting.spindle_rpm))
@@ -1196,7 +1373,7 @@ fn plan_pocket(
             for (x0, x1) in spans_per_row[row_index].iter().copied() {
                 // Alternate sweep direction so consecutive spans connect
                 // without crossing uncleared material more than necessary.
-                let (start_x, end_x) = if span_index % 2 == 0 {
+                let (start_x, end_x) = if span_index.is_multiple_of(2) {
                     (x0, x1)
                 } else {
                     (x1, x0)
@@ -1312,10 +1489,7 @@ fn segment_distance(point: Point2Dto, a: Point2Dto, b: Point2Dto) -> f64 {
         return distance_2d(point, a);
     }
     let t = (((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq).clamp(0.0, 1.0);
-    distance_2d(
-        point,
-        Point2Dto::new(a.x + dx * t, a.y + dy * t),
-    )
+    distance_2d(point, Point2Dto::new(a.x + dx * t, a.y + dy * t))
 }
 
 /// Ray-cast containment for a simple closed polygon, boundary inclusive.
@@ -1435,10 +1609,7 @@ fn plan_thread(
     );
     ensure_program_budget(
         builder.commands.len(),
-        targets
-            .len()
-            .saturating_mul(radii.len())
-            .saturating_mul(4),
+        targets.len().saturating_mul(radii.len()).saturating_mul(4),
         name,
     )?;
     for (point, hole_top, hole_bottom) in targets {
@@ -1663,15 +1834,18 @@ pub(crate) fn offset_polyline_open(
     let offset = radius * side;
     let segment_direction = |index: usize| unit_direction(points[index], points[index + 1]);
     let shifted = |point: Point2Dto, direction: Point2Dto| {
-        Point2Dto::new(point.x - direction.y * offset, point.y + direction.x * offset)
+        Point2Dto::new(
+            point.x - direction.y * offset,
+            point.y + direction.x * offset,
+        )
     };
     let mut result = Vec::with_capacity(points.len());
     // Start endpoint: the first segment's normal only.
     result.push(shifted(points[0], segment_direction(0)?));
-    for index in 1..points.len() - 1 {
-        let current = points[index];
-        let first_direction = segment_direction(index - 1)?;
-        let second_direction = segment_direction(index)?;
+    for window in points.windows(3) {
+        let current = window[1];
+        let first_direction = unit_direction(window[0], window[1])?;
+        let second_direction = unit_direction(window[1], window[2])?;
         let first_line = shifted(current, first_direction);
         let second_line = shifted(current, second_direction);
         let denominator = cross(first_direction, second_direction);
@@ -1698,7 +1872,10 @@ pub(crate) fn offset_polyline_open(
         result.push(candidate);
     }
     // End endpoint: the last segment's normal only.
-    result.push(shifted(points[points.len() - 1], segment_direction(points.len() - 2)?));
+    result.push(shifted(
+        points[points.len() - 1],
+        segment_direction(points.len() - 2)?,
+    ));
     Ok(result)
 }
 
@@ -1961,7 +2138,10 @@ mod tests {
             cutting: cutting(),
         };
         let program = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 32.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 32.0)],
+            ),
             1,
         )
         .unwrap();
@@ -2003,7 +2183,10 @@ mod tests {
             cutting: cutting(),
         };
         let program = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 10.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 10.0)],
+            ),
             1,
         )
         .unwrap();
@@ -2296,7 +2479,10 @@ mod tests {
         // One depth level: exactly one visit to the chain start (the lead-in
         // reaches it). A closed contour would cut back to it a second time.
         assert_eq!(
-            targets.iter().filter(|point| near(**point, 5.0, 5.0)).count(),
+            targets
+                .iter()
+                .filter(|point| near(**point, 5.0, 5.0))
+                .count(),
             1
         );
         // The chain ends at its own last point and leaves on the tangential
@@ -2346,9 +2532,13 @@ mod tests {
             .into_iter()
             .filter(|point| (point.z + 2.0).abs() < 1.0e-9)
             .collect::<Vec<_>>();
-        assert!((bottom_right[1].x - 5.0).abs() < 1.0e-9 && (bottom_right[1].y - 2.0).abs() < 1.0e-9);
+        assert!(
+            (bottom_right[1].x - 5.0).abs() < 1.0e-9 && (bottom_right[1].y - 2.0).abs() < 1.0e-9
+        );
         let chain_end_right = bottom_right[bottom_right.len() - 2];
-        assert!((chain_end_right.x - 33.0).abs() < 1.0e-9 && (chain_end_right.y - 20.0).abs() < 1.0e-9);
+        assert!(
+            (chain_end_right.x - 33.0).abs() < 1.0e-9 && (chain_end_right.y - 20.0).abs() < 1.0e-9
+        );
     }
 
     #[test]
@@ -2442,18 +2632,20 @@ mod tests {
             program.commands[off_index + 1],
             CamCommandDto::Linear { .. }
         ));
-        // The programmed path is the part contour itself — no radius offset —
-        // wrapped by the tangential leads: plunge at the lead start (0,5),
-        // exit along the closing segment to (5,0).
+        // The programmed profile remains the part contour itself — no radius
+        // offset. The uncompensated entry/exit points sit on the physical
+        // compensated centerline, so normal controller activation travels
+        // (0,2) -> compensated (5,2), and cancellation leaves compensated
+        // (2,5) -> (2,0), without sweeping across the part corner.
         let targets = cutting_targets(&program);
         let near = |point: Point3Dto, x: f64, y: f64| {
             (point.x - x).abs() < 1.0e-9 && (point.y - y).abs() < 1.0e-9
         };
-        assert!(near(targets[0], 0.0, 5.0));
+        assert!(near(targets[0], 0.0, 2.0));
         assert!(targets.iter().any(|point| near(*point, 15.0, 5.0)));
         assert!(targets.iter().any(|point| near(*point, 15.0, 15.0)));
         assert!(!targets.iter().any(|point| near(*point, 18.0, 2.0)));
-        assert!(near(*targets.last().expect("cutting moves"), 5.0, 0.0));
+        assert!(near(*targets.last().expect("cutting moves"), 2.0, 0.0));
     }
 
     #[test]
@@ -2491,15 +2683,16 @@ mod tests {
         // compensation is the operator's call (the control owns its own
         // activation minimum), so planning must still succeed with the
         // compensation move riding the short lead.
-        let mut operation = closed_boss_operation(
-            CompensationMode::InControl,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InControl, ContourCompensation::Outside);
         if let CamOperationDto::Contour2d { lead_in, .. } = &mut operation {
             *lead_in = 2.0;
         }
         let program = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap();
@@ -2510,16 +2703,37 @@ mod tests {
     }
 
     #[test]
+    fn inside_control_compensation_requires_room_for_both_leads_and_the_cutter() {
+        // A 10 mm wall cannot safely hold two 5 mm physical leads while a
+        // Ø6 cutter stays one radius clear of both neighboring corners.
+        // Reject the plan rather than allowing the transition to gouge a wall.
+        let error = plan_setup(
+            &document(
+                vec![closed_boss_operation(
+                    CompensationMode::InControl,
+                    ContourCompensation::Inside,
+                )],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
+            1,
+        )
+        .unwrap_err();
+        assert!(error.0.contains("at least 16.000 mm"));
+        assert!(error.0.contains("shorten the leads"));
+    }
+
+    #[test]
     fn contour_requires_positive_leads() {
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::On,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::On);
         if let CamOperationDto::Contour2d { lead_out, .. } = &mut operation {
             *lead_out = 0.0;
         }
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();
@@ -2605,9 +2819,7 @@ mod tests {
             .commands
             .iter()
             .filter_map(|command| match command {
-                CamCommandDto::Linear { to, feed } if (*feed - feed_z).abs() < 1.0e-9 => {
-                    Some(to.z)
-                }
+                CamCommandDto::Linear { to, feed } if (*feed - feed_z).abs() < 1.0e-9 => Some(to.z),
                 _ => None,
             })
             .collect()
@@ -2658,7 +2870,10 @@ mod tests {
         *breakthrough_depth = 1.0;
         // 10 mm drill, conventional 118-degree point: tip 5 / tan(59 deg).
         let program = plan_setup(
-            &document(vec![operation.clone()], vec![tool(2, CamToolKind::Drill, 10.0)]),
+            &document(
+                vec![operation.clone()],
+                vec![tool(2, CamToolKind::Drill, 10.0)],
+            ),
             1,
         )
         .unwrap();
@@ -2721,7 +2936,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.to_string().contains("tip-through applies to the drilling cycle family"),
+            error
+                .to_string()
+                .contains("tip-through applies to the drilling cycle family"),
             "unexpected error: {error}"
         );
     }
@@ -2742,7 +2959,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.to_string().contains("break-through depth must be zero or positive"),
+            error
+                .to_string()
+                .contains("break-through depth must be zero or positive"),
             "unexpected error: {error}"
         );
     }
@@ -2804,6 +3023,124 @@ mod tests {
             assert!(
                 (actual - expected).abs() < 1.0e-9,
                 "rapid at {actual} should be {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn face_contour_and_drill_sections_leave_by_way_of_the_retract_plane() {
+        // Every section must end its cut at the retract plane before
+        // travelling on to clearance. This endpoint is also the red exit
+        // marker shown beside the green feed-entry marker in the viewport.
+        let face = CamOperationDto::Face {
+            id: 1,
+            name: "Face".into(),
+            enabled: true,
+            tool_id: 1,
+            bounds: Rect2Dto {
+                min: Point2Dto::new(0.0, 0.0),
+                max: Point2Dto::new(40.0, 30.0),
+            },
+            top_z: 0.0,
+            target_z: -1.0,
+            step_over: 3.0,
+            step_down: 1.0,
+            safe_distance: 5.0,
+            direction: FaceDirection::BothWays,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            feed_height_z: 1.0,
+            cutting: cutting(),
+        };
+        let contour = CamOperationDto::Contour2d {
+            id: 2,
+            name: "Contour".into(),
+            enabled: true,
+            tool_id: 1,
+            path: vec![
+                Point2Dto::new(5.0, 5.0),
+                Point2Dto::new(35.0, 5.0),
+                Point2Dto::new(35.0, 25.0),
+                Point2Dto::new(5.0, 25.0),
+            ],
+            closed: true,
+            top_z: 0.0,
+            bottom_z: -2.0,
+            step_down: 2.0,
+            compensation: ContourCompensation::Outside,
+            compensation_mode: CompensationMode::InSoftware,
+            lead_in: 5.0,
+            lead_out: 5.0,
+            lead_arc_radius: None,
+            direction: MillingDirection::Climb,
+            roughing_passes: 1,
+            roughing_step_over: None,
+            finishing_pass: false,
+            finish_allowance: 0.0,
+            finish_feed: None,
+            spring_pass: false,
+            chain_ref: None,
+            clearance_z: 10.0,
+            retract_z: 3.0,
+            feed_height_z: 1.0,
+            cutting: cutting(),
+        };
+        let mut drill = drill_operation(DrillCycle::Drill);
+        let CamOperationDto::Drill { id, .. } = &mut drill else {
+            unreachable!();
+        };
+        *id = 3;
+        let program = plan_setup(
+            &document(
+                vec![face, contour, drill],
+                vec![
+                    tool(1, CamToolKind::FlatEndMill, 6.0),
+                    tool(2, CamToolKind::Drill, 5.0),
+                ],
+            ),
+            1,
+        )
+        .unwrap();
+        // Walk each section: after its final feed move the first rapid must
+        // stop at the retract plane, and the rapid after that at clearance.
+        let mut cursor = 0;
+        for _section in 0..3 {
+            let mut last_feed = None;
+            while cursor < program.commands.len() {
+                let command = &program.commands[cursor];
+                cursor += 1;
+                match command {
+                    CamCommandDto::Linear { .. } | CamCommandDto::Circular { .. } => {
+                        last_feed = Some(cursor)
+                    }
+                    CamCommandDto::SectionEnd => break,
+                    _ => {}
+                }
+            }
+            let last_feed = last_feed.expect("section has feed moves");
+            let exit_rapids: Vec<f64> = program.commands[last_feed..]
+                .iter()
+                .take_while(|command| !matches!(command, CamCommandDto::SectionEnd))
+                .filter_map(|command| match command {
+                    CamCommandDto::Rapid { to } => Some(to.z),
+                    _ => None,
+                })
+                .take(2)
+                .collect();
+            assert_eq!(
+                exit_rapids.len(),
+                2,
+                "section should rapid to retract then clearance"
+            );
+            assert!(
+                (exit_rapids[0] - 3.0).abs() < 1.0e-9,
+                "first exit rapid should stop at the retract plane, got {}",
+                exit_rapids[0]
+            );
+            assert!(
+                (exit_rapids[1] - 10.0).abs() < 1.0e-9,
+                "second exit rapid should reach clearance, got {}",
+                exit_rapids[1]
             );
         }
     }
@@ -3168,13 +3505,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(!cuts.is_empty());
-        assert!(cuts
-            .iter()
-            .all(|point| (point.z - (-1.5)).abs() < 1.0e-9));
+        assert!(cuts.iter().all(|point| (point.z - (-1.5)).abs() < 1.0e-9));
         // Outward offset of 0.5 mm on a CCW square: X range 9.5..=30.5.
-        assert!(cuts
-            .iter()
-            .any(|point| (point.x - 30.5).abs() < 1.0e-9));
+        assert!(cuts.iter().any(|point| (point.x - 30.5).abs() < 1.0e-9));
         assert!(cuts.iter().all(|point| point.x >= 9.5 - 1.0e-9));
     }
 
@@ -3256,9 +3589,7 @@ mod tests {
             .commands
             .iter()
             .filter_map(|command| match command {
-                CamCommandDto::Linear { to, feed } if (*feed - 200.0).abs() < 1.0e-9 => {
-                    Some(to.z)
-                }
+                CamCommandDto::Linear { to, feed } if (*feed - 200.0).abs() < 1.0e-9 => Some(to.z),
                 _ => None,
             })
             .collect();
@@ -3268,9 +3599,7 @@ mod tests {
         let deepest = |center_x: f64| {
             arcs.iter()
                 .filter(|(_, command, _)| match command {
-                    CamCommandDto::Circular { center, .. } => {
-                        (center.x - center_x).abs() < 1.0e-9
-                    }
+                    CamCommandDto::Circular { center, .. } => (center.x - center_x).abs() < 1.0e-9,
                     _ => false,
                 })
                 .map(|(_, command, _)| match command {
@@ -3489,10 +3818,7 @@ mod tests {
         };
         *radial_passes = 2;
         let error = plan_setup(
-            &document(
-                vec![operation],
-                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
-            ),
+            &document(vec![operation], vec![tool(7, CamToolKind::ThreadMill, 4.8)]),
             1,
         )
         .unwrap_err();
@@ -3510,10 +3836,7 @@ mod tests {
         *radial_passes = 3;
         *step_over = Some(0.5);
         let error = plan_setup(
-            &document(
-                vec![operation],
-                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
-            ),
+            &document(vec![operation], vec![tool(7, CamToolKind::ThreadMill, 4.8)]),
             1,
         )
         .unwrap_err();
@@ -3525,10 +3848,7 @@ mod tests {
         };
         *step_over = Some(0.2);
         let error = plan_setup(
-            &document(
-                vec![operation],
-                vec![tool(7, CamToolKind::ThreadMill, 4.8)],
-            ),
+            &document(vec![operation], vec![tool(7, CamToolKind::ThreadMill, 4.8)]),
             1,
         )
         .unwrap_err();
@@ -3539,7 +3859,10 @@ mod tests {
 
     fn contour_pass_program(operation: CamOperationDto) -> CamProgramDto {
         plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .expect("plan")
@@ -3561,10 +3884,8 @@ mod tests {
 
     #[test]
     fn contour_roughing_passes_step_to_the_wall_then_finish_and_spring() {
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Outside);
         let CamOperationDto::Contour2d {
             roughing_passes,
             roughing_step_over,
@@ -3609,10 +3930,8 @@ mod tests {
 
     #[test]
     fn climb_direction_rewinds_a_cw_loop_around_its_start() {
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Outside);
         let CamOperationDto::Contour2d { path, .. } = &mut operation else {
             unreachable!();
         };
@@ -3658,10 +3977,8 @@ mod tests {
 
     #[test]
     fn arc_leads_round_the_straight_lead_onto_the_profile() {
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Outside);
         let CamOperationDto::Contour2d {
             lead_arc_radius, ..
         } = &mut operation
@@ -3709,10 +4026,8 @@ mod tests {
 
     #[test]
     fn in_control_arc_lead_keeps_activation_on_the_straight_lead() {
-        let mut operation = closed_boss_operation(
-            CompensationMode::InControl,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InControl, ContourCompensation::Outside);
         let CamOperationDto::Contour2d {
             lead_arc_radius, ..
         } = &mut operation
@@ -3744,6 +4059,21 @@ mod tests {
         assert!(program.commands[on_index..off_index]
             .iter()
             .any(|command| matches!(command, CamCommandDto::Circular { .. })));
+        let arc_centers: Vec<Point3Dto> = program.commands[on_index..off_index]
+            .iter()
+            .filter_map(|command| match command {
+                CamCommandDto::Circular { center, .. } => Some(*center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arc_centers.len(), 2);
+        // The requested physical lead radius is 2 mm. G42 offsets toward the
+        // arc centers, so the programmed radius is 2 + tool r3 = 5 mm; the
+        // controller's compensated cutter-center arc is still exactly r2.
+        assert!((arc_centers[0].x - 5.0).abs() < 1.0e-9);
+        assert!(arc_centers[0].y.abs() < 1.0e-9);
+        assert!(arc_centers[1].x.abs() < 1.0e-9);
+        assert!((arc_centers[1].y - 5.0).abs() < 1.0e-9);
         // The programmed path is still the part contour.
         let cuts = linears_at(&program, -2.0);
         assert!(cuts
@@ -3864,16 +4194,17 @@ mod tests {
         };
         *spring_pass = true;
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();
         assert!(error.0.contains("spring pass"));
         // Multiple roughing passes without a radial step-over.
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Outside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Outside);
         let CamOperationDto::Contour2d {
             roughing_passes, ..
         } = &mut operation
@@ -3882,34 +4213,33 @@ mod tests {
         };
         *roughing_passes = 2;
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();
         assert!(error.0.contains("radial step-over"));
         // Finishing pass without an allowance.
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Outside,
-        );
-        let CamOperationDto::Contour2d {
-            finishing_pass, ..
-        } = &mut operation
-        else {
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Outside);
+        let CamOperationDto::Contour2d { finishing_pass, .. } = &mut operation else {
             unreachable!();
         };
         *finishing_pass = true;
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();
         assert!(error.0.contains("finish allowance"));
         // Arc leads into an inside closed profile.
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::Inside,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::Inside);
         let CamOperationDto::Contour2d {
             lead_arc_radius, ..
         } = &mut operation
@@ -3918,16 +4248,17 @@ mod tests {
         };
         *lead_arc_radius = Some(2.0);
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();
         assert!(error.0.contains("arc leads"));
         // Radial passes on an on-path contour have no material side.
-        let mut operation = closed_boss_operation(
-            CompensationMode::InSoftware,
-            ContourCompensation::On,
-        );
+        let mut operation =
+            closed_boss_operation(CompensationMode::InSoftware, ContourCompensation::On);
         let CamOperationDto::Contour2d {
             roughing_passes,
             roughing_step_over,
@@ -3939,7 +4270,10 @@ mod tests {
         *roughing_passes = 2;
         *roughing_step_over = Some(2.0);
         let error = plan_setup(
-            &document(vec![operation], vec![tool(1, CamToolKind::FlatEndMill, 6.0)]),
+            &document(
+                vec![operation],
+                vec![tool(1, CamToolKind::FlatEndMill, 6.0)],
+            ),
             1,
         )
         .unwrap_err();

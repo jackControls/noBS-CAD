@@ -13,6 +13,9 @@ mod post;
 mod post_events;
 mod simulation;
 
+#[cfg(test)]
+mod stabilization_tests;
+
 pub use model::{
     BoxAnchor, CamChainRefDto, CamChainSource, CamDocumentDto, CamLoadWarningDto, CamOperationDto,
     CamPostConfigDto, CamResolvedStockDto, CamSetupDto, CamStockFace, CamStockOffsetsDto,

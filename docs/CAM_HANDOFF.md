@@ -1,9 +1,131 @@
 # CAM branch handoff — 2026-08-28
 
-State of `feature/cam` after seventeen working rounds, rebased onto current
+State of `feature/cam` after twenty working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 20 (2026-08-28) — bounded CAM stabilization gate
+
+The gate deliberately added no machining operation. It converted the recent
+operator-led fixes into one cross-layer baseline before simulator-foundation
+work begins.
+
+1. **One golden job now crosses every current authority.**
+   `stabilization_tests::golden_job_stays_aligned_across_save_plan_post_and_simulation`
+   builds a face + machine-compensated contour + through-drill setup, validates
+   it, serializes/reopens/softens it, proves the regenerated neutral program is
+   identical, posts native 828D output, and runs volumetric stock simulation.
+   It pins section order, Retract → Clearance exits, `G42 NORM`/`G40`, named
+   tool calls, no shop macro, no rapid collision, and the requested simulation
+   cell size.
+2. **The native compensation contract has a primary-source basis.** Siemens'
+   SINUMERIK 828D Tools Function Manual (07/2024, A5E48764330B AH, section
+   3.5.3.2) defines `G41/G42 NORM` as direct approach/retraction to/from the
+   compensated straight line. That matches the simulator state machine and
+   removes reliance on an inherited Group-17 mode.
+3. **Simulation limits are visible instead of silently discarded.**
+   `CamWorkspace` now renders simulation warnings in addition to program
+   warnings, deduplicates the shared prefix, and shows the actual maximum cell
+   edge as **3D detail** with grid dimensions in its tooltip. The simulator's
+   voxel warning includes exact X/Y/Z cell sizes and dimensions. Its chamfer-
+   mill warning now accurately says that the conical envelope is not yet
+   implemented rather than implying the stored angle is missing.
+4. **The roadmap now matches the branch.** `docs/ROADMAP.md` has a real M4 CAM
+   section instead of listing the workspace as deferred. `docs/CAM.md` now
+   orders simulator confidence, the shared 2D geometry kernel, remaining 2.5D
+   work, 3D adaptive clearing, and posted-NC verification by dependency.
+
+Verification: CAM 107 passed, including the new cross-layer gate. Full
+workspace/build/package verification is recorded at the end of this handoff.
+
+## Round 19 (2026-08-28) — in-control lead transitions stop gouging
+
+The door-block simulation screenshot exposed a real bug that the earlier
+large-tool regression had accidentally avoided: its part probes stayed away
+from the compensation activation/cancellation corner, and its own comment
+admitted that a Ø63 tool could shave that corner. A new probe at (91,71),
+1 mm inside the nominal boss, failed immediately. The previous “large cutter
+does not cut the part” conclusion was therefore too broad.
+
+1. **Root cause: the simulator started compensation too early.** It offset
+   the uncompensated activation anchor together with the whole programmed
+   path, as though full radius compensation already existed there. At G40 it
+   then swept diagonally from the compensated endpoint to a lead-out target
+   on the nominal wall tangent. The nominal profile was correct, but that
+   invented transition crossed the corner with a large cutter.
+2. **The planner now generates safe physical centerline leads.** Lead lengths
+   and lead arc radius are explicitly physical cutter-center dimensions. For
+   an in-control pass, the pre-G41/G42 point and post-G40 point are shifted by
+   the nominal tool radius so normal controller activation/cancellation runs
+   tangent to the compensated path. A requested lead arc is programmed one
+   tool radius larger; after the controller offsets toward its center, the
+   physical arc has exactly the requested radius instead of collapsing when
+   the tool is larger than the arc. Profile coordinates remain nominal.
+3. **The simulator models normal controller response.** The first buffered
+   linear is treated as the activation block: sweep from its uncompensated
+   anchor to the first compensated point, then offset/sweep the remaining
+   contour, then cancel from the final compensated point. Cancellation time
+   now also uses the physical move rather than the nominal endpoint pair.
+4. **Inside compensation no longer activates at a sharp polygon corner.**
+   The planner splits an eligible straight wall only where it can fit the
+   physical lead-in, physical lead-out, and one cutter radius at each adjacent
+   corner. This keeps the whole transition inside the wall band; when no such
+   segment exists it fails closed with shorter-lead, smaller-tool, and software-
+   compensation choices.
+5. **Native Siemens output pins the same behavior.** G41/G42 activation now
+   includes `NORM`, avoiding an inherited KONT/KONTC/KONTT state that would
+   make machine motion disagree with the simulator.
+
+Regression coverage now probes the large-tool lead corner with both straight
+and 2 mm physical-radius arc leads, checks the programmed arc expansion, and
+keeps the existing winding/inside/outside/open-chain compensation matrix.
+It also rejects inside-control leads that cannot fit safely on any wall.
+
+Verification: CAM 106 passed, every Rust workspace suite passed, TypeScript
+and both production bundles built cleanly, the WASM smoke test passed, and the
+fresh 137 MiB macOS app passed deep strict signature verification with all
+required license notices present.
+
+## Round 18 (2026-08-28) — feed/retract parity and roughing-kernel decision
+
+The operation-height report was traced against the workspace reference
+screenshots before changing behavior. They use one consistent convention:
+green entry begins at Feed height, red exit ends at Retract height, and
+Clearance remains a separate travel plane. Fresh face, contour, and drill
+operations intentionally resolve Feed and Retract to the same default
+height; their markers should therefore be level unless the operator edits
+one of those rows.
+
+1. **Every section now visits Retract before Clearance.**
+   `ProgramBuilder::retract_to_clearance` previously made one rapid directly
+   from the cut to Clearance, skipping the configured Retract plane. It now
+   emits cut → Retract → Clearance whenever the tool is below Retract. The
+   regression covers face, 2D contour, and drill independently and stops at
+   each section boundary so a later operation cannot mask a missing move.
+2. **The red viewport marker uses the real retract endpoint.** The overlay
+   searches backward from the end of the operation for the final actual
+   rapid/feed/arc endpoint on `retract_z`, after the last cutting move. This
+   selects the first upward rapid for milling/drilling and the feed-out
+   endpoint for tapping/reaming, while ignoring the later Clearance move.
+3. **Reference-aligned defaults were preserved.** The unfinished attempt to
+   move every transport reference to Stock top was not kept: the per-kind
+   table already matches the screenshots, including Model top for face and
+   drilling and Stock top for contour. A code comment now pins the intended
+   Feed = Retract default for those three operation kinds.
+4. **Rounded contour roughing is deferred to shared geometry.** The local
+   corner-fillet prototype was removed after it failed its own rectangular
+   path regression and exposed missing concave-corner/self-intersection
+   safeguards. Roughing laps continue to use exact offset polylines. The
+   requested rolling, larger-radius motion belongs in the shared 2D path
+   kernel together with engagement-aware smoothing, future high-speed paths,
+   and later 3D families; it should not become planner-only special-case
+   geometry.
+
+Verification: cam 105 passed, full Rust workspace green,
+`npx tsc --noEmit`, `npm run build:wasm`, `npm run smoke:wasm`, and
+`npm run build` green. A fresh ad-hoc-signed macOS `.app` was bundled with
+portable OCCT libraries and passed `codesign --verify --deep --strict`.
 
 ## Round 17 (2026-08-28) — per-hole spans, tip-through, uniform markers
 
@@ -703,49 +825,46 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (cam 94), mcp-server 37,
-`npx tsc --noEmit`, `npm run build`, `node scripts/smoke-wasm.mjs`,
-`node scripts/bundle-macos.mjs`.
+`cargo test --workspace` (CAM 107),
+`cargo test --manifest-path mcp-server/Cargo.toml` (102),
+`cargo clippy -p nbcad-cam --all-targets --no-deps -- -D warnings`,
+`npx tsc --noEmit`, `npm run build:wasm`, `npm run smoke:wasm`, and
+`npm run build`. A fresh 137 MiB arm64 macOS `.app` was built without a DMG,
+passed deep strict code-signature verification, contains the required license
+notices, and has no Homebrew library paths. A live open of `doorBlock.nbcad`
+also confirmed the Manufacture workspace exposes the actual 0.472 mm 3D
+detail and the simulator's voxel/collision-scope warnings.
 
 ## Not done yet (rough priority)
 
-1. Bore milling (circular interpolation of holes with an end mill).
-2. 3D adaptive clearing — the largest outstanding algorithmic piece.
-3. Fine boring with shift (G76 semantics), back-boring, gun drilling;
-   canned-cycle output variants behind per-control validation, if ever.
-4. Thread milling round 2: helical lead-in/out arcs (line leads today),
-   external threads, multi-start, tool-pitch matching against the operation.
-5. Tool library: holders/shafts, central-library file import/export.
-   (The central/project two-scope model, named cutting-data profiles, the
-   Vc/fz calculator, and planner-step defaults are landed.)
-6. Heights "From"-references: landed for every operation kind, feed height
-   included (round 16 — the five-tab scaffold is universal); per-kind
-   defaults plus the hole top/bottom references landed in round 17.
-   Remaining: the additional references (fixture planes, selected contours,
-   highest/lowest-of) once selection plumbing exists.
-7. Geometry picking upgrades: viewport chain selection for
-   contour/pocket/chamfer (sketch loops already supported; hole-face picking
-   for drill/thread landed in round 10 and accepts ANY cylindrical face since
-   round 11, and since round 17 each pick carries the face's real top/bottom
-   span in setup Z — the recorded setup-space axis is the seam for
-   indexed/5-axis tool orientation, which fixed-axis planning does not
-   consume yet).
-   Indexed/5-axis work itself (per-operation tool orientation, tilted-hole
-   drilling) is the larger roadmap item that will consume those axes.
-8. The shared Passes/Linking tabs render the reference option set with
-   placeholders for every kind; the planner still needs to consume them:
-   stock-to-leave
-   (radial/axial), tolerance/smoothing,
-   pass direction + extension,
-   keep-tool-down linking, vertical lead radii, and the
-   ramp/lead/transition feedrates. (Landed in round 16: feed height,
-   face/pocket/chamfer/contour direction selection, contour radial
-   multi-pass + finishing + spring pass, horizontal arc leads for contour.
-   Landed in round 17: drill break-through depth + tip-through-bottom, and
-   the lead/arc-radius tool-diameter floors are GONE — the control owns its
-   activation travel.)
-9. Ramp/helical entries for pocket and contour — the blocker for
-   non-center-cutting tools there (facing is already exempt).
+1. **Simulator confidence foundation:** accurate cutter envelopes; target
+   gouge detection; shaft/holder, fixture, and machine-envelope collisions;
+   explicit quality/tolerance control; smoother remaining-stock extraction;
+   and command-level playback. Tool holders/shafts enter the library as part
+   of this work; central-library import/export can follow independently.
+2. **Shared robust 2D geometry kernel:** safe miter/arc offsets, clipping and
+   Boolean cleanup, concave/self-intersection handling, tangent-arc fitting,
+   and engagement-aware smoothing. Rounded/rolling contour roughing remains
+   here so the same kernel serves high-speed and future 3D paths.
+3. **Remaining 2.5D linking and operations:** ramp/helical pocket and contour
+   entry (the blocker for non-center-cutting tools), keep-tool-down linking,
+   stock-to-leave, tolerance/smoothing, pass extensions, vertical lead radii,
+   tabs, bore milling, and ramp/lead/transition feed rates.
+4. **Hole/thread follow-ups:** fine boring with shift (G76 semantics),
+   back-boring, gun drilling, and thread-milling helical leads, external
+   threads, multi-start, and tool-pitch matching. Canned-cycle output stays
+   behind per-control validation, if added at all.
+5. **Selection/reference follow-ups:** fixture planes, selected contours,
+   highest/lowest-of height references, direct exact-BRep chain selection,
+   and central-library file import/export. Picked cylindrical-hole spans and
+   setup-space axes are already persisted; indexed/5-axis planning remains a
+   separate future workspace.
+6. **3D adaptive clearing:** the largest path-planning piece, intentionally
+   after simulator confidence and the shared geometry kernel can verify rest
+   stock, engagement, gouging, and collision behavior.
+7. **Posted-NC verification and machine safety:** parse/replay final controller
+   text, compare it with neutral motion, then add tool-length compensation,
+   limits, safe home/tool-change policies, and controller golden suites.
 
 ## Process note
 

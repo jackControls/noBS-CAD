@@ -3,7 +3,7 @@ import { AlertTriangle, Clock3, Cuboid, Download, RefreshCw, Route, ScanEye } fr
 import { activeCamSetup, findCamOperation, setCamUnits } from '../../cam/document';
 import { displayLength, lengthUnitLabel } from '../../cam/units';
 import { getEngine } from '../../engine';
-import type { CamProgramDto, CamUnits } from '../../engine/types';
+import type { CamProgramDto, CamSimulationResultDto, CamUnits } from '../../engine/types';
 import { cancelCamPointPick } from '../../cam/pointPick';
 import { useAppStore, type CamDialogState } from '../../store/appStore';
 import { Viewport } from '../viewport/Viewport';
@@ -33,6 +33,16 @@ export function CamWorkspace() {
   const [simulationError, setSimulationError] = useState<string | null>(null);
   const [simulationGeneration, setSimulationGeneration] = useState(0);
   const [simulationBusy, setSimulationBusy] = useState(false);
+  const programWarnings = program?.warnings ?? [];
+  // Simulation starts with the program warnings and appends its own accuracy
+  // and collision-model limitations. Show those additions exactly once; the
+  // old panel rendered program warnings only and silently hid simulator ones.
+  const simulationWarnings = (simulation?.warnings ?? []).filter(
+    (warning) => !programWarnings.includes(warning),
+  );
+  const simulationResolution = simulation
+    ? formatSimulationResolution(simulation, units)
+    : null;
 
   useEffect(() => {
     const { setCamProgram } = useAppStore.getState();
@@ -167,6 +177,15 @@ export function CamWorkspace() {
             >
               {units === 'millimeters' ? 'mm' : 'inch'}
             </button>
+            {simulation && simulationResolution && (
+              <span
+                data-testid="cam-simulation-resolution"
+                title={`3D stock preview grid: ${simulation.dimensions.join(' × ')} cells. Displayed edges and remaining-stock measurements can vary by about one ${simulationResolution} cell.`}
+                className="rounded border border-edge bg-panel px-2 py-1 font-mono text-[9px] text-mute"
+              >
+                3D detail {simulationResolution}
+              </span>
+            )}
             <button
               type="button"
               disabled={!setup}
@@ -233,8 +252,12 @@ export function CamWorkspace() {
                 : `${program.name} | Total machining time: ${formatMachiningTime(program.stats.estimated_seconds)}`}
             </div>
           )}
-          {(planError || simulationError || program?.warnings.length || simulation?.collisions.length) && (
-            <div className="absolute bottom-3 left-3 max-w-3xl rounded border border-[#d69b45]/45 bg-[#2a2117]/95 p-2.5 text-[10px] text-[#e8c589] shadow-lg">
+          {(planError
+            || simulationError
+            || programWarnings.length
+            || simulationWarnings.length
+            || simulation?.collisions.length) && (
+            <div className="absolute bottom-3 left-3 max-h-48 max-w-3xl overflow-y-auto rounded border border-[#d69b45]/45 bg-[#2a2117]/95 p-2.5 text-[10px] text-[#e8c589] shadow-lg">
               <div className="flex items-start gap-2">
                 <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                 <div>
@@ -245,7 +268,8 @@ export function CamWorkspace() {
                       {collision.message}
                     </div>
                   ))}
-                  {program?.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+                  {programWarnings.map((warning) => <div key={warning}>{warning}</div>)}
+                  {simulationWarnings.map((warning) => <div key={warning}>{warning}</div>)}
                 </div>
               </div>
             </div>
@@ -311,6 +335,12 @@ function ProgramStats({ program, units }: { program: CamProgramDto; units: CamUn
       </span>
     </div>
   );
+}
+
+function formatSimulationResolution(simulation: CamSimulationResultDto, units: CamUnits): string {
+  const edge = Math.max(...simulation.cell_size);
+  const precision = units === 'millimeters' ? 3 : 4;
+  return `${displayLength(edge, units).toFixed(precision)} ${lengthUnitLabel(units)}`;
 }
 
 const WORK_OFFSETS = ['g54', 'g55', 'g56', 'g57', 'g58', 'g59'] as const;

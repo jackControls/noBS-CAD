@@ -172,10 +172,8 @@ fn truncate_program_through(
                     break;
                 }
             }
-            CamCommandDto::SectionEnd => {
-                if current.is_some_and(|pos| pos <= target) {
-                    end = index + 1;
-                }
+            CamCommandDto::SectionEnd if current.is_some_and(|pos| pos <= target) => {
+                end = index + 1;
             }
             _ => {}
         }
@@ -217,14 +215,19 @@ fn simulate_program(
     }
     if outcome.approximated_chamfer {
         warnings.push(
-            "Chamfer-mill stock removal currently uses a cylindrical envelope until tool angle is stored."
+            "Chamfer-mill stock removal currently uses a cylindrical envelope; conical cutter removal is not implemented yet."
                 .to_string(),
         );
     }
-    warnings.push(
-        "3D stock is voxelized: increase resolution before using remaining-stock measurements for process decisions."
-            .to_string(),
-    );
+    warnings.push(format!(
+        "3D stock is voxelized at {:.3} × {:.3} × {:.3} mm per cell ({} × {} × {} cells); displayed boundaries and remaining-stock measurements can vary by about one cell.",
+        stock.cell_size[0],
+        stock.cell_size[1],
+        stock.cell_size[2],
+        stock.dimensions[0],
+        stock.dimensions[1],
+        stock.dimensions[2],
+    ));
     warnings.push(
         "The first simulator slice checks rapid/tool contact with stock; target-part gouge, fixture, shank, holder, and machine-envelope checks are scaffolded for later geometry inputs."
             .to_string(),
@@ -299,10 +302,11 @@ fn run_program(
     let mut sweep_samples = 0usize;
     // Machine-side cutter compensation (in-control contour sections): the
     // programmed path is the part contour, so the compensated centerline is
-    // reconstructed here exactly like the control would — buffered while
-    // compensation is active, offset by the tool radius on cancellation,
-    // then swept. `comp_anchor` is the programmed point where compensation
-    // activated; `comp_tool` is the tool that was active then.
+    // reconstructed here with normal controller approach/retract behavior:
+    // the activation move runs from the uncompensated anchor to the first
+    // compensated point, the following contour is offset by the tool radius,
+    // and cancellation returns from the final compensated point. `comp_tool`
+    // is the tool that was active when compensation began.
     let mut comp_side: Option<bool> = None;
     let mut comp_anchor: Option<Point3Dto> = None;
     let mut comp_tool: Option<&CamToolDto> = None;
@@ -346,19 +350,41 @@ fn run_program(
                         "simulation: cutter compensation activated without a tool".to_string(),
                     )
                 })?;
-                // The compensated centerline is the buffered polyline offset
-                // by the tool radius. All compensated moves share one depth
-                // (profiling at constant Z); a Z change inside compensation
-                // is not a profiling move and fails closed. Arcs tessellate
-                // into chords (about 0.5 mm of arc length each) so the
-                // polyline offset approximates the offset arc.
+                // The first buffered LINEAR is the G41/G42 activation move.
+                // With the controller's normal approach behavior, the tool
+                // travels from the uncompensated anchor directly to the
+                // compensated starting position; compensation is not already
+                // at full radius at the anchor. The remaining programmed
+                // contour is offset as one path. This distinction is crucial
+                // for large tools: offsetting the anchor itself invents a
+                // diagonal lead transition that can gouge the part corner.
                 let depth = anchor.z;
-                let mut polyline: Vec<crate::model::Point2Dto> = Vec::new();
-                polyline.push(crate::model::Point2Dto::new(anchor.x, anchor.y));
+                let Some((entry, compensated_moves)) = comp_buffer.split_first() else {
+                    return Err(CamPlanError(
+                        "simulation: cutter compensation has no activation move".to_string(),
+                    ));
+                };
+                let (entry_index, entry_target, entry_feed) = match entry {
+                    (index, CompMove::Line(to), feed) => (*index, *to, *feed),
+                    _ => {
+                        return Err(CamPlanError(
+                            "simulation: cutter compensation must activate on a linear move"
+                                .to_string(),
+                        ));
+                    }
+                };
+                if (entry_target.z - depth).abs() > 1.0e-6 {
+                    return Err(CamPlanError(
+                        "simulation: cutter compensation activation must stay at constant depth"
+                            .to_string(),
+                    ));
+                }
+                let mut polyline =
+                    vec![crate::model::Point2Dto::new(entry_target.x, entry_target.y)];
                 // One entry per generated polyline segment, keeping the
                 // originating command index and feed for step reporting.
                 let mut seg_meta: Vec<(usize, f64)> = Vec::new();
-                for (buffered_index, buffered, feed) in &comp_buffer {
+                for (buffered_index, buffered, feed) in compensated_moves {
                     let (move_end, arc) = match buffered {
                         CompMove::Line(to) => (*to, None),
                         CompMove::Arc {
@@ -379,7 +405,9 @@ fn run_program(
                             seg_meta.push((*buffered_index, *feed));
                         }
                         Some((center, clockwise)) => {
-                            let from = *polyline.last().expect("anchor is always present");
+                            let from = *polyline
+                                .last()
+                                .expect("activation target is always present");
                             let arc_radius = distance_2d(from, center);
                             if arc_radius <= 1.0e-9 {
                                 return Err(CamPlanError(
@@ -387,8 +415,7 @@ fn run_program(
                                 ));
                             }
                             let start_angle = (from.y - center.y).atan2(from.x - center.x);
-                            let end_angle =
-                                (move_end.y - center.y).atan2(move_end.x - center.x);
+                            let end_angle = (move_end.y - center.y).atan2(move_end.x - center.x);
                             let mut sweep = end_angle - start_angle;
                             if clockwise {
                                 while sweep >= 0.0 {
@@ -402,8 +429,7 @@ fn run_program(
                             let chords = ((sweep.abs() * arc_radius) / 0.5).ceil() as usize;
                             let chords = chords.clamp(1, 64);
                             for chord in 1..=chords {
-                                let angle =
-                                    start_angle + sweep * (chord as f64 / chords as f64);
+                                let angle = start_angle + sweep * (chord as f64 / chords as f64);
                                 polyline.push(crate::model::Point2Dto::new(
                                     center.x + arc_radius * angle.cos(),
                                     center.y + arc_radius * angle.sin(),
@@ -413,7 +439,41 @@ fn run_program(
                         }
                     }
                 }
+                if polyline.len() < 2 {
+                    return Err(CamPlanError(
+                        "simulation: cutter compensation needs a contour move after activation"
+                            .to_string(),
+                    ));
+                }
                 let offset = offset_polyline_open(&polyline, tool.diameter * 0.5, left)?;
+                let compensated_start = Point3Dto::new(offset[0].x, offset[0].y, depth);
+                note_approximation(
+                    tool,
+                    &mut outcome.approximated_drill,
+                    &mut outcome.approximated_chamfer,
+                );
+                let entry_removed = stock
+                    .sweep_tool(
+                        tool,
+                        anchor,
+                        compensated_start,
+                        SweepMode::RemoveMaterial,
+                        &mut sweep_samples,
+                    )?
+                    .removed;
+                if collect {
+                    let duration = distance(anchor, compensated_start) / entry_feed * 60.0;
+                    outcome.cumulative_seconds += duration;
+                    outcome.steps.push(CamSimulationStepDto {
+                        command_index: entry_index,
+                        kind: CamSimulationStepKind::Linear,
+                        from: Some(anchor),
+                        to: Some(compensated_start),
+                        duration_seconds: duration,
+                        cumulative_seconds: outcome.cumulative_seconds,
+                        removed_voxels: entry_removed,
+                    });
+                }
                 for (index, (buffered_index, feed)) in seg_meta.iter().enumerate() {
                     let start = offset[index];
                     let end = offset[index + 1];
@@ -509,7 +569,7 @@ fn run_program(
                 // physically starts at the compensated end point and slides
                 // back to the programmed path as the offset cancels.
                 let sweep_from = compensated_position.take().or(from);
-                let duration = from
+                let duration = sweep_from
                     .map(|start| distance(start, *to) / *feed * 60.0)
                     .unwrap_or(0.0);
                 let removed = if let (Some(start), Some(tool)) = (sweep_from, active_tool) {
@@ -689,13 +749,11 @@ fn initial_stock(
 ) -> Result<VoxelStock, CamPlanError> {
     match &setup.resolved_stock {
         CamResolvedStockDto::Box => Ok(VoxelStock::filled(spec, |_| true)),
-        CamResolvedStockDto::Cylinder { center, radius } => {
-            Ok(VoxelStock::filled(spec, |point| {
-                let dx = point.x - center.x;
-                let dy = point.y - center.y;
-                dx * dx + dy * dy <= radius * radius + EPSILON
-            }))
-        }
+        CamResolvedStockDto::Cylinder { center, radius } => Ok(VoxelStock::filled(spec, |point| {
+            let dx = point.x - center.x;
+            let dy = point.y - center.y;
+            dx * dx + dy * dy <= radius * radius + EPSILON
+        })),
         CamResolvedStockDto::Hex {
             center,
             across_flats,
@@ -753,7 +811,7 @@ fn voxelize_mesh_stock(
     spec: &GridSpec,
     mesh: &CamStockMeshDto,
 ) -> Result<VoxelStock, CamPlanError> {
-    if mesh.positions.len() % 3 != 0 || mesh.indices.len() % 3 != 0 {
+    if !mesh.positions.len().is_multiple_of(3) || !mesh.indices.len().is_multiple_of(3) {
         return Err(CamPlanError(
             "stock body mesh must contain xyz triples and complete triangles".to_string(),
         ));
@@ -797,18 +855,40 @@ fn voxelize_mesh_stock(
     let mut column_hits: Vec<Vec<f64>> = (0..column_count).map(|_| Vec::new()).collect();
     let mut tests = 0usize;
     for triangle in mesh.indices.chunks_exact(3) {
-        let vertices = [to_setup(triangle[0]), to_setup(triangle[1]), to_setup(triangle[2])];
+        let vertices = [
+            to_setup(triangle[0]),
+            to_setup(triangle[1]),
+            to_setup(triangle[2]),
+        ];
         let min_x = vertices.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
-        let max_x = vertices.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let max_x = vertices
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max);
         let min_y = vertices.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-        let max_y = vertices.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        let max_y = vertices
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max);
         let column_range = |min: f64, max: f64, origin: f64, cell: f64, count: usize| {
             let lo = ((min - origin) / cell).floor() as isize;
             let hi = ((max - origin) / cell).ceil() as isize;
             (lo.clamp(0, count as isize) as usize)..(hi.clamp(0, count as isize) as usize)
         };
-        let xs = column_range(min_x, max_x, spec.min.x, spec.cell_size[0], spec.dimensions[0]);
-        let ys = column_range(min_y, max_y, spec.min.y, spec.cell_size[1], spec.dimensions[1]);
+        let xs = column_range(
+            min_x,
+            max_x,
+            spec.min.x,
+            spec.cell_size[0],
+            spec.dimensions[0],
+        );
+        let ys = column_range(
+            min_y,
+            max_y,
+            spec.min.y,
+            spec.cell_size[1],
+            spec.dimensions[1],
+        );
         tests = tests.saturating_add(xs.len().saturating_mul(ys.len()));
         if tests > MAX_STOCK_VOXELIZE_TESTS {
             return Err(CamPlanError(
@@ -1242,9 +1322,7 @@ fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool 
         | CamToolKind::Reamer
         | CamToolKind::BoringBar
         | CamToolKind::ThreadMill
-        | CamToolKind::TurningGeneral => {
-            radial_sq <= radius * radius + EPSILON
-        }
+        | CamToolKind::TurningGeneral => radial_sq <= radius * radius + EPSILON,
         CamToolKind::BallEndMill => {
             if dz <= radius {
                 radial_sq + (dz - radius).powi(2) <= radius * radius + EPSILON
@@ -1487,6 +1565,13 @@ mod tests {
         assert!(result.removed_volume_mm3 > 0.0);
         assert!(result.stock_mesh.as_ref().unwrap().triangle_count >= 12);
         assert!(!result.steps.is_empty());
+        let resolution_warning = result
+            .warnings
+            .iter()
+            .find(|warning| warning.starts_with("3D stock is voxelized at"))
+            .expect("actual preview resolution is operator-visible");
+        assert!(resolution_warning.contains("1.000 × 1.000 × 1.000 mm per cell"));
+        assert!(resolution_warning.contains("one cell"));
     }
 
     #[test]
@@ -1856,16 +1941,28 @@ mod tests {
         // The diameter-wide band outside the walls is removed...
         assert!(removed_at(&stock, 88.0, 76.0, -1.0));
         assert!(removed_at(&stock, 95.0, 30.0, -1.0));
-        // ...the part survives right up to its walls (probes kept clear of the
-        // lead-corner neighbourhood, where the straight-lead compensation
-        // slide is known to shave the corner with very large tools — arc
-        // leads are the answer, see the operation's lead options)...
+        // ...the part survives right up to its walls, including immediately
+        // inside the activation/cancellation corner...
         assert!(!removed_at(&stock, 105.0, 76.0, -1.0));
         assert!(!removed_at(&stock, 109.0, 76.0, -1.0));
         assert!(!removed_at(&stock, 95.0, 81.0, -1.0));
+        assert!(!removed_at(&stock, 91.0, 71.0, -1.0));
         // ...and stock well beyond the band is untouched.
         assert!(!removed_at(&stock, 10.0, 10.0, -1.0));
         assert!(!removed_at(&stock, 190.0, 76.0, -1.0));
+
+        // A small requested lead radius is the physical cutter-center
+        // radius. The planner enlarges the programmed arc by the tool radius
+        // before G42, so even a Ø63 cutter keeps the same safe corner.
+        if let CamOperationDto::Contour2d {
+            lead_arc_radius, ..
+        } = &mut document.setups[0].operations[0]
+        {
+            *lead_arc_radius = Some(2.0);
+        }
+        let arc_stock = run_contour_case(&document);
+        assert!(!removed_at(&arc_stock, 91.0, 71.0, -1.0));
+        assert!(!removed_at(&arc_stock, 105.0, 76.0, -1.0));
     }
 
     #[test]
@@ -1975,9 +2072,7 @@ mod tests {
         second.id = 2;
         second.name = "Second clamping group".to_string();
         second.stock_spec = crate::model::CamStockSpecDto::RestFromSetup { setup_id: 1 };
-        second.resolved_stock = CamResolvedStockDto::Rest {
-            source_setup_id: 1,
-        };
+        second.resolved_stock = CamResolvedStockDto::Rest { source_setup_id: 1 };
         second.operations = vec![CamOperationDto::Face {
             id: 3,
             name: "Corner face".to_string(),
@@ -2003,9 +2098,10 @@ mod tests {
                 coolant: CoolantMode::Off,
             },
         }];
-        second.operations.iter_mut().for_each(|operation| match operation {
-            CamOperationDto::Face { id, .. } => *id = 3,
-            _ => {}
+        second.operations.iter_mut().for_each(|operation| {
+            if let CamOperationDto::Face { id, .. } = operation {
+                *id = 3;
+            }
         });
         document.setups.push(second);
         document.next_setup_id = 3;
@@ -2055,8 +2151,7 @@ mod tests {
             3, 0, 4, 3, 4, 7, // -X
         ];
         let mut document = document();
-        document.setups[0].stock_spec =
-            crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
+        document.setups[0].stock_spec = crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
         document.setups[0].resolved_stock = CamResolvedStockDto::ModelBody { body_id: 9 };
         let result = simulate_setup(
             &document,
@@ -2078,8 +2173,7 @@ mod tests {
     #[test]
     fn modeled_body_stock_fails_closed_without_the_host_mesh() {
         let mut document = document();
-        document.setups[0].stock_spec =
-            crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
+        document.setups[0].stock_spec = crate::model::CamStockSpecDto::ModelBody { body_id: 9 };
         document.setups[0].resolved_stock = CamResolvedStockDto::ModelBody { body_id: 9 };
         let error = simulate_setup(
             &document,

@@ -170,32 +170,42 @@ rewrites stored geometry.
   contour as-is and activates machine-side cutter radius compensation
   (G41/G42 with the tool's diameter register on controls that take one,
   cancelled with G40) on the lead-in and lead-out moves, so the shop can
-  fine-tune size and swap cutter diameters at the machine without reposting;
-  the posted coordinates are the part geometry, not the tool-center path.
+  fine-tune size and wear at the machine. Profile coordinates remain the
+  part geometry; only the uncompensated link endpoints and programmed lead
+  arcs include the nominal radius needed to make controller activation and
+  cancellation physically safe. A radically different cutter still needs
+  link-clearance verification and may require reposting.
   In software offsets the path in the planner and posts plain tool-center
   coordinates with no machine compensation. GRBL has no cutter radius
   compensation vocabulary, so the GRBL post refuses in-control programs —
   fail closed with an actionable message rather than emit unoffset motion.
-  The simulator honors both modes: in-control programs are offset by the
-  nominal tool radius during simulation (buffered between the activation and
-  cancellation markers, mitered at corners; compensated arcs tessellate into
-  short chords at cancellation), so the preview still cuts
-  exactly to the contour and never past it.
+  The simulator honors both modes. For in-control programs it models normal
+  controller approach/retract behavior: the activation block moves from the
+  uncompensated lead point to the first compensated center point, the
+  following profile is offset by the nominal tool radius (mitered at corners;
+  arcs tessellate into short chords), and cancellation leaves from the final
+  compensated center point. The native Siemens profile explicitly emits
+  `NORM` with G41/G42 so posted behavior matches that verification model.
 - Straight or arc lead-in/lead-out on contour operations, with
   operator-set lengths and an optional horizontal arc radius that rounds
   each straight lead into a tangential 90° meet with the profile, swinging
   in from the non-material side so the entry corner is never scuffed.
-  Leads extend the end tangents for outside compensation and open
-  chains; a closed loop compensated INSIDE (pocket/slot walls) instead
-  enters and leaves along the start corner's interior angle bisector, so the
-  entry plunge and the compensation-activation move never cross the wall
-  into the material outside the ring (arc leads need swing room a closed
-  inside profile does not have, so they are straight there). Lead lengths
-  and the arc radius carry no tool-diameter floor: with machine-side
-  compensation the control owns its activation travel (short leads are its
-  problem to solve, not a plan-time error), and with software compensation
-  the planner offsets the programmed path directly. The dialog seeds leads
-  at 1.5x the tool radius as a comfortable default, never a limit.
+  Lead lengths and arc radius describe the physical cutter-center motion.
+  With machine-side compensation, entry and exit points are shifted onto
+  that compensated centerline; a requested arc is programmed one tool radius
+  larger so the controller's inward offset reconstructs the requested radius
+  instead of collapsing a small arc under a large cutter. Outside profiles
+  and open chains extend their tangents. An inside machine-compensated loop
+  starts along a straight wall segment long enough for both leads plus one
+  cutter radius at each neighboring corner, keeping the complete transition
+  in the wall band and avoiding ambiguous activation at a sharp inside corner;
+  otherwise planning fails closed with guidance to shorten the leads, switch
+  to software compensation, or use a smaller cutter. Software-compensated
+  inside loops keep the interior-bisector lead. Arc leads into a closed inside
+  profile remain unsupported. Positive lead values carry no arbitrary tool-
+  diameter floor, though a real control can still reject an activation move
+  shorter than its machine-specific minimum. The dialog seeds leads at 1.5x
+  the tool radius as a comfortable default, never a limit.
   Vertical lead radii are a documented next slice.
 - Contour cuts climb or conventional (the planner re-winds the stored path
   around its start; open chains reverse with the physical side preserved),
@@ -207,7 +217,11 @@ rewrites stored geometry.
   are pre-offset by the planner. Switching compensation modes never touches
   the picked edge chain: the operation stores its `chain_ref` provenance and
   edit sessions re-select the same viewport entities. Maximum stepdown is
-  always on for contour (no multiple-depths toggle).
+  always on for contour (no multiple-depths toggle). Roughing laps currently
+  follow the same exact offset polyline as the profile lap. Rounded/rolling
+  roughing corners are deliberately deferred to the shared 2D path kernel:
+  doing them safely needs concave-corner handling, self-intersection cleanup,
+  and engagement-aware smoothing that can also serve later high-speed paths.
 - Facing rows are centered on the face: cutter bands extend one radius past
   each row's center, so the minimal row count spans the face and a face one
   band covers gets exactly one pass through the middle — never a row
@@ -283,10 +297,12 @@ rewrites stored geometry.
   operation's toolpath (dotted rapids / solid cuts, drawn through geometry),
   identical pure-cone direction markers — green where the cutting feed
   starts, red where the tool leaves the work — planted at the exact start of
-  the first feed move of every operation kind; the exit cone lifts to the
-  retract target pointing up when the section closes with an upward rapid
-  (the only safe rapid level, at or above the feed height), otherwise it
-  rides the exact end of the last feed move,
+  the first feed move of every operation kind; the exit cone parks at the
+  final actual motion endpoint on the configured retract plane and points up.
+  Milling explicitly stops at retract before continuing to clearance, while
+  tapping/reaming feed back to the same endpoint. Face, contour, and drill
+  defaults resolve Feed and Retract to the same height, so their two markers
+  are level unless the operator deliberately separates those settings,
   oriented along the exact motion tangent (arc tangents from the circle
   geometry, not display chords; rapids never carry markers). Cone size
   follows the model extent alone — a fixed short marker that grows and
@@ -385,7 +401,10 @@ interactive simulation deterministic and bounded.
 Bevy remains a presentation layer. The remaining-stock mesh rides the native
 viewport's transient triangle channel (alpha-blended, depth-tested) alongside
 the toolpath line layers, so the desktop app renders simulation results in the
-shared modeling viewport. A dedicated retained Bevy CAM scene and timeline
+shared modeling viewport. The workspace displays the actual maximum cell edge
+as **3D detail** and renders the simulator's own accuracy/coverage warnings
+(deduplicated from planner warnings), so a blocky boundary cannot silently be
+mistaken for exact stock. A dedicated retained Bevy CAM scene and timeline
 player can consume the same result later; it should not own material removal
 or safety decisions.
 
@@ -603,28 +622,28 @@ model, machine definitions, cycles, and verification layer are mature.
 
 ## Next engineering slices
 
-1. Selection-derived contours and drill points from exact BRep faces/edges
-   (today the operator picks sketch loops/points or enters coordinates).
-2. Second operation wave: thread milling, bore cycles, 3D adaptive clearing,
-   and richer drilling cycles (chip-breaking, deep hole, tapping, reaming,
-   boring).
-3. Exact target-solid voxelization, fixture/tool-holder definitions, gouge and
-   collision checking, plus operation-to-operation rest machining.
-4. Timeline playback and per-step inspection fed directly from the headless
-   simulator; the remaining-stock mesh already renders through the shared
-   viewport's transient channel.
-5. Tool-length compensation, machine limits, safe tool-change/home policies,
-   and configurable controller capabilities.
-6. Ramp/helical entries, tabs, arc/sweep lead shapes (beyond the straight
-   tangent leads contours already plan), lead corner-clearance validation,
-   and arc fitting.
-7. Parse and simulate final posted NC, compare it with pre-post motion, and add
-   per-command inspection plus golden controller tests.
-8. A 2D geometry kernel module: robust polygon offsetting with miter/arc
-   joins and self-intersection cleanup, polygon clipping and boolean ops, and
-   tangent-arc fitting between arbitrary segment pairs. Today's offsets are
-   single-polylines with miter joins — enough for straight-led contours, not
-   for what comes next. This kernel is the prerequisite for arc and sweep
-   lead shapes, validating that a lead cannot gouge the part on approach,
-   rest machining against exact boundaries, and the future 3D toolpath
-   families; build it before those slices rather than inside them.
+1. **CAM stabilization gate (landed 2026-08-28).** A representative
+   face/contour/drill job crosses save/reopen, controller-neutral planning,
+   native Siemens posting, and stock simulation in one regression. The gate
+   also pins retract-before-clearance, normal cutter-compensation transitions,
+   operator-visible simulator warnings, and actual preview resolution.
+2. **Simulator confidence foundation (next).** Add accurate envelopes for
+   every supported cutter; target-part gouge checking; shaft/holder, fixture,
+   and machine-envelope collisions; an explicit quality/tolerance control;
+   smoother accuracy-controlled remaining-stock extraction; and command-level
+   playback. Keep OCCT as exact target/fixture geometry, the headless Rust
+   subsystem as the removal/safety authority, and Bevy as presentation.
+3. **Shared robust 2D geometry kernel.** Implement polygon offsets with
+   miter/arc joins and self-intersection cleanup, clipping/booleans,
+   tangent-arc fitting, and engagement-aware smoothing. This is the
+   prerequisite for rounded contour roughing, safe concave transitions,
+   rest-boundary reasoning, and later high-speed/3D path families.
+4. **Remaining 2.5D linking and operations.** Ramp/helical entry,
+   keep-tool-down linking, vertical lead radii, tabs, bore milling, and the
+   remaining thread-milling variants belong after the shared geometry base.
+5. **3D adaptive clearing.** Start only after the simulator and shared path
+   kernel can validate rest stock, engagement, gouging, and collisions.
+6. **Posted-NC verification.** Parse and simulate final controller text,
+   compare it with neutral motion, and add command-level inspection plus
+   golden controller suites. Tool-length compensation, machine limits, and
+   safe home/tool-change policies join this machine-verification layer.

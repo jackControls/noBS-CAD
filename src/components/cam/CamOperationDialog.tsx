@@ -111,7 +111,9 @@ const HEIGHT_FROM_DEAD = [
  *  planes differently per kind: facing starts a skin above the stock top and
  *  cuts to the model top; contours run stock-to-stock with a break-through;
  *  hole kinds hang off the model top / stock bottom or the picked holes' own
- *  span. Editing always re-opens the stored absolute values instead. */
+ *  span. Feed and retract intentionally resolve to the same default height
+ *  for face, contour, and drill operations; editing always re-opens the
+ *  stored absolute values instead. */
 const HEIGHT_DEFAULTS: Record<
   OperationKind,
   {
@@ -623,8 +625,8 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
   };
   const [leadIn, setLeadIn] = useState(() => seedLead(contourOp?.lead_in));
   const [leadOut, setLeadOut] = useState(() => seedLead(contourOp?.lead_out));
-  // Optional arc radius rounding each straight lead into a tangential meet
-  // with the profile (empty = straight leads).
+  // Optional physical cutter-center arc radius rounding each straight lead
+  // into a tangential meet with the profile (empty = straight leads).
   const [leadArcRadius, setLeadArcRadius] = useState(
     contourOp?.lead_arc_radius != null
       ? displayLength(contourOp.lead_arc_radius, units).toFixed(4)
@@ -1181,10 +1183,10 @@ export function CamOperationDialog({ kind, editing }: { kind: OperationKind; edi
           if (arcMm !== null && arcMm <= 0) {
             throw new Error('Lead arc radius must be positive.');
           }
-          // Lead lengths and arc radius carry no tool-diameter floor: short
-          // leads are legal — with machine-side compensation the control owns
-          // its activation travel, and with software compensation the planner
-          // offsets the programmed path directly.
+          // Lead lengths and arc radius describe physical cutter-center
+          // motion and carry no tool-diameter floor. In-control planning
+          // expands the programmed lead arc by the selected tool radius so
+          // the controller's compensated result still matches this value.
           const passes = Math.max(1, Math.round(parseDraft(roughingPasses, 'Roughing passes')));
           let roughStepMm: number | null = null;
           if (passes > 1) {
