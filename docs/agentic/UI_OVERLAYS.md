@@ -49,3 +49,22 @@ changes there. The test must:
 Checking only that React state changed, the node exists, an overlay rectangle
 was reported to native code, or the element looks correct in fullscreen does
 not prove the windowed surface is painted and interactive.
+
+## Responsive command-ribbon policy
+
+This policy applies to Solid Modeling, Sketch, Drawing, Assembly, and CAM.
+
+1. Keep every workflow group visible at ordinary desktop widths. In particular,
+   a primary action such as **Select** must not be available only after
+   horizontally scrolling the ribbon.
+2. When the command strip loses space, move secondary direct buttons into that
+   panel's existing flyout before hiding a panel or enabling horizontal scroll.
+   Panels without a curated flyout must expose an equivalent generated menu so
+   no command becomes unreachable.
+3. Measure the usable strip after fixed chrome (the workspace switcher and, in
+   Sketch, Finish Sketch). Do not rely on a global viewport breakpoint: restore
+   direct buttons as soon as that measured space returns.
+4. Horizontal scrolling is the final fallback, only after the localized panel
+   labels and one primary action from each group cannot coexist. Center a
+   one-command group over its panel label and use the same button width and
+   label treatment across groups.

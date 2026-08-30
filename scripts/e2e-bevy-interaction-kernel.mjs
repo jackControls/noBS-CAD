@@ -720,25 +720,39 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().mode === 'sketch',
   );
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="ribbon-command-scroll"]')
+      ?.getAttribute('data-ribbon-layout-ready') === 'true',
+  );
   const compactRibbon = await page.evaluate(() => {
     const root = document.querySelector('[data-testid="ribbon-tools"]');
     const commands = document.querySelector(
       '[data-testid="ribbon-command-scroll"]',
     );
-    const fix = document.querySelector('[data-ribbon-button="fixUnfix"]');
+    const dimension = document.querySelector('[data-ribbon-button="sketchDimension"]');
+    const select = document.querySelector('[data-ribbon-button="select"]');
     const finish = [...document.querySelectorAll('button')].find(
       (button) => button.textContent?.trim().toLowerCase() === 'finish sketch',
     );
-    if (!root || !commands || !fix || !finish) return null;
+    if (!root || !commands || !dimension || !select || !finish) return null;
     const rootRect = root.getBoundingClientRect();
     const commandsRect = commands.getBoundingClientRect();
-    const fixRect = fix.getBoundingClientRect();
+    const dimensionRect = dimension.getBoundingClientRect();
+    const dimensionPanel = dimension.closest('[data-ribbon-panel]');
+    const dimensionPanelRect = dimensionPanel?.getBoundingClientRect();
+    const selectRect = select.getBoundingClientRect();
     const finishRect = finish.getBoundingClientRect();
     return {
       overflow: commands.scrollWidth - commands.clientWidth,
-      fixFullyVisible:
-        fixRect.left >= commandsRect.left - 0.5 &&
-        fixRect.right <= commandsRect.right + 0.5,
+      dimensionCentered: dimensionPanelRect
+        ? Math.abs(
+          dimensionRect.left + dimensionRect.width / 2
+            - (dimensionPanelRect.left + dimensionPanelRect.width / 2),
+        ) <= 1
+        : false,
+      selectFullyVisible:
+        selectRect.left >= commandsRect.left - 0.5 &&
+        selectRect.right <= commandsRect.right + 0.5,
       finishFullyVisible:
         finishRect.left >= rootRect.left - 0.5 &&
         finishRect.right <= rootRect.right + 0.5,
@@ -746,8 +760,8 @@ try {
   });
   assert.deepEqual(
     compactRibbon,
-    { overflow: 0, fixFullyVisible: true, finishFullyVisible: true },
-    'the complete sketch ribbon must fit without clipping at 1280 px',
+    { overflow: 0, dimensionCentered: true, selectFullyVisible: true, finishFullyVisible: true },
+    'the compact sketch ribbon keeps Dimension centered, Select visible, and Finish Sketch unclipped at 1280 px',
   );
   await page.locator('button[title="Line"]').click();
   const sketchPaletteMask = await page.evaluate(async () => {
