@@ -2,8 +2,8 @@
 
 Hands-on audit of every constraint function in the sketch workspace, driven
 through the real UI (Playwright against the web build) plus engine-level
-probes where the UI could not isolate a cause. Autodesk Fusion's sketch
-constraint behavior is used as the reference bar throughout.
+probes where the UI could not isolate a cause. Established mechanical-CAD
+sketch behavior is used as the reference bar throughout.
 
 **Environment.** Branch `fix/sketch-cad` at `8d46b18` (origin/main). WASM
 engine built the same day from `feature/cam`; `git diff main feature/cam --
@@ -35,11 +35,11 @@ driving the actual UI:
 | Concentric | ✅ center distance 5.9e-11 |
 | Tangent line↔circle | ✅ gap 7.7e-11 |
 | Coincident point↔point | ✅ merged exactly |
-| Coincident point↔circle (point-on-rim) | ✅ Fusion-parity point-on-curve |
+| Coincident point↔circle (point-on-rim) | ✅ standard point-on-curve behavior |
 | MidPoint (point + line) | ✅ lands at exact midpoint |
 | 3-entity multi-select for Symmetry | ✅ `[16,17,15]`, axis = last selected |
 | DOF chip | ✅ `DOF: 44` == solver's `dof.value` (44); staircase 8→7 (parallel), −1 per H/V, −3 on Fix of a V-line — all arithmetically right |
-| Dimension defaults | ✅ circles get **diameter** (Ø), lines get length — matches Fusion |
+| Dimension defaults | ✅ circles get **diameter** (Ø), lines get length — common CAD default |
 | Dimension edit gesture | ✅ double-click (or two clicks ≤450 ms) opens the inline formula-capable editor |
 | Invalid-selection messages | ✅ specific and actionable, e.g. *"Symmetry needs two entities and an axis line (select axis last)."* |
 | Honest placeholders | ✅ AutoConstrain / Curvature rendered disabled, not missing |
@@ -58,8 +58,8 @@ premise fails.
 draw-roughly-then-constrain workflow.
 
 **Symptom.** Two points (a sketched line's endpoints) + a vertical axis line,
-axis selected last: the constraint is rejected. In Fusion this is the
-canonical symmetry use — the solver moves the geometry into symmetry.
+axis selected last: the constraint is rejected. This is the canonical
+symmetry workflow — the solver should move the geometry into symmetry.
 
 **Reproduce (UI).**
 1. Draw a near-vertical line (it auto-snaps to Vertical) — the axis.
@@ -98,8 +98,8 @@ the iteration budget is gone. Fixing the axis removes those directions and
 the same LM loop converges immediately.
 
 **Suggested fix.** Either (a) seed the solve for a freshly added Symmetry by
-pre-mirroring `b` across the current axis before iterating (cheap, mirrors
-Fusion's behavior of moving geometry to satisfy the new constraint), or
+pre-mirroring `b` across the current axis before iterating (cheap and consistent
+with the expected behavior of moving geometry to satisfy the new constraint), or
 (b) strengthen the LM loop (line search / dogleg, or temporarily down-weight
 the axis variables for the first iterations of a symmetry add).
 
@@ -134,9 +134,10 @@ the 80-iteration budget out; nearer starts converge on centers, farther starts
 escape via radius growth.
 
 The d = 30 outcome is also a UX finding on its own: mathematically valid, but
-no user expects circles they drew at r = 5 to balloon to r = 13.47. Fusion
-translates circles and preserves radii. Consider weighting radius variables
-stiffer than positions during a tangent add.
+no user expects circles they drew at r = 5 to balloon to r = 13.47. A
+predictable CAD solve translates circles and preserves their unconstrained
+radii. Consider weighting radius variables stiffer than positions during a
+tangent add.
 
 ---
 
@@ -201,9 +202,9 @@ reports (see above); repeated panel clicks silently "work" (compounded by the
 selection surviving the apply — see UX-3).
 
 **Suggested fix.** Before solving, reject (or no-op with a status message) a
-constraint identical to an existing one on the same entity set. For Fusion
-parity, also reject rank-neutral additions ("this constraint is redundant"),
-which the code can already detect via `rank_increased`.
+constraint identical to an existing one on the same entity set. For predictable
+behavior, also identify rank-neutral additions as redundant rather than silently
+adding them; the code can already detect this via `rank_increased`.
 
 ---
 
@@ -267,8 +268,8 @@ passes `session.rs:2792`. The two dims only fight later, when the user edits
 one of them (and with Bug 5, the stored values can't even be compared
 honestly).
 
-**Fusion reference.** The second dimension is automatically demoted to a
-**driven (reference) dimension** with a toast explaining why. There is
+**Recommended behavior.** The second dimension should automatically become a
+**driven (reference) dimension** with a notice explaining why. There is
 currently no driven-dimension concept in `Constraint`/`DimensionDto` — worth
 adding alongside this fix.
 
@@ -288,9 +289,9 @@ snap lives in the engine path too, so this is not just pointer inference.
 `entities[].start/end` and the auto constraint list.
 
 **Cause.** `LINE_AXIS_INFERENCE_TOL_DEG = 10` (`Viewport.tsx:195`) plus the
-engine-side equivalent applied to `to_raw`. Fusion's H/V inference window is
-roughly 2–3°, is visibly previewed, and never rewrites already-typed/exact
-coordinates.
+engine-side equivalent applied to `to_raw`. A narrower H/V inference window of
+roughly 2–3° is less intrusive; it should be visibly previewed and must never
+rewrite already-typed/exact coordinates.
 
 **Suggested fix.** Drop the tolerance to 2–3°; keep 10° only for the visual
 inference *chip* if desired, and never apply an axis snap without the glyph
@@ -298,33 +299,33 @@ preview having been visible at commit time.
 
 ---
 
-## UX improvements (ranked, Fusion as the bar)
+## UX improvements (ranked against established CAD behavior)
 
 1. **Type-on-place for dimensions.** Today: placement commits the measured
-   value; editing requires a second gesture (double-click). Fusion opens the
-   value input at placement. The engine already supports it —
+   value; editing requires a second gesture (double-click). Established CAD
+   workflows open the value input at placement. The engine already supports it —
    `add_dimension` accepts `value_text` (`dims.rs:276`) — but the Viewport
    never sends it (`Viewport.tsx:10011` `addDimension({ entities, text_pos })`).
    Low-effort, high-payoff parity win.
 2. **Expose point-pair Horizontal/Vertical.** The solver has
    `HorizontalPoints` / `VerticalPoints` (`constraint.rs:47-56`), but the
    panel gate is lines-only (`applyConstraint.ts:23-28`); two selected points
-   yield *"Horizontal/Vertical needs one or more lines."* Fusion aligns two
-   points with H/V. The panel rule just needs a points branch.
+   yield *"Horizontal/Vertical needs one or more lines."* Standard H/V tools
+   also align two points. The panel rule just needs a points branch.
 3. **Clear the selection after a successful apply.** Selection persists
    (`selectionAfter: [3]` etc. in every transcript), so a second click
-   double-applies (see Bug 4). Fusion clears selection on success.
+   double-applies (see Bug 4). Clearing it on success prevents accidental repeats.
 4. **Tangent should prefer moving circles over resizing them** (see Bug 2's
    d = 30 case) — stiffen radius variables during tangent adds.
-5. **MidPoint should accept arcs** (point at arc midpoint is standard in
-   Fusion); the gate is point+line only (`applyConstraint.ts:43-47`).
+5. **MidPoint should accept arcs** (a point at an arc midpoint is a standard
+   sketch relation); the gate is point+line only (`applyConstraint.ts:43-47`).
 6. **Symmetry axis-order affordance.** The all-lines variant infers the axis
-   as the most-recently-selected line — same convention as Fusion, and the
+   as the most-recently-selected line — a familiar convention, and the
    failure hint ("select axis last") is good. But a *successful* apply with an
    unintended axis gives no feedback. Highlight the inferred axis (or prompt
    explicitly) before committing.
 7. **Multi-select caps.** H/V and Fix/UnFix accept at most 8 entities
-   (`applyConstraint.ts:24,42`) — an arbitrary ceiling Fusion doesn't have.
+   (`applyConstraint.ts:24,42`) — an arbitrary ceiling with no modeling reason.
 8. **Empty-conflict message assembly** — covered by Bug 3's fix; the string
    builder should also never emit a dangling "conflicts with ".
 

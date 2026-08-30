@@ -1,6 +1,7 @@
 /**
- * Isolated engine-level solver convergence probes (symmetry / tangent).
- * Evidence for docs/SKETCH_CONSTRAINT_AUDIT.md.
+ * Isolated engine-level solver convergence regressions (symmetry / tangent).
+ * Originally used as evidence for docs/SKETCH_CONSTRAINT_AUDIT.md; retained
+ * to keep the audited convergence envelope reproducible after hardening.
  * Run: start `npm run dev -- --port 7317 --strictPort`, then `node scripts/audit-sketch-solver-probes.mjs [out-dir]`.
  */
 import { chromium } from 'playwright';
@@ -83,7 +84,7 @@ await run('tangent-cc-d15-isolated', `
 
 // the exact UI symmetry case from round 5
 await run('symmetry-ui-case', `
-  const ax = await engine.addLine({ from: { x: 0, y: -50 }, to_raw: { x: 0.9, y: -18 }, ctrl_held: false });
+  const ax = await engine.addLine({ from: { x: 0, y: -50 }, to_raw: { x: 0.9, y: -18 }, ctrl_held: true });
   const axis = ax.sketch.entities.filter(e => e.kind === 'line').at(-1).id;
   await engine.addConstraints([{ type: 'vertical', entity: axis }]);
   const ls = await engine.addLine({ from: { x: -18, y: -44 }, to_raw: { x: -9, y: -32 }, ctrl_held: false });

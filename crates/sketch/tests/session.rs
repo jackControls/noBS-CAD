@@ -106,12 +106,12 @@ fn horizontal_inference_near_axis_projects_endpoint() {
 }
 
 #[test]
-fn horizontal_is_the_default_until_the_cursor_is_intentionally_diagonal() {
+fn deliberate_nine_degree_line_is_not_flattened_by_axis_inference() {
     let s = session_off_grid();
     let nine_degrees = 50.0 * 9.0_f64.to_radians().tan();
     let preview = s.preview_segment(v(0.0, 0.0), v(50.0, nine_degrees), false);
-    assert_eq!(preview.inferences, vec![Inference::Horizontal]);
-    assert_eq!(preview.snapped_to, v(50.0, 0.0));
+    assert!(preview.inferences.is_empty());
+    assert_eq!(preview.snapped_to, v(50.0, nine_degrees));
 }
 
 #[test]
@@ -149,6 +149,36 @@ fn ctrl_disables_inference() {
     let preview = s.preview_segment(v(0.0, 0.0), v(50.0, 1.0), true);
     assert!(preview.inferences.is_empty());
     assert_eq!(preview.snapped_to, v(50.0, 1.0));
+}
+
+#[test]
+fn ctrl_suppresses_magnetic_point_and_origin_acquisition() {
+    let mut s = session_off_grid();
+    let point = s.add_point(v(20.0, 20.0)).unwrap().entities[0];
+
+    let near_point = s.preview_segment(v(50.0, 50.0), v(20.4, 19.7), true);
+    assert_eq!(near_point.snap, SnapTarget::None);
+    assert_eq!(near_point.snapped_to, v(20.4, 19.7));
+    assert_ne!(near_point.snap, SnapTarget::Point { entity: point });
+
+    let near_origin = s.preview_segment(v(50.0, 50.0), v(0.4, -0.3), true);
+    assert_eq!(near_origin.snap, SnapTarget::None);
+    assert_eq!(near_origin.snapped_to, v(0.4, -0.3));
+}
+
+#[test]
+fn intentional_origin_snap_creates_a_visible_datum_relation_not_fix() {
+    let mut s = session_off_grid();
+    let line = s.add_line(v(0.4, -0.3), v(24.0, 9.0), false).unwrap();
+    assert!(line.created_constraints.iter().any(|created| matches!(
+        created.constraint,
+        Constraint::OriginCoincident { entity } if entity == line.start_point_id
+    )));
+    assert!(!line
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(constraint.constraint, Constraint::Fix { .. })));
 }
 
 #[test]
@@ -377,12 +407,14 @@ fn snapping_onto_an_existing_point_merges_structurally() {
 fn add_line_creates_hv_constraints_from_inference() {
     let mut s = session_off_grid();
     let h = s.add_line(v(0.0, 0.0), v(50.0, 1.0), false).unwrap();
-    assert_eq!(h.created_constraints.len(), 1);
-    assert_eq!(h.created_constraints[0].constraint, {
-        nbcad_sketch::Constraint::Horizontal {
-            entity: h.entity_id,
-        }
-    });
+    assert!(h.created_constraints.iter().any(|created| matches!(
+        created.constraint,
+        Constraint::Horizontal { entity } if entity == h.entity_id
+    )));
+    assert!(h.created_constraints.iter().any(|created| matches!(
+        created.constraint,
+        Constraint::OriginCoincident { entity } if entity == h.start_point_id
+    )));
     // The endpoint was projected exactly horizontal.
     let (_, end) = line_endpoints(&s, h.entity_id);
     assert_eq!(end, v(50.0, 0.0));
@@ -472,6 +504,117 @@ fn connected_right_angles_prefer_relational_perpendicular_constraints() {
 }
 
 #[test]
+fn connected_perpendicular_is_previewed_and_the_override_suppresses_it() {
+    let mut s = session_off_grid();
+    let base = s.add_line(v(10.0, 10.0), v(40.0, 10.0), true).unwrap();
+
+    let preview = s.preview_segment(v(40.0, 10.0), v(40.6, 40.0), false);
+    assert!(preview.inferences.contains(&Inference::Perpendicular));
+    let committed = s.add_line(v(40.0, 10.0), v(40.6, 40.0), false).unwrap();
+    assert!(committed.created_constraints.iter().any(|created| matches!(
+        created.constraint,
+        Constraint::Perpendicular { a, b }
+            if (a == base.entity_id && b == committed.entity_id)
+                || (a == committed.entity_id && b == base.entity_id)
+    )));
+    assert!(
+        !committed.created_constraints.iter().any(|created| matches!(
+            created.constraint,
+            Constraint::Vertical { entity } if entity == committed.entity_id
+        ))
+    );
+
+    let suppressed = s.preview_segment(v(40.0, 10.0), v(40.6, -20.0), true);
+    assert!(!suppressed.inferences.contains(&Inference::Perpendicular));
+}
+
+#[test]
+fn center_acquisition_is_associative_and_never_silently_fixes_a_curve() {
+    let mut s = session_off_grid();
+    let center = s.add_point(v(20.0, 20.0)).unwrap().entities[0];
+    let circle = s
+        .add_circle_selective(
+            nbcad_sketch::CircleMode::CenterDiameter,
+            v(20.5, 19.6),
+            v(32.0, 20.0),
+            false,
+        )
+        .unwrap();
+    let circle_id = circle.entities[0];
+    assert!(circle.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::CenterCoincident { point, curve }
+            if point == center && curve == circle_id
+    )));
+    assert!(!circle
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(constraint.constraint, Constraint::Fix { entity } if entity == circle_id)));
+
+    let origin_circle = s
+        .add_circle_selective(
+            nbcad_sketch::CircleMode::CenterDiameter,
+            v(0.3, -0.2),
+            v(8.0, 0.0),
+            false,
+        )
+        .unwrap();
+    assert!(origin_circle
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(
+            constraint.constraint,
+            Constraint::OriginCoincident { entity } if entity == origin_circle.entities[0]
+        )));
+}
+
+#[test]
+fn arc_endpoint_tangency_is_selective_associative_and_suppressible() {
+    let mut inferred = session_off_grid();
+    let carrier = inferred.add_line(v(0.0, 0.0), v(10.0, 0.0), true).unwrap();
+    let arc = inferred
+        .add_arc_3pt_selective(v(10.0, 0.0), v(15.0, 5.0), v(10.0, 10.0), false)
+        .unwrap();
+    let arc_id = arc.entities[0];
+    assert!(arc.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::ArcEndpointCoincident { point, arc, .. }
+            if point == carrier.end_point_id && arc == arc_id
+    )));
+    assert!(
+        arc.sketch.constraints.iter().any(|constraint| matches!(
+            constraint.constraint,
+            Constraint::Tangent { a, b }
+                if (a == carrier.entity_id && b == arc_id)
+                    || (a == arc_id && b == carrier.entity_id)
+        )),
+        "constraints={:?}, entities={:?}",
+        arc.sketch.constraints,
+        arc.sketch.entities
+    );
+
+    let mut suppressed = session_off_grid();
+    let carrier = suppressed
+        .add_line(v(0.0, 0.0), v(10.0, 0.0), true)
+        .unwrap();
+    let arc = suppressed
+        .add_arc_3pt_selective(v(10.0, 0.0), v(15.0, 5.0), v(10.0, 10.0), true)
+        .unwrap();
+    assert!(!arc.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::ArcEndpointCoincident { point, arc: constrained_arc, .. }
+            if point == carrier.end_point_id && constrained_arc == arc.entities[0]
+    )));
+    assert!(!arc.sketch.constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::Tangent { a, b }
+            if a == arc.entities[0] || b == arc.entities[0]
+    )));
+}
+
+#[test]
 fn add_line_with_ctrl_creates_no_constraints() {
     let mut s = session_off_grid();
     let r = s.add_line(v(0.0, 0.0), v(50.0, 1.0), true).unwrap();
@@ -508,24 +651,24 @@ fn dragging_a_horizontal_line_endpoint_translates_the_line_keeping_h() {
     // so the whole line translates vertically (rubber-banding
     // under-constrained geometry, D4.4).
     let mut s = session_off_grid();
-    let l = s.add_line(v(0.0, 0.0), v(50.0, 1.0), false).unwrap(); // H inferred
+    let l = s.add_line(v(10.0, 10.0), v(60.0, 11.0), false).unwrap(); // H inferred
     let r = s
-        .move_point(move_req(l.end_point_id, v(70.0, 30.0), DragPhase::Single))
+        .move_point(move_req(l.end_point_id, v(80.0, 30.0), DragPhase::Single))
         .unwrap();
     let (start, end) = line_endpoints_dto(&r.sketch, l.entity_id);
-    assert_eq!(end, v(70.0, 30.0)); // pinned exactly to the cursor
+    assert_eq!(end, v(80.0, 30.0)); // pinned exactly to the cursor
     assert!((start.y - end.y).abs() < 1e-9, "H must hold after drag");
 }
 
 #[test]
 fn dragging_a_vertical_line_endpoint_translates_the_line_keeping_v() {
     let mut s = session_off_grid();
-    let l = s.add_line(v(0.0, 0.0), v(1.0, 50.0), false).unwrap(); // V inferred
+    let l = s.add_line(v(10.0, 10.0), v(11.0, 60.0), false).unwrap(); // V inferred
     let r = s
-        .move_point(move_req(l.end_point_id, v(30.0, 70.0), DragPhase::Single))
+        .move_point(move_req(l.end_point_id, v(30.0, 80.0), DragPhase::Single))
         .unwrap();
     let (start, end) = line_endpoints_dto(&r.sketch, l.entity_id);
-    assert_eq!(end, v(30.0, 70.0)); // pinned exactly to the cursor
+    assert_eq!(end, v(30.0, 80.0)); // pinned exactly to the cursor
     assert!((start.x - end.x).abs() < 1e-9, "V must hold after drag");
 }
 
@@ -596,7 +739,11 @@ fn deleting_a_point_deletes_connected_lines_and_constraints() {
     assert!(r.removed.contains(&shared));
     assert!(r.removed.contains(&l1.entity_id));
     assert!(r.removed.contains(&l2.entity_id));
-    assert_eq!(r.sketch.constraints.len(), 0);
+    assert_eq!(r.sketch.constraints.len(), 1);
+    assert!(matches!(
+        r.sketch.constraints[0].constraint,
+        Constraint::OriginCoincident { entity } if entity == l1.start_point_id
+    ));
     // Only the two outer endpoints survive.
     assert_eq!(r.sketch.entities.len(), 2);
 }
@@ -639,7 +786,15 @@ fn delete_is_undoable_with_full_cascade_restore() {
 
     let restored = s.undo().unwrap();
     assert_eq!(restored.sketch.entities.len(), 5);
-    assert_eq!(restored.sketch.constraints.len(), 1);
+    assert_eq!(restored.sketch.constraints.len(), 2);
+    assert!(restored
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(
+            constraint.constraint,
+            Constraint::OriginCoincident { entity } if entity == l1.start_point_id
+        )));
 }
 
 #[test]

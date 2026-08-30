@@ -34,6 +34,7 @@ import { pickDatumPlane, pickPlanarFace, pickPlane } from '../../engine/controll
 import type {
   BodyFeatureDefinitionDto,
   CurveCrossingRequest,
+  DimensionalConstraintType,
   DimensionDto,
   EntityDto,
   FaceDto,
@@ -53,6 +54,7 @@ import type {
   PreviewDto,
   SketchDto,
   SketchPointKindDto,
+  SketchConstraintType,
   SnapTarget,
   TrackingAxis,
   Vec2,
@@ -72,6 +74,8 @@ import {
 import { computeDimGeometry, formatDimMeasurement } from './dimsRenderer';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
 import {
+  CONSTRAINT_EXISTENCE_GLYPH,
+  MULTI_ENTITY_RELATION_GLYPH,
   SINGLE_POINT_RELATION_GLYPH,
   layoutConstraintGlyphs,
   singlePointRelationAnchor,
@@ -192,7 +196,18 @@ const LINE_TRACKING_REACH_PX = 480;
 /** Near-tied tracking candidates remain free instead of choosing randomly. */
 const LINE_TRACKING_AMBIGUITY_PX = 2.5;
 /** Must match the engine's H/V inference cone. */
-const LINE_AXIS_INFERENCE_TOL_DEG = 10;
+// Keep the visible acquisition cone identical to the engine commit rule.
+const LINE_AXIS_INFERENCE_TOL_DEG = 3;
+const DIMENSION_CONSTRAINT_TYPES: ReadonlySet<DimensionalConstraintType> = new Set([
+  'distance',
+  'radius',
+  'diameter',
+  'angle',
+]);
+const isDimensionalConstraintType = (
+  type: SketchConstraintType,
+): type is DimensionalConstraintType =>
+  DIMENSION_CONSTRAINT_TYPES.has(type as DimensionalConstraintType);
 const LINE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line']);
 const CURVE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line', 'circle', 'arc']);
 type SolidEdgePickMode = 'any' | 'refinable' | 'straight';
@@ -350,6 +365,7 @@ export function Viewport() {
     const CSS_MUTE = cssThemeColor('--mute', '#9aa0a8');
     const CSS_FINISH = cssThemeColor('--finish', '#58a65c');
     const CSS_DIMENSION = cssThemeColor('--dimgreen', '#aecb1e');
+    const CSS_REFERENCE_DIMENSION = CSS_MUTE;
     const CSS_DIMENSION_SELECTED = cssThemeColor(
       '--cad-dimension-selected',
       '#c4b9ff',
@@ -407,6 +423,7 @@ export function Viewport() {
     const COLOR_HEMI_SKY = interactionThemeColor('--cad-hemi-sky', '#dce9f5');
     const COLOR_HEMI_GROUND = interactionThemeColor('--cad-hemi-ground', '#30343b');
     const COLOR_DIMENSION = interactionThemeColor('--dimgreen', '#aecb1e');
+    const COLOR_REFERENCE_DIMENSION = interactionThemeColor('--mute', '#9aa0a8');
     const COLOR_DIMENSION_SELECTED = interactionThemeColor(
       '--cad-dimension-selected',
       '#c4b9ff',
@@ -984,7 +1001,9 @@ export function Viewport() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = selected ? CSS_GRIP_FILL : CSS_INK;
-        ctx.fillText(text, 32, 34);
+        // Fit multi-character fallbacks (Tg, Col, Sym) inside the same
+        // constant-pixel chip instead of clipping their first/last letters.
+        ctx.fillText(text, 32, 34, 56);
       }
       const texture = new CAD.CanvasTexture(canvas);
       glyphTextureCache.set(cacheKey, texture);
@@ -3406,28 +3425,19 @@ export function Viewport() {
         });
       };
 
-      const SKIP_CONSTRAINT_TYPES = new Set([
-        'distance',
-        'radius',
-        'diameter',
-        'angle',
-        'arc_endpoint_coincident',
-        'equal_distance',
-        'span_midpoint',
-      ]);
-      const TWO_ENTITY_GLYPH: Record<string, string> = {
-        // Prefer ASCII / basic Latin so Bevy system fonts never tofu.
-        // Single-point relations (coincident/tangent/perpendicular/concentric)
-        // use SINGLE_POINT_RELATION_GLYPH via a dedicated placement path.
-        parallel: '//',
-        equal: '=',
-        collinear: 'Col',
-        symmetry: 'Sym',
+      const constraintGlyphPx = (label: string, selected: boolean) => {
+        const multiCharacter = Array.from(label).length > 1;
+        if (selected) return multiCharacter ? 24 : 20;
+        return multiCharacter ? 18 : 15;
       };
+
+      // Dimensional constraints have full line/arrow/text annotations in
+      // `rebuildDimensions`. Every geometric constraint is handled below;
+      // none may silently disappear from the Constraints presentation.
       const byId = new Map(sketch.entities.map((entity) => [entity.id, entity]));
 
       for (const constraint of sketch.constraints) {
-        if (SKIP_CONSTRAINT_TYPES.has(constraint.type)) continue;
+        if (isDimensionalConstraintType(constraint.type)) continue;
         const selected = constraint.id === selectedConstraint;
 
         if (
@@ -3446,8 +3456,8 @@ export function Viewport() {
             x: (a.position.x + b.position.x) / 2,
             y: (a.position.y + b.position.y) / 2,
           };
-          const label = horizontal ? 'H' : 'V';
-          const glyphPx = selected ? 20 : 15;
+          const label = CONSTRAINT_EXISTENCE_GLYPH[constraint.type];
+          const glyphPx = constraintGlyphPx(label, selected);
           const preferredDir = horizontal ? { x: 0, y: -1 } : { x: 1, y: 0 };
           const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
           registerConstraintSprite(
@@ -3482,7 +3492,7 @@ export function Viewport() {
             sprite,
             constraint.id,
             glyphPx,
-            'Mid',
+            CONSTRAINT_EXISTENCE_GLYPH.midpoint,
             selected,
             mid,
             preferredDir,
@@ -3490,12 +3500,19 @@ export function Viewport() {
           );
           continue;
         }
-        if (constraint.type === 'reference_midpoint') {
+        if (
+          constraint.type === 'reference_midpoint'
+          || constraint.type === 'span_midpoint'
+        ) {
           const point = sketch.entities.find(
             (entity) => entity.kind === 'point' && entity.id === constraint.point,
           );
           const position =
-            point?.kind === 'point' ? point.position : constraint.position;
+            point?.kind === 'point'
+              ? point.position
+              : constraint.type === 'reference_midpoint'
+                ? constraint.position
+                : null;
           if (!position) continue;
           const glyphPx = selected ? 18 : 13;
           const sprite = makeSprite(
@@ -3507,7 +3524,7 @@ export function Viewport() {
             sprite,
             constraint.id,
             glyphPx,
-            'Mid',
+            CONSTRAINT_EXISTENCE_GLYPH[constraint.type],
             selected,
             position,
             null,
@@ -3523,8 +3540,8 @@ export function Viewport() {
               x: (line.start.x + line.end.x) / 2,
               y: (line.start.y + line.end.y) / 2,
             };
-            const label = constraint.type === 'horizontal' ? 'H' : 'V';
-            const glyphPx = selected ? 20 : 15;
+            const label = CONSTRAINT_EXISTENCE_GLYPH[constraint.type];
+            const glyphPx = constraintGlyphPx(label, selected);
             const preferredDir = constraint.type === 'horizontal'
               ? { x: 0, y: -1 }
               : { x: 1, y: 0 };
@@ -3560,7 +3577,7 @@ export function Viewport() {
               sprite,
               constraint.id,
               glyphPx,
-              'Fix',
+              CONSTRAINT_EXISTENCE_GLYPH.fix,
               selected,
               anchor,
             );
@@ -3588,7 +3605,7 @@ export function Viewport() {
                     y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
                   });
           if (!anchor) continue;
-          const glyphPx = selected ? 20 : 15;
+          const glyphPx = constraintGlyphPx(singlePointGlyph, selected);
           const sprite = makeSprite(glyphTexture(singlePointGlyph, selected), glyphPx, 7);
           registerConstraintSprite(
             sprite,
@@ -3601,7 +3618,7 @@ export function Viewport() {
           continue;
         }
 
-        const glyph = TWO_ENTITY_GLYPH[constraint.type];
+        const glyph = MULTI_ENTITY_RELATION_GLYPH[constraint.type];
         if (!glyph) continue;
         const anchors = constraintReferencedEntityIds(constraint)
           .map((id) => entityAnchor(byId.get(id), lines))
@@ -3614,7 +3631,7 @@ export function Viewport() {
                 x: anchors.reduce((sum, point) => sum + point.x, 0) / anchors.length,
                 y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
               };
-        const glyphPx = selected ? 20 : 15;
+        const glyphPx = constraintGlyphPx(glyph, selected);
         const sprite = makeSprite(glyphTexture(glyph, selected), glyphPx, 7);
         registerConstraintSprite(
           sprite,
@@ -3644,8 +3661,12 @@ export function Viewport() {
     const dimArrows: Array<{ mesh: CAD.Mesh; px: number }> = [];
 
     const dimTextCache = new Map<string, CAD.CanvasTexture>();
-    const dimTextTexture = (text: string, selected: boolean): CAD.CanvasTexture => {
-      const key = `${text}|${selected ? 1 : 0}`;
+    const dimTextTexture = (
+      text: string,
+      selected: boolean,
+      reference: boolean,
+    ): CAD.CanvasTexture => {
+      const key = `${text}|${selected ? 1 : 0}|${reference ? 1 : 0}`;
       const cached = dimTextCache.get(key);
       if (cached) return cached;
       const canvas = window.document.createElement('canvas');
@@ -3655,7 +3676,11 @@ export function Viewport() {
       ctx.font = '600 44px -apple-system, Segoe UI, Roboto, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = selected ? CSS_DIMENSION_SELECTED : CSS_DIMENSION;
+      ctx.fillStyle = selected
+        ? CSS_DIMENSION_SELECTED
+        : reference
+          ? CSS_REFERENCE_DIMENSION
+          : CSS_DIMENSION;
       ctx.fillText(text, 128, 34);
       const texture = new CAD.CanvasTexture(canvas);
       dimTextCache.set(key, texture);
@@ -3685,11 +3710,11 @@ export function Viewport() {
       dimLike: { constraint_id?: number; text: string },
       textPos: Vec2,
       dirLocal: CAD.Vector3 | null,
-      opts: { selected: boolean; aligned: boolean; dimId: number },
+      opts: { selected: boolean; aligned: boolean; dimId: number; reference: boolean },
     ) => {
       const sprite = new CAD.Sprite(
         new CAD.SpriteMaterial({
-          map: dimTextTexture(dimLike.text, opts.selected),
+          map: dimTextTexture(dimLike.text, opts.selected, opts.reference),
           transparent: true,
           depthTest: false,
         }),
@@ -3700,7 +3725,9 @@ export function Viewport() {
       sprite.userData.nativeAnnotationKind = 'dimension';
       sprite.userData.nativeAnnotationColor = opts.selected
         ? COLOR_DIMENSION_SELECTED
-        : COLOR_DIMENSION;
+        : opts.reference
+          ? COLOR_REFERENCE_DIMENSION
+          : COLOR_DIMENSION;
       sprite.userData.nativeAnnotationSelected = opts.selected;
       sprite.userData.dimensionId = opts.dimId;
       dimSprites.push({
@@ -3717,13 +3744,18 @@ export function Viewport() {
      * tool's placement preview). */
     const renderDimAnnotation = (
       group: CAD.Group,
-      dimLike: { kind: DimensionDto['kind']; entities: number[]; text: string; text_pos: Vec2; constraint_id?: number },
+      dimLike: { kind: DimensionDto['kind']; entities: number[]; text: string; text_pos: Vec2; constraint_id?: number; mode?: DimensionDto['mode'] },
       byId: Map<number, EntityDto>,
       opts: { selected: boolean; aligned: boolean },
     ) => {
       const geom = computeDimGeometry(dimLike, byId);
       if (!geom) return;
-      const green = opts.selected ? COLOR_DIMENSION_SELECTED : COLOR_DIMENSION;
+      const reference = dimLike.mode === 'reference';
+      const green = opts.selected
+        ? COLOR_DIMENSION_SELECTED
+        : reference
+          ? COLOR_REFERENCE_DIMENSION
+          : COLOR_DIMENSION;
       const z = 0.22;
       const dimId = dimLike.constraint_id ?? -1;
       switch (geom.shape) {
@@ -3758,6 +3790,7 @@ export function Viewport() {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
+            reference,
           });
           break;
         }
@@ -3776,6 +3809,7 @@ export function Viewport() {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
+            reference,
           });
           break;
         }
@@ -3789,6 +3823,7 @@ export function Viewport() {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
+            reference,
           });
           break;
         }
@@ -3803,6 +3838,7 @@ export function Viewport() {
             selected: opts.selected,
             aligned: opts.aligned,
             dimId,
+            reference,
           });
           break;
         }
@@ -4650,6 +4686,52 @@ export function Viewport() {
       return !!sketch?.entities.some((e) => e.id === id && e.kind === 'point');
     };
 
+    /** Mirror the engine's deliberately narrow arc-tangent inference for
+     * live feedback. Only a line sharing the exact picked point qualifies;
+     * a remote line with a similar direction never creates a relation. */
+    const arcEndpointHasConnectedTangent = (center: Vec2, endpoint: Vec2): boolean => {
+      const sketch = store.getState().activeSketch;
+      if (!sketch) return false;
+      const point = sketch.entities.find(
+        (entity): entity is Extract<EntityDto, { kind: 'point' }> =>
+          entity.kind === 'point'
+          && Math.hypot(
+            entity.position.x - endpoint.x,
+            entity.position.y - endpoint.y,
+          ) <= 1e-7,
+      );
+      if (!point) return false;
+      const radial = {
+        x: endpoint.x - center.x,
+        y: endpoint.y - center.y,
+      };
+      const radialLength = Math.hypot(radial.x, radial.y);
+      if (radialLength <= 1e-7) return false;
+      const tangent = {
+        x: -radial.y / radialLength,
+        y: radial.x / radialLength,
+      };
+      const sineLimit = Math.sin(
+        CAD.MathUtils.degToRad(LINE_AXIS_INFERENCE_TOL_DEG),
+      );
+      return sketch.entities.some((entity) => {
+        if (
+          entity.kind !== 'line'
+          || (entity.start_id !== point.id && entity.end_id !== point.id)
+        ) {
+          return false;
+        }
+        const direction = {
+          x: entity.end.x - entity.start.x,
+          y: entity.end.y - entity.start.y,
+        };
+        const length = Math.hypot(direction.x, direction.y);
+        return length > 1e-7
+          && Math.abs(direction.x * tangent.y - direction.y * tangent.x) / length
+            <= sineLimit;
+      });
+    };
+
     // --- Inference chips + snap marker (HTML overlay near the cursor) ---
     const hideChips = () => {
       if (chipsRef.current) chipsRef.current.style.display = 'none';
@@ -4674,6 +4756,10 @@ export function Viewport() {
             ? chip(t('sketch.inferenceH'))
             : i === 'vertical'
               ? chip(t('sketch.inferenceV'))
+              : i === 'perpendicular'
+                ? chip('⊥')
+              : i === 'tangent'
+                ? chip('TAN')
               : i === 'tracking_horizontal'
                 ? chip('Y ALIGN')
                 : i === 'tracking_vertical'
@@ -5245,6 +5331,11 @@ export function Viewport() {
       tool: ToolId;
       /** Collected snapped points (line: [chain start]). */
       points: Vec2[];
+      /** Relation override is sticky across every pick in one multi-click
+       * creation gesture. This preserves a Command/Control override used on
+       * the first or an intermediate pick even if the key is released before
+       * the final click. Chained Line resets it after each committed segment. */
+      suppressInference?: boolean;
       /** Exact carrier identity for a line whose first point is a visual
        * crossing without an existing topological point. */
       startCrossing?: CurveCrossingRequest | null;
@@ -5554,9 +5645,19 @@ export function Viewport() {
       p: Vec2,
       allowMidpoint = false,
       excludePosition: Vec2 | null = null,
+      suppressRelations = false,
     ): { point: Vec2; target: SnapTarget } => {
       const state = store.getState();
       if (!state.palette.snap) return { point: p, target: { kind: 'none' } };
+      if (suppressRelations) {
+        return {
+          point: {
+            x: snapToGrid(p.x, sketchGridStep),
+            y: snapToGrid(p.y, sketchGridStep),
+          },
+          target: { kind: 'grid' },
+        };
+      }
       const tolerance = worldPerPixel() * MODIFY_CAPTURE_PX;
       const sketch = state.activeSketch;
       let bestPoint: { id: number; point: Vec2; distance: number } | null = null;
@@ -5714,8 +5815,12 @@ export function Viewport() {
     /** Preserve the raw cursor ray for line H/V inference. Magnetic point,
      * origin, and midpoint acquisitions remain exact; only ordinary grid
      * rounding is deferred to the engine so it can infer direction first. */
-    const acquireLineHint = (p: Vec2, allowMidpoint: boolean): Vec2 => {
-      const acquired = acquireCreateSnap(p, allowMidpoint);
+    const acquireLineHint = (
+      p: Vec2,
+      allowMidpoint: boolean,
+      suppressRelations = false,
+    ): Vec2 => {
+      const acquired = acquireCreateSnap(p, allowMidpoint, null, suppressRelations);
       return acquired.target.kind === 'grid' ? p : acquired.point;
     };
 
@@ -5744,7 +5849,7 @@ export function Viewport() {
       // A chained line must not magnetize back onto its own start point (or a
       // crossing at that same coordinate). That would manufacture a
       // degenerate/diagonal preview before H/V intent gets a chance to win.
-      const acquired = acquireCreateSnap(p, allowMidpoint, anchor);
+      const acquired = acquireCreateSnap(p, allowMidpoint, anchor, ctrlHeld);
       if (acquired.target.kind !== 'grid') {
         return {
           hint: acquired.point,
@@ -5993,8 +6098,12 @@ export function Viewport() {
     };
 
     /** Snap the cursor through the engine (points > origin > grid > raw). */
-    const snapCursorInfo = async (p: Vec2, allowMidpoint = false): Promise<PreviewDto> => {
-      const acquired = acquireCreateSnap(p, allowMidpoint);
+    const snapCursorInfo = async (
+      p: Vec2,
+      allowMidpoint = false,
+      suppressRelations = false,
+    ): Promise<PreviewDto> => {
+      const acquired = acquireCreateSnap(p, allowMidpoint, null, suppressRelations);
       // Screen-space acquisition already resolved magnetic geometry using a
       // zoom-aware tolerance. Sending that exact point through a second
       // endpoint snap can exclude the point as the segment's own start and
@@ -6022,7 +6131,7 @@ export function Viewport() {
         return await engine.previewSegment({
           from: acquired.point,
           to_raw: acquired.point,
-          ctrl_held: !allowMidpoint,
+          ctrl_held: suppressRelations || !allowMidpoint,
         });
       } catch {
         return {
@@ -6048,7 +6157,7 @@ export function Viewport() {
       coincidentWith: number | null;
       extension: { from: Vec2; to: Vec2 } | null;
     } => {
-      const acquired = acquireCreateSnap(p);
+      const acquired = acquireCreateSnap(p, false, null, suppressCarrier);
       if (acquired.target.kind === 'point' || acquired.target.kind === 'origin') {
         return { position: acquired.point, coincidentWith: null, extension: null };
       }
@@ -6324,11 +6433,18 @@ export function Viewport() {
       const locks = dynLocks();
       const anchor = run.points[0];
       const pos = clusterPos(e.clientX, e.clientY);
+      const inferenceOverride = e.ctrlKey || e.metaKey || Boolean(run.suppressInference);
 
       switch (run.tool) {
         case 'line': {
           const texts = dynTexts();
-          const intent = acquireLineIntent(p, anchor, locks, e.ctrlKey, !e.ctrlKey);
+          const intent = acquireLineIntent(
+            p,
+            anchor,
+            locks,
+            inferenceOverride,
+            !inferenceOverride,
+          );
           void engine
             .previewSegmentLocked({
               from: anchor,
@@ -6339,7 +6455,7 @@ export function Viewport() {
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
-              ctrl_held: e.ctrlKey,
+              ctrl_held: inferenceOverride,
               tracking: intent.tracking,
               intersection: intent.intersection,
             })
@@ -6373,12 +6489,12 @@ export function Viewport() {
           break;
         }
         case 'midpointLine': {
-          const hint = acquireLineHint(p, !e.ctrlKey);
+          const hint = acquireLineHint(p, !inferenceOverride, inferenceOverride);
           void engine
             .previewSegment({
               from: anchor,
               to_raw: hint,
-              ctrl_held: e.ctrlKey,
+              ctrl_held: inferenceOverride,
             })
             .then((preview) => {
             if (seq !== previewSeq) return;
@@ -6398,7 +6514,7 @@ export function Viewport() {
         case 'rect2pt':
         case 'rectCenter': {
           const mode = run.tool === 'rect2pt' ? 'two_point' : 'center';
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const corner = rectCorner(mode, anchor, snap.snapped_to, locks);
             const corners = rectCorners(mode, anchor, corner);
@@ -6434,7 +6550,7 @@ export function Viewport() {
         case 'circleCenter':
         case 'circle2pt': {
           const mode = run.tool === 'circleCenter' ? 'center_diameter' : 'two_point';
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const spec = circleSpec(mode, anchor, snap.snapped_to, locks);
             if (spec) {
@@ -6454,9 +6570,10 @@ export function Viewport() {
           break;
         }
         case 'arc3pt': {
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
+            let tangentInference = false;
             if (run.points.length === 1) {
               setPreviewPositions([
                 anchor.x,
@@ -6477,6 +6594,11 @@ export function Viewport() {
                 setPreviewPositions(
                   tessellateArc(circle.center, circle.radius, s, e2, 0.12),
                 );
+                tangentInference = !inferenceOverride
+                  && (
+                    arcEndpointHasConnectedTangent(circle.center, run.points[0])
+                    || arcEndpointHasConnectedTangent(circle.center, snapped)
+                  );
               } else {
                 setPreviewPositions([
                   anchor.x,
@@ -6489,31 +6611,51 @@ export function Viewport() {
               }
             }
             showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
+            const rect = surface.domElement.getBoundingClientRect();
+            showChips(
+              tangentInference ? ['tangent'] : [],
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+            );
           });
           break;
         }
         case 'arcCenter': {
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
+            let tangentInference = false;
             if (run.points.length === 1) {
               const r = Math.hypot(snapped.x - anchor.x, snapped.y - anchor.y);
               if (r > 1e-6) setPreviewPositions(tessellateCircle(anchor, r, 0.12));
+              tangentInference = !inferenceOverride
+                && arcEndpointHasConnectedTangent(anchor, snapped);
             } else {
               const start = run.points[1];
               const r = Math.hypot(start.x - anchor.x, start.y - anchor.y);
               const a0 = angleOf(anchor, start);
               const a1 = angleOf(anchor, snapped);
               setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12));
+              tangentInference = !inferenceOverride
+                && (
+                  arcEndpointHasConnectedTangent(anchor, start)
+                  || arcEndpointHasConnectedTangent(anchor, snapped)
+                );
             }
             showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
+            const rect = surface.domElement.getBoundingClientRect();
+            showChips(
+              tangentInference ? ['tangent'] : [],
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+            );
           });
           break;
         }
         case 'slot': {
           const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
           const mode = modeMap[store.getState().slotMode];
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
             if (run.points.length === 1) {
@@ -6550,7 +6692,7 @@ export function Viewport() {
           break;
         }
         case 'splineFit': {
-          void snapCursorInfo(p).then((snap) => {
+          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const pts = [...run.points, snap.snapped_to];
             const positions = tessellateSpline(pts, 16, 0.12);
@@ -6569,6 +6711,8 @@ export function Viewport() {
     /** Commit the active tool run at cursor `p` (click or Enter). */
     const commitToolRun = (run: ToolRun, p: Vec2, ctrlHeld: boolean) => {
       if (!engine) return;
+      const suppressInference = ctrlHeld || Boolean(run.suppressInference);
+      run.suppressInference = suppressInference;
       const locks = dynLocks();
       const texts = dynTexts();
       const anchor = run.points[0];
@@ -6580,7 +6724,13 @@ export function Viewport() {
           if (run.committing || run.awaitingPointerMove) return;
           run.committing = true;
           store.getState().setDynPending(true);
-          const intent = acquireLineIntent(p, anchor, locks, ctrlHeld, !ctrlHeld);
+          const intent = acquireLineIntent(
+            p,
+            anchor,
+            locks,
+            suppressInference,
+            !suppressInference,
+          );
           void engine
             .addLineLocked({
               from: anchor,
@@ -6591,7 +6741,7 @@ export function Viewport() {
               angle_deg: locks.angle ?? null,
               length_text: texts.length ?? null,
               angle_text: texts.angle ?? null,
-              ctrl_held: ctrlHeld,
+              ctrl_held: suppressInference,
               tracking: intent.tracking,
               intersection: intent.intersection,
             })
@@ -6606,6 +6756,7 @@ export function Viewport() {
                 run.startCrossing = null;
                 run.committing = false;
                 run.awaitingPointerMove = true;
+                run.suppressInference = false;
                 store.getState().clearDynLocks();
                 store.getState().setDynPending(false);
               } else {
@@ -6620,9 +6771,13 @@ export function Viewport() {
           break;
         }
         case 'midpointLine': {
-          const end = acquireLineHint(p, !ctrlHeld);
+          const end = acquireLineHint(p, !suppressInference, suppressInference);
           void engine
-            .addLineMidpoint({ mid_raw: anchor, end_raw: end, ctrl_held: ctrlHeld })
+            .addLineMidpoint({
+              mid_raw: anchor,
+              end_raw: end,
+              ctrl_held: suppressInference,
+            })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
               done();
@@ -6632,7 +6787,7 @@ export function Viewport() {
         }
         case 'rect2pt':
         case 'rectCenter': {
-          const corner = acquireCreateSnap(p).point;
+          const corner = acquireCreateSnap(p, false, null, suppressInference).point;
           void engine
             .addRectangleLocked({
               mode: run.tool === 'rect2pt' ? 'two_point' : 'center',
@@ -6642,7 +6797,7 @@ export function Viewport() {
               width_text: texts.width ?? null,
               height_text: texts.height ?? null,
               corner_hint: corner,
-              ctrl_held: ctrlHeld,
+              ctrl_held: suppressInference,
             })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
@@ -6653,7 +6808,7 @@ export function Viewport() {
         }
         case 'circleCenter':
         case 'circle2pt': {
-          const edge = acquireCreateSnap(p).point;
+          const edge = acquireCreateSnap(p, false, null, suppressInference).point;
           void engine
             .addCircleLocked({
               mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point',
@@ -6661,7 +6816,7 @@ export function Viewport() {
               diameter_mm: locks.diameter ?? null,
               diameter_text: texts.diameter ?? null,
               edge_hint: edge,
-              ctrl_held: ctrlHeld,
+              ctrl_held: suppressInference,
             })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
@@ -6671,14 +6826,14 @@ export function Viewport() {
           break;
         }
         case 'arc3pt': {
-          const next = acquireCreateSnap(p).point;
+          const next = acquireCreateSnap(p, false, null, suppressInference).point;
           if (run.points.length < 2) {
             run.points.push(next);
             break;
           }
           const [p1, p2] = run.points;
           void engine
-            .addArc3pt({ p1, p2, p3: next, ctrl_held: ctrlHeld })
+            .addArc3pt({ p1, p2, p3: next, ctrl_held: suppressInference })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
               done();
@@ -6687,14 +6842,14 @@ export function Viewport() {
           break;
         }
         case 'arcCenter': {
-          const next = acquireCreateSnap(p).point;
+          const next = acquireCreateSnap(p, false, null, suppressInference).point;
           if (run.points.length < 2) {
             run.points.push(next);
             break;
           }
           const [center, start] = run.points;
           void engine
-            .addArcCenter({ center, start, sweep: next, ctrl_held: ctrlHeld })
+            .addArcCenter({ center, start, sweep: next, ctrl_held: suppressInference })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
               done();
@@ -6706,7 +6861,7 @@ export function Viewport() {
           if (run.points.length < 2) {
             // Second end-cap center picked: arm the width field once the
             // slot axis exists.
-            run.points.push(acquireCreateSnap(p).point);
+            run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
             const lp = lastPointerClient ?? { x: 0, y: 0 };
             const pos2 = clusterPos(lp.x, lp.y);
             store.getState().showDynInput(TOOL_FIELDS.slot!, pos2.x, pos2.y);
@@ -6719,7 +6874,7 @@ export function Viewport() {
               mode: modeMap[store.getState().slotMode],
               p1: run.points[0],
               p2: run.points[1],
-              cursor: acquireCreateSnap(p).point,
+              cursor: acquireCreateSnap(p, false, null, suppressInference).point,
               width_mm: locks.width ?? null,
               width_text: texts.width ?? null,
             })
@@ -6731,7 +6886,7 @@ export function Viewport() {
         case 'splineFit': {
           // Chain: every click appends a fit point; Enter or double-click
           // commits (see commitSpline), Esc cancels via endToolRun.
-          run.points.push(acquireCreateSnap(p).point);
+          run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
           break;
         }
       }
@@ -6745,17 +6900,19 @@ export function Viewport() {
      * move the snap marker). */
     let startSnapPending = false;
     let startSeq = 0;
-    let queuedCommit: Vec2 | null = null;
+    let queuedCommit: { point: Vec2; suppressInference: boolean } | null = null;
     const startToolRun = (tool: ToolId, p: Vec2, e: PointerEvent) => {
       if (!engine) return;
+      const inferenceOverride = e.ctrlKey || e.metaKey;
       if (tool === 'point') {
-        const placement = acquirePointPlacement(p, e.ctrlKey);
+        const placement = acquirePointPlacement(p, inferenceOverride);
         clearGroup(acquireGroup);
         hideChips();
         void engine
           .addPoint({
             position: placement.position,
             coincident_with: placement.coincidentWith,
+            ctrl_held: inferenceOverride,
           })
           .then((result) => store.getState().setActiveSketch(result.sketch))
           .catch((error) => reportToolError(error, 'Cannot create point'));
@@ -6763,7 +6920,11 @@ export function Viewport() {
       }
       startSnapPending = true;
       const seq = ++startSeq;
-      void snapCursorInfo(p, tool === 'line' || tool === 'midpointLine')
+      void snapCursorInfo(
+        p,
+        !inferenceOverride && (tool === 'line' || tool === 'midpointLine'),
+        inferenceOverride,
+      )
         .then((preview) => {
           startSnapPending = false;
           if (seq !== startSeq) return;
@@ -6771,6 +6932,7 @@ export function Viewport() {
           toolRun = {
             tool,
             points: [snapped],
+            suppressInference: inferenceOverride,
             startCrossing:
               tool === 'line' && preview.snap.kind === 'intersection'
                 ? {
@@ -6791,7 +6953,7 @@ export function Viewport() {
           if (queuedCommit) {
             const q = queuedCommit;
             queuedCommit = null;
-            commitToolRun(toolRun, q, false);
+            commitToolRun(toolRun, q.point, q.suppressInference);
           }
         })
         .catch((error) => {
@@ -9445,13 +9607,13 @@ export function Viewport() {
               dimDragging = { dimId: downInfo.dimCandidate, sprite: entry.sprite };
             }
           } else if (downInfo.constraintCandidate == null && isPointEntity(downInfo.candidate)) {
-            beginPointDrag(downInfo.candidate!, p, e.ctrlKey);
+            beginPointDrag(downInfo.candidate!, p, e.ctrlKey || e.metaKey);
           }
         }
       }
 
       if (dragging) {
-        queuePointDragUpdate(p, e.ctrlKey);
+        queuePointDragUpdate(p, e.ctrlKey || e.metaKey);
         return;
       }
 
@@ -9496,8 +9658,9 @@ export function Viewport() {
 
       if (state.activeTool !== null && engine) {
         // No run yet: still show the snap marker for the first point.
+        const inferenceOverride = e.ctrlKey || e.metaKey;
         if (state.activeTool === 'point') {
-          const placement = acquirePointPlacement(p, e.ctrlKey);
+          const placement = acquirePointPlacement(p, inferenceOverride);
           clearGroup(acquireGroup);
           if (placement.extension) {
             addAlignmentGuide(
@@ -9512,7 +9675,7 @@ export function Viewport() {
               ],
             );
           }
-          const acquired = acquireCreateSnap(p);
+          const acquired = acquireCreateSnap(p, false, null, inferenceOverride);
           const placementKind =
             placement.coincidentWith !== null || placement.extension
               ? 'curve'
@@ -9528,7 +9691,9 @@ export function Viewport() {
         }
         const acquired = acquireCreateSnap(
           p,
-          !e.ctrlKey && (state.activeTool === 'line' || state.activeTool === 'midpointLine'),
+          !inferenceOverride && (state.activeTool === 'line' || state.activeTool === 'midpointLine'),
+          null,
+          inferenceOverride,
         );
         showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
         return;
@@ -10038,12 +10203,15 @@ export function Viewport() {
           // A click landing while the first point's snap is still pending
           // becomes the first commit (queued), not a chain restart.
           if (startSnapPending) {
-            queuedCommit = p;
+            queuedCommit = {
+              point: p,
+              suppressInference: e.ctrlKey || e.metaKey,
+            };
             return;
           }
           startToolRun(state.activeTool, p, e);
         } else {
-          commitToolRun(toolRun, p, e.ctrlKey);
+          commitToolRun(toolRun, p, e.ctrlKey || e.metaKey);
         }
         return;
       }
@@ -10091,11 +10259,11 @@ export function Viewport() {
       // by the ribbon/sidebar inset and could place it entirely offscreen.
       const localX = ((projected.x + 1) / 2) * rect.width;
       const localY = ((1 - projected.y) / 2) * rect.height;
-      const editorX = Math.max(0, Math.min(Math.max(0, rect.width - 150), localX));
+      const editorX = Math.max(0, Math.min(Math.max(0, rect.width - 280), localX));
       const editorY = Math.max(14, Math.min(Math.max(14, rect.height - 28), localY));
       const initial = currentDim.param_expression
         ? `=${currentDim.param_expression}`
-        : currentDim.text.replace(/[ØR°]/g, '');
+        : currentDim.value.toString();
 
       currentState.setSelectedDimension(dimId);
       currentState.setSelectedEntity(null);
@@ -10214,7 +10382,7 @@ export function Viewport() {
           (state.mode === 'sketch' ? pointerToSketch(e) : null) ??
           lastSketchPoint ??
           dragging.last;
-        finishPointDrag(p, e.ctrlKey);
+        finishPointDrag(p, e.ctrlKey || e.metaKey);
         downInfo = null;
         return;
       }

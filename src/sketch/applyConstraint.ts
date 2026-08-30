@@ -14,15 +14,17 @@ type Kind = EntityDto['kind'];
 const RULES: Record<
   string,
   {
-    count: number | number[];
+    count: number | number[] | { min: number };
     kinds?: (ks: Kind[]) => boolean;
     build: (ids: number[]) => ConstraintPayload[];
     fix?: boolean;
   }
 > = {
   hv: {
-    count: [1, 2, 3, 4, 5, 6, 7, 8],
-    kinds: (ks) => ks.every((k) => k === 'line'),
+    count: { min: 1 },
+    kinds: (ks) =>
+      ks.every((kind) => kind === 'line') ||
+      (ks.length === 2 && ks.every((kind) => kind === 'point')),
     // Apply H to near-horizontal lines and V to near-vertical ones.
     build: () => [],
   },
@@ -39,7 +41,7 @@ const RULES: Record<
     kinds: (ks) => ks.every((k) => k === 'line'),
     build: ([a, b]) => [{ type: 'perpendicular', a, b }],
   },
-  fixUnfix: { count: [1, 2, 3, 4, 5, 6, 7, 8], fix: true, build: () => [] },
+  fixUnfix: { count: { min: 1 }, fix: true, build: () => [] },
   midpoint: {
     count: 2,
     kinds: (ks) => ks.filter((kind) => kind === 'point').length === 1 && ks.filter((kind) => kind === 'line').length === 1,
@@ -85,8 +87,12 @@ export async function applyConstraintById(iconId: string | undefined): Promise<v
   const byId = new Map(sketch.entities.map((e) => [e.id, e]));
   const kinds = ids.map((id) => byId.get(id)?.kind ?? ('missing' as const));
 
-  const counts = Array.isArray(rule.count) ? rule.count : [rule.count];
-  if (!counts.includes(ids.length) || (rule.kinds && !rule.kinds(kinds as Kind[]))) {
+  const countIsValid = typeof rule.count === 'number'
+    ? ids.length === rule.count
+    : Array.isArray(rule.count)
+      ? rule.count.includes(ids.length)
+      : ids.length >= rule.count.min;
+  if (!countIsValid || (rule.kinds && !rule.kinds(kinds as Kind[]))) {
     s.setConstraintDialog({
       titleKey: 'constraints.invalidTitle',
       message: translate(`constraints.needs.${iconId}`),
@@ -117,30 +123,48 @@ export async function applyConstraintById(iconId: string | undefined): Promise<v
   }
 
   const engine = await getEngine();
+  const acceptSketch = (nextSketch: typeof sketch) => {
+    const current = useAppStore.getState();
+    current.setActiveSketch(nextSketch);
+    current.setSelectedEntities([]);
+    current.setSelectedEntity(null);
+  };
   try {
     if (rule.fix) {
       const result = await engine.toggleFixEntities(orderedIds);
-      s.setActiveSketch(result.sketch);
+      acceptSketch(result.sketch);
       return;
     }
     if (iconId === 'hv') {
-      // Per-line H or V by the line's dominant axis.
-      const constraints = orderedIds.flatMap((id) => {
-        const entity = byId.get(id);
-        if (!entity || entity.kind !== 'line') return [];
-        const horizontal =
-          Math.abs(entity.end.x - entity.start.x) >= Math.abs(entity.end.y - entity.start.y);
-        return [{
-          type: horizontal ? 'horizontal' : 'vertical',
-          entity: id,
-        } as const];
-      });
+      const constraints: ConstraintPayload[] = kinds.every((kind) => kind === 'point')
+        ? (() => {
+            const first = byId.get(orderedIds[0]);
+            const second = byId.get(orderedIds[1]);
+            if (!first || first.kind !== 'point' || !second || second.kind !== 'point') return [];
+            const horizontal = Math.abs(second.position.x - first.position.x) >=
+              Math.abs(second.position.y - first.position.y);
+            return [{
+              type: horizontal ? 'horizontal_points' : 'vertical_points',
+              a: orderedIds[0],
+              b: orderedIds[1],
+            }];
+          })()
+        : orderedIds.flatMap((id) => {
+            const entity = byId.get(id);
+            if (!entity || entity.kind !== 'line') return [];
+            const horizontal =
+              Math.abs(entity.end.x - entity.start.x) >= Math.abs(entity.end.y - entity.start.y);
+            return [{
+              type: horizontal ? 'horizontal' : 'vertical',
+              entity: id,
+            } as const];
+          });
       const result = await engine.addConstraints(constraints);
-      s.setActiveSketch(result.sketch);
+      acceptSketch(result.sketch);
       return;
     }
     const result = await engine.addConstraints(rule.build(orderedIds));
-    s.setActiveSketch(result.sketch);
+    acceptSketch(result.sketch);
   } catch (err) {
     if (err instanceof EngineError) {
       const report = err.data as

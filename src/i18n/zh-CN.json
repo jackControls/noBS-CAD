@@ -348,7 +348,12 @@
   "dimEditor": {
     "placeholder": "值或 =公式",
     "title": "编辑尺寸（值或公式）",
-    "errorTitle": "无法编辑尺寸"
+    "errorTitle": "无法编辑尺寸",
+    "makeReference": "参考尺寸",
+    "makeDriving": "设为驱动",
+    "makeReferenceDescription": "停止控制几何并显示求解后的测量值",
+    "makeDrivingDescription": "使用当前测量值控制几何",
+    "referenceDescription": "参考尺寸 — 显示求解后的几何测量值"
   },
   "navbar": {
     "orbit": "环绕",
@@ -716,7 +721,7 @@
     "invalidTitle": "选择无效",
     "unsupported": "此约束暂不支持。",
     "needs": {
-      "hv": "水平/垂直约束需要一条或多条直线。",
+      "hv": "水平/垂直约束需要一条或多条直线，或恰好两个点。",
       "coincident": "重合约束需要两个实体（点与点/直线/圆重合）。",
       "tangent": "相切约束需要一条直线和一个圆/圆弧，或两个圆/圆弧。",
       "equal": "相等约束需要两条直线或两个圆/圆弧。",

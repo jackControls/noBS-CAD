@@ -107,7 +107,9 @@ try {
       tracking: { point: referenceId, axis: 'horizontal' },
     });
     await engine.setGridStep(10);
-    const nearHorizontalY = 15 + 30 * Math.tan((9.5 * Math.PI) / 180);
+    // Stay just inside the product's intentionally narrow 3° H/V inference
+    // cone; larger deviations must remain free rather than flattening intent.
+    const nearHorizontalY = 15 + 30 * Math.tan((2.5 * Math.PI) / 180);
     const horizontal = await engine.previewSegment({
       from: { x: 0, y: 15 },
       to_raw: { x: 30, y: nearHorizontalY },
@@ -157,7 +159,7 @@ try {
     () => window.__appStore.getState().dynInput.active,
   );
   const uiEndX = -30;
-  const nearHorizontalY = 15 + 30 * Math.tan((9.5 * Math.PI) / 180);
+  const nearHorizontalY = 15 + 30 * Math.tan((2.5 * Math.PI) / 180);
   const nearHorizontalPoint = await sketchToScreen(uiEndX, nearHorizontalY);
   const targetStack = await page.evaluate(
     ({ x, y }) =>
@@ -456,6 +458,22 @@ try {
           || (constraint.a === upright.id && constraint.b === short.id)),
     ),
     'the chained vertical turn should retain perpendicular design intent',
+  );
+  await page.waitForFunction(
+    () => window.__nativeViewportTransient().annotations.some(
+      (annotation) => annotation.kind === 'constraint' && annotation.text === '⊥',
+    ),
+  );
+  const perpendicularAnnotations = await page.evaluate(
+    () => window.__nativeViewportTransient().annotations.filter(
+      (annotation) => annotation.kind === 'constraint' && annotation.text === '⊥',
+    ),
+  );
+  assert.ok(
+    perpendicularAnnotations.length > 0,
+    `perpendicular relation must emit a standard visible glyph; annotations=${JSON.stringify(
+      perpendicularAnnotations,
+    )}`,
   );
   await page.keyboard.press('Escape');
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);

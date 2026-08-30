@@ -509,6 +509,11 @@ impl WasmEngine {
         host::handle(&mut self.manager, "edit_dimension", payload)
     }
 
+    /// `payload`: serialized `SetDimensionModeRequest`.
+    pub fn set_dimension_mode(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "set_dimension_mode", payload)
+    }
+
     /// `payload`: serialized `MoveDimensionRequest`.
     pub fn move_dimension(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "move_dimension", payload)

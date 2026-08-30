@@ -348,7 +348,12 @@
   "dimEditor": {
     "placeholder": "valor o =fórmula",
     "title": "Editar cota (valor o fórmula)",
-    "errorTitle": "No se puede editar la cota"
+    "errorTitle": "No se puede editar la cota",
+    "makeReference": "Referencia",
+    "makeDriving": "Hacer conductora",
+    "makeReferenceDescription": "Dejar de controlar la geometría y mostrar la medida resuelta",
+    "makeDrivingDescription": "Usar la medida actual para controlar la geometría",
+    "referenceDescription": "Cota de referencia — muestra la geometría resuelta"
   },
   "navbar": {
     "orbit": "Órbita",
@@ -432,7 +437,7 @@
     "intersectHint": "Mantenga solo el material compartido por la extrusión y los cuerpos objetivo seleccionados.",
     "autoCutHint": "Vista previa automática: la extrusión entra en material existente. Restar de:",
     "autoJoinHint": "Vista previa automática: la extrusión crece hacia afuera desde el material existente. Agregar a:",
-    "autoJoinProfilesHint": "Vista previa automática: los perfiles con aristas compartidas se fusionarán en un solo cuerpo.",
+    "autoJoinProfilesHint": "Vista previa automática: los perfiles con aristas compartidas se combinarán en un solo cuerpo.",
     "autoNewBodyHint": "Vista previa automática: cree un cuerpo separado porque la extrusión no se encuentra con el material existente.",
     "targetBodies": "Cuerpos objetivo",
     "noTargetBodies": "Cree un cuerpo antes de usar Agregar, Restar o Común.",
@@ -716,7 +721,7 @@
     "invalidTitle": "Selección no válida",
     "unsupported": "Esta restricción aún no se admite.",
     "needs": {
-      "hv": "Horizontal/Vertical requiere una o más líneas.",
+      "hv": "Horizontal/Vertical requiere una o más líneas o exactamente dos puntos.",
       "coincident": "Coincidente requiere dos entidades (punto sobre punto/línea/círculo).",
       "tangent": "Tangente requiere una línea y un círculo/arco, o dos círculos/arcos.",
       "equal": "Igual requiere dos líneas o dos círculos/arcos.",

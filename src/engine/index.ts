@@ -95,6 +95,7 @@ import type {
   MirrorRequest,
   MoveCopyRequest,
   MoveDimensionRequest,
+  SetDimensionModeRequest,
   MovePointRequest,
   MovePointResult,
   OffsetPreviewDto,
@@ -249,6 +250,7 @@ export interface Engine {
   addConstraints(constraints: ConstraintPayload[]): Promise<ToolResult>;
   addDimension(request: DimensionRequest): Promise<ToolResult>;
   editDimension(request: EditDimensionRequest): Promise<AddConstraintResult>;
+  setDimensionMode(request: SetDimensionModeRequest): Promise<AddConstraintResult>;
   moveDimension(request: MoveDimensionRequest): Promise<AddConstraintResult>;
   deleteDimension(constraintId: number): Promise<AddConstraintResult>;
   deleteConstraint(constraintId: number): Promise<AddConstraintResult>;

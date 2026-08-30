@@ -40,6 +40,14 @@
 | [community/ANNOUNCEMENT_DRAFTS.md](community/ANNOUNCEMENT_DRAFTS.md) | Maintainers | Before public announcements |
 | [community/DISCUSSIONS_WELCOME.md](community/DISCUSSIONS_WELCOME.md) | Maintainers | First Discussions post |
 
+## Sketch quality
+
+| Doc | Notes |
+|-----|-------|
+| [SKETCH_CONSTRAINT_AUDIT.md](SKETCH_CONSTRAINT_AUDIT.md) | Constraint behavior audit and reproducible findings |
+| [SKETCH_CONSTRAINT_AUDIT_FIX_FEEDBACK.md](SKETCH_CONSTRAINT_AUDIT_FIX_FEEDBACK.md) | Implemented fixes, verification, and deliberate follow-ups |
+| [SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md) | Executable 25×25 ordered constraint/dimension matrix and operation-ownership policy |
+
 ## Packaging / provenance
 
 | Doc | Notes |

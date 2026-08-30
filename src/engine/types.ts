@@ -43,18 +43,53 @@ export type EntityDto =
   | { kind: 'circle'; id: number; center: Vec2; radius: number; fully_defined: boolean }
   | { kind: 'spline'; id: number; points: Vec2[]; tessellation: Vec2[]; fully_defined: boolean };
 
+/** Every geometric relation serialized by the sketch engine. */
+export type GeometricConstraintType =
+  | 'horizontal'
+  | 'vertical'
+  | 'horizontal_points'
+  | 'vertical_points'
+  | 'coincident'
+  | 'origin_coincident'
+  | 'center_coincident'
+  | 'tangent'
+  | 'equal'
+  | 'parallel'
+  | 'perpendicular'
+  | 'fix'
+  | 'midpoint'
+  | 'reference_midpoint'
+  | 'span_midpoint'
+  | 'concentric'
+  | 'collinear'
+  | 'symmetry'
+  | 'arc_endpoint_coincident'
+  | 'equal_distance';
+
+export type DimensionalConstraintType =
+  | 'distance'
+  | 'radius'
+  | 'diameter'
+  | 'angle';
+
+export type SketchConstraintType = GeometricConstraintType | DimensionalConstraintType;
+
 /** Flattened `ConstraintDto` — `{ id, type, ...fields }`, see constraint.rs. */
 export interface ConstraintDto {
   id: number;
-  type: string;
+  type: SketchConstraintType;
   entity?: number;
   a?: number;
   b?: number;
   point?: number;
+  curve?: number;
+  arc?: number;
+  origin?: number;
+  /** Arc endpoint selector for `arc_endpoint_coincident`. */
+  end?: 'start' | 'end' | number;
   edge?: number;
   position?: Vec2;
   start?: number;
-  end?: number;
   axis?: number;
   from?: number;
   to?: number | null;
@@ -73,7 +108,7 @@ export interface SketchDto {
   entities: EntityDto[];
   constraints: ConstraintDto[];
   reference_midpoints: Array<{ edge_id: number; position: Vec2 }>;
-  /** Driving dimensions with presentation data (D9). */
+  /** Driving and reference dimensions with presentation data (D9). */
   dimensions: DimensionDto[];
   dimension_style: DimensionStyle;
   dof: DofDto;
@@ -83,13 +118,16 @@ export interface SketchDto {
 
 export type DimensionStyle = 'aligned' | 'iso';
 
-/** One driving dimension in a snapshot (D9). */
+export type DimensionMode = 'driving' | 'reference';
+
+/** One driving or reference dimension in a snapshot (D9). */
 export interface DimensionDto {
   constraint_id: number;
+  mode: DimensionMode;
   kind: 'distance' | 'radius' | 'diameter' | 'angle';
   entities: number[];
-  param_id: number;
-  param_name: string;
+  param_id: number | null;
+  param_name: string | null;
   param_expression: string | null;
   value: number;
   /** Formatted text (2 decimals, Ø/R/° affixes). */
@@ -108,6 +146,11 @@ export interface DimensionRequest {
 export interface EditDimensionRequest {
   constraint_id: number;
   text: string;
+}
+
+export interface SetDimensionModeRequest {
+  constraint_id: number;
+  mode: DimensionMode;
 }
 
 export interface MoveDimensionRequest {
@@ -235,7 +278,7 @@ export type SnapTarget =
   | { kind: 'curve'; entity: number }
   | { kind: 'intersection'; first: number; second: number };
 
-export type Inference = 'horizontal' | 'vertical' | 'coincident';
+export type Inference = 'horizontal' | 'vertical' | 'perpendicular' | 'coincident';
 export type TrackingAxis = 'horizontal' | 'vertical';
 
 export interface LineTrackingRequest {
@@ -2342,11 +2385,14 @@ export interface PointRequest {
   position: Vec2;
   /** Stable line/circle/arc id acquired under the pointer, if any. */
   coincident_with?: number | null;
+  /** Temporarily suppress inferred point/origin/carrier relations. */
+  ctrl_held?: boolean;
 }
 
 /** A constraint as serialized by the Rust `Constraint` enum (tagged). */
 export type ConstraintPayload =
   | { type: 'horizontal' | 'vertical' | 'fix'; entity: number }
+  | { type: 'horizontal_points' | 'vertical_points'; a: number; b: number }
   | { type: 'coincident' | 'tangent' | 'equal' | 'parallel' | 'perpendicular' | 'midpoint' | 'concentric' | 'collinear'; a: number; b: number }
   | { type: 'symmetry'; a: number; b: number; axis: number };
 

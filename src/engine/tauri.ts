@@ -96,6 +96,7 @@ import type {
   MirrorRequest,
   MoveCopyRequest,
   MoveDimensionRequest,
+  SetDimensionModeRequest,
   MovePointRequest,
   MovePointResult,
   OffsetPreviewDto,
@@ -632,6 +633,10 @@ export class TauriEngine implements Engine {
 
   async editDimension(request: EditDimensionRequest): Promise<AddConstraintResult> {
     return this.call('engine_edit_dimension', request);
+  }
+
+  async setDimensionMode(request: SetDimensionModeRequest): Promise<AddConstraintResult> {
+    return this.call('engine_set_dimension_mode', request);
   }
 
   async moveDimension(request: MoveDimensionRequest): Promise<AddConstraintResult> {

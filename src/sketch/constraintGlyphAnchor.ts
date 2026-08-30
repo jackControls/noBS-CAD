@@ -15,8 +15,43 @@
  * Badge hit size tracks the visible sprite (`px`), not a large label box.
  */
 
-import type { ConstraintDto, EntityDto, Vec2 } from '../engine/types';
+import type {
+  ConstraintDto,
+  EntityDto,
+  GeometricConstraintType,
+  Vec2,
+} from '../engine/types';
 import { constraintReferencedEntityIds } from './constraintRefs';
+
+/**
+ * Visible existence marker for every geometric relation emitted by Rust.
+ * Keeping this exhaustive `Record` makes a missing glyph a TypeScript error
+ * when the IPC constraint union changes, instead of a silent viewport fallthrough.
+ */
+export const CONSTRAINT_EXISTENCE_GLYPH: Readonly<
+  Record<GeometricConstraintType, string>
+> = Object.freeze({
+  horizontal: 'H',
+  vertical: 'V',
+  horizontal_points: 'H',
+  vertical_points: 'V',
+  coincident: '●',
+  origin_coincident: '●',
+  center_coincident: '●',
+  tangent: 'Tg',
+  equal: '=',
+  parallel: '∥',
+  perpendicular: '⊥',
+  fix: 'Fix',
+  midpoint: '△',
+  reference_midpoint: '△',
+  span_midpoint: '△',
+  concentric: '◎',
+  collinear: 'Col',
+  symmetry: 'Sym',
+  arc_endpoint_coincident: '●',
+  equal_distance: '=',
+});
 
 /**
  * Geometric constraints whose meaning lives at one sketch point (contact,
@@ -25,17 +60,37 @@ import { constraintReferencedEntityIds } from './constraintRefs';
  */
 export const SINGLE_POINT_RELATION_TYPES = new Set([
   'coincident',
+  'origin_coincident',
+  'center_coincident',
   'tangent',
   'perpendicular',
   'concentric',
+  'reference_midpoint',
+  'span_midpoint',
+  'arc_endpoint_coincident',
 ]);
 
 export const SINGLE_POINT_RELATION_GLYPH: Record<string, string> = {
-  coincident: 'o',
-  tangent: 'Tg',
-  perpendicular: 'T',
-  concentric: 'O',
+  coincident: CONSTRAINT_EXISTENCE_GLYPH.coincident,
+  origin_coincident: CONSTRAINT_EXISTENCE_GLYPH.origin_coincident,
+  center_coincident: CONSTRAINT_EXISTENCE_GLYPH.center_coincident,
+  tangent: CONSTRAINT_EXISTENCE_GLYPH.tangent,
+  perpendicular: CONSTRAINT_EXISTENCE_GLYPH.perpendicular,
+  concentric: CONSTRAINT_EXISTENCE_GLYPH.concentric,
+  reference_midpoint: CONSTRAINT_EXISTENCE_GLYPH.reference_midpoint,
+  span_midpoint: CONSTRAINT_EXISTENCE_GLYPH.span_midpoint,
+  arc_endpoint_coincident: CONSTRAINT_EXISTENCE_GLYPH.arc_endpoint_coincident,
 };
+
+export const MULTI_ENTITY_RELATION_GLYPH: Readonly<Partial<
+  Record<GeometricConstraintType, string>
+>> = Object.freeze({
+  parallel: CONSTRAINT_EXISTENCE_GLYPH.parallel,
+  equal: CONSTRAINT_EXISTENCE_GLYPH.equal,
+  collinear: CONSTRAINT_EXISTENCE_GLYPH.collinear,
+  symmetry: CONSTRAINT_EXISTENCE_GLYPH.symmetry,
+  equal_distance: CONSTRAINT_EXISTENCE_GLYPH.equal_distance,
+});
 
 function mid(a: Vec2, b: Vec2): Vec2 {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -149,6 +204,39 @@ export function singlePointRelationAnchor(
   byId: Map<number, EntityDto>,
 ): Vec2 | null {
   if (!SINGLE_POINT_RELATION_TYPES.has(constraint.type)) return null;
+  if (constraint.type === 'origin_coincident') {
+    const entity = constraint.entity == null ? null : byId.get(constraint.entity);
+    if (entity?.kind === 'point') return entity.position;
+    if (entity?.kind === 'circle' || entity?.kind === 'arc') return entity.center;
+    return { x: 0, y: 0 };
+  }
+  if (constraint.type === 'center_coincident') {
+    const point = constraint.point == null ? null : byId.get(constraint.point);
+    if (point?.kind === 'point') return point.position;
+    const curve = constraint.curve == null ? null : byId.get(constraint.curve);
+    if (curve?.kind === 'circle' || curve?.kind === 'arc') return curve.center;
+    return null;
+  }
+  if (
+    constraint.type === 'reference_midpoint'
+    || constraint.type === 'span_midpoint'
+    || constraint.type === 'arc_endpoint_coincident'
+  ) {
+    const point = constraint.point == null ? null : byId.get(constraint.point);
+    if (point?.kind === 'point') return point.position;
+    if (constraint.type === 'reference_midpoint') return constraint.position ?? null;
+    if (constraint.type === 'arc_endpoint_coincident' && constraint.arc != null) {
+      const arc = byId.get(constraint.arc);
+      if (arc?.kind === 'arc') {
+        const angle = constraint.end === 'end' ? arc.end_angle : arc.start_angle;
+        return {
+          x: arc.center.x + Math.cos(angle) * arc.radius,
+          y: arc.center.y + Math.sin(angle) * arc.radius,
+        };
+      }
+    }
+    return null;
+  }
   const ids = constraintReferencedEntityIds(constraint);
   if (ids.length < 2) return null;
   const a = byId.get(ids[0]);

@@ -26,8 +26,8 @@ use crate::dto::{
     LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest,
     MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest, OffsetRequest,
     PointRequest, PolygonRequest, RectangleRequest, RectangularPatternRequest, ScaleRequest,
-    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SlotRequest,
-    SplineRequest, ToggleFixBatchRequest, TrimRequest,
+    SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest,
+    SetGridStepRequest, SlotRequest, SplineRequest, ToggleFixBatchRequest, TrimRequest,
 };
 use crate::manager::SketchManager;
 use crate::plane::PlaneRef;
@@ -288,6 +288,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "edit_dimension" => {
             with_payload(payload, |r: EditDimensionRequest| manager.edit_dimension(r))
         }
+        "set_dimension_mode" => with_payload(payload, |r: SetDimensionModeRequest| {
+            manager.set_dimension_mode(r)
+        }),
         "move_dimension" => {
             with_payload(payload, |r: MoveDimensionRequest| manager.move_dimension(r))
         }

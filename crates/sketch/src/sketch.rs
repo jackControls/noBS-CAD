@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use nbcad_core::EdgeId;
 
-use crate::constraint::{Constraint, ConstraintId};
+use crate::constraint::{Constraint, ConstraintId, ConstraintKind};
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
 use crate::params::{ParamId, ParamTable};
@@ -21,11 +21,22 @@ pub struct DofReport {
     pub fully_defined: bool,
 }
 
+/// Whether a sketch dimension controls geometry or only reports its solved
+/// measurement. Reference dimensions are persisted annotations, but they do
+/// not contribute equations to the constraint solver.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionMode {
+    #[default]
+    Driving,
+    Reference,
+}
+
 /// Errors returned by [`Sketch::solve`].
 ///
 /// Over-constraining input is rejected with an explicit conflict report
-/// naming the offending constraints/entities; it is never silently converted
-/// to driven dimensions.
+/// naming the offending constraints/entities. Reference annotations remain
+/// explicitly marked measurements and never participate in the solver.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SolveError {
     /// The new constraint set is over-constrained; `conflicts` names the
@@ -58,6 +69,10 @@ pub struct SketchSnapshot {
     params: ParamTable,
     dim_params: HashMap<ConstraintId, ParamId>,
     dim_placements: HashMap<ConstraintId, Vec2>,
+    /// Added after the original driving-only snapshot format. Missing entries
+    /// deserialize as driving dimensions for backwards compatibility.
+    #[serde(default)]
+    dim_modes: HashMap<ConstraintId, DimensionMode>,
     next_entity: u64,
     next_constraint: u64,
 }
@@ -90,6 +105,9 @@ pub struct Sketch {
     dim_params: HashMap<ConstraintId, ParamId>,
     /// Dimensional constraint → annotation text position (sketch mm).
     dim_placements: HashMap<ConstraintId, Vec2>,
+    /// Explicit driving/reference state for dimension annotations. Legacy
+    /// dimensions without an entry remain driving by default.
+    dim_modes: HashMap<ConstraintId, DimensionMode>,
     next_entity: u64,
     next_constraint: u64,
 }
@@ -152,6 +170,8 @@ impl Sketch {
         self.dim_params
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         self.dim_placements
+            .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
+        self.dim_modes
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         removed
     }
@@ -261,6 +281,7 @@ impl Sketch {
         self.fix_targets.remove(&id);
         self.dim_params.remove(&id);
         self.dim_placements.remove(&id);
+        self.dim_modes.remove(&id);
         Some(self.constraints.remove(index).1)
     }
 
@@ -285,6 +306,132 @@ impl Sketch {
 
     pub fn constraints(&self) -> impl Iterator<Item = (ConstraintId, &Constraint)> {
         self.constraints.iter().map(|(id, c)| (*id, c))
+    }
+
+    /// Existing relation equivalent to `candidate`, with commutative entity
+    /// order normalized. This protects the graph from exact duplicate
+    /// geometric relations and multiple driving dimensions for one measure.
+    pub fn equivalent_constraint(&self, candidate: &Constraint) -> Option<ConstraintId> {
+        self.constraints.iter().find_map(|(id, constraint)| {
+            self.relations_equivalent(constraint, candidate)
+                .then_some(*id)
+        })
+    }
+
+    /// Existing equivalent relation that participates in the solver. A
+    /// reference dimension may duplicate the same measurement by design, so
+    /// it must not block creation or conversion of the one allowed driver.
+    pub fn equivalent_driving_constraint(
+        &self,
+        candidate: &Constraint,
+        excluding: Option<ConstraintId>,
+    ) -> Option<ConstraintId> {
+        self.constraints.iter().find_map(|(id, constraint)| {
+            if Some(*id) == excluding
+                || (constraint.kind() == ConstraintKind::Dimensional
+                    && self.is_reference_dimension(id))
+            {
+                return None;
+            }
+            self.relations_equivalent(constraint, candidate)
+                .then_some(*id)
+        })
+    }
+
+    pub fn equivalent_reference_constraint(
+        &self,
+        candidate: &Constraint,
+        excluding: Option<ConstraintId>,
+    ) -> Option<ConstraintId> {
+        self.constraints.iter().find_map(|(id, constraint)| {
+            (Some(*id) != excluding
+                && constraint.kind() == ConstraintKind::Dimensional
+                && self.is_reference_dimension(id)
+                && self.relations_equivalent(constraint, candidate))
+            .then_some(*id)
+        })
+    }
+
+    /// Whether two proposed relations are equivalent in this sketch. Unlike
+    /// `Constraint::same_relation`, this also resolves line carriers to their
+    /// endpoint entities and is therefore suitable for atomic batch checks.
+    pub fn relations_equivalent(&self, first: &Constraint, second: &Constraint) -> bool {
+        first.same_relation(second) || self.same_carrier_relation(first, second)
+    }
+
+    /// Whether two relations are a proven algebraic contradiction, including
+    /// the line-carrier versus endpoint-pair forms exposed by the UI.
+    pub fn relations_directly_conflict(&self, first: &Constraint, second: &Constraint) -> bool {
+        first.directly_conflicts_with(second)
+            || self.carrier_relations_directly_conflict(first, second)
+    }
+
+    /// Recognize relations that use different public entity forms for the
+    /// same underlying line endpoints. This closes the common loophole where
+    /// a line-level H/V or length driver is duplicated by selecting its two
+    /// endpoint points instead.
+    fn same_carrier_relation(&self, first: &Constraint, second: &Constraint) -> bool {
+        fn unordered_pair_eq(a: EntityId, b: EntityId, c: EntityId, d: EntityId) -> bool {
+            (a == c && b == d) || (a == d && b == c)
+        }
+
+        let line_matches_pair = |line: EntityId, a: EntityId, b: EntityId| {
+            self.line_endpoint_ids(line)
+                .is_some_and(|(start, end)| unordered_pair_eq(start, end, a, b))
+        };
+        match (*first, *second) {
+            (Constraint::Horizontal { entity: line }, Constraint::HorizontalPoints { a, b })
+            | (Constraint::HorizontalPoints { a, b }, Constraint::Horizontal { entity: line })
+            | (Constraint::Vertical { entity: line }, Constraint::VerticalPoints { a, b })
+            | (Constraint::VerticalPoints { a, b }, Constraint::Vertical { entity: line }) => {
+                line_matches_pair(line, a, b)
+            }
+            (
+                Constraint::Distance {
+                    from: line,
+                    to: None,
+                    ..
+                },
+                Constraint::Distance {
+                    from: a,
+                    to: Some(b),
+                    ..
+                },
+            )
+            | (
+                Constraint::Distance {
+                    from: a,
+                    to: Some(b),
+                    ..
+                },
+                Constraint::Distance {
+                    from: line,
+                    to: None,
+                    ..
+                },
+            ) => line_matches_pair(line, a, b),
+            _ => false,
+        }
+    }
+
+    fn carrier_relations_directly_conflict(&self, first: &Constraint, second: &Constraint) -> bool {
+        fn unordered_pair_eq(a: EntityId, b: EntityId, c: EntityId, d: EntityId) -> bool {
+            (a == c && b == d) || (a == d && b == c)
+        }
+
+        let line_matches_pair = |line: EntityId, a: EntityId, b: EntityId| {
+            self.line_endpoint_ids(line)
+                .is_some_and(|(start, end)| unordered_pair_eq(start, end, a, b))
+        };
+        match (*first, *second) {
+            (Constraint::Horizontal { entity: line }, Constraint::VerticalPoints { a, b })
+            | (Constraint::VerticalPoints { a, b }, Constraint::Horizontal { entity: line })
+            | (Constraint::Vertical { entity: line }, Constraint::HorizontalPoints { a, b })
+            | (Constraint::HorizontalPoints { a, b }, Constraint::Vertical { entity: line }) => {
+                line_matches_pair(line, a, b)
+            }
+            _ => false,
+        }
     }
 
     pub fn constraint_count(&self) -> usize {
@@ -325,6 +472,16 @@ impl Sketch {
     pub fn bind_dimension(&mut self, cid: ConstraintId, param: ParamId, text_pos: Vec2) {
         self.dim_params.insert(cid, param);
         self.dim_placements.insert(cid, text_pos);
+        self.dim_modes.insert(cid, DimensionMode::Driving);
+    }
+
+    /// Register a read-only dimension annotation. It deliberately has no
+    /// parameter binding: its displayed value is measured from solved
+    /// geometry instead of becoming a solver target.
+    pub fn bind_reference_dimension(&mut self, cid: ConstraintId, text_pos: Vec2) {
+        self.dim_params.remove(&cid);
+        self.dim_placements.insert(cid, text_pos);
+        self.dim_modes.insert(cid, DimensionMode::Reference);
     }
 
     pub fn dim_param(&self, cid: &ConstraintId) -> Option<ParamId> {
@@ -333,6 +490,22 @@ impl Sketch {
 
     pub fn dim_placement(&self, cid: &ConstraintId) -> Option<Vec2> {
         self.dim_placements.get(cid).copied()
+    }
+
+    pub fn dim_mode(&self, cid: &ConstraintId) -> DimensionMode {
+        self.dim_modes.get(cid).copied().unwrap_or_default()
+    }
+
+    pub fn is_reference_dimension(&self, cid: &ConstraintId) -> bool {
+        self.dim_mode(cid) == DimensionMode::Reference
+    }
+
+    pub fn set_dim_mode(&mut self, cid: ConstraintId, mode: DimensionMode) {
+        self.dim_modes.insert(cid, mode);
+    }
+
+    pub fn unbind_dim_param(&mut self, cid: &ConstraintId) -> Option<ParamId> {
+        self.dim_params.remove(cid)
     }
 
     pub fn set_dim_placement(&mut self, cid: ConstraintId, text_pos: Vec2) {
@@ -359,6 +532,140 @@ impl Sketch {
             .unwrap_or(fallback)
     }
 
+    /// Copy a constraint with its parameter-backed value materialized.
+    pub fn effective_constraint(&self, cid: ConstraintId, constraint: Constraint) -> Constraint {
+        let mut effective = constraint;
+        let value = if self.is_reference_dimension(&cid) {
+            self.measure_dimension_constraint(constraint)
+        } else {
+            self.dim_params
+                .get(&cid)
+                .and_then(|pid| self.params.get(*pid))
+                .map(|parameter| parameter.value)
+        };
+        if let Some(value) = value {
+            effective.set_dimension_value(value);
+        }
+        effective
+    }
+
+    /// Measure a dimensional relation from current solved geometry. This is
+    /// the authoritative value for reference dimensions and is also used to
+    /// materialize truthful snapshots.
+    pub fn measure_dimension_constraint(&self, constraint: Constraint) -> Option<f64> {
+        fn signed_distance(point: Vec2, start: Vec2, end: Vec2) -> Option<f64> {
+            let direction = end - start;
+            let length = direction.length();
+            (length >= 1e-12).then_some(
+                (direction.x * (point.y - start.y) - direction.y * (point.x - start.x)) / length,
+            )
+        }
+
+        fn line_angle(direction: Vec2) -> Option<f64> {
+            (direction.length() >= 1e-12).then_some(direction.y.atan2(direction.x))
+        }
+
+        match constraint {
+            Constraint::Distance { from, to: None, .. } => {
+                let (start, end) = self.resolved_line(from)?;
+                Some(start.distance(end))
+            }
+            Constraint::Distance {
+                from, to: Some(to), ..
+            } => match (self.entity(from), self.entity(to)) {
+                (Some(Entity::Point { position: a }), Some(Entity::Point { position: b })) => {
+                    Some(a.distance(*b))
+                }
+                (Some(Entity::Point { position }), Some(Entity::Line { .. })) => {
+                    let (start, end) = self.resolved_line(to)?;
+                    signed_distance(*position, start, end)
+                }
+                (Some(Entity::Line { .. }), Some(Entity::Point { position })) => {
+                    let (start, end) = self.resolved_line(from)?;
+                    signed_distance(*position, start, end)
+                }
+                (Some(Entity::Line { .. }), Some(Entity::Line { .. })) => {
+                    let (start, end) = self.resolved_line(from)?;
+                    let (other_start, _) = self.resolved_line(to)?;
+                    signed_distance(other_start, start, end).map(f64::abs)
+                }
+                (
+                    Some(
+                        Entity::Circle {
+                            radius: from_radius,
+                            ..
+                        }
+                        | Entity::Arc {
+                            radius: from_radius,
+                            ..
+                        },
+                    ),
+                    Some(
+                        Entity::Circle {
+                            radius: to_radius, ..
+                        }
+                        | Entity::Arc {
+                            radius: to_radius, ..
+                        },
+                    ),
+                ) => Some(to_radius - from_radius),
+                _ => None,
+            },
+            Constraint::Radius { entity, .. } => match self.entity(entity) {
+                Some(Entity::Circle { radius, .. } | Entity::Arc { radius, .. }) => Some(*radius),
+                _ => None,
+            },
+            Constraint::Diameter { entity, .. } => match self.entity(entity) {
+                Some(Entity::Circle { radius, .. } | Entity::Arc { radius, .. }) => {
+                    Some(*radius * 2.0)
+                }
+                _ => None,
+            },
+            Constraint::Angle { a, b, .. } => {
+                let (a_start, a_end) = self.resolved_line(a)?;
+                let a_angle = line_angle(a_end - a_start)?;
+                let b_angle = if b.0 == crate::entity::AXIS_SENTINEL.0 {
+                    0.0
+                } else {
+                    let (b_start, b_end) = self.resolved_line(b)?;
+                    line_angle(b_end - b_start)?
+                };
+                let mut delta = (a_angle - b_angle).to_degrees().abs() % 360.0;
+                if delta > 180.0 {
+                    delta = 360.0 - delta;
+                }
+                Some(delta)
+            }
+            _ => None,
+        }
+    }
+
+    /// Synchronize the serialized fallback values after parameter evaluation.
+    /// Expressions may update several dependent dimensions at once, so this
+    /// deliberately refreshes every binding rather than only the edited one.
+    pub fn sync_dimension_constraint_values(&mut self) {
+        let updates = self
+            .constraints
+            .iter()
+            .filter_map(|(cid, constraint)| {
+                let value = if self.is_reference_dimension(cid) {
+                    self.measure_dimension_constraint(*constraint)
+                } else {
+                    self.dim_params
+                        .get(cid)
+                        .and_then(|pid| self.params.get(*pid))
+                        .map(|parameter| parameter.value)
+                }?;
+                Some((*cid, value))
+            })
+            .collect::<HashMap<_, _>>();
+        for (cid, constraint) in &mut self.constraints {
+            if let Some(value) = updates.get(cid) {
+                constraint.set_dimension_value(*value);
+            }
+        }
+    }
+
     /// The Fix constraint acting on an entity, if any (for Fix/Unfix).
     pub fn fix_constraint_on(&self, entity: EntityId) -> Option<ConstraintId> {
         self.constraints.iter().find_map(|(cid, c)| {
@@ -375,11 +682,16 @@ impl Sketch {
     pub fn snapshot(&self) -> SketchSnapshot {
         SketchSnapshot {
             entities: self.entities.clone(),
-            constraints: self.constraints.clone(),
+            constraints: self
+                .constraints
+                .iter()
+                .map(|(id, constraint)| (*id, self.effective_constraint(*id, *constraint)))
+                .collect(),
             fix_targets: self.fix_targets.clone(),
             params: self.params.clone(),
             dim_params: self.dim_params.clone(),
             dim_placements: self.dim_placements.clone(),
+            dim_modes: self.dim_modes.clone(),
             next_entity: self.next_entity,
             next_constraint: self.next_constraint,
         }
@@ -392,8 +704,15 @@ impl Sketch {
         self.params = snapshot.params;
         self.dim_params = snapshot.dim_params;
         self.dim_placements = snapshot.dim_placements;
+        self.dim_modes = snapshot.dim_modes;
+        // Normalize legacy snapshots into the explicit mode map. A dimension
+        // created by older versions is always a driving dimension.
+        for cid in self.dim_placements.keys() {
+            self.dim_modes.entry(*cid).or_default();
+        }
         self.next_entity = snapshot.next_entity;
         self.next_constraint = snapshot.next_constraint;
+        self.sync_dimension_constraint_values();
     }
 
     // --- Solver API ---
@@ -414,6 +733,7 @@ impl Sketch {
     pub fn solve(&mut self) -> Result<(), SolveError> {
         let analysis = crate::solver::solve(self, &[]);
         if analysis.converged {
+            self.sync_dimension_constraint_values();
             Ok(())
         } else {
             Err(SolveError::NumericalFailure)
@@ -508,6 +828,7 @@ impl SketchSnapshot {
             .keys()
             .chain(self.dim_params.keys())
             .chain(self.dim_placements.keys())
+            .chain(self.dim_modes.keys())
             .any(|id| !constraint_ids.contains(id))
         {
             return Err("constraint metadata references a missing constraint".to_string());
@@ -526,7 +847,12 @@ impl SketchSnapshot {
                 ));
             }
         }
-        for id in self.dim_params.keys().chain(self.dim_placements.keys()) {
+        for id in self
+            .dim_params
+            .keys()
+            .chain(self.dim_placements.keys())
+            .chain(self.dim_modes.keys())
+        {
             if !matches!(
                 self.constraints
                     .iter()
@@ -559,6 +885,35 @@ impl SketchSnapshot {
                 ));
             }
         }
+        for cid in self.dim_placements.keys() {
+            let mode = self.dim_modes.get(cid).copied().unwrap_or_default();
+            match mode {
+                DimensionMode::Driving => {
+                    if !self.dim_params.contains_key(cid) {
+                        return Err(format!(
+                            "driving dimension {} has no parameter binding",
+                            cid.0
+                        ));
+                    }
+                }
+                DimensionMode::Reference => {
+                    if self.dim_params.contains_key(cid) {
+                        return Err(format!(
+                            "reference dimension {} has a driving parameter",
+                            cid.0
+                        ));
+                    }
+                }
+            }
+        }
+        for cid in self.dim_modes.keys() {
+            if !self.dim_placements.contains_key(cid) {
+                return Err(format!(
+                    "dimension {} has a mode but no annotation placement",
+                    cid.0
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -582,6 +937,47 @@ mod tests {
         let (s, p1, p2, line, circle) = sample_sketch();
         assert!(p2.0 > p1.0 && line.0 > p2.0 && circle.0 > line.0);
         assert_eq!(s.entity_count(), 4);
+    }
+
+    #[test]
+    fn equivalent_constraints_recognize_carrier_endpoint_forms() {
+        let (mut s, p1, p2, line, circle) = sample_sketch();
+        let horizontal = s.add_constraint(Constraint::Horizontal { entity: line });
+        assert_eq!(
+            s.equivalent_constraint(&Constraint::HorizontalPoints { a: p2, b: p1 }),
+            Some(horizontal)
+        );
+
+        let length = s.add_constraint(Constraint::Distance {
+            from: line,
+            to: None,
+            value: 50.0,
+        });
+        assert_eq!(
+            s.equivalent_constraint(&Constraint::Distance {
+                from: p1,
+                to: Some(p2),
+                value: 25.0,
+            }),
+            Some(length)
+        );
+
+        let radius = s.add_constraint(Constraint::Radius {
+            entity: circle,
+            value: 10.0,
+        });
+        assert_eq!(
+            s.equivalent_constraint(&Constraint::Diameter {
+                entity: circle,
+                value: 20.0,
+            }),
+            Some(radius)
+        );
+
+        assert!(s.relations_directly_conflict(
+            &Constraint::Horizontal { entity: line },
+            &Constraint::VerticalPoints { a: p2, b: p1 },
+        ));
     }
 
     #[test]
@@ -681,6 +1077,53 @@ mod tests {
         // Ids continue monotonically after a restore.
         let p3 = s.add_entity(Entity::point(1.0, 1.0));
         assert!(p3.0 > line.0);
+    }
+
+    #[test]
+    fn reference_dimension_snapshot_roundtrip_preserves_mode_without_a_parameter() {
+        let (mut sketch, _, _, line, _) = sample_sketch();
+        let cid = sketch.add_constraint(Constraint::Distance {
+            from: line,
+            to: None,
+            value: 0.0,
+        });
+        sketch.bind_reference_dimension(cid, Vec2::new(25.0, 10.0));
+        let encoded = serde_json::to_string(&sketch.snapshot()).unwrap();
+        let decoded: SketchSnapshot = serde_json::from_str(&encoded).unwrap();
+        decoded.validate().unwrap();
+
+        let mut restored = Sketch::new();
+        restored.restore(decoded);
+        assert_eq!(restored.dim_mode(&cid), DimensionMode::Reference);
+        assert_eq!(restored.dim_param(&cid), None);
+        assert!(matches!(
+            restored.effective_constraint(cid, *restored.constraint(cid).unwrap()),
+            Constraint::Distance { value, .. } if (value - 50.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn legacy_dimension_snapshot_without_modes_loads_as_driving() {
+        let (mut sketch, _, _, line, _) = sample_sketch();
+        let pid = sketch
+            .params_mut()
+            .add(crate::params::ParamKind::Length, None, 50.0)
+            .unwrap();
+        let cid = sketch.add_constraint(Constraint::Distance {
+            from: line,
+            to: None,
+            value: 50.0,
+        });
+        sketch.bind_dimension(cid, pid, Vec2::new(25.0, 10.0));
+        let mut encoded = serde_json::to_value(sketch.snapshot()).unwrap();
+        encoded.as_object_mut().unwrap().remove("dim_modes");
+        let decoded: SketchSnapshot = serde_json::from_value(encoded).unwrap();
+        decoded.validate().unwrap();
+
+        let mut restored = Sketch::new();
+        restored.restore(decoded);
+        assert_eq!(restored.dim_mode(&cid), DimensionMode::Driving);
+        assert_eq!(restored.dim_param(&cid), Some(pid));
     }
 
     #[test]

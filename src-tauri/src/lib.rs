@@ -442,6 +442,7 @@ engine_command!(engine_add_constraint, "add_constraint");
 engine_command!(engine_add_constraints, "add_constraints");
 engine_command!(engine_add_dimension, "add_dimension");
 engine_command!(engine_edit_dimension, "edit_dimension");
+engine_command!(engine_set_dimension_mode, "set_dimension_mode");
 engine_command!(engine_move_dimension, "move_dimension");
 engine_command!(engine_delete_dimension, "delete_dimension");
 engine_command!(engine_delete_constraint, "delete_constraint");
@@ -1015,6 +1016,7 @@ pub fn run() {
             engine_add_constraints,
             engine_add_dimension,
             engine_edit_dimension,
+            engine_set_dimension_mode,
             engine_move_dimension,
             engine_delete_dimension,
             engine_delete_constraint,

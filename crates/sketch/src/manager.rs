@@ -52,9 +52,9 @@ use crate::dto::{
     MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
     MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewDto,
     ProjectVisibilityDto, RectangleRequest, RectangularPatternRequest, ScaleRequest,
-    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto,
-    SlotRequest, SplineRequest, ToggleFixBatchRequest, ToolResult, TrimPreviewDto, TrimRequest,
-    UndoResult,
+    SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest,
+    SetGridStepRequest, SketchDto, SlotRequest, SplineRequest, ToggleFixBatchRequest, ToolResult,
+    TrimPreviewDto, TrimRequest, UndoResult,
 };
 use crate::entity::EntityId;
 use crate::project::{
@@ -2962,8 +2962,11 @@ impl SketchManager {
     }
 
     pub fn add_point(&mut self, request: PointRequest) -> Result<ToolResult, SessionError> {
-        self.active_mut()?
-            .add_point_on(request.position, request.coincident_with)
+        self.active_mut()?.add_point_on_selective(
+            request.position,
+            request.coincident_with,
+            request.ctrl_held,
+        )
     }
 
     pub fn add_line_midpoint(
@@ -2975,8 +2978,12 @@ impl SketchManager {
     }
 
     pub fn add_rectangle(&mut self, request: RectangleRequest) -> Result<ToolResult, SessionError> {
-        self.active_mut()?
-            .add_rectangle(request.mode, request.p1, request.p2)
+        self.active_mut()?.add_rectangle_selective(
+            request.mode,
+            request.p1,
+            request.p2,
+            request.ctrl_held,
+        )
     }
 
     pub fn add_rectangle_locked(
@@ -2987,8 +2994,12 @@ impl SketchManager {
     }
 
     pub fn add_circle(&mut self, request: CircleRequest) -> Result<ToolResult, SessionError> {
-        self.active_mut()?
-            .add_circle(request.mode, request.p1, request.p2)
+        self.active_mut()?.add_circle_selective(
+            request.mode,
+            request.p1,
+            request.p2,
+            request.ctrl_held,
+        )
     }
 
     pub fn add_circle_locked(
@@ -3007,16 +3018,24 @@ impl SketchManager {
     }
 
     pub fn add_arc_3pt(&mut self, request: Arc3PointRequest) -> Result<ToolResult, SessionError> {
-        self.active_mut()?
-            .add_arc_3pt(request.p1, request.p2, request.p3)
+        self.active_mut()?.add_arc_3pt_selective(
+            request.p1,
+            request.p2,
+            request.p3,
+            request.ctrl_held,
+        )
     }
 
     pub fn add_arc_center(
         &mut self,
         request: ArcCenterRequest,
     ) -> Result<ToolResult, SessionError> {
-        self.active_mut()?
-            .add_arc_center(request.center, request.start, request.sweep)
+        self.active_mut()?.add_arc_center_selective(
+            request.center,
+            request.start,
+            request.sweep,
+            request.ctrl_held,
+        )
     }
 
     pub fn add_constraint(
@@ -3042,6 +3061,13 @@ impl SketchManager {
         request: EditDimensionRequest,
     ) -> Result<AddConstraintResult, SessionError> {
         self.active_mut()?.edit_dimension(request)
+    }
+
+    pub fn set_dimension_mode(
+        &mut self,
+        request: SetDimensionModeRequest,
+    ) -> Result<AddConstraintResult, SessionError> {
+        self.active_mut()?.set_dimension_mode(request)
     }
 
     pub fn move_dimension(

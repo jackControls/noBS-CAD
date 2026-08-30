@@ -25,6 +25,10 @@ use crate::sketch::Sketch;
 /// Convergence tolerance on max |residual| (mm / rad mixed residuals).
 const TOL: f64 = 1e-9;
 const MAX_ITERS: usize = 80;
+/// Direction residuals are dimensionless. Scale them into the same numerical
+/// neighborhood as ordinary millimetre equations so a distance relation
+/// cannot dominate an angle relation by orders of magnitude.
+const DIRECTION_SCALE: f64 = 100.0;
 /// Below 0.1 micrometre a trimmed finite edge is treated as its persistent
 /// support line. This avoids singular direction derivatives at the exact
 /// fillet/chamfer consumption boundary while remaining far below modeling
@@ -55,6 +59,38 @@ pub struct Analysis {
 impl Analysis {
     pub fn fully_defined(&self, entity: EntityId) -> bool {
         self.entity_free.get(&entity).copied().unwrap_or(0) == 0
+    }
+}
+
+/// Operation-local invariants used only while a newly requested relation is
+/// being fitted to the authored geometry. These are deliberately excluded
+/// from rank/DOF reporting and are never persisted in the sketch. They make
+/// the initial application behave like a CAD tool instead of letting a
+/// scale-invariant equation find a numerically cheap but surprising shape.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SolveStays {
+    pub(crate) line_lengths: Vec<(EntityId, f64)>,
+    pub(crate) line_angles: Vec<(EntityId, f64)>,
+    pub(crate) line_midpoints: Vec<(EntityId, Vec2)>,
+    pub(crate) point_pair_distances: Vec<(EntityId, EntityId, f64)>,
+    pub(crate) point_pair_angles: Vec<(EntityId, EntityId, f64)>,
+    pub(crate) point_pair_midpoints: Vec<(EntityId, EntityId, Vec2)>,
+    pub(crate) point_positions: Vec<(EntityId, Vec2)>,
+    pub(crate) curve_radii: Vec<(EntityId, f64)>,
+    pub(crate) curve_centers: Vec<(EntityId, Vec2)>,
+}
+
+impl SolveStays {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.line_lengths.is_empty()
+            && self.line_angles.is_empty()
+            && self.line_midpoints.is_empty()
+            && self.point_pair_distances.is_empty()
+            && self.point_pair_angles.is_empty()
+            && self.point_pair_midpoints.is_empty()
+            && self.point_positions.is_empty()
+            && self.curve_radii.is_empty()
+            && self.curve_centers.is_empty()
     }
 }
 
@@ -124,10 +160,10 @@ enum Eq {
         /// discontinuous exactly while a radius edit is reopening the edge.
         support_mode: bool,
     },
-    /// |a|² − |b|² = 0 (Equal line lengths).
-    DiffLen2 { a: Diff, b: Diff },
-    /// |c1 − c2|² − (r1 + sign·r2)² = 0 (circle/arc↔circle/arc tangency;
-    /// sign = +1 external, −1 internal, chosen from current geometry).
+    /// |a| − |b| = 0 (Equal line lengths, in millimetres).
+    EqualLength { a: Diff, b: Diff },
+    /// |c1 − c2| − |r1 + sign·r2| = 0 (circle/arc↔circle/arc
+    /// tangency, in millimetres; sign = +1 external, −1 internal).
     CircleCircle {
         c1: Pt,
         r1: usize,
@@ -135,7 +171,7 @@ enum Eq {
         r2: usize,
         sign: f64,
     },
-    /// |p − c|² − r² = 0 (point on circle/arc).
+    /// |p − c| − |r| = 0 (point on circle/arc, in millimetres).
     PointOnCircle { p: Pt, c: Pt, r: usize },
     /// p.x − c.x − r·cos a = 0 (arc-endpoint trim anchor, x component;
     /// Constraint::ArcEndpointCoincident).
@@ -174,7 +210,6 @@ impl Eq {
                 (r, terms.clone())
             }
             Eq::Cross { a, b } => {
-                const SCALE: f64 = 100.0;
                 let (ax, ay) = a.val(x);
                 let (bx, by) = b.val(x);
                 let la = (ax * ax + ay * ay).sqrt().max(1e-12);
@@ -186,16 +221,16 @@ impl Eq {
                 // mm² residual dwarfed distance equations and made editable
                 // Offset dimensions stall in the LM solver.
                 a.push_deriv(
-                    SCALE * (by / denom - cross * ax / (la * la * la * lb)),
-                    SCALE * (-bx / denom - cross * ay / (la * la * la * lb)),
+                    DIRECTION_SCALE * (by / denom - cross * ax / (la * la * la * lb)),
+                    DIRECTION_SCALE * (-bx / denom - cross * ay / (la * la * la * lb)),
                     &mut out,
                 );
                 b.push_deriv(
-                    SCALE * (-ay / denom - cross * bx / (la * lb * lb * lb)),
-                    SCALE * (ax / denom - cross * by / (la * lb * lb * lb)),
+                    DIRECTION_SCALE * (-ay / denom - cross * bx / (la * lb * lb * lb)),
+                    DIRECTION_SCALE * (ax / denom - cross * by / (la * lb * lb * lb)),
                     &mut out,
                 );
-                (SCALE * cross / denom, out)
+                (DIRECTION_SCALE * cross / denom, out)
             }
             Eq::Dot { a, b } => {
                 let (ax, ay) = a.val(x);
@@ -209,16 +244,16 @@ impl Eq {
                 // (~30 mm) and stall a chained right-angle drag so
                 // move_point reverts. Cross already uses the same shape.
                 a.push_deriv(
-                    bx / denom - dot * ax / (la * la * la * lb),
-                    by / denom - dot * ay / (la * la * la * lb),
+                    DIRECTION_SCALE * (bx / denom - dot * ax / (la * la * la * lb)),
+                    DIRECTION_SCALE * (by / denom - dot * ay / (la * la * la * lb)),
                     &mut out,
                 );
                 b.push_deriv(
-                    ax / denom - dot * bx / (la * lb * lb * lb),
-                    ay / denom - dot * by / (la * lb * lb * lb),
+                    DIRECTION_SCALE * (ax / denom - dot * bx / (la * lb * lb * lb)),
+                    DIRECTION_SCALE * (ay / denom - dot * by / (la * lb * lb * lb)),
                     &mut out,
                 );
-                (dot / denom, out)
+                (DIRECTION_SCALE * dot / denom, out)
             }
             Eq::CrossPt {
                 d,
@@ -230,19 +265,29 @@ impl Eq {
                 let (dx, dy) = d.val(x);
                 let (px, py) = (x[p.0], x[p.1]);
                 let (bx, by) = (x[base.0], x[base.1]);
-                if support_mode || (dx * dx + dy * dy).sqrt() < DEGENERATE_LINE_EPS {
+                let len = (dx * dx + dy * dy).sqrt();
+                if support_mode || len < DEGENERATE_LINE_EPS {
                     let (ux, uy) = support;
                     let t = ux * (py - by) - uy * (px - bx);
                     return (t, vec![(p.0, -uy), (p.1, ux), (base.0, uy), (base.1, -ux)]);
                 }
-                let t = dx * (py - by) - dy * (px - bx);
-                let mut out = Vec::with_capacity(8);
-                d.push_deriv(py - by, -(px - bx), &mut out);
-                out.push((p.0, -dy));
-                out.push((p.1, dx));
-                out.push((base.0, dy));
-                out.push((base.1, -dx));
-                (t, out)
+                let rx = px - bx;
+                let ry = py - by;
+                let cross = dx * ry - dy * rx;
+                let mut out = Vec::with_capacity(10);
+                // Signed point-to-line distance, not a raw mm² cross
+                // product. Normalizing keeps incidence compatible with
+                // angular and dimensional equations in the same solve.
+                d.push_deriv(
+                    ry / len - cross * dx / len.powi(3),
+                    -rx / len - cross * dy / len.powi(3),
+                    &mut out,
+                );
+                out.push((p.0, -dy / len));
+                out.push((p.1, dx / len));
+                out.push((base.0, dy / len));
+                out.push((base.1, -dx / len));
+                (cross / len, out)
             }
             Eq::LineCircleTangent {
                 d,
@@ -310,13 +355,15 @@ impl Eq {
                 let f = x[p.1] - x[c.1] - x[r] * sa;
                 (f, vec![(p.1, 1.0), (c.1, -1.0), (r, -sa), (a, -x[r] * ca)])
             }
-            Eq::DiffLen2 { a, b } => {
+            Eq::EqualLength { a, b } => {
                 let (ax, ay) = a.val(x);
                 let (bx, by) = b.val(x);
+                let a_length = (ax * ax + ay * ay).sqrt().max(1e-12);
+                let b_length = (bx * bx + by * by).sqrt().max(1e-12);
                 let mut out = Vec::with_capacity(8);
-                a.push_deriv(2.0 * ax, 2.0 * ay, &mut out);
-                b.push_deriv(-2.0 * bx, -2.0 * by, &mut out);
-                (ax * ax + ay * ay - bx * bx - by * by, out)
+                a.push_deriv(ax / a_length, ay / a_length, &mut out);
+                b.push_deriv(-bx / b_length, -by / b_length, &mut out);
+                (a_length - b_length, out)
             }
             Eq::CircleCircle {
                 c1,
@@ -327,32 +374,36 @@ impl Eq {
             } => {
                 let dx = x[c1.0] - x[c2.0];
                 let dy = x[c1.1] - x[c2.1];
-                let s = x[r1] + sign * x[r2];
-                let f = dx * dx + dy * dy - s * s;
+                let distance = (dx * dx + dy * dy).sqrt().max(1e-12);
+                let signed_radius = x[r1] + sign * x[r2];
+                let radius_sign = if signed_radius < 0.0 { -1.0 } else { 1.0 };
+                let f = distance - signed_radius.abs();
                 (
                     f,
                     vec![
-                        (c1.0, 2.0 * dx),
-                        (c2.0, -2.0 * dx),
-                        (c1.1, 2.0 * dy),
-                        (c2.1, -2.0 * dy),
-                        (r1, -2.0 * s),
-                        (r2, -2.0 * sign * s),
+                        (c1.0, dx / distance),
+                        (c2.0, -dx / distance),
+                        (c1.1, dy / distance),
+                        (c2.1, -dy / distance),
+                        (r1, -radius_sign),
+                        (r2, -radius_sign * sign),
                     ],
                 )
             }
             Eq::PointOnCircle { p, c, r } => {
                 let dx = x[p.0] - x[c.0];
                 let dy = x[p.1] - x[c.1];
-                let f = dx * dx + dy * dy - x[r] * x[r];
+                let distance = (dx * dx + dy * dy).sqrt().max(1e-12);
+                let radius_sign = if x[r] < 0.0 { -1.0 } else { 1.0 };
+                let f = distance - x[r].abs();
                 (
                     f,
                     vec![
-                        (p.0, 2.0 * dx),
-                        (c.0, -2.0 * dx),
-                        (p.1, 2.0 * dy),
-                        (c.1, -2.0 * dy),
-                        (r, -2.0 * x[r]),
+                        (p.0, dx / distance),
+                        (c.0, -dx / distance),
+                        (p.1, dy / distance),
+                        (c.1, -dy / distance),
+                        (r, -radius_sign),
                     ],
                 )
             }
@@ -408,7 +459,12 @@ impl Eq {
                 // cross = ax·by − ay·bx; dot = ax·bx + ay·by
                 a.push_deriv(dc * by + dd * bx, -dc * bx + dd * by, &mut out);
                 b.push_deriv(-dc * ay + dd * ax, dc * ax + dd * ay, &mut out);
-                (f, out)
+                (
+                    DIRECTION_SCALE * f,
+                    out.into_iter()
+                        .map(|(index, derivative)| (index, DIRECTION_SCALE * derivative))
+                        .collect(),
+                )
             }
             Eq::AngleAxis { a, target } => {
                 let (ax, ay) = a.val(x);
@@ -418,26 +474,37 @@ impl Eq {
                 let mut out = Vec::with_capacity(4);
                 // ∂atan2(ay,ax)/∂ax = −ay/r², ∂/∂ay = ax/r²
                 a.push_deriv(-ay / r2, ax / r2, &mut out);
-                (f, out)
+                (
+                    DIRECTION_SCALE * f,
+                    out.into_iter()
+                        .map(|(index, derivative)| (index, DIRECTION_SCALE * derivative))
+                        .collect(),
+                )
             }
             Eq::SymmetryMid { a, b, axis } => {
                 let (ux, uy) = axis.val(x);
+                let len = (ux * ux + uy * uy).sqrt().max(1e-12);
                 let mx = (x[a.0] + x[b.0]) / 2.0;
                 let my = (x[a.1] + x[b.1]) / 2.0;
                 let (a1x, a1y) = (x[axis.x1], x[axis.y1]);
-                let f = ux * (my - a1y) - uy * (mx - a1x);
+                let rx = mx - a1x;
+                let ry = my - a1y;
+                let cross = ux * ry - uy * rx;
                 let mut out = Vec::with_capacity(10);
-                // ∂F/∂(axis diff): (my − a1y, −(mx − a1x))
-                axis.push_deriv(my - a1y, -(mx - a1x), &mut out);
+                axis.push_deriv(
+                    ry / len - cross * ux / len.powi(3),
+                    -rx / len - cross * uy / len.powi(3),
+                    &mut out,
+                );
                 // ∂F/∂m = (−uy, ux) with m = (a + b)/2
-                out.push((a.0, -0.5 * uy));
-                out.push((b.0, -0.5 * uy));
-                out.push((a.1, 0.5 * ux));
-                out.push((b.1, 0.5 * ux));
+                out.push((a.0, -0.5 * uy / len));
+                out.push((b.0, -0.5 * uy / len));
+                out.push((a.1, 0.5 * ux / len));
+                out.push((b.1, 0.5 * ux / len));
                 // ∂F/∂a1 (axis start, beyond the diff chain above)
-                out.push((axis.x1, uy));
-                out.push((axis.y1, -ux));
-                (f, out)
+                out.push((axis.x1, uy / len));
+                out.push((axis.y1, -ux / len));
+                (cross / len, out)
             }
         }
     }
@@ -609,6 +676,63 @@ impl VarMap {
     }
 }
 
+/// When a line and arc already share an endpoint through an explicit
+/// ArcEndpointCoincident relation, tangency is most accurately expressed as
+/// line direction perpendicular to the endpoint radius. The generic
+/// line-to-circle distance equation is geometrically correct, but its
+/// Jacobian becomes first-order redundant exactly at an endpoint contact;
+/// the directional equation keeps rank analysis and interactive solving
+/// well-conditioned at that common sketch configuration.
+fn shared_line_arc_endpoint_radial(
+    sketch: &Sketch,
+    map: &VarMap,
+    line: EntityId,
+    arc: EntityId,
+) -> Option<Diff> {
+    if !matches!(sketch.entity(arc), Some(Entity::Arc { .. })) {
+        return None;
+    }
+    // Trimmed fillets/chamfers can intentionally consume and later reopen a
+    // carrier. Their arcs have two tangent carriers and rely on the generic
+    // support-line equation through that topology transition. The endpoint
+    // directional form is for the single connected tangent inferred while
+    // authoring an ordinary arc.
+    let tangent_count = sketch
+        .constraints()
+        .filter(|(_, constraint)| {
+            matches!(constraint, Constraint::Tangent { a, b } if *a == arc || *b == arc)
+        })
+        .count();
+    if tangent_count != 1 {
+        return None;
+    }
+    let (resolved_start, resolved_end) = sketch.resolved_line(line)?;
+    if resolved_start.distance(resolved_end) < DEGENERATE_LINE_EPS {
+        return None;
+    }
+    let (line_start, line_end) = sketch.line_endpoint_ids(line)?;
+    let point = sketch
+        .constraints()
+        .find_map(|(_, constraint)| match *constraint {
+            Constraint::ArcEndpointCoincident {
+                point,
+                arc: constrained_arc,
+                ..
+            } if constrained_arc == arc && (point == line_start || point == line_end) => {
+                Some(point)
+            }
+            _ => None,
+        })?;
+    let center = map.pt(sketch, arc)?;
+    let endpoint = map.pt(sketch, point)?;
+    Some(Diff {
+        x1: center.0,
+        y1: center.1,
+        x2: endpoint.0,
+        y2: endpoint.1,
+    })
+}
+
 /// Build the equation set: one row per residual, tagged by constraint.
 fn build_equations(
     sketch: &Sketch,
@@ -627,6 +751,9 @@ fn build_equations(
     let mut eqs: Vec<(Option<ConstraintId>, Eq)> = Vec::new();
 
     for (cid, constraint) in sketch.constraints() {
+        if sketch.is_reference_dimension(&cid) {
+            continue;
+        }
         match *constraint {
             Constraint::Horizontal { entity } => {
                 if let Some(d) = map.line_diff(sketch, entity) {
@@ -684,6 +811,19 @@ fn build_equations(
                     for (var, target) in vars.into_iter().zip(targets.iter()) {
                         push_lin(&mut eqs, cid, vec![(var, 1.0)], -*target);
                     }
+                }
+            }
+            Constraint::OriginCoincident { entity } => {
+                if let Some(center) = map.pt(sketch, entity) {
+                    push_lin(&mut eqs, cid, vec![(center.0, 1.0)], 0.0);
+                    push_lin(&mut eqs, cid, vec![(center.1, 1.0)], 0.0);
+                }
+            }
+            Constraint::CenterCoincident { point, curve } => {
+                if let (Some(point), Some(center)) = (map.pt(sketch, point), map.pt(sketch, curve))
+                {
+                    push_lin(&mut eqs, cid, vec![(center.0, 1.0), (point.0, -1.0)], 0.0);
+                    push_lin(&mut eqs, cid, vec![(center.1, 1.0), (point.1, -1.0)], 0.0);
                 }
             }
             Constraint::Coincident { a, b } => {
@@ -806,7 +946,7 @@ fn build_equations(
                     if let (Some(da), Some(db)) =
                         (map.line_diff(sketch, a), map.line_diff(sketch, b))
                     {
-                        eqs.push((Some(cid), Eq::DiffLen2 { a: da, b: db }));
+                        eqs.push((Some(cid), Eq::EqualLength { a: da, b: db }));
                     }
                 }
                 _ => {
@@ -834,6 +974,13 @@ fn build_equations(
                         Some(Entity::Line { .. }),
                         Some(Entity::Circle { .. } | Entity::Arc { .. }),
                     ) => {
+                        if let (Some(d), Some(radial)) = (
+                            map.line_diff(sketch, a),
+                            shared_line_arc_endpoint_radial(sketch, map, a, b),
+                        ) {
+                            eqs.push((Some(cid), Eq::Dot { a: d, b: radial }));
+                            continue;
+                        }
                         if let (Some(d), Some(c), Some(r)) = (
                             map.line_diff(sketch, a),
                             map.pt(sketch, b),
@@ -861,6 +1008,13 @@ fn build_equations(
                         Some(Entity::Circle { .. } | Entity::Arc { .. }),
                         Some(Entity::Line { .. }),
                     ) => {
+                        if let (Some(d), Some(radial)) = (
+                            map.line_diff(sketch, b),
+                            shared_line_arc_endpoint_radial(sketch, map, b, a),
+                        ) {
+                            eqs.push((Some(cid), Eq::Dot { a: d, b: radial }));
+                            continue;
+                        }
                         if let (Some(d), Some(c), Some(r)) = (
                             map.line_diff(sketch, b),
                             map.pt(sketch, a),
@@ -937,7 +1091,7 @@ fn build_equations(
                 ) {
                     eqs.push((
                         Some(cid),
-                        Eq::DiffLen2 {
+                        Eq::EqualLength {
                             a: Diff {
                                 x1: o.0,
                                 y1: o.1,
@@ -1439,6 +1593,70 @@ fn max_abs(f: &[f64]) -> f64 {
     f.iter().fold(0.0_f64, |m, v| m.max(v.abs()))
 }
 
+/// Find the constraint/variable island that currently needs work.
+///
+/// Sketches commonly contain several disconnected groups of geometry. Once
+/// one group is solved, including its tiny floating-point residuals in every
+/// later LM step can make an otherwise simple operation on another group
+/// stall or move the wrong geometry. Start with equations that are outside
+/// tolerance, then follow the equation-variable graph to include every
+/// equation coupled to those variables. Satisfied, disconnected islands stay
+/// exactly where the user left them and do not enlarge the linear solve.
+fn active_solve_component(
+    f: &[f64],
+    jac: &[Vec<(usize, f64)>],
+    variable_count: usize,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut active_rows: Vec<bool> = f.iter().map(|value| value.abs() > TOL).collect();
+    let mut active_variables = vec![false; variable_count];
+
+    loop {
+        let mut changed = false;
+
+        for (row_index, row) in jac.iter().enumerate() {
+            if !active_rows[row_index]
+                && row.iter().any(|(variable, _)| active_variables[*variable])
+            {
+                active_rows[row_index] = true;
+                changed = true;
+            }
+        }
+
+        for (row_index, row) in jac.iter().enumerate() {
+            if !active_rows[row_index] {
+                continue;
+            }
+            for &(variable, _) in row {
+                if !active_variables[variable] {
+                    active_variables[variable] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    // A non-zero equation with no usable derivative cannot identify a local
+    // component. Preserve the previous all-sketch behavior so the caller gets
+    // the best available diagnosis instead of silently doing no work.
+    if active_rows.iter().any(|active| *active) && !active_variables.iter().any(|active| *active) {
+        active_rows.fill(true);
+        active_variables.fill(true);
+    }
+
+    (active_rows, active_variables)
+}
+
+fn selected_squared_norm(f: &[f64], active_rows: &[bool]) -> f64 {
+    f.iter()
+        .zip(active_rows)
+        .filter_map(|(value, active)| active.then_some(value * value))
+        .sum()
+}
+
 /// Wrap an angle residual to (−π, π] (branch-safe for Newton steps).
 fn wrap_angle(a: f64) -> f64 {
     const TAU: f64 = std::f64::consts::TAU;
@@ -1566,7 +1784,7 @@ fn seed_consumed_radius_edit(sketch: &Sketch, map: &VarMap, x: &mut [f64]) {
     let radius_edits = sketch
         .constraints()
         .filter_map(|(cid, constraint)| match *constraint {
-            Constraint::Radius { entity, value } => {
+            Constraint::Radius { entity, value } if !sketch.is_reference_dimension(&cid) => {
                 let radius_var = map.radius_var(sketch, entity)?;
                 let current = x[radius_var].abs();
                 let target = sketch.dim_value(&cid, value).abs();
@@ -1655,10 +1873,166 @@ fn seed_consumed_radius_edit(sketch: &Sketch, map: &VarMap, x: &mut [f64]) {
 
 /// Damped Newton (LM) solve; writes the solution back into the sketch.
 pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
+    solve_with_stays(sketch, pins, &SolveStays::default())
+}
+
+/// Solve while retaining selected authored properties.
+///
+/// These stays are operation-local stabilization equations, not persistent
+/// sketch constraints. They let direction-only tools choose the nearest
+/// rigid rotation instead of stretching a free endpoint toward infinity,
+/// and let size-only tools resize without rotating their carriers. The
+/// returned rank/DOF still describes only the actual sketch constraints.
+pub(crate) fn solve_with_stays(
+    sketch: &mut Sketch,
+    pins: &[(EntityId, Vec2)],
+    stays: &SolveStays,
+) -> Analysis {
     let map = build_var_map(sketch);
-    let eqs = build_equations(sketch, &map, pins);
+    let mut eqs = build_equations(sketch, &map, pins);
+    let hard_equation_count = eqs.len();
+    for &(line, target) in &stays.line_lengths {
+        let Some((start, end)) = sketch.line_endpoint_ids(line) else {
+            continue;
+        };
+        let (Some(a), Some(b)) = (map.pt(sketch, start), map.pt(sketch, end)) else {
+            continue;
+        };
+        if target.is_finite() && target >= DEGENERATE_LINE_EPS {
+            eqs.push((None, Eq::DistPt { a, b, target }));
+        }
+    }
+    for &(line, target) in &stays.line_angles {
+        if target.is_finite() {
+            if let Some(a) = map.line_diff(sketch, line) {
+                eqs.push((None, Eq::AngleAxis { a, target }));
+            }
+        }
+    }
+    for &(line, target) in &stays.line_midpoints {
+        let Some((start, end)) = sketch.line_endpoint_ids(line) else {
+            continue;
+        };
+        let (Some(a), Some(b)) = (map.pt(sketch, start), map.pt(sketch, end)) else {
+            continue;
+        };
+        if target.x.is_finite() && target.y.is_finite() {
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(a.0, 0.5), (b.0, 0.5)],
+                    c: -target.x,
+                },
+            ));
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(a.1, 0.5), (b.1, 0.5)],
+                    c: -target.y,
+                },
+            ));
+        }
+    }
+    for &(first, second, target) in &stays.point_pair_distances {
+        if !target.is_finite() || target < DEGENERATE_LINE_EPS {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (map.pt(sketch, first), map.pt(sketch, second)) {
+            eqs.push((None, Eq::DistPt { a, b, target }));
+        }
+    }
+    for &(first, second, target) in &stays.point_pair_angles {
+        if !target.is_finite() {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (map.pt(sketch, first), map.pt(sketch, second)) {
+            eqs.push((
+                None,
+                Eq::AngleAxis {
+                    a: Diff {
+                        x1: a.0,
+                        y1: a.1,
+                        x2: b.0,
+                        y2: b.1,
+                    },
+                    target,
+                },
+            ));
+        }
+    }
+    for &(first, second, target) in &stays.point_pair_midpoints {
+        if !target.x.is_finite() || !target.y.is_finite() {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (map.pt(sketch, first), map.pt(sketch, second)) {
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(a.0, 0.5), (b.0, 0.5)],
+                    c: -target.x,
+                },
+            ));
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(a.1, 0.5), (b.1, 0.5)],
+                    c: -target.y,
+                },
+            ));
+        }
+    }
+    for &(point, target) in &stays.point_positions {
+        if !target.x.is_finite() || !target.y.is_finite() {
+            continue;
+        }
+        if let Some(point) = map.pt(sketch, point) {
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(point.0, 1.0)],
+                    c: -target.x,
+                },
+            ));
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(point.1, 1.0)],
+                    c: -target.y,
+                },
+            ));
+        }
+    }
+    for &(curve, target) in &stays.curve_radii {
+        if !target.is_finite() || target < DEGENERATE_LINE_EPS {
+            continue;
+        }
+        if let Some(r) = map.radius_var(sketch, curve) {
+            eqs.push((None, Eq::Radius { r, target }));
+        }
+    }
+    for &(curve, target) in &stays.curve_centers {
+        if !target.x.is_finite() || !target.y.is_finite() {
+            continue;
+        }
+        if let Some(center) = map.pt(sketch, curve) {
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(center.0, 1.0)],
+                    c: -target.x,
+                },
+            ));
+            eqs.push((
+                None,
+                Eq::Lin {
+                    terms: vec![(center.1, 1.0)],
+                    c: -target.y,
+                },
+            ));
+        }
+    }
     let n = map.n;
-    let m = eqs.len();
+    let m = hard_equation_count;
 
     if n == 0 {
         return Analysis {
@@ -1677,6 +2051,8 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     seed_consumed_radius_edit(sketch, &map, &mut x);
     let (mut f, mut jac) = eval_all(&eqs, &x, n);
     let mut residual = max_abs(&f);
+    let (active_rows, active_variables) = active_solve_component(&f, &jac, n);
+    let mut cost = selected_squared_norm(&f, &active_rows);
     // Pre-solve line lengths + radii for the collapse guard (see below).
     let pre_line_len: Vec<(usize, usize, usize, usize, f64, bool)> = sketch
         .entities()
@@ -1710,6 +2086,39 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
             _ => None,
         })
         .collect();
+    // A newly applied tangent should normally translate unconstrained
+    // circles rather than silently changing the size the user drew. Apply
+    // this movement preference only to tangent participants without their
+    // own radius/diameter driver; ordinary dimensional radius solves keep
+    // their unweighted convergence behavior.
+    let mut movement_weight = vec![1.0; n];
+    let prefers_preserved_radius = |entity: EntityId| {
+        let tangent_participant = sketch.constraints().any(|(_, constraint)| {
+            matches!(constraint, Constraint::Tangent { a, b } if *a == entity || *b == entity)
+        });
+        let directly_dimensioned = sketch.constraints().any(|(cid, constraint)| {
+            if sketch.is_reference_dimension(&cid) {
+                return false;
+            }
+            matches!(
+                constraint,
+                Constraint::Radius { entity: target, .. }
+                    | Constraint::Diameter { entity: target, .. }
+                    if *target == entity
+            )
+        });
+        tangent_participant && !directly_dimensioned
+    };
+    for (entity, (_, radius)) in &map.circles {
+        if prefers_preserved_radius(*entity) {
+            movement_weight[*radius] = 1024.0;
+        }
+    }
+    for (entity, (_, radius, ..)) in &map.arcs {
+        if prefers_preserved_radius(*entity) {
+            movement_weight[*radius] = 1024.0;
+        }
+    }
     let mut lambda = 1e-3;
     let mut iterations = 0;
 
@@ -1718,7 +2127,10 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
         // Normal equations (JᵀJ + λ·diag(JᵀJ)) Δ = −Jᵀf.
         let mut ata = vec![vec![0.0; n]; n];
         let mut jtf = vec![0.0; n];
-        for (row, &fr) in jac.iter().zip(f.iter()) {
+        for ((row, &fr), active) in jac.iter().zip(f.iter()).zip(&active_rows) {
+            if !active {
+                continue;
+            }
             for &(i, vi) in row {
                 jtf[i] -= vi * fr;
                 for &(j, vj) in row {
@@ -1727,25 +2139,50 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
             }
         }
         for i in 0..n {
-            ata[i][i] += lambda * ata[i][i].max(1e-12);
+            if active_variables[i] {
+                ata[i][i] += lambda * movement_weight[i] * ata[i][i].max(1e-12);
+            } else {
+                // Keep disconnected variables fixed and make their rows
+                // harmlessly invertible in the full-sized normal matrix.
+                ata[i][i] = 1.0;
+            }
         }
         let mut rhs = jtf;
         if !solve_square(&mut ata, &mut rhs) {
             lambda *= 8.0;
             continue;
         }
-        let mut x_new = x.clone();
-        for i in 0..n {
-            x_new[i] += rhs[i];
+        // LM minimizes the sum of squared residuals. The previous acceptance
+        // test used only the largest individual residual, which could reject
+        // a valid descent step when coupled constraints traded which row was
+        // temporarily largest. Try the full step, then a bounded backtrack.
+        let mut accepted = None;
+        for backtrack in 0..8 {
+            let scale = 0.5_f64.powi(backtrack);
+            let mut candidate = x.clone();
+            for i in 0..n {
+                if active_variables[i] {
+                    candidate[i] += rhs[i] * scale;
+                }
+            }
+            let (candidate_f, candidate_jac) = eval_all(&eqs, &candidate, n);
+            let candidate_cost = selected_squared_norm(&candidate_f, &active_rows);
+            if candidate_cost < cost {
+                accepted = Some((candidate, candidate_f, candidate_jac, candidate_cost, scale));
+                break;
+            }
         }
-        let (f_new, jac_new) = eval_all(&eqs, &x_new, n);
-        let res_new = max_abs(&f_new);
-        if res_new < residual {
+        if let Some((x_new, f_new, jac_new, cost_new, scale)) = accepted {
             x = x_new;
             f = f_new;
             jac = jac_new;
-            lambda = (lambda / 4.0).max(1e-12);
-            residual = res_new;
+            cost = cost_new;
+            residual = max_abs(&f);
+            lambda = if scale == 1.0 {
+                (lambda / 4.0).max(1e-12)
+            } else {
+                (lambda / 2.0).max(1e-12)
+            };
         } else {
             lambda *= 6.0;
         }
@@ -1758,7 +2195,10 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
     if converged {
         let mut ata = vec![vec![0.0; n]; n];
         let mut jtf = vec![0.0; n];
-        for (row, &fr) in jac.iter().zip(f.iter()) {
+        for ((row, &fr), active) in jac.iter().zip(f.iter()).zip(&active_rows) {
+            if !active {
+                continue;
+            }
             for &(i, vi) in row {
                 jtf[i] -= vi * fr;
                 for &(j, vj) in row {
@@ -1766,11 +2206,18 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
                 }
             }
         }
+        for (i, active) in active_variables.iter().enumerate() {
+            if !active {
+                ata[i][i] = 1.0;
+            }
+        }
         let mut rhs = jtf;
         if solve_square(&mut ata, &mut rhs) {
             let mut x_new = x.clone();
             for i in 0..n {
-                x_new[i] += rhs[i];
+                if active_variables[i] {
+                    x_new[i] += rhs[i];
+                }
             }
             let (f_new, jac_new) = eval_all(&eqs, &x_new, n);
             let res_new = max_abs(&f_new);
@@ -1826,8 +2273,17 @@ pub fn solve(sketch: &mut Sketch, pins: &[(EntityId, Vec2)]) -> Analysis {
         write_values(sketch, &map, &x);
     }
 
+    let hard_residual = max_abs(&f[..hard_equation_count]);
     finish_analysis(
-        sketch, &map, &eqs, &x, &f, &jac, converged, iterations, residual,
+        sketch,
+        &map,
+        &eqs[..hard_equation_count],
+        &x,
+        &f[..hard_equation_count],
+        &jac[..hard_equation_count],
+        converged,
+        iterations,
+        hard_residual,
     )
 }
 

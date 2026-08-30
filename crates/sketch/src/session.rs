@@ -46,10 +46,9 @@ pub const MIN_GRID_STEP_MM: f64 = 0.001;
 pub const MAX_GRID_STEP_MM: f64 = 1_000_000.0;
 /// H/V inference cone half-angle in degrees.
 ///
-/// Ten degrees gives horizontal/vertical the default bias expected from a
-/// mechanical sketcher while leaving deliberate diagonals easy to acquire.
-/// Ctrl remains the explicit temporary inference override.
-pub const INFERENCE_ANGLE_TOL_DEG: f64 = 10.0;
+/// A narrow cone keeps H/V helpful without silently flattening deliberate
+/// shallow diagonals. Ctrl remains the explicit temporary inference override.
+pub const INFERENCE_ANGLE_TOL_DEG: f64 = 3.0;
 /// Segments shorter than this are rejected as degenerate.
 pub const MIN_LINE_LENGTH_MM: f64 = 1e-6;
 /// Distance below which two points are considered the same location.
@@ -67,7 +66,9 @@ fn format_number(v: f64) -> String {
 }
 
 /// Errors of the sketch-session API. Serialized at the host boundary; the
-/// OverConstrained variant also carries structured conflict data (D4.2).
+/// OverConstrained carries structured conflict data (D4.2), while
+/// ConstraintSolveFailed deliberately does not invent a culprit when the
+/// numerical solver cannot establish one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionError {
     /// `begin_sketch` while another sketch is being edited.
@@ -102,6 +103,11 @@ pub enum SessionError {
     OverConstrained {
         rejected: ConstraintDesc,
         conflicts_with: Vec<ConstraintDesc>,
+    },
+    /// The proposed relation could not be solved, and leave-one-out analysis
+    /// did not prove that any existing constraint caused the failure.
+    ConstraintSolveFailed {
+        rejected: ConstraintDesc,
     },
 }
 
@@ -139,6 +145,13 @@ impl fmt::Display for SessionError {
                     .map(|e| e.label.as_str())
                     .collect::<Vec<_>>()
                     .join(" and ");
+                if conflicts_with.is_empty() {
+                    return write!(
+                        f,
+                        "Cannot add {} between {}: it conflicts with the existing constrained geometry",
+                        rejected.kind, ents
+                    );
+                }
                 if conflicts_with.len() > 4 {
                     return write!(
                         f,
@@ -165,6 +178,19 @@ impl fmt::Display for SessionError {
                     f,
                     "Cannot add {} between {}: conflicts with {}",
                     rejected.kind, ents, conflicts
+                )
+            }
+            SessionError::ConstraintSolveFailed { rejected } => {
+                let ents = rejected
+                    .entities
+                    .iter()
+                    .map(|entity| entity.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                write!(
+                    f,
+                    "The sketch solver could not satisfy {} between {}. No specific conflicting constraint was identified",
+                    rejected.kind, ents
                 )
             }
         }
@@ -406,6 +432,7 @@ impl SketchSession {
     /// Re-solve after a mutation and refresh the analysis used by DTOs.
     fn recompute(&mut self) {
         self.analysis = Some(solver::solve(&mut self.sketch, &[]));
+        self.sketch.sync_dimension_constraint_values();
     }
 
     fn analysis(&self) -> Analysis {
@@ -423,10 +450,11 @@ impl SketchSession {
     fn snap_inner(
         &self,
         raw: Vec2,
+        allow_relational: bool,
         allow_midpoint: bool,
         exclude_position: Option<Vec2>,
     ) -> (Vec2, SnapTarget) {
-        if self.point_snap {
+        if self.point_snap && allow_relational {
             if let Some((id, _)) = self
                 .sketch
                 .entities()
@@ -479,6 +507,7 @@ impl SketchSession {
                 }
             }
         }
+
         if self.grid_snap {
             let step = self.grid_step;
             let snapped = Vec2::new((raw.x / step).round() * step, (raw.y / step).round() * step);
@@ -491,7 +520,14 @@ impl SketchSession {
     }
 
     fn snap(&self, raw: Vec2) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, false, None)
+        self.snap_inner(raw, true, false, None)
+    }
+
+    /// Creation-tool snap with a temporary inference override. Ctrl/Cmd
+    /// suppresses object/datum acquisition while leaving the independently
+    /// configured engineering grid available.
+    fn snap_creation(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        self.snap_inner(raw, !ctrl_held, false, None)
     }
 
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
@@ -499,13 +535,13 @@ impl SketchSession {
     /// constraint on commit (D4.1 parity). Holding Ctrl suppresses the
     /// midpoint inference (Ctrl disables inferences).
     fn snap_line_flow(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held, None)
+        self.snap_inner(raw, !ctrl_held, !ctrl_held, None)
     }
 
     /// Endpoint acquisition must not magnetize a short segment back onto its
     /// own start point. Other coincident candidates retain normal priority.
     fn snap_line_endpoint(&self, raw: Vec2, from: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held, Some(from))
+        self.snap_inner(raw, !ctrl_held, !ctrl_held, Some(from))
     }
 
     /// Shared pipeline for `preview_segment` and `add_line`: snap, then
@@ -565,6 +601,13 @@ impl SketchSession {
                     }
                 }
             }
+        }
+
+        if !ctrl_held
+            && snapped.distance(from) >= MIN_LINE_LENGTH_MM
+            && self.preview_has_connected_perpendicular(from, snapped, target)
+        {
+            inferences.push(Inference::Perpendicular);
         }
 
         PreviewDto {
@@ -1280,9 +1323,17 @@ impl SketchSession {
                 Some((id, _)) => EndpointResolution::Existing(id),
                 None => EndpointResolution::New(Vec2::ZERO),
             },
-            SnapTarget::Grid
-            | SnapTarget::None
-            | SnapTarget::Midpoint { .. }
+            // Suppressing magnetic acquisition must not manufacture two
+            // topologically separate vertices at the exact same coordinate.
+            // Reuse only an exact (numerical-epsilon) match; nearby points
+            // remain untouched when the override is active.
+            SnapTarget::Grid | SnapTarget::None => {
+                match self.sketch.nearest_point(coords, MERGE_EPS) {
+                    Some((id, _)) => EndpointResolution::Existing(id),
+                    None => EndpointResolution::New(coords),
+                }
+            }
+            SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
             | SnapTarget::Curve { .. } => EndpointResolution::New(coords),
             SnapTarget::Intersection { .. } => match self.sketch.nearest_point(coords, MERGE_EPS) {
@@ -1337,25 +1388,151 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Ground a point that truly lands on the sketch origin while snapping
-    /// is enabled. Origin acquisition is a geometric reference, not merely
-    /// a one-time coordinate rounding: later dimension edits must propagate
-    /// away from it instead of translating the whole connected chain.
-    fn ground_origin_point(&mut self, point_id: EntityId) -> Option<ConstraintDto> {
-        if !self.grid_snap
-            || self.sketch.fix_constraint_on(point_id).is_some()
-            || self
-                .sketch
-                .point_position(point_id)
-                .is_none_or(|position| position.distance(Vec2::ZERO) > MERGE_EPS)
-        {
+    /// Persist an intentional origin acquisition without silently applying
+    /// `Fix`. Origin coincidence removes only translation; every unrelated
+    /// size/angle degree of freedom remains available to later dimensions.
+    fn attach_origin_if_acquired(
+        &mut self,
+        entity: EntityId,
+        target: SnapTarget,
+    ) -> Option<ConstraintDto> {
+        if target != SnapTarget::Origin {
             return None;
         }
-        let constraint = Constraint::Fix { entity: point_id };
-        let id = self.sketch.add_constraint(constraint);
-        let targets = self.unknown_values(point_id);
-        self.sketch.set_fix_targets(id, targets);
-        Some(ConstraintDto { id, constraint })
+        self.try_add_independent_auto_constraint(Constraint::OriginCoincident { entity })
+    }
+
+    /// Persist center acquisition for center-authored circles/arcs. A center
+    /// snapped to a point follows that point; a center snapped to the origin
+    /// keeps only its translational datum relation.
+    fn attach_curve_center_if_acquired(
+        &mut self,
+        curve: EntityId,
+        target: SnapTarget,
+    ) -> Option<ConstraintDto> {
+        let constraint = match target {
+            SnapTarget::Origin => Constraint::OriginCoincident { entity: curve },
+            SnapTarget::Point { entity: point } => Constraint::CenterCoincident { point, curve },
+            _ => return None,
+        };
+        self.try_add_independent_auto_constraint(constraint)
+    }
+
+    fn has_relation(&self, relation: &Constraint) -> bool {
+        self.sketch
+            .constraints()
+            .any(|(_, existing)| existing.same_relation(relation))
+    }
+
+    /// Resolve a picked point-like datum for an associative curve relation.
+    /// Grid/raw picks are geometry only; point/origin picks become durable.
+    fn materialize_acquired_point(
+        &mut self,
+        _position: Vec2,
+        target: SnapTarget,
+    ) -> Option<EntityId> {
+        match target {
+            SnapTarget::Point { entity } => Some(entity),
+            SnapTarget::Origin => {
+                let point = self
+                    .sketch
+                    .nearest_point(Vec2::ZERO, MERGE_EPS)
+                    .map(|(entity, _)| entity)
+                    .unwrap_or_else(|| {
+                        self.sketch.add_entity(Entity::Point {
+                            position: Vec2::ZERO,
+                        })
+                    });
+                self.attach_origin_if_acquired(point, target);
+                Some(point)
+            }
+            _ => None,
+        }
+    }
+
+    fn attach_arc_endpoint_if_acquired(
+        &mut self,
+        arc: EntityId,
+        end: crate::constraint::ArcEndpoint,
+        position: Vec2,
+        target: SnapTarget,
+    ) -> Result<Option<EntityId>, SessionError> {
+        let Some(point) = self.materialize_acquired_point(position, target) else {
+            return Ok(None);
+        };
+        let relation = Constraint::ArcEndpointCoincident { point, arc, end };
+        if !self.has_relation(&relation)
+            && self.try_add_independent_auto_constraint(relation).is_none()
+        {
+            return Err(SessionError::InvalidConstraint(
+                "Cannot preserve the acquired arc endpoint".to_string(),
+            ));
+        }
+        Ok(Some(point))
+    }
+
+    fn attach_curve_point_if_acquired(
+        &mut self,
+        curve: EntityId,
+        position: Vec2,
+        target: SnapTarget,
+    ) -> Result<Option<EntityId>, SessionError> {
+        let Some(point) = self.materialize_acquired_point(position, target) else {
+            return Ok(None);
+        };
+        let relation = Constraint::Coincident { a: point, b: curve };
+        if !self.has_relation(&relation)
+            && self.try_add_independent_auto_constraint(relation).is_none()
+        {
+            return Err(SessionError::InvalidConstraint(
+                "Cannot preserve the acquired point on the curve".to_string(),
+            ));
+        }
+        Ok(Some(point))
+    }
+
+    /// Add tangency only when a newly created arc endpoint is already bound
+    /// to a line endpoint and its authored tangent is inside the narrow
+    /// inference cone. Remote or merely nearby lines are never considered.
+    fn infer_arc_endpoint_tangent(
+        &mut self,
+        arc: EntityId,
+        end: crate::constraint::ArcEndpoint,
+        point: EntityId,
+    ) {
+        let Some(Entity::Arc {
+            start_angle,
+            end_angle,
+            ..
+        }) = self.sketch.entity(arc)
+        else {
+            return;
+        };
+        let angle = match end {
+            crate::constraint::ArcEndpoint::Start => *start_angle,
+            crate::constraint::ArcEndpoint::End => *end_angle,
+        };
+        let tangent = Vec2::new(-angle.sin(), angle.cos());
+        let sine_limit = INFERENCE_ANGLE_TOL_DEG.to_radians().sin();
+        let candidates = self
+            .sketch
+            .lines_connected_to(point)
+            .into_iter()
+            .filter_map(|line| {
+                let (a, b) = self.sketch.resolved_line(line)?;
+                let direction = b - a;
+                let length = direction.length();
+                if length < MIN_LINE_LENGTH_MM {
+                    return None;
+                }
+                let parallel_error =
+                    (direction.x * tangent.y - direction.y * tangent.x).abs() / length;
+                (parallel_error <= sine_limit).then_some((line, parallel_error))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((line, _)) = candidates {
+            self.try_add_independent_auto_constraint(Constraint::Tangent { a: line, b: arc });
+        }
     }
 
     /// Find the best already-connected line at each endpoint that is within
@@ -1408,6 +1585,46 @@ impl SketchSession {
         candidates
     }
 
+    /// Whether a preview segment is within the inference cone of a line
+    /// already connected at either acquired endpoint. Restricting this to a
+    /// shared topological point avoids surprising remote relations.
+    fn preview_has_connected_perpendicular(
+        &self,
+        from: Vec2,
+        to: Vec2,
+        to_target: SnapTarget,
+    ) -> bool {
+        let direction = to - from;
+        let length = direction.length();
+        if length < MIN_LINE_LENGTH_MM {
+            return false;
+        }
+        let mut endpoints = Vec::with_capacity(2);
+        if let Some((point, _)) = self.sketch.nearest_point(from, MERGE_EPS) {
+            endpoints.push(point);
+        }
+        if let SnapTarget::Point { entity } = to_target {
+            if !endpoints.contains(&entity) {
+                endpoints.push(entity);
+            }
+        }
+        let cosine_limit = INFERENCE_ANGLE_TOL_DEG.to_radians().sin();
+        endpoints.into_iter().any(|point| {
+            self.sketch
+                .lines_connected_to(point)
+                .into_iter()
+                .any(|line| {
+                    let Some((a, b)) = self.sketch.resolved_line(line) else {
+                        return false;
+                    };
+                    let other = b - a;
+                    let other_length = other.length();
+                    other_length >= MIN_LINE_LENGTH_MM
+                        && direction.dot(other).abs() / (length * other_length) <= cosine_limit
+                })
+        })
+    }
+
     /// Automatic relations are opportunistic: keep only constraints that
     /// are consistent and remove at least one independent degree of freedom.
     /// This avoids filling a closed profile with redundant relations.
@@ -1415,16 +1632,10 @@ impl SketchSession {
         &mut self,
         constraint: Constraint,
     ) -> Option<ConstraintDto> {
-        let already_present = self.sketch.constraints().any(|(_, existing)| {
-            *existing == constraint
-                || matches!(
-                    (*existing, constraint),
-                    (
-                        Constraint::Perpendicular { a: ea, b: eb },
-                        Constraint::Perpendicular { a, b }
-                    ) if ea == b && eb == a
-                )
-        });
+        let already_present = self
+            .sketch
+            .constraints()
+            .any(|(_, existing)| existing.same_relation(&constraint));
         if already_present {
             return None;
         }
@@ -1611,6 +1822,7 @@ impl SketchSession {
                     Some(Constraint::Vertical { entity: line_id })
                 }
                 Inference::Horizontal | Inference::Vertical => None,
+                Inference::Perpendicular => None,
                 // Structural: merged shared points, no constraint record.
                 Inference::Coincident => None,
             };
@@ -1619,8 +1831,8 @@ impl SketchSession {
                 created.push(ConstraintDto { id, constraint: c });
             }
         }
-        for point_id in [start_point_id, end_point_id] {
-            if let Some(constraint) = self.ground_origin_point(point_id) {
+        for (point_id, target) in [(start_point_id, from_target), (end_point_id, preview.snap)] {
+            if let Some(constraint) = self.attach_origin_if_acquired(point_id, target) {
                 created.push(constraint);
             }
         }
@@ -1716,7 +1928,7 @@ impl SketchSession {
 
     /// A single standalone point (Point tool), snapped.
     pub fn add_point(&mut self, raw: Vec2) -> Result<ToolResult, SessionError> {
-        self.add_point_on(raw, None)
+        self.add_point_on_selective(raw, None, false)
     }
 
     /// A Point-tool placement with an optional acquired carrier curve.
@@ -1727,7 +1939,16 @@ impl SketchSession {
         raw: Vec2,
         coincident_with: Option<EntityId>,
     ) -> Result<ToolResult, SessionError> {
-        if let Some(carrier) = coincident_with {
+        self.add_point_on_selective(raw, coincident_with, false)
+    }
+
+    pub fn add_point_on_selective(
+        &mut self,
+        raw: Vec2,
+        coincident_with: Option<EntityId>,
+        ctrl_held: bool,
+    ) -> Result<ToolResult, SessionError> {
+        if let Some(carrier) = coincident_with.filter(|_| !ctrl_held) {
             let position = self.point_projected_to_curve(carrier, raw)?;
             if let Some((id, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
                 return Ok(ToolResult {
@@ -1758,13 +1979,13 @@ impl SketchSession {
             });
         }
 
-        let (coords, target) = self.snap(raw);
+        let (coords, target) = self.snap_creation(raw, ctrl_held);
         let resolution = self.resolve_endpoint(coords, target);
         if let EndpointResolution::Existing(id) = resolution {
-            // Snapped onto an existing point: normally nothing to add, but
-            // migrate a legacy ungrounded origin point when it is acquired.
+            // Snapped onto an existing point: normally nothing to add. An
+            // origin acquisition still needs its explicit datum relation.
             let before = self.sketch.snapshot();
-            if self.ground_origin_point(id).is_some() {
+            if self.attach_origin_if_acquired(id, target).is_some() {
                 self.recompute();
                 self.push_command(before);
             }
@@ -1778,7 +1999,7 @@ impl SketchSession {
             unreachable!()
         };
         let id = self.sketch.add_entity(Entity::Point { position: p });
-        self.ground_origin_point(id);
+        self.attach_origin_if_acquired(id, target);
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -1912,16 +2133,28 @@ impl SketchSession {
             a: mid_id,
             b: line_id,
         });
+        let perpendicular_created = if ctrl_held {
+            false
+        } else {
+            let mut accepted = false;
+            for constraint in self.perpendicular_candidates(line_id, [a_id, b_id]) {
+                accepted |= self
+                    .try_add_independent_auto_constraint(constraint)
+                    .is_some();
+            }
+            accepted
+        };
         for inference in preview.inferences {
             match inference {
-                Inference::Horizontal => {
+                Inference::Horizontal if !perpendicular_created => {
                     self.sketch
                         .add_constraint(Constraint::Horizontal { entity: line_id });
                 }
-                Inference::Vertical => {
+                Inference::Vertical if !perpendicular_created => {
                     self.sketch
                         .add_constraint(Constraint::Vertical { entity: line_id });
                 }
+                Inference::Horizontal | Inference::Vertical | Inference::Perpendicular => {}
                 Inference::Coincident => {}
             }
         }
@@ -1931,9 +2164,8 @@ impl SketchSession {
         if let Some(constraint) = self.midpoint_constraint_for_target(b_id, preview.snap) {
             self.sketch.add_constraint(constraint);
         }
-        for point_id in [mid_id, a_id, b_id] {
-            self.ground_origin_point(point_id);
-        }
+        self.attach_origin_if_acquired(mid_id, mid_target);
+        self.attach_origin_if_acquired(b_id, preview.snap);
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -1950,9 +2182,19 @@ impl SketchSession {
         p1: Vec2,
         p2: Vec2,
     ) -> Result<ToolResult, SessionError> {
-        let (a, _) = self.snap(p1);
-        let (b, _) = self.snap(p2);
-        self.build_rectangle(mode, a, b)
+        self.add_rectangle_selective(mode, p1, p2, false)
+    }
+
+    pub fn add_rectangle_selective(
+        &mut self,
+        mode: RectangleMode,
+        p1: Vec2,
+        p2: Vec2,
+        ctrl_held: bool,
+    ) -> Result<ToolResult, SessionError> {
+        let (a, a_target) = self.snap_creation(p1, ctrl_held);
+        let (b, b_target) = self.snap_creation(p2, ctrl_held);
+        self.build_rectangle(mode, a, b, [(a, a_target), (b, b_target)])
     }
 
     /// Rectangle honoring locked width/height dynamic-input fields.
@@ -1971,8 +2213,8 @@ impl SketchSession {
             Some(t) => Some(self.eval_text(t)?),
             None => request.height_mm,
         };
-        let (anchor, _) = self.snap(request.anchor);
-        let hint = request.corner_hint;
+        let (anchor, anchor_target) = self.snap_creation(request.anchor, request.ctrl_held);
+        let (hint, hint_target) = self.snap_creation(request.corner_hint, request.ctrl_held);
         let sx = if hint.x >= anchor.x { 1.0 } else { -1.0 };
         let sy = if hint.y >= anchor.y { 1.0 } else { -1.0 };
         let extent = |full: f64| match mode {
@@ -1994,6 +2236,14 @@ impl SketchSession {
 
         let before = self.sketch.snapshot();
         let entities = self.create_rectangle(mode, anchor, corner)?;
+        for (position, target) in [(anchor, anchor_target), (corner, hint_target)] {
+            if target != SnapTarget::Origin {
+                continue;
+            }
+            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
+                self.attach_origin_if_acquired(point, target);
+            }
+        }
         // Corner points drive the rectangle: dims span corner-to-corner so
         // later corner ops keep their reference (2026-07-19 PM, D9).
         let (bl, br, tl) = (entities[0], entities[1], entities[3]);
@@ -2019,9 +2269,18 @@ impl SketchSession {
         mode: RectangleMode,
         p1: Vec2,
         p2: Vec2,
+        acquisitions: [(Vec2, SnapTarget); 2],
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
         let entities = self.create_rectangle(mode, p1, p2)?;
+        for (position, target) in acquisitions {
+            if target != SnapTarget::Origin {
+                continue;
+            }
+            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
+                self.attach_origin_if_acquired(point, target);
+            }
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2094,10 +2353,6 @@ impl SketchSession {
         self.sketch.add_constraint(Constraint::Vertical {
             entity: line_ids[3],
         });
-        for point_id in &point_ids {
-            self.ground_origin_point(*point_id);
-        }
-
         let mut entities = point_ids;
         entities.extend(line_ids);
         Ok(entities)
@@ -2110,9 +2365,19 @@ impl SketchSession {
         p1: Vec2,
         p2: Vec2,
     ) -> Result<ToolResult, SessionError> {
-        let (a, _) = self.snap(p1);
-        let (b, _) = self.snap(p2);
-        self.build_circle(mode, a, b)
+        self.add_circle_selective(mode, p1, p2, false)
+    }
+
+    pub fn add_circle_selective(
+        &mut self,
+        mode: CircleMode,
+        p1: Vec2,
+        p2: Vec2,
+        ctrl_held: bool,
+    ) -> Result<ToolResult, SessionError> {
+        let (a, a_target) = self.snap_creation(p1, ctrl_held);
+        let (b, _) = self.snap_creation(p2, ctrl_held);
+        self.build_circle(mode, a, b, a_target)
     }
 
     /// Circle honoring a locked diameter field (typed value auto-creates a
@@ -2128,9 +2393,9 @@ impl SketchSession {
             Some(t) => Some(self.eval_text(t)?),
             None => request.diameter_mm,
         };
-        let (anchor, _) = self.snap(request.anchor);
+        let (anchor, anchor_target) = self.snap_creation(request.anchor, request.ctrl_held);
         let hint = if diameter_mm.is_none() {
-            self.snap(request.edge_hint).0
+            self.snap_creation(request.edge_hint, request.ctrl_held).0
         } else {
             request.edge_hint
         };
@@ -2162,6 +2427,9 @@ impl SketchSession {
 
         let before = self.sketch.snapshot();
         let id = self.create_circle(mode, anchor, second)?;
+        if mode == CircleMode::CenterDiameter {
+            self.attach_curve_center_if_acquired(id, anchor_target);
+        }
         let d_text = request
             .diameter_text
             .clone()
@@ -2182,9 +2450,13 @@ impl SketchSession {
         mode: CircleMode,
         p1: Vec2,
         p2: Vec2,
+        center_target: SnapTarget,
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
         let id = self.create_circle(mode, p1, p2)?;
+        if mode == CircleMode::CenterDiameter {
+            self.attach_curve_center_if_acquired(id, center_target);
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2429,9 +2701,19 @@ impl SketchSession {
         p2: Vec2,
         p3: Vec2,
     ) -> Result<ToolResult, SessionError> {
-        let (p1, _) = self.snap(p1);
-        let (p2, _) = self.snap(p2);
-        let (p3, _) = self.snap(p3);
+        self.add_arc_3pt_selective(p1, p2, p3, false)
+    }
+
+    pub fn add_arc_3pt_selective(
+        &mut self,
+        p1: Vec2,
+        p2: Vec2,
+        p3: Vec2,
+        ctrl_held: bool,
+    ) -> Result<ToolResult, SessionError> {
+        let (p1, p1_target) = self.snap_creation(p1, ctrl_held);
+        let (p2, p2_target) = self.snap_creation(p2, ctrl_held);
+        let (p3, p3_target) = self.snap_creation(p3, ctrl_held);
         let d = 2.0 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
         if d.abs() < MERGE_EPS {
             return Err(SessionError::DegenerateSegment); // collinear
@@ -2452,10 +2734,10 @@ impl SketchSession {
             let off = (m - s).rem_euclid(std::f64::consts::TAU);
             off <= span
         };
-        let (start_angle, end_angle) = if ccw_contains(a0, a1, am) {
-            (a0, a1)
+        let (start_angle, end_angle, start_pick, end_pick) = if ccw_contains(a0, a1, am) {
+            (a0, a1, (p1, p1_target), (p3, p3_target))
         } else {
-            (a1, a0)
+            (a1, a0, (p3, p3_target), (p1, p1_target))
         };
         let before = self.sketch.snapshot();
         let id = self.sketch.add_entity(Entity::Arc {
@@ -2464,6 +2746,45 @@ impl SketchSession {
             start_angle,
             end_angle,
         });
+        let start_point = match self.attach_arc_endpoint_if_acquired(
+            id,
+            crate::constraint::ArcEndpoint::Start,
+            start_pick.0,
+            start_pick.1,
+        ) {
+            Ok(point) => point,
+            Err(error) => {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+        };
+        let end_point = match self.attach_arc_endpoint_if_acquired(
+            id,
+            crate::constraint::ArcEndpoint::End,
+            end_pick.0,
+            end_pick.1,
+        ) {
+            Ok(point) => point,
+            Err(error) => {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.attach_curve_point_if_acquired(id, p2, p2_target) {
+            self.sketch.restore(before);
+            self.recompute();
+            return Err(error);
+        }
+        if !ctrl_held {
+            if let Some(point) = start_point {
+                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, point);
+            }
+            if let Some(point) = end_point {
+                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, point);
+            }
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2480,9 +2801,19 @@ impl SketchSession {
         start: Vec2,
         sweep: Vec2,
     ) -> Result<ToolResult, SessionError> {
-        let (center, _) = self.snap(center);
-        let (start, _) = self.snap(start);
-        let (sweep, _) = self.snap(sweep);
+        self.add_arc_center_selective(center, start, sweep, false)
+    }
+
+    pub fn add_arc_center_selective(
+        &mut self,
+        center: Vec2,
+        start: Vec2,
+        sweep: Vec2,
+        ctrl_held: bool,
+    ) -> Result<ToolResult, SessionError> {
+        let (center, center_target) = self.snap_creation(center, ctrl_held);
+        let (start, start_target) = self.snap_creation(start, ctrl_held);
+        let (sweep, sweep_target) = self.snap_creation(sweep, ctrl_held);
         let radius = center.distance(start);
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
@@ -2499,6 +2830,51 @@ impl SketchSession {
             start_angle,
             end_angle,
         });
+        self.attach_curve_center_if_acquired(id, center_target);
+        let start_point = match self.attach_arc_endpoint_if_acquired(
+            id,
+            crate::constraint::ArcEndpoint::Start,
+            start,
+            start_target,
+        ) {
+            Ok(point) => point,
+            Err(error) => {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+        };
+        // The third center-arc pick defines sweep direction. It represents a
+        // durable endpoint acquisition only when the picked vertex already
+        // lies on the authored radius. A broad screen-space snap tolerance
+        // here would move an off-radius point (or distort the arc) merely
+        // because it happened to provide the intended angular direction.
+        let sweep_is_endpoint = (center.distance(sweep) - radius).abs() <= MERGE_EPS;
+        let end_point = if sweep_is_endpoint {
+            match self.attach_arc_endpoint_if_acquired(
+                id,
+                crate::constraint::ArcEndpoint::End,
+                sweep,
+                sweep_target,
+            ) {
+                Ok(point) => point,
+                Err(error) => {
+                    self.sketch.restore(before);
+                    self.recompute();
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        if !ctrl_held {
+            if let Some(point) = start_point {
+                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, point);
+            }
+            if let Some(point) = end_point {
+                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, point);
+            }
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2638,6 +3014,8 @@ impl SketchSession {
 
         match *constraint {
             Constraint::ArcEndpointCoincident { .. }
+            | Constraint::OriginCoincident { .. }
+            | Constraint::CenterCoincident { .. }
             | Constraint::EqualDistance { .. }
             | Constraint::ReferenceMidpoint { .. }
             | Constraint::SpanMidpoint { .. } => {
@@ -2776,7 +3154,7 @@ impl SketchSession {
         constraint: Constraint,
     ) -> Result<AddConstraintResult, SessionError> {
         self.validate_constraint(&constraint)?;
-        let before_rank = solver::analyze(&self.sketch).rank;
+        self.reject_duplicate_relation(&constraint)?;
         let before = self.sketch.snapshot();
 
         let cid = self.sketch.add_constraint(constraint);
@@ -2785,21 +3163,14 @@ impl SketchSession {
             self.sketch.set_fix_targets(cid, targets);
         }
 
-        let analysis = solver::solve(&mut self.sketch, &[]);
+        let analysis = self.solve_constraint_operation_with_recovery(&[constraint]);
         let new_residual = solver::constraint_residual(&self.sketch, cid);
-        let rank_increased = analysis.rank > before_rank;
 
-        if !analysis.converged || (!rank_increased && new_residual > INCONSISTENT_EPS) {
-            // Over-constrained (inconsistent or under-determined): reject
-            // and name the conflicting constraints (D4.2).
-            let rejected = self.describe_constraint(cid);
-            let conflicts_with = self.find_conflicts(cid, constraint);
+        if !analysis.converged || new_residual > INCONSISTENT_EPS {
+            let error = self.classify_constraint_failure(cid, constraint);
             self.sketch.restore(before);
             self.recompute();
-            return Err(SessionError::OverConstrained {
-                rejected,
-                conflicts_with,
-            });
+            return Err(error);
         }
 
         self.analysis = Some(analysis);
@@ -2822,14 +3193,21 @@ impl SketchSession {
                 "no constraints to apply".to_string(),
             ));
         }
+        let mut unique = Vec::with_capacity(constraints.len());
+        for constraint in &constraints {
+            self.validate_constraint(constraint)?;
+            self.reject_duplicate_relation(constraint)?;
+            if unique
+                .iter()
+                .any(|existing: &Constraint| self.sketch.relations_equivalent(existing, constraint))
+            {
+                return Err(Self::duplicate_relation_error(constraint));
+            }
+            unique.push(*constraint);
+        }
         let before = self.sketch.snapshot();
         let mut added = Vec::with_capacity(constraints.len());
         for constraint in constraints {
-            if let Err(error) = self.validate_constraint(&constraint) {
-                self.sketch.restore(before);
-                self.recompute();
-                return Err(error);
-            }
             let cid = self.sketch.add_constraint(constraint);
             if let Constraint::Fix { entity } = constraint {
                 let targets = self.unknown_values(entity);
@@ -2838,7 +3216,11 @@ impl SketchSession {
             added.push((cid, constraint));
         }
 
-        let analysis = solver::solve(&mut self.sketch, &[]);
+        let added_constraints = added
+            .iter()
+            .map(|(_, constraint)| *constraint)
+            .collect::<Vec<_>>();
+        let analysis = self.solve_constraint_operation_with_recovery(&added_constraints);
         let rejected = added
             .iter()
             .find(|(cid, _)| solver::constraint_residual(&self.sketch, *cid) > INCONSISTENT_EPS);
@@ -2847,14 +3229,10 @@ impl SketchSession {
                 .copied()
                 .or_else(|| added.last().copied())
                 .expect("non-empty batch");
-            let rejected = self.describe_constraint(cid);
-            let conflicts_with = self.find_conflicts(cid, constraint);
+            let error = self.classify_constraint_failure(cid, constraint);
             self.sketch.restore(before);
             self.recompute();
-            return Err(SessionError::OverConstrained {
-                rejected,
-                conflicts_with,
-            });
+            return Err(error);
         }
 
         self.analysis = Some(analysis);
@@ -2871,8 +3249,8 @@ impl SketchSession {
         })
     }
 
-    /// Remove a geometric constraint (panel-applied relations). Driving
-    /// dimensions must use [`Self::delete_dimension`].
+    /// Remove a geometric constraint (panel-applied relations). Dimension
+    /// annotations must use [`Self::delete_dimension`].
     pub fn delete_constraint(
         &mut self,
         cid: ConstraintId,
@@ -2887,7 +3265,7 @@ impl SketchSession {
             )))?;
         if constraint.kind() == crate::constraint::ConstraintKind::Dimensional {
             return Err(SessionError::InvalidConstraint(
-                "use delete_dimension for driving dimensions".to_string(),
+                "use delete_dimension for sketch dimensions".to_string(),
             ));
         }
         let before = self.sketch.snapshot();
@@ -2963,6 +3341,1241 @@ impl SketchSession {
         })
     }
 
+    fn duplicate_relation_error(constraint: &Constraint) -> SessionError {
+        let message = if constraint.kind() == crate::constraint::ConstraintKind::Dimensional {
+            format!(
+                "A driving {} dimension already controls this measurement; edit or remove the existing dimension first",
+                constraint.kind_str()
+            )
+        } else {
+            format!(
+                "The {} constraint already exists on the selected geometry",
+                constraint.kind_str()
+            )
+        };
+        SessionError::InvalidConstraint(message)
+    }
+
+    pub(crate) fn reject_duplicate_relation(
+        &self,
+        constraint: &Constraint,
+    ) -> Result<(), SessionError> {
+        if self
+            .sketch
+            .equivalent_driving_constraint(constraint, None)
+            .is_some()
+        {
+            return Err(Self::duplicate_relation_error(constraint));
+        }
+        Ok(())
+    }
+
+    /// Solve freshly added relations using operation-local invariants. A
+    /// direction tool keeps authored sizes, a size tool keeps authored
+    /// directions, and a position tool keeps carrier shape. If the preferred
+    /// behavior is incompatible with the wider graph, fall back to the pure
+    /// constraint solve rather than rejecting an otherwise valid relation.
+    /// Symmetry axes are hard operation datums and never participate in that
+    /// unrestricted fallback unless the command directly edits the axis. A
+    /// stalled symmetry solve also retries from the nearest exact symmetric
+    /// point-pair configuration.
+    pub(crate) fn solve_constraint_operation_with_recovery(
+        &mut self,
+        constraints: &[Constraint],
+    ) -> Analysis {
+        let stays = self.operation_stays(constraints);
+        self.seed_constraint_projections(constraints);
+        let seeded_state = self.sketch.snapshot();
+        let first = if stays.is_empty() {
+            solver::solve(&mut self.sketch, &[])
+        } else {
+            solver::solve_with_stays(&mut self.sketch, &[], &stays)
+        };
+        if first.converged {
+            return first;
+        }
+        let mut failed = first;
+        if !stays.is_empty() {
+            // Position anchors only choose the nearest pose; authored size
+            // and bearing are the operation's semantic invariants. If the
+            // wider graph cannot keep every local anchor, release location
+            // first while retaining shape. This avoids satisfying a simple
+            // Coincident/Midpoint/Parallel request by stretching a carrier.
+            let mut relaxed = stays.clone();
+            // A symmetry axis is a selected datum, not one of the objects
+            // being fitted. Keep its complete pose even when ordinary local
+            // pose anchors are relaxed; otherwise a valid solution can be
+            // found by silently sliding the datum instead of mirroring the
+            // selected objects around it.
+            let addressed = constraints
+                .iter()
+                .flat_map(Constraint::referenced_entities)
+                .collect::<BTreeSet<_>>();
+            let newly_selected_axes = constraints
+                .iter()
+                .filter_map(|constraint| match *constraint {
+                    Constraint::Symmetry { axis, .. } => Some(axis),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let symmetry_axes = self
+                .sketch
+                .constraints()
+                .filter(|(cid, _)| !self.sketch.is_reference_dimension(cid))
+                .filter_map(|(_, constraint)| match *constraint {
+                    Constraint::Symmetry { axis, .. } => Some(axis),
+                    _ => None,
+                })
+                .filter(|axis| {
+                    if newly_selected_axes.contains(axis) {
+                        return true;
+                    }
+                    let endpoint_addressed =
+                        self.sketch
+                            .line_endpoint_ids(*axis)
+                            .is_some_and(|(start, end)| {
+                                addressed.contains(&start) || addressed.contains(&end)
+                            });
+                    !addressed.contains(axis) && !endpoint_addressed
+                })
+                .collect::<BTreeSet<_>>();
+            relaxed
+                .line_midpoints
+                .retain(|(line, _)| symmetry_axes.contains(line));
+            relaxed.point_pair_midpoints.clear();
+            relaxed.point_positions.clear();
+            relaxed.curve_centers.clear();
+            if !relaxed.is_empty() {
+                self.sketch.restore(seeded_state.clone());
+                let second = solver::solve_with_stays(&mut self.sketch, &[], &relaxed);
+                if second.converged {
+                    return second;
+                }
+            }
+
+            // A positional relation can legitimately require an
+            // undimensioned carrier to rotate (for example, putting a point
+            // at the midpoint of a line whose endpoint is already aligned).
+            // Release bearing next, but continue to protect every authored
+            // length/radius from solver scale escapes.
+            let mut size_only = relaxed;
+            size_only
+                .line_angles
+                .retain(|(line, _)| symmetry_axes.contains(line));
+            size_only.point_pair_angles.clear();
+            if !size_only.is_empty() {
+                self.sketch.restore(seeded_state.clone());
+                let third = solver::solve_with_stays(&mut self.sketch, &[], &size_only);
+                if third.converged {
+                    return third;
+                }
+            }
+
+            // A selected symmetry axis is a hard operation datum. If the
+            // graph cannot solve while that datum's pose is retained, reject
+            // the new command atomically instead of accepting an unrestricted
+            // solution that moves or rescales the axis behind the user's
+            // back. Direct edits of the axis were excluded above and may
+            // still use the ordinary fallback.
+            if !symmetry_axes.is_empty() {
+                self.sketch.restore(seeded_state);
+                return failed;
+            }
+
+            // A failed nonlinear solve still leaves trial values in the
+            // sketch. Retry from the finite projected pose, never from that
+            // partially diverged iterate.
+            self.sketch.restore(seeded_state.clone());
+            let fallback = solver::solve(&mut self.sketch, &[]);
+            if fallback.converged {
+                return fallback;
+            }
+            failed = fallback;
+        }
+        self.sketch.restore(seeded_state);
+        let mut seeded = false;
+        for constraint in constraints {
+            if let Constraint::Symmetry { a, b, axis } = *constraint {
+                seeded |= self.seed_symmetry_projection(a, b, axis);
+            }
+        }
+        if seeded {
+            solver::solve(&mut self.sketch, &[])
+        } else {
+            failed
+        }
+    }
+
+    /// Put a newly requested relation on the nearest exact geometric branch
+    /// before the nonlinear solve. The solver remains authoritative and can
+    /// move the wider constrained component, but it no longer needs to find
+    /// a finite solution by walking through a scale/translation null space.
+    fn seed_constraint_projections(&mut self, constraints: &[Constraint]) {
+        fn set_point(sketch: &mut Sketch, point: EntityId, position: Vec2) -> bool {
+            let Some(Entity::Point { position: target }) = sketch.entity_mut(point) else {
+                return false;
+            };
+            *target = position;
+            true
+        }
+
+        fn set_line_pose(
+            sketch: &mut Sketch,
+            line: EntityId,
+            midpoint: Vec2,
+            length: f64,
+            angle: f64,
+        ) -> bool {
+            let Some((start, end)) = sketch.line_endpoint_ids(line) else {
+                return false;
+            };
+            if !length.is_finite() || length < MIN_LINE_LENGTH_MM || !angle.is_finite() {
+                return false;
+            }
+            let half = Vec2::new(angle.cos(), angle.sin()) * (length * 0.5);
+            set_point(sketch, start, midpoint - half) && set_point(sketch, end, midpoint + half)
+        }
+
+        fn line_pose(sketch: &Sketch, line: EntityId) -> Option<(Vec2, f64, f64)> {
+            let (start, end) = sketch.resolved_line(line)?;
+            let direction = end - start;
+            let length = direction.length();
+            (length >= MIN_LINE_LENGTH_MM).then_some((
+                (start + end) * 0.5,
+                length,
+                direction.y.atan2(direction.x),
+            ))
+        }
+
+        fn nearest_parallel(reference: f64, current: f64) -> f64 {
+            let opposite = reference + std::f64::consts::PI;
+            if wrap_angle(current - reference).abs() <= wrap_angle(current - opposite).abs() {
+                reference
+            } else {
+                opposite
+            }
+        }
+
+        fn nearest_perpendicular(reference: f64, current: f64) -> f64 {
+            let ccw = reference + std::f64::consts::FRAC_PI_2;
+            let cw = reference - std::f64::consts::FRAC_PI_2;
+            if wrap_angle(current - ccw).abs() <= wrap_angle(current - cw).abs() {
+                ccw
+            } else {
+                cw
+            }
+        }
+
+        fn wrap_angle(angle: f64) -> f64 {
+            let mut wrapped = angle.rem_euclid(std::f64::consts::TAU);
+            if wrapped > std::f64::consts::PI {
+                wrapped -= std::f64::consts::TAU;
+            }
+            wrapped
+        }
+
+        fn curve_spec(sketch: &Sketch, entity: EntityId) -> Option<(Vec2, f64)> {
+            match sketch.entity(entity) {
+                Some(Entity::Circle { center, radius } | Entity::Arc { center, radius, .. }) => {
+                    Some((*center, *radius))
+                }
+                _ => None,
+            }
+        }
+
+        fn set_curve_center(sketch: &mut Sketch, entity: EntityId, target: Vec2) -> bool {
+            match sketch.entity_mut(entity) {
+                Some(Entity::Circle { center, .. } | Entity::Arc { center, .. }) => {
+                    *center = target;
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        fn set_curve_radius(sketch: &mut Sketch, entity: EntityId, target: f64) -> bool {
+            if !target.is_finite() || target < MIN_LINE_LENGTH_MM {
+                return false;
+            }
+            match sketch.entity_mut(entity) {
+                Some(Entity::Circle { radius, .. } | Entity::Arc { radius, .. }) => {
+                    *radius = target;
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        fn point_line_distance_seed(
+            sketch: &Sketch,
+            point: EntityId,
+            carrier: EntityId,
+            target: f64,
+        ) -> Option<Vec2> {
+            let current = sketch.point_position(point)?;
+            let (carrier_start, carrier_end) = sketch.resolved_line(carrier)?;
+            let carrier_direction = carrier_end - carrier_start;
+            let carrier_length = carrier_direction.length();
+            if carrier_length < MIN_LINE_LENGTH_MM {
+                return None;
+            }
+            let tangent = carrier_direction * (1.0 / carrier_length);
+            let normal = Vec2::new(-tangent.y, tangent.x);
+
+            sketch
+                .entities()
+                .filter_map(|(_, entity)| {
+                    let Entity::Line { start, end } = *entity else {
+                        return None;
+                    };
+                    let opposite = if start == point {
+                        end
+                    } else if end == point {
+                        start
+                    } else {
+                        return None;
+                    };
+                    let anchor = sketch.point_position(opposite)?;
+                    let authored = current - anchor;
+                    let authored_length = authored.length();
+                    if authored_length < MIN_LINE_LENGTH_MM {
+                        return None;
+                    }
+                    let motion = authored * (1.0 / authored_length);
+                    let denominator = motion.dot(normal);
+                    if denominator.abs() < 1.0e-9 {
+                        return None;
+                    }
+                    let along = (target - (anchor - carrier_start).dot(normal)) / denominator;
+                    let candidate = anchor + motion * along;
+                    candidate
+                        .x
+                        .is_finite()
+                        .then_some((candidate, candidate.distance(current)))
+                        .filter(|(candidate, _)| candidate.y.is_finite())
+                })
+                .min_by(|(_, first), (_, second)| first.total_cmp(second))
+                .map(|(candidate, _)| candidate)
+        }
+
+        for constraint in constraints {
+            match *constraint {
+                Constraint::Horizontal { entity } => {
+                    if let Some((midpoint, length, current)) = line_pose(&self.sketch, entity) {
+                        let target = nearest_parallel(0.0, current);
+                        set_line_pose(&mut self.sketch, entity, midpoint, length, target);
+                    }
+                }
+                Constraint::Vertical { entity } => {
+                    if let Some((midpoint, length, current)) = line_pose(&self.sketch, entity) {
+                        let target = nearest_parallel(std::f64::consts::FRAC_PI_2, current);
+                        set_line_pose(&mut self.sketch, entity, midpoint, length, target);
+                    }
+                }
+                Constraint::HorizontalPoints { a, b } | Constraint::VerticalPoints { a, b } => {
+                    let (Some(first), Some(second)) =
+                        (self.sketch.point_position(a), self.sketch.point_position(b))
+                    else {
+                        continue;
+                    };
+                    let direction = second - first;
+                    let length = direction.length();
+                    if length < MIN_LINE_LENGTH_MM {
+                        continue;
+                    }
+                    let midpoint = (first + second) * 0.5;
+                    let current = direction.y.atan2(direction.x);
+                    let reference = if matches!(constraint, Constraint::HorizontalPoints { .. }) {
+                        0.0
+                    } else {
+                        std::f64::consts::FRAC_PI_2
+                    };
+                    let target = nearest_parallel(reference, current);
+                    let rotation = target - current;
+                    let cosine = rotation.cos();
+                    let sine = rotation.sin();
+                    let mut rigid_points = BTreeSet::from([a, b]);
+                    for (_, entity) in self.sketch.entities() {
+                        let Entity::Line { start, end } = *entity else {
+                            continue;
+                        };
+                        if start == a || start == b || end == a || end == b {
+                            rigid_points.extend([start, end]);
+                        }
+                    }
+                    let transformed = rigid_points
+                        .into_iter()
+                        .filter_map(|point| {
+                            let relative = self.sketch.point_position(point)? - midpoint;
+                            Some((
+                                point,
+                                midpoint
+                                    + Vec2::new(
+                                        relative.x * cosine - relative.y * sine,
+                                        relative.x * sine + relative.y * cosine,
+                                    ),
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    for (point, position) in transformed {
+                        set_point(&mut self.sketch, point, position);
+                    }
+                }
+                Constraint::Parallel { a, b }
+                | Constraint::Perpendicular { a, b }
+                | Constraint::Angle { a, b, .. }
+                    if b != crate::entity::AXIS_SENTINEL =>
+                {
+                    let (Some((_, _, reference)), Some((midpoint, length, current))) =
+                        (line_pose(&self.sketch, a), line_pose(&self.sketch, b))
+                    else {
+                        continue;
+                    };
+                    let target = match *constraint {
+                        Constraint::Parallel { .. } => nearest_parallel(reference, current),
+                        Constraint::Perpendicular { .. } => {
+                            nearest_perpendicular(reference, current)
+                        }
+                        Constraint::Angle { value, .. } => reference + value.to_radians(),
+                        _ => unreachable!(),
+                    };
+                    set_line_pose(&mut self.sketch, b, midpoint, length, target);
+                }
+                Constraint::Angle { a, b, value } if b == crate::entity::AXIS_SENTINEL => {
+                    if let Some((midpoint, length, _)) = line_pose(&self.sketch, a) {
+                        set_line_pose(&mut self.sketch, a, midpoint, length, value.to_radians());
+                    }
+                }
+                Constraint::Collinear { a, b } => {
+                    let (
+                        Some((reference_midpoint, _, reference_angle)),
+                        Some((target_midpoint, length, current)),
+                    ) = (line_pose(&self.sketch, a), line_pose(&self.sketch, b))
+                    else {
+                        continue;
+                    };
+                    let reference_direction =
+                        Vec2::new(reference_angle.cos(), reference_angle.sin());
+                    let projected_midpoint = reference_midpoint
+                        + reference_direction
+                            * (target_midpoint - reference_midpoint).dot(reference_direction);
+                    set_line_pose(
+                        &mut self.sketch,
+                        b,
+                        projected_midpoint,
+                        length,
+                        nearest_parallel(reference_angle, current),
+                    );
+                }
+                Constraint::Equal { a, b } => {
+                    match (line_pose(&self.sketch, a), line_pose(&self.sketch, b)) {
+                        (Some((_, reference_length, _)), Some((midpoint, _, angle))) => {
+                            set_line_pose(&mut self.sketch, b, midpoint, reference_length, angle);
+                        }
+                        _ => {
+                            if let (Some((_, radius)), Some(_)) =
+                                (curve_spec(&self.sketch, a), curve_spec(&self.sketch, b))
+                            {
+                                set_curve_radius(&mut self.sketch, b, radius);
+                            }
+                        }
+                    }
+                }
+                Constraint::Coincident { a, b } => match (
+                    self.sketch.entity(a).cloned(),
+                    self.sketch.entity(b).cloned(),
+                ) {
+                    (Some(Entity::Point { .. }), Some(Entity::Point { position })) => {
+                        set_point(&mut self.sketch, a, position);
+                    }
+                    (Some(Entity::Point { position }), Some(Entity::Line { .. })) => {
+                        if let Some((start, end)) = self.sketch.resolved_line(b) {
+                            let direction = end - start;
+                            let squared_length = direction.dot(direction);
+                            if squared_length >= MIN_LINE_LENGTH_MM.powi(2) {
+                                let along = (position - start).dot(direction) / squared_length;
+                                set_point(&mut self.sketch, a, start + direction * along);
+                            }
+                        }
+                    }
+                    (Some(Entity::Line { .. }), Some(Entity::Point { position })) => {
+                        if let Some((start, end)) = self.sketch.resolved_line(a) {
+                            let direction = end - start;
+                            let squared_length = direction.dot(direction);
+                            if squared_length >= MIN_LINE_LENGTH_MM.powi(2) {
+                                let along = (position - start).dot(direction) / squared_length;
+                                set_point(&mut self.sketch, b, start + direction * along);
+                            }
+                        }
+                    }
+                    (Some(Entity::Point { position }), Some(Entity::Circle { center, radius }))
+                    | (
+                        Some(Entity::Point { position }),
+                        Some(Entity::Arc { center, radius, .. }),
+                    ) => {
+                        let radial = position - center;
+                        let direction = if radial.length() < MIN_LINE_LENGTH_MM {
+                            Vec2::new(1.0, 0.0)
+                        } else {
+                            radial * (1.0 / radial.length())
+                        };
+                        set_point(&mut self.sketch, a, center + direction * radius);
+                    }
+                    (Some(Entity::Circle { center, radius }), Some(Entity::Point { position }))
+                    | (
+                        Some(Entity::Arc { center, radius, .. }),
+                        Some(Entity::Point { position }),
+                    ) => {
+                        let radial = position - center;
+                        let direction = if radial.length() < MIN_LINE_LENGTH_MM {
+                            Vec2::new(1.0, 0.0)
+                        } else {
+                            radial * (1.0 / radial.length())
+                        };
+                        set_point(&mut self.sketch, b, center + direction * radius);
+                    }
+                    (
+                        Some(Entity::Circle { center, .. } | Entity::Arc { center, .. }),
+                        Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                    ) => {
+                        set_curve_center(&mut self.sketch, b, center);
+                    }
+                    _ => {}
+                },
+                Constraint::OriginCoincident { entity } => match self.sketch.entity(entity) {
+                    Some(Entity::Point { .. }) => {
+                        set_point(&mut self.sketch, entity, Vec2::ZERO);
+                    }
+                    Some(Entity::Circle { .. } | Entity::Arc { .. }) => {
+                        set_curve_center(&mut self.sketch, entity, Vec2::ZERO);
+                    }
+                    _ => {}
+                },
+                Constraint::CenterCoincident { point, curve } => {
+                    if let Some(position) = self.sketch.point_position(point) {
+                        set_curve_center(&mut self.sketch, curve, position);
+                    }
+                }
+                Constraint::Midpoint { a, b } => {
+                    if let Some((start, end)) = self.sketch.resolved_line(b) {
+                        set_point(&mut self.sketch, a, (start + end) * 0.5);
+                    }
+                }
+                Constraint::Concentric { a, b } => {
+                    if let Some((center, _)) = curve_spec(&self.sketch, a) {
+                        set_curve_center(&mut self.sketch, b, center);
+                    }
+                }
+                Constraint::Tangent { a, b } => {
+                    let (line, curve) = match (self.sketch.entity(a), self.sketch.entity(b)) {
+                        (
+                            Some(Entity::Line { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => (Some(a), Some(b)),
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Line { .. }),
+                        ) => (Some(b), Some(a)),
+                        _ => (None, None),
+                    };
+                    if let (Some(line), Some(curve)) = (line, curve) {
+                        if let (Some((start, end)), Some((center, radius))) = (
+                            self.sketch.resolved_line(line),
+                            curve_spec(&self.sketch, curve),
+                        ) {
+                            let direction = end - start;
+                            let length = direction.length();
+                            if length >= MIN_LINE_LENGTH_MM {
+                                let normal = Vec2::new(-direction.y / length, direction.x / length);
+                                let signed = (center - start).dot(normal);
+                                let projection = center - normal * signed;
+                                let side = if signed < 0.0 { -1.0 } else { 1.0 };
+                                set_curve_center(
+                                    &mut self.sketch,
+                                    curve,
+                                    projection + normal * (side * radius),
+                                );
+                            }
+                        }
+                    } else if let (Some((first, first_radius)), Some((second, second_radius))) =
+                        (curve_spec(&self.sketch, a), curve_spec(&self.sketch, b))
+                    {
+                        let radial = second - first;
+                        let distance = radial.length();
+                        let direction = if distance < MIN_LINE_LENGTH_MM {
+                            Vec2::new(1.0, 0.0)
+                        } else {
+                            radial * (1.0 / distance)
+                        };
+                        let target = if distance >= first_radius + second_radius {
+                            first_radius + second_radius
+                        } else {
+                            (first_radius - second_radius).abs()
+                        };
+                        set_curve_center(&mut self.sketch, b, first + direction * target);
+                    }
+                }
+                Constraint::Distance { from, to, value } => match (
+                    self.sketch.entity(from).cloned(),
+                    to.and_then(|entity| self.sketch.entity(entity).cloned()),
+                    to,
+                ) {
+                    (Some(Entity::Line { .. }), None, None) => {
+                        if let Some((midpoint, _, angle)) = line_pose(&self.sketch, from) {
+                            set_line_pose(&mut self.sketch, from, midpoint, value.abs(), angle);
+                        }
+                    }
+                    (
+                        Some(Entity::Point { position: first }),
+                        Some(Entity::Point { position: second }),
+                        Some(to),
+                    ) => {
+                        let radial = second - first;
+                        let direction = if radial.length() < MIN_LINE_LENGTH_MM {
+                            Vec2::new(1.0, 0.0)
+                        } else {
+                            radial * (1.0 / radial.length())
+                        };
+                        let midpoint = (first + second) * 0.5;
+                        let half = direction * (value.abs() * 0.5);
+                        set_point(&mut self.sketch, from, midpoint - half);
+                        set_point(&mut self.sketch, to, midpoint + half);
+                    }
+                    (Some(Entity::Point { position }), Some(Entity::Line { .. }), Some(line)) => {
+                        if let Some(candidate) =
+                            point_line_distance_seed(&self.sketch, from, line, value)
+                        {
+                            set_point(&mut self.sketch, from, candidate);
+                        } else if let Some((start, end)) = self.sketch.resolved_line(line) {
+                            let direction = end - start;
+                            let length = direction.length();
+                            if length >= MIN_LINE_LENGTH_MM {
+                                let tangent = direction * (1.0 / length);
+                                let normal = Vec2::new(-tangent.y, tangent.x);
+                                let projection = start + tangent * (position - start).dot(tangent);
+                                set_point(&mut self.sketch, from, projection + normal * value);
+                            }
+                        }
+                    }
+                    (Some(Entity::Line { .. }), Some(Entity::Point { position }), Some(point)) => {
+                        if let Some(candidate) =
+                            point_line_distance_seed(&self.sketch, point, from, value)
+                        {
+                            set_point(&mut self.sketch, point, candidate);
+                        } else if let Some((start, end)) = self.sketch.resolved_line(from) {
+                            let direction = end - start;
+                            let length = direction.length();
+                            if length >= MIN_LINE_LENGTH_MM {
+                                let tangent = direction * (1.0 / length);
+                                let normal = Vec2::new(-tangent.y, tangent.x);
+                                let projection = start + tangent * (position - start).dot(tangent);
+                                set_point(&mut self.sketch, point, projection + normal * value);
+                            }
+                        }
+                    }
+                    (Some(Entity::Line { .. }), Some(Entity::Line { .. }), Some(target_line)) => {
+                        if let (Some((start, end)), Some((target_midpoint, length, angle))) = (
+                            self.sketch.resolved_line(from),
+                            line_pose(&self.sketch, target_line),
+                        ) {
+                            let direction = end - start;
+                            let direction_length = direction.length();
+                            if direction_length < MIN_LINE_LENGTH_MM {
+                                continue;
+                            }
+                            let unit = direction * (1.0 / direction_length);
+                            let normal = Vec2::new(-unit.y, unit.x);
+                            let signed = (target_midpoint - start).dot(normal);
+                            let side = if signed < 0.0 { -1.0 } else { 1.0 };
+                            let along = start + unit * (target_midpoint - start).dot(unit);
+                            set_line_pose(
+                                &mut self.sketch,
+                                target_line,
+                                along + normal * (side * value.abs()),
+                                length,
+                                angle,
+                            );
+                        }
+                    }
+                    (
+                        Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        Some(target),
+                    ) => {
+                        if let Some((_, radius)) = curve_spec(&self.sketch, from) {
+                            set_curve_radius(&mut self.sketch, target, radius + value);
+                        }
+                    }
+                    _ => {}
+                },
+                Constraint::Symmetry { a, b, axis } => {
+                    self.seed_symmetry_projection(a, b, axis);
+                }
+                Constraint::Fix { .. }
+                | Constraint::Radius { .. }
+                | Constraint::Diameter { .. }
+                | Constraint::ReferenceMidpoint { .. }
+                | Constraint::SpanMidpoint { .. }
+                | Constraint::ArcEndpointCoincident { .. }
+                | Constraint::EqualDistance { .. } => {}
+                Constraint::Parallel { .. }
+                | Constraint::Perpendicular { .. }
+                | Constraint::Angle { .. } => {}
+            }
+        }
+
+        // A newly rotated carrier can move an endpoint that already owns a
+        // two-point H/V relation. Translate the relation's follower and its
+        // incident carriers as one local rigid group so the existing
+        // alignment is restored without stretching those carriers. This is
+        // only a finite initial pose; the solver still enforces the complete
+        // graph and every persistent constraint.
+        let alignments = self
+            .sketch
+            .constraints()
+            .filter(|(cid, _)| !self.sketch.is_reference_dimension(cid))
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::HorizontalPoints { a, b } => Some((a, b, true)),
+                Constraint::VerticalPoints { a, b } => Some((a, b, false)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (reference, follower, horizontal) in alignments {
+            let (Some(reference_position), Some(follower_position)) = (
+                self.sketch.point_position(reference),
+                self.sketch.point_position(follower),
+            ) else {
+                continue;
+            };
+            let delta = if horizontal {
+                Vec2::new(0.0, reference_position.y - follower_position.y)
+            } else {
+                Vec2::new(reference_position.x - follower_position.x, 0.0)
+            };
+            if delta.length() <= 1.0e-12 {
+                continue;
+            }
+            let mut rigid_points = BTreeSet::from([follower]);
+            for (_, entity) in self.sketch.entities() {
+                let Entity::Line { start, end } = *entity else {
+                    continue;
+                };
+                if start == follower && end != reference {
+                    rigid_points.insert(end);
+                } else if end == follower && start != reference {
+                    rigid_points.insert(start);
+                }
+            }
+            let translated = rigid_points
+                .into_iter()
+                .filter_map(|point| Some((point, self.sketch.point_position(point)? + delta)))
+                .collect::<Vec<_>>();
+            for (point, position) in translated {
+                set_point(&mut self.sketch, point, position);
+            }
+        }
+    }
+
+    /// Capture the authored properties that a newly applied tool does not
+    /// semantically own. These are preferences for this one solve only; they
+    /// are not hidden constraints and never reduce the sketch's reported DOF.
+    fn operation_stays(&self, constraints: &[Constraint]) -> solver::SolveStays {
+        fn add_line_shape(
+            lengths: &mut BTreeSet<EntityId>,
+            angles: &mut BTreeSet<EntityId>,
+            line: EntityId,
+        ) {
+            lengths.insert(line);
+            angles.insert(line);
+        }
+
+        fn add_line_pose(
+            lengths: &mut BTreeSet<EntityId>,
+            angles: &mut BTreeSet<EntityId>,
+            midpoints: &mut BTreeSet<EntityId>,
+            line: EntityId,
+        ) {
+            add_line_shape(lengths, angles, line);
+            midpoints.insert(line);
+        }
+
+        let mut line_lengths = BTreeSet::new();
+        let mut line_angles = BTreeSet::new();
+        let mut line_midpoints = BTreeSet::new();
+        let mut curve_radii = BTreeSet::new();
+        let mut curve_centers = BTreeSet::new();
+        let mut point_pair_distances = BTreeSet::new();
+        let mut point_pair_angles = BTreeSet::new();
+        let mut point_pair_midpoints = BTreeSet::new();
+        let mut point_positions = BTreeSet::new();
+        let mut moving_line_endpoints = BTreeSet::new();
+        let mut direction_operation = false;
+
+        for constraint in constraints {
+            match *constraint {
+                // Direction-only: rotate, but do not resize.
+                Constraint::Horizontal { entity } | Constraint::Vertical { entity } => {
+                    line_lengths.insert(entity);
+                    line_midpoints.insert(entity);
+                    direction_operation = true;
+                }
+                Constraint::HorizontalPoints { a, b } | Constraint::VerticalPoints { a, b } => {
+                    point_pair_distances.insert((a, b));
+                    point_pair_midpoints.insert((a, b));
+                    for (entity, geometry) in self.sketch.entities() {
+                        if matches!(
+                            *geometry,
+                            Entity::Line { start, end }
+                                if start == a || start == b || end == a || end == b
+                        ) {
+                            line_lengths.insert(entity);
+                        }
+                    }
+                }
+                Constraint::Parallel { a, b }
+                | Constraint::Perpendicular { a, b }
+                | Constraint::Angle { a, b, .. } => {
+                    line_lengths.insert(a);
+                    line_midpoints.insert(a);
+                    if b != crate::entity::AXIS_SENTINEL {
+                        line_lengths.insert(b);
+                        line_midpoints.insert(b);
+                    }
+                    direction_operation = true;
+                }
+                // Collinear also owns relative position. Keep the first
+                // carrier in place and move the second onto its support.
+                Constraint::Collinear { a, b } => {
+                    line_lengths.extend([a, b]);
+                    line_angles.insert(a);
+                    line_midpoints.insert(a);
+                }
+
+                // Position-only: retain the carrier's size and direction.
+                Constraint::Coincident { a, b } => {
+                    match (self.sketch.entity(a), self.sketch.entity(b)) {
+                        (Some(Entity::Point { .. }), Some(Entity::Point { .. })) => {
+                            point_positions.insert(b);
+                            moving_line_endpoints.insert(a);
+                        }
+                        (Some(Entity::Point { .. }), Some(Entity::Line { .. })) => {
+                            add_line_shape(&mut line_lengths, &mut line_angles, b);
+                            moving_line_endpoints.insert(a);
+                        }
+                        (Some(Entity::Line { .. }), Some(Entity::Point { .. })) => {
+                            add_line_shape(&mut line_lengths, &mut line_angles, a);
+                            moving_line_endpoints.insert(b);
+                        }
+                        (
+                            Some(Entity::Point { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => {
+                            curve_radii.insert(b);
+                            curve_centers.insert(b);
+                            moving_line_endpoints.insert(a);
+                        }
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Point { .. }),
+                        ) => {
+                            curve_radii.insert(a);
+                            curve_centers.insert(a);
+                            moving_line_endpoints.insert(b);
+                        }
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => {
+                            curve_radii.extend([a, b]);
+                            curve_centers.insert(a);
+                        }
+                        _ => {}
+                    }
+                }
+                Constraint::OriginCoincident { entity } => match self.sketch.entity(entity) {
+                    Some(Entity::Point { .. }) => {
+                        moving_line_endpoints.insert(entity);
+                    }
+                    Some(Entity::Circle { .. } | Entity::Arc { .. }) => {
+                        curve_radii.insert(entity);
+                    }
+                    _ => {}
+                },
+                Constraint::CenterCoincident { point, curve } => {
+                    point_positions.insert(point);
+                    curve_radii.insert(curve);
+                }
+                Constraint::Midpoint { a: point, b: line } => {
+                    add_line_shape(&mut line_lengths, &mut line_angles, line);
+                    moving_line_endpoints.insert(point);
+                }
+                Constraint::Concentric { a, b } => {
+                    curve_radii.extend([a, b]);
+                    curve_centers.insert(a);
+                }
+
+                // Tangency owns contact position/direction, never size.
+                Constraint::Tangent { a, b } => {
+                    match (self.sketch.entity(a), self.sketch.entity(b)) {
+                        (
+                            Some(Entity::Line { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => {
+                            line_lengths.insert(a);
+                            line_midpoints.insert(a);
+                            curve_radii.insert(b);
+                        }
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Line { .. }),
+                        ) => {
+                            line_lengths.insert(b);
+                            line_midpoints.insert(b);
+                            curve_radii.insert(a);
+                        }
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => {
+                            curve_radii.extend([a, b]);
+                            curve_centers.insert(a);
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Equal is size-only. The first selection is authoritative;
+                // the second acquires its size without either line rotating.
+                Constraint::Equal { a, b } => {
+                    match (self.sketch.entity(a), self.sketch.entity(b)) {
+                        (Some(Entity::Line { .. }), Some(Entity::Line { .. })) => {
+                            line_lengths.insert(a);
+                            line_angles.extend([a, b]);
+                            line_midpoints.extend([a, b]);
+                        }
+                        (
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                            Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        ) => {
+                            curve_radii.insert(a);
+                            curve_centers.extend([a, b]);
+                        }
+                        _ => {}
+                    }
+                }
+
+                // A distance dimension changes the measured size/separation,
+                // not the authored bearing or carrier shape.
+                Constraint::Distance { from, to, .. } => match (
+                    self.sketch.entity(from),
+                    to.and_then(|entity| self.sketch.entity(entity)),
+                    to,
+                ) {
+                    (Some(Entity::Line { .. }), None, None) => {
+                        line_angles.insert(from);
+                        line_midpoints.insert(from);
+                    }
+                    (Some(Entity::Point { .. }), Some(Entity::Point { .. }), Some(to)) => {
+                        point_pair_angles.insert((from, to));
+                        point_pair_midpoints.insert((from, to));
+                    }
+                    (Some(Entity::Point { .. }), Some(Entity::Line { .. }), Some(to)) => {
+                        add_line_shape(&mut line_lengths, &mut line_angles, to);
+                        moving_line_endpoints.insert(from);
+                    }
+                    (Some(Entity::Line { .. }), Some(Entity::Point { .. }), Some(to)) => {
+                        add_line_shape(&mut line_lengths, &mut line_angles, from);
+                        moving_line_endpoints.insert(to);
+                    }
+                    (Some(Entity::Line { .. }), Some(Entity::Line { .. }), Some(to)) => {
+                        add_line_shape(&mut line_lengths, &mut line_angles, from);
+                        add_line_shape(&mut line_lengths, &mut line_angles, to);
+                        line_midpoints.insert(from);
+                    }
+                    (
+                        Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        Some(Entity::Circle { .. } | Entity::Arc { .. }),
+                        Some(to),
+                    ) => {
+                        curve_radii.insert(from);
+                        curve_centers.extend([from, to]);
+                    }
+                    _ => {}
+                },
+
+                // Symmetry uses the last selection as the datum and the first
+                // object as the size reference. The mirrored target may need
+                // to acquire that size.
+                Constraint::Symmetry { a, b, axis } => {
+                    add_line_pose(
+                        &mut line_lengths,
+                        &mut line_angles,
+                        &mut line_midpoints,
+                        axis,
+                    );
+                    if matches!(self.sketch.entity(a), Some(Entity::Line { .. })) {
+                        line_lengths.insert(a);
+                    } else {
+                        // Point symmetry changes placement, not the authored
+                        // shape of carriers attached to those points. Keep
+                        // their complete shape in the preferred solve and at
+                        // least their size in relaxed recovery.
+                        for (entity, geometry) in self.sketch.entities() {
+                            if matches!(
+                                *geometry,
+                                Entity::Line { start, end }
+                                    if start == a || start == b || end == a || end == b
+                            ) {
+                                add_line_shape(&mut line_lengths, &mut line_angles, entity);
+                            }
+                        }
+                        moving_line_endpoints.extend([a, b]);
+                    }
+                }
+
+                // Fix stores the current values. Radius/Diameter already touch
+                // only their radius variable, and the remaining variants are
+                // internal tool topology rather than panel operations.
+                Constraint::Radius { entity, .. } | Constraint::Diameter { entity, .. } => {
+                    curve_centers.insert(entity);
+                }
+                Constraint::Fix { .. }
+                | Constraint::ReferenceMidpoint { .. }
+                | Constraint::SpanMidpoint { .. }
+                | Constraint::ArcEndpointCoincident { .. }
+                | Constraint::EqualDistance { .. } => {}
+            }
+        }
+
+        // An axis used by an existing symmetry relation remains a datum when
+        // a later, unrelated operation is applied. Without this operation-
+        // local stay, the nonlinear system can satisfy a new Coincident or
+        // dimensional request by translating or scaling the datum itself.
+        // If the new command directly addresses the axis or either endpoint,
+        // do not protect it here: the user is intentionally editing it.
+        let addressed = constraints
+            .iter()
+            .flat_map(Constraint::referenced_entities)
+            .collect::<BTreeSet<_>>();
+        let existing_symmetry_axes = self
+            .sketch
+            .constraints()
+            .filter(|(cid, _)| !self.sketch.is_reference_dimension(cid))
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::Symmetry { axis, .. } => Some(axis),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for axis in existing_symmetry_axes {
+            let endpoint_addressed = self
+                .sketch
+                .line_endpoint_ids(axis)
+                .is_some_and(|(start, end)| addressed.contains(&start) || addressed.contains(&end));
+            if !addressed.contains(&axis) && !endpoint_addressed {
+                add_line_pose(
+                    &mut line_lengths,
+                    &mut line_angles,
+                    &mut line_midpoints,
+                    axis,
+                );
+            }
+        }
+
+        // A direction relation can propagate rotation into lines mentioned
+        // by an existing angle/parallel/perpendicular relation. Preserve
+        // their lengths, but do not pin propagated midpoints: collinear and
+        // coincident chains may legitimately need to translate when the
+        // selected carrier rotates. The directly selected carriers already
+        // have the operation-specific midpoint stays above.
+        if direction_operation {
+            for (entity, geometry) in self.sketch.entities() {
+                match *geometry {
+                    Entity::Line { .. } => {
+                        line_lengths.insert(entity);
+                    }
+                    Entity::Circle { .. } | Entity::Arc { .. } => {
+                        curve_radii.insert(entity);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // When a selected point is an endpoint of another line, that point
+        // is allowed to move but the opposite, unselected endpoint is the
+        // natural local pivot. Without it, angle/tangent null spaces can send
+        // the complete connected line arbitrarily far from the sketch.
+        for moving in moving_line_endpoints {
+            for (_, geometry) in self.sketch.entities() {
+                let Entity::Line { start, end } = *geometry else {
+                    continue;
+                };
+                if start == moving && end != moving {
+                    point_positions.insert(end);
+                } else if end == moving && start != moving {
+                    point_positions.insert(start);
+                }
+            }
+        }
+
+        solver::SolveStays {
+            line_lengths: line_lengths
+                .into_iter()
+                .filter_map(|line| {
+                    let (start, end) = self.sketch.resolved_line(line)?;
+                    Some((line, start.distance(end)))
+                })
+                .collect(),
+            line_midpoints: line_midpoints
+                .into_iter()
+                .filter_map(|line| {
+                    let (start, end) = self.sketch.resolved_line(line)?;
+                    Some((line, (start + end) * 0.5))
+                })
+                .collect(),
+            line_angles: line_angles
+                .into_iter()
+                .filter_map(|line| {
+                    let (start, end) = self.sketch.resolved_line(line)?;
+                    let direction = end - start;
+                    (direction.length() >= MIN_LINE_LENGTH_MM)
+                        .then_some((line, direction.y.atan2(direction.x)))
+                })
+                .collect(),
+            point_pair_distances: point_pair_distances
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    Some((
+                        a,
+                        b,
+                        self.sketch
+                            .point_position(a)?
+                            .distance(self.sketch.point_position(b)?),
+                    ))
+                })
+                .collect(),
+            point_pair_angles: point_pair_angles
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    let direction =
+                        self.sketch.point_position(b)? - self.sketch.point_position(a)?;
+                    (direction.length() >= MIN_LINE_LENGTH_MM).then_some((
+                        a,
+                        b,
+                        direction.y.atan2(direction.x),
+                    ))
+                })
+                .collect(),
+            point_pair_midpoints: point_pair_midpoints
+                .into_iter()
+                .filter_map(|(a, b)| {
+                    Some((
+                        a,
+                        b,
+                        (self.sketch.point_position(a)? + self.sketch.point_position(b)?) * 0.5,
+                    ))
+                })
+                .collect(),
+            point_positions: point_positions
+                .into_iter()
+                .filter_map(|point| Some((point, self.sketch.point_position(point)?)))
+                .collect(),
+            curve_radii: curve_radii
+                .into_iter()
+                .filter_map(|entity| match self.sketch.entity(entity) {
+                    Some(Entity::Circle { radius, .. } | Entity::Arc { radius, .. }) => {
+                        Some((entity, *radius))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            curve_centers: curve_centers
+                .into_iter()
+                .filter_map(|curve| match self.sketch.entity(curve) {
+                    Some(Entity::Circle { center, .. } | Entity::Arc { center, .. }) => {
+                        Some((curve, *center))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    fn seed_symmetry_projection(&mut self, a: EntityId, b: EntityId, axis: EntityId) -> bool {
+        let Some((axis_start, axis_end)) = self.sketch.resolved_line(axis) else {
+            return false;
+        };
+        let direction = axis_end - axis_start;
+        let length = direction.length();
+        if length < MIN_LINE_LENGTH_MM {
+            return false;
+        }
+        let tangent = direction * (1.0 / length);
+        let normal = Vec2::new(-tangent.y, tangent.x);
+        let pairs = match (self.sketch.entity(a), self.sketch.entity(b)) {
+            (Some(Entity::Point { .. }), Some(Entity::Point { .. })) => vec![(a, b)],
+            (Some(Entity::Line { .. }), Some(Entity::Line { .. })) => {
+                let (Some((a_start, a_end)), Some((b_start, b_end))) = (
+                    self.sketch.line_endpoint_ids(a),
+                    self.sketch.line_endpoint_ids(b),
+                ) else {
+                    return false;
+                };
+                vec![(a_start, b_start), (a_end, b_end)]
+            }
+            _ => return false,
+        };
+
+        let mut projections = Vec::with_capacity(pairs.len());
+        for (first, second) in pairs {
+            let (Some(first_position), Some(second_position)) = (
+                self.sketch.point_position(first),
+                self.sketch.point_position(second),
+            ) else {
+                return false;
+            };
+            let first_relative = first_position - axis_start;
+            let second_relative = second_position - axis_start;
+            let along = (first_relative.dot(tangent) + second_relative.dot(tangent)) * 0.5;
+            let across = (first_relative.dot(normal) - second_relative.dot(normal)) * 0.5;
+            projections.push((
+                first,
+                axis_start + tangent * along + normal * across,
+                second,
+                axis_start + tangent * along - normal * across,
+            ));
+        }
+        for (first, first_position, second, second_position) in projections {
+            if let Some(Entity::Point { position }) = self.sketch.entity_mut(first) {
+                *position = first_position;
+            }
+            if let Some(Entity::Point { position }) = self.sketch.entity_mut(second) {
+                *position = second_position;
+            }
+        }
+        true
+    }
+
+    /// Return an over-constraint only when removing a named relation proves
+    /// that it is a culprit. Otherwise report numerical non-convergence
+    /// truthfully without fabricating a connected constraint list.
+    pub(crate) fn classify_constraint_failure(
+        &mut self,
+        cid: ConstraintId,
+        constraint: Constraint,
+    ) -> SessionError {
+        let rejected = self.describe_constraint(cid);
+        let conflicts_with = self.find_conflicts(cid, constraint);
+        if conflicts_with.is_empty() {
+            SessionError::ConstraintSolveFailed { rejected }
+        } else {
+            SessionError::OverConstrained {
+                rejected,
+                conflicts_with,
+            }
+        }
+    }
+
     /// Identify existing constraints that conflict with the fresh one.
     ///
     /// Constraints propagate through a connected geometry network, so only
@@ -2981,12 +4594,30 @@ impl SketchSession {
         let constraints = self
             .sketch
             .constraints()
-            .filter(|(cid, _)| *cid != new_cid)
+            .filter(|(cid, _)| *cid != new_cid && !self.sketch.is_reference_dimension(cid))
             .map(|(cid, constraint)| (cid, *constraint))
             .collect::<Vec<_>>();
         let mut candidates = BTreeSet::new();
         loop {
             let mut changed = false;
+            // Constraint references often name a carrier line while Fix and
+            // Coincident relations name its endpoint entities. Traverse both
+            // directions of that structural ownership before walking the
+            // constraint graph, otherwise a fully fixed line appears
+            // unrelated to the Fix constraints that actually pin it.
+            for (entity_id, entity) in self.sketch.entities() {
+                let referenced = entity.referenced_entities();
+                if component_entities.contains(&entity_id)
+                    || referenced
+                        .iter()
+                        .any(|reference| component_entities.contains(reference))
+                {
+                    changed |= component_entities.insert(entity_id);
+                    for reference in referenced {
+                        changed |= component_entities.insert(reference);
+                    }
+                }
+            }
             for (cid, constraint) in &constraints {
                 let referenced = constraint.referenced_entities();
                 if referenced
@@ -3004,19 +4635,84 @@ impl SketchSession {
             }
         }
 
-        let mut conflicts = Vec::new();
-        for cid in &candidates {
-            let snapshot = self.sketch.snapshot();
-            self.sketch.remove_constraint(*cid);
-            let analysis = solver::solve(&mut self.sketch, &[]);
-            let residual = solver::constraint_residual(&self.sketch, new_cid);
-            self.sketch.restore(snapshot);
-            if analysis.converged && residual <= INCONSISTENT_EPS {
-                conflicts.push(self.describe_constraint(*cid));
+        let snapshot = self.sketch.snapshot();
+        self.sketch.remove_constraint(new_cid);
+        // The failed trial may have left coordinates away from the existing
+        // constraints' solved state. Re-solve the pre-existing graph before
+        // deciding whether it was fully defined; Jacobian analysis alone
+        // would incorrectly treat those transient residuals as evidence that
+        // the old graph was not fixed.
+        let base = solver::solve(&mut self.sketch, &[]);
+        self.sketch.restore(snapshot);
+        let base_fully_defined = base.converged
+            && new_constraint.referenced_entities().iter().all(|entity| {
+                if base.fully_defined(*entity) {
+                    return true;
+                }
+                // Lines are carrier entities whose unknowns live on
+                // their endpoint points. A line with both endpoints
+                // fully fixed is itself fully defined even when the
+                // analysis map has no independent row for the carrier
+                // ID. This matters when attributing an Equal/Parallel
+                // conflict to endpoint Fix constraints.
+                let references = self
+                    .sketch
+                    .entity(*entity)
+                    .map(Entity::referenced_entities)
+                    .unwrap_or_default();
+                !references.is_empty()
+                    && references
+                        .iter()
+                        .all(|reference| base.fully_defined(*reference))
+            });
+
+        let mut conflicts: Vec<(Constraint, ConstraintDesc)> = Vec::new();
+        for (cid, candidate) in &constraints {
+            if candidates.contains(cid)
+                && self
+                    .sketch
+                    .relations_directly_conflict(&new_constraint, candidate)
+            {
+                conflicts.push((*candidate, self.describe_constraint(*cid)));
+            }
+        }
+        // Leave-one-out is evidence of a logical blocker only when the
+        // pre-existing geometry is fully defined. On a free system, removing
+        // a relation can merely lead the nonlinear solve into a friendlier
+        // basin (the audit's false Vertical-vs-Symmetry accusation).
+        if base_fully_defined {
+            for cid in &candidates {
+                if conflicts.iter().any(|(constraint, _)| {
+                    constraints
+                        .iter()
+                        .find(|(candidate_id, _)| candidate_id == cid)
+                        .is_some_and(|(_, candidate)| constraint.same_relation(candidate))
+                }) {
+                    continue;
+                }
+                let snapshot = self.sketch.snapshot();
+                self.sketch.remove_constraint(*cid);
+                let analysis = solver::solve(&mut self.sketch, &[]);
+                let residual = solver::constraint_residual(&self.sketch, new_cid);
+                self.sketch.restore(snapshot);
+                if analysis.converged && residual <= INCONSISTENT_EPS {
+                    let candidate = constraints
+                        .iter()
+                        .find(|(candidate_id, _)| candidate_id == cid)
+                        .map(|(_, constraint)| *constraint)
+                        .expect("candidate constraint exists");
+                    if !conflicts
+                        .iter()
+                        .any(|(existing, _)| existing.same_relation(&candidate))
+                    {
+                        conflicts.push((candidate, self.describe_constraint(*cid)));
+                    }
+                }
             }
         }
         let non_anchor_conflicts = conflicts
             .iter()
+            .map(|(_, description)| description)
             .filter(|description| description.kind != "fix")
             .cloned()
             .collect::<Vec<_>>();
@@ -3024,23 +4720,22 @@ impl SketchSession {
             return non_anchor_conflicts;
         }
         if conflicts.is_empty() {
-            // A conflict may require removing more than one redundant
-            // relation. Name the connected non-anchor constraints instead
-            // of falsely presenting the origin Fix as the sole cause.
-            let fallback = candidates
-                .iter()
-                .map(|cid| self.describe_constraint(*cid))
-                .filter(|description| description.kind != "fix")
-                .collect::<Vec<_>>();
-            if fallback.is_empty() {
-                for cid in candidates {
-                    conflicts.push(self.describe_constraint(cid));
+            // If the pre-existing system is consistent and every entity of
+            // the rejected relation is fully defined, its Fix relations are
+            // collectively a proven blocker even when removing only one Fix
+            // leaves the system too stiff for the leave-one-out solve.
+            if base_fully_defined {
+                for (cid, candidate) in &constraints {
+                    if candidates.contains(cid) && matches!(candidate, Constraint::Fix { .. }) {
+                        conflicts.push((*candidate, self.describe_constraint(*cid)));
+                    }
                 }
-            } else {
-                conflicts = fallback;
             }
         }
         conflicts
+            .into_iter()
+            .map(|(_, description)| description)
+            .collect()
     }
 
     /// Human-readable description of a constraint for the conflict report.
@@ -3168,7 +4863,10 @@ impl SketchSession {
         let constraints = self
             .sketch
             .constraints()
-            .map(|(id, c)| ConstraintDto { id, constraint: *c })
+            .map(|(id, constraint)| ConstraintDto {
+                id,
+                constraint: self.sketch.effective_constraint(id, *constraint),
+            })
             .collect();
         SketchDto {
             name: self.name.clone(),

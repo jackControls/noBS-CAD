@@ -1,6 +1,6 @@
 /**
- * Engine-level proof that edit_dimension leaves Constraint.value stale.
- * Evidence for docs/SKETCH_CONSTRAINT_AUDIT.md.
+ * Engine-level regression for the audited edit-dimension value staleness.
+ * The flattened constraint, dimension DTO, and solved geometry must agree.
  * Run: start `npm run dev -- --port 7317 --strictPort`, then `node scripts/audit-dimension-staleness.mjs [out-dir]`.
  */
 import { chromium } from 'playwright';
@@ -38,4 +38,10 @@ const result = await page.evaluate(async () => {
   };
 });
 console.log(JSON.stringify(result, null, 2));
+if (Math.abs(result.afterEdit.length - 42) > 1e-7
+    || result.afterEdit.constraintValue !== 42
+    || result.afterEdit.dimensionValue !== 42
+    || result.afterEdit.dimensionText !== '42.00') {
+  throw new Error(`dimension sources diverged after edit: ${JSON.stringify(result.afterEdit)}`);
+}
 await browser.close();

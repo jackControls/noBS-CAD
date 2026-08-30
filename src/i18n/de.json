@@ -348,7 +348,12 @@
   "dimEditor": {
     "placeholder": "Wert oder =Formel",
     "title": "Bemaßung bearbeiten (Wert oder Formel)",
-    "errorTitle": "Bemaßung kann nicht bearbeitet werden"
+    "errorTitle": "Bemaßung kann nicht bearbeitet werden",
+    "makeReference": "Referenz",
+    "makeDriving": "Steuernd machen",
+    "makeReferenceDescription": "Geometrie nicht mehr steuern und das gelöste Maß anzeigen",
+    "makeDrivingDescription": "Das aktuelle Maß zum Steuern der Geometrie verwenden",
+    "referenceDescription": "Referenzbemaßung — zeigt die gelöste Geometrie an"
   },
   "navbar": {
     "orbit": "Umlauf",
@@ -716,7 +721,7 @@
     "invalidTitle": "Ungültige Auswahl",
     "unsupported": "Diese Randbedingung wird noch nicht unterstützt.",
     "needs": {
-      "hv": "Horizontal/Vertikal benötigt eine oder mehrere Linien.",
+      "hv": "Horizontal/Vertikal benötigt eine oder mehrere Linien oder genau zwei Punkte.",
       "coincident": "Koinzidenz benötigt zwei Entitäten (Punkt auf Punkt/Linie/Kreis).",
       "tangent": "Tangential benötigt eine Linie und einen Kreis/Bogen oder zwei Kreise/Bögen.",
       "equal": "Gleich benötigt zwei Linien oder zwei Kreise/Bögen.",
