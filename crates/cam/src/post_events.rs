@@ -80,7 +80,7 @@ pub enum PostEventDto {
 pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> PostEventStreamDto {
     let mut events = Vec::with_capacity(program.commands.len());
     for command in &program.commands {
-        events.push(match command {
+        let event = match command {
             CamCommandDto::ProgramStart { .. } => PostEventDto::OnOpen,
             CamCommandDto::WorkOffset { offset } => PostEventDto::OnWorkOffset { offset: *offset },
             CamCommandDto::SectionStart {
@@ -106,6 +106,9 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
                 rpm: *rpm,
             },
             CamCommandDto::Coolant { mode } => PostEventDto::OnCoolant { mode: *mode },
+            // Simulator-only state record. Planner-produced programs never
+            // contain it, and a post callback must not turn it into motion.
+            CamCommandDto::SetPosition { .. } => continue,
             CamCommandDto::Rapid { to } => PostEventDto::OnRapid {
                 x: to.x,
                 y: to.y,
@@ -122,6 +125,7 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
                 center,
                 to,
                 feed,
+                ..
             } => PostEventDto::OnCircular {
                 clockwise: *clockwise,
                 center: *center,
@@ -135,7 +139,8 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
             CamCommandDto::CutterCompensationOff => PostEventDto::OnCutterCompensationOff,
             CamCommandDto::SectionEnd => PostEventDto::OnSectionEnd,
             CamCommandDto::ProgramEnd => PostEventDto::OnClose,
-        });
+        };
+        events.push(event);
     }
     PostEventStreamDto {
         format: "nbcad-post-events".to_string(),

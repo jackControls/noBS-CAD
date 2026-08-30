@@ -18,6 +18,7 @@ import type {
   BreakRequest,
   BodyAppearance,
   CamDocumentDto,
+  CamGcodeSimulationRequestDto,
   CamPostRequestDto,
   CamPostResultDto,
   CamProgramDto,
@@ -376,6 +377,12 @@ export class TauriEngine implements Engine {
 
   async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
     return this.call('engine_cam_simulate', request);
+  }
+
+  async camSimulateGcode(
+    request: CamGcodeSimulationRequestDto,
+  ): Promise<CamSimulationResultDto> {
+    return this.call('engine_cam_simulate_gcode', request);
   }
 
   async camPostEvents(setupId: number): Promise<PostEventStreamDto> {

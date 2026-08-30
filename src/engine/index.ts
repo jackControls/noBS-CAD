@@ -17,6 +17,7 @@ import type {
   BreakRequest,
   BodyAppearance,
   CamDocumentDto,
+  CamGcodeSimulationRequestDto,
   CamPostRequestDto,
   CamPostResultDto,
   CamProgramDto,
@@ -196,6 +197,7 @@ export interface Engine {
   camPost(request: CamPostRequestDto): Promise<CamPostResultDto>;
   camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto>;
   camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto>;
+  camSimulateGcode(request: CamGcodeSimulationRequestDto): Promise<CamSimulationResultDto>;
   camPostEvents(setupId: number): Promise<PostEventStreamDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;

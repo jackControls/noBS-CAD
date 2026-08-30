@@ -65,6 +65,7 @@ type WasmEngineMethods = WasmEngineInner & {
   cam_post(payload: string): string;
   cam_analyze_nbpost(payload: string): string;
   cam_simulate(payload: string): string;
+  cam_simulate_gcode(payload: string): string;
   cam_post_events(payload: string): string;
 };
 import type {
@@ -77,6 +78,7 @@ import type {
   BreakRequest,
   BodyAppearance,
   CamDocumentDto,
+  CamGcodeSimulationRequestDto,
   CamPostRequestDto,
   CamPostResultDto,
   CamProgramDto,
@@ -537,6 +539,14 @@ export class WasmEngine implements Engine {
   async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).cam_simulate(JSON.stringify(request)),
+    );
+  }
+
+  async camSimulateGcode(
+    request: CamGcodeSimulationRequestDto,
+  ): Promise<CamSimulationResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_simulate_gcode(JSON.stringify(request)),
     );
   }
 

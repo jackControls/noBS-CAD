@@ -9,6 +9,12 @@ import type {
 import type { MoveCopyCommandPreview } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
+import {
+  simulationHasStockSurface,
+  simulationPlaybackPose,
+  simulationPlaybackToolVisible,
+} from '../../cam/overlay';
+import { modeledStockBodyId, setupPointToModel } from '../../cam/geometry';
 
 export interface NativeCameraState {
   position: [number, number, number];
@@ -129,8 +135,8 @@ interface NativePresentation {
   constraintRelatedSketchEntityIds: number[];
   hoveredSketchEntityId: number | null;
   hiddenBodyIds: number[];
-  /** Part bodies ghosted to a see-through wireframe shell (CAM stock-vs-model
-   *  inspection while a simulated operation is selected). */
+  /** Part bodies ghosted to a see-through wireframe shell when the operator
+   *  explicitly requests a target reference over CAM remaining stock. */
   ghostedBodyIds: number[];
   hiddenDatumPlaneIds: number[];
   hiddenSketchNames: string[];
@@ -140,6 +146,17 @@ interface NativePresentation {
   hoveredProfile: ProfileRefDto | null;
   bodyPoses: import('../../engine/types').BodyPoseDto[];
   instanceBodyPoses: import('../../engine/types').InstanceBodyPoseDto[];
+  /** Rust-owned remaining stock is already resident in Bevy. */
+  camStockVisible: boolean;
+  /** Lightweight semantic cutter primitive. Bevy retains its meshes and only
+   *  changes transforms while playback advances. */
+  camTool: {
+    tip: [number, number, number];
+    axis: [number, number, number];
+    diameter: number;
+    fluteLength: number;
+    overallLength: number;
+  } | null;
 }
 
 export type NativeViewportLinePattern = 'solid' | 'dotted';
@@ -163,6 +180,13 @@ export interface NativeViewportTriangleLayer {
   color: [number, number, number, number];
   /** World-space triangle vertices, packed as x, y, z. */
   positions: number[];
+  /** Optional world-space vertex normals, packed one-for-one with positions.
+   *  Surface-producing systems can provide smooth/feature-aware normals;
+   *  legacy command overlays continue to receive flat normals natively. */
+  normals?: number[];
+  /** Physical CAM stock is opaque and studio-lit. Command/profile fills keep
+   *  the historical unlit translucent overlay presentation. */
+  material?: 'overlay' | 'machined_stock';
   /** Render after model depth so an internal selected profile remains visible. */
   xray: boolean;
 }
@@ -790,22 +814,60 @@ export function collectNativeViewportPresentation(): NativePresentation {
     movePreview,
   );
 
-  // CAM stock-vs-model inspection: an explicit operator toggle ghosts the
-  // setup's part bodies to a wireframe shell while a simulated operation is
-  // reviewed, so the machined stock surface shows through on request
-  // (mirrors the overlay's simulation-display gate in src/cam/overlay.ts).
-  const ghostedBodyIds = (() => {
-    if (state.activeTab !== 'cam') return [] as number[];
-    if (!state.camXrayModel) return [] as number[];
-    if (state.selectedCamOperationId === null || state.camDialog !== null) return [] as number[];
+  // A valid simulation frame becomes the one physical workpiece surface in
+  // the normal CAM view. Hide the exact target and any modeled raw-stock body
+  // so neither can occupy the same depth as the green remaining-stock mesh.
+  // X-Ray explicitly brings only the finished target back as a faint shell.
+  const camStageBodies = (() => {
+    if (state.activeTab !== 'cam') return null;
+    if (state.camDialog !== null) return null;
     const simulation = state.camSimulation;
     const cam = state.camDocument;
     const setup = cam.setups.find((candidate) => candidate.id === cam.active_setup_id) ?? null;
-    if (!simulation || !setup || simulation.setup_id !== setup.id) return [] as number[];
-    // Same freshness gate as the overlay: the ghost follows the simulation
-    // computed through the currently selected operation, never a stale one.
-    if (simulation.through_operation_id !== state.selectedCamOperationId) return [] as number[];
-    return setup.body_ids;
+    if (!simulation || !simulationHasStockSurface(simulation) || !setup || simulation.setup_id !== setup.id) return null;
+    // Same freshness gate as the overlay: CAM prediction follows the selected
+    // operation; controller-code simulation is setup-wide.
+    if (
+      simulation.source === 'cam_toolpath'
+      && simulation.through_operation_id !== state.selectedCamOperationId
+    ) return null;
+    if (
+      state.camSimulationTimeline
+      && simulation.source !== state.camSimulationTimeline.source
+    ) return null;
+    const stockBodyId = modeledStockBodyId(setup, cam);
+    return {
+      targetBodyIds: setup.body_ids.filter((bodyId) => bodyId !== stockBodyId),
+      stockBodyId,
+    };
+  })();
+  const ghostedBodyIds = state.camXrayModel
+    ? camStageBodies?.targetBodyIds ?? []
+    : [];
+  const hiddenBodyIds = [...new Set([
+    ...hiddenReferences(browser, state.hidden, 'body'),
+    ...(!state.camXrayModel ? (camStageBodies?.targetBodyIds ?? []) : []),
+    ...(camStageBodies?.stockBodyId == null ? [] : [camStageBodies.stockBodyId]),
+  ])];
+
+  const camTool: NativePresentation['camTool'] = (() => {
+    if (state.activeTab !== 'cam' || state.camDialog !== null) return null;
+    const timeline = state.camSimulationTimeline;
+    const playback = state.camSimulationPlayback;
+    if (!timeline || !playback) return null;
+    if (!simulationPlaybackToolVisible(state.selectedCamOperationId, playback)) return null;
+    const pose = simulationPlaybackPose(timeline, playback.time_seconds);
+    if (!pose || pose.toolId === null) return null;
+    const tool = state.camDocument.tools.find((candidate) => candidate.id === pose.toolId);
+    if (!tool) return null;
+    const tip = setupPointToModel(pose.position, timeline.wcs);
+    return {
+      tip: [tip.x, tip.y, tip.z],
+      axis: timeline.wcs.z_axis,
+      diameter: tool.diameter,
+      fluteLength: tool.flute_length,
+      overallLength: tool.overall_length,
+    };
   })();
 
   return {
@@ -828,7 +890,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
     selectedSketchEntityIds,
     constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,
-    hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
+    hiddenBodyIds,
     ghostedBodyIds,
     hiddenDatumPlaneIds: hiddenReferences(
       browser,
@@ -850,6 +912,9 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredProfile: state.profilePicker?.hovered ?? null,
     bodyPoses,
     instanceBodyPoses,
+    camStockVisible: camStageBodies !== null
+      && state.camSimulation?.native_stock_present === true,
+    camTool,
   };
 }
 
@@ -1641,6 +1706,8 @@ function previewKey(preview: NativeViewportTransient): string {
   for (const layer of preview.triangles) {
     layer.color.forEach(addNumber);
     layer.positions.forEach(addNumber);
+    layer.normals?.forEach(addNumber);
+    addString(layer.material ?? 'overlay');
     addNumber(layer.xray ? 1 : 0);
   }
   for (const arrow of preview.arrows) {

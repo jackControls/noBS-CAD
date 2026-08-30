@@ -37,6 +37,18 @@ pub enum MotionKind {
     Cutting,
 }
 
+/// Principal interpolation plane for a circular move. CAM planning currently
+/// emits XY arcs, while the shared simulation timeline also accepts XZ/YZ
+/// arcs parsed from final controller programs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CamArcPlane {
+    #[default]
+    Xy,
+    Xz,
+    Yz,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CamCommandDto {
@@ -69,6 +81,13 @@ pub enum CamCommandDto {
     Coolant {
         mode: CoolantMode,
     },
+    /// Establishes the tool-tip pose in workpiece coordinates without
+    /// claiming that the tool travelled there. The strict NC interpreter
+    /// emits this after excluded machine-coordinate/tool-change motion; CAM
+    /// planning never emits it.
+    SetPosition {
+        to: Point3Dto,
+    },
     Rapid {
         to: Point3Dto,
     },
@@ -78,6 +97,8 @@ pub enum CamCommandDto {
     },
     Circular {
         clockwise: bool,
+        #[serde(default)]
+        plane: CamArcPlane,
         center: Point3Dto,
         to: Point3Dto,
         feed: f64,
@@ -105,7 +126,10 @@ pub enum CamCommandDto {
 impl CamCommandDto {
     pub fn endpoint(&self) -> Option<Point3Dto> {
         match self {
-            Self::Rapid { to } | Self::Linear { to, .. } | Self::Circular { to, .. } => Some(*to),
+            Self::SetPosition { to }
+            | Self::Rapid { to }
+            | Self::Linear { to, .. }
+            | Self::Circular { to, .. } => Some(*to),
             _ => None,
         }
     }
@@ -416,6 +440,7 @@ impl ProgramBuilder {
         self.stats.estimated_seconds += length / feed * 60.0;
         self.commands.push(CamCommandDto::Circular {
             clockwise,
+            plane: CamArcPlane::Xy,
             center: Point3Dto::new(center.x, center.y, from.z),
             to,
             feed,

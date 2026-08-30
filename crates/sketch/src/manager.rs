@@ -22,9 +22,10 @@ use nbcad_assembly::{
     UpdateJointRequestDto, UpdateOccurrenceRequestDto,
 };
 use nbcad_cam::{
-    analyze_nbpost, plan_setup, post_event_stream, post_setup, simulate_setup, CamDocumentDto,
-    CamPostRequestDto, CamPostResultDto, CamProgramDto, CamSimulationRequestDto,
-    CamSimulationResultDto, NbPostAnalysisDto, NbPostAnalysisRequestDto, PostEventStreamDto,
+    analyze_nbpost, plan_setup, post_event_stream, post_setup, simulate_gcode, simulate_setup,
+    CamDocumentDto, CamGcodeSimulationRequestDto, CamPostRequestDto, CamPostResultDto,
+    CamProgramDto, CamSimulationRequestDto, CamSimulationResultDto, NbPostAnalysisDto,
+    NbPostAnalysisRequestDto, PostEventStreamDto,
 };
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
@@ -1272,6 +1273,13 @@ impl SketchManager {
         request: CamSimulationRequestDto,
     ) -> Result<CamSimulationResultDto, SessionError> {
         simulate_setup(&self.cam, &request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_simulate_gcode(
+        &self,
+        request: CamGcodeSimulationRequestDto,
+    ) -> Result<CamSimulationResultDto, SessionError> {
+        simulate_gcode(&self.cam, &request).map_err(|error| SessionError::Solid(error.to_string()))
     }
 
     pub fn cam_post_events(&self, setup_id: u64) -> Result<PostEventStreamDto, SessionError> {
@@ -4070,7 +4078,8 @@ mod project_tests {
     use nbcad_cam::{
         CamOperationDto, CamPostConfigDto, CamSetupDto, CamToolDto, CamToolKind, CamUnits,
         CoolantMode, CuttingParametersDto, Point2Dto as CamPoint2Dto, Point3Dto as CamPoint3Dto,
-        Rect2Dto as CamRect2Dto, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
+        Rect2Dto as CamRect2Dto, StockBoxDto, WcsOriginSpecDto, WorkCoordinateSystemDto,
+        WorkOffset,
     };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{

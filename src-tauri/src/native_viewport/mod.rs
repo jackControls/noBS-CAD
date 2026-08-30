@@ -163,8 +163,8 @@ pub struct ViewportPresentation {
     #[serde(default)]
     pub hidden_body_ids: Vec<u64>,
     /// Bodies rendered as a faint shell with see-through wireframe edges:
-    /// the manufacturing simulation ghosts the part bodies so the machined
-    /// stock surface shows through (stock-vs-model inspection).
+    /// CAM uses this only when the operator explicitly adds the finished
+    /// target as an X-Ray reference over the remaining-stock stage.
     #[serde(default)]
     pub ghosted_body_ids: Vec<u64>,
     #[serde(default)]
@@ -185,6 +185,23 @@ pub struct ViewportPresentation {
     /// Per-occurrence display rows; several rows may reuse one source body.
     #[serde(default)]
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
+    /// Desktop CAM simulation stock is retained directly by Bevy rather than
+    /// travelling through the webview's transient preview JSON.
+    #[serde(default)]
+    pub cam_stock_visible: bool,
+    /// Retained CAM cutter primitive. Playback updates only its pose and
+    /// dimensions; stock/path triangle soup stays in the static preview.
+    pub cam_tool: Option<ViewportCamTool>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportCamTool {
+    pub tip: [f32; 3],
+    pub axis: [f32; 3],
+    pub diameter: f32,
+    pub flute_length: f32,
+    pub overall_length: f32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -325,9 +342,25 @@ pub struct ViewportTriangleLayer {
     pub color: [f32; 4],
     #[serde(default)]
     pub positions: Vec<f32>,
+    /// Optional world-space vertex normals, packed one-for-one with
+    /// positions. When omitted the native renderer computes flat normals.
+    #[serde(default)]
+    pub normals: Vec<f32>,
+    /// Physical CAM stock uses the normal lit/depth-writing model pipeline;
+    /// command fills retain their translucent unlit overlay presentation.
+    #[serde(default)]
+    pub material: ViewportTriangleMaterial,
     /// Draw after model depth for internal datum/profile selection.
     #[serde(default)]
     pub xray: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportTriangleMaterial {
+    #[default]
+    Overlay,
+    MachinedStock,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
@@ -473,6 +506,15 @@ pub(crate) struct ViewportModel {
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
 }
 
+/// Remaining-stock surface already transformed into model/world coordinates.
+/// This is an internal Rust-to-Bevy channel: it deliberately has no serde
+/// contract because the webview must never relay these large buffers.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ViewportCamStock {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+}
+
 pub struct NativeViewport {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     inner: platform::PlatformNativeViewport,
@@ -579,6 +621,19 @@ impl NativeViewport {
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = preview;
+            Err("the embedded native viewport is unavailable on this platform".to_string())
+        }
+    }
+
+    pub(crate) fn set_cam_stock(&self, stock: Option<ViewportCamStock>) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        {
+            self.inner.set_cam_stock(stock)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            let _ = stock;
             Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }

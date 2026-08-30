@@ -1,5 +1,6 @@
 import type {
   CamBoxAnchor,
+  CamDocumentDto,
   CamPoint2Dto,
   CamResolvedStockDto,
   CamSetupDto,
@@ -36,6 +37,28 @@ export interface SketchLoop {
   points: Vec2[];
   area: number;
   label: string;
+}
+
+/** Resolve the actual modeled raw-stock body through a rest-stock chain.
+ *  The same answer is used by simulation input and viewport presentation so
+ *  raw material is never mistaken for a finished-part target. */
+export function modeledStockBodyId(
+  setup: CamSetupDto,
+  cam: CamDocumentDto,
+): number | null {
+  const visited = new Set<number>();
+  let cursor: CamSetupDto | undefined = setup;
+  while (cursor && cursor.resolved_stock.shape === 'rest') {
+    if (visited.has(cursor.id)) return null;
+    visited.add(cursor.id);
+    const sourceSetupId: number = cursor.resolved_stock.source_setup_id;
+    cursor = cam.setups.find(
+      (candidate) => candidate.id === sourceSetupId,
+    );
+  }
+  return cursor?.resolved_stock.shape === 'model_body'
+    ? cursor.resolved_stock.body_id
+    : null;
 }
 
 export function listSketchPointRefs(sketches: SketchDto[]): SketchPointRef[] {

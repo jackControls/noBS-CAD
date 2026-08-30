@@ -3902,6 +3902,7 @@ dependencies = [
  "glib",
  "gtk",
  "hidapi",
+ "nbcad-cam",
  "nbcad-core",
  "nbcad-export",
  "nbcad-mcp-mutate",

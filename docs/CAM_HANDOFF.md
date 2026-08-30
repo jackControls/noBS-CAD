@@ -1,9 +1,286 @@
-# CAM branch handoff — 2026-08-28
+# CAM branch handoff — 2026-08-29
 
-State of `feature/cam` after twenty working rounds, rebased onto current
+State of `feature/cam` after twenty-nine working rounds, rebased onto current
 `main` (assembly MCP tools included; force-pushed). Everything below is
 verified against the working tree and test runs of this date; trust the tree
 and the tests, not this document, when they disagree.
+
+## Round 29 (2026-08-29) — native simulation worker and retained stage cache
+
+1. Desktop CAM prediction no longer runs through the generic locked engine
+   command. Tauri clones the small CAM intent document under the project lock,
+   runs the voxel/cutter kernel on a blocking Rust worker, and cooperatively
+   cancels an older sweep when a newer selection or playback frame arrives.
+   Modeling, saving, and Bevy camera input therefore stay responsive while a
+   high-density stock run is in progress. The WASM/browser path is unchanged.
+2. A full setup run now retains bounded operation-boundary stock checkpoints
+   as compact one-bit-per-cell grids. Setup time zero, complete setup, and
+   operation selection reuse those grids; playback inside later operations
+   resumes after the nearest completed operation instead of replaying every
+   earlier cutter move. The process-wide cache is capped at four setups and
+   32 MiB and falls back to an exact fresh run after eviction.
+3. Remaining-stock triangles no longer make the Rust → JSON → JavaScript →
+   JSON → Rust round trip on desktop. The result mesh is transformed to model
+   coordinates in Rust and sent through a dedicated retained Bevy resource;
+   React receives timeline, measurements, warnings, and issue metadata only.
+   Hidden comparison evidence meshes are likewise omitted from desktop JSON,
+   while verification counts and volumes remain authoritative. Browser/WASM
+   still receives the renderer-neutral mesh as its fallback contract.
+4. The compact greedy extractor now relaxes shared internal cutter-boundary
+   vertices toward their surrounding binary isosurface while keeping the
+   authoritative occupancy grid unchanged. Planar stock/facing surfaces stay
+   flat, circular and conical cuts gain sub-cell display silhouettes, and
+   occupancy-gradient normals remain continuous. Both Bevy cameras use 8×
+   MSAA, so this geometric smoothing is followed by normal GPU edge AA rather
+   than spending verification voxels to chase screen pixels.
+
+Verification: CAM 128/128 (including checkpoint/resume equivalence and
+cancellation), TypeScript, desktop tests/build, and diff checks pass.
+
+## Round 28 (2026-08-29) — setup-stage cutter and high-density stock preview
+
+1. Selecting the setup or Stock & WCS at its incoming-stock frame no longer
+   borrows Tool 1 from the first timeline step. A shared presentation gate
+   covers both the native retained Bevy cutter and the triangle-overlay
+   fallback. Starting playback at time zero still reveals the first active
+   tool immediately; selecting an operation still presents its cutter.
+2. Auto now targets 352 cells across the stock's longest side with an 8M-cell
+   bound. Compared with the former 160-cell Auto target, that is 10.65 times
+   the volumetric sample density and about 2.2 times finer per axis. A literal
+   ten-times-finer edge would cost one thousand times as many 3D cells and is
+   deliberately not exposed as an interactive default. Fine/Balanced/Fast now
+   target 512/256/128 cells with 8M/4M/1M bounds.
+3. The conservative greedy stock surface now emits real per-vertex normals.
+   Internal vertical cut walls derive them from the surrounding occupancy
+   gradient, so drilled and contoured walls shade continuously instead of as
+   alternating X/Y voxel strips. Horizontal floors and the stock envelope
+   retain flat normals and crisp manufactured edges. The mesh is still a
+   bounded presentation of the authoritative voxel bitset; a future
+   signed-distance extractor remains the route to sub-cell silhouettes.
+
+Verification: CAM 126/126, TypeScript, formatting, desktop tests/build, and
+diff checks pass.
+
+## Round 27 (2026-08-29) — model-relative simulation density
+
+1. Auto detail no longer clamps the physical cell edge to a hard-coded
+   0.25–2.0 mm range. It targets 160 cells along the stock's longest side,
+   preserving the same relative visual density for physically small and large
+   parts. The bounded voxel budget may only coarsen that target; the UI still
+   reports the actual resulting cell size and dimensions.
+2. Fine/Balanced/Fast are model-relative too: 256/160/96 samples across the
+   longest stock side, with their existing 4M/2M/500k safety budgets. They no
+   longer mean fixed 0.25/0.5/1.0 mm cells.
+3. Density deliberately stays independent of camera zoom and screen pixels.
+   Orbiting therefore cannot change verification numbers, invalidate target
+   caches, or replay the program merely because the view changed. Screen-space
+   mesh LOD may later reduce distant presentation cost, but never chooses the
+   material-removal grid.
+4. The screenshot's 0.472 mm Auto cell came from the old 72-cell ratio, not a
+   fixed 0.472 mm setting. For the same approximately 34 mm longest side, the
+   new Auto target is approximately 0.212 mm before budget adjustment. This
+   materially reduces stair steps, while the planned signed-distance display
+   shell remains the structural fix for smooth circular silhouettes.
+
+Verification: CAM 125/125 (including a scale-invariance regression),
+TypeScript, formatting, and diff checks pass.
+
+## Round 26 (2026-08-29) — physical remaining-stock material
+
+1. Remaining stock is no longer rendered as a 72%-alpha, unlit command fill.
+   It now has an explicit `machined_stock` presentation contract: opaque,
+   depth-writing, studio-lit, non-metallic, and rough. Rear hole walls and the
+   target cannot blend through the front surface, removing the angle-dependent
+   color flash and giving drilled walls normal light/depth cues.
+2. Legacy profile/tool/selection triangles keep the default translucent unlit
+   `overlay` material, so improving stock does not change command interaction.
+   The material kind participates in the retained-preview hash and round-trips
+   through the Tauri boundary; omitted kinds remain backward-compatible.
+3. The renderer-neutral simulation mesh and native triangle layer now reserve
+   an optional one-normal-per-vertex channel. The current conservative greedy
+   voxel extractor deliberately emits no synthetic smoothing normals, but a
+   later signed-distance surface can deliver genuine gradient normals without
+   changing the viewport protocol or the verification result.
+4. The visual architecture decision is a dual representation: the occupied
+   voxel bitset remains the deterministic verification/removal authority; a
+   bounded narrow-band signed-distance display shell will feed a smooth
+   surface extractor. Tri-dexel and exact 2D slabs remain possible specialized
+   accelerators, not a second safety authority. OCCT may reconstruct an
+   as-machined solid offline at an operation/setup boundary, never in the
+   playback removal loop.
+
+Verification: CAM 124/124, desktop 49/49, Rust checks, formatting, diff checks,
+and TypeScript all pass. This slice improves shading and occlusion immediately;
+the binary greedy surface silhouette is still resolution-stepped until the SDF
+display extractor lands.
+
+## Round 25 (2026-08-29) — stage-stock presentation
+
+1. The normal simulator view now renders exactly one physical workpiece
+   surface: green remaining stock. Amber excess and magenta missing-target
+   meshes are still generated and measured by Rust but are no longer layered
+   over the stock, eliminating their coplanar depth fight while orbiting.
+2. Selecting the setup/Stock & WCS row presents the setup's incoming stock at
+   zero completed motions. The complete setup run remains retained as the
+   background verification/playback timeline. Selecting an operation retains
+   the existing cumulative “through operation” behavior and therefore shows
+   stock immediately after that operation.
+3. Rest setup time zero reconstructs the previous setup's completed remainder;
+   regression coverage pins both ordinary zero-step stock and rest-chain input
+   stock before the current setup removes anything.
+4. While a valid stage mesh is present, the exact target bodies and any
+   modeled raw-stock body are removed from the ordinary render pass so they
+   cannot fill cut-away regions or fight the voxel surface. X-Ray explicitly
+   restores only the target as a faint reference shell. The setup stock ghost
+   keeps its envelope lines but drops its duplicate fill.
+5. Verification volumes, responsible-motion findings, warnings, and the
+   compact card continue behind the stage view. Target-gouge paint/markers are
+   suppressed; rapid-contact safety markers remain. The single stock surface
+   can consume the full 60k presentation allowance and discloses any stride
+   simplification without changing full-detail verification numbers.
+
+## Round 24 (2026-08-29) — verification disclosure hardening
+
+1. Mesh voxelization now counts columns whose deduplicated Z crossings have
+   odd parity. It continues paired best-effort filling but carries a labeled
+   closure/tessellation warning through modeled stock, target-body unions, the
+   prepared-target cache, rest chains, and final simulation results. An open
+   triangle added to a closed target mesh pins the operator-visible warning.
+2. Native presentation uses a dynamic 60k-triangle simulation allowance under
+   the 65,536 aggregate cap. Gouge evidence receives the largest guaranteed
+   share, remaining stock is second, excess stock third, and unused shares are
+   redistributed. Any stride decimation produces a detailed warning, while
+   the verification card states that 3D evidence is simplified and numeric
+   values remain full-detail.
+3. Operation-scoped verification now labels `Scope: through “<operation>” ·
+   compared with the finished part`; amber status reads “Stock remains at
+   stage” rather than looking like a final setup verdict.
+4. Initial protected-volume shortfall now names an earlier rest-source
+   operation as a possible cause instead of blaming only stock/WCS/selection.
+
+## Round 23 (2026-08-29) — simulator corrective gate
+
+The review findings were reproduced and closed as a correctness/performance
+gate:
+
+1. A `G40` emitted on a rapid block now consumes the physical compensated
+   endpoint in the rapid branch and uses it as the collision-sweep origin.
+   Later reposition/plunge moves therefore cannot inherit a stale full-depth
+   centerline. The NC regression pins `G0 G40 Z...` followed by XY reposition
+   and a pure Z plunge.
+2. NC input now has an explicit Fanuc-style dialect. Its `G4 P` value is
+   milliseconds, while ISO P and Siemens P/F are seconds. F and P are parsed
+   independently and P wins deterministically when both occur, matching the
+   built-in Fanuc post instead of inflating its dwell by 1000x.
+3. The bull-nose cutter envelope revolves the declared corner radius around
+   the tool axis: the tip flat, quarter-round, and full OD are represented
+   instead of using a sharp full-radius cylinder.
+4. Finished-part voxelization and both exact distance transforms are prepared
+   once behind a bounded eight-entry cache. Complete requests supply meshes;
+   playback frames supply the opaque cache key only. Grid, WCS, and tolerance
+   compatibility are rechecked before reuse.
+5. The host follows rest-stock chains to their ultimate modeled-body source
+   when supplying stock geometry, and excludes that raw-stock body from the
+   intended target union.
+6. Auto detection recognizes `SUPA` as a bounded NC word at column zero.
+7. Playback pose lookup now binary-searches cumulative time, in-progress
+   verification stays visually neutral, and redundant multiply-add calls are
+   plain multiplication.
+
+New regressions cover every engine-level behavior above, including cache reuse
+without re-sending target meshes and rest stock inherited from modeled stock.
+The full workspace, 49-test desktop crate, 102-test MCP server, strict CAM
+clippy, TypeScript/Vite, WASM build/smoke, and portable macOS bundle gates are
+green. The fresh 138 MiB ad-hoc-signed `.app` carries local `@rpath` OCCT/TBB
+libraries and all required notices; no DMG was produced.
+
+## Round 22 (2026-08-29) — target-aware CAM verification
+
+This slice turns the stock player into the first useful CAM verification
+surface while preserving the dual-input architecture.
+
+1. **The intended part is now simulation input.** `CamWorkspace` gathers the
+   setup's selected OCCT body meshes in model coordinates. Rust transforms
+   them into the setup WCS, voxelizes every closed body on the stock grid, and
+   unions them. CAM prediction and final-NC input pass the same target contract
+   into `simulate_program`; Bevy still receives only renderer-neutral results.
+2. **Tolerance is explicit and honest.** A three-axis squared Euclidean
+   distance transform builds the accepted exterior band and protected target
+   core. The requested comparison tolerance is accepted in document units,
+   but the effective value cannot be tighter than one cell diagonal. Both are
+   returned; the workspace shows the effective value and actual grid detail.
+   Auto/Fine/Balanced/Fast presets adjust requested cell size and bounded voxel
+   budget without allowing the UI label to overstate achieved resolution.
+3. **Excess and overcut are different physical results.** Remaining cells
+   beyond the target band are reported as extra stock and rendered amber.
+   Protected target cells removed after the starting-stock snapshot are
+   reported as overcut and rendered as magenta missing-volume geometry, so an
+   empty gouge remains visible. Initial stock shortfall is counted separately
+   and produces a setup warning.
+4. **The responsible move is retained.** Every physical timeline step carries
+   its protected-cell removal count. The first overcut location becomes a
+   typed issue tied to its command index; NC runs retain the already-recorded
+   source block. Rapid/stock contact remains a distinct issue kind.
+5. **The implementation is clean-room.** Public product documentation was used
+   only to form a behavior checklist (comparison, accuracy disclosure,
+   navigation, and statistics). No external code, UI assets, text, private
+   interfaces, executable inspection, or post logic entered the repository.
+   The math, API, UI layout, naming, colors, tests, and implementation were
+   designed against this project's existing OCCT/Rust/Bevy boundaries.
+
+Focused verification: CAM 116 passed, including deterministic distance math,
+no-false-gouge, and motion-attributed overcut tests. Full workspace/build/app
+verification is recorded at the end of this handoff.
+
+## Round 21 (2026-08-29) — dual-input 3D simulator foundation
+
+The bounded stabilization pass was committed separately as `eaa39d9` before
+this slice began. The simulator now has one physical authority with two inputs,
+matching the intended product split without duplicating removal behavior.
+
+1. **CAM prediction and final NC converge on one kernel.** Existing CAM intent
+   still plans to controller-neutral `CamProgram` motion. A new strict
+   workpiece-only interpreter translates final NC text to the same motion;
+   `simulate_program` alone owns voxel removal, rapid/tool contact, timing,
+   stock meshing, and step records. Timeline steps now carry active tool,
+   arbitrary-plane arc geometry, and optional NC source line.
+2. **Siemens 828D is the first honest NC language.** The interpreter supports
+   the modal metric/inch, absolute/incremental, plane, line/arc, work-offset,
+   tool/spindle/coolant, and radius-compensation words required by the current
+   production sample. Two programmed endpoint axes select out-of-plane arcs;
+   `CR=` and IJK centers work in XY/XZ/YZ. A `T` preload stays pending until
+   M6. `SUPA`/G53 and D/H are acknowledged but excluded from workpiece motion;
+   a zero-motion pose reset prevents hidden machine travel from becoming an
+   invented stock sweep.
+   Modal CYCLE81 is expanded to rapid approach, feed drilling, and rapid
+   retract. Unsupported rotary axes, cycles, feed modes, and flow control fail
+   closed.
+3. **The supplied program was exercised, not merely pattern-matched.** The
+   1,892-line / 1,870-block MPF completed a local end-to-end interpreter and
+   voxel probe with matching project-library tool numbers. This crossed its
+   vertical arcs, `CR=` arcs, G41/G42 transitions, preload calls, shop macro
+   acknowledgement, and eight modal CYCLE81 hole positions. The external shop
+   file is not embedded in the repository; permanent focused tests pin each
+   supported semantic.
+4. **Both inputs use one 3D player.** The manufacturing workspace exposes CAM
+   Sim and NC Sim explicitly. Both retain a complete timeline while requesting
+   deterministic partial stock frames, and share play/pause/reset, scrub,
+   speed, moving-tool, and source-line presentation. Tool pose interpolates on
+   lines and helices in every principal plane. Stock updates at completed block
+   boundaries in this first correctness-oriented implementation; debouncing
+   and stale-result guards keep frame requests ordered.
+5. **Orbit remains live during playback.** OCCT continues as exact B-rep and
+   tessellation authority. The Rust simulator remains renderer-neutral. Bevy
+   receives transient stock/path geometry plus a retained cutter and
+   independently owns the camera/input loop, so orbit, pan, and zoom do not
+   pause the simulation clock. The cutter transform updates independently;
+   stock and full-path geometry are not resent on every clock tick.
+
+Next confidence work is accurate non-cylindrical cutter envelopes,
+shaft/holder and fixture collisions, issue navigation/stop controls, and
+retained voxel checkpoints for continuous stock removal within long motion
+blocks. Machine travel and machine geometry stay out until the explicitly
+machine-aware layer.
 
 ## Round 20 (2026-08-28) — bounded CAM stabilization gate
 
@@ -618,8 +895,10 @@ position only.)
   at export time (`CamPostRequestDto.post`), document `post_defaults` only
   prefill the dialog. Helical arcs (Z advances through the turn, i.e. thread
   milling) post as plain G2/G3 blocks carrying a Z word in every dialect.
-- `simulation.rs` — voxel stock removal + rapid-collision reports. Tap /
-  reamer / boring bar / thread mill sweep as plain cylinders (no
+- `simulation.rs` — voxel stock removal, rapid-contact reports, OCCT-mesh
+  target voxelization, anisotropic distance-band comparison, protected-target
+  motion attribution, and renderer-neutral remaining/excess/gouge meshes. Tap
+  / reamer / boring bar / thread mill sweep as plain cylinders (no
   tip-approximation note).
 - `post_events.rs` — neutral callback-event stream for future post adapters.
 
@@ -633,9 +912,11 @@ position only.)
   `collectNativeViewportTransient`: translucent stock ghost + envelope edges,
   RGB WCS axes at the setup origin, the selected operation's toolpath
   (dotted amber rapids / solid green cuts, width >= 2 so they render through
-  geometry via the highlight gizmo group), green remaining-stock mesh from
-  the voxel simulator with red rapid-collision markers, and point-pick
-  candidates. All planner/simulator output is setup-space; `overlay.ts` is
+  geometry via the highlight gizmo group), the selected stage's single green
+  remaining-stock surface, rapid-contact markers, and point-pick candidates.
+  Excess/overcut verification stays in the card and issue stream rather than
+  being painted over the stock. All planner/simulator output is setup-space;
+  `overlay.ts` is
   the single place that transforms it back to model coordinates
   (`geometry.ts::setupPointToModel`). The planned program and simulation
   result live in the store (`camProgram` / `camSimulation`) so the collector
@@ -825,23 +1106,27 @@ drill cycles.
 
 ## Verification (all green at handoff)
 
-`cargo test --workspace` (CAM 107),
+`cargo test --workspace` (CAM 124),
 `cargo test --manifest-path mcp-server/Cargo.toml` (102),
+`cargo test --manifest-path src-tauri/Cargo.toml` (49),
 `cargo clippy -p nbcad-cam --all-targets --no-deps -- -D warnings`,
 `npx tsc --noEmit`, `npm run build:wasm`, `npm run smoke:wasm`, and
-`npm run build`. A fresh 137 MiB arm64 macOS `.app` was built without a DMG,
+`npm run build`. A fresh 138 MiB arm64 macOS `.app` was built without a DMG,
 passed deep strict code-signature verification, contains the required license
-notices, and has no Homebrew library paths. A live open of `doorBlock.nbcad`
-also confirmed the Manufacture workspace exposes the actual 0.472 mm 3D
-detail and the simulator's voxel/collision-scope warnings.
+notices, and has no Homebrew library paths. The fresh bundle launched
+successfully. The earlier live `doorBlock.nbcad` probe confirmed the
+Manufacture workspace exposes actual cell detail and simulator coverage
+warnings; setup and operation stage selection should now be operator-checked
+on that same job.
 
 ## Not done yet (rough priority)
 
-1. **Simulator confidence foundation:** accurate cutter envelopes; target
-   gouge detection; shaft/holder, fixture, and machine-envelope collisions;
-   explicit quality/tolerance control; smoother remaining-stock extraction;
-   and command-level playback. Tool holders/shafts enter the library as part
-   of this work; central-library import/export can follow independently.
+1. **Simulator confidence hardening:** accurate cutter envelopes; shaft/holder
+   and fixture collisions; a true narrow-band SDF/contouring extractor beyond
+   the current bounded display relaxation; finer checkpoints for continuous
+   removal within long individual blocks; and issue navigation/stop controls.
+   Tool holders/shafts enter the library as part of this work; machine
+   envelopes stay in the later machine-aware layer.
 2. **Shared robust 2D geometry kernel:** safe miter/arc offsets, clipping and
    Boolean cleanup, concave/self-intersection handling, tangent-arc fitting,
    and engagement-aware smoothing. Rounded/rolling contour roughing remains
@@ -862,9 +1147,10 @@ detail and the simulator's voxel/collision-scope warnings.
 6. **3D adaptive clearing:** the largest path-planning piece, intentionally
    after simulator confidence and the shared geometry kernel can verify rest
    stock, engagement, gouging, and collision behavior.
-7. **Posted-NC verification and machine safety:** parse/replay final controller
-   text, compare it with neutral motion, then add tool-length compensation,
-   limits, safe home/tool-change policies, and controller golden suites.
+7. **Controller equivalence and machine safety:** compare the now-interpreted
+   final controller text with neutral planner motion, broaden strict dialect
+   coverage, then add tool-length compensation, limits, safe home/tool-change
+   policies, machine geometry, and controller golden suites.
 
 ## Process note
 

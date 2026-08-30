@@ -101,13 +101,16 @@ use {
     gtk::prelude::*,
 };
 
-use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme};
+use super::ui::{
+    self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme,
+};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use super::ViewportRect;
 use super::{
-    NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
-    ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel, ViewportOriginPlane,
-    ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind, ViewportSnapMarker,
+    NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamStock, ViewportCamTool,
+    ViewportCamera, ViewportHud, ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel,
+    ViewportOriginPlane, ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind,
+    ViewportSnapMarker,
 };
 use crate::state::BOOTSTRAP_SESSION_ID;
 
@@ -181,6 +184,7 @@ enum RenderCommand {
     DropModelSession(String),
     Camera(ViewportCamera),
     Preview(ViewportPreview),
+    CamStock(Option<ViewportCamStock>),
     Presentation(ViewportPresentation),
 }
 
@@ -192,6 +196,7 @@ struct PendingRenderCommands {
     drop_model_sessions: Vec<String>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
+    cam_stock: Option<Option<ViewportCamStock>>,
     presentation: Option<ViewportPresentation>,
     scheduled: bool,
 }
@@ -588,6 +593,25 @@ impl PlatformNativeViewport {
             return Err("native transient presentation is too large".to_string());
         }
         self.enqueue(RenderCommand::Preview(preview))
+    }
+
+    pub fn set_cam_stock(&self, stock: Option<ViewportCamStock>) -> Result<(), String> {
+        const MAX_CAM_STOCK_FLOATS: usize = 9 * 262_144;
+        if let Some(stock) = &stock {
+            if stock.positions.is_empty()
+                || !stock.positions.len().is_multiple_of(9)
+                || stock.positions.len() > MAX_CAM_STOCK_FLOATS
+                || (!stock.normals.is_empty() && stock.normals.len() != stock.positions.len())
+                || !stock
+                    .positions
+                    .iter()
+                    .chain(stock.normals.iter())
+                    .all(|value| value.is_finite())
+            {
+                return Err("native CAM stock surface is invalid or too large".to_string());
+            }
+        }
+        self.enqueue(RenderCommand::CamStock(stock))
     }
 
     pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
@@ -2053,6 +2077,12 @@ struct PreviewResource {
     mesh_revision: u64,
 }
 
+#[derive(Resource, Default)]
+struct CamStockResource {
+    value: Option<ViewportCamStock>,
+    revision: u64,
+}
+
 #[derive(Resource, Clone, Copy, Default)]
 struct PaletteResource(ViewportPalette);
 
@@ -2105,6 +2135,7 @@ struct RenderedRevisions {
     hud: u64,
     annotations: u64,
     preview_meshes: u64,
+    cam_stock: u64,
 }
 
 #[derive(Component)]
@@ -2147,6 +2178,18 @@ struct NativeOverlayCamera;
 
 #[derive(Component)]
 struct NativePreviewMesh;
+
+#[derive(Component)]
+struct NativeCamStockMesh;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativeCamToolPartKind {
+    Flute,
+    Shank,
+}
+
+#[derive(Component, Clone, Copy)]
+struct NativeCamToolPart(NativeCamToolPartKind);
 
 #[derive(Clone, Copy)]
 enum NativePreviewArrowPartKind {
@@ -2290,6 +2333,7 @@ fn build_bevy_app(
         .init_resource::<ModelGeometryCache>()
         .init_resource::<CameraResource>()
         .init_resource::<PreviewResource>()
+        .init_resource::<CamStockResource>()
         .init_resource::<PaletteResource>()
         .init_resource::<HudResource>()
         .init_resource::<ViewportSizeResource>()
@@ -2307,6 +2351,9 @@ fn build_bevy_app(
                 rebuild_native_face_overlays,
                 apply_body_poses,
                 rebuild_native_preview_meshes,
+                rebuild_native_cam_stock,
+                update_native_cam_stock_visibility,
+                update_native_cam_tool,
                 update_native_preview_arrows,
                 rebuild_native_annotations,
                 rebuild_native_hud,
@@ -2350,6 +2397,7 @@ fn setup_scene(
         NativeViewportCamera,
         NativeCadCamera,
         Camera3d::default(),
+        Msaa::Sample8,
         BoxShadowSamples(6),
         Projection::Perspective(PerspectiveProjection {
             fov: camera.vertical_fov_degrees.to_radians(),
@@ -2366,6 +2414,7 @@ fn setup_scene(
         NativeOverlayCamera,
         IsDefaultUiCamera,
         Camera3d::default(),
+        Msaa::Sample8,
         Camera {
             order: 1,
             clear_color: ClearColorConfig::None,
@@ -3040,9 +3089,10 @@ fn apply_body_poses(
     }
 }
 
-/// Rebuilds only command-owned transient fills and manipulators. These meshes
-/// are intentionally separate from OCCT scene geometry: they may be
-/// translucent, depth-independent, and replaced on every debounced edit.
+/// Rebuilds renderer-neutral transient surfaces and manipulators. These meshes
+/// stay separate from OCCT scene geometry: command fills may be translucent
+/// overlays, while CAM remaining stock uses an opaque lit physical material.
+/// Both remain replaceable at the simulator/editor's debounced update rate.
 fn rebuild_native_preview_meshes(
     mut commands: Commands,
     preview: Res<PreviewResource>,
@@ -3080,30 +3130,66 @@ fn rebuild_native_preview_meshes(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
+        let all_positions_valid = positions.len() * 3 == layer.positions.len();
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.compute_flat_normals();
+        let normals = layer
+            .normals
+            .chunks_exact(3)
+            .filter_map(|normal| {
+                normal
+                    .iter()
+                    .all(|value| value.is_finite())
+                    .then_some([normal[0], normal[1], normal[2]])
+            })
+            .collect::<Vec<_>>();
+        if all_positions_valid
+            && layer.normals.len() == layer.positions.len()
+            && normals.len() * 3 == layer.normals.len()
+        {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        } else {
+            mesh.compute_flat_normals();
+        }
         let color = Color::srgba(
             layer.color[0].clamp(0.0, 1.0),
             layer.color[1].clamp(0.0, 1.0),
             layer.color[2].clamp(0.0, 1.0),
             layer.color[3].clamp(0.0, 1.0),
         );
+        let machined_stock =
+            layer.material == crate::native_viewport::ViewportTriangleMaterial::MachinedStock;
         let mut entity = commands.spawn((
-            Name::new("Native command profile/tool fill"),
+            Name::new(if machined_stock {
+                "Native CAM remaining stock"
+            } else {
+                "Native command profile/tool fill"
+            }),
             NativePreviewMesh,
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color,
-                alpha_mode: AlphaMode::Blend,
-                unlit: true,
+                base_color: if machined_stock {
+                    color.with_alpha(1.0)
+                } else {
+                    color
+                },
+                alpha_mode: if machined_stock {
+                    AlphaMode::Opaque
+                } else {
+                    AlphaMode::Blend
+                },
+                unlit: !machined_stock,
+                metallic: 0.0,
+                perceptual_roughness: if machined_stock { 0.74 } else { 0.5 },
                 double_sided: true,
                 cull_mode: None,
-                depth_bias: 2.0,
+                depth_bias: if machined_stock { 0.0 } else { 2.0 },
                 ..default()
             })),
             NotShadowCaster,
-            NotShadowReceiver,
         ));
+        if !machined_stock {
+            entity.insert(NotShadowReceiver);
+        }
         if layer.xray {
             entity.insert(RenderLayers::layer(1));
         }
@@ -3194,6 +3280,205 @@ fn rebuild_native_preview_meshes(
             base.insert(layer);
         }
     }
+}
+
+/// Upload the desktop simulator's retained stock directly from Rust. This is
+/// intentionally independent of `PreviewResource`: toolpath/highlight updates
+/// from React can no longer tear down or resend the large physical stock mesh.
+fn rebuild_native_cam_stock(
+    mut commands: Commands,
+    stock: Res<CamStockResource>,
+    presentation: Res<PresentationResource>,
+    mut revisions: ResMut<RenderedRevisions>,
+    existing: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<NativeCamStockMesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if revisions.cam_stock == stock.revision {
+        return;
+    }
+    revisions.cam_stock = stock.revision;
+
+    for (entity, mesh, material) in &existing {
+        meshes.remove(mesh.0.id());
+        materials.remove(material.0.id());
+        commands.entity(entity).despawn();
+    }
+
+    let Some(stock) = &stock.value else {
+        return;
+    };
+    let positions = stock
+        .positions
+        .chunks_exact(3)
+        .map(|point| [point[0], point[1], point[2]])
+        .collect::<Vec<_>>();
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    if stock.normals.len() == stock.positions.len() {
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            stock
+                .normals
+                .chunks_exact(3)
+                .map(|normal| [normal[0], normal[1], normal[2]])
+                .collect::<Vec<_>>(),
+        );
+    } else {
+        mesh.compute_flat_normals();
+    }
+    commands.spawn((
+        Name::new("Native retained CAM remaining stock"),
+        NativeCamStockMesh,
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.16, 0.6, 0.25),
+            alpha_mode: AlphaMode::Opaque,
+            metallic: 0.0,
+            perceptual_roughness: 0.68,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        })),
+        if presentation.0.cam_stock_visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        },
+        NotShadowCaster,
+    ));
+}
+
+fn update_native_cam_stock_visibility(
+    presentation: Res<PresentationResource>,
+    mut stock: Query<&mut Visibility, With<NativeCamStockMesh>>,
+) {
+    if !presentation.is_changed() {
+        return;
+    }
+    let visibility = if presentation.0.cam_stock_visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut current in &mut stock {
+        *current = visibility;
+    }
+}
+
+/// The playback cutter is semantic retained Bevy geometry, not transient
+/// triangle soup. A clock tick therefore moves two unit cylinders without
+/// hashing, serializing, or reallocating the static stock and toolpath meshes.
+fn update_native_cam_tool(
+    mut commands: Commands,
+    presentation: Res<PresentationResource>,
+    mut existing: Query<(&NativeCamToolPart, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !presentation.is_changed() {
+        return;
+    }
+    let Some(tool) = presentation.0.cam_tool else {
+        for (_, _, mut visibility) in &mut existing {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+
+    let mut found_flute = false;
+    let mut found_shank = false;
+    for (part, mut transform, mut visibility) in &mut existing {
+        match part.0 {
+            NativeCamToolPartKind::Flute => found_flute = true,
+            NativeCamToolPartKind::Shank => found_shank = true,
+        }
+        if let Some(next) = cam_tool_part_transform(tool, part.0) {
+            *transform = next;
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+    if found_flute && found_shank {
+        return;
+    }
+
+    let parts = [
+        (
+            NativeCamToolPartKind::Flute,
+            Color::srgba(0.78, 0.80, 0.84, 0.72),
+            "CAM playback cutter",
+        ),
+        (
+            NativeCamToolPartKind::Shank,
+            Color::srgba(0.62, 0.65, 0.70, 0.42),
+            "CAM playback shank",
+        ),
+    ];
+    for (kind, color, name) in parts {
+        if (kind == NativeCamToolPartKind::Flute && found_flute)
+            || (kind == NativeCamToolPartKind::Shank && found_shank)
+        {
+            continue;
+        }
+        let Some(transform) = cam_tool_part_transform(tool, kind) else {
+            continue;
+        };
+        commands.spawn((
+            Name::new(name),
+            NativeCamToolPart(kind),
+            Mesh3d(meshes.add(Cylinder::new(1.0, 1.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color,
+                alpha_mode: AlphaMode::Blend,
+                metallic: 0.65,
+                perceptual_roughness: 0.32,
+                cull_mode: None,
+                ..default()
+            })),
+            transform,
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
+}
+
+fn cam_tool_part_transform(
+    tool: ViewportCamTool,
+    kind: NativeCamToolPartKind,
+) -> Option<Transform> {
+    let tip = Vec3::from_array(tool.tip);
+    let axis = Vec3::from_array(tool.axis).normalize_or_zero();
+    if !tip.is_finite()
+        || axis == Vec3::ZERO
+        || !tool.diameter.is_finite()
+        || !tool.flute_length.is_finite()
+        || !tool.overall_length.is_finite()
+        || tool.diameter <= 0.0
+        || tool.flute_length <= 0.0
+        || tool.overall_length < tool.flute_length
+    {
+        return None;
+    }
+    let (offset, length) = match kind {
+        NativeCamToolPartKind::Flute => (0.0, tool.flute_length),
+        NativeCamToolPartKind::Shank => {
+            (tool.flute_length, tool.overall_length - tool.flute_length)
+        }
+    };
+    if length <= f32::EPSILON {
+        return None;
+    }
+    let radius = tool.diameter * 0.5;
+    Some(
+        Transform::from_translation(tip + axis * (offset + length * 0.5))
+            .with_rotation(Quat::from_rotation_arc(Vec3::Y, axis))
+            .with_scale(Vec3::new(radius, length, radius)),
+    )
 }
 
 /// Preserve a constant logical-pixel arrow footprint without touching GPU
@@ -4066,7 +4351,15 @@ fn draw_cad_gizmos(
             // small ones bottom out at the cheap sketch-grip density.
             let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
             let half_steps = ((radius / world_per_pixel.max(0.001)).ceil() as i32).clamp(4, 96);
-            draw_filled_disc(&mut highlights, center, right, up, radius, color, half_steps);
+            draw_filled_disc(
+                &mut highlights,
+                center,
+                right,
+                up,
+                radius,
+                color,
+                half_steps,
+            );
         }
     }
 
@@ -4617,6 +4910,7 @@ fn push_render_command(
         }
         RenderCommand::Camera(camera) => pending.camera = Some(camera),
         RenderCommand::Preview(preview) => pending.preview = Some(preview),
+        RenderCommand::CamStock(stock) => pending.cam_stock = Some(stock),
         RenderCommand::Presentation(presentation) => {
             pending.presentation = Some(presentation);
         }
@@ -4658,6 +4952,7 @@ fn drain_render_commands(
                 && pending.drop_model_sessions.is_empty()
                 && pending.camera.is_none()
                 && pending.preview.is_none()
+                && pending.cam_stock.is_none()
                 && pending.presentation.is_none()
             {
                 pending.scheduled = false;
@@ -4670,6 +4965,7 @@ fn drain_render_commands(
                 std::mem::take(&mut pending.drop_model_sessions),
                 pending.camera.take(),
                 pending.preview.take(),
+                pending.cam_stock.take(),
                 pending.presentation.take(),
             )
         };
@@ -4678,7 +4974,8 @@ fn drain_render_commands(
             || commands.1.is_some()
             || !commands.2.is_empty()
             || !commands.3.is_empty()
-            || commands.5.is_some();
+            || commands.5.is_some()
+            || commands.6.is_some();
 
         if let Ok(mut current) = metrics.lock() {
             current.wakeups += 1;
@@ -4728,7 +5025,10 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if let Some(presentation) = commands.6 {
+        if let Some(stock) = commands.6 {
+            apply_render_command(RenderCommand::CamStock(stock), runtime, metrics, &mut dirty);
+        }
+        if let Some(presentation) = commands.7 {
             apply_render_command(
                 RenderCommand::Presentation(presentation),
                 runtime,
@@ -4907,6 +5207,12 @@ fn apply_render_command(
             if preview_mesh_content_changed(&resource.value, &next) {
                 resource.mesh_revision = resource.mesh_revision.wrapping_add(1);
             }
+            resource.value = next;
+            resource.revision = resource.revision.wrapping_add(1);
+            *dirty = true;
+        }
+        RenderCommand::CamStock(next) => {
+            let mut resource = runtime.app.world_mut().resource_mut::<CamStockResource>();
             resource.value = next;
             resource.revision = resource.revision.wrapping_add(1);
             *dirty = true;
@@ -5591,6 +5897,30 @@ mod tests {
     }
 
     #[test]
+    fn retained_cam_tool_places_flute_and_shank_from_the_tip_axis() {
+        let tool = ViewportCamTool {
+            tip: [1.0, 2.0, 3.0],
+            axis: [0.0, 0.0, 1.0],
+            diameter: 6.0,
+            flute_length: 20.0,
+            overall_length: 50.0,
+        };
+        let flute = cam_tool_part_transform(tool, NativeCamToolPartKind::Flute)
+            .expect("valid flute transform");
+        let shank = cam_tool_part_transform(tool, NativeCamToolPartKind::Shank)
+            .expect("valid shank transform");
+        assert!(flute
+            .translation
+            .abs_diff_eq(Vec3::new(1.0, 2.0, 13.0), 1.0e-6));
+        assert!(flute.scale.abs_diff_eq(Vec3::new(3.0, 20.0, 3.0), 1.0e-6));
+        assert!((flute.rotation * Vec3::Y).abs_diff_eq(Vec3::Z, 1.0e-6));
+        assert!(shank
+            .translation
+            .abs_diff_eq(Vec3::new(1.0, 2.0, 38.0), 1.0e-6));
+        assert!(shank.scale.abs_diff_eq(Vec3::new(3.0, 30.0, 3.0), 1.0e-6));
+    }
+
+    #[test]
     fn native_model_carries_closed_profiles_from_an_internal_midplane_sketch() {
         let state = crate::state::AppState::new();
         assert_engine_ok(
@@ -5703,10 +6033,8 @@ mod tests {
         let near = Vec3::ZERO;
         let far = Vec3::new(0.0, 0.0, -90.0);
 
-        let near_radius =
-            screen_space_disc_radius(camera, viewport, near, SKETCH_POINT_RADIUS_PX);
-        let far_radius =
-            screen_space_disc_radius(camera, viewport, far, SKETCH_POINT_RADIUS_PX);
+        let near_radius = screen_space_disc_radius(camera, viewport, near, SKETCH_POINT_RADIUS_PX);
+        let far_radius = screen_space_disc_radius(camera, viewport, far, SKETCH_POINT_RADIUS_PX);
         let near_world_per_pixel = world_per_pixel_at(camera, viewport, near);
         let far_world_per_pixel = world_per_pixel_at(camera, viewport, far);
 
@@ -5738,6 +6066,8 @@ mod tests {
                 "triangles": [{
                     "color": [1.0, 0.4, 0.2, 0.25],
                     "positions": [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 5.0, 0.0],
+                    "normals": [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                    "material": "machined_stock",
                     "xray": true
                 }],
                 "arrows": [{
@@ -5763,6 +6093,11 @@ mod tests {
         assert_eq!(preview.lines[0].segments.len(), 6);
         assert!(preview.triangles[0].xray);
         assert_eq!(preview.triangles[0].positions.len(), 9);
+        assert_eq!(preview.triangles[0].normals.len(), 9);
+        assert_eq!(
+            preview.triangles[0].material,
+            crate::native_viewport::ViewportTriangleMaterial::MachinedStock
+        );
         assert_eq!(preview.arrows[0].end, [0.0, 0.0, 10.0]);
         assert_eq!(preview.arrows[0].width, 2.0);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
@@ -5797,6 +6132,10 @@ mod tests {
             }"#,
         )
         .expect("preview should deserialize");
+        assert_eq!(
+            base.triangles[0].material,
+            crate::native_viewport::ViewportTriangleMaterial::Overlay
+        );
         let mut moved_annotation = base.clone();
         moved_annotation.annotations[0].screen = [420.0, 240.0];
         assert!(

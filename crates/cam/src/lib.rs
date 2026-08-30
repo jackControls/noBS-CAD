@@ -6,6 +6,7 @@
 //! machine dialects and third-party post adapters never leak into geometry or
 //! path planning.
 
+mod gcode;
 mod model;
 mod nbpost;
 mod planner;
@@ -16,6 +17,7 @@ mod simulation;
 #[cfg(test)]
 mod stabilization_tests;
 
+pub use gcode::{simulate_gcode, CamGcodeDialectDto, CamGcodeSimulationRequestDto};
 pub use model::{
     BoxAnchor, CamChainRefDto, CamChainSource, CamDocumentDto, CamLoadWarningDto, CamOperationDto,
     CamPostConfigDto, CamResolvedStockDto, CamSetupDto, CamStockFace, CamStockOffsetsDto,
@@ -30,11 +32,14 @@ pub use nbpost::{
     NbPostSourceKind,
 };
 pub use planner::{
-    plan_setup, CamCommandDto, CamPlanError, CamProgramDto, CamProgramStatsDto, MotionKind,
+    plan_setup, CamArcPlane, CamCommandDto, CamPlanError, CamProgramDto, CamProgramStatsDto,
+    MotionKind,
 };
 pub use post::{post_setup, CamPostRequestDto, CamPostResultDto};
 pub use post_events::{post_event_stream, PostEventDto, PostEventStreamDto};
 pub use simulation::{
-    simulate_setup, CamSimulationCollisionDto, CamSimulationMeshDto, CamSimulationRequestDto,
-    CamSimulationResultDto, CamSimulationStepDto, CamSimulationStepKind, CamStockMeshDto,
+    simulate_setup, simulate_setup_with_cancellation, CamSimulationCancellation,
+    CamSimulationCollisionDto, CamSimulationCollisionKindDto, CamSimulationComparisonDto,
+    CamSimulationMeshDto, CamSimulationRequestDto, CamSimulationResultDto, CamSimulationSourceDto,
+    CamSimulationStepDto, CamSimulationStepKind, CamSimulationTargetDto, CamStockMeshDto,
 };

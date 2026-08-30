@@ -268,6 +268,11 @@ fn render_program(
                 CoolantMode::Mist => writer.block("M7"),
                 CoolantMode::Flood => writer.block("M8"),
             },
+            CamCommandDto::SetPosition { .. } => {
+                return Err(CamPlanError(
+                    "workpiece position resets are simulator-only and cannot be posted".to_string(),
+                ));
+            }
             CamCommandDto::Rapid { to } => {
                 if position.is_none() {
                     // A combined XYZ rapid from an unknown start can move
@@ -304,6 +309,7 @@ fn render_program(
                 center,
                 to,
                 feed,
+                ..
             } => {
                 let from = position.ok_or_else(|| {
                     CamPlanError("a circular post record needs a known start position".to_string())
@@ -464,6 +470,11 @@ fn render_siemens828d_program(
                 CoolantMode::Mist => writer.block("M7"),
                 CoolantMode::Flood => writer.block("M8"),
             },
+            CamCommandDto::SetPosition { .. } => {
+                return Err(CamPlanError(
+                    "workpiece position resets are simulator-only and cannot be posted".to_string(),
+                ));
+            }
             CamCommandDto::Rapid { to } => {
                 if position.is_none() {
                     writer.block(&format!("G0 Z{}", units.siemens_len(to.z)));
@@ -501,6 +512,7 @@ fn render_siemens828d_program(
                 center,
                 to,
                 feed,
+                ..
             } => {
                 let from = position.ok_or_else(|| {
                     CamPlanError("a circular post record needs a known start position".to_string())

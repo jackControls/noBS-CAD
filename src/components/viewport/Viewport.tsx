@@ -3057,6 +3057,9 @@ export function Viewport() {
         selectedCamOperationId: transientState.selectedCamOperationId,
         camProgram: transientState.camProgram,
         camSimulation: transientState.camSimulation,
+        camSimulationTimeline: transientState.camSimulationTimeline,
+        camSimulationPlayback: transientState.camSimulationPlayback,
+        renderPlaybackTool: !nativeViewportIsActive(),
         camPointPick: transientState.camPointPick,
         camHolePick: transientState.camHolePick,
         camLoopPick: transientState.camLoopPick,
@@ -11565,7 +11568,6 @@ export function Viewport() {
       dimensions: store.getState().palette.dimensions,
       constraints: store.getState().palette.constraints,
     };
-
     // Track ground-grid rebuild with fade-aware opacity.
     const updateGridFades = (dt: number) => {
       const step = dt * 4; // ~250 ms fade
@@ -11590,9 +11592,30 @@ export function Viewport() {
       );
     };
 
-    const unsub = store.subscribe((s) => {
-      nativeTransientDirty = true;
-      wakeControllerFrame();
+    const unsub = store.subscribe((s, previous) => {
+      const playbackClockChanged =
+        s.camSimulationPlayback !== previous.camSimulationPlayback;
+      const playbackOnlyUpdate = playbackClockChanged
+        && s.activeTab === previous.activeTab
+        && s.camDocument === previous.camDocument
+        && s.selectedCamOperationId === previous.selectedCamOperationId
+        && s.camProgram === previous.camProgram
+        && s.camSimulation === previous.camSimulation
+        && s.camSimulationTimeline === previous.camSimulationTimeline
+        && s.camPointPick === previous.camPointPick
+        && s.camHolePick === previous.camHolePick
+        && s.camLoopPick === previous.camLoopPick
+        && s.camChainPick === previous.camChainPick
+        && s.camDialog === previous.camDialog
+        && s.solidScene === previous.solidScene;
+      // Native playback sends a retained semantic cutter pose through the
+      // lightweight presentation channel. Do not re-hash/re-upload the stock
+      // mesh and full toolpath for a clock-only update. Any simultaneous CAM
+      // or scene change still rebuilds the preview, including project resets.
+      if (!playbackOnlyUpdate) {
+        nativeTransientDirty = true;
+        wakeControllerFrame();
+      }
       const referencesVisible = referencePickerVisible(s);
       if (referencesVisible !== lastReferencePickerVisible) {
         lastReferencePickerVisible = referencesVisible;

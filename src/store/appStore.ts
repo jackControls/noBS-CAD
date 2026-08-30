@@ -702,6 +702,15 @@ const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
 const INITIAL_SIX_DOF_SPEED = readSixDofSpeed();
 
+/** Presentation state for either CAM-predicted or G-code-honest playback.
+ *  The authoritative timeline and stock remain Rust simulator results; this
+ *  only carries the user's clock controls. */
+export interface CamSimulationPlaybackState {
+  playing: boolean;
+  time_seconds: number;
+  speed: number;
+}
+
 interface AppState {
   mode: AppMode;
   /** Active ribbon tab id ('solid', 'sketch', ...). */
@@ -842,9 +851,13 @@ interface AppState {
   camProgram: CamProgramDto | null;
   /** Latest volumetric stock simulation; shared-viewport overlay input. */
   camSimulation: CamSimulationResultDto | null;
-  /** See-through inspection: ghost the setup's part bodies to a wireframe
-   *  shell while a simulated operation is reviewed. OFF by default — the
-   *  full-model ghost is an operator request, never an automatic display. */
+  /** Complete physical timeline retained while `camSimulation` may hold a
+   *  stock frame truncated to the playback clock. */
+  camSimulationTimeline: CamSimulationResultDto | null;
+  camSimulationPlayback: CamSimulationPlaybackState | null;
+  /** See-through inspection: add the setup's target bodies as a faint shell
+   *  over the current remaining-stock stage. OFF shows only physical stock;
+   *  the model reference is always an explicit operator request. */
   camXrayModel: boolean;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
@@ -995,6 +1008,8 @@ interface AppState {
   setCamChainPickHover: (hoverKey: string | null) => void;
   setCamProgram: (program: CamProgramDto | null) => void;
   setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
+  setCamSimulationTimeline: (simulation: CamSimulationResultDto | null) => void;
+  setCamSimulationPlayback: (playback: CamSimulationPlaybackState | null) => void;
   setCamXrayModel: (on: boolean) => void;
   loadProjectState: (
     update: SolidUpdateDto,
@@ -1196,6 +1211,8 @@ function resetDocumentUiState(): Partial<AppState> {
     camChainPick: null,
     camProgram: null,
     camSimulation: null,
+    camSimulationTimeline: null,
+    camSimulationPlayback: null,
     camXrayModel: false,
     selectedFace: null,
     selectedFaces: [],
@@ -1322,6 +1339,8 @@ export const useAppStore = create<AppState>()((set) => ({
   camChainPick: null,
   camProgram: null,
   camSimulation: null,
+  camSimulationTimeline: null,
+  camSimulationPlayback: null,
   camXrayModel: false,
   selectedFace: null,
   selectedFaces: [],
@@ -2338,6 +2357,10 @@ export const useAppStore = create<AppState>()((set) => ({
   setCamProgram: (camProgram) => set({ camProgram }),
 
   setCamSimulation: (camSimulation) => set({ camSimulation }),
+
+  setCamSimulationTimeline: (camSimulationTimeline) => set({ camSimulationTimeline }),
+
+  setCamSimulationPlayback: (camSimulationPlayback) => set({ camSimulationPlayback }),
 
   setCamXrayModel: (camXrayModel) => set({ camXrayModel }),
 

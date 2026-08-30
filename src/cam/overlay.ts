@@ -4,6 +4,8 @@ import type {
   CamProgramDto,
   CamSetupDto,
   CamSimulationResultDto,
+  CamSimulationStepDto,
+  CamToolDto,
   Point3Dto,
   SolidSceneDto,
 } from '../engine/types';
@@ -18,6 +20,7 @@ import type {
   CamHolePickSession,
   CamLoopPickSession,
   CamPointPickSession,
+  CamSimulationPlaybackState,
 } from '../store/appStore';
 import { activeCamSetup } from './document';
 import { modelBoundsOfBodies, setupPointToModel } from './geometry';
@@ -50,6 +53,11 @@ export interface CamOverlayState {
   selectedCamOperationId: number | null;
   camProgram: CamProgramDto | null;
   camSimulation: CamSimulationResultDto | null;
+  camSimulationTimeline: CamSimulationResultDto | null;
+  camSimulationPlayback: CamSimulationPlaybackState | null;
+  /** Native Bevy playback uses a retained semantic cutter primitive rather
+   *  than resending triangle soup every animation frame. */
+  renderPlaybackTool?: boolean;
   camPointPick: CamPointPickSession | null;
   /** Active viewport hole-picking session (drill/thread dialogs). */
   camHolePick: CamHolePickSession | null;
@@ -69,8 +77,8 @@ const STOCK_FILL: Rgba = [0.62, 0.68, 0.75, 0.16];
 const STOCK_EDGE: Rgba = [0.62, 0.68, 0.75, 0.5];
 const RAPID_LINE: Rgba = [0.94, 0.67, 0.29, 0.8];
 const CUT_LINE: Rgba = [0.34, 0.84, 0.64, 0.95];
-const REST_STOCK_FILL: Rgba = [0.16, 0.6, 0.25, 0.9];
-const COLLISION_POINT: Rgba = [0.94, 0.38, 0.35, 0.95];
+const REST_STOCK_FILL: Rgba = [0.16, 0.6, 0.25, 1];
+const RAPID_CONTACT_POINT: Rgba = [0.94, 0.67, 0.29, 0.95];
 const PICK_POINT: Rgba = [0.4, 0.73, 0.94, 0.95];
 const PICK_POINT_HOVER: Rgba = [1.0, 0.85, 0.4, 1];
 /** Picked hole centers in a drill/thread hole-pick session. */
@@ -87,7 +95,12 @@ const AXIS_X: Rgba = [0.93, 0.42, 0.35, 1];
 const AXIS_Y: Rgba = [0.34, 0.84, 0.64, 1];
 const AXIS_Z: Rgba = [0.4, 0.73, 0.94, 1];
 
-const MAX_STOCK_TRIANGLES = 65_536;
+type SimulationMesh = NonNullable<CamSimulationResultDto['stock_mesh']>;
+
+// The native transient channel caps all triangles at 65,536. Reserve ~5.5k
+// for the setup ghost and animated tool; the rest belongs to the one surface
+// the normal CAM view presents: remaining stock at the selected stage.
+const SIMULATION_STOCK_TRIANGLE_BUDGET = 60_000;
 const CYLINDER_SEGMENTS = 64;
 
 interface ToolpathSegment {
@@ -102,6 +115,10 @@ export function buildToolpathSegments(commands: CamCommandDto[]): ToolpathSegmen
   const segments: ToolpathSegment[] = [];
   let position: Point3Dto | null = null;
   for (const command of commands) {
+    if (command.kind === 'set_position') {
+      position = command.to;
+      continue;
+    }
     if (command.kind === 'rapid' || command.kind === 'linear') {
       if (position) {
         segments.push({ from: position, to: command.to, rapid: command.kind === 'rapid' });
@@ -278,13 +295,30 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   }
 
   pushWcsAxes(layers, setup);
-  pushStockGhost(layers, setup);
-  pushSelectedToolpath(layers, state, setup);
-  pushSelectedTool(layers, state, setup);
-  // The simulated stock belongs to a selected operation under review: with
-  // no selection, or while a dialog is open, the viewport shows the plain
-  // model instead.
-  if (state.selectedCamOperationId !== null && !state.camDialogOpen) {
+  const simulationVisible = !state.camDialogOpen
+    && currentStageSimulation(state, setup) !== null;
+  // Once a simulated stage exists, its green surface is the stock. Keep only
+  // the setup envelope lines; drawing the original translucent stock solid at
+  // the same coordinates would reintroduce coplanar flashing at time zero.
+  pushStockGhost(layers, setup, !simulationVisible);
+  if (state.camSimulationTimeline?.source === 'g_code') {
+    pushSimulationTimelinePath(layers, state.camSimulationTimeline, setup);
+  } else {
+    pushSelectedToolpath(layers, state, setup);
+  }
+  if (
+    state.renderPlaybackTool !== false
+    && state.camSimulationTimeline
+    && state.camSimulationPlayback
+  ) {
+    pushPlaybackTool(layers, state, setup);
+  } else if (!state.camSimulationTimeline || !state.camSimulationPlayback) {
+    pushSelectedTool(layers, state, setup);
+  }
+  // Simulation is presentation-only and disappears while a manufacturing
+  // editor dialog is open. CAM review may be scoped to one operation; an NC
+  // program timeline is setup-wide and does not require a selected operation.
+  if (!state.camDialogOpen) {
     pushSimulationStock(layers, state, setup, markerRadius);
   }
   return layers;
@@ -330,7 +364,11 @@ function pushWcsAxes(layers: CamOverlayLayers, setup: CamSetupDto) {
 }
 
 /** Semi-transparent stock solid plus a crisper envelope outline. */
-function pushStockGhost(layers: CamOverlayLayers, setup: CamSetupDto) {
+function pushStockGhost(
+  layers: CamOverlayLayers,
+  setup: CamSetupDto,
+  showFill: boolean,
+) {
   const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
   const fillPositions: number[] = [];
   const edgePositions: number[] = [];
@@ -353,12 +391,19 @@ function pushStockGhost(layers: CamOverlayLayers, setup: CamSetupDto) {
             6,
             Math.PI / 6,
           );
-    pushPrism(toModel, ring, setup.stock.min.z, setup.stock.max.z, fillPositions, edgePositions);
+    pushPrism(
+      toModel,
+      ring,
+      setup.stock.min.z,
+      setup.stock.max.z,
+      fillPositions,
+      edgePositions,
+    );
   } else {
     // box and rest both present as the resolved envelope box.
-    pushBox(toModel, setup, fillPositions, edgePositions);
+    pushBox(toModel, setup, showFill ? fillPositions : null, edgePositions);
   }
-  if (fillPositions.length > 0) {
+  if (showFill && fillPositions.length > 0) {
     layers.triangles.push({ color: STOCK_FILL, positions: fillPositions, xray: false });
   }
   if (edgePositions.length > 0) {
@@ -493,17 +538,7 @@ function pushSelectedTool(
 
   const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
   if (startTip) {
-    const ring = regularRing(startTip.x, startTip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
-    const flutePositions: number[] = [];
-    pushPrism(toModel, ring, startTip.z, startTip.z + tool.flute_length, flutePositions, []);
-    if (flutePositions.length > 0) {
-      layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
-    }
-    const shankPositions: number[] = [];
-    pushPrism(toModel, ring, startTip.z + tool.flute_length, startTip.z + tool.overall_length, shankPositions, []);
-    if (shankPositions.length > 0) {
-      layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
-    }
+    pushToolAt(layers, setup, tool, startTip);
   }
 
   interface FeedMove {
@@ -643,6 +678,186 @@ function pushSelectedTool(
   if (exitAnchor && exitDir) pushEndpointCone(exitAnchor, exitDir, EXIT_ARROW);
 }
 
+function pushToolAt(
+  layers: CamOverlayLayers,
+  setup: CamSetupDto,
+  tool: CamToolDto,
+  tip: Point3Dto,
+) {
+  const toModel = (point: Point3Dto) => setupPointToModel(point, setup.wcs);
+  const ring = regularRing(tip.x, tip.y, tool.diameter / 2, CYLINDER_SEGMENTS, 0);
+  const flutePositions: number[] = [];
+  pushPrism(toModel, ring, tip.z, tip.z + tool.flute_length, flutePositions, []);
+  if (flutePositions.length > 0) {
+    layers.triangles.push({ color: TOOL_FLUTE_FILL, positions: flutePositions, xray: false });
+  }
+  const shankPositions: number[] = [];
+  pushPrism(
+    toModel,
+    ring,
+    tip.z + tool.flute_length,
+    tip.z + tool.overall_length,
+    shankPositions,
+    [],
+  );
+  if (shankPositions.length > 0) {
+    layers.triangles.push({ color: TOOL_SHANK_FILL, positions: shankPositions, xray: false });
+  }
+}
+
+interface SimulationPlaybackPose {
+  position: Point3Dto;
+  toolId: number | null;
+  stepIndex: number;
+  sourceLine: number | null;
+}
+
+/** Continuous presentation pose over the discrete physical timeline. Stock
+ *  changes remain authoritative at completed-block boundaries, while this
+ *  interpolation lets the Bevy camera orbit freely around a smoothly moving
+ *  cutter. */
+export function simulationPlaybackPose(
+  timeline: CamSimulationResultDto,
+  timeSeconds: number,
+): SimulationPlaybackPose | null {
+  if (timeline.steps.length === 0) return null;
+  const time = clamp(timeSeconds, 0, Math.max(0, timeline.estimated_seconds));
+  let low = 0;
+  let high = timeline.steps.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (time <= timeline.steps[middle].cumulative_seconds + 1e-9) high = middle;
+    else low = middle + 1;
+  }
+  const stepIndex = Math.min(low, timeline.steps.length - 1);
+  const step = timeline.steps[stepIndex];
+  const startTime = step.cumulative_seconds - step.duration_seconds;
+  const fraction = step.duration_seconds > 1e-9
+    ? clamp((time - startTime) / step.duration_seconds, 0, 1)
+    : 1;
+  const position = simulationStepPoint(step, fraction);
+  if (!position) return null;
+  return {
+    position,
+    toolId: step.tool_id,
+    stepIndex,
+    sourceLine: step.source_line,
+  };
+}
+
+/** A setup row represents stock before its first motion. The timeline still
+ * starts with that first motion so playback can begin immediately, but a
+ * paused zero-time setup view must not borrow the first operation's cutter. */
+export function simulationPlaybackToolVisible(
+  selectedOperationId: number | null,
+  playback: CamSimulationPlaybackState,
+): boolean {
+  return selectedOperationId !== null
+    || playback.playing
+    || playback.time_seconds > 1e-9;
+}
+
+function simulationStepPoint(step: CamSimulationStepDto, fraction: number): Point3Dto | null {
+  const from = step.from ?? step.to;
+  const to = step.to ?? step.from;
+  if (!from || !to) return null;
+  if (step.kind !== 'circular' || !step.center || step.clockwise === null || !step.plane) {
+    return {
+      x: from.x + (to.x - from.x) * fraction,
+      y: from.y + (to.y - from.y) * fraction,
+      z: from.z + (to.z - from.z) * fraction,
+    };
+  }
+  const [su, sv, sw] = arcComponents(from, step.plane);
+  const [eu, ev, ew] = arcComponents(to, step.plane);
+  const [cu, cv] = arcComponents(step.center, step.plane);
+  const startAngle = Math.atan2(sv - cv, su - cu);
+  const endAngle = Math.atan2(ev - cv, eu - cu);
+  let sweep = endAngle - startAngle;
+  if (step.clockwise) {
+    while (sweep >= 0) sweep -= Math.PI * 2;
+  } else {
+    while (sweep <= 0) sweep += Math.PI * 2;
+  }
+  const radius = Math.hypot(su - cu, sv - cv);
+  const angle = startAngle + sweep * fraction;
+  return pointFromArcComponents(
+    cu + radius * Math.cos(angle),
+    cv + radius * Math.sin(angle),
+    sw + (ew - sw) * fraction,
+    step.plane,
+  );
+}
+
+function arcComponents(point: Point3Dto, plane: 'xy' | 'xz' | 'yz'): [number, number, number] {
+  if (plane === 'xz') return [point.z, point.x, point.y];
+  if (plane === 'yz') return [point.y, point.z, point.x];
+  return [point.x, point.y, point.z];
+}
+
+function pointFromArcComponents(
+  u: number,
+  v: number,
+  w: number,
+  plane: 'xy' | 'xz' | 'yz',
+): Point3Dto {
+  if (plane === 'xz') return { x: v, y: w, z: u };
+  if (plane === 'yz') return { x: w, y: u, z: v };
+  return { x: u, y: v, z: w };
+}
+
+function pushPlaybackTool(
+  layers: CamOverlayLayers,
+  state: CamOverlayState,
+  setup: CamSetupDto,
+) {
+  const timeline = state.camSimulationTimeline;
+  const playback = state.camSimulationPlayback;
+  if (!timeline || !playback || timeline.setup_id !== setup.id) return;
+  if (!simulationPlaybackToolVisible(state.selectedCamOperationId, playback)) return;
+  const pose = simulationPlaybackPose(timeline, playback.time_seconds);
+  if (!pose || pose.toolId === null) return;
+  const tool = state.camDocument.tools.find((entry) => entry.id === pose.toolId);
+  if (tool) pushToolAt(layers, setup, tool, pose.position);
+}
+
+function pushSimulationTimelinePath(
+  layers: CamOverlayLayers,
+  timeline: CamSimulationResultDto,
+  setup: CamSetupDto,
+) {
+  if (timeline.setup_id !== setup.id) return;
+  const rapid: number[] = [];
+  const cutting: number[] = [];
+  for (const step of timeline.steps) {
+    if (!step.from || !step.to || step.kind === 'dwell') continue;
+    const target = step.kind === 'rapid' ? rapid : cutting;
+    const segmentCount = step.kind === 'circular' ? 32 : 1;
+    let previous = simulationStepPoint(step, 0);
+    for (let segment = 1; previous && segment <= segmentCount; segment += 1) {
+      const next = simulationStepPoint(step, segment / segmentCount);
+      if (!next) break;
+      const fromModel = setupPointToModel(previous, timeline.wcs);
+      const toModel = setupPointToModel(next, timeline.wcs);
+      target.push(
+        fromModel.x,
+        fromModel.y,
+        fromModel.z,
+        toModel.x,
+        toModel.y,
+        toModel.z,
+      );
+      previous = next;
+    }
+  }
+  if (rapid.length > 0) {
+    layers.lines.push({ color: RAPID_LINE, width: 2, pattern: 'dotted', segments: rapid });
+  }
+  if (cutting.length > 0) {
+    layers.lines.push({ color: CUT_LINE, width: 2, pattern: 'solid', segments: cutting });
+  }
+}
+
 /** Remaining-stock estimate from the voxel simulator, in machinist green,
  *  plus rapid-collision markers. Meshes are transformed once per simulation
  *  result and cached by object identity. */
@@ -652,56 +867,135 @@ function pushSimulationStock(
   setup: CamSetupDto,
   markerRadius: number,
 ) {
-  const simulation = state.camSimulation;
-  if (!simulation || simulation.setup_id !== setup.id) return;
-  // Only the result truncated at the selected operation may paint: anything
-  // else is stale (the selection moved on while the simulator was running).
-  if (simulation.through_operation_id !== state.selectedCamOperationId) return;
-
+  const simulation = currentStageSimulation(state, setup);
+  if (!simulation) return;
   if (simulation.stock_mesh) {
-    const layer = transformedStockMeshLayer(simulation);
+    const layer = transformedSimulationStockMeshLayer(
+      simulation,
+      simulation.stock_mesh,
+      REST_STOCK_FILL,
+      false,
+    );
     if (layer) layers.triangles.push(layer);
   }
-  if (simulation.collisions.length > 0) {
-    const positions: number[] = [];
-    for (const collision of simulation.collisions) {
-      const point = setupPointToModel(collision.position, simulation.wcs);
-      positions.push(point.x, point.y, point.z);
-    }
-    layers.points.push({ color: COLLISION_POINT, radius: markerRadius * 1.2, positions });
+  const rapidContact: number[] = [];
+  for (const collision of simulation.collisions) {
+    // Finished-part verification stays active in Rust and in the issue panel,
+    // but it does not recolor or mark the normal remaining-stock view.
+    if (collision.kind !== 'rapid_stock_contact') continue;
+    const point = setupPointToModel(collision.position, simulation.wcs);
+    rapidContact.push(point.x, point.y, point.z);
+  }
+  if (rapidContact.length > 0) {
+    layers.points.push({ color: RAPID_CONTACT_POINT, radius: markerRadius * 1.2, positions: rapidContact });
   }
 }
 
-let stockMeshCache: {
+function currentStageSimulation(
+  state: CamOverlayState,
+  setup: CamSetupDto,
+): CamSimulationResultDto | null {
+  const simulation = state.camSimulation;
+  if (!simulation || !simulationHasStockSurface(simulation) || simulation.setup_id !== setup.id) return null;
+  // CAM-predicted stock can be scoped to one selected operation. Controller-
+  // code input is setup-wide, so it deliberately has no operation freshness
+  // key. In either mode, never combine a stock frame with another timeline.
+  if (
+    simulation.source === 'cam_toolpath'
+    && simulation.through_operation_id !== state.selectedCamOperationId
+  ) return null;
+  if (
+    state.camSimulationTimeline
+    && simulation.source !== state.camSimulationTimeline.source
+  ) return null;
+  return simulation;
+}
+
+export function simulationHasStockSurface(simulation: CamSimulationResultDto): boolean {
+  return simulation.stock_mesh !== null || simulation.native_stock_present;
+}
+
+let simulationMeshCache: {
   source: CamSimulationResultDto;
   layer: NativeViewportTriangleLayer | null;
 } | null = null;
 
-function transformedStockMeshLayer(
+function simulationMeshTriangleCount(mesh: SimulationMesh | null): number {
+  return mesh ? Math.floor(mesh.positions.length / 9) : 0;
+}
+
+function simulationStockMeshStride(mesh: SimulationMesh): number {
+  const triangleCount = simulationMeshTriangleCount(mesh);
+  return Math.max(1, Math.ceil(triangleCount / SIMULATION_STOCK_TRIANGLE_BUDGET));
+}
+
+/** Presentation-only disclosure. Rust-side volumes and issue counts always
+ * remain based on the complete voxel result. Verification evidence is not
+ * painted over the normal stage view; this warning concerns only a simplified
+ * remaining-stock surface. */
+export function simulationMeshPresentationWarnings(
   simulation: CamSimulationResultDto,
-): NativeViewportTriangleLayer | null {
-  if (stockMeshCache?.source === simulation) return stockMeshCache.layer;
-  let layer: NativeViewportTriangleLayer | null = null;
+): string[] {
   const mesh = simulation.stock_mesh;
-  if (mesh) {
-    const triangleCount = Math.floor(mesh.positions.length / 9);
-    const stride = Math.max(1, Math.ceil(triangleCount / MAX_STOCK_TRIANGLES));
-    const positions: number[] = [];
-    for (let triangle = 0; triangle < triangleCount; triangle += stride) {
-      for (let corner = 0; corner < 3; corner += 1) {
-        const offset = triangle * 9 + corner * 3;
-        const point = setupPointToModel(
-          { x: mesh.positions[offset], y: mesh.positions[offset + 1], z: mesh.positions[offset + 2] },
-          simulation.wcs,
-        );
-        positions.push(point.x, point.y, point.z);
+  if (!mesh) return [];
+  const triangleCount = simulationMeshTriangleCount(mesh);
+  const stride = simulationStockMeshStride(mesh);
+  if (stride <= 1) return [];
+  const displayed = Math.ceil(triangleCount / stride);
+  return [
+    `Remaining-stock surface is simplified ${stride}× for 3D display (${displayed.toLocaleString()} of ${triangleCount.toLocaleString()} triangles shown); verification volumes and issue counts remain full-detail.`,
+  ];
+}
+
+function transformedSimulationStockMeshLayer(
+  simulation: CamSimulationResultDto,
+  mesh: SimulationMesh,
+  color: Rgba,
+  xray: boolean,
+): NativeViewportTriangleLayer | null {
+  if (simulationMeshCache?.source === simulation) return simulationMeshCache.layer;
+  const triangleCount = Math.floor(mesh.positions.length / 9);
+  const stride = simulationStockMeshStride(mesh);
+  const positions: number[] = [];
+  const sourceNormals = mesh.normals;
+  const hasNormals = sourceNormals?.length === mesh.positions.length;
+  const normals: number[] = [];
+  for (let triangle = 0; triangle < triangleCount; triangle += stride) {
+    for (let corner = 0; corner < 3; corner += 1) {
+      const offset = triangle * 9 + corner * 3;
+      const point = setupPointToModel(
+        { x: mesh.positions[offset], y: mesh.positions[offset + 1], z: mesh.positions[offset + 2] },
+        simulation.wcs,
+      );
+      positions.push(point.x, point.y, point.z);
+      if (hasNormals && sourceNormals) {
+        const x = sourceNormals[offset];
+        const y = sourceNormals[offset + 1];
+        const z = sourceNormals[offset + 2];
+        const modelX = x * simulation.wcs.x_axis[0]
+          + y * simulation.wcs.y_axis[0]
+          + z * simulation.wcs.z_axis[0];
+        const modelY = x * simulation.wcs.x_axis[1]
+          + y * simulation.wcs.y_axis[1]
+          + z * simulation.wcs.z_axis[1];
+        const modelZ = x * simulation.wcs.x_axis[2]
+          + y * simulation.wcs.y_axis[2]
+          + z * simulation.wcs.z_axis[2];
+        const length = Math.hypot(modelX, modelY, modelZ) || 1;
+        normals.push(modelX / length, modelY / length, modelZ / length);
       }
     }
-    if (positions.length > 0) {
-      layer = { color: REST_STOCK_FILL, positions, xray: false };
-    }
   }
-  stockMeshCache = { source: simulation, layer };
+  const layer: NativeViewportTriangleLayer | null = positions.length > 0
+    ? {
+        color,
+        positions,
+        ...(normals.length === positions.length ? { normals } : {}),
+        material: 'machined_stock',
+        xray,
+      }
+    : null;
+  simulationMeshCache = { source: simulation, layer };
   return layer;
 }
 

@@ -86,17 +86,19 @@ pub use nbcad_assembly::{
     UpdateOccurrenceRequestDto,
 };
 pub use nbcad_cam::{
-    BoxAnchor, CamCommandDto, CamDocumentDto, CamOperationDto, CamPostConfigDto,
-    CamPostRequestDto, CamPostResultDto, CamProgramDto, CamProgramStatsDto, CamResolvedStockDto,
-    CamSetupDto, CamSimulationCollisionDto, CamSimulationMeshDto, CamSimulationRequestDto,
-    CamSimulationResultDto, CamSimulationStepDto, CamSimulationStepKind, CamStockFace,
-    CamStockMeshDto, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape, CamStockSpecDto,
-    CamToolDto, CamToolKind, CamUnits, ContourCompensation, CoolantMode, CuttingParametersDto,
-    MotionKind, NbPostAnalysisDto, NbPostAnalysisRequestDto, NbPostCompatibilityLevel,
-    NbPostSourceKind, Point2Dto as CamPoint2Dto, Point3Dto as CamPoint3Dto, PostDialect,
-    PostEventDto, PostEventStreamDto, Rect2Dto as CamRect2Dto, Siemens828dAtcStyle,
-    Siemens828dPostConfigDto, Siemens828dToolChangePositioning, SpindleDirection, StockBoxDto,
-    WcsOriginSpecDto, WorkCoordinateSystemDto, WorkOffset,
+    BoxAnchor, CamArcPlane, CamCommandDto, CamDocumentDto, CamGcodeDialectDto,
+    CamGcodeSimulationRequestDto, CamOperationDto, CamPostConfigDto, CamPostRequestDto,
+    CamPostResultDto, CamProgramDto, CamProgramStatsDto, CamResolvedStockDto, CamSetupDto,
+    CamSimulationCollisionDto, CamSimulationMeshDto, CamSimulationRequestDto,
+    CamSimulationResultDto, CamSimulationSourceDto, CamSimulationStepDto, CamSimulationStepKind,
+    CamStockFace, CamStockMeshDto, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape,
+    CamStockSpecDto, CamToolDto, CamToolKind, CamUnits, ContourCompensation, CoolantMode,
+    CuttingParametersDto, MotionKind, NbPostAnalysisDto, NbPostAnalysisRequestDto,
+    NbPostCompatibilityLevel, NbPostSourceKind, Point2Dto as CamPoint2Dto,
+    Point3Dto as CamPoint3Dto, PostDialect, PostEventDto, PostEventStreamDto,
+    Rect2Dto as CamRect2Dto, Siemens828dAtcStyle, Siemens828dPostConfigDto,
+    Siemens828dToolChangePositioning, SpindleDirection, StockBoxDto, WcsOriginSpecDto,
+    WorkCoordinateSystemDto, WorkOffset,
 };
 pub use params::{ParamId, ParamKind, ParamTable, Parameter};
 pub use plane::{FaceId, OriginPlane, PlaneBasis, PlaneError, PlaneRef};

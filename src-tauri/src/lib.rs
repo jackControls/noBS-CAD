@@ -16,13 +16,21 @@ mod state;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Mutex,
+};
 
 use native_viewport::{
-    NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
-    ViewportModel, ViewportPresentation, ViewportPreview,
+    NativePick, NativeViewport, NativeViewportMetrics, ViewportCamStock, ViewportCamera,
+    ViewportLayout, ViewportModel, ViewportPresentation, ViewportPreview,
+};
+use nbcad_cam::{
+    simulate_setup_with_cancellation, CamSimulationCancellation, CamSimulationRequestDto,
+    CamSimulationResultDto,
 };
 use nbcad_core::DocumentDto;
+use nbcad_sketch::{err_json, ok_json};
 use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
 use state::{AppState, BOOTSTRAP_SESSION_ID};
@@ -50,6 +58,38 @@ struct SystemMemoryStatus {
 struct NativeQuitState {
     unsaved: AtomicBool,
     approved: AtomicBool,
+}
+
+#[derive(Default)]
+struct CamSimulationService {
+    generation: AtomicU64,
+    current: Mutex<Option<(u64, CamSimulationCancellation)>>,
+}
+
+impl CamSimulationService {
+    fn begin(&self) -> (u64, CamSimulationCancellation) {
+        let request_id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let cancellation = CamSimulationCancellation::default();
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, previous)) = current.replace((request_id, cancellation.clone())) {
+            previous.cancel();
+        }
+        (request_id, cancellation)
+    }
+
+    fn with_current<T>(&self, request_id: u64, action: impl FnOnce() -> T) -> Option<T> {
+        let current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current
+            .as_ref()
+            .is_some_and(|(current_id, _)| *current_id == request_id)
+            .then(action)
+    }
 }
 
 #[tauri::command]
@@ -185,6 +225,103 @@ fn native_viewport_metrics(viewport: tauri::State<'_, NativeViewport>) -> Native
     viewport.metrics()
 }
 
+fn retained_cam_stock(result: &CamSimulationResultDto) -> Option<ViewportCamStock> {
+    let mesh = result.stock_mesh.as_ref()?;
+    if mesh.positions.is_empty() || !mesh.positions.len().is_multiple_of(3) {
+        return None;
+    }
+    let wcs = result.wcs;
+    let mut positions = Vec::with_capacity(mesh.positions.len());
+    for point in mesh.positions.chunks_exact(3) {
+        let x = point[0] as f64;
+        let y = point[1] as f64;
+        let z = point[2] as f64;
+        positions.extend([
+            (wcs.origin.x + x * wcs.x_axis[0] + y * wcs.y_axis[0] + z * wcs.z_axis[0]) as f32,
+            (wcs.origin.y + x * wcs.x_axis[1] + y * wcs.y_axis[1] + z * wcs.z_axis[1]) as f32,
+            (wcs.origin.z + x * wcs.x_axis[2] + y * wcs.y_axis[2] + z * wcs.z_axis[2]) as f32,
+        ]);
+    }
+    let mut normals = Vec::new();
+    if mesh.normals.len() == mesh.positions.len() {
+        normals.reserve(mesh.normals.len());
+        for normal in mesh.normals.chunks_exact(3) {
+            let x = normal[0] as f64;
+            let y = normal[1] as f64;
+            let z = normal[2] as f64;
+            let model = [
+                x * wcs.x_axis[0] + y * wcs.y_axis[0] + z * wcs.z_axis[0],
+                x * wcs.x_axis[1] + y * wcs.y_axis[1] + z * wcs.z_axis[1],
+                x * wcs.x_axis[2] + y * wcs.y_axis[2] + z * wcs.z_axis[2],
+            ];
+            let length = model.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if length <= f64::EPSILON {
+                normals.extend([0.0, 0.0, 1.0]);
+            } else {
+                normals.extend(model.map(|value| (value / length) as f32));
+            }
+        }
+    }
+    Some(ViewportCamStock { positions, normals })
+}
+
+/// Desktop fast path: clone CAM intent under the engine lock, then perform all
+/// voxel/cutter work on a blocking Rust worker. Only metadata returns through
+/// JSON; the large remaining-stock mesh goes straight into retained Bevy GPU
+/// geometry. A newer call cooperatively cancels this one.
+#[tauri::command]
+async fn engine_cam_simulate(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    service: tauri::State<'_, CamSimulationService>,
+    payload: String,
+) -> Result<String, String> {
+    let request = match serde_json::from_str::<CamSimulationRequestDto>(&payload) {
+        Ok(request) => request,
+        Err(error) => return Ok(err_json(format!("invalid CAM simulation request: {error}"))),
+    };
+    let (session_id, document) = state.cam_snapshot();
+    let (request_id, cancellation) = service.begin();
+    let _ = viewport.set_cam_stock(None);
+    let worker_cancellation = cancellation.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        simulate_setup_with_cancellation(&document, &request, Some(&worker_cancellation))
+    })
+    .await;
+    let mut result = match worker {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => return Ok(err_json(error.to_string())),
+        Err(error) => return Ok(err_json(format!("CAM simulation worker failed: {error}"))),
+    };
+    if state.active_project_session_id() != session_id {
+        return Ok(err_json(
+            "CAM simulation project changed before the result was ready",
+        ));
+    }
+    let retained = retained_cam_stock(&result);
+    let published = service.with_current(request_id, || {
+        retained
+            .map(|stock| viewport.set_cam_stock(Some(stock)).is_ok())
+            .unwrap_or(false)
+    });
+    let Some(published) = published else {
+        return Ok(err_json("CAM simulation superseded by a newer request"));
+    };
+    if published {
+        result.stock_mesh = None;
+        result.native_stock_present = true;
+        if let Some(comparison) = &mut result.comparison {
+            // Verification remains authoritative in the counts/volumes and
+            // issue list. The normal stage view intentionally shows only
+            // remaining stock, so these hidden evidence meshes must not pay a
+            // second large JSON transfer.
+            comparison.excess_mesh = None;
+            comparison.gouge_mesh = None;
+        }
+    }
+    Ok(ok_json(result))
+}
+
 macro_rules! engine_command {
     ($name:ident, $method:literal) => {
         engine_command!($name, $method, mutate);
@@ -238,22 +375,53 @@ engine_command!(engine_document_set_name, "document_set_name");
 engine_command!(
     engine_project_export_model,
     "project_export_model",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(engine_end_sketch, "end_sketch", no_payload);
-engine_command!(engine_finished_sketches, "finished_sketches", no_payload, read);
+engine_command!(
+    engine_finished_sketches,
+    "finished_sketches",
+    no_payload,
+    read
+);
 engine_command!(engine_edit_sketch, "edit_sketch");
 engine_command!(engine_active_sketch, "active_sketch", no_payload, read);
 engine_command!(engine_profile_catalog, "profile_catalog", no_payload, read);
 engine_command!(engine_solid_scene, "solid_scene", no_payload, read);
-engine_command!(engine_body_appearances, "body_appearances", no_payload, read);
-engine_command!(engine_project_visibility, "project_visibility", no_payload, read);
+engine_command!(
+    engine_body_appearances,
+    "body_appearances",
+    no_payload,
+    read
+);
+engine_command!(
+    engine_project_visibility,
+    "project_visibility",
+    no_payload,
+    read
+);
 engine_command!(engine_project_set_visibility, "project_set_visibility");
-engine_command!(engine_drawing_document, "drawing_document", no_payload, read);
+engine_command!(
+    engine_drawing_document,
+    "drawing_document",
+    no_payload,
+    read
+);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
-engine_command!(engine_assembly_document, "assembly_document", no_payload, read);
+engine_command!(
+    engine_assembly_document,
+    "assembly_document",
+    no_payload,
+    read
+);
 engine_command!(engine_assembly_set_document, "assembly_set_document");
-engine_command!(engine_assembly_solution, "assembly_solution", no_payload, read);
+engine_command!(
+    engine_assembly_solution,
+    "assembly_solution",
+    no_payload,
+    read
+);
 engine_command!(
     engine_assembly_create_component,
     "assembly_create_component"
@@ -282,7 +450,11 @@ engine_command!(
     engine_assembly_set_occurrence_pose,
     "assembly_set_occurrence_pose"
 );
-engine_command!(engine_assembly_preview_joint, "assembly_preview_joint", read);
+engine_command!(
+    engine_assembly_preview_joint,
+    "assembly_preview_joint",
+    read
+);
 engine_command!(engine_assembly_create_joint, "assembly_create_joint");
 engine_command!(engine_assembly_update_joint, "assembly_update_joint");
 engine_command!(
@@ -390,7 +562,7 @@ engine_command!(engine_cam_set_document, "cam_set_document");
 engine_command!(engine_cam_plan, "cam_plan");
 engine_command!(engine_cam_post, "cam_post");
 engine_command!(engine_cam_analyze_nbpost, "cam_analyze_nbpost");
-engine_command!(engine_cam_simulate, "cam_simulate");
+engine_command!(engine_cam_simulate_gcode, "cam_simulate_gcode");
 engine_command!(engine_cam_post_events, "cam_post_events");
 engine_command!(engine_set_body_appearance, "set_body_appearance");
 
@@ -401,39 +573,68 @@ fn engine_drawing_projection(state: tauri::State<'_, AppState>, payload: &str) -
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(
     engine_revolve_definitions,
     "revolve_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
-engine_command!(engine_sweep_definitions, "sweep_definitions", no_payload, read);
-engine_command!(engine_loft_definitions, "loft_definitions", no_payload, read);
+engine_command!(
+    engine_sweep_definitions,
+    "sweep_definitions",
+    no_payload,
+    read
+);
+engine_command!(
+    engine_loft_definitions,
+    "loft_definitions",
+    no_payload,
+    read
+);
 engine_command!(engine_rib_definitions, "rib_definitions", no_payload, read);
-engine_command!(engine_fillet_definitions, "fillet_definitions", no_payload, read);
+engine_command!(
+    engine_fillet_definitions,
+    "fillet_definitions",
+    no_payload,
+    read
+);
 engine_command!(
     engine_chamfer_definitions,
     "chamfer_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
-engine_command!(engine_hole_definitions, "hole_definitions", no_payload, read);
+engine_command!(
+    engine_hole_definitions,
+    "hole_definitions",
+    no_payload,
+    read
+);
 engine_command!(
     engine_datum_plane_definitions,
     "datum_plane_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(
     engine_body_feature_definitions,
     "body_feature_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(engine_datum_plane_create, "datum_plane_create");
 engine_command!(engine_datum_plane_edit, "datum_plane_edit");
 engine_command!(engine_preview_segment, "preview_segment", read);
 engine_command!(engine_eval_expression, "eval_expression", read);
 engine_command!(engine_add_line, "add_line");
-engine_command!(engine_preview_segment_locked, "preview_segment_locked", read);
+engine_command!(
+    engine_preview_segment_locked,
+    "preview_segment_locked",
+    read
+);
 engine_command!(engine_add_line_locked, "add_line_locked");
 engine_command!(engine_add_point, "add_point");
 engine_command!(engine_add_line_midpoint, "add_line_midpoint");
@@ -828,7 +1029,8 @@ fn cam_library_load(app: tauri::AppHandle) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let metadata = fs::metadata(&path).map_err(|error| format!("could not read tool library: {error}"))?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("could not read tool library: {error}"))?;
     if metadata.len() > MAX_FILE_BYTES {
         return Err("tool library is larger than the 256 MB safety limit".to_string());
     }
@@ -920,6 +1122,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
+        .manage(CamSimulationService::default())
         .manage(NativeQuitState::default())
         .manage(native_menu::NativeEditMenuState::default())
         .manage(native_menu::NativeFileMenuState::default())
@@ -1062,6 +1265,7 @@ pub fn run() {
             engine_cam_post,
             engine_cam_analyze_nbpost,
             engine_cam_simulate,
+            engine_cam_simulate_gcode,
             engine_cam_post_events,
             engine_set_body_appearance,
             engine_extrude_definitions,

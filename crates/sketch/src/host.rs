@@ -185,6 +185,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
             with_payload(payload, |request| manager.cam_analyze_nbpost(request))
         }
         "cam_simulate" => with_payload(payload, |request| manager.cam_simulate(request)),
+        "cam_simulate_gcode" => {
+            with_payload(payload, |request| manager.cam_simulate_gcode(request))
+        }
         "cam_post_events" => {
             with_payload(payload, |setup_id: u64| manager.cam_post_events(setup_id))
         }

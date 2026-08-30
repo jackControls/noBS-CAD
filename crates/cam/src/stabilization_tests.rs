@@ -245,7 +245,9 @@ fn golden_job_stays_aligned_across_save_plan_post_and_simulation() {
             voxel_size: Some(0.5),
             max_voxels: None,
             stock_mesh: None,
+            target: None,
             through_operation_id: None,
+            completed_steps: None,
         },
     )
     .expect("simulate golden job");

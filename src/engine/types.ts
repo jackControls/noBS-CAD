@@ -2590,6 +2590,8 @@ export interface CamLoadWarningDto {
   message: string;
 }
 
+export type CamArcPlane = 'xy' | 'xz' | 'yz';
+
 export type CamCommandDto =
   | { kind: 'program_start'; name: string; work_offset: CamWorkOffset }
   | { kind: 'work_offset'; offset: CamWorkOffset }
@@ -2597,9 +2599,19 @@ export type CamCommandDto =
   | { kind: 'tool_change'; tool_id: number; tool_number: number | null; tool_name: string }
   | { kind: 'spindle'; direction: CamSpindleDirection; rpm: number }
   | { kind: 'coolant'; mode: CamCoolantMode }
+  /** Establishes a workpiece tool-tip pose without implying travel through
+   *  excluded machine-coordinate or tool-change motion. */
+  | { kind: 'set_position'; to: Point3Dto }
   | { kind: 'rapid'; to: Point3Dto }
   | { kind: 'linear'; to: Point3Dto; feed: number }
-  | { kind: 'circular'; clockwise: boolean; center: Point3Dto; to: Point3Dto; feed: number }
+  | {
+      kind: 'circular';
+      clockwise: boolean;
+      plane: CamArcPlane;
+      center: Point3Dto;
+      to: Point3Dto;
+      feed: number;
+    }
   | { kind: 'dwell'; seconds: number }
   /** Activates machine-side cutter radius compensation on the linear move
    *  that follows (the lead-in); `left` true posts G41, false posts G42. */
@@ -2682,31 +2694,57 @@ export interface CamStockMeshDto {
   indices: number[];
 }
 
+export interface CamSimulationTargetDto {
+  /** Opaque identity used to reuse prepared target verification during playback. */
+  cache_key?: string | null;
+  /** Closed intended-part meshes in model coordinates (mm), treated as a union. */
+  meshes: CamStockMeshDto[];
+  /** Requested radial comparison tolerance in millimetres. */
+  tolerance_mm: number;
+}
+
 export interface CamSimulationRequestDto {
   setup_id: number;
   voxel_size?: number | null;
   max_voxels?: number | null;
   /** Required when the setup's stock is a modeled body. */
   stock_mesh?: CamStockMeshDto | null;
+  /** Intended finished part used for excess-stock and gouge verification. */
+  target?: CamSimulationTargetDto | null;
   /** Simulate only through this operation (inclusive, in setup order): the
    *  remaining-stock view of a selected operation must not show material that
    *  later operations have not removed yet. Omitted simulates everything. */
   through_operation_id?: number | null;
+  /** Execute only the first N physical motion/dwell steps. The complete
+   *  timeline remains a separate result while playback requests stock at
+   *  deterministic block boundaries. */
+  completed_steps?: number | null;
 }
 
-export type CamSimulationStepKind = 'rapid' | 'linear' | 'circular' | 'dwell';
+export type CamSimulationSourceDto = 'cam_toolpath' | 'g_code';
+export type CamSimulationStepKind = 'position' | 'rapid' | 'linear' | 'circular' | 'dwell';
 
 export interface CamSimulationStepDto {
   command_index: number;
+  /** NC sequence number when present, otherwise its physical source line. */
+  source_line: number | null;
   kind: CamSimulationStepKind;
+  tool_id: number | null;
   from: Point3Dto | null;
   to: Point3Dto | null;
+  center: Point3Dto | null;
+  clockwise: boolean | null;
+  plane: CamArcPlane | null;
   duration_seconds: number;
   cumulative_seconds: number;
   removed_voxels: number;
+  gouged_voxels: number;
 }
 
+export type CamSimulationCollisionKindDto = 'rapid_stock_contact' | 'target_gouge';
+
 export interface CamSimulationCollisionDto {
+  kind: CamSimulationCollisionKindDto;
   command_index: number;
   position: Point3Dto;
   message: string;
@@ -2715,11 +2753,29 @@ export interface CamSimulationCollisionDto {
 export interface CamSimulationMeshDto {
   /** Triangle soup in setup coordinates, packed x/y/z. */
   positions: number[];
+  /** Optional per-vertex normals, packed one-for-one with positions. */
+  normals?: number[];
   triangle_count: number;
+}
+
+export interface CamSimulationComparisonDto {
+  requested_tolerance_mm: number;
+  effective_tolerance_mm: number;
+  target_voxels: number;
+  excess_voxels: number;
+  gouged_voxels: number;
+  initial_shortfall_voxels: number;
+  target_volume_mm3: number;
+  excess_volume_mm3: number;
+  gouged_volume_mm3: number;
+  initial_shortfall_volume_mm3: number;
+  excess_mesh: CamSimulationMeshDto | null;
+  gouge_mesh: CamSimulationMeshDto | null;
 }
 
 export interface CamSimulationResultDto {
   setup_id: number;
+  source: CamSimulationSourceDto;
   wcs: CamWorkCoordinateSystemDto;
   grid_origin: Point3Dto;
   cell_size: [number, number, number];
@@ -2733,10 +2789,32 @@ export interface CamSimulationResultDto {
   steps: CamSimulationStepDto[];
   collisions: CamSimulationCollisionDto[];
   stock_mesh: CamSimulationMeshDto | null;
+  /** Desktop host retained the stock mesh directly in native Bevy. */
+  native_stock_present: boolean;
+  comparison: CamSimulationComparisonDto | null;
   /** Echo of the request's truncation target — the host uses it to keep a
    *  stale result from painting over a freshly changed operation selection. */
   through_operation_id: number | null;
+  /** Present for a playback stock frame and equal to the number of steps
+   *  actually executed. Absent for a complete timeline. */
+  completed_steps: number | null;
   warnings: string[];
+}
+
+export type CamGcodeDialectDto = 'auto' | 'iso' | 'fanuc' | 'siemens828d';
+
+/** Workpiece-only controller-code input. Machine kinematics and PLC behavior
+ *  intentionally remain outside this simulator boundary. */
+export interface CamGcodeSimulationRequestDto {
+  setup_id: number;
+  source: string;
+  file_name?: string | null;
+  dialect?: CamGcodeDialectDto;
+  voxel_size?: number | null;
+  max_voxels?: number | null;
+  stock_mesh?: CamStockMeshDto | null;
+  target?: CamSimulationTargetDto | null;
+  completed_steps?: number | null;
 }
 
 export interface PostEventStreamDto {

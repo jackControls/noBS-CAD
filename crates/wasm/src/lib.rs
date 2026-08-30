@@ -291,6 +291,10 @@ impl WasmEngine {
         host::handle(&mut self.manager, "cam_simulate", payload)
     }
 
+    pub fn cam_simulate_gcode(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_simulate_gcode", payload)
+    }
+
     pub fn cam_post_events(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "cam_post_events", payload)
     }
