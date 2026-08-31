@@ -1054,6 +1054,52 @@ fn apply_one_inbox_op(
             }));
         }
     };
+    let stamped_session = parsed
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let stamped_window = parsed
+        .get("window_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let session_mismatch = stamped_session.is_some_and(|s| s != session_id);
+    let window_mismatch = stamped_window.is_some_and(|w| w != window_label);
+    if session_mismatch || window_mismatch {
+        let conflict = serde_json::to_string(&json!({
+            "code": "session_identity_mismatch",
+            "writeback": false,
+            "session_mode": "ui_owned_apply",
+            "session_id": session_id,
+            "window_id": window_label,
+            "stamped_session_id": stamped_session,
+            "stamped_window_id": stamped_window,
+            "hint": "inbox op identity does not match the destination session/window; dead-letter and do not apply",
+        }))
+        .unwrap_or_else(|_| {
+            format!(
+                "{{\"code\":\"session_identity_mismatch\",\"writeback\":false,\"session_mode\":\"ui_owned_apply\",\"session_id\":\"{session_id}\"}}"
+            )
+        });
+        dead_letter_inbox_op(&session_id, seq, &conflict)?;
+        return Ok(json!({
+            "applied": false,
+            "dead_lettered": true,
+            "seq": seq,
+            "name": name,
+            "error": conflict,
+            "reason": "session_identity_mismatch",
+            "session_id": session_id,
+            "window_id": window_label,
+            "stamped_session_id": stamped_session,
+            "stamped_window_id": stamped_window,
+            "session_mode": "ui_owned_apply",
+            "writeback": false,
+            "pending": pending_inbox_seqs(&session_id).len(),
+            "engine_revision": project.engine_revision,
+        }));
+    }
     let current = project.engine_revision;
     if current != base_generation {
         let conflict = generation_conflict(&session_id, base_generation, Some(current));
@@ -1485,14 +1531,38 @@ mod tests {
     }
 
     fn write_inbox(session_id: &str, seq: u64, name: &str, base: u64, arguments: Value) {
+        write_inbox_with_identity(session_id, seq, name, base, arguments, None, None, None);
+    }
+
+    fn write_inbox_with_identity(
+        session_id: &str,
+        seq: u64,
+        name: &str,
+        base: u64,
+        arguments: Value,
+        stamped_session: Option<&str>,
+        stamped_window: Option<&str>,
+        stamped_document: Option<&str>,
+    ) {
         let inbox = session_root().join(session_id).join("inbox");
         fs::create_dir_all(&inbox).unwrap();
-        let body = serde_json::to_string_pretty(&json!({
+        let mut body = json!({
             "name": name,
             "arguments": arguments,
             "base_generation": base,
-        }))
-        .unwrap();
+        });
+        if let Some(object) = body.as_object_mut() {
+            if let Some(sid) = stamped_session {
+                object.insert("session_id".to_string(), json!(sid));
+            }
+            if let Some(wid) = stamped_window {
+                object.insert("window_id".to_string(), json!(wid));
+            }
+            if let Some(did) = stamped_document {
+                object.insert("document_id".to_string(), json!(did));
+            }
+        }
+        let body = serde_json::to_string_pretty(&body).unwrap();
         fs::write(inbox.join(format!("{seq}.json")), body).unwrap();
     }
 
@@ -2316,6 +2386,92 @@ mod tests {
         );
         assert_eq!(second["seq"], 2);
         assert_eq!(engine.document_snapshot().name, "AgeStaleOk");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inbox_stamped_for_a_refuses_apply_on_publisher_b() {
+        // Operate-without-clobber: a stamped inbox op for window/session A
+        // must dead-letter when applied against publisher reserved for B.
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-bridge-inbox-id-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let (session_a, gen_a) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session_a, gen_a, "from-a"))
+            .unwrap();
+        let (session_b, gen_b) = reserve(&state, "secondary");
+        state
+            .write_for_window("secondary", payload(&session_b, gen_b, "from-b"))
+            .unwrap();
+        assert_ne!(session_a, session_b);
+
+        // A's stamped op landed in B's inbox (mis-routed / copied).
+        write_inbox_with_identity(
+            &session_b,
+            1,
+            "cad_set_document_name",
+            gen_b,
+            json!({"name": "Clobber"}),
+            Some(&session_a),
+            Some("main"),
+            Some("tab-a"),
+        );
+        // Matching B op behind it — must remain unwedged.
+        write_inbox(
+            &session_b,
+            2,
+            "cad_set_document_name",
+            gen_b,
+            json!({"name": "KeepB"}),
+        );
+
+        let engine = AppState::new();
+        let model_b_before =
+            fs::read_to_string(session_root().join(&session_b).join("model.json")).unwrap();
+        let dead = apply_one_inbox_op(&state, "secondary", &engine).unwrap();
+        assert_eq!(dead["applied"], false, "{dead}");
+        assert_eq!(dead["dead_lettered"], true);
+        assert_eq!(dead["reason"], "session_identity_mismatch");
+        assert_eq!(dead["seq"], 1);
+        assert!(session_root()
+            .join(&session_b)
+            .join("inbox/failed/1.json")
+            .exists());
+        assert_eq!(pending_inbox_seqs(&session_b), vec![2]);
+        let model_b_after =
+            fs::read_to_string(session_root().join(&session_b).join("model.json")).unwrap();
+        assert_eq!(model_b_before, model_b_after);
+        assert_eq!(engine.document_snapshot().name, "Untitled");
+
+        let applied = apply_one_inbox_op(&state, "secondary", &engine).unwrap();
+        assert_eq!(applied["applied"], true, "{applied}");
+        assert_eq!(applied["seq"], 2);
+        assert_eq!(engine.document_snapshot().name, "KeepB");
+
+        // Matching stamp on the correct publisher still applies.
+        let (session_c, gen_c) = reserve(&state, "main");
+        // re-bind main may create new session after previous publishes — use fresh reserve
+        state
+            .write_for_window("main", payload(&session_c, gen_c, "fresh-a"))
+            .unwrap();
+        write_inbox_with_identity(
+            &session_c,
+            1,
+            "cad_set_document_name",
+            gen_c,
+            json!({"name": "MatchA"}),
+            Some(&session_c),
+            Some("main"),
+            None,
+        );
+        let engine_a = AppState::new();
+        let ok = apply_one_inbox_op(&state, "main", &engine_a).unwrap();
+        assert_eq!(ok["applied"], true, "{ok}");
+        assert_eq!(engine_a.document_snapshot().name, "MatchA");
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

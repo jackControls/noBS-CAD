@@ -51,11 +51,17 @@ and `document_id` / `project_session_id` (native project tab). Publish write
 still requires the reserved identity — a delayed write from tab/window A cannot
 land in B's session.
 MCP `cad_submit` (attached only) writes `inbox/<seq>.json` with
-`{ name, arguments, base_generation }`. A stale `base_generation` is
-`generation_conflict` (`writeback: false`, `session_mode: ui_owned_apply`).
-The desktop polls that inbox, applies via the same `host::handle` / solid-replay
-path as Tauri IPC, then the existing publisher writes a new snapshot. MCP never
-writes `model.json` (Jack removed last-writer-wins; do not bring it back).
+`{ name, arguments, base_generation }` plus optional identity stamps
+`session_id` / `window_id` / `document_id` taken from the attached published
+session. A stale `base_generation` is `generation_conflict`; a stamped op whose
+`session_id` / `window_id` does not match the destination apply binding is
+`session_identity_mismatch` and is dead-lettered (`writeback: false`,
+`session_mode: ui_owned_apply`) so later seqs stay unwedged. Unstamped ops keep
+compat apply behavior. Attach+submit is isolated per published window/session
+(tested); this is still **not** a live multi-window broker. The desktop polls
+that inbox, applies via the same `host::handle` / solid-replay path as Tauri
+IPC, then the existing publisher writes a new snapshot. MCP never writes
+`model.json` (Jack removed last-writer-wins; do not bring it back).
 
 While a sketch transaction is active, project export intentionally keeps the
 last completed `model.json`; `active-sketch.json` carries the current
@@ -73,16 +79,18 @@ This is **UI-owned apply**, not in-process shared memory. [#11](https://github.c
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
 
-### Stdio vs broker matrix ([#12](https://github.com/jackControls/noBS-CAD/issues/12) first slice)
+### Stdio vs broker matrix ([#12](https://github.com/jackControls/noBS-CAD/issues/12) second slice)
 | Mode | Transport | Document scope | How to target |
 |------|-----------|----------------|---------------|
 | **Stdio headless (CI/goldens)** | one `nbcad-mcp` process | one in-memory document | no attach; call modeling tools directly |
-| **Stdio + snapshot attach** | one `nbcad-mcp` process | one attached snapshot at a time | `cad_list_sessions` → `cad_attach` by `session_id` / `window_id` / `document_id` |
+| **Stdio + snapshot attach** | one `nbcad-mcp` process | one attached snapshot at a time | `cad_list_sessions` → `cad_attach` by `session_id` / `window_id` / `document_id`; `cad_submit` stamps identity and cannot clobber another published window's inbox/model |
 | **Broker (not shipped)** | future router over windows | many live windows | Option B product lean; still TBD |
 
-Stdio remains the supported offline path. This slice lists/targets published
-window/document identities; it is **not** a live multi-window broker and does
-not require UI changes beyond the existing identity-bound publisher.
+Stdio remains the supported offline path. List/target plus operate-without-clobber
+are tested on the snapshot bridge; this is still **not** a live multi-window
+broker and does not require UI changes beyond the existing identity-bound
+publisher. [#11](https://github.com/jackControls/noBS-CAD/issues/11) in-process
+co-link remains open.
 
 ### Stdio (current supported path)
 Agents and CI spawn `nbcad-mcp` as an MCP stdio server. One process owns one
@@ -115,7 +123,7 @@ counts so a rebuilt history can be checked against the imported solid.
 |------------|-------|--------|-------|
 | Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
-| Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id` on the snapshot bridge; stdio still one doc per process | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
+| Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id`; attach+submit isolated per published window (identity-stamped inbox; mismatch dead-letters). Stdio still one doc per process; **not** a live broker | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
 
 ## Proposed (not shipped here)
