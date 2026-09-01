@@ -675,15 +675,50 @@ pub struct InboxOp {
     pub name: String,
     pub arguments: Value,
     pub base_generation: u64,
+    /// Optional identity stamp from the attached session at submit time.
+    pub session_id: Option<String>,
+    pub window_id: Option<String>,
+    pub document_id: Option<String>,
 }
 
 impl InboxOp {
+    /// Unstamped op (compat / tests). Production `cad_submit` stamps identity.
+    pub fn unstamped(name: impl Into<String>, arguments: Value, base_generation: u64) -> Self {
+        Self {
+            name: name.into(),
+            arguments,
+            base_generation,
+            session_id: None,
+            window_id: None,
+            document_id: None,
+        }
+    }
+
+    pub fn with_identity(mut self, identity: &SessionIdentity) -> Self {
+        self.session_id = Some(identity.session_id.clone());
+        self.window_id = identity.window_id.clone();
+        self.document_id = identity.document_id.clone();
+        self
+    }
+
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut value = json!({
             "name": self.name,
             "arguments": self.arguments,
             "base_generation": self.base_generation,
-        })
+        });
+        if let Some(object) = value.as_object_mut() {
+            if let Some(session_id) = &self.session_id {
+                object.insert("session_id".to_string(), json!(session_id));
+            }
+            if let Some(window_id) = &self.window_id {
+                object.insert("window_id".to_string(), json!(window_id));
+            }
+            if let Some(document_id) = &self.document_id {
+                object.insert("document_id".to_string(), json!(document_id));
+            }
+        }
+        value
     }
 
     pub fn from_json(value: &Value) -> Result<Self, String> {
@@ -701,6 +736,9 @@ impl InboxOp {
             name,
             arguments,
             base_generation,
+            session_id: optional_id(value, "session_id"),
+            window_id: optional_id(value, "window_id"),
+            document_id: optional_id(value, "document_id"),
         })
     }
 }
@@ -742,6 +780,59 @@ pub fn generation_conflict_error(
             "{{\"code\":\"generation_conflict\",\"writeback\":false,\"session_mode\":\"ui_owned_apply\",\"session_id\":\"{session_id}\"}}"
         )
     })
+}
+
+/// Structured error when a stamped inbox op targets a different session/window.
+pub fn session_identity_mismatch_error(
+    destination_session_id: &str,
+    destination_window_id: Option<&str>,
+    stamped_session_id: Option<&str>,
+    stamped_window_id: Option<&str>,
+) -> String {
+    serde_json::to_string(&json!({
+        "code": "session_identity_mismatch",
+        "writeback": false,
+        "session_mode": "ui_owned_apply",
+        "session_id": destination_session_id,
+        "window_id": destination_window_id,
+        "stamped_session_id": stamped_session_id,
+        "stamped_window_id": stamped_window_id,
+        "hint": "inbox op identity does not match the destination session/window; dead-letter and do not apply",
+    }))
+    .unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"session_identity_mismatch\",\"writeback\":false,\"session_mode\":\"ui_owned_apply\",\"session_id\":\"{destination_session_id}\"}}"
+        )
+    })
+}
+
+/// Return a structured identity-mismatch error when a stamped op does not
+/// match the destination session / window this apply is bound to.
+/// Unstamped ops (missing fields) keep current behavior.
+pub fn inbox_op_identity_mismatch(
+    destination_session_id: &str,
+    destination_window_id: Option<&str>,
+    op: &InboxOp,
+) -> Option<String> {
+    let session_mismatch = op
+        .session_id
+        .as_deref()
+        .is_some_and(|stamped| stamped != destination_session_id);
+    let window_mismatch = match (op.window_id.as_deref(), destination_window_id) {
+        (Some(stamped), Some(dest)) => stamped != dest,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if session_mismatch || window_mismatch {
+        Some(session_identity_mismatch_error(
+            destination_session_id,
+            destination_window_id,
+            op.session_id.as_deref(),
+            op.window_id.as_deref(),
+        ))
+    } else {
+        None
+    }
 }
 
 pub fn not_attached_error() -> String {
@@ -922,6 +1013,12 @@ where
             return Err(error);
         }
     };
+    let destination_window = session_identity(session_id).window_id;
+    if let Some(error) = inbox_op_identity_mismatch(session_id, destination_window.as_deref(), &op)
+    {
+        dead_letter_inbox_op(session_id, seq, &error)?;
+        return Err(error);
+    }
     let current = match read_heartbeat_generation(session_id) {
         Ok(generation) => generation,
         Err(_) => {
@@ -1482,11 +1579,7 @@ mod tests {
 
         let seq = write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "solid_mirror".to_string(),
-                arguments: json!({"body_ids": [1]}),
-                base_generation: 3,
-            },
+            &InboxOp::unstamped("solid_mirror".to_string(), json!({"body_ids": [1]}), 3),
         )
         .unwrap();
         assert_eq!(seq, 1);
@@ -1506,11 +1599,11 @@ mod tests {
         // the next apply_inbox_op must take the lowest remaining pending.
         let seq2 = write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "AfterStaleHead"}),
-                base_generation: 4,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "AfterStaleHead"}),
+                4,
+            ),
         )
         .unwrap();
         assert_eq!(seq2, 2);
@@ -1572,11 +1665,11 @@ mod tests {
                     let marker = format!("{thread}-{index}");
                     let seq = write_inbox_op(
                         &sid,
-                        &InboxOp {
-                            name: "solid_mirror".to_string(),
-                            arguments: json!({"body_ids": [1], "marker": marker}),
-                            base_generation: 1,
-                        },
+                        &InboxOp::unstamped(
+                            "solid_mirror".to_string(),
+                            json!({"body_ids": [1], "marker": marker}),
+                            1,
+                        ),
                     )
                     .expect("exclusive inbox reserve must succeed");
                     allocated.push((seq, format!("{thread}-{index}")));
@@ -1630,11 +1723,11 @@ mod tests {
         fs::write(inbox.join("1.json"), "{not-json").unwrap();
         let seq = write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "AfterBadJson"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "AfterBadJson"}),
+                1,
+            ),
         )
         .unwrap();
         assert_eq!(seq, 2);
@@ -1687,20 +1780,20 @@ mod tests {
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "First"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "First"}),
+                1,
+            ),
         )
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "Second"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "Second"}),
+                1,
+            ),
         )
         .unwrap();
         let first = apply_inbox_op(&unique, |name, arguments| {
@@ -1752,20 +1845,16 @@ mod tests {
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "assembly_document".to_string(),
-                arguments: json!({}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped("assembly_document".to_string(), json!({}), 1),
         )
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "AfterUnsupported"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "AfterUnsupported"}),
+                1,
+            ),
         )
         .unwrap();
         assert!(
@@ -1823,11 +1912,11 @@ mod tests {
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "Once"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "Once"}),
+                1,
+            ),
         )
         .unwrap();
         let mut host_calls = 0u32;
@@ -1885,20 +1974,20 @@ mod tests {
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "MissingHb"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "MissingHb"}),
+                1,
+            ),
         )
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "AfterMissingHb"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "AfterMissingHb"}),
+                1,
+            ),
         )
         .unwrap();
         let hb = session_dir().join(&unique).join("heartbeat.json");
@@ -1965,11 +2054,11 @@ mod tests {
         assert_eq!(meta["generation"], 1);
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "AgeStaleOk"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "AgeStaleOk"}),
+                1,
+            ),
         )
         .unwrap();
         let applied = apply_inbox_op(&unique, |name, arguments| {
@@ -2011,20 +2100,20 @@ mod tests {
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "First"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "First"}),
+                1,
+            ),
         )
         .unwrap();
         write_inbox_op(
             &unique,
-            &InboxOp {
-                name: "cad_set_document_name".to_string(),
-                arguments: json!({"name": "Second"}),
-                base_generation: 1,
-            },
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "Second"}),
+                1,
+            ),
         )
         .unwrap();
         assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![1, 2]);
@@ -2036,6 +2125,141 @@ mod tests {
         .unwrap();
         assert_eq!(first.seq, 1);
         assert_eq!(pending_inbox_seqs(&unique).unwrap(), vec![2]);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stamped_inbox_identity_mismatch_is_dead_lettered_and_unblocks() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let session_a = test_session_uuid();
+        let session_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (now_ms().wrapping_add(31)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-id-mismatch-{session_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+
+        for (sid, window, doc, marker) in [
+            (&session_a, "main", "tab-a", "model-a"),
+            (&session_b, "secondary", "tab-b", "model-b"),
+        ] {
+            write_session(
+                sid,
+                "model.json",
+                &format!(r#"{{"version":1,"marker":"{marker}"}}"#),
+            )
+            .unwrap();
+            write_session(
+                sid,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":1,"session_id":"{sid}","window_id":"{window}","document_id":"{doc}","project_session_id":"{doc}"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+        }
+
+        // A's stamped op copied into B's inbox — must not apply against B.
+        write_inbox_op(
+            &session_b,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "FromA"}),
+                1,
+            )
+            .with_identity(&SessionIdentity {
+                session_id: session_a.clone(),
+                window_id: Some("main".to_string()),
+                document_id: Some("tab-a".to_string()),
+            }),
+        )
+        .unwrap();
+        // Matching B op behind the mismatched head — must stay unwedged.
+        write_inbox_op(
+            &session_b,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "FromB"}),
+                1,
+            )
+            .with_identity(&session_identity(&session_b)),
+        )
+        .unwrap();
+
+        let err = apply_inbox_op(&session_b, |_name, _args| {
+            panic!("mismatched identity must not call host_apply")
+        })
+        .expect_err("stamped A op must not apply on B");
+        let parsed: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(parsed["code"], "session_identity_mismatch");
+        assert_eq!(parsed["writeback"], false);
+        assert_eq!(parsed["session_mode"], "ui_owned_apply");
+        assert!(
+            session_dir()
+                .join(&session_b)
+                .join("inbox/failed/1.json")
+                .exists(),
+            "mismatched head must dead-letter"
+        );
+        assert_eq!(pending_inbox_seqs(&session_b).unwrap(), vec![2]);
+        let model_b = read_session_file(&session_b, "model.json").unwrap();
+        assert!(model_b.contains("model-b"));
+        assert!(!model_b.contains("FromA"));
+
+        let applied = apply_inbox_op(&session_b, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "FromB");
+            Ok(json!({"name": "FromB"}))
+        })
+        .expect("matching B op must apply after dead-letter");
+        assert_eq!(applied.seq, 2);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unstamped_inbox_op_still_applies_compat() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-unstamped-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}","window_id":"main","document_id":"tab"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "Compat"}),
+                1,
+            ),
+        )
+        .unwrap();
+        let body = read_session_file(&unique, "inbox/1.json").unwrap();
+        assert!(
+            !body.contains("session_id"),
+            "unstamped op omits identity: {body}"
+        );
+        let applied = apply_inbox_op(&unique, |name, arguments| {
+            assert_eq!(name, "cad_set_document_name");
+            assert_eq!(arguments["name"], "Compat");
+            Ok(json!({"name": "Compat"}))
+        })
+        .expect("unstamped ops keep current apply behavior");
+        assert_eq!(applied.seq, 1);
+        assert!(applied.op.session_id.is_none());
+        assert!(applied.op.window_id.is_none());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
