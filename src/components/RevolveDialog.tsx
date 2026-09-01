@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { getEngine } from '../engine';
-import { submitRevolve } from '../engine/controller';
+import { cancelTimelineFeatureEdit, submitRevolve } from '../engine/controller';
 import type { ExtrudeOperation, ProfileCatalogItemDto } from '../engine/types';
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/appStore';
@@ -19,6 +19,7 @@ export function RevolveDialog() {
   const { t } = useTranslation();
   const openFeature = useAppStore((state) => state.revolveDialogFeature);
   const close = useAppStore((state) => state.closeRevolveDialog);
+  const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((state) => state.solidBusy);
   const scene = useAppStore((state) => state.solidScene);
   const selectedBody = useAppStore((state) => state.selectedBody);
@@ -247,7 +248,7 @@ export function RevolveDialog() {
             type="button"
             title={t('revolve.cancel')}
             disabled={busy}
-            onClick={close}
+            onClick={cancel}
             className="rounded p-1 text-mute hover:bg-edge hover:text-ink disabled:opacity-40"
           >
             <X size={14} />
@@ -418,7 +419,7 @@ export function RevolveDialog() {
           <button
             type="button"
             disabled={busy}
-            onClick={close}
+            onClick={cancel}
             className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge disabled:opacity-40"
           >
             {t('revolve.cancel')}

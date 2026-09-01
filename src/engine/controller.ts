@@ -5,7 +5,7 @@
  * high-frequency drawing calls (preview/add/move during pointer gestures)
  * are issued by the Viewport directly against `getEngine()`.
  */
-import { getEngine } from './index';
+import { getEngine, type Engine } from './index';
 import type {
   BodyFeatureRequestDto,
   DatumPlaneRequest,
@@ -19,6 +19,7 @@ import type {
   RibRequest,
   SolidFilletRequest,
   SolidChamferRequest,
+  SolidUpdateDto,
   HoleRequest,
   SweepRequest,
 } from './types';
@@ -27,6 +28,7 @@ import {
   useAppStore,
   type BodyFeatureKind,
   type ConstructionPlaneKind,
+  type HistoryEditCheckpoint,
 } from '../store/appStore';
 import {
   authorizeNextSolidRedo,
@@ -54,6 +56,7 @@ export function canUndoApplicationHistory(): boolean {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_undo ?? false;
+  if (state.historyEdit) return false;
   if (state.activeTab === 'drawing') return canUndoDrawingHistory();
   if (state.activeTab !== 'solid') return false;
   return state.mode === 'solid' && (
@@ -65,6 +68,7 @@ export function canRedoApplicationHistory(): boolean {
   const state = useAppStore.getState();
   if (state.projectBusy || state.solidBusy) return false;
   if (state.mode === 'sketch') return state.activeSketch?.can_redo ?? false;
+  if (state.historyEdit) return false;
   if (state.activeTab === 'drawing') return canRedoDrawingHistory();
   if (state.activeTab !== 'solid') return false;
   if (state.mode !== 'solid' || !state.document) return false;
@@ -80,6 +84,7 @@ export { subscribeApplicationHistory } from './applicationHistory';
 /** Arm Create Sketch: origin planes become pickable (Esc cancels). */
 export function startPlanePick(): void {
   const state = useAppStore.getState();
+  if (state.historyEdit) return;
   state.closeExtrudeDialog();
   state.closeRevolveDialog();
   state.closeSweepDialog();
@@ -180,11 +185,173 @@ async function beginSketchOn(
   }
 }
 
+/** Publish a history-stage replay together with its stage-scoped inputs. */
+async function applyHistoryStageUpdate(
+  engine: Engine,
+  update: SolidUpdateDto,
+): Promise<void> {
+  const [finishedSketches, datumPlanes] = await Promise.all([
+    engine.finishedSketches(),
+    engine.datumPlaneDefinitions(),
+  ]);
+  const state = useAppStore.getState();
+  state.applySolidUpdate(update);
+  state.setFinishedSketches(finishedSketches);
+  state.applyDatumPlaneUpdate({
+    document: update.document,
+    planes: datumPlanes,
+  });
+}
+
+interface TimelineHistoryMutation {
+  featureId: number;
+  projectKey: string;
+  finish: () => void;
+}
+
+let timelineHistoryMutation: TimelineHistoryMutation | null = null;
+
+function finishTimelineHistoryMutation(featureId: number): void {
+  const mutation = timelineHistoryMutation;
+  if (!mutation || mutation.featureId !== featureId) return;
+  timelineHistoryMutation = null;
+  mutation.finish();
+}
+
+/**
+ * Discard the frontend history effects of a temporary stage. Both rollback
+ * transitions have already been published at this point, so wait for the
+ * history observer to reconcile them while its mutation guard is still held,
+ * then bind any Solid Redo entry to the restored generation.
+ */
+async function discardTimelineHistoryMutation(
+  checkpoint: HistoryEditCheckpoint,
+): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  const mutation = timelineHistoryMutation;
+  if (mutation?.featureId === checkpoint.featureId) {
+    authorizeNextSolidRedo(mutation.projectKey);
+  }
+  useAppStore.setState({ dirty: checkpoint.restoreDirty });
+  finishTimelineHistoryMutation(checkpoint.featureId);
+}
+
+/**
+ * Move the evaluated model to the input boundary of one timeline feature,
+ * then open its editor. `rollback_index` is a feature count, so the feature
+ * at `index` is deliberately excluded. The previous cursor is retained so
+ * Cancel and a successful edit can return to the exact stage the user was
+ * viewing before they started editing.
+ */
+export async function beginTimelineFeatureEdit(
+  featureId: number,
+  openEditor: (engine: Engine) => void | Promise<void>,
+): Promise<void> {
+  const state = useAppStore.getState();
+  const document = state.document;
+  if (
+    !document
+    || state.projectBusy
+    || state.solidBusy
+    || state.historyEdit
+    || timelineHistoryMutation
+  ) return;
+  const featureIndex = document.features.findIndex((feature) => feature.id === featureId);
+  if (featureIndex < 0) return;
+  const restoreRollbackIndex = document.rollback_index;
+  const checkpoint: HistoryEditCheckpoint = {
+    featureId,
+    restoreRollbackIndex,
+    restoreDirty: state.dirty,
+  };
+  timelineHistoryMutation = {
+    featureId,
+    projectKey: currentHistoryProjectKey(),
+    finish: beginHistoryMutation(),
+  };
+
+  state.setSolidBusy(true);
+  let engine: Engine | null = null;
+  let staged = false;
+  try {
+    engine = await getEngine();
+    const update = await engine.setRollback(featureIndex);
+    staged = true;
+    await applyHistoryStageUpdate(engine, update);
+    state.setHistoryEdit(checkpoint);
+    // Moving the cursor only prepares the editor; it is not a document edit.
+    useAppStore.setState({ dirty: checkpoint.restoreDirty });
+    await openEditor(engine);
+  } catch (error) {
+    // Opening a sketch can still fail (for example a broken support face).
+    // Do not strand the document at the pre-feature cursor in that case.
+    if (engine && staged) {
+      try {
+        const restored = await engine.setRollback(restoreRollbackIndex);
+        await applyHistoryStageUpdate(engine, restored);
+      } catch {
+        // The original failure is the useful error to report.
+      }
+    }
+    state.setHistoryEdit(null);
+    await discardTimelineHistoryMutation(checkpoint);
+    state.setConstraintDialog({
+      titleKey: 'constraints.invalidTitle',
+      message: error instanceof Error ? error.message : 'Could not open history editor',
+    });
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
+/** Restore the cursor saved for an editor after its model mutation commits. */
+async function resumeTimelineFeatureEdit(
+  engine: Engine,
+  featureId: number | undefined,
+): Promise<SolidUpdateDto | null> {
+  if (!featureId || featureId <= 0) return null;
+  const state = useAppStore.getState();
+  const checkpoint = state.historyEdit;
+  if (!checkpoint || checkpoint.featureId !== featureId) return null;
+  const update = await engine.setRollback(checkpoint.restoreRollbackIndex);
+  await applyHistoryStageUpdate(engine, update);
+  state.setHistoryEdit(null);
+  finishTimelineHistoryMutation(checkpoint.featureId);
+  return update;
+}
+
+/** Cancel an editor and restore the timeline stage it replaced. */
+export async function cancelTimelineFeatureEdit(close: () => void): Promise<void> {
+  const state = useAppStore.getState();
+  const checkpoint = state.historyEdit;
+  if (!checkpoint) {
+    close();
+    return;
+  }
+  state.setSolidBusy(true);
+  try {
+    const engine = await getEngine();
+    const update = await engine.setRollback(checkpoint.restoreRollbackIndex);
+    await applyHistoryStageUpdate(engine, update);
+    state.setHistoryEdit(null);
+    await discardTimelineHistoryMutation(checkpoint);
+    close();
+  } catch (error) {
+    state.setConstraintDialog({
+      titleKey: 'constraints.invalidTitle',
+      message: error instanceof Error ? error.message : 'Could not restore history',
+    });
+  } finally {
+    state.setSolidBusy(false);
+  }
+}
+
 /** FINISH SKETCH → end the engine session and return to solid mode. */
 export async function finishSketch(): Promise<void> {
   const engine = await getEngine();
   const result = await engine.endSketch();
   const s = useAppStore.getState();
+  const historyFeatureId = s.historyEdit?.featureId;
   s.setActiveTool(null);
   s.setSelectedEntity(null);
   s.setHoveredEntity(null);
@@ -193,7 +360,8 @@ export async function finishSketch(): Promise<void> {
   s.setFinishedSketches(await engine.finishedSketches());
   s.setMode('solid');
   try {
-    s.applySolidUpdate(await engine.recomputeSolids());
+    const restored = await resumeTimelineFeatureEdit(engine, historyFeatureId);
+    if (!restored) s.applySolidUpdate(await engine.recomputeSolids());
   } catch (error) {
     s.setConstraintDialog({
       titleKey: 'constraints.invalidTitle',
@@ -248,6 +416,7 @@ export async function undoApplicationHistory(): Promise<void> {
     if (state.activeSketch?.can_undo) await undoSketch();
     return;
   }
+  if (state.historyEdit) return;
   if (state.activeTab === 'drawing') {
     await undoDrawingDocument();
     return;
@@ -298,6 +467,7 @@ export async function redoApplicationHistory(): Promise<void> {
     if (state.activeSketch?.can_redo) await redoSketch();
     return;
   }
+  if (state.historyEdit) return;
   if (state.activeTab === 'drawing') {
     await redoDrawingDocument();
     return;
@@ -524,21 +694,29 @@ export async function submitConstructionPlane(
     const update = featureId
       ? await engine.editDatumPlane(featureId, request)
       : await engine.createDatumPlane(request);
-    state.applyDatumPlaneUpdate(update);
+    const historyEdit = state.historyEdit?.featureId === featureId;
+    let displayedDocument = update.document;
     // Editing a datum plane changes the world bases of every sketch hosted
     // by it. Recompute immediately so dependent solids do not remain drawn
     // at the old plane until the next unrelated modeling command.
-    if (featureId) {
+    if (historyEdit) {
+      const restored = await resumeTimelineFeatureEdit(engine, featureId);
+      if (restored) displayedDocument = restored.document;
+    } else {
+      state.applyDatumPlaneUpdate(update);
+    }
+    if (featureId && !historyEdit) {
       const settled = await engine.recomputeSolids();
       state.applySolidUpdate(settled);
       state.applyDatumPlaneUpdate({
         document: settled.document,
         planes: await engine.datumPlaneDefinitions(),
       });
+      displayedDocument = settled.document;
     }
     state.clearSolidSelection();
     state.closeConstructionPlaneDialog();
-    const folder = update.document.browser.find(
+    const folder = displayedDocument.browser.find(
       (node) => node.kind === 'construction_folder',
     );
     if (folder && !useAppStore.getState().expanded[folder.id]) {
@@ -566,10 +744,12 @@ export async function submitBodyFeature(
     const update = featureId
       ? await engine.editBodyFeature(featureId, request)
       : await engine.bodyFeature(request);
-    state.applySolidUpdate(update);
+    const restored = await resumeTimelineFeatureEdit(engine, featureId);
+    const displayed = restored ?? update;
+    if (!restored) state.applySolidUpdate(update);
     state.clearSolidSelection();
     state.closeBodyFeatureDialog();
-    const bodies = update.document.browser.find(
+    const bodies = displayed.document.browser.find(
       (node) => node.kind === 'bodies_folder',
     );
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
@@ -645,10 +825,12 @@ export async function submitExtrude(
       featureId && featureId > 0
         ? await engine.editExtrude(featureId, request)
         : await engine.extrude(request);
-    state.applySolidUpdate(update);
+    const restored = await resumeTimelineFeatureEdit(engine, featureId);
+    const displayed = restored ?? update;
+    if (!restored) state.applySolidUpdate(update);
     state.clearSolidSelection();
     state.closeExtrudeDialog();
-    const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
+    const bodies = displayed.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
       state.toggleExpanded(bodies.id);
     }
@@ -674,10 +856,12 @@ export async function submitRevolve(
       featureId && featureId > 0
         ? await engine.editRevolve(featureId, request)
         : await engine.revolve(request);
-    state.applySolidUpdate(update);
+    const restored = await resumeTimelineFeatureEdit(engine, featureId);
+    const displayed = restored ?? update;
+    if (!restored) state.applySolidUpdate(update);
     state.clearSolidSelection();
     state.closeRevolveDialog();
-    const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
+    const bodies = displayed.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
       state.toggleExpanded(bodies.id);
     }
@@ -714,12 +898,14 @@ async function submitAdvancedSolid(
         ? await engine.editRib(featureId, request as RibRequest)
         : await engine.rib(request as RibRequest);
     }
-    state.applySolidUpdate(update);
+    const restored = await resumeTimelineFeatureEdit(engine, featureId);
+    const displayed = restored ?? update;
+    if (!restored) state.applySolidUpdate(update);
     state.clearSolidSelection();
     if (kind === 'sweep') state.closeSweepDialog();
     else if (kind === 'loft') state.closeLoftDialog();
     else state.closeRibDialog();
-    const bodies = update.document.browser.find((node) => node.kind === 'bodies_folder');
+    const bodies = displayed.document.browser.find((node) => node.kind === 'bodies_folder');
     if (bodies && !useAppStore.getState().expanded[bodies.id]) {
       state.toggleExpanded(bodies.id);
     }
@@ -783,7 +969,8 @@ async function submitRefinement(
         : featureId
           ? await engine.editHole(featureId, request as HoleRequest)
           : await engine.hole(request as HoleRequest);
-    state.applySolidUpdate(update);
+    const restored = await resumeTimelineFeatureEdit(engine, featureId);
+    if (!restored) state.applySolidUpdate(update);
     state.clearSolidSelection();
     if (kind === 'fillet') state.closeFilletDialog();
     else if (kind === 'chamfer') state.closeChamferDialog();
@@ -800,10 +987,11 @@ async function submitRefinement(
 
 export async function setTimelineRollback(rollbackIndex: number): Promise<void> {
   const state = useAppStore.getState();
+  if (state.historyEdit) return;
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();
-    state.applySolidUpdate(await engine.setRollback(rollbackIndex));
+    await applyHistoryStageUpdate(engine, await engine.setRollback(rollbackIndex));
   } catch (error) {
     state.setConstraintDialog({
       titleKey: 'constraints.invalidTitle',
@@ -817,6 +1005,7 @@ export async function setTimelineRollback(rollbackIndex: number): Promise<void> 
 /** Delete a history selection from newest to oldest and refresh derived state once. */
 export async function deleteTimelineFeatures(featureIds: number[]): Promise<boolean> {
   const state = useAppStore.getState();
+  if (state.historyEdit) return false;
   const historyOrder = new Map(
     (state.document?.features ?? []).map((feature, index) => [feature.id, index]),
   );
@@ -870,6 +1059,7 @@ export async function reorderTimelineFeature(
   targetIndex: number,
 ): Promise<boolean> {
   const state = useAppStore.getState();
+  if (state.historyEdit) return false;
   state.setSolidBusy(true);
   try {
     const engine = await getEngine();

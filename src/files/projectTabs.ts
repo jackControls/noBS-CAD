@@ -212,6 +212,9 @@ async function ensureActiveProjectTab(
 
 async function snapshotActiveProjectTab(): Promise<string> {
   const state = useAppStore.getState();
+  if (state.historyEdit) {
+    throw new Error(translate('file.finishBeforeFeatureEdit'));
+  }
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeTabSwitch'));
   }
@@ -358,7 +361,7 @@ async function withProjectTransition(
   operation: () => Promise<boolean>,
 ): Promise<boolean> {
   const state = useAppStore.getState();
-  if (state.solidBusy) return false;
+  if (state.solidBusy || state.historyEdit) return false;
   state.setSolidBusy(true);
   try {
     return await operation();
@@ -568,7 +571,7 @@ export async function collectRecoverableProjectTabs(): Promise<{
 }> {
   const state = useAppStore.getState();
   let activeModelJson: string | null = null;
-  if (state.dirty && !state.activeSketch) {
+  if (state.dirty && !state.activeSketch && !state.historyEdit) {
     try {
       activeModelJson = await exportProjectModelWithVisibility();
       if (state.activeProjectTabId) {

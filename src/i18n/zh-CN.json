@@ -44,6 +44,7 @@
     "noOpenProject": "保存前请创建或打开一个设计。",
     "finishBeforeSave": "保存项目前请完成当前草图。",
     "finishBeforeTabSwitch": "切换文档前请完成当前草图。",
+    "finishBeforeFeatureEdit": "使用项目文件操作前，请完成或取消当前特征编辑。",
     "tabUnavailable": "此文档标签页已不可用。",
     "discardConfirm": "打开另一个项目并丢弃当前未保存的更改？",
     "closeDiscardConfirm": "关闭此设计并丢弃其未保存的更改？",

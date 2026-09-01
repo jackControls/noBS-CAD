@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Crosshair, Layers3, LoaderCircle, MousePointer2, X } from 'lucide-react';
 import { getEngine } from '../engine';
-import { submitConstructionPlane } from '../engine/controller';
+import { cancelTimelineFeatureEdit, submitConstructionPlane } from '../engine/controller';
 import type {
   BodyDto,
   DatumPlaneDefinitionDto,
@@ -118,6 +118,7 @@ function previewHalfSize(
 export function ConstructionPlaneDialog() {
   const dialog = useAppStore((state) => state.constructionPlaneDialog);
   const close = useAppStore((state) => state.closeConstructionPlaneDialog);
+  const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((state) => state.solidBusy);
   const bodies = useAppStore((state) => state.solidScene.bodies);
   const knownPlanes = useAppStore((state) => state.datumPlanes);
@@ -464,7 +465,7 @@ export function ConstructionPlaneDialog() {
           </span>
           <button
             type="button"
-            onClick={close}
+            onClick={cancel}
             disabled={busy}
             className="rounded p-1 text-mute hover:bg-edge hover:text-ink"
           >
@@ -665,7 +666,7 @@ export function ConstructionPlaneDialog() {
           )}
         </div>
         <footer className="flex h-11 items-center justify-end gap-2 border-t border-edge bg-header px-3">
-          <button type="button" onClick={close} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">Cancel</button>
+          <button type="button" onClick={cancel} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">Cancel</button>
           <button data-testid="construction-plane-ok" type="submit" disabled={!valid} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">OK</button>
         </footer>
       </form>

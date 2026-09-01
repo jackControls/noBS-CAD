@@ -42,6 +42,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
+  beginTimelineFeatureEdit,
   deleteTimelineFeatures,
   editSketch,
   openExtrude,
@@ -66,37 +67,42 @@ import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
 function editTimelineFeature(feature: FeatureDto) {
-  if (feature.kind === 'sketch') void editSketch(feature.name);
-  if (feature.kind === 'extrude') openExtrude(feature.id);
-  if (feature.kind === 'revolve') openRevolve(feature.id);
-  if (feature.kind === 'sweep') openSweep(feature.id);
-  if (feature.kind === 'loft') openLoft(feature.id);
-  if (feature.kind === 'rib') openRib(feature.id);
-  if (feature.kind === 'fillet') openSolidFillet(feature.id);
-  if (feature.kind === 'chamfer') openSolidChamfer(feature.id);
-  if (feature.kind === 'hole') openHole(feature.id);
-  if (feature.kind === 'external_thread') {
-    openBodyFeature('external_thread', feature.id);
-  }
-  if (feature.kind === 'move_copy') openBodyFeature('move_copy', feature.id);
-  if (feature.kind === 'construction_plane') {
-    const definition = useAppStore
-      .getState()
-      .datumPlanes.find((plane) => plane.feature_id === feature.id);
-    if (definition) {
+  void beginTimelineFeatureEdit(feature.id, async (engine) => {
+    if (feature.kind === 'sketch') return editSketch(feature.name);
+    if (feature.kind === 'extrude') openExtrude(feature.id);
+    if (feature.kind === 'revolve') openRevolve(feature.id);
+    if (feature.kind === 'sweep') openSweep(feature.id);
+    if (feature.kind === 'loft') openLoft(feature.id);
+    if (feature.kind === 'rib') openRib(feature.id);
+    if (feature.kind === 'fillet') openSolidFillet(feature.id);
+    if (feature.kind === 'chamfer') openSolidChamfer(feature.id);
+    if (feature.kind === 'hole') openHole(feature.id);
+    if (feature.kind === 'external_thread') {
+      openBodyFeature('external_thread', feature.id);
+    }
+    if (feature.kind === 'move_copy') openBodyFeature('move_copy', feature.id);
+    if (feature.kind === 'construction_plane') {
+      // The stage view deliberately hides this datum while it is being
+      // edited, so resolve its retained definition through the engine.
+      const definition = (await engine.datumPlaneDefinitions()).find(
+        (plane) => plane.feature_id === feature.id,
+      );
+      if (!definition) {
+        throw new Error(`Could not find construction plane ${feature.name}`);
+      }
       openConstructionPlane(definition.source.type, feature.id);
     }
-  }
-  if (feature.kind === 'shell') openBodyFeature('shell', feature.id);
-  if (feature.kind === 'mirror') openBodyFeature('mirror', feature.id);
-  if (feature.kind === 'rectangular_pattern') {
-    openBodyFeature('rectangular_pattern', feature.id);
-  }
-  if (feature.kind === 'circular_pattern') {
-    openBodyFeature('circular_pattern', feature.id);
-  }
-  if (feature.kind === 'combine') openBodyFeature('combine', feature.id);
-  if (feature.kind === 'split_body') openBodyFeature('split_body', feature.id);
+    if (feature.kind === 'shell') openBodyFeature('shell', feature.id);
+    if (feature.kind === 'mirror') openBodyFeature('mirror', feature.id);
+    if (feature.kind === 'rectangular_pattern') {
+      openBodyFeature('rectangular_pattern', feature.id);
+    }
+    if (feature.kind === 'circular_pattern') {
+      openBodyFeature('circular_pattern', feature.id);
+    }
+    if (feature.kind === 'combine') openBodyFeature('combine', feature.id);
+    if (feature.kind === 'split_body') openBodyFeature('split_body', feature.id);
+  });
 }
 
 function canEditTimelineFeature(feature: FeatureDto): boolean {
@@ -132,6 +138,8 @@ export function Timeline() {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
   const busy = useAppStore((s) => s.solidBusy);
+  const projectBusy = useAppStore((s) => s.projectBusy);
+  const historyEditing = useAppStore((s) => s.historyEdit !== null);
   const mode = useAppStore((s) => s.mode);
   const joints = useAppStore((s) => s.assemblyDocument.joints);
   const selectedJointId = useAppStore((s) => s.selectedJointId);
@@ -160,7 +168,8 @@ export function Timeline() {
   } | null>(null);
   const selectionAnchorRef = useRef<number | null>(null);
   const displayedRollback = drag?.index ?? requestedRollback ?? rollback;
-  const canReorder = mode === 'solid' && !busy && rollback === features.length;
+  const interactionLocked = busy || projectBusy || historyEditing;
+  const canReorder = mode === 'solid' && !interactionLocked && rollback === features.length;
 
   useEffect(() => {
     const validIds = new Set(features.map((feature) => feature.id));
@@ -221,13 +230,13 @@ export function Timeline() {
   const move = useCallback(
     (next: number) => {
       const clamped = Math.max(0, Math.min(features.length, next));
-      if (busy || clamped === rollback) return;
+      if (interactionLocked || clamped === rollback) return;
       setRequestedRollback(clamped);
       void setTimelineRollback(clamped).finally(() => {
         setRequestedRollback((current) => (current === clamped ? null : current));
       });
     },
-    [busy, features.length, rollback],
+    [features.length, interactionLocked, rollback],
   );
 
   useEffect(() => {
@@ -295,7 +304,7 @@ export function Timeline() {
   }, [drag?.pointerId, move]);
 
   const beginCursorDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (busy || event.button !== 0) return;
+    if (interactionLocked || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     dragIndexRef.current = displayedRollback;
@@ -445,7 +454,7 @@ export function Timeline() {
             ? t('timeline.editSketch')
             : t('timeline.editFeature'),
         icon: <Pencil size={14} />,
-        disabled: mode !== 'solid' || busy || !canEditTimelineFeature(feature),
+        disabled: mode !== 'solid' || interactionLocked || !canEditTimelineFeature(feature),
         onSelect: () => editTimelineFeature(feature),
       },
       { type: 'separator', id: 'history-separator' },
@@ -454,7 +463,7 @@ export function Timeline() {
         id: 'rollback-before',
         label: t('timeline.rollbackBefore'),
         icon: <ArrowLeftToLine size={14} />,
-        disabled: busy || rollback === index,
+        disabled: interactionLocked || rollback === index,
         onSelect: () => move(index),
       },
       {
@@ -462,7 +471,7 @@ export function Timeline() {
         id: 'rollback-after',
         label: t('timeline.rollbackAfter'),
         icon: <ArrowRightToLine size={14} />,
-        disabled: busy || rollback === index + 1,
+        disabled: interactionLocked || rollback === index + 1,
         onSelect: () => move(index + 1),
       },
       {
@@ -470,7 +479,7 @@ export function Timeline() {
         id: 'rollback-end',
         label: t('timeline.rollbackEnd'),
         icon: <ArrowRightToLine size={14} />,
-        disabled: busy || rollback === features.length,
+        disabled: interactionLocked || rollback === features.length,
         onSelect: () => move(features.length),
       },
       { type: 'separator', id: 'delete-separator' },
@@ -480,7 +489,7 @@ export function Timeline() {
         label: t('timeline.deleteFeature'),
         icon: <Trash2 size={14} />,
         danger: true,
-        disabled: mode !== 'solid' || busy,
+        disabled: mode !== 'solid' || interactionLocked,
         onSelect: () => {
           const targets = selectedFeatureIds.has(feature.id)
             ? features.filter((candidate) => selectedFeatureIds.has(candidate.id))
@@ -500,7 +509,7 @@ export function Timeline() {
         id: 'edit-joint',
         label: t('timeline.editJoint'),
         icon: <Pencil size={14} />,
-        disabled: mode !== 'solid' || busy,
+        disabled: mode !== 'solid' || interactionLocked,
         onSelect: () => openJointEditor(joint.id),
       },
       {
@@ -508,7 +517,7 @@ export function Timeline() {
         id: 'toggle-joint',
         label: joint.enabled ? t('timeline.suppressJoint') : t('timeline.unsuppressJoint'),
         icon: <Link2 size={14} />,
-        disabled: mode !== 'solid' || busy,
+        disabled: mode !== 'solid' || interactionLocked,
         onSelect: () => void setJointEnabled(joint.id, !joint.enabled),
       },
       { type: 'separator', id: 'delete-joint-separator' },
@@ -518,7 +527,7 @@ export function Timeline() {
         label: t('timeline.deleteJoint'),
         icon: <Trash2 size={14} />,
         danger: true,
-        disabled: mode !== 'solid' || busy,
+        disabled: mode !== 'solid' || interactionLocked,
         onSelect: () => void deleteJoint(joint.id),
       },
     ];
@@ -553,7 +562,7 @@ export function Timeline() {
       >
         {controls.map((control) => {
           const disabled =
-            busy ||
+            interactionLocked ||
             features.length === 0 ||
             Math.max(0, Math.min(features.length, control.next)) === rollback;
           return (
@@ -592,7 +601,7 @@ export function Timeline() {
                 hint={t('timeline.dragMarker')}
                 value={displayedRollback}
                 max={features.length}
-                busy={busy}
+                busy={interactionLocked}
                 dragging={drag !== null}
                 onPointerDown={beginCursorDrag}
                 onMove={move}
@@ -603,7 +612,7 @@ export function Timeline() {
               index={index}
               active={index < displayedRollback}
               selected={selectedFeatureIds.has(feature.id)}
-              busy={busy}
+              busy={interactionLocked}
               reorderEnabled={canReorder}
               reordering={featureDrag?.featureId === feature.id && featureDrag.moved}
               onSelect={(event) => selectFeature(event, feature.id, index)}
@@ -622,7 +631,7 @@ export function Timeline() {
             hint={t('timeline.dragMarker')}
             value={displayedRollback}
             max={features.length}
-            busy={busy}
+            busy={interactionLocked}
             dragging={drag !== null}
             onPointerDown={beginCursorDrag}
             onMove={move}
@@ -636,7 +645,7 @@ export function Timeline() {
             key={joint.id}
             joint={joint}
             selected={joint.id === selectedJointId}
-            busy={busy}
+            busy={interactionLocked}
             onSelect={() => {
               setSolidSidebarMode('assembly');
               setSelectedJointId(joint.id);
@@ -671,7 +680,7 @@ export function Timeline() {
       {deleteTargets.length > 0 && (
         <DeleteFeatureDialog
           features={deleteTargets}
-          busy={busy}
+          busy={interactionLocked}
           onCancel={() => setDeleteTargets([])}
           onConfirm={() => {
             const featureIds = deleteTargets.map((feature) => feature.id);

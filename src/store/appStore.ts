@@ -65,6 +65,7 @@ import {
   readSixDofSpeed,
 } from '../navigationPreferences';
 import type { BrowserNode, DocumentDto, NodeId } from '../types/document';
+import { stageDatumPlanes, stageFinishedSketches } from '../engine/historyStage';
 import { normalizeDrawingDocument } from '../drawing/sheet';
 
 function emptyProjectVisibility(): ProjectVisibilityDto {
@@ -551,6 +552,18 @@ export type BodyFeatureKind =
 
 export type SolidSelectionKind = 'body' | 'face' | 'edge';
 
+/**
+ * A transient timeline-edit checkpoint. The displayed scene is evaluated
+ * immediately before `featureId`; completing or cancelling the editor
+ * returns the build cursor to `restoreRollbackIndex`.
+ */
+export interface HistoryEditCheckpoint {
+  featureId: number;
+  restoreRollbackIndex: number;
+  /** Dirty state before the temporary history stage was displayed. */
+  restoreDirty: boolean;
+}
+
 /** Default check states for the sketch palette. */
 const DEFAULT_PALETTE: Record<PaletteOptionKey, boolean> = {
   linetype: false,
@@ -722,6 +735,8 @@ interface AppState {
   constructionPlanePickedReference: PlaneRef | null;
   constructionPlanePickedEdge: ConstructionPlanePickedEdge | null;
   bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
+  /** Non-persistent history editing boundary for timeline feature editors. */
+  historyEdit: HistoryEditCheckpoint | null;
   sketchPatternDialog: 'rectangular' | 'circular' | null;
   /** File chooser/export operation that must keep the active tab stable. */
   projectBusy: boolean;
@@ -929,6 +944,7 @@ interface AppState {
   setConstructionPlanePickedEdge: (edge: ConstructionPlanePickedEdge) => void;
   openBodyFeatureDialog: (kind: BodyFeatureKind, featureId?: number) => void;
   closeBodyFeatureDialog: () => void;
+  setHistoryEdit: (checkpoint: HistoryEditCheckpoint | null) => void;
   openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
   closeSketchPatternDialog: () => void;
   setProjectBusy: (busy: boolean) => void;
@@ -1022,6 +1038,7 @@ function resetDocumentUiState(): Partial<AppState> {
     constructionPlanePickedReference: null,
     constructionPlanePickedEdge: null,
     bodyFeatureDialog: null,
+    historyEdit: null,
     sketchPatternDialog: null,
     solidBusy: false,
   };
@@ -1135,6 +1152,7 @@ export const useAppStore = create<AppState>()((set) => ({
   constructionPlanePickedReference: null,
   constructionPlanePickedEdge: null,
   bodyFeatureDialog: null,
+  historyEdit: null,
   sketchPatternDialog: null,
   projectBusy: false,
   solidBusy: false,
@@ -1177,9 +1195,9 @@ export const useAppStore = create<AppState>()((set) => ({
     set({
       document: doc,
       engineKind: engine.kind,
-      finishedSketches,
+      finishedSketches: stageFinishedSketches(doc, finishedSketches),
       solidScene,
-      datumPlanes,
+      datumPlanes: stageDatumPlanes(doc, datumPlanes),
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       drawingDocument,
       assemblyDocument,
@@ -1235,9 +1253,9 @@ export const useAppStore = create<AppState>()((set) => ({
     set({
       document: doc,
       engineKind: engine.kind,
-      finishedSketches,
+      finishedSketches: stageFinishedSketches(doc, finishedSketches),
       solidScene,
-      datumPlanes,
+      datumPlanes: stageDatumPlanes(doc, datumPlanes),
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
       drawingDocument,
       assemblyDocument,
@@ -1249,9 +1267,20 @@ export const useAppStore = create<AppState>()((set) => ({
     });
   },
 
-  setDocument: (doc) => set({ document: doc, dirty: true }),
+  setDocument: (doc) =>
+    set((state) => ({
+      document: doc,
+      finishedSketches: stageFinishedSketches(doc, state.finishedSketches),
+      datumPlanes: stageDatumPlanes(doc, state.datumPlanes),
+      dirty: true,
+    })),
 
-  setFinishedSketches: (sketches) => set({ finishedSketches: sketches }),
+  setFinishedSketches: (sketches) =>
+    set((state) => ({
+      finishedSketches: state.document
+        ? stageFinishedSketches(state.document, sketches)
+        : sketches,
+    })),
 
   setSolidScene: (solidScene) => {
     jointPreviewGeneration += 1;
@@ -1287,6 +1316,11 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) => ({
       document: update.document,
       solidScene: update.scene,
+      finishedSketches: stageFinishedSketches(
+        update.document,
+        state.finishedSketches,
+      ),
+      datumPlanes: stageDatumPlanes(update.document, state.datumPlanes),
       dirty: true,
       bodyAppearances: scrubAppearances(state.bodyAppearances, update.scene.bodies),
       selectedBody:
@@ -1343,11 +1377,15 @@ export const useAppStore = create<AppState>()((set) => ({
   },
 
   applyDatumPlaneUpdate: (update) =>
-    set({
+    set((state) => ({
       document: update.document,
-      datumPlanes: update.planes,
+      finishedSketches: stageFinishedSketches(
+        update.document,
+        state.finishedSketches,
+      ),
+      datumPlanes: stageDatumPlanes(update.document, update.planes),
       dirty: true,
-    }),
+    })),
 
   setBodyAppearances: (appearances) => set({ bodyAppearances: appearances }),
 
@@ -2030,9 +2068,9 @@ export const useAppStore = create<AppState>()((set) => ({
     set({
       ...resetDocumentUiState(),
       document: update.document,
-      finishedSketches,
+      finishedSketches: stageFinishedSketches(update.document, finishedSketches),
       solidScene: update.scene,
-      datumPlanes,
+      datumPlanes: stageDatumPlanes(update.document, datumPlanes),
       bodyAppearances: scrubAppearances(bodyAppearances, update.scene.bodies),
       drawingDocument: normalizeDrawingDocument(drawingDocument),
       assemblyDocument,
@@ -2855,6 +2893,8 @@ export const useAppStore = create<AppState>()((set) => ({
 
   closeBodyFeatureDialog: () =>
     set({ bodyFeatureDialog: null, solidCommandPreview: null }),
+
+  setHistoryEdit: (historyEdit) => set({ historyEdit }),
 
   openSketchPatternDialog: (kind) =>
     set({

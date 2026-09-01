@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Box, LoaderCircle, MousePointerClick, X } from 'lucide-react';
 import { getEngine } from '../engine';
-import { submitExtrude } from '../engine/controller';
+import { cancelTimelineFeatureEdit, submitExtrude } from '../engine/controller';
 import type {
   ExtrudeExtent,
   ExtrudeOperation,
@@ -33,6 +33,7 @@ export function ExtrudeDialog() {
   const { t } = useTranslation();
   const openFeature = useAppStore((s) => s.extrudeDialogFeature);
   const close = useAppStore((s) => s.closeExtrudeDialog);
+  const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((s) => s.solidBusy);
   const scene = useAppStore((s) => s.solidScene);
   const selectedBody = useAppStore((s) => s.selectedBody);
@@ -731,7 +732,7 @@ export function ExtrudeDialog() {
             type="button"
             title={t('extrude.cancel')}
             disabled={busy}
-            onClick={close}
+            onClick={cancel}
             className="rounded p-1 text-mute hover:bg-edge hover:text-ink disabled:opacity-40"
           >
             <X size={14} />
@@ -1071,7 +1072,7 @@ export function ExtrudeDialog() {
           <button
             type="button"
             disabled={busy}
-            onClick={close}
+            onClick={cancel}
             className="h-7 rounded border border-edge px-3 text-xs text-mute hover:bg-edge hover:text-ink disabled:opacity-40"
           >
             {t('extrude.cancel')}

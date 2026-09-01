@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { getEngine } from '../engine';
-import { submitBodyFeature } from '../engine/controller';
+import { cancelTimelineFeatureEdit, submitBodyFeature } from '../engine/controller';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
@@ -512,6 +512,7 @@ const ICONS = {
 export function BodyFeatureDialog() {
   const dialog = useAppStore((state) => state.bodyFeatureDialog);
   const close = useAppStore((state) => state.closeBodyFeatureDialog);
+  const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((state) => state.solidBusy);
   const bodies = useAppStore((state) => state.solidScene.bodies);
   const selectedBody = useAppStore((state) => state.selectedBody);
@@ -1574,7 +1575,7 @@ export function BodyFeatureDialog() {
           </span>
           <button
             type="button"
-            onClick={close}
+            onClick={cancel}
             disabled={busy}
             className="rounded p-1 text-mute hover:bg-edge hover:text-ink"
           >
@@ -2251,7 +2252,7 @@ export function BodyFeatureDialog() {
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge bg-header px-3">
           <button
             type="button"
-            onClick={close}
+            onClick={cancel}
             disabled={busy}
             className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge"
           >

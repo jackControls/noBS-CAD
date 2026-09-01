@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { LoaderCircle, MoveRight, X } from 'lucide-react';
 import { getEngine } from '../engine';
-import { submitSweep } from '../engine/controller';
+import { cancelTimelineFeatureEdit, submitSweep } from '../engine/controller';
 import type {
   ExtrudeOperation,
   ProfileCatalogItemDto,
@@ -20,6 +20,7 @@ export function SweepDialog() {
   const { t } = useTranslation();
   const featureId = useAppStore((state) => state.sweepDialogFeature);
   const close = useAppStore((state) => state.closeSweepDialog);
+  const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((state) => state.solidBusy);
   const bodies = useAppStore((state) => state.solidScene.bodies);
   const selectedBody = useAppStore((state) => state.selectedBody);
@@ -250,7 +251,7 @@ export function SweepDialog() {
         <header className="feature-dialog-header flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <MoveRight size={15} className="text-accent" />
           <span className="flex-1 text-xs font-semibold text-ink">{featureId > 0 ? t('sweep.editTitle') : t('sweep.title')}</span>
-          <button type="button" onClick={close} disabled={busy} className="rounded p-1 text-mute hover:bg-edge hover:text-ink"><X size={14} /></button>
+          <button type="button" onClick={cancel} disabled={busy} className="rounded p-1 text-mute hover:bg-edge hover:text-ink"><X size={14} /></button>
         </header>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
           {loading ? <p className="flex items-center gap-2 text-xs text-mute"><LoaderCircle size={14} className="animate-spin" />{t('sweep.loading')}</p>
@@ -275,7 +276,7 @@ export function SweepDialog() {
                   <SolidOperationFields operation={operation} setOperation={setOperation} targetBodies={targetBodies} setTargetBodies={setTargetBodies} />
                 </>}
         </div>
-        <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge bg-header px-3"><button type="button" onClick={close} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">{t('sweep.cancel')}</button><button data-testid="sweep-ok" type="submit" disabled={!canSubmit} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">{t('sweep.ok')}</button></footer>
+        <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge bg-header px-3"><button type="button" onClick={cancel} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">{t('sweep.cancel')}</button><button data-testid="sweep-ok" type="submit" disabled={!canSubmit} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">{t('sweep.ok')}</button></footer>
       </form>
     </div>
   );
