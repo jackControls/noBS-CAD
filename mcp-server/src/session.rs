@@ -6,7 +6,7 @@
 //! Tauri IPC, then the existing publisher writes a new snapshot. This is still
 //! **not** in-process shared memory.
 //!
-//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json}`.
+//! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json,inbox/applied/<seq>.json?,inbox/failed/<seq>.json?}`.
 //! Live window projection reads expiring per-process leases under
 //! `<session_dir>/_ui/processes/`.
 //! Session ids must be UUID v4 strings.
@@ -1058,6 +1058,219 @@ where
         op,
         host_result,
     })
+}
+
+/// Default / max wait for [`await_inbox_apply`] (MCP `cad_await_apply`).
+pub const AWAIT_APPLY_DEFAULT_TIMEOUT_MS: u64 = 5_000;
+pub const AWAIT_APPLY_MAX_TIMEOUT_MS: u64 = 30_000;
+pub const AWAIT_APPLY_DEFAULT_POLL_MS: u64 = 50;
+
+/// Disk receipt for one inbox sequence after UI apply or dead-letter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboxReceipt {
+    Pending,
+    Applied {
+        base_generation: u64,
+        name: Option<String>,
+    },
+    Failed {
+        error: Option<String>,
+        name: Option<String>,
+        base_generation: Option<u64>,
+    },
+}
+
+fn read_optional_u64(value: &Value, key: &str) -> Option<u64> {
+    value.get(key).and_then(Value::as_u64)
+}
+
+fn read_optional_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn parse_receipt_file(path: &Path) -> Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or(json!({}))
+}
+
+/// Observe whether `inbox/<seq>.json` was archived (`applied/`) or dead-lettered
+/// (`failed/`). Does not mutate disk. Missing receipts are [`InboxReceipt::Pending`]
+/// even if the pending file is gone (race / unknown seq).
+pub fn inbox_op_receipt(session_id: &str, seq: u64) -> Result<InboxReceipt, String> {
+    require_valid_session_id(session_id)?;
+    let applied = session_path(session_id, &format!("inbox/applied/{seq}.json"))?;
+    if applied.is_file() {
+        let parsed = parse_receipt_file(&applied);
+        return Ok(InboxReceipt::Applied {
+            base_generation: read_optional_u64(&parsed, "base_generation").unwrap_or(0),
+            name: read_optional_string(&parsed, "name"),
+        });
+    }
+    let failed = session_path(session_id, &format!("inbox/failed/{seq}.json"))?;
+    if failed.is_file() {
+        let parsed = parse_receipt_file(&failed);
+        return Ok(InboxReceipt::Failed {
+            error: read_optional_string(&parsed, "error"),
+            name: read_optional_string(&parsed, "name"),
+            base_generation: read_optional_u64(&parsed, "base_generation"),
+        });
+    }
+    Ok(InboxReceipt::Pending)
+}
+
+/// True when the UI publisher has written a post-apply snapshot usable by
+/// `cad_refresh`.
+///
+/// Native inbox apply first bumps heartbeat with `kind: "engine_revision"`
+/// (generation = base+1) before archiving the seq; the TS publisher then
+/// writes `model.json` and a heartbeat **without** that kind. Waiting only
+/// for generation > base races the model write. Tests that call
+/// [`publish_applied_snapshot`] also omit `kind: "engine_revision"`.
+pub fn snapshot_publish_ready(session_id: &str, base_generation: u64) -> bool {
+    let Ok(body) = read_session_file(session_id, "heartbeat.json") else {
+        return false;
+    };
+    let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+    let Some(generation) = parsed.get("generation").and_then(Value::as_u64) else {
+        return false;
+    };
+    if generation <= base_generation {
+        return false;
+    }
+    match parsed.get("kind").and_then(Value::as_str) {
+        Some("engine_revision") => false,
+        _ => true,
+    }
+}
+
+fn clamp_await_timeout_ms(timeout_ms: u64) -> u64 {
+    timeout_ms.min(AWAIT_APPLY_MAX_TIMEOUT_MS)
+}
+
+/// Poll disk until the inbox seq has an applied/failed receipt and (for
+/// applied) the publisher heartbeat is past `kind: engine_revision`, or until
+/// `timeout_ms` elapses. `timeout_ms == 0` is a single observation.
+///
+/// Does **not** write `model.json`. Does **not** claim in-process co-link.
+pub fn await_inbox_apply(
+    session_id: &str,
+    seq: u64,
+    timeout_ms: u64,
+    poll_ms: u64,
+) -> Result<Value, String> {
+    require_valid_session_id(session_id)?;
+    let timeout_ms = clamp_await_timeout_ms(timeout_ms);
+    let poll_ms = poll_ms.max(1).min(1_000);
+    let started = now_ms();
+    let deadline = started.saturating_add(timeout_ms);
+
+    loop {
+        let elapsed_ms = now_ms().saturating_sub(started);
+        let receipt = inbox_op_receipt(session_id, seq)?;
+        let current_generation = read_heartbeat_generation(session_id).ok();
+
+        match receipt {
+            InboxReceipt::Failed {
+                error,
+                name,
+                base_generation,
+            } => {
+                return Ok(json!({
+                    "status": "failed",
+                    "timed_out": false,
+                    "seq": seq,
+                    "session_id": session_id,
+                    "name": name,
+                    "error": error,
+                    "base_generation": base_generation,
+                    "current_generation": current_generation,
+                    "applied": false,
+                    "dead_lettered": true,
+                    "published": false,
+                    "refreshed": false,
+                    "session_mode": "ui_owned_apply",
+                    "writeback": false,
+                    "elapsed_ms": elapsed_ms,
+                    "hint": "inbox op was dead-lettered; cad_refresh will not see a successful apply",
+                }));
+            }
+            InboxReceipt::Applied {
+                base_generation,
+                name,
+            } => {
+                let published = snapshot_publish_ready(session_id, base_generation);
+                if published {
+                    return Ok(json!({
+                        "status": "applied",
+                        "timed_out": false,
+                        "seq": seq,
+                        "session_id": session_id,
+                        "name": name,
+                        "base_generation": base_generation,
+                        "current_generation": current_generation,
+                        "applied": true,
+                        "dead_lettered": false,
+                        "published": true,
+                        "refreshed": false,
+                        "session_mode": "ui_owned_apply",
+                        "writeback": false,
+                        "elapsed_ms": elapsed_ms,
+                        "hint": "UI applied and published; call cad_refresh (or await with refresh:true) to load the snapshot",
+                    }));
+                }
+                // Applied but publisher still on engine_revision heartbeat.
+                if timeout_ms == 0 || now_ms() >= deadline {
+                    return Ok(json!({
+                        "status": "timeout",
+                        "timed_out": true,
+                        "seq": seq,
+                        "session_id": session_id,
+                        "name": name,
+                        "base_generation": base_generation,
+                        "current_generation": current_generation,
+                        "applied": true,
+                        "dead_lettered": false,
+                        "published": false,
+                        "refreshed": false,
+                        "session_mode": "ui_owned_apply",
+                        "writeback": false,
+                        "elapsed_ms": elapsed_ms,
+                        "hint": "apply receipt present but publisher snapshot not ready (heartbeat still kind=engine_revision or generation not advanced); retry cad_await_apply",
+                    }));
+                }
+            }
+            InboxReceipt::Pending => {
+                if timeout_ms == 0 || now_ms() >= deadline {
+                    let status = if timeout_ms == 0 {
+                        "pending"
+                    } else {
+                        "timeout"
+                    };
+                    return Ok(json!({
+                        "status": status,
+                        "timed_out": timeout_ms != 0,
+                        "seq": seq,
+                        "session_id": session_id,
+                        "current_generation": current_generation,
+                        "applied": false,
+                        "dead_lettered": false,
+                        "published": false,
+                        "refreshed": false,
+                        "session_mode": "ui_owned_apply",
+                        "writeback": false,
+                        "elapsed_ms": elapsed_ms,
+                        "hint": "still waiting for UI inbox apply receipt (inbox/applied/<seq>.json or inbox/failed/<seq>.json)",
+                    }));
+                }
+            }
+        }
+
+        let remaining = deadline.saturating_sub(now_ms());
+        let sleep_ms = poll_ms.min(remaining.max(1));
+        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+    }
 }
 
 /// Test/helper: replace model.json and bump heartbeat generation.
@@ -2260,6 +2473,246 @@ mod tests {
         assert_eq!(applied.seq, 1);
         assert!(applied.op.session_id.is_none());
         assert!(applied.op.window_id.is_none());
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inbox_op_receipt_pending_applied_failed() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-receipt-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+
+        assert_eq!(inbox_op_receipt(&unique, 1).unwrap(), InboxReceipt::Pending);
+
+        write_inbox_op(
+            &unique,
+            &InboxOp::unstamped("cad_set_document_name".to_string(), json!({"name": "A"}), 1),
+        )
+        .unwrap();
+        assert_eq!(inbox_op_receipt(&unique, 1).unwrap(), InboxReceipt::Pending);
+
+        apply_inbox_op(&unique, |_name, _args| Ok(json!({}))).expect("apply should archive");
+        match inbox_op_receipt(&unique, 1).unwrap() {
+            InboxReceipt::Applied {
+                base_generation,
+                name,
+            } => {
+                assert_eq!(base_generation, 1);
+                assert_eq!(name.as_deref(), Some("cad_set_document_name"));
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+
+        write_inbox_op(
+            &unique,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "B"}),
+                99,
+            ),
+        )
+        .unwrap();
+        let _ = apply_inbox_op(&unique, |_name, _args| Ok(json!({}))).expect_err("stale");
+        match inbox_op_receipt(&unique, 2).unwrap() {
+            InboxReceipt::Failed {
+                error,
+                base_generation,
+                ..
+            } => {
+                assert!(error.unwrap_or_default().contains("generation_conflict"));
+                assert_eq!(base_generation, Some(99));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_publish_ready_rejects_engine_revision_kind() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-pubready-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"session_id":"{unique}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        assert!(
+            !snapshot_publish_ready(&unique, 1),
+            "engine_revision heartbeat must not count as published"
+        );
+
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"session_id":"{unique}","session_mode":"read_only_snapshot"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        assert!(snapshot_publish_ready(&unique, 1));
+        assert!(
+            !snapshot_publish_ready(&unique, 2),
+            "generation must advance past base"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn await_inbox_apply_sees_publish_after_delayed_host() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-await-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+        write_session(&unique, "model.json", r#"{"version":1,"name":"before"}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        let seq = write_inbox_op(
+            &unique,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "After"}),
+                1,
+            ),
+        )
+        .unwrap();
+
+        let session_for_worker = unique.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            // OCC still sees generation 1; archive the op, then simulate the native
+            // engine_revision heartbeat bump, then the TS publisher snapshot.
+            apply_inbox_op(&session_for_worker, |_name, _args| Ok(json!({"ok": true}))).unwrap();
+            write_session(
+                &session_for_worker,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":2,"session_id":"{session_for_worker}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            publish_applied_snapshot(&session_for_worker, r#"{"version":1,"name":"After"}"#)
+                .unwrap();
+        });
+
+        let result = await_inbox_apply(&unique, seq, 2_000, 20).unwrap();
+        worker.join().unwrap();
+        assert_eq!(result["status"], "applied");
+        assert_eq!(result["timed_out"], false);
+        assert_eq!(result["applied"], true);
+        assert_eq!(result["published"], true);
+        assert_eq!(result["seq"], seq);
+        assert_eq!(result["writeback"], false);
+        assert!(result["current_generation"].as_u64().unwrap() > 1);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn await_inbox_apply_timeout_while_pending() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-await-to-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        let seq = write_inbox_op(
+            &unique,
+            &InboxOp::unstamped("cad_set_document_name".to_string(), json!({"name": "X"}), 1),
+        )
+        .unwrap();
+
+        let result = await_inbox_apply(&unique, seq, 60, 15).unwrap();
+        assert_eq!(result["status"], "timeout");
+        assert_eq!(result["timed_out"], true);
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["published"], false);
+
+        let probe = await_inbox_apply(&unique, seq, 0, 15).unwrap();
+        assert_eq!(probe["status"], "pending");
+        assert_eq!(probe["timed_out"], false);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn await_inbox_apply_reports_failed_receipt() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-await-fail-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        write_inbox_op(
+            &unique,
+            &InboxOp::unstamped(
+                "cad_set_document_name".to_string(),
+                json!({"name": "X"}),
+                99,
+            ),
+        )
+        .unwrap();
+        let _ = apply_inbox_op(&unique, |_n, _a| Ok(json!({}))).expect_err("stale");
+
+        let result = await_inbox_apply(&unique, 1, 500, 20).unwrap();
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["dead_lettered"], true);
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["timed_out"], false);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

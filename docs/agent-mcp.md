@@ -29,8 +29,10 @@ Needs native OCCT (`OCCT_ROOT` when not in a default install). Logs stay on
 5. Subagents: `full_static` or `cad_list_all_tools`.
 6. Optional UI snapshot: `cad_list_sessions` → `cad_attach` by `session_id`,
    `window_id`, or `document_id` → inspect. Mutates while attached go through
-   `cad_submit` (inbox; UI applies). `cad_refresh` after the UI publishes.
-   Goldens do not require attach. Do not write `model.json` from MCP.
+   `cad_submit` (inbox; UI applies). Prefer `cad_await_apply` with the returned
+   `seq` (waits for apply receipt + publisher, optional refresh) instead of
+   racing `cad_refresh`. Goldens do not require attach. Do not write
+   `model.json` from MCP.
 
 Soft disclosure: out-of-focus tools stay **callable**; results may include
 `_disclosure`.

@@ -23,11 +23,11 @@ machine (or CI runner).
 | Topic | Current state |
 |-------|----------------|
 | Transport | **stdio** JSON-RPC (`nbcad-mcp`) — logs on **stderr** |
-| Tools | **107** modeling tools + control/export helpers |
+| Tools | Modeling tools + control/export helpers (includes `cad_await_apply`) |
 | Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
 | Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
-| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_refresh` re-reads. Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
+| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_await_apply` waits for apply receipt + publisher snapshot (optional refresh). Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
 | Geometry | Same native OCCT replay path as desktop when OCCT is available |
 | Export | STEP + STL + **3MF** (`solid_export_*`, `material_catalog`); 3MF preferred for slicers |
 
@@ -72,9 +72,10 @@ With attach:
 1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`, plus `window_id` / `document_id` when published. `windows[]` is **one entry per live process/window pair** with `documents[]` plus an authoritative `active_document_id` recorded by the native tab transition (never inferred from heartbeat order). Desktop processes renew independent leases under `_ui/processes/`; a process/window disappears after the lease expires or is removed at shutdown. Inactive tabs stay listed regardless of their own heartbeat age while their owning process lease is fresh; prior-run and closed tabs do not. Multiple concurrently running desktop processes remain independently visible.
 2. `cad_attach` — target by `session_id` and/or `window_id` and/or `document_id` (UUID `document_id` remains a session alias). All provided selectors are **intersected** before ambiguity is reported. Requires valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
 3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Direct mutates while attached return structured `session_read_only`; inspect/export/control stay callable. Only names in the shared `nbcad-mcp-mutate` map are accepted.
-4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge.
-5. `cad_refresh` — explicit re-read of the attached session from disk (needed after apply+publish).
-6. `cad_detach` — clears the attached session id.
+4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge. Successful applies archive to `inbox/applied/<seq>.json`.
+5. `cad_await_apply` — poll until the submit seq has an applied/failed receipt; for applied, also wait until the publisher heartbeat is past `kind: engine_revision` (so `model.json` is ready). Optional `refresh` (default true) then reloads the attached snapshot. `timeout_ms: 0` is a single status probe. This closes the manual `cad_refresh` race for agents; it is still **not** in-process shared memory.
+6. `cad_refresh` — explicit re-read of the attached session from disk (still available; prefer `cad_await_apply` after submit).
+7. `cad_detach` — clears the attached session id.
 This is **UI-owned apply**, not in-process shared memory. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
@@ -121,10 +122,18 @@ counts so a rebuilt history can be checked against the imported solid.
 
 | Capability | Today | Target | Issue |
 |------------|-------|--------|-------|
-| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
+| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). `cad_await_apply` waits for apply receipt + publish before refresh. Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
 | Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id`; attach+submit isolated per published window (identity-stamped inbox; mismatch dead-letters). Stdio still one doc per process; **not** a live broker | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
+
+## Slice note (`cad_await_apply`)
+Agents used to `cad_submit` then race a manual `cad_refresh`. `cad_await_apply`
+polls `inbox/applied/<seq>.json` / `inbox/failed/<seq>.json` and, on success,
+waits until the publisher heartbeat is past the native `kind: engine_revision`
+bump so refresh loads the new `model.json`. Still UI-owned file protocol —
+[#11](https://github.com/jackControls/noBS-CAD/issues/11) remains open until
+true in-process shared memory.
 
 ## Proposed (not shipped here)
 - In-process UI ↔ MCP co-link (same memory). UI-owned inbox apply is a file protocol, not that ([#11](https://github.com/jackControls/noBS-CAD/issues/11) still open)
