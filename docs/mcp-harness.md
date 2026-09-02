@@ -139,7 +139,7 @@ Three headless MCP quests score the first education path from
 They wrap the built-in print-in-place parts (`demo_export_pip_3mf`) —
 the **cam bolt** and **drawer clip** — not a cube. Tests:
 `tutor_quest_pip_*` in `cargo test --manifest-path mcp-server/Cargo.toml`
-(Windows CI: `mcp-server.yml`). No `cad_attach`. The UI tutor that narrates
+(Windows + Ubuntu CI: `mcp-server.yml`). No `cad_attach`. The UI tutor that narrates
 the same steps is still open on that issue.
 
 | Quest | What you do | How CI scores it |

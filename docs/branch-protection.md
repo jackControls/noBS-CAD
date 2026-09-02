@@ -27,7 +27,7 @@ GitHub → Settings → Branches → Branch protection rule for `main`:
 | Check | Purpose | Required? |
 |-------|---------|-----------|
 | Engine tests | `cargo test --workspace` | When green and fast enough |
-| MCP tests | build/test `mcp-server` | When green |
+| MCP tests | build/test `mcp-server` (Windows + Ubuntu) | When green (jobs exist; required-checks still a maintainer settings click) |
 | E2E smoke | small Playwright subset | Soft → then required |
 | Windows portable ZIP | existing workflow | Informative until stable/fast for all PRs |
 
