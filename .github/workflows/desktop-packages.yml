@@ -164,12 +164,16 @@ jobs:
             rust_target: x86_64-pc-windows-msvc
             vcpkg_triplet: x64-windows
             msvc_component: Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+            skip_wasm_opt: false
           - architecture: arm64
             runner: windows-11-vs2026-arm
             runner_cache_key: windows-11-vs2026-arm-arm64-windows-msvc
             rust_target: aarch64-pc-windows-msvc
             vcpkg_triplet: arm64-windows
             msvc_component: Microsoft.VisualStudio.Component.VC.Tools.ARM64
+            # wasm-pack 0.13.1 has no prebuilt wasm-opt binary for Windows
+            # ARM64. Rust still builds the WebAssembly module in release mode.
+            skip_wasm_opt: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
@@ -312,7 +316,21 @@ jobs:
         shell: pwsh
         env:
           OCCT_ROOT: ${{ env.VCPKG_INSTALL_ROOT }}\${{ matrix.vcpkg_triplet }}
-        run: npm run bundle:windows:portable -- -Target ${{ matrix.rust_target }}
+        run: |
+          $bundleArguments = @(
+            "run",
+            "bundle:windows:portable",
+            "--",
+            "-Target",
+            "${{ matrix.rust_target }}"
+          )
+          if ("${{ matrix.skip_wasm_opt }}" -eq "true") {
+            $bundleArguments += "-SkipWasmOpt"
+          }
+          & npm.cmd @bundleArguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "npm.cmd exited with code $LASTEXITCODE"
+          }
 
       - name: Verify packaged native viewport
         shell: pwsh

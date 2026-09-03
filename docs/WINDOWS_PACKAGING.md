@@ -122,6 +122,11 @@ requests to `main`, version tags, and manual dispatches. Both jobs:
    WebView startup failures;
 6. uploads the ZIP and SHA-256 file for seven days.
 
+`wasm-pack` 0.13.1 does not provide a prebuilt `wasm-opt` executable for a
+Windows ARM64 host. The ARM64 CI row therefore passes `--no-opt` only for its
+WebAssembly packaging step; the Rust WebAssembly module still uses Cargo's
+release profile. x64 continues to run the configured Binaryen optimization.
+
 The binary-cache key includes the pinned dependency manifest and the installed
 MSVC toolset version. The first run for a new combination compiles OCCT and
 stores vcpkg's binary packages; subsequent runs restore those packages instead
