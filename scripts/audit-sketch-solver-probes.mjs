@@ -1,7 +1,6 @@
 /**
  * Isolated engine-level solver convergence regressions (symmetry / tangent).
- * Originally used as evidence for docs/SKETCH_CONSTRAINT_AUDIT.md; retained
- * to keep the audited convergence envelope reproducible after hardening.
+ * Keeps the symmetry and tangent convergence envelopes reproducible.
  * Run: start `npm run dev -- --port 7317 --strictPort`, then `node scripts/audit-sketch-solver-probes.mjs [out-dir]`.
  */
 import { chromium } from 'playwright';

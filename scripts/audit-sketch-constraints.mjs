@@ -1,6 +1,5 @@
 /**
- * UI-level constraint audit (round 5 of the 2026-08-29 sketch audit).
- * Evidence for docs/SKETCH_CONSTRAINT_AUDIT.md.
+ * UI-level constraint behavior probes and screenshot capture.
  * Run: start `npm run dev -- --port 7317 --strictPort`, then `node scripts/audit-sketch-constraints.mjs [out-dir]`.
  */
 import { chromium } from 'playwright';

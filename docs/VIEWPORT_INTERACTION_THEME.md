@@ -38,8 +38,7 @@ render-world extraction frame. Without a transparent degenerate keepalive, a
 valid re-entry can update every picker and presentation state yet remain
 invisible until the mouse reaches a different feature. Do not remove those
 keepalives or treat an applied presentation counter as proof of visible pixels.
-The user confirmed that hover/re-entry was working in the resident-layer
-desktop build on 2026-09-02. Preserve that mechanism when adjusting appearance.
+Preserve this residency mechanism when adjusting appearance.
 
 ## Desktop visual validation gate
 
@@ -51,47 +50,23 @@ visual fix is not complete until the actual packaged app has reproduced the
 scenario and its Bevy viewport has been inspected in every affected theme.
 Do not report a desktop visual fix from browser evidence alone.
 
-### 2026-09-02 straight-line/profile overlap verification
+Required visual scenarios include:
 
-The packaged `noBS CAD Picker Stroke Test.app` was exercised through the macOS
-UI, using a rectangular sketch, a selected Revolve profile, and one of its
-boundary lines as the axis. Before/after Bevy screenshots at the same viewport
-size, camera, and zoom showed the old dark/red backing around the selected
-edge replaced by a single fine purple stroke. Selection remained visible with
-the pointer away, in light and dark appearance, and after orbiting underneath
-the sketch plane. The original system-appearance setting was restored.
+- approaching a profile edge from both its interior and exterior, and
+  reacquiring hover after crossing an unselectable region;
+- selecting a boundary as an axis or path, moving the pointer away, and
+  switching between command input fields without losing its accepted state;
+- rectangular and circular profile boundaries at multiple zoom levels and
+  viewing angles, including viewing a sketch from underneath;
+- origin-plane hover and selection retaining the plane's orientation color;
+  and
+- repeating affected scenarios in both light and dark appearance.
 
-No stroke-width constant, color, hit-testing rule, or residency mechanism was
-changed for this check. The visible thinning comes from removing the duplicate
-profile strokes, not from an unverified CSS or width adjustment. All 30 native
-viewport tests passed, including six outline-subtraction regressions; shared
-picker, screen-space picker, and theme tests also passed. Those tests are not
-visual evidence. Hover-only re-entry was not independently re-exercised by the
-UI controller in this check; its confirmation is the user's resident-build
-test above, not these selected-line screenshots.
+Compare screenshots with the same viewport size, camera, and zoom when
+checking stroke changes. Picker, theme, and outline-subtraction tests provide
+regression coverage but do not replace these native observations.
 
-### 2026-09-02 profile-border thinning verification
-
-The user confirmed that hover and selected-line thickness were correct and
-asked to thin only the remaining profile border. The old desktop window showed
-a wider white backing around the gold perimeter, while its selected axis was
-already a fine purple line. The packaged `noBS CAD Profile Border Test.app`
-was then exercised through the macOS UI with a vertical rectangular sketch,
-a Revolve profile, and its upper boundary as the selected axis. Actual Bevy
-screenshots showed a single thin gold/orange perimeter without the backing,
-with the purple axis still visible while the pointer was away. The rectangle
-was checked at two zoom levels, and both rectangular and circular profiles
-were inspected in light and dark appearance. The app's original System
-appearance setting was restored; the user's existing window was left intact.
-
-Only the profile pass and its duplicate base-curve coverage changed. Direct
-line width/color, hit testing, pointer state, resident-layer keepalives, profile
-fill, points, and origin-plane styling were not changed. All 37 native viewport
-tests passed, including open-tail, circular, reversed-arc, wrapped-arc, and
-merged-source coverage regressions; shared picker, screen-space picker, and
-theme tests also passed. These tests supplement, not replace, the desktop
-screenshots. Hover-only re-entry was not independently re-exercised by the UI
-controller in this check; its acceptance remains the user's confirmation.
+## Viewport-relative sizing and contrast
 
 These are logical design weights, not fixed backing-pixel widths. All
 interaction strokes scale with the logical viewport diagonal relative to a

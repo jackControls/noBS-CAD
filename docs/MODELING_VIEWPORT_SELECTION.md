@@ -1,4 +1,4 @@
-# Modeling Viewport Selection Audit
+# Modeling viewport selection
 
 ## Interaction rule
 
@@ -67,10 +67,7 @@ distinct without visually thickening its parent profile boundary.
 The profile's own border is also a single 0.75 logical-pixel stroke with no
 halo. Its covered base-sketch intervals are omitted instead of leaving a wider
 ordinary curve underneath; open tails remain visible. This is shared native
-rendering for all profile-based commands, not a Revolve-specific style. The
-profile-border build was visually inspected in the actual macOS Bevy viewport
-with rectangular and circular profiles in light and dark appearance on
-2026-09-02; direct line feedback and picking behavior were left unchanged.
+rendering for all profile-based commands, not a Revolve-specific style.
 Origin planes retain their blue/green/red orientation fills and borders. Hover
 and selection only brighten that permanent orientation color; they never add
 a generic cyan edge outline.
@@ -98,7 +95,7 @@ Every value in `ViewportPickGeometry` maps to one of these channels. The
 picker contract test enumerates the geometry registry and fails when a new
 capability lacks both hover and selected-state feedback.
 
-## Solid Modeling audit matrix
+## Solid Modeling command coverage
 
 | Command | Geometric references | Viewport behavior |
 | --- | --- | --- |
@@ -137,8 +134,7 @@ picks, and only the owning role can replace them. Returning to a saved Revolve
 line axis restores its validated identity into shared viewport feedback as
 well as retaining it for submission. The engine-backed
 `npm run e2e:modeling-picker-state` regression covers these transitions,
-including persisted feature editing; native visual evidence is recorded in
-`SKETCH_CAD_BRANCH_REVIEW.md`.
+including persisted feature editing.
 
 ### Overlapping profile priority
 
@@ -159,14 +155,7 @@ profile remains selectable outside the inset. Tests:
 `npm run e2e:face-sketch-profile-picking`. The latter checks actual mouse hover
 and clicks from three view directions in Extrude, Revolve, Loft, and Sweep,
 then submits an OCCT extrusion using the inset sketch. These state/engine
-checks are separate from the macOS Bevy visual verification below.
-
-On 2026-09-02, a copy of the user's partial-Revolve model was opened in the
-packaged `noBS CAD Profile Picker Fix.app` in dark appearance. The small face
-rectangle visibly selected as Sketch2, not Sketch1, in normal and oblique
-views. A submitted Add extrusion produced the expected small rectangular
-protrusion. That test operation was undone afterward. No Bevy colors, stroke
-widths, or hover-residency mechanisms were changed.
+checks do not substitute for inspecting the native Bevy viewport.
 
 ## Physical geometry versus joint-placement aids
 
@@ -192,8 +181,7 @@ transitions, default/explicit native pick purpose, a real OCCT 80-degree
 Revolve with an empty sector and a second body behind it, physical caps/walls,
 and retained joint-opening/rim targets. `e2e:surface-point-feedback` exercises
 mouse face selection and Move/Copy point feedback; browser state checks are
-not substitutes for the packaged Bevy observations recorded in the branch
-review.
+not substitutes for inspecting the packaged Bevy viewport.
 
 ## Bidirectional multi-input picking
 
@@ -221,7 +209,7 @@ overlay. For Hole, clicking an eligible visible sketch point on a planar face
 may satisfy the support-face and first-position roles in the same deliberate
 click, after which the command remains in position-picking mode.
 
-The audit covers Solid Modeling feature creation and editing. Appearance,
+These rules cover Solid Modeling feature creation and editing. Appearance,
 drawing metadata, motion-study configuration, and assembly document structure
 use semantic named records rather than anonymous solid geometry and are outside
 this rule.
