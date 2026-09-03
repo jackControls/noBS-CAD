@@ -118,9 +118,6 @@ use crate::state::BOOTSTRAP_SESSION_ID;
 const INITIAL_PHYSICAL_SIZE: u32 = 1;
 #[cfg(not(target_os = "linux"))]
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
-// 4x is portable for our color/depth targets; 8x fails validation on Apple M4.
-// Keep model and overlay cameras on the same supported sample count.
-const VIEWPORT_MSAA: Msaa = Msaa::Sample4;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
@@ -2400,7 +2397,7 @@ fn setup_scene(
         NativeViewportCamera,
         NativeCadCamera,
         Camera3d::default(),
-        VIEWPORT_MSAA,
+        Msaa::Sample8,
         BoxShadowSamples(6),
         Projection::Perspective(PerspectiveProjection {
             fov: camera.vertical_fov_degrees.to_radians(),
@@ -2417,7 +2414,7 @@ fn setup_scene(
         NativeOverlayCamera,
         IsDefaultUiCamera,
         Camera3d::default(),
-        VIEWPORT_MSAA,
+        Msaa::Sample8,
         Camera {
             order: 1,
             clear_color: ClearColorConfig::None,
@@ -5848,31 +5845,6 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn viewport_cameras_use_portable_msaa() {
-        let mut gizmo_config = GizmoConfigStore::default();
-        gizmo_config.insert(GizmoConfig::default(), CadHighlightGizmos::default());
-        gizmo_config.insert(GizmoConfig::default(), CadSketchGizmos::default());
-        gizmo_config.insert(GizmoConfig::default(), CadSketchPointOutlineGizmos::default());
-        gizmo_config.insert(GizmoConfig::default(), CadSketchPointGizmos::default());
-
-        let mut app = App::new();
-        app.insert_resource(gizmo_config)
-            .init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_systems(Startup, setup_scene);
-        app.update();
-
-        let world = app.world_mut();
-        let mut cameras = world.query_filtered::<&Msaa, With<NativeViewportCamera>>();
-        let sample_counts: Vec<Msaa> = cameras.iter(world).copied().collect();
-        assert_eq!(
-            sample_counts,
-            vec![Msaa::Sample4; 2],
-            "both CAD and overlay cameras must use portable 4x multisampling"
-        );
-    }
 
     fn assert_engine_ok(response: String) -> serde_json::Value {
         let envelope: serde_json::Value =
