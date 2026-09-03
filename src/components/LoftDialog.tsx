@@ -11,27 +11,22 @@ import type {
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/appStore';
 import { SolidOperationFields } from './SolidOperationFields';
+import { ViewportSelectionField } from './ViewportSelectionField';
 
 const LABEL_CLASS = 'mb-1 block text-[10px] font-semibold uppercase tracking-wide text-mute';
 const INPUT_CLASS =
   'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
-
-function keyOf(section: ProfileRefDto) {
-  return `${section.sketch_name}:${section.profile_index}`;
-}
 
 export function LoftDialog() {
   const { t } = useTranslation();
   const featureId = useAppStore((state) => state.loftDialogFeature);
   const close = useAppStore((state) => state.closeLoftDialog);
   const busy = useAppStore((state) => state.solidBusy);
-  const bodies = useAppStore((state) => state.solidScene.bodies);
-  const selectedBody = useAppStore((state) => state.selectedBody);
   const profilePicker = useAppStore((state) =>
     state.profilePicker?.owner === 'loft' ? state.profilePicker : null,
   );
   const configureProfilePicker = useAppStore((state) => state.configureProfilePicker);
-  const toggleProfilePick = useAppStore((state) => state.toggleProfilePick);
+  const replaceProfilePicks = useAppStore((state) => state.replaceProfilePicks);
   const curvePicker = useAppStore((state) =>
     state.curvePicker?.owner === 'loft_centerline' || state.curvePicker?.owner === 'loft_guide'
       ? state.curvePicker
@@ -39,6 +34,8 @@ export function LoftDialog() {
   );
   const configureCurvePicker = useAppStore((state) => state.configureCurvePicker);
   const replaceCurvePicks = useAppStore((state) => state.replaceCurvePicks);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
   const [ruled, setRuled] = useState(false);
   const [continuity, setContinuity] = useState<LoftContinuity>('g0');
@@ -56,6 +53,7 @@ export function LoftDialog() {
 
   useEffect(() => {
     if (featureId === null) return;
+    const initiallySelectedBody = useAppStore.getState().selectedBody;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -70,7 +68,7 @@ export function LoftDialog() {
         : undefined;
       const paths = nextCatalog.filter((item) => item.path_curves.length > 0);
       setCatalog(nextCatalog);
-      const initialSections = edit?.sections ?? usable.slice(0, 2).flatMap((item) => item.profiles.filter((profile) => profile.nesting_depth % 2 === 0).slice(0, 1).map((profile) => ({ sketch_name: item.sketch_name, profile_index: profile.index })));
+      const initialSections = edit?.sections ?? [];
       configureProfilePicker(
         'loft',
         usable,
@@ -81,45 +79,48 @@ export function LoftDialog() {
       setContinuity(edit?.continuity ?? 'g0');
       const initialCenterlineSketch =
         edit?.centerline?.sketch_name ?? paths[0]?.sketch_name ?? '';
+      const initialCenterlineIds = edit?.centerline?.entity_ids ?? [];
+      configureCurvePicker(
+        'loft_centerline',
+        nextCatalog,
+        initialCenterlineIds.map((entityId) => ({
+          sketchName: initialCenterlineSketch,
+          entityId,
+        })),
+        initialCenterlineSketch,
+      );
       setCenterlineEnabled(edit?.centerline != null);
       setCenterlineSketch(initialCenterlineSketch);
-      setCenterlineIds(
-        edit?.centerline?.entity_ids ??
-          paths
-            .find((item) => item.sketch_name === initialCenterlineSketch)
-            ?.path_curves.slice(0, 1)
-            .map((curve) => curve.entity_id) ??
-          [],
-      );
+      setCenterlineIds(initialCenterlineIds);
       const initialGuideSketch =
         edit?.guide_rail?.sketch_name ?? paths[0]?.sketch_name ?? '';
       setGuideEnabled(edit?.guide_rail != null);
       setGuideSketch(initialGuideSketch);
-      setGuideIds(
-        edit?.guide_rail?.entity_ids ??
-          paths
-            .find((item) => item.sketch_name === initialGuideSketch)
-            ?.path_curves.slice(0, 1)
-            .map((curve) => curve.entity_id) ??
-          [],
-      );
+      setGuideIds(edit?.guide_rail?.entity_ids ?? []);
       setOperation(edit?.operation ?? 'new_body');
-      setTargets(edit?.target_body_ids.length ? edit.target_body_ids : selectedBody !== null ? [selectedBody] : bodies[0] ? [bodies[0].id] : []);
+      setTargets(
+        edit?.target_body_ids.length
+          ? edit.target_body_ids
+          : initiallySelectedBody !== null
+            ? [initiallySelectedBody]
+            : [],
+      );
+      setModelingPickTarget('loft_sections');
     }).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : t('loft.loadFailed'));
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [bodies, configureProfilePicker, featureId, selectedBody, t]);
+  }, [configureCurvePicker, configureProfilePicker, featureId, setModelingPickTarget, t]);
 
   useEffect(() => {
     if (!curvePicker) return;
     const ids = curvePicker.selected.map((candidate) => candidate.entityId);
     if (curvePicker.owner === 'loft_centerline') {
-      setCenterlineEnabled(true);
+      if (ids.length > 0) setCenterlineEnabled(true);
       setCenterlineSketch(curvePicker.sketchName);
       setCenterlineIds(ids);
     } else {
-      setGuideEnabled(true);
+      if (ids.length > 0) setGuideEnabled(true);
       setGuideSketch(curvePicker.sketchName);
       setGuideIds(ids);
     }
@@ -130,54 +131,10 @@ export function LoftDialog() {
     item.profiles.some((profile) => profile.nesting_depth % 2 === 0),
   );
   const pathEntries = catalog.filter((item) => item.path_curves.length > 0);
-  const centerlineEntry = catalog.find(
-    (item) => item.sketch_name === centerlineSketch,
-  );
-  const guideEntry = catalog.find((item) => item.sketch_name === guideSketch);
   const canSubmit = !loading && !busy && !error && sections.length >= 2
     && (!centerlineEnabled || (centerlineSketch !== '' && centerlineIds.length > 0))
     && (!guideEnabled || (guideSketch !== '' && guideIds.length > 0))
     && (operation === 'new_body' || targets.length > 0);
-  const toggle = (section: ProfileRefDto) => {
-    toggleProfilePick(section);
-  };
-  const choosePathSketch = (
-    name: string,
-    setSketch: (value: string) => void,
-    setIds: (value: number[]) => void,
-    owner: 'loft_centerline' | 'loft_guide',
-  ) => {
-    const ids =
-      catalog
-        .find((item) => item.sketch_name === name)
-        ?.path_curves.slice(0, 1)
-        .map((curve) => curve.entity_id) ?? [];
-    setSketch(name);
-    setIds(ids);
-    if (curvePicker?.owner === owner) {
-      replaceCurvePicks(owner, ids.map((entityId) => ({ sketchName: name, entityId })), name);
-    }
-  };
-  const togglePathId = (
-    id: number,
-    setIds: React.Dispatch<React.SetStateAction<number[]>>,
-    owner: 'loft_centerline' | 'loft_guide',
-    sketchName: string,
-  ) => {
-    setIds((current) => {
-      const next = current.includes(id)
-        ? current.filter((candidate) => candidate !== id)
-        : [...current, id];
-      if (curvePicker?.owner === owner) {
-        replaceCurvePicks(
-          owner,
-          next.map((entityId) => ({ sketchName, entityId })),
-          sketchName,
-        );
-      }
-      return next;
-    });
-  };
   const activateCurvePicker = (
     owner: 'loft_centerline' | 'loft_guide',
     sketchName: string,
@@ -189,6 +146,16 @@ export function LoftDialog() {
       ids.map((entityId) => ({ sketchName, entityId })),
       sketchName,
     );
+    setModelingPickTarget(owner === 'loft_centerline' ? 'loft_centerline' : 'loft_guide');
+  };
+  const activateSections = () => {
+    configureProfilePicker(
+      'loft',
+      profileEntries,
+      sections,
+      sections[sections.length - 1]?.sketch_name ?? '',
+    );
+    setModelingPickTarget('loft_sections');
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -220,26 +187,64 @@ export function LoftDialog() {
             : error ? <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">{error}</p>
               : profileEntries.length < 2 ? <p className="text-xs leading-5 text-mute">{t('loft.noProfiles')}</p>
                 : <>
-                  <p className="text-[10px] leading-4 text-mute">{t('solidProfile.pickHint')}</p>
-                  <fieldset><legend className={LABEL_CLASS}>{t('loft.sections')}</legend><div className="space-y-1 rounded border border-edge bg-header p-2">{profileEntries.flatMap((item) => item.profiles.filter((profile) => profile.nesting_depth % 2 === 0).map((profile) => {
-                    const section = { sketch_name: item.sketch_name, profile_index: profile.index };
-                    const order = sections.findIndex((candidate) => keyOf(candidate) === keyOf(section));
-                    return <label key={keyOf(section)} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"><input type="checkbox" checked={order >= 0} onChange={() => toggle(section)} className="accent-accent" /><span className="flex-1">{item.sketch_name} · {t('loft.profile')} {profile.index + 1}</span>{order >= 0 && <span className="text-[10px] text-accent">#{order + 1}</span>}</label>;
-                  }))}</div></fieldset>
-                  <p className="text-[10px] leading-4 text-mute">{t('loft.orderHint')}</p>
+                  <ViewportSelectionField
+                    testId="loft-sections-selection"
+                    label={t('loft.sections')}
+                    status={sections.length > 0 ? `${sections.length} ${sections.length === 1 ? 'section' : 'sections'} selected` : 'Click closed profiles in the viewport'}
+                    hint="Select profiles in loft order. The viewport highlights and numbered badges show the current order."
+                    active={modelingPickTarget === 'loft_sections'}
+                    hasSelection={sections.length > 0}
+                    onActivate={activateSections}
+                    onClear={() => {
+                      replaceProfilePicks('loft', [], '');
+                      setModelingPickTarget('loft_sections');
+                    }}
+                  />
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={ruled} onChange={(event) => setRuled(event.target.checked)} className="accent-accent" />{t('loft.ruled')}</label>
                   <label><span className={LABEL_CLASS}>Section continuity</span><select data-testid="loft-continuity" value={continuity} onChange={(event) => setContinuity(event.target.value as LoftContinuity)} className={INPUT_CLASS}><option value="g0">G0 · Position</option><option value="g1">G1 · Tangent</option><option value="g2">G2 · Curvature</option></select></label>
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="loft-centerline-enabled" type="checkbox" checked={centerlineEnabled} onChange={(event) => setCenterlineEnabled(event.target.checked)} disabled={pathEntries.length === 0} className="accent-accent" />Use a centerline</label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="loft-centerline-enabled" type="checkbox" checked={centerlineEnabled} onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setCenterlineEnabled(enabled);
+                    if (enabled) activateCurvePicker('loft_centerline', centerlineSketch, centerlineIds);
+                    else if (modelingPickTarget === 'loft_centerline') setModelingPickTarget('loft_sections');
+                  }} disabled={pathEntries.length === 0} className="accent-accent" />Use a centerline</label>
                   {centerlineEnabled && <>
-                    <label><span className={LABEL_CLASS}>Centerline sketch</span><select data-testid="loft-centerline-sketch" value={centerlineSketch} onChange={(event) => choosePathSketch(event.target.value, setCenterlineSketch, setCenterlineIds, 'loft_centerline')} className={INPUT_CLASS}>{pathEntries.map((item) => <option key={item.sketch_name}>{item.sketch_name}</option>)}</select></label>
-                    <fieldset><legend className={LABEL_CLASS}>Centerline curves</legend><button type="button" onClick={() => activateCurvePicker('loft_centerline', centerlineSketch, centerlineIds)} className={`mb-1 h-7 w-full rounded border px-2 text-xs ${curvePicker?.owner === 'loft_centerline' ? 'border-accent bg-accent/15 text-ink' : 'border-edge text-mute hover:bg-edge hover:text-ink'}`}>Pick centerline in canvas</button><div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">{centerlineEntry?.path_curves.map((curve) => <label key={curve.entity_id} className="flex cursor-pointer gap-2 text-xs text-ink"><input data-testid={`loft-centerline-${curve.entity_id}`} type="checkbox" checked={centerlineIds.includes(curve.entity_id)} onChange={() => togglePathId(curve.entity_id, setCenterlineIds, 'loft_centerline', centerlineSketch)} className="accent-accent" /><span className="capitalize">{curve.kind}</span> {curve.entity_id}</label>)}</div></fieldset>
+                    <ViewportSelectionField
+                      testId="loft-centerline-selection"
+                      label="Centerline"
+                      status={centerlineIds.length > 0 ? `${centerlineIds.length} centerline ${centerlineIds.length === 1 ? 'curve' : 'curves'} selected · ${centerlineSketch}` : 'Click a centerline in the viewport'}
+                      active={modelingPickTarget === 'loft_centerline'}
+                      hasSelection={centerlineIds.length > 0}
+                      onActivate={() => activateCurvePicker('loft_centerline', centerlineSketch, centerlineIds)}
+                      onClear={() => {
+                        setCenterlineIds([]);
+                        replaceCurvePicks('loft_centerline', [], centerlineSketch);
+                        setModelingPickTarget('loft_centerline');
+                      }}
+                    />
                   </>}
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="loft-guide-enabled" type="checkbox" checked={guideEnabled} onChange={(event) => setGuideEnabled(event.target.checked)} disabled={pathEntries.length === 0} className="accent-accent" />Use a guide rail</label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="loft-guide-enabled" type="checkbox" checked={guideEnabled} onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setGuideEnabled(enabled);
+                    if (enabled) activateCurvePicker('loft_guide', guideSketch, guideIds);
+                    else if (modelingPickTarget === 'loft_guide') setModelingPickTarget('loft_sections');
+                  }} disabled={pathEntries.length === 0} className="accent-accent" />Use a guide rail</label>
                   {guideEnabled && <>
-                    <label><span className={LABEL_CLASS}>Guide sketch</span><select data-testid="loft-guide-sketch" value={guideSketch} onChange={(event) => choosePathSketch(event.target.value, setGuideSketch, setGuideIds, 'loft_guide')} className={INPUT_CLASS}>{pathEntries.map((item) => <option key={item.sketch_name}>{item.sketch_name}</option>)}</select></label>
-                    <fieldset><legend className={LABEL_CLASS}>Guide curves</legend><button type="button" onClick={() => activateCurvePicker('loft_guide', guideSketch, guideIds)} className={`mb-1 h-7 w-full rounded border px-2 text-xs ${curvePicker?.owner === 'loft_guide' ? 'border-accent bg-accent/15 text-ink' : 'border-edge text-mute hover:bg-edge hover:text-ink'}`}>Pick guide curves in canvas</button><div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">{guideEntry?.path_curves.map((curve) => <label key={curve.entity_id} className="flex cursor-pointer gap-2 text-xs text-ink"><input data-testid={`loft-guide-${curve.entity_id}`} type="checkbox" checked={guideIds.includes(curve.entity_id)} onChange={() => togglePathId(curve.entity_id, setGuideIds, 'loft_guide', guideSketch)} className="accent-accent" /><span className="capitalize">{curve.kind}</span> {curve.entity_id}</label>)}</div></fieldset>
+                    <ViewportSelectionField
+                      testId="loft-guide-selection"
+                      label="Guide rail"
+                      status={guideIds.length > 0 ? `${guideIds.length} guide ${guideIds.length === 1 ? 'curve' : 'curves'} selected · ${guideSketch}` : 'Click a guide rail in the viewport'}
+                      active={modelingPickTarget === 'loft_guide'}
+                      hasSelection={guideIds.length > 0}
+                      onActivate={() => activateCurvePicker('loft_guide', guideSketch, guideIds)}
+                      onClear={() => {
+                        setGuideIds([]);
+                        replaceCurvePicks('loft_guide', [], guideSketch);
+                        setModelingPickTarget('loft_guide');
+                      }}
+                    />
                   </>}
-                  <SolidOperationFields operation={operation} setOperation={setOperation} targetBodies={targets} setTargetBodies={setTargets} />
+                  <SolidOperationFields operation={operation} setOperation={setOperation} targetBodies={targets} setTargetBodies={setTargets} pickTarget="loft_targets" />
                 </>}
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge bg-header px-3"><button type="button" onClick={close} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">{t('loft.cancel')}</button><button data-testid="loft-ok" type="submit" disabled={!canSubmit} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">{t('loft.ok')}</button></footer>

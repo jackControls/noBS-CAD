@@ -1487,16 +1487,22 @@ export class MeshStandardMaterial extends Material {
 export class PointsMaterial extends Material {
   size: number;
   sizeAttenuation: boolean;
+  map: Texture | null;
+  alphaTest: number;
 
   constructor(
     parameters: MaterialParameters & {
       size?: number;
       sizeAttenuation?: boolean;
+      map?: Texture | null;
+      alphaTest?: number;
     } = {},
   ) {
     super(parameters);
     this.size = parameters.size ?? 1;
     this.sizeAttenuation = parameters.sizeAttenuation ?? true;
+    this.map = parameters.map ?? null;
+    this.alphaTest = parameters.alphaTest ?? 0;
   }
 }
 
@@ -1646,6 +1652,10 @@ export class SegmentListGeometry extends BufferGeometry {
 export class ScreenLineMaterial extends Material {
   linewidth: number;
   resolution = new Vector2(1, 1);
+  /** Unscaled logical width for viewport-relative interaction graphics. */
+  viewportRelativeLinewidthBase: number | null = null;
+  /** Logical-pixel displacement of the camera-aware hover companion. */
+  hoverCompanionOffsetPx = 0;
 
   constructor(parameters: MaterialParameters & { linewidth?: number } = {}) {
     super(parameters);

@@ -46,7 +46,7 @@ try {
     () => window.__appStore?.getState().document !== null && !!window.__engine,
   );
 
-  console.log('1. Untouched default 10 mm submits with Enter');
+  console.log('1. Viewport-selected profile submits with the untouched default 10 mm');
   await createFinishedRectangle();
   const extrudeButton = page.locator('button[title="Extrude"]').first();
   await extrudeButton.click();
@@ -57,13 +57,22 @@ try {
       window.__appStore.getState().profilePicker?.owner === 'extrude'
       && !window.__appStore.getState().solidBusy,
   );
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().profilePicker?.selected.length),
+    0,
+    'a new command waits for the user to identify the source in the viewport',
+  );
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().modelingPickTarget),
+    'extrude_source',
+  );
+  const initialCenter = await page.evaluate(() => window.__worldToScreen(0, 0, 0));
+  await page.mouse.click(initialCenter.x, initialCenter.y);
+  await page.waitForFunction(
+    () => window.__appStore.getState().profilePicker?.selected.length === 1,
+  );
   const distance = page.getByTestId('extrude-distance');
   assert.equal(await distance.inputValue(), '10');
-  assert.equal(
-    await distance.evaluate((element) => document.activeElement === element),
-    true,
-    'default distance should receive focus so Enter submits the dialog',
-  );
   await page.keyboard.press('Enter');
   await page.waitForFunction(
     () =>
@@ -95,22 +104,23 @@ try {
   await page.waitForFunction(
     () => window.__appStore.getState().profilePicker?.owner === 'extrude',
   );
-  const profileCheckbox = dialog.locator('input[type="checkbox"]').first();
-  assert.equal(await profileCheckbox.isChecked(), true);
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().profilePicker?.selected.length),
+    0,
+  );
   await page.evaluate(() => {
     window.__appStore.getState().selectSolidFeature('face', 999, 888, null, false);
   });
-  await page.getByTestId('extrude-clear-profiles').click();
+  await page.getByTestId('extrude-profile-selection-state').click();
   await page.waitForFunction(
     () =>
       window.__appStore.getState().profilePicker?.selected.length === 0
-      && window.__appStore.getState().profilePicker?.sketchName === ''
       && window.__appStore.getState().selectedFace === null,
   );
-  assert.equal(
-    await page.getByTestId('extrude-sketch').inputValue(),
-    '',
-    'Clear & reselect removes the old sketch scope instead of trapping the picker',
+  assert.match(
+    await page.getByTestId('extrude-profile-selection-state').innerText(),
+    /click closed profiles or a planar face/i,
+    'reactivating the source field clears unrelated solid selection without trapping the viewport picker',
   );
   assert.equal(
     await page.evaluate(() => window.__nativeViewportTransient().triangles.length),
@@ -136,7 +146,7 @@ try {
     'clicking any candidate region adopts its owning sketch',
   );
   assert.equal(
-    await dialog.locator('input[type="checkbox"]:checked').count(),
+    await page.evaluate(() => window.__appStore.getState().profilePicker?.selected.length),
     1,
   );
   await page.waitForFunction(

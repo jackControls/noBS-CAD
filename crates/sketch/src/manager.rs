@@ -58,7 +58,7 @@ use crate::dto::{
 };
 use crate::entity::EntityId;
 use crate::project::{
-    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV2, ProjectPreferencesV2,
+    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV3, ProjectPreferencesV2,
     PROJECT_FORMAT, PROJECT_SCHEMA_VERSION,
 };
 use crate::session::{
@@ -185,7 +185,7 @@ impl SketchManager {
                 "finish the active sketch before saving the project".to_string(),
             ));
         }
-        let model = ProjectModelV2 {
+        let model = ProjectModelV3 {
             format: PROJECT_FORMAT.to_string(),
             schema_version: PROJECT_SCHEMA_VERSION,
             document: ProjectDocumentV2 {
@@ -5351,6 +5351,117 @@ mod project_tests {
             .profiles
             .iter()
             .all(|profile| !profile.curves.is_empty()));
+    }
+
+    #[test]
+    fn reference_project_requires_a_new_reader_and_preserves_measurement_semantics() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        manager.begin_sketch(plane).unwrap();
+        let line = manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(10.0, 10.0),
+                to_raw: crate::Vec2::new(50.0, 10.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        let dimension = manager
+            .add_dimension(DimensionRequest {
+                entities: vec![line.entity_id],
+                text_pos: crate::Vec2::new(30.0, 15.0),
+                value_text: None,
+            })
+            .unwrap();
+        let before = manager
+            .set_dimension_mode(SetDimensionModeRequest {
+                constraint_id: dimension.sketch.dimensions[0].constraint_id,
+                mode: crate::DimensionMode::Reference,
+            })
+            .unwrap()
+            .sketch;
+        assert_eq!(before.dof.value, 4);
+        manager.end_sketch().unwrap();
+        let json = manager.export_project_model().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Existing schema-2 builds reject every version except 1 and 2. Do
+        // not let an additive-field "compatibility" change remove this gate.
+        assert!(parsed["schema_version"].as_u64().unwrap() > 2);
+
+        // Also preserve reference files from this branch's earlier test
+        // builds, which wrote the mode map without raising schema_version.
+        for version in [2, PROJECT_SCHEMA_VERSION] {
+            let mut input = parsed.clone();
+            input["schema_version"] = version.into();
+            let mut loaded = SketchManager::new();
+            let plan = loaded.prepare_load_project(input.to_string()).unwrap();
+            assert!(plan.jobs.is_empty());
+            commit_plan(&mut loaded, plan, plane.origin_basis().unwrap());
+            let after = loaded.edit_sketch("Sketch1").unwrap();
+            assert_eq!(after.dof, before.dof);
+            assert_eq!(after.dimensions.len(), 1);
+            assert_eq!(after.dimensions[0].mode, crate::DimensionMode::Reference);
+            assert_eq!(after.dimensions[0].param_id, None);
+            assert!((after.dimensions[0].value - 40.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn schema_v2_driving_dimensions_migrate_without_changing_solver_or_parameters() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        manager.begin_sketch(plane).unwrap();
+        let line = manager
+            .add_line(SegmentRequest {
+                from: crate::Vec2::new(10.0, 10.0),
+                to_raw: crate::Vec2::new(50.0, 10.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        let before = manager
+            .add_dimension(DimensionRequest {
+                entities: vec![line.entity_id],
+                text_pos: crate::Vec2::new(30.0, 15.0),
+                value_text: None,
+            })
+            .unwrap()
+            .sketch;
+        manager.end_sketch().unwrap();
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&manager.export_project_model().unwrap()).unwrap();
+        legacy["schema_version"] = 2.into();
+        legacy["sketches"][0]["snapshot"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dim_modes");
+
+        let mut loaded = SketchManager::new();
+        let plan = loaded.prepare_load_project(legacy.to_string()).unwrap();
+        commit_plan(&mut loaded, plan, plane.origin_basis().unwrap());
+        let resaved: serde_json::Value =
+            serde_json::from_str(&loaded.export_project_model().unwrap()).unwrap();
+        assert_eq!(resaved["schema_version"], PROJECT_SCHEMA_VERSION);
+        let after = loaded.edit_sketch("Sketch1").unwrap();
+        assert_eq!(after.dof, before.dof);
+        assert_eq!(after.dimensions.len(), 1);
+        assert_eq!(after.dimensions[0].mode, crate::DimensionMode::Driving);
+        assert_eq!(after.dimensions[0].param_id, before.dimensions[0].param_id);
+        assert_eq!(
+            after.dimensions[0].param_name,
+            before.dimensions[0].param_name
+        );
+        let edited = loaded
+            .edit_dimension(EditDimensionRequest {
+                constraint_id: after.dimensions[0].constraint_id,
+                text: "55".to_string(),
+            })
+            .unwrap()
+            .sketch;
+        assert_eq!(edited.dof, before.dof);
+        assert!((edited.dimensions[0].value - 55.0).abs() < 1e-7);
     }
 
     #[test]

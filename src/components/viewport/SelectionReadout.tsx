@@ -1,5 +1,11 @@
 import { useMemo } from 'react';
+import type { GeometricConstraintType } from '../../engine/types';
 import { useTranslation } from '../../i18n';
+import {
+  CONSTRAINT_TYPE_ICON,
+  CONSTRAINT_TYPE_LABEL_KEY,
+  ConstraintIconContent,
+} from '../../sketch/constraintIcons';
 import { useAppStore } from '../../store/appStore';
 import {
   measureSketchSelection,
@@ -67,6 +73,7 @@ export function SelectionReadout() {
   const selectedFace = useAppStore((state) => state.selectedFace);
   const selectedFaces = useAppStore((state) => state.selectedFaces);
   const selectedEdges = useAppStore((state) => state.selectedEdges);
+  const selectedConstraint = useAppStore((state) => state.selectedConstraint);
 
   const measurement = useMemo(
     () =>
@@ -96,7 +103,24 @@ export function SelectionReadout() {
     ],
   );
 
-  if (!measurement) return null;
+  const constraint = useMemo(() => {
+    if (mode !== 'sketch' || selectedConstraint === null) return null;
+    const candidate = activeSketch?.constraints.find(
+      (entry) => entry.id === selectedConstraint,
+    );
+    if (!candidate || !(candidate.type in CONSTRAINT_TYPE_ICON)) return null;
+    return {
+      type: candidate.type as GeometricConstraintType,
+    };
+  }, [activeSketch, mode, selectedConstraint]);
+
+  if (!measurement && !constraint) return null;
+
+  const rows = measurement?.rows ?? [];
+  const approximate = rows.some((row) => row.approximate);
+  const subject = constraint
+    ? t(CONSTRAINT_TYPE_LABEL_KEY[constraint.type])
+    : titleFor(measurement!, t);
 
   return (
     <aside
@@ -112,15 +136,37 @@ export function SelectionReadout() {
           data-native-hud-title
           className="text-[9px] font-semibold tracking-[0.14em] text-mute"
         >
-          {t('selectionReadout.title')}
+          {constraint
+            ? t('selectionReadout.constraintTitle')
+            : t('selectionReadout.title')}
         </span>
-        <span data-native-hud-subject className="truncate font-medium">
-          {titleFor(measurement, t)}
+        <span
+          data-native-hud-subject
+          className="flex min-w-0 items-center gap-1.5 truncate font-medium"
+        >
+          {constraint && (
+            <svg
+              data-testid="selection-constraint-icon"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="shrink-0 text-mute/75"
+              aria-hidden="true"
+            >
+              <ConstraintIconContent kind={CONSTRAINT_TYPE_ICON[constraint.type]} />
+            </svg>
+          )}
+          <span className="truncate">{subject}</span>
         </span>
       </div>
-      {measurement.rows.length > 0 ? (
+      {rows.length > 0 ? (
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-          {measurement.rows.map((row) => (
+          {rows.map((row) => (
             <div
               key={row.label}
               data-native-hud-row
@@ -144,7 +190,7 @@ export function SelectionReadout() {
           {t('selectionReadout.selectedOnly')}
         </div>
       )}
-      {measurement.rows.some((row) => row.approximate) && (
+      {approximate && (
         <div
           data-native-hud-footer
           className="mt-1.5 border-t border-edge/60 pt-1 text-right text-[9px] text-mute"

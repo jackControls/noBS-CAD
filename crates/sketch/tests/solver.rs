@@ -390,6 +390,53 @@ fn perpendicular_and_angle_preserve_both_line_lengths() {
 }
 
 #[test]
+fn parallel_keeps_the_reference_chain_and_rotates_only_the_free_follower_end() {
+    let mut s = session();
+    let bottom = s.add_line(v(0.0, 0.0), v(30.0, 0.0), true).unwrap();
+    let right = s.add_line(v(30.0, 0.0), v(36.0, 24.0), true).unwrap();
+    let top = s.add_line(v(36.0, 24.0), v(2.0, 30.0), true).unwrap();
+
+    s.toggle_fix(bottom.start_point_id).unwrap();
+    s.add_constraint(Constraint::Horizontal {
+        entity: bottom.entity_id,
+    })
+    .unwrap();
+    s.add_constraint(Constraint::Perpendicular {
+        a: bottom.entity_id,
+        b: right.entity_id,
+    })
+    .unwrap();
+
+    let before = s.dto();
+    let before_bottom = line(&before, bottom.entity_id);
+    let before_right = line(&before, right.entity_id);
+    let before_top = line(&before, top.entity_id);
+    let top_length = before_top.0.distance(before_top.1);
+
+    let solved = s
+        .add_constraint(Constraint::Parallel {
+            a: bottom.entity_id,
+            b: top.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let after_bottom = line(&solved, bottom.entity_id);
+    let after_right = line(&solved, right.entity_id);
+    let after_top = line(&solved, top.entity_id);
+
+    assert!(close(after_bottom.0, before_bottom.0));
+    assert!(close(after_bottom.1, before_bottom.1));
+    assert!(close(after_right.0, before_right.0));
+    assert!(close(after_right.1, before_right.1));
+    assert!(close(after_top.0, before_top.0));
+    assert!((after_top.0.distance(after_top.1) - top_length).abs() < 1e-7);
+    let bottom_direction = after_bottom.1 - after_bottom.0;
+    let top_direction = after_top.1 - after_top.0;
+    let cross = bottom_direction.x * top_direction.y - bottom_direction.y * top_direction.x;
+    assert!(cross.abs() < 1e-7);
+}
+
+#[test]
 fn point_axis_alignment_preserves_the_pair_distance() {
     for horizontal in [false, true] {
         let mut s = session();
@@ -1761,7 +1808,7 @@ fn typed_angle_snaps_its_free_distance_to_the_active_grid() {
 }
 
 #[test]
-fn line_tracking_is_exact_and_persists_as_a_point_relation() {
+fn line_tracking_is_exact_but_remains_a_temporary_placement_aid() {
     let mut s = session();
     let reference = s.add_point(v(0.0, 5.0)).unwrap().entities[0];
     let result = s
@@ -1784,7 +1831,7 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .unwrap();
     let (_, endpoint) = line(&result.sketch, result.entity_id);
     assert!(close(endpoint, v(15.0, 5.0)));
-    assert!(result.sketch.constraints.iter().any(|constraint| matches!(
+    assert!(!result.sketch.constraints.iter().any(|constraint| matches!(
         constraint.constraint,
         Constraint::HorizontalPoints { a, b }
             if a == reference && b == result.end_point_id
@@ -1794,16 +1841,8 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .move_point(move_req(reference, v(0.0, 7.0)))
         .unwrap()
         .sketch;
-    let reference_position = moved
-        .entities
-        .iter()
-        .find_map(|entity| match entity {
-            EntityDto::Point { id, position, .. } if *id == reference => Some(*position),
-            _ => None,
-        })
-        .unwrap();
     let (_, moved_endpoint) = line(&moved, result.entity_id);
-    assert!((moved_endpoint.y - reference_position.y).abs() < 1e-7);
+    assert!((moved_endpoint.y - 5.0).abs() < 1e-7);
 }
 
 #[test]

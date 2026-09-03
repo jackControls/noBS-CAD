@@ -3,6 +3,7 @@
  * - H/V accepts two points and creates a point relation;
  * - bulk H/V is not capped at eight selected lines;
  * - successful constraint commands clear their consumed selection;
+ * - two-feature commands accept button-first, one-first, and both-first flows;
  * - duplicate relations are rejected without polluting the graph;
  * - deliberate shallow diagonals survive while near-axis intent is inferred;
  * - all direction-only ribbon paths retain authored finite lengths;
@@ -34,8 +35,8 @@ try {
     store.applySolidUpdate(await engine.newProject());
     let sketch = await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
     sketch = await engine.setGridSnap(false);
-    store.setMode('sketch');
     store.setActiveSketch(sketch);
+    store.setMode('sketch');
 
     const p1 = await engine.addPoint({ position: { x: -12, y: 8 } });
     const firstPoint = p1.entities.at(-1);
@@ -70,6 +71,242 @@ try {
   assert.equal(typeof created.firstPoint, 'number');
   assert.equal(typeof created.secondPoint, 'number');
 
+  console.log('0. Two-feature commands accept every selection order');
+  const selectionOrderFixture = await page.evaluate(async () => {
+    const engine = window.__engine;
+    const store = window.__appStore.getState();
+    const addLine = async (from, to) => {
+      const result = await engine.addLine({ from, to_raw: to, ctrl_held: true });
+      store.setActiveSketch(result.sketch);
+      return result.entity_id;
+    };
+    const buttonFirst = [
+      await addLine({ x: -105, y: 70 }, { x: -78, y: 76 }),
+      await addLine({ x: -105, y: 88 }, { x: -82, y: 101 }),
+    ];
+    const oneFirst = [
+      await addLine({ x: -65, y: 72 }, { x: -38, y: 79 }),
+      await addLine({ x: -54, y: 92 }, { x: -47, y: 121 }),
+    ];
+    const bothFirst = [
+      await addLine({ x: -18, y: 72 }, { x: 8, y: 80 }),
+      await addLine({ x: -15, y: 96 }, { x: 1, y: 118 }),
+    ];
+    const firstHvPointResult = await engine.addPoint({ position: { x: 34, y: 92 } });
+    const firstHvPoint = firstHvPointResult.entities.at(-1);
+    const secondHvPointResult = await engine.addPoint({ position: { x: 64, y: 101 } });
+    const secondHvPoint = secondHvPointResult.entities.at(-1);
+    store.setActiveSketch(secondHvPointResult.sketch);
+    store.setSelectedEntities([]);
+    store.setSelectedEntity(null);
+    return { buttonFirst, oneFirst, bothFirst, hvPoints: [firstHvPoint, secondHvPoint] };
+  });
+  await page.evaluate(() => window.__cameraApi.fit());
+  await page.waitForTimeout(550);
+
+  console.log('0a. Active sketch tools carry their toolbar glyph beside the cursor');
+  const viewportBox = await page.locator('.native-viewport-surface').boundingBox();
+  assert.ok(viewportBox, 'viewport is visible');
+  const cursorPoint = {
+    x: viewportBox.x + viewportBox.width * 0.62,
+    y: viewportBox.y + viewportBox.height * 0.42,
+  };
+  await page.locator('[data-ribbon-button="line"]').click();
+  await page.mouse.move(cursorPoint.x, cursorPoint.y);
+  await page.waitForFunction(() => {
+    const badge = document.querySelector('[data-testid="active-tool-cursor"]');
+    return badge?.getAttribute('data-active-tool-icon') === 'line'
+      && getComputedStyle(badge).display !== 'none';
+  });
+  let cursorAnnotation = await page.evaluate(() =>
+    window.__nativeViewportTransient().annotations.find(
+      (annotation) => annotation.kind === 'tool',
+    ),
+  );
+  assert.equal(cursorAnnotation?.toolIcon, 'line');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-ribbon-button="rectangle"]').click();
+  await page.mouse.move(cursorPoint.x + 12, cursorPoint.y + 9);
+  await page.waitForFunction(() =>
+    document.querySelector('[data-testid="active-tool-cursor"]')
+      ?.getAttribute('data-active-tool-icon') === 'rect',
+  );
+  cursorAnnotation = await page.evaluate(() =>
+    window.__nativeViewportTransient().annotations.find(
+      (annotation) => annotation.kind === 'tool',
+    ),
+  );
+  assert.equal(cursorAnnotation?.toolIcon, 'rectangle');
+  await page.keyboard.press('Escape');
+
+  const clickLine = async (lineId, additive = false) => {
+    const current = await state();
+    const line = current.activeSketch.entities.find(
+      (entity) => entity.kind === 'line' && entity.id === lineId,
+    );
+    assert.ok(line, `line ${lineId} exists`);
+    const point = await page.evaluate(
+      ([x, y]) => window.__sketchToScreen(x, y),
+      [(line.start.x + line.end.x) / 2, (line.start.y + line.end.y) / 2],
+    );
+    if (additive) await page.keyboard.down('Shift');
+    await page.mouse.click(point.x, point.y);
+    if (additive) await page.keyboard.up('Shift');
+  };
+  const relationExists = (type, ids) => page.evaluate(
+    ({ type, ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === type
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { type, ids },
+  );
+  const clickPoint = async (pointId) => {
+    const current = await state();
+    const entity = current.activeSketch.entities.find(
+      (candidate) => candidate.kind === 'point' && candidate.id === pointId,
+    );
+    assert.ok(entity, `point ${pointId} exists`);
+    const point = await page.evaluate(
+      ([x, y]) => window.__sketchToScreen(x, y),
+      [entity.position.x, entity.position.y],
+    );
+    await page.mouse.click(point.x, point.y);
+  };
+
+  // Command first, then two ordinary clicks (no Shift modifier).
+  await page.locator('[data-ribbon-button="parallel"]').click();
+  assert.equal((await state()).pendingConstraintTool, 'parallel');
+  assert.equal(
+    await page.locator('[data-ribbon-button="parallel"]').getAttribute('aria-pressed'),
+    'true',
+  );
+  await page.getByText(/Select 2 features for Parallel \(0\/2/i).waitFor();
+  await clickLine(selectionOrderFixture.buttonFirst[0]);
+  assert.equal((await state()).pendingConstraintTool, 'parallel');
+  assert.equal((await state()).selectedEntities.length, 1);
+  assert.equal(
+    await page.locator('[data-testid="active-tool-cursor"]').getAttribute('data-active-tool-icon'),
+    'parallel',
+  );
+  cursorAnnotation = await page.evaluate(() =>
+    window.__nativeViewportTransient().annotations.find(
+      (annotation) => annotation.kind === 'tool',
+    ),
+  );
+  assert.equal(cursorAnnotation?.icon, 'parallel');
+  await page.getByText(/Select 2 features for Parallel \(1\/2/i).waitFor();
+  await clickLine(selectionOrderFixture.buttonFirst[1]);
+  await page.waitForFunction(
+    ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === 'parallel'
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { ids: selectionOrderFixture.buttonFirst },
+  );
+  assert.equal((await state()).pendingConstraintTool, null);
+  assert.deepEqual((await state()).selectedEntities, []);
+
+  const parallelConstraintId = await page.evaluate(({ ids }) => {
+    const state = window.__appStore.getState();
+    const constraint = state.activeSketch.constraints.find(
+      (candidate) => candidate.type === 'parallel'
+        && ids.includes(candidate.a)
+        && ids.includes(candidate.b),
+    );
+    state.setSelectedConstraint(constraint.id);
+    return constraint.id;
+  }, { ids: selectionOrderFixture.buttonFirst });
+  assert.equal(typeof parallelConstraintId, 'number');
+  await page.waitForFunction(() =>
+    document.querySelector('[data-native-hud="selection"] [data-native-hud-title]')
+      ?.textContent?.trim() === 'CONSTRAINT',
+  );
+  assert.match(
+    await page.locator('[data-native-hud="selection"] [data-native-hud-subject]').innerText(),
+    /Parallel/i,
+  );
+  assert.equal(await page.getByTestId('selection-constraint-icon').count(), 1);
+  await page.evaluate(() => window.__appStore.getState().setSelectedConstraint(null));
+  const quietParallelMarks = await page.evaluate(() =>
+    window.__nativeViewportTransient().annotations.filter(
+      (annotation) => annotation.kind === 'constraint'
+        && annotation.icon === 'parallel'
+        && !annotation.selected,
+    ),
+  );
+  assert.equal(
+    quietParallelMarks.length,
+    2,
+    'parallel relation repeats its visible icon on both participant lines',
+  );
+  assert.ok(
+    quietParallelMarks.every(
+      (mark) => mark.color[3] >= 0.55 && mark.color[3] <= 0.68,
+    ),
+    `unselected relation icons should remain translucent, got ${quietParallelMarks.map((mark) => mark.color[3]).join(', ')}`,
+  );
+
+  // One entity first, then the command, then one ordinary click.
+  await clickLine(selectionOrderFixture.oneFirst[0]);
+  assert.deepEqual((await state()).selectedEntities, [selectionOrderFixture.oneFirst[0]]);
+  await page.locator('[data-ribbon-button="perpendicular"]').click();
+  assert.equal((await state()).pendingConstraintTool, 'perpendicular');
+  assert.deepEqual((await state()).selectedEntities, [selectionOrderFixture.oneFirst[0]]);
+  await clickLine(selectionOrderFixture.oneFirst[1]);
+  await page.waitForFunction(
+    ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === 'perpendicular'
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { ids: selectionOrderFixture.oneFirst },
+  );
+  assert.equal((await state()).pendingConstraintTool, null);
+
+  // Original both-selected flow remains immediate.
+  await clickLine(selectionOrderFixture.bothFirst[0]);
+  await clickLine(selectionOrderFixture.bothFirst[1], true);
+  assert.deepEqual(
+    new Set((await state()).selectedEntities),
+    new Set(selectionOrderFixture.bothFirst),
+  );
+  await page.locator('[data-ribbon-button="equal"]').click();
+  await page.waitForFunction(
+    ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === 'equal'
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { ids: selectionOrderFixture.bothFirst },
+  );
+  assert.equal((await state()).pendingConstraintTool, null);
+  assert.equal(await relationExists('equal', selectionOrderFixture.bothFirst), true);
+
+  // Escape retires the pending command before it clears a preserved pick.
+  await page.locator('[data-ribbon-button="parallel"]').click();
+  assert.equal((await state()).pendingConstraintTool, 'parallel');
+  await page.keyboard.press('Escape');
+  assert.equal((await state()).pendingConstraintTool, null);
+
+  // H/V is one-feature for a line but two-feature for point alignment. Its
+  // button-first mode waits after a point and completes on the second point.
+  await page.locator('[data-ribbon-button="horizontalVertical"]').click();
+  assert.equal((await state()).pendingConstraintTool, 'hv');
+  await clickPoint(selectionOrderFixture.hvPoints[0]);
+  assert.equal((await state()).pendingConstraintTool, 'hv');
+  await clickPoint(selectionOrderFixture.hvPoints[1]);
+  await page.waitForFunction(
+    ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === 'horizontal_points'
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { ids: selectionOrderFixture.hvPoints },
+  );
+  assert.equal((await state()).pendingConstraintTool, null);
+
   console.log('1. Two selected points create an exact H/V point relation');
   await page.evaluate(({ firstPoint, secondPoint }) => {
     const store = window.__appStore.getState();
@@ -78,12 +315,18 @@ try {
   }, created);
   await applyHorizontalVertical();
   await page.waitForFunction(
-    () => window.__appStore.getState().activeSketch?.constraints
-      .some((constraint) => constraint.type === 'horizontal_points'),
+    ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
+      (constraint) => constraint.type === 'horizontal_points'
+        && ids.includes(constraint.a)
+        && ids.includes(constraint.b),
+    ),
+    { ids: [created.firstPoint, created.secondPoint] },
   );
   let app = await state();
   const horizontalPoints = app.activeSketch.constraints.find(
-    (constraint) => constraint.type === 'horizontal_points',
+    (constraint) => constraint.type === 'horizontal_points'
+      && [constraint.a, constraint.b].includes(created.firstPoint)
+      && [constraint.a, constraint.b].includes(created.secondPoint),
   );
   assert.deepEqual(
     new Set([horizontalPoints.a, horizontalPoints.b]),

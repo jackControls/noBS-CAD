@@ -82,8 +82,11 @@ try {
     },
     source,
   );
-  assert.match(await dialog.innerText(), /Exact OCCT face/i);
-  assert.match(await page.getByTestId('extrude-profile-selection-state').innerText(), /1 source/i);
+  assert.match(
+    await page.getByTestId('extrude-profile-selection-state').innerText(),
+    /Body1 .* Face \d+ selected/i,
+    'the viewport-picked source is described by its visible body and face, not an opaque ID',
+  );
   assert.equal(
     await dialog.locator('[data-extrude-operation="join"]').getAttribute('aria-checked'),
     'true',

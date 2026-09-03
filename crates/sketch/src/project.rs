@@ -22,10 +22,12 @@ use crate::{AssemblyDocumentDto, DrawingDocumentDto, ProjectVisibilityDto};
 
 pub const PROJECT_FORMAT: &str = "nbcad-project";
 pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
-pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+// Schema 3 is a reader boundary, not just an additive field: schema-2 readers
+// interpret reference dimensions as driving equations and omit their labels.
+pub const PROJECT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProjectModelV2 {
+pub(crate) struct ProjectModelV3 {
     pub format: String,
     pub schema_version: u32,
     pub document: ProjectDocumentV2,
@@ -111,7 +113,7 @@ pub(crate) struct ProjectPreferencesV2 {
     pub grid_snap: bool,
 }
 
-pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV2, String> {
+pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV3, String> {
     let mut header: serde_json::Value = serde_json::from_str(json)
         .map_err(|error| format!("model.json is not valid JSON: {error}"))?;
     let format = header
@@ -128,15 +130,21 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV2, String> {
     } else if format != PROJECT_FORMAT {
         return Err(format!("unsupported project format '{format}'"));
     }
-    if schema_version == 1 {
-        migrate_v1_to_v2(&mut header)?;
-    } else if schema_version != u64::from(PROJECT_SCHEMA_VERSION) {
-        return Err(format!(
-            "project schema {schema_version} is not supported by this build (latest: {PROJECT_SCHEMA_VERSION})"
-        ));
+    match schema_version {
+        1 => {
+            migrate_v1_to_v2(&mut header)?;
+            migrate_v2_to_v3(&mut header);
+        }
+        2 => migrate_v2_to_v3(&mut header),
+        version if version == u64::from(PROJECT_SCHEMA_VERSION) => {}
+        _ => {
+            return Err(format!(
+                "project schema {schema_version} is not supported by this build (latest: {PROJECT_SCHEMA_VERSION})"
+            ));
+        }
     }
 
-    let model: ProjectModelV2 = serde_json::from_value(header)
+    let model: ProjectModelV3 = serde_json::from_value(header)
         .map_err(|error| format!("invalid project model: {error}"))?;
     validate_project(&model)?;
     Ok(model)
@@ -175,14 +183,17 @@ fn migrate_v1_to_v2(model: &mut serde_json::Value) -> Result<(), String> {
         }
     }
 
-    root.insert(
-        "schema_version".to_string(),
-        serde_json::Value::from(PROJECT_SCHEMA_VERSION),
-    );
+    root.insert("schema_version".to_string(), serde_json::Value::from(2));
     Ok(())
 }
 
-pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
+fn migrate_v2_to_v3(model: &mut serde_json::Value) {
+    // SketchSnapshot defaults missing dim_modes entries to Driving. Preserve
+    // any explicit modes written by pre-release schema-2 reference builds.
+    model["schema_version"] = serde_json::Value::from(3);
+}
+
+pub(crate) fn validate_project(model: &ProjectModelV3) -> Result<(), String> {
     if model.format != PROJECT_FORMAT || model.schema_version != PROJECT_SCHEMA_VERSION {
         return Err("project header does not match the supported schema".to_string());
     }
@@ -545,7 +556,7 @@ pub(crate) fn validate_project(model: &ProjectModelV2) -> Result<(), String> {
 }
 
 fn validate_feature_entry(
-    model: &ProjectModelV2,
+    model: &ProjectModelV3,
     feature_id: FeatureId,
     name: &str,
     kind: FeatureKind,

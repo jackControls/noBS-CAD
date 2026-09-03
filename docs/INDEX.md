@@ -47,6 +47,7 @@
 | [SKETCH_CONSTRAINT_AUDIT.md](SKETCH_CONSTRAINT_AUDIT.md) | Constraint behavior audit and reproducible findings |
 | [SKETCH_CONSTRAINT_AUDIT_FIX_FEEDBACK.md](SKETCH_CONSTRAINT_AUDIT_FIX_FEEDBACK.md) | Implemented fixes, verification, and deliberate follow-ups |
 | [SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md) | Executable 25×25 ordered constraint/dimension matrix and operation-ownership policy |
+| [SKETCH_CAD_BRANCH_REVIEW.md](SKETCH_CAD_BRANCH_REVIEW.md) | 2026-09-02 branch review, recorder retirement, and verified fixes for the three findings |
 
 ## Packaging / provenance
 

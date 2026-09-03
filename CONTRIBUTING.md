@@ -52,6 +52,13 @@ Pick what fits:
 - Ran an MCP or e2e scenario — describe briefly
 - Docs-only / no runtime impact — say so explicitly
 
+For desktop viewport rendering, browser output is not visual validation. Bevy
+owns the pixels inside the packaged desktop viewport, and it can fail or clip
+while browser state and browser tests remain correct. Reproduce the scenario
+in a packaged Tauri app and inspect the actual Bevy surface before describing
+a desktop visual issue as fixed. Record the tested appearance mode and the
+visible result in the PR test plan.
+
 ## 5. Follow through until merge-ready
 
 Stay with the PR until it is ready to merge:

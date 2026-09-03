@@ -28,6 +28,7 @@ import {
 import type { ThreadPreset } from '../lib/threadStandards';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
+import { ViewportSelectionField } from './ViewportSelectionField';
 
 const INPUT_CLASS = 'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
 const LABEL_CLASS = 'mb-1 block text-[10px] font-semibold uppercase tracking-wide text-mute';
@@ -137,6 +138,9 @@ export function HoleDialog() {
   const pickedSketchPoints = useAppStore((state) => state.holePositionSelections);
   const setPickedSketchPoints = useAppStore((state) => state.setHolePositionSelections);
   const setSolidCommandPreview = useAppStore((state) => state.setSolidCommandPreview);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
+  const clearSolidSelection = useAppStore((state) => state.clearSolidSelection);
   const [bodyId, setBodyId] = useState(0);
   const [faceId, setFaceId] = useState(0);
   const [x, setX] = useState('0');
@@ -197,12 +201,17 @@ export function HoleDialog() {
       const edit = featureId > 0
         ? definitions.find((definition) => definition.feature_id === featureId)
         : undefined;
-      const initialBodyId = edit?.body_id ?? selection.selectedBody ?? planarBodies[0]?.id ?? 0;
-      const body = planarBodies.find((candidate) => candidate.id === initialBodyId) ?? planarBodies[0];
+      const selectedSupportBody = selection.selectedFace === null
+        ? undefined
+        : planarBodies.find((candidate) => candidate.faces.some(
+            (face) => face.id === selection.selectedFace && face.plane !== null,
+          ));
+      const initialBodyId = edit?.body_id ?? selectedSupportBody?.id ?? 0;
+      const body = planarBodies.find((candidate) => candidate.id === initialBodyId);
       const face = edit
         ? body?.faces.find((candidate) => candidate.id === edit.face_id)
         : body?.faces.find((candidate) => candidate.id === selection.selectedFace && candidate.plane !== null)
-          ?? body?.faces.find((candidate) => candidate.plane !== null);
+          ?? undefined;
       setBodyId(body?.id ?? 0);
       setFaceId(face?.id ?? 0);
       if (edit) {
@@ -293,17 +302,18 @@ export function HoleDialog() {
         setThreadDepth(String(edit?.extent.type === 'distance' ? edit.extent.depth : 8));
       }
       setFlip(edit?.flip ?? false);
+      setModelingPickTarget(face?.plane ? 'hole_positions' : 'hole_support');
     }).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : t('hole.loadFailed'));
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [featureId, planarBodies, t]);
+  }, [featureId, planarBodies, setModelingPickTarget, t]);
 
   // The Hole panel is modeless: clicking another planar face retargets the
   // feature and uses the exact click as its center without resetting the
   // diameter/style values already entered in the panel.
   useEffect(() => {
-    if (featureId === null || selectedFace === null) return;
+    if (featureId === null || modelingPickTarget !== 'hole_support' || selectedFace === null) return;
     const body = planarBodies.find((candidate) =>
       candidate.faces.some((face) => face.id === selectedFace && face.plane !== null),
     );
@@ -314,7 +324,8 @@ export function HoleDialog() {
     const local = localPoint(face.plane, selectedPoint ?? faceCenter(body, face));
     setX(String(Number(local.x.toFixed(6))));
     setY(String(Number(local.y.toFixed(6))));
-  }, [featureId, planarBodies, selectedFace, selectedPoint]);
+    setModelingPickTarget('hole_positions');
+  }, [featureId, modelingPickTarget, planarBodies, selectedFace, selectedPoint, setModelingPickTarget, setPickedSketchPoints]);
 
   useEffect(() => {
     if (featureId === null) return;
@@ -415,7 +426,7 @@ export function HoleDialog() {
 
   if (featureId === null) return null;
   const body = planarBodies.find((candidate) => candidate.id === bodyId);
-  const faces = body?.faces.filter((face) => face.plane !== null) ?? [];
+  const supportFace = body?.faces.find((face) => face.id === faceId && face.plane !== null);
   const values = {
     x: Number(x), y: Number(y), diameter: Number(diameter), depth: Number(depth),
     counterboreDiameter: Number(counterboreDiameter), counterboreDepth: Number(counterboreDepth),
@@ -481,32 +492,9 @@ export function HoleDialog() {
     setThreadSeries(series);
     chooseThreadPreset(preset.id);
   };
-  const chooseBody = (nextBodyId: number) => {
-    const nextBody = planarBodies.find((candidate) => candidate.id === nextBodyId);
-    const nextFace = nextBody?.faces.find((candidate) => candidate.plane !== null);
-    setBodyId(nextBodyId);
-    setFaceId(nextFace?.id ?? 0);
-    setPickedSketchPoints([]);
-    if (nextBody && nextFace?.plane) {
-      const local = localPoint(nextFace.plane, faceCenter(nextBody, nextFace));
-      setX(String(Number(local.x.toFixed(6))));
-      setY(String(Number(local.y.toFixed(6))));
-    }
-  };
-  const chooseFace = (nextFaceId: number) => {
-    const nextFace = body?.faces.find((candidate) => candidate.id === nextFaceId);
-    setFaceId(nextFaceId);
-    setPickedSketchPoints([]);
-    if (body && nextFace?.plane) {
-      const local = localPoint(nextFace.plane, faceCenter(body, nextFace));
-      setX(String(Number(local.x.toFixed(6))));
-      setY(String(Number(local.y.toFixed(6))));
-    }
-  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
-    const supportFace = body?.faces.find((candidate) => candidate.id === faceId);
     const positions: HolePositionDto[] = pickedSketchPoints.length > 0 && supportFace?.plane
       ? pickedSketchPoints.map((pick) => {
           const { world, ...position_reference } = pick;
@@ -558,8 +546,44 @@ export function HoleDialog() {
             : error ? <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">{error}</p>
               : planarBodies.length === 0 ? <p className="text-xs text-mute">{t('hole.noFaces')}</p>
                 : <>
-                  <label><span className={LABEL_CLASS}>{t('hole.body')}</span><select value={bodyId} onChange={(event) => chooseBody(Number(event.target.value))} className={INPUT_CLASS}>{planarBodies.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
-                  <label><span className={LABEL_CLASS}>{t('hole.face')}</span><select data-testid="hole-face" value={faceId} onChange={(event) => chooseFace(Number(event.target.value))} className={INPUT_CLASS}>{faces.map((face, index) => <option key={face.id} value={face.id}>{t('hole.face')} {index + 1} (#{face.id})</option>)}</select></label>
+                  <ViewportSelectionField
+                    testId="hole-face"
+                    label="Support face"
+                    status={body && supportFace ? `${body.name} · planar face selected` : 'Click a planar face in the viewport'}
+                    hint="This face sets the hole plane and cutting direction."
+                    active={modelingPickTarget === 'hole_support'}
+                    hasSelection={Boolean(body && supportFace)}
+                    onActivate={() => setModelingPickTarget('hole_support')}
+                    onClear={() => {
+                      setBodyId(0);
+                      setFaceId(0);
+                      setPickedSketchPoints([]);
+                      clearSolidSelection();
+                      setModelingPickTarget('hole_support');
+                    }}
+                  />
+                  <ViewportSelectionField
+                    testId="hole-position-selection"
+                    label="Positions"
+                    status={pickedSketchPoints.length > 0
+                      ? `${pickedSketchPoints.length} associative ${pickedSketchPoints.length === 1 ? 'position' : 'positions'} selected`
+                      : body && supportFace
+                        ? `Position set at U ${x}, V ${y}`
+                        : 'Select a support face first'}
+                    hint="Click visible sketch points, endpoints, corners, or centers. You can also enter U/V below."
+                    active={modelingPickTarget === 'hole_positions'}
+                    hasSelection={Boolean(body && supportFace)}
+                    onActivate={() => {
+                      if (body && supportFace) setModelingPickTarget('hole_positions');
+                      else setModelingPickTarget('hole_support');
+                    }}
+                    onClear={() => {
+                      setPickedSketchPoints([]);
+                      setX('0');
+                      setY('0');
+                      setModelingPickTarget(body && supportFace ? 'hole_positions' : 'hole_support');
+                    }}
+                  />
                   <div className="grid grid-cols-2 gap-2"><label><span className={LABEL_CLASS}>{t('hole.positionX')}</span><DimensionInput step="any" value={x} onValueChange={(value) => { setX(value); setPickedSketchPoints([]); }} /></label><label><span className={LABEL_CLASS}>{t('hole.positionY')}</span><DimensionInput step="any" value={y} onValueChange={(value) => { setY(value); setPickedSketchPoints([]); }} /></label></div>
                   {pickedSketchPoints.length > 0 && (
                     <div className="rounded border border-accent/40 bg-accent/10 px-2 py-1.5 text-[10px] text-ink">
@@ -567,9 +591,7 @@ export function HoleDialog() {
                         <span>{t('hole.associativeCount').replace('{count}', String(pickedSketchPoints.length))}</span>
                         <button type="button" onClick={() => setPickedSketchPoints([])} className="text-mute hover:text-ink">{t('hole.clearPositions')}</button>
                       </div>
-                      <div className="mt-1 truncate font-mono text-[9px] text-mute">
-                        {pickedSketchPoints.map((pick) => `${pick.sketch_name}:${pick.entity_id}`).join(', ')}
-                      </div>
+                      <div className="mt-1 truncate text-[9px] text-mute">The selected points remain associative to their sketches.</div>
                     </div>
                   )}
                   <label>

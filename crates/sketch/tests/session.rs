@@ -6,8 +6,8 @@
 use nbcad_sketch::host;
 use nbcad_sketch::{
     Constraint, DimensionRequest, DragPhase, EditDimensionRequest, EntityDto, Inference,
-    LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef, SegmentRequest, SketchManager,
-    SketchSession, SnapTarget, Vec2,
+    LineTrackingRequest, LockedSegmentRequest, MovePointRequest, OriginPlane, PlaneRef,
+    SegmentRequest, SketchManager, SketchSession, SnapTarget, TrackingAxis, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -70,20 +70,60 @@ fn origin_snap_when_no_point_nearby() {
 #[test]
 fn grid_snap_rounds_to_intersection_when_on() {
     let s = session_on_grid();
-    let preview = s.preview_segment(v(0.0, 0.0), v(12.0, 8.0), true); // ctrl: no H/V projection
+    let preview = s.preview_segment(v(0.0, 0.0), v(12.0, 9.0), true); // ctrl: no H/V projection
     assert_eq!(preview.snap, SnapTarget::Grid);
     assert_eq!(preview.snapped_to, v(10.0, 10.0));
+}
+
+#[test]
+fn grid_snap_leaves_free_space_unrounded() {
+    let s = session_on_grid();
+    let raw = v(2.6, 0.0);
+    let preview = s.preview_segment(v(50.0, 50.0), raw, true);
+    assert_eq!(preview.snap, SnapTarget::None);
+    assert_eq!(preview.snapped_to, raw);
 }
 
 #[test]
 fn adaptive_grid_step_supports_one_micrometer() {
     let mut s = session_on_grid();
     s.set_grid_step(0.001).unwrap();
-    let preview = s.preview_segment(v(20.0, 20.0), v(12.3454, 8.7656), true);
+    let preview = s.preview_segment(v(20.0, 20.0), v(12.34515, 8.76585), true);
     assert_eq!(preview.snap, SnapTarget::Grid);
     assert!((preview.snapped_to.x - 12.345).abs() < 1e-12);
     assert!((preview.snapped_to.y - 8.766).abs() < 1e-12);
     assert!(s.set_grid_step(0.000_1).is_err());
+}
+
+#[test]
+fn tracking_aligns_the_commit_without_creating_a_hidden_relation() {
+    let mut s = session_off_grid();
+    let source = s.add_point(v(10.0, 20.0)).unwrap().entities[0];
+    let line = s
+        .add_line_locked(&LockedSegmentRequest {
+            from: v(0.0, 0.0),
+            to_hint: v(35.0, 20.4),
+            from_crossing: None,
+            to_crossing: None,
+            length_mm: None,
+            angle_deg: None,
+            length_text: None,
+            angle_text: None,
+            ctrl_held: false,
+            tracking: Some(LineTrackingRequest {
+                point: source,
+                axis: TrackingAxis::Horizontal,
+            }),
+            intersection: None,
+        })
+        .unwrap();
+
+    let (_, end) = line_endpoints(&s, line.entity_id);
+    assert!((end.y - 20.0).abs() < 1e-9);
+    assert!(!s.dto().constraints.iter().any(|constraint| matches!(
+        constraint.constraint,
+        Constraint::HorizontalPoints { .. } | Constraint::VerticalPoints { .. }
+    )));
 }
 
 #[test]
@@ -119,9 +159,11 @@ fn horizontal_inference_uses_raw_cursor_before_grid_rounding() {
     let s = session_on_grid();
     // The anchor is intentionally halfway between 10 mm grid lines. The raw
     // cursor is almost horizontal, while independently rounding its Y to 20
-    // would make the segment too steep for the inference cone.
+    // would make the segment too steep for the inference cone. The pointer is
+    // outside the grid capture radius, so direction inference keeps the free
+    // coordinate raw instead of reporting a grid acquisition.
     let preview = s.preview_segment(v(0.0, 15.0), v(30.0, 16.0), false);
-    assert_eq!(preview.snap, SnapTarget::Grid);
+    assert_eq!(preview.snap, SnapTarget::None);
     assert_eq!(preview.inferences, vec![Inference::Horizontal]);
     assert_eq!(preview.snapped_to, v(30.0, 15.0));
 }
@@ -895,17 +937,17 @@ fn unsupported_plane_kinds_are_rejected() {
 fn grid_snap_preference_applies_to_sessions() {
     let mut m = SketchManager::new();
     m.begin_sketch(XY).unwrap();
-    // Default on: (12, 8) snaps to (10, 10) even with ctrl held.
+    // Default on: a point inside the magnetic radius snaps even with ctrl held.
     let p = m
-        .preview_segment(seg(v(0.0, 0.0), v(12.0, 8.0), true))
+        .preview_segment(seg(v(0.0, 0.0), v(12.0, 9.0), true))
         .unwrap();
     assert_eq!(p.snapped_to, v(10.0, 10.0));
     m.set_grid_snap(nbcad_sketch::SetGridSnapRequest { enabled: false })
         .unwrap();
     let p = m
-        .preview_segment(seg(v(0.0, 0.0), v(12.0, 8.0), true))
+        .preview_segment(seg(v(0.0, 0.0), v(12.0, 9.0), true))
         .unwrap();
-    assert_eq!(p.snapped_to, v(12.0, 8.0));
+    assert_eq!(p.snapped_to, v(12.0, 9.0));
 }
 
 #[test]
@@ -915,7 +957,7 @@ fn adaptive_grid_preference_applies_to_new_sessions() {
         .unwrap();
     m.begin_sketch(XY).unwrap();
     let p = m
-        .preview_segment(seg(v(20.0, 20.0), v(12.3454, 8.7656), true))
+        .preview_segment(seg(v(20.0, 20.0), v(12.34515, 8.76585), true))
         .unwrap();
     assert!((p.snapped_to.x - 12.345).abs() < 1e-12);
     assert!((p.snapped_to.y - 8.766).abs() < 1e-12);

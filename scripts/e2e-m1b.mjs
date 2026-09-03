@@ -203,11 +203,11 @@ try {
   await page.waitForTimeout(500);
   s = await sketch();
   const circle = s.entities.find((e) => e.kind === 'circle');
-  // The edge click at x=58 is unambiguously closest to the x=60 grid line,
-  // so the corrected second-point snap produces a 20 mm radius.
+  // Selective grid capture leaves an edge click outside the small magnetic
+  // radius at its authored coordinate instead of rounding all free space.
   check(
-    'circle: edge click honors snap acquisition',
-    !!circle && Math.abs(circle.radius - 20) < 0.01,
+    'circle: edge click remains free outside grid capture radius',
+    !!circle && Math.abs(circle.radius - 18) < 0.01,
     circle ? `r=${circle.radius}` : 'none',
   );
   await shot('06c-circle');

@@ -998,6 +998,7 @@ fn tool_specs() -> Vec<ToolSpec> {
             "profile_indices": profile_indices,
             "axis_origin": point.clone(),
             "axis_direction": point.clone(),
+            "axis_line_sketch_name": { "type": ["string", "null"], "minLength": 1, "description": "Optional sketch owning the stable axis line. It must be coplanar with sketch_name; omitted values use sketch_name." },
             "axis_line_entity_id": { "type": ["integer", "null"], "minimum": 1, "description": "Optional stable line entity id; overrides the manual axis." },
             "angle_deg": { "type": "number", "exclusiveMinimum": 0, "maximum": 360 },
             "flip": { "type": "boolean" },

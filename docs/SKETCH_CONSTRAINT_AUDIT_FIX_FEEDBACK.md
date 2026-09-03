@@ -1,6 +1,6 @@
 # Sketch constraint audit — fix feedback
 
-**Date:** 2026-08-29
+**Date:** 2026-08-30
 **Branch:** `fix/sketch-cad`
 **Audit:** [SKETCH_CONSTRAINT_AUDIT.md](SKETCH_CONSTRAINT_AUDIT.md)
 
@@ -51,15 +51,25 @@ committed. Interactive point dragging keeps its existing solve path.
   Fix/UnFix.
 - A successful constraint operation clears the selection, reducing accidental
   repeat application.
+- Every two-feature relation supports all normal command orders: select both
+  then invoke; select one, invoke, then select the second; or invoke first and
+  select both. The active command and `0/2` or `1/2` progress remain visible,
+  the final valid pick solves automatically, and Escape cancels the pending
+  command before clearing its preserved selection. Horizontal/Vertical uses
+  the same path when aligning two points, while a picked line still completes
+  immediately.
 - Localized invalid-selection messages describe the line and point workflows.
 - The audit uses neutral mechanical-CAD terminology; named-product references
   were removed from the audit and repository text touched by this pass.
-- Geometric constraint indications now use one exhaustive visual inventory.
-  Perpendicular uses the standard `⊥` mark (instead of an ambiguous `T`), and
-  every serialized geometric relation—including internal midpoint,
-  arc-endpoint, and equal-distance relations—has a visible, selectable badge
-  when the Constraints palette option is enabled. Dimensional constraints
-  continue to use their full dimension annotations.
+- Geometric constraint indications now use one exhaustive visual inventory
+  shared with the command toolbar. Perpendicular uses a right-angle square and
+  Parallel uses a two-line mark. Every serialized geometric relation—including
+  internal midpoint, arc-endpoint, and equal-distance relations—has a visible,
+  selectable badge when the Constraints palette option is enabled.
+  Dimensional constraints continue to use their full dimension annotations.
+- Secondary-clicking any geometric badge or dimension annotation now opens a
+  removal menu. The same generic path covers every relation type rather than a
+  hand-maintained subset.
 
 ## Selective automatic constraints
 
@@ -83,6 +93,18 @@ the same coordinates as an existing vertex reuses the vertex identity so the
 sketch cannot accumulate visually coincident but topologically disconnected
 points.
 
+Grid and alignment assistance are intentionally weaker than persistent design
+intent:
+
+- the adaptive minor grid captures only inside a seven-screen-pixel magnetic
+  radius; elsewhere the authored coordinate remains continuous;
+- grid acquisition never creates a persistent constraint;
+- point-axis and feature-extension tracking is drawn as a dotted temporary
+  guide, may place the current point exactly, and never creates a hidden
+  Horizontal/Vertical point relation; and
+- exact vertices, intersections, midpoints, curve centers, and carriers retain
+  priority over the grid fallback.
+
 ## Constraint operation invariants
 
 Constraint application and dimension editing now carry temporary operation
@@ -101,6 +123,13 @@ constraints, and do not reduce reported DOF afterward.
 | Radius/Diameter | Curve size | Center and unrelated arc state |
 | Symmetry | Mirrored placement | Datum-axis shape and first selected line size |
 | Fix | Stored pose | The entity is recorded without moving first |
+
+For two-line direction commands, selection order is meaningful. The first
+selected line is the direction reference and remains at its authored pose. The
+second line rotates without resizing about a shared endpoint when available;
+otherwise its most connected endpoint is preferred, with its midpoint used for
+a disconnected line. This keeps the three-line open-chain case local: applying
+Parallel to the top and bottom lines changes only the top line's bearing.
 
 The solver now restricts each numerical step to the connected constraint
 island that is actually outside tolerance. Already-satisfied disconnected
@@ -129,12 +158,20 @@ Engine tests now cover:
 - edit-time invariants for line length, point distance, angle, point-to-line
   distance, line-to-line offset, and radial-offset dimensions;
 - direction constraints applied in a sketch containing disconnected,
-  already-constrained geometry.
+  already-constrained geometry;
 - selective origin, midpoint, center, axis, connected-perpendicular, and arc
   endpoint/tangent inference;
 - per-gesture Control/Command suppression without accidental nearby-point
-  magnetization; and
-- exact-coordinate vertex reuse under suppression without an inferred Fix.
+  magnetization;
+- exact-coordinate vertex reuse under suppression without an inferred Fix;
+- proximity-only grid capture and continuous free placement outside the
+  capture radius;
+- temporary dotted alignment guides that do not add point-pair relations;
+- first-selection reference behavior for direction tools in the exact
+  three-line open-chain scenario; and
+- exhaustive shared constraint artwork, free/defined point-state rendering,
+  secondary-click removal for geometric and dimensional constraints, and all
+  three selection orders for two-feature relation commands.
 
 ### Pairwise permutation audit
 
@@ -191,9 +228,10 @@ constraint and geometry intact. Fillet/chamfer topology is also deliberately
 excluded from radial pre-projection, so reducing a radius still reopens an
 exactly consumed carrier.
 
-The UI regression exercises the actual ribbon path for two-point
-Horizontal/Vertical, more than eight selected lines, exact point alignment,
-selection clearing, duplicate rejection, graph integrity, and both inference
+The UI regression exercises the actual ribbon path for button-first,
+one-selection-first, and both-selections-first relations; two-point
+Horizontal/Vertical; more than eight selected lines; exact point alignment;
+selection clearing; duplicate rejection; graph integrity; and both inference
 boundaries. A second regression exercises reference creation, live measurement,
 read-only editing, and both mode conversions. Both are part of `e2e:release`.
 
@@ -209,8 +247,9 @@ read-only editing, and both mode conversions. Both are part of `e2e:release`.
 | Existing constraint milestone regression | Pass |
 | Numeric input-selection regression | Pass |
 | Driving/reference dimension UI regression | Pass |
+| Adaptive grid/tracking/constraint-menu UI regression | Pass |
 | Native macOS debug app build | Pass |
-| Native macOS launch/render smoke test | Pass — ribbon, browser, orientation control, origin planes, and native 3D grid render correctly; Create Sketch enters plane-selection mode |
+| Native macOS launch/render smoke test | Pass — native sketch grid and lines render correctly; free grips are hollow, inferred relation marks are visible, and secondary-click opens the constraint-removal menu |
 
 Strict Clippy under the current Rust toolchain still reports warnings that
 predate this work in untouched crates. The changed code introduces no new

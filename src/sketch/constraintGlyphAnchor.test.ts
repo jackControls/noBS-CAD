@@ -15,11 +15,18 @@ import type {
 } from '../engine/types';
 import {
   CONSTRAINT_EXISTENCE_GLYPH,
+  distributedRelationGlyphTargets,
   layoutConstraintGlyphs,
   offsetGlyphFromAnchor,
+  rightAngleGlyphFrame,
   singlePointRelationAnchor,
 } from './constraintGlyphAnchor';
 import { constraintReferencedEntityIds } from './constraintRefs';
+import {
+  CONSTRAINT_ICON_PRIMITIVES,
+  CONSTRAINT_TYPE_ICON,
+  TOOL_CONSTRAINT_ICON,
+} from './constraintIcons';
 
 let failures = 0;
 
@@ -90,9 +97,26 @@ console.log('constraint glyph anchors');
     geometricTypes.every((type) => CONSTRAINT_EXISTENCE_GLYPH[type].trim().length > 0),
   );
   check(
-    'perpendicular uses the standard perpendicular mark',
+    'every geometric constraint resolves to shared toolbar/viewport artwork',
+    geometricTypes.every(
+      (type) => CONSTRAINT_ICON_PRIMITIVES[CONSTRAINT_TYPE_ICON[type]].length > 0,
+    ),
+  );
+  check(
+    'perpendicular retains an explicit semantic fallback label',
     CONSTRAINT_EXISTENCE_GLYPH.perpendicular === '⊥',
     CONSTRAINT_EXISTENCE_GLYPH.perpendicular,
+  );
+  check(
+    'perpendicular artwork includes a dedicated right-angle square',
+    CONSTRAINT_ICON_PRIMITIVES.perpendicular.some(
+      (primitive) => primitive.type === 'path' && primitive.d === 'M5 14h5v5',
+    ),
+  );
+  check(
+    'combined Horizontal/Vertical command remains visually distinct from Perpendicular',
+    TOOL_CONSTRAINT_ICON.hv !== TOOL_CONSTRAINT_ICON.perpendicular
+      && CONSTRAINT_ICON_PRIMITIVES[TOOL_CONSTRAINT_ICON.hv].length > 0,
   );
 }
 
@@ -276,6 +300,96 @@ console.log('constraint glyph anchors');
     'perpendicular order-independent',
     !!ab && !!ba && near(ab, ba),
     JSON.stringify(ba),
+  );
+  const distributed = distributedRelationGlyphTargets(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    map,
+  );
+  check(
+    'disjoint perpendicular features receive one marker each',
+    distributed.length === 2
+      && distributed.map((target) => target.entityId).join(',') === '1,2',
+    JSON.stringify(distributed),
+  );
+}
+
+{
+  const horizontal = line(1, { x: -10, y: 0 }, { x: 10, y: 0 });
+  const vertical = line(2, { x: 0, y: -10 }, { x: 0, y: 10 });
+  const distributed = distributedRelationGlyphTargets(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    byId(horizontal, vertical),
+  );
+  check(
+    'intersecting perpendicular features retain one shared square marker',
+    distributed.length === 0,
+    JSON.stringify(distributed),
+  );
+}
+
+{
+  const upper = line(1, { x: 0, y: 10 }, { x: 20, y: 10 });
+  const lower = line(2, { x: 0, y: 0 }, { x: 20, y: 0 });
+  const targets = distributedRelationGlyphTargets(
+    { id: 1, type: 'parallel', a: 1, b: 2 },
+    byId(upper, lower),
+  );
+  check(
+    'parallel marks repeat on both lines',
+    targets.length === 2
+      && near(targets[0].anchor, { x: 10, y: 10 })
+      && near(targets[1].anchor, { x: 10, y: 0 }),
+    JSON.stringify(targets),
+  );
+  check(
+    'parallel marks offset into the space between the lines',
+    targets[0].preferredDir?.y === -1 && targets[1].preferredDir?.y === 1,
+    JSON.stringify(targets.map((target) => target.preferredDir)),
+  );
+}
+
+{
+  const horizontal = line(1, { x: -10, y: 0 }, { x: 10, y: 0 });
+  const vertical = line(2, { x: 0, y: -10 }, { x: 0, y: 10 });
+  const frame = rightAngleGlyphFrame(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    byId(horizontal, vertical),
+  );
+  check(
+    'intersecting perpendicular lines expose an aligned square frame',
+    !!frame
+      && near(frame.vertex, { x: 0, y: 0 })
+      && Math.abs(
+        frame.directionA.x * frame.directionB.x
+          + frame.directionA.y * frame.directionB.y,
+      ) < 1e-9
+      && Math.abs(frame.maxSize - 10) < 1e-9,
+    JSON.stringify(frame),
+  );
+  const disjoint = rightAngleGlyphFrame(
+    { id: 2, type: 'perpendicular', a: 1, b: 3 },
+    byId(horizontal, line(3, { x: 20, y: 10 }, { x: 20, y: 20 })),
+  );
+  check(
+    'disjoint perpendicular lines do not draw a detached square',
+    disjoint === null,
+    JSON.stringify(disjoint),
+  );
+}
+
+{
+  const left = circle(1, { x: -10, y: 0 }, 4);
+  const right = circle(2, { x: 10, y: 0 }, 6);
+  const targets = distributedRelationGlyphTargets(
+    { id: 1, type: 'equal', a: 1, b: 2 },
+    byId(left, right),
+  );
+  check(
+    'equal-circle marks repeat on the visible circumferences',
+    targets.length === 2
+      && near(targets[0].anchor, { x: -14, y: 0 })
+      && near(targets[1].anchor, { x: 16, y: 0 }),
+    JSON.stringify(targets),
   );
 }
 

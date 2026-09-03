@@ -2,7 +2,7 @@
 
 ## Persistence
 
-`ProjectModelV2.body_appearances: Vec<BodyAppearance>` (additive, `#[serde(default)]`).
+`ProjectModelV3.body_appearances: Vec<BodyAppearance>` (additive, `#[serde(default)]`).
 
 Fields:
 

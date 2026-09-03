@@ -697,6 +697,7 @@ impl SolidDocument {
             profile_indices: request.profile_indices,
             axis_origin: request.axis_origin,
             axis_direction: request.axis_direction,
+            axis_line_sketch_name: request.axis_line_sketch_name,
             axis_line_entity_id: request.axis_line_entity_id,
             angle_deg: request.angle_deg,
             flip: request.flip,
@@ -738,6 +739,7 @@ impl SolidDocument {
         definition.profile_indices = request.profile_indices;
         definition.axis_origin = request.axis_origin;
         definition.axis_direction = request.axis_direction;
+        definition.axis_line_sketch_name = request.axis_line_sketch_name;
         definition.axis_line_entity_id = request.axis_line_entity_id;
         definition.angle_deg = request.angle_deg;
         definition.flip = request.flip;
@@ -2353,15 +2355,41 @@ fn make_jobs(
                 }
                 let (axis_origin_2d, axis_direction_2d) =
                     if let Some(entity_id) = definition.axis_line_entity_id {
-                        let line = find_line(sketch, entity_id).ok_or_else(|| {
+                        let axis_sketch_name = definition
+                            .axis_line_sketch_name
+                            .as_deref()
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or(&definition.sketch_name);
+                        let axis_sketch = if axis_sketch_name == definition.sketch_name {
+                            sketch
+                        } else {
+                            find_input_sketch(
+                                catalog,
+                                active_features,
+                                axis_sketch_name,
+                                definition.feature_id,
+                                feature_order,
+                            )?
+                        };
+                        if !plane_bases_coplanar(sketch.basis, axis_sketch.basis) {
+                            return Err(SolidError::InvalidAxis(format!(
+                                "Revolve axis sketch '{}' is not coplanar with profile sketch '{}'",
+                                axis_sketch.sketch_name, sketch.sketch_name
+                            )));
+                        }
+                        let line = find_line(axis_sketch, entity_id).ok_or_else(|| {
                             SolidError::InvalidAxis(format!(
                                 "Revolve axis line {entity_id} no longer exists in '{}'",
-                                sketch.sketch_name
+                                axis_sketch.sketch_name
                             ))
                         })?;
+                        let start_world = axis_sketch.basis.to_3d([line.start.x, line.start.y]);
+                        let end_world = axis_sketch.basis.to_3d([line.end.x, line.end.y]);
+                        let start = sketch.basis.to_2d(start_world);
+                        let end = sketch.basis.to_2d(end_world);
                         (
-                            line.start,
-                            Point2Dto::new(line.end.x - line.start.x, line.end.y - line.start.y),
+                            Point2Dto::new(start[0], start[1]),
+                            Point2Dto::new(end[0] - start[0], end[1] - start[1]),
                         )
                     } else {
                         (definition.axis_origin, definition.axis_direction)
@@ -4390,6 +4418,27 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
+    const NORMAL_TOLERANCE: f64 = 1e-6;
+    const PLANE_DISTANCE_TOLERANCE_MM: f64 = 1e-5;
+    let first_normal_length = dot(first.normal, first.normal).sqrt();
+    let second_normal_length = dot(second.normal, second.normal).sqrt();
+    if first_normal_length <= EPS || second_normal_length <= EPS {
+        return false;
+    }
+    let alignment =
+        dot(first.normal, second.normal).abs() / (first_normal_length * second_normal_length);
+    if alignment < 1.0 - NORMAL_TOLERANCE {
+        return false;
+    }
+    let origin_delta = [
+        second.origin[0] - first.origin[0],
+        second.origin[1] - first.origin[1],
+        second.origin[2] - first.origin[2],
+    ];
+    dot(origin_delta, first.normal).abs() / first_normal_length <= PLANE_DISTANCE_TOLERANCE_MM
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4465,6 +4514,29 @@ mod tests {
         second.feature_id = FeatureId(2);
         second.basis.origin[2] = 20.0;
         catalog.push(second);
+        catalog
+    }
+
+    fn catalog_with_coplanar_axis_sketch() -> Vec<ProfileCatalogItemDto> {
+        let mut catalog = catalog();
+        let mut axis = catalog[0].clone();
+        axis.sketch_name = "AxisSketch".to_string();
+        axis.feature_id = FeatureId(2);
+        axis.profiles.clear();
+        // Same XY plane, but with a translated and quarter-turned local basis.
+        // The local line below maps to the world-space X=0 profile boundary.
+        axis.basis.origin = [5.0, 5.0, 0.0];
+        axis.basis.u = [0.0, 1.0, 0.0];
+        axis.basis.v = [-1.0, 0.0, 0.0];
+        axis.basis.normal = [0.0, 0.0, 1.0];
+        axis.lines = vec![SketchLineDto {
+            entity_id: 199,
+            start: Point2Dto::new(-5.0, 5.0),
+            end: Point2Dto::new(15.0, 5.0),
+        }];
+        axis.path_curves.clear();
+        axis.reference_points.clear();
+        catalog.push(axis);
         catalog
     }
 
@@ -5173,6 +5245,7 @@ mod tests {
             profile_indices: vec![0],
             axis_origin: Point2Dto::new(0.0, 0.0),
             axis_direction: Point2Dto::new(0.0, 1.0),
+            axis_line_sketch_name: None,
             axis_line_entity_id: Some(99),
             angle_deg: 360.0,
             flip: false,
@@ -5202,6 +5275,7 @@ mod tests {
             profile_indices: vec![0],
             axis_origin: Point2Dto::new(10.0, 0.0),
             axis_direction: Point2Dto::new(0.0, 1.0),
+            axis_line_sketch_name: None,
             axis_line_entity_id: None,
             angle_deg: 180.0,
             flip: false,
@@ -5217,6 +5291,62 @@ mod tests {
                 &active(&[1, 2]),
             ),
             Err(SolidError::InvalidAxis(_))
+        ));
+    }
+
+    #[test]
+    fn revolve_accepts_a_stable_line_from_any_coplanar_earlier_sketch() {
+        let mut doc = SolidDocument::new();
+        let plan = doc
+            .prepare_add_revolve(
+                FeatureId(3),
+                "Revolve1",
+                RevolveRequest {
+                    sketch_name: "Sketch1".to_string(),
+                    profile_indices: vec![0],
+                    axis_origin: Point2Dto::new(123.0, 456.0),
+                    axis_direction: Point2Dto::new(1.0, 0.0),
+                    axis_line_sketch_name: Some("AxisSketch".to_string()),
+                    axis_line_entity_id: Some(199),
+                    angle_deg: 180.0,
+                    flip: false,
+                    operation: ExtrudeOperation::NewBody,
+                    target_body_ids: Vec::new(),
+                },
+                &catalog_with_coplanar_axis_sketch(),
+                &active(&[1, 2, 3]),
+            )
+            .unwrap();
+        let KernelJobDto::Revolve(job) = &plan.jobs[0] else {
+            panic!("expected a Revolve job")
+        };
+        assert_eq!(job.axis_origin, Point3Dto::from([0.0, 0.0, 0.0]));
+        assert_eq!(job.axis_direction, Point3Dto::from([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn revolve_rejects_a_stable_line_from_a_parallel_offset_plane() {
+        let mut doc = SolidDocument::new();
+        assert!(matches!(
+            doc.prepare_add_revolve(
+                FeatureId(3),
+                "Revolve1",
+                RevolveRequest {
+                    sketch_name: "Sketch1".to_string(),
+                    profile_indices: vec![0],
+                    axis_origin: Point2Dto::new(0.0, 0.0),
+                    axis_direction: Point2Dto::new(0.0, 1.0),
+                    axis_line_sketch_name: Some("Sketch2".to_string()),
+                    axis_line_entity_id: Some(99),
+                    angle_deg: 180.0,
+                    flip: false,
+                    operation: ExtrudeOperation::NewBody,
+                    target_body_ids: Vec::new(),
+                },
+                &catalog_with_second_section(),
+                &active(&[1, 2, 3]),
+            ),
+            Err(SolidError::InvalidAxis(message)) if message.contains("not coplanar")
         ));
     }
 
@@ -5319,6 +5449,7 @@ mod tests {
             profile_indices: vec![0],
             axis_origin: Point2Dto::new(0.0, 0.0),
             axis_direction: Point2Dto::new(0.0, 1.0),
+            axis_line_sketch_name: None,
             axis_line_entity_id: Some(404),
             angle_deg: 180.0,
             flip: false,

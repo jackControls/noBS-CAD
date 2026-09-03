@@ -52,6 +52,13 @@ try {
         holePointSelected: css.getPropertyValue('--cad-hole-point-selected').trim(),
         sketchHover: css.getPropertyValue('--cad-hover').trim(),
         sketchSelected: css.getPropertyValue('--cad-sketch-selected').trim(),
+        pickNormal: css.getPropertyValue('--cad-pick-normal').trim(),
+        pickHover: css.getPropertyValue('--cad-pick-hover').trim(),
+        pickSelected: css.getPropertyValue('--cad-pick-selected').trim(),
+        pickHalo: css.getPropertyValue('--cad-pick-halo').trim(),
+        originPlaneXy: css.getPropertyValue('--cad-origin-plane-xy').trim(),
+        originPlaneXz: css.getPropertyValue('--cad-origin-plane-xz').trim(),
+        originPlaneYz: css.getPropertyValue('--cad-origin-plane-yz').trim(),
         finishedPoint: css.getPropertyValue('--cad-finished-point').trim(),
         finishedPointOutline: css
           .getPropertyValue('--cad-finished-point-outline')
@@ -67,12 +74,23 @@ try {
   assert.equal(theme.colorScheme, 'light');
   assert.equal(theme.panel, '#f4f6f8');
   assert.equal(theme.dimension, '#344600');
-  assert.equal(theme.selectedDimension, '#2e1b78');
-  assert.equal(theme.holePointSelected, '#ffd43b');
-  assert.equal(theme.sketchHover, '#9c4400');
-  assert.equal(theme.sketchSelected, '#5038a8');
-  assert.equal(theme.finishedPoint, '#6b2d00');
+  assert.equal(theme.selectedDimension, '#7a1f00');
+  assert.equal(theme.holePointSelected, '#7a1f00');
+  assert.equal(theme.pickNormal, '#38566a');
+  assert.equal(theme.pickHover, '#004fd8');
+  assert.equal(theme.pickSelected, '#b83200');
+  assert.equal(theme.pickHalo, '#17212b');
+  assert.deepEqual(
+    [theme.originPlaneXy, theme.originPlaneXz, theme.originPlaneYz],
+    ['#0b63b6', '#257942', '#b5323a'],
+  );
+  assert.equal(theme.sketchHover, theme.pickHover);
+  assert.equal(theme.sketchSelected, theme.pickSelected);
+  assert.equal(theme.finishedPoint, theme.pickNormal);
   assert.equal(theme.finishedPointOutline, '#ffffff');
+  assert.ok(contrastRatio(theme.pickHalo, theme.viewport) >= 7);
+  assert.ok(contrastRatio(theme.pickHover, theme.pickHalo) >= 1.5);
+  assert.ok(contrastRatio(theme.pickSelected, theme.pickHalo) >= 1.5);
   assert.ok(
     contrastRatio(theme.dimension, theme.body) >= 4.5,
     `light dimension/body contrast is ${contrastRatio(theme.dimension, theme.body).toFixed(2)}:1`,
@@ -126,10 +144,21 @@ try {
   assert.equal(theme.preference, 'dark');
   assert.equal(theme.resolved, 'dark');
   assert.equal(theme.panel, '#23262b');
-  assert.equal(theme.sketchHover, '#ffd166');
-  assert.equal(theme.sketchSelected, '#c4b9ff');
-  assert.equal(theme.finishedPoint, '#ff9f43');
+  assert.equal(theme.pickNormal, '#86a9c7');
+  assert.equal(theme.pickHover, '#00f5ff');
+  assert.equal(theme.pickSelected, '#ffd000');
+  assert.equal(theme.pickHalo, '#ffffff');
+  assert.deepEqual(
+    [theme.originPlaneXy, theme.originPlaneXz, theme.originPlaneYz],
+    ['#57a8ff', '#55c978', '#ff7078'],
+  );
+  assert.equal(theme.sketchHover, theme.pickHover);
+  assert.equal(theme.sketchSelected, theme.pickSelected);
+  assert.equal(theme.finishedPoint, theme.pickNormal);
   assert.equal(theme.finishedPointOutline, '#15191f');
+  assert.ok(contrastRatio(theme.pickHalo, theme.viewport) >= 7);
+  assert.ok(contrastRatio(theme.pickHover, theme.pickHalo) >= 1.3);
+  assert.ok(contrastRatio(theme.pickSelected, theme.pickHalo) >= 1.3);
   assert.ok(
     contrastRatio(theme.sketchHover, theme.viewport) >= 4.5,
     `dark sketch-hover/viewport contrast is ${contrastRatio(theme.sketchHover, theme.viewport).toFixed(2)}:1`,

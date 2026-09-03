@@ -11,6 +11,7 @@ import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
 import { SolidOperationFields } from './SolidOperationFields';
+import { ViewportSelectionField } from './ViewportSelectionField';
 
 const INPUT_CLASS = 'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
 const LABEL_CLASS = 'mb-1 block text-[10px] font-semibold uppercase tracking-wide text-mute';
@@ -21,13 +22,14 @@ export function RibDialog() {
   const close = useAppStore((state) => state.closeRibDialog);
   const busy = useAppStore((state) => state.solidBusy);
   const bodies = useAppStore((state) => state.solidScene.bodies);
-  const selectedBody = useAppStore((state) => state.selectedBody);
   const selectedFace = useAppStore((state) => state.selectedFace);
   const curvePicker = useAppStore((state) =>
     state.curvePicker?.owner === 'rib_centerline' ? state.curvePicker : null,
   );
   const configureCurvePicker = useAppStore((state) => state.configureCurvePicker);
   const replaceCurvePicks = useAppStore((state) => state.replaceCurvePicks);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
   const [sketchName, setSketchName] = useState('');
   const [lineIds, setLineIds] = useState<number[]>([]);
@@ -44,6 +46,9 @@ export function RibDialog() {
 
   useEffect(() => {
     if (featureId === null) return;
+    const selection = useAppStore.getState();
+    const initiallySelectedBody = selection.selectedBody;
+    const initiallySelectedFace = selection.selectedFace;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -53,7 +58,7 @@ export function RibDialog() {
       const usable = nextCatalog.filter((item) => item.path_curves.length > 0);
       const edit = featureId > 0 ? definitions.find((definition) => definition.feature_id === featureId) : undefined;
       const initialSketch = edit?.sketch_name ?? usable[usable.length - 1]?.sketch_name ?? '';
-      const initialLineIds = edit?.line_entity_ids ?? usable.find((item) => item.sketch_name === initialSketch)?.path_curves.map((curve) => curve.entity_id) ?? [];
+      const initialLineIds = edit?.line_entity_ids ?? [];
       setCatalog(usable);
       setSketchName(initialSketch);
       setLineIds(initialLineIds);
@@ -69,19 +74,34 @@ export function RibDialog() {
       setToFaceId(
         edit?.extent?.type === 'to_face'
           ? edit.extent.face_id
-          : bodies
-              .flatMap((body) => body.faces)
-              .find((face) => face.plane !== null)?.id ?? 0,
+          : initiallySelectedFace !== null
+              && bodies.some((body) =>
+                body.faces.some((face) => face.id === initiallySelectedFace && face.plane !== null))
+            ? initiallySelectedFace
+            : 0,
       );
       setSymmetric(edit?.symmetric ?? false);
       setFlip(edit?.flip ?? false);
       setOperation(edit?.operation ?? (bodies.length ? 'join' : 'new_body'));
-      setTargets(edit?.target_body_ids.length ? edit.target_body_ids : selectedBody !== null ? [selectedBody] : bodies[0] ? [bodies[0].id] : []);
+      setTargets(
+        edit?.target_body_ids.length
+          ? edit.target_body_ids
+          : initiallySelectedBody !== null
+            ? [initiallySelectedBody]
+            : [],
+      );
+      setModelingPickTarget('rib_centerline');
     }).catch((cause: unknown) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : t('rib.loadFailed'));
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [bodies, configureCurvePicker, featureId, selectedBody, t]);
+  }, [
+    bodies,
+    configureCurvePicker,
+    featureId,
+    setModelingPickTarget,
+    t,
+  ]);
 
   useEffect(() => {
     if (!curvePicker) return;
@@ -90,15 +110,20 @@ export function RibDialog() {
   }, [curvePicker]);
 
   useEffect(() => {
-    if (featureId === null || extentType !== 'to_face' || selectedFace === null) return;
+    if (featureId === null || modelingPickTarget !== 'rib_to_face' || selectedFace === null) return;
     const planar = bodies.some((body) =>
       body.faces.some((face) => face.id === selectedFace && face.plane !== null),
     );
-    if (planar) setToFaceId(selectedFace);
-  }, [bodies, extentType, featureId, selectedFace]);
+    if (planar) {
+      setExtentType('to_face');
+      setToFaceId(selectedFace);
+    }
+  }, [bodies, featureId, modelingPickTarget, selectedFace]);
 
   if (featureId === null) return null;
-  const selected = catalog.find((item) => item.sketch_name === sketchName);
+  const targetFace = bodies
+    .flatMap((body) => body.faces.map((face, index) => ({ body, face, index })))
+    .find(({ face }) => face.id === toFaceId && face.plane !== null);
   const thicknessValue = Number(thickness);
   const depthValue = Number(depth);
   const canSubmit = !loading && !busy && !error && sketchName !== '' && lineIds.length > 0
@@ -107,28 +132,15 @@ export function RibDialog() {
     && (extentType !== 'to_face' || toFaceId > 0)
     && (extentType !== 'to_next' || operation !== 'new_body')
     && (operation === 'new_body' || targets.length > 0);
-  const chooseSketch = (name: string) => {
-    const entry = catalog.find((item) => item.sketch_name === name);
-    const ids = entry?.path_curves.map((curve) => curve.entity_id) ?? [];
-    setSketchName(name);
-    setLineIds(ids);
-    replaceCurvePicks(
+  const activateCenterline = () => {
+    configureCurvePicker(
       'rib_centerline',
-      ids.map((entityId) => ({ sketchName: name, entityId })),
-      name,
-    );
-  };
-  const toggleLine = (id: number) => setLineIds((current) => {
-    const next = current.includes(id)
-      ? current.filter((candidate) => candidate !== id)
-      : [...current, id];
-    replaceCurvePicks(
-      'rib_centerline',
-      next.map((entityId) => ({ sketchName, entityId })),
+      catalog,
+      lineIds.map((entityId) => ({ sketchName, entityId })),
       sketchName,
     );
-    return next;
-  });
+    setModelingPickTarget('rib_centerline');
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
@@ -155,15 +167,44 @@ export function RibDialog() {
             : error ? <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">{error}</p>
               : catalog.length === 0 ? <p className="text-xs text-mute">{t('rib.noLines')}</p>
                 : <>
-                  <label><span className={LABEL_CLASS}>{t('rib.sketch')}</span><select data-testid="rib-sketch" value={sketchName} onChange={(event) => chooseSketch(event.target.value)} className={INPUT_CLASS}>{catalog.map((item) => <option key={item.sketch_name}>{item.sketch_name}</option>)}</select></label>
-                  <fieldset><legend className={LABEL_CLASS}>Centerline curves</legend><p className="mb-1 text-[10px] leading-4 text-mute">Click visible finished-sketch curves in the canvas to add or remove them.</p><div className="max-h-32 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">{selected?.path_curves.map((curve) => <label key={curve.entity_id} className="flex cursor-pointer gap-2 text-xs text-ink"><input data-testid={`rib-centerline-${curve.entity_id}`} type="checkbox" checked={lineIds.includes(curve.entity_id)} onChange={() => toggleLine(curve.entity_id)} className="accent-accent" /><span className="capitalize">{curve.kind}</span> {curve.entity_id}</label>)}</div></fieldset>
-                  <label><span className={LABEL_CLASS}>Extent</span><select data-testid="rib-extent" value={extentType} onChange={(event) => setExtentType(event.target.value as RibExtent['type'])} className={INPUT_CLASS}><option value="distance">Distance</option><option value="to_next">To Next</option><option value="to_face">Up to Face</option><option value="through_all">Through All</option></select></label>
+                  <ViewportSelectionField
+                    testId="rib-centerline-selection"
+                    label="Centerline curves"
+                    status={lineIds.length > 0 ? `${lineIds.length} centerline ${lineIds.length === 1 ? 'curve' : 'curves'} selected · ${sketchName}` : 'Click centerline curves in the viewport'}
+                    hint="Click visible finished-sketch curves to add or remove them."
+                    active={modelingPickTarget === 'rib_centerline'}
+                    hasSelection={lineIds.length > 0}
+                    onActivate={activateCenterline}
+                    onClear={() => {
+                      setLineIds([]);
+                      replaceCurvePicks('rib_centerline', [], sketchName);
+                      setModelingPickTarget('rib_centerline');
+                    }}
+                  />
+                  <label><span className={LABEL_CLASS}>Extent</span><select data-testid="rib-extent" value={extentType} onChange={(event) => {
+                    const next = event.target.value as RibExtent['type'];
+                    setExtentType(next);
+                    if (next === 'to_face') setModelingPickTarget('rib_to_face');
+                    else if (modelingPickTarget === 'rib_to_face') setModelingPickTarget('rib_centerline');
+                  }} className={INPUT_CLASS}><option value="distance">Distance</option><option value="to_next">To Next</option><option value="to_face">Up to Face</option><option value="through_all">Through All</option></select></label>
                   {extentType === 'to_next' && operation === 'new_body' && <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] leading-4 text-amber-200">To Next needs Add, Subtract, or Common so there is a target body to stop at.</p>}
                   <div className="grid grid-cols-2 gap-2"><label><span className={LABEL_CLASS}>{t('rib.thickness')}</span><DimensionInput autoSelectKey={lineIds.length > 0 ? `${sketchName}:${lineIds.join(',')}` : null} data-testid="rib-thickness" min="0.000001" step="any" value={thickness} onValueChange={setThickness} /></label>{extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('rib.depth')}</span><DimensionInput data-testid="rib-depth" min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}</div>
-                  {extentType === 'to_face' && <label><span className={LABEL_CLASS}>Target planar face</span><select data-testid="rib-to-face" value={toFaceId} onChange={(event) => setToFaceId(Number(event.target.value))} className={INPUT_CLASS}><option value={0}>Select a face</option>{bodies.flatMap((body) => body.faces.map((face, index) => ({ body, face, index }))).filter(({ face }) => face.plane !== null).map(({ body, face, index }) => <option key={face.id} value={face.id}>{body.name} · Face {index + 1} (#{face.id})</option>)}</select></label>}
+                  {extentType === 'to_face' && <ViewportSelectionField
+                    testId="rib-to-face-selection"
+                    label="Target planar face"
+                    status={targetFace ? `${targetFace.body.name} · planar face selected` : 'Click a planar face in the viewport'}
+                    hint="Only planar faces can terminate this rib."
+                    active={modelingPickTarget === 'rib_to_face'}
+                    hasSelection={targetFace !== undefined}
+                    onActivate={() => setModelingPickTarget('rib_to_face')}
+                    onClear={() => {
+                      setToFaceId(0);
+                      setModelingPickTarget('rib_to_face');
+                    }}
+                  />}
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={symmetric} onChange={(event) => setSymmetric(event.target.checked)} className="accent-accent" />{t('rib.symmetric')}</label>
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={flip} onChange={(event) => setFlip(event.target.checked)} className="accent-accent" />{t('rib.flip')}</label>
-                  <SolidOperationFields operation={operation} setOperation={setOperation} targetBodies={targets} setTargetBodies={setTargets} />
+                  <SolidOperationFields operation={operation} setOperation={setOperation} targetBodies={targets} setTargetBodies={setTargets} pickTarget="rib_targets" />
                 </>}
         </div>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge bg-header px-3"><button type="button" onClick={close} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">{t('rib.cancel')}</button><button data-testid="rib-ok" type="submit" disabled={!canSubmit} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">{t('rib.ok')}</button></footer>

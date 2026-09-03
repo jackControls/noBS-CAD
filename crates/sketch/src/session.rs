@@ -38,6 +38,11 @@ pub const SNAP_TOLERANCE_MM: f64 = 2.0;
 /// Default grid step in mm; the sketch grid snaps to its intersections when
 /// grid snap is on.
 pub const GRID_STEP_MM: f64 = 10.0;
+/// Grid intersections are magnetic only inside this fraction of one visible
+/// minor-grid step. The frontend uses the equivalent screen-space radius;
+/// this engine-side guard keeps direct/native callers from rounding every
+/// free coordinate merely because the grid is enabled.
+pub const GRID_CAPTURE_FRACTION: f64 = 0.25;
 /// Finest supported modeling grid: one micrometer in the document's mm
 /// coordinate system.
 pub const MIN_GRID_STEP_MM: f64 = 0.001;
@@ -514,7 +519,9 @@ impl SketchSession {
             if exclude_position.is_some_and(|excluded| snapped.distance(excluded) <= MERGE_EPS) {
                 return (raw, SnapTarget::None);
             }
-            return (snapped, SnapTarget::Grid);
+            if snapped.distance(raw) <= step * GRID_CAPTURE_FRACTION {
+                return (snapped, SnapTarget::Grid);
+            }
         }
         (raw, SnapTarget::None)
     }
@@ -881,8 +888,9 @@ impl SketchSession {
     /// Resolve a viewport-acquired horizontal/vertical tracking reference
     /// against the segment's remaining degrees of freedom. The viewport
     /// decides *which* point is close in screen space; this engine function
-    /// performs the exact intersection and reports the guide that will become
-    /// a persistent point-pair relation on commit.
+    /// performs the exact intersection and reports a temporary dotted guide.
+    /// The aligned coordinate is committed, but no point-pair relation is
+    /// inferred from this visual aid.
     fn tracking_preview(
         &self,
         from: Vec2,
@@ -897,22 +905,23 @@ impl SketchSession {
             return None;
         }
 
+        let mut grid_acquired = false;
         let snapped = match (length_mm, angle_rad, request.axis) {
             (None, None, TrackingAxis::Horizontal) => Vec2::new(
-                if self.grid_snap {
-                    (cursor.x / self.grid_step).round() * self.grid_step
-                } else {
-                    cursor.x
-                },
+                self.snap_1d_with_status(cursor.x)
+                    .map_or(cursor.x, |value| {
+                        grid_acquired = true;
+                        value
+                    }),
                 source.y,
             ),
             (None, None, TrackingAxis::Vertical) => Vec2::new(
                 source.x,
-                if self.grid_snap {
-                    (cursor.y / self.grid_step).round() * self.grid_step
-                } else {
-                    cursor.y
-                },
+                self.snap_1d_with_status(cursor.y)
+                    .map_or(cursor.y, |value| {
+                        grid_acquired = true;
+                        value
+                    }),
             ),
             (None, Some(angle), axis) => {
                 let direction = Vec2::new(angle.cos(), angle.sin());
@@ -931,7 +940,7 @@ impl SketchSession {
         }
         Some(PreviewDto {
             snapped_to: snapped,
-            snap: if self.grid_snap {
+            snap: if grid_acquired {
                 SnapTarget::Grid
             } else {
                 SnapTarget::None
@@ -1169,6 +1178,7 @@ impl SketchSession {
         }
         candidates
             .into_iter()
+            .filter(|point| point.distance(cursor) <= step * GRID_CAPTURE_FRACTION)
             .min_by(|a, b| a.distance(cursor).total_cmp(&b.distance(cursor)))
     }
 
@@ -1199,6 +1209,7 @@ impl SketchSession {
         }
         candidates
             .into_iter()
+            .filter(|point| point.distance(cursor) <= step * GRID_CAPTURE_FRACTION)
             .min_by(|a, b| a.distance(cursor).total_cmp(&b.distance(cursor)))
     }
 
@@ -1852,24 +1863,10 @@ impl SketchSession {
             }
         }
 
-        // Object-snap tracking is associative: moving the acquired reference
-        // later keeps this endpoint on the same horizontal/vertical axis.
-        if let Some(guide) = preview.tracking {
-            if guide.point != end_point_id {
-                let constraint = match guide.axis {
-                    TrackingAxis::Horizontal => Constraint::HorizontalPoints {
-                        a: guide.point,
-                        b: end_point_id,
-                    },
-                    TrackingAxis::Vertical => Constraint::VerticalPoints {
-                        a: guide.point,
-                        b: end_point_id,
-                    },
-                };
-                let id = self.sketch.add_constraint(constraint);
-                created.push(ConstraintDto { id, constraint });
-            }
-        }
+        // Alignment tracking is a placement aid, not an inferred relation.
+        // It supplies an exact coordinate and a dotted preview guide, then
+        // disappears on commit. Users can add Horizontal/Vertical Points
+        // explicitly when they want the alignment to remain associative.
 
         // An axis/curve intersection is geometric, not a one-time coordinate
         // coincidence. Persist the endpoint on its acquired carrier so later
@@ -2655,13 +2652,18 @@ impl SketchSession {
         })
     }
 
-    /// 1D snap of a free axis component (grid intersections when on).
-    fn snap_1d(&self, v: f64) -> f64 {
-        if self.grid_snap {
-            (v / self.grid_step).round() * self.grid_step
-        } else {
-            v
+    /// Magnetic 1D snap of a free axis component.
+    fn snap_1d_with_status(&self, v: f64) -> Option<f64> {
+        if !self.grid_snap {
+            return None;
         }
+        let snapped = (v / self.grid_step).round() * self.grid_step;
+        ((snapped - v).abs() <= self.grid_step * GRID_CAPTURE_FRACTION).then_some(snapped)
+    }
+
+    /// 1D snap of a free axis component (nearby grid lines when on).
+    fn snap_1d(&self, v: f64) -> f64 {
+        self.snap_1d_with_status(v).unwrap_or(v)
     }
 
     /// Coincident corner snap for rectangles, respecting locked axes: only
@@ -4111,6 +4113,39 @@ impl SketchSession {
         let mut moving_line_endpoints = BTreeSet::new();
         let mut direction_operation = false;
 
+        // Direction tools treat the first selected line as the reference and
+        // rotate the follower around its most meaningful local pivot. A
+        // shared endpoint with the reference wins; otherwise an endpoint
+        // connected to more sketch lines wins. A disconnected follower uses
+        // its midpoint. These are operation-local pose preferences only.
+        let preferred_direction_pivot = |reference: EntityId, follower: EntityId| {
+            let (reference_start, reference_end) = self.sketch.line_endpoint_ids(reference)?;
+            let (follower_start, follower_end) = self.sketch.line_endpoint_ids(follower)?;
+            if follower_start == reference_start || follower_start == reference_end {
+                return Some(follower_start);
+            }
+            if follower_end == reference_start || follower_end == reference_end {
+                return Some(follower_end);
+            }
+            let incidence = |point: EntityId| {
+                self.sketch
+                    .entities()
+                    .filter(|(_, entity)| {
+                        matches!(**entity, Entity::Line { start, end } if start == point || end == point)
+                    })
+                    .count()
+            };
+            let start_incidence = incidence(follower_start);
+            let end_incidence = incidence(follower_end);
+            if start_incidence > end_incidence {
+                Some(follower_start)
+            } else if end_incidence > start_incidence {
+                Some(follower_end)
+            } else {
+                None
+            }
+        };
+
         for constraint in constraints {
             match *constraint {
                 // Direction-only: rotate, but do not resize.
@@ -4135,11 +4170,20 @@ impl SketchSession {
                 Constraint::Parallel { a, b }
                 | Constraint::Perpendicular { a, b }
                 | Constraint::Angle { a, b, .. } => {
-                    line_lengths.insert(a);
-                    line_midpoints.insert(a);
-                    if b != crate::entity::AXIS_SENTINEL {
+                    if b == crate::entity::AXIS_SENTINEL {
+                        // A one-line angle behaves like H/V: rotate about its
+                        // center while keeping its authored length.
+                        line_lengths.insert(a);
+                        line_midpoints.insert(a);
+                    } else {
+                        // The first selection is the direction reference.
+                        add_line_pose(&mut line_lengths, &mut line_angles, &mut line_midpoints, a);
                         line_lengths.insert(b);
-                        line_midpoints.insert(b);
+                        if let Some(pivot) = preferred_direction_pivot(a, b) {
+                            point_positions.insert(pivot);
+                        } else {
+                            line_midpoints.insert(b);
+                        }
                     }
                     direction_operation = true;
                 }

@@ -174,6 +174,22 @@ setting. Suppression does not create duplicate vertices: an endpoint that is
 already at exactly the same coordinates as an existing vertex reuses that
 topology without adding a persistent inferred relation.
 
+Grid quantization is magnetic, not unconditional: the nearest adaptive minor
+grid intersection captures only inside a small screen-space radius. Away from
+that radius, continuous cursor coordinates remain available. Grid acquisition
+never adds a relation. Point-axis and feature-extension tracking likewise
+remain dotted, operation-local guides; they can establish an exact placement
+for the current gesture but do not persist Horizontal/Vertical point-pair
+relations.
+
+For two-line direction operations, the first selection is the stable direction
+reference. The second selection is the follower: its length is retained and it
+rotates about a shared endpoint, otherwise its most connected endpoint, with a
+midpoint fallback for disconnected geometry. The focused three-line regression
+asserts that applying Parallel to the top and bottom carriers changes only the
+top carrier's direction; the reference line, shared upright, and all three
+lengths remain unchanged.
+
 Automatic **Fix** is different and should not be the default. Fix locks size
 and location, masks under-constrained design intent, and easily turns later
 dimensions into conflicts. A stable sketch should instead use:

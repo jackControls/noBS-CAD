@@ -18,7 +18,8 @@
  * builds CPU interaction proxies and forwards pointer/camera intent to the
  * native viewport. All scene units are document units (millimeters by default).
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import * as CAD from './cadInteraction';
 import {
   ScreenPolyline,
@@ -30,7 +31,13 @@ import {
 } from './cadInteraction';
 import { useTranslation } from '../../i18n';
 import { getEngine, EngineError, type Engine } from '../../engine';
-import { pickDatumPlane, pickPlanarFace, pickPlane } from '../../engine/controller';
+import {
+  deleteConstraint,
+  deleteDimension,
+  pickDatumPlane,
+  pickPlanarFace,
+  pickPlane,
+} from '../../engine/controller';
 import type {
   BodyFeatureDefinitionDto,
   CurveCrossingRequest,
@@ -64,6 +71,36 @@ import {
   type FinishedSketchPointPick,
   type SketchTool,
 } from '../../store/appStore';
+import {
+  activeEdgePickMode,
+  activeViewportPick,
+  linePickWinsOverProfile,
+  modelingBodyPickMode,
+  modelingPickTargetForGeometry,
+  pickAccepts,
+  type ActiveViewportPick,
+  type ModelingBodyPickMode,
+} from '../../modeling/viewportPicker';
+import {
+  collectAppViewportPickFeedback,
+  finishedSketchEntityFeedback,
+} from '../../modeling/viewportPickFeedback';
+import { pickProfileRegion, type ProfileRegionHit } from '../../modeling/profileRegionPicker';
+import {
+  allRevolveAxisLineOptions,
+  revolveAxisLineOptions,
+  revolveProfileAcceptsAxis,
+} from '../../lib/revolveAxis';
+import {
+  pickClipPolylineCandidate,
+  type ClipPoint,
+  type ClipPolylineCandidate,
+  type ScreenPick,
+} from '../../modeling/screenSpaceEntityPicker';
+import {
+  VIEWPORT_INTERACTION_STROKE_PX,
+  viewportInteractionScale,
+} from '../../theme/viewportInteractionTheme';
 import { isStraightSolidEdge } from '../../solidEdgeEligibility';
 import type { BrowserNode } from '../../types/document';
 import {
@@ -73,13 +110,24 @@ import {
 } from './cameraApi';
 import { computeDimGeometry, formatDimMeasurement } from './dimsRenderer';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
+import { selectForPendingConstraint } from '../../sketch/applyConstraint';
 import {
   CONSTRAINT_EXISTENCE_GLYPH,
   MULTI_ENTITY_RELATION_GLYPH,
   SINGLE_POINT_RELATION_GLYPH,
+  distributedRelationGlyphTargets,
   layoutConstraintGlyphs,
+  rightAngleGlyphFrame,
   singlePointRelationAnchor,
 } from '../../sketch/constraintGlyphAnchor';
+import {
+  CONSTRAINT_TYPE_ICON,
+  TOOL_CONSTRAINT_ICON,
+  drawConstraintIcon,
+  type ConstraintIconKind,
+  type RelationConstraintIconKind,
+} from '../../sketch/constraintIcons';
+import { ToolIcon } from '../icons';
 import {
   adaptiveSketchGridStep,
   DEFAULT_SKETCH_GRID_STEP_MM,
@@ -100,11 +148,13 @@ import {
 } from './toolPreview';
 import { DynamicInputOverlay } from './DynamicInputOverlay';
 import { DimensionEditor } from './DimensionEditor';
+import { ContextMenu, type ContextMenuEntry } from '../ContextMenu';
 import { NavBar } from './NavBar';
 import { OrientationDial } from './OrientationDial';
 import { SelectionReadout } from './SelectionReadout';
 import {
   attachNativeViewport,
+  collectNativeViewportPresentation,
   nativeViewportIsActive,
   pickNativeViewport,
   syncNativeViewportCamera,
@@ -112,6 +162,7 @@ import {
   type NativeViewportPick,
   type NativeViewportLinePattern,
   type NativeViewportSnapKind,
+  type NativeViewportToolIcon,
   type NativeViewportTransient,
 } from './nativeViewportBridge';
 import { triangulateProfileRegion } from './profileTriangulation';
@@ -181,6 +232,11 @@ export function referencePlaneHalfSizeForView(
 const SKETCH_FIT_HALF_EXTENT = 75;
 /** Magnetic acquisition radius for valid modify-tool targets. */
 const MODIFY_CAPTURE_PX = 14;
+/** Symmetric profile-boundary zone in which a Revolve line outranks the
+ * region on either side. Keeping this below the shared 17 px line envelope
+ * leaves a usable interior target even for compact profiles. */
+/** Grid intersections acquire only when the pointer is visibly near one. */
+const GRID_CAPTURE_PX = 7;
 /** Hole placement points keep a compact glyph but use a forgiving target. */
 const HOLE_POINT_CAPTURE_PX = 18;
 /** Screen-space forgiveness around visible origin-plane fills and outlines. */
@@ -211,7 +267,6 @@ const isDimensionalConstraintType = (
 const LINE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line']);
 const CURVE_TARGET_KINDS: ReadonlySet<EntityDto['kind']> = new Set(['line', 'circle', 'arc']);
 type SolidEdgePickMode = 'any' | 'refinable' | 'straight';
-type BodyFeaturePickMode = 'body-multi' | 'body-single' | 'face-multi' | 'face-single';
 
 const COLOR_AXIS_Z = 0x4f9dde; // conventional Z-axis blue, not a brand color
 
@@ -267,12 +322,14 @@ interface PickerPlane {
   plane: OriginPlane;
   mesh: CAD.Mesh<CAD.PlaneGeometry, CAD.MeshBasicMaterial>;
   border: CAD.LineSegments;
+  baseColor: number;
 }
 
 interface PickerDef {
   plane: OriginPlane;
   basis: PlaneBasis;
-  color: number;
+  colorToken: string;
+  colorFallback: string;
   labelKey: string;
 }
 
@@ -280,44 +337,127 @@ const PICKER_PLANES: PickerDef[] = [
   {
     plane: 'xy',
     basis: { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1] },
-    color: COLOR_AXIS_Z,
+    colorToken: '--cad-origin-plane-xy',
+    colorFallback: '#57a8ff',
     labelKey: 'sketch.planeXy',
   },
   {
     plane: 'xz',
     basis: { origin: [0, 0, 0], u: [1, 0, 0], v: [0, 0, 1], normal: [0, -1, 0] },
-    color: 0x58a65c,
+    colorToken: '--cad-origin-plane-xz',
+    colorFallback: '#55c978',
     labelKey: 'sketch.planeXz',
   },
   {
     plane: 'yz',
     basis: { origin: [0, 0, 0], u: [0, 1, 0], v: [0, 0, 1], normal: [1, 0, 0] },
-    color: 0xd64949,
+    colorToken: '--cad-origin-plane-yz',
+    colorFallback: '#ff7078',
     labelKey: 'sketch.planeYz',
   },
 ];
+
+const CONSTRAINT_TOOL_LABEL_KEYS: Readonly<Record<string, string>> = {
+  hv: 'ribbon.sketch.horizontalVertical',
+  coincident: 'ribbon.sketch.coincident',
+  tangent: 'ribbon.sketch.tangent',
+  equal: 'ribbon.sketch.equal',
+  parallel: 'ribbon.sketch.parallel',
+  perpendicular: 'ribbon.sketch.perpendicular',
+  midpoint: 'ribbon.sketch.midpoint',
+  concentric: 'ribbon.sketch.concentric',
+  collinear: 'ribbon.sketch.collinear',
+};
+
+type CursorToolDefinition = {
+  /** React toolbar glyph id for the browser/WebGL fallback cursor. */
+  uiIcon: string;
+  /** Compact procedural icon id for the native Bevy viewport cursor. */
+  nativeIcon: NativeViewportToolIcon;
+};
+
+const SKETCH_TOOL_CURSOR: Readonly<
+  Record<Exclude<SketchTool, null>, CursorToolDefinition>
+> = Object.freeze({
+  line: { uiIcon: 'line', nativeIcon: 'line' },
+  midpointLine: { uiIcon: 'midpointLine', nativeIcon: 'midpoint_line' },
+  point: { uiIcon: 'point', nativeIcon: 'point' },
+  rect2pt: { uiIcon: 'rect', nativeIcon: 'rectangle' },
+  rectCenter: { uiIcon: 'rect', nativeIcon: 'rectangle' },
+  circleCenter: { uiIcon: 'circle', nativeIcon: 'circle' },
+  circle2pt: { uiIcon: 'circle', nativeIcon: 'circle' },
+  arc3pt: { uiIcon: 'arc', nativeIcon: 'arc' },
+  arcCenter: { uiIcon: 'arc', nativeIcon: 'arc' },
+  dimension: { uiIcon: 'dimension', nativeIcon: 'dimension' },
+  fillet: { uiIcon: 'fillet', nativeIcon: 'fillet' },
+  chamfer: { uiIcon: 'chamfer', nativeIcon: 'chamfer' },
+  offset: { uiIcon: 'offset', nativeIcon: 'offset' },
+  trim: { uiIcon: 'trim', nativeIcon: 'trim' },
+  extend: { uiIcon: 'extend', nativeIcon: 'extend' },
+  break: { uiIcon: 'break', nativeIcon: 'break' },
+  mirror: { uiIcon: 'mirror', nativeIcon: 'mirror' },
+  moveCopy: { uiIcon: 'moveCopy', nativeIcon: 'move_copy' },
+  scale: { uiIcon: 'scale', nativeIcon: 'scale' },
+  polygon: { uiIcon: 'polygon', nativeIcon: 'polygon' },
+  slot: { uiIcon: 'slot', nativeIcon: 'slot' },
+  splineFit: { uiIcon: 'spline', nativeIcon: 'spline' },
+});
+
+const CONSTRAINT_CURSOR_UI_ICON: Readonly<Record<string, string>> = Object.freeze({
+  hv: 'hv',
+  coincident: 'coincident',
+  tangent: 'tangent',
+  equal: 'equal',
+  parallel: 'parallel',
+  perpendicular: 'perpendicular',
+  midpoint: 'midpointC',
+  concentric: 'concentric',
+  collinear: 'collinear',
+  symmetry: 'symmetry',
+});
 
 export function Viewport() {
   const containerRef = useRef<HTMLDivElement>(null);
   const apiRef = useRef<ViewportCameraApi | null>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
+  const toolCursorRef = useRef<HTMLDivElement>(null);
   const planeTagRef = useRef<HTMLDivElement>(null);
   const zoomRectRef = useRef<HTMLDivElement>(null);
+  const [constraintContextMenu, setConstraintContextMenu] = useState<{
+    target: 'constraint' | 'dimension';
+    id: number;
+    point: { x: number; y: number };
+  } | null>(null);
   const pickingPlane = useAppStore((s) => s.mode === 'pickPlane');
   const constructionPlanePickTarget = useAppStore(
     (s) => s.constructionPlanePickTarget,
   );
+  const pendingConstraintTool = useAppStore((s) => s.pendingConstraintTool);
+  const activeTool = useAppStore((s) => s.activeTool);
+  const pendingConstraintSelectionCount = useAppStore(
+    (s) => new Set([
+      ...s.selectedEntities,
+      ...(s.selectedEntity === null ? [] : [s.selectedEntity]),
+    ]).size,
+  );
   const commandSelectionPrompt = useAppStore((s) => {
+    const activePick = activeViewportPick(
+      s.modelingPickTarget,
+      s.constructionPlanePickTarget,
+      s.mode === 'pickPlane',
+    );
+    if (activePick) return activePick.spec.prompt;
     if (s.profilePicker) {
+      if (s.profilePicker.owner === 'revolve') {
+        return 'Select a closed profile or any coplanar straight sketch line for the Revolve axis';
+      }
       const owner =
         s.profilePicker.owner === 'extrude'
           ? 'Extrude'
-          : s.profilePicker.owner === 'revolve'
-            ? 'Revolve'
-            : s.profilePicker.owner === 'sweep'
-              ? 'Sweep'
-              : 'Loft';
+          : s.profilePicker.owner === 'sweep'
+            ? 'Sweep'
+            : 'Loft';
       return `Select closed sketch profiles for ${owner}`;
     }
     if (s.curvePicker) return 'Select finished sketch curves in the viewport';
@@ -334,15 +474,30 @@ export function Viewport() {
   });
   const { t } = useTranslation();
 
+  const pendingConstraintPrompt = pendingConstraintTool
+    ? t(
+        pendingConstraintTool === 'hv'
+          ? 'constraints.selectHorizontalVertical'
+          : 'constraints.selectFeatures',
+      )
+        .replace(
+          '{constraint}',
+          t(CONSTRAINT_TOOL_LABEL_KEYS[pendingConstraintTool] ?? pendingConstraintTool),
+        )
+        .replace('{count}', String(Math.min(2, pendingConstraintSelectionCount)))
+    : null;
+
   const selectionPrompt = pickingPlane
     ? t('sketch.pickPlanePrompt')
-    : constructionPlanePickTarget === 'first_reference'
-      ? 'Select the first planar face or reference plane (Esc to stop selecting)'
-      : constructionPlanePickTarget === 'second_reference'
-        ? 'Select the second parallel face or plane (Esc to stop selecting)'
-        : constructionPlanePickTarget === 'axis_edge'
-          ? 'Select a straight model edge for the plane axis (Esc to stop selecting)'
-          : commandSelectionPrompt;
+    : constructionPlanePickTarget !== null
+      ? commandSelectionPrompt
+      : pendingConstraintPrompt ?? commandSelectionPrompt;
+
+  const cursorUiIcon = pendingConstraintTool
+    ? CONSTRAINT_CURSOR_UI_ICON[pendingConstraintTool] ?? null
+    : activeTool
+      ? SKETCH_TOOL_CURSOR[activeTool].uiIcon
+      : null;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -363,38 +518,41 @@ export function Viewport() {
     const CSS_ACCENT = cssThemeColor('--accent', '#7463d8');
     const CSS_INK = cssThemeColor('--ink', '#d7dce2');
     const CSS_MUTE = cssThemeColor('--mute', '#9aa0a8');
+    const CSS_CONSTRAINT = '#e07878';
     const CSS_FINISH = cssThemeColor('--finish', '#58a65c');
     const CSS_DIMENSION = cssThemeColor('--dimgreen', '#aecb1e');
     const CSS_REFERENCE_DIMENSION = CSS_MUTE;
     const CSS_DIMENSION_SELECTED = cssThemeColor(
       '--cad-dimension-selected',
-      '#c4b9ff',
+      '#ffd000',
     );
     const CSS_GRIP_FILL = cssThemeColor('--cad-grip-fill', '#ffffff');
-    const COLOR_SKETCH = interactionThemeColor('--sketchline', '#5da9ff');
+    const COLOR_PICK_NORMAL = interactionThemeColor('--cad-pick-normal', '#86a9c7');
+    const COLOR_PICK_HALO = interactionThemeColor('--cad-pick-halo', '#ffffff');
+    const COLOR_SKETCH = interactionThemeColor('--sketchline', '#86a9c7');
     const COLOR_DEFINED = interactionThemeColor('--cad-defined', '#e8e9ec');
-    const COLOR_HOVER = interactionThemeColor('--cad-hover', '#ffd166');
+    const COLOR_HOVER = interactionThemeColor('--cad-pick-hover', '#00f5ff');
     const COLOR_ACCENT = interactionThemeColor('--accent', '#7463d8');
     const COLOR_SELECTED = interactionThemeColor(
-      '--cad-sketch-selected',
-      '#c4b9ff',
+      '--cad-pick-selected',
+      '#ffd000',
     );
     const COLOR_CONSTRAINT_RELATED = interactionThemeColor(
       '--cad-constraint-related',
       '#3ecf9a',
     );
     const COLOR_PREVIEW = interactionThemeColor('--cad-preview', '#8fc4ff');
-    const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#4ac7ff');
+    const COLOR_FINISHED = interactionThemeColor('--cad-finished', '#86a9c7');
     const COLOR_FINISHED_POINT = interactionThemeColor(
       '--cad-finished-point',
-      '#ff9f43',
+      '#86a9c7',
     );
     const COLOR_FINISHED_POINT_OUTLINE = interactionThemeColor(
       '--cad-finished-point-outline',
       '#15191f',
     );
     const COLOR_BODY = interactionThemeColor('--cad-body', '#8b9bac');
-    const COLOR_BODY_SELECTED = interactionThemeColor('--cad-body-selected', '#69a9d4');
+    const COLOR_BODY_SELECTED = interactionThemeColor('--cad-body-selected', '#a96725');
     const COLOR_BODY_TOOL = interactionThemeColor('--cad-body-tool', '#b58a43');
 
     const bodyBaseColor = (bodyId: number, appearances: ReturnType<typeof useAppStore.getState>['bodyAppearances']) => {
@@ -403,18 +561,18 @@ export function Viewport() {
       const { r, g, b } = appearance.color;
       return (r << 16) | (g << 8) | b;
     };
-    const COLOR_FACE_HOVER = interactionThemeColor('--cad-face-hover', '#9ed5f3');
-    const COLOR_FACE_SELECTED = interactionThemeColor('--cad-face-selected', '#30aee8');
+    const COLOR_FACE_HOVER = interactionThemeColor('--cad-face-hover', '#238a9d');
+    const COLOR_FACE_SELECTED = interactionThemeColor('--cad-face-selected', '#cf7715');
     const COLOR_EDGE = interactionThemeColor('--cad-edge', '#29333d');
-    const COLOR_EDGE_HOVER = interactionThemeColor('--cad-edge-hover', '#58c7ff');
-    const COLOR_EDGE_SELECTED = interactionThemeColor('--cad-edge-selected', '#ffc857');
+    const COLOR_EDGE_HOVER = interactionThemeColor('--cad-pick-hover', '#00f5ff');
+    const COLOR_EDGE_SELECTED = interactionThemeColor('--cad-pick-selected', '#ffd000');
     const COLOR_THREAD_COSMETIC = interactionThemeColor(
       '--cad-thread-cosmetic',
       '#70c4ee',
     );
     const COLOR_HOLE_POINT_SELECTED = interactionThemeColor(
       '--cad-hole-point-selected',
-      '#ffd166',
+      '#ffd000',
     );
     const COLOR_GROUND_FINE = interactionThemeColor('--cad-ground-fine', '#3a3f47');
     const COLOR_GROUND_MAJOR = interactionThemeColor('--cad-ground-major', '#4d545f');
@@ -426,7 +584,7 @@ export function Viewport() {
     const COLOR_REFERENCE_DIMENSION = interactionThemeColor('--mute', '#9aa0a8');
     const COLOR_DIMENSION_SELECTED = interactionThemeColor(
       '--cad-dimension-selected',
-      '#c4b9ff',
+      '#ffd000',
     );
 
     let engine: Engine | null = null;
@@ -442,7 +600,6 @@ export function Viewport() {
     const surface = new CAD.ViewportInputSurface();
     surface.setPixelRatio(window.devicePixelRatio);
     container.appendChild(surface.domElement);
-    surface.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     const scene = new CAD.Scene();
     const camera = new CAD.PerspectiveCamera(45, 1, 0.1, 20000);
@@ -807,6 +964,9 @@ export function Viewport() {
     const solidEdgeHighlightGroup = new CAD.Group();
     solidEdgeHighlightGroup.name = 'solid-edge-highlights';
     scene.add(solidEdgeHighlightGroup);
+    const solidPointHighlightGroup = new CAD.Group();
+    solidPointHighlightGroup.name = 'solid-point-highlights';
+    scene.add(solidPointHighlightGroup);
     const datumGroup = new CAD.Group();
     datumGroup.name = 'construction-planes';
     scene.add(datumGroup);
@@ -901,6 +1061,7 @@ export function Viewport() {
 
     // --- Pick-plane quads ---
     const picker: PickerPlane[] = PICKER_PLANES.map((def) => {
+      const baseColor = interactionThemeColor(def.colorToken, def.colorFallback);
       const group = new CAD.Group();
       const u = new CAD.Vector3(...def.basis.u);
       const v = new CAD.Vector3(...def.basis.v);
@@ -912,9 +1073,9 @@ export function Viewport() {
       const mesh = new CAD.Mesh(
         new CAD.PlaneGeometry(REFERENCE_PLANE_SIZE, REFERENCE_PLANE_SIZE),
         new CAD.MeshBasicMaterial({
-          color: def.color,
+          color: baseColor,
           transparent: true,
-          opacity: 0.1,
+          opacity: 0.12,
           side: CAD.DoubleSide,
           depthWrite: false,
         }),
@@ -922,12 +1083,12 @@ export function Viewport() {
       mesh.userData.plane = def.plane;
       const border = new CAD.LineSegments(
         new CAD.EdgesGeometry(mesh.geometry),
-        new CAD.LineBasicMaterial({ color: def.color, transparent: true, opacity: 0.35 }),
+        new CAD.LineBasicMaterial({ color: baseColor, transparent: true, opacity: 0.72 }),
       );
       group.add(mesh, border);
       group.visible = false;
       scene.add(group);
-      return { plane: def.plane, mesh, border };
+      return { plane: def.plane, mesh, border, baseColor };
     });
 
     const setPickerVisible = (visible: boolean) => {
@@ -939,31 +1100,90 @@ export function Viewport() {
       if (!visible && planeTagRef.current) planeTagRef.current.style.display = 'none';
     };
 
+    const activePickForState = (
+      state: ReturnType<typeof useAppStore.getState>,
+    ): ActiveViewportPick | null => activeViewportPick(
+      state.modelingPickTarget,
+      state.constructionPlanePickTarget,
+      state.mode === 'pickPlane',
+    );
+
+    const pickFeedbackForState = (
+      state: ReturnType<typeof useAppStore.getState>,
+    ) => collectAppViewportPickFeedback(state);
+
     const referencePickerVisible = (
       state: ReturnType<typeof useAppStore.getState>,
-    ) =>
-      state.mode === 'pickPlane' ||
-      state.constructionPlanePickTarget === 'first_reference' ||
-      state.constructionPlanePickTarget === 'second_reference';
+    ) => {
+      const activePick = activePickForState(state);
+      return state.mode === 'pickPlane' || pickAccepts(activePick, 'reference-plane');
+    };
 
     setPickerVisible(referencePickerVisible(useAppStore.getState()));
 
-    const highlightPickerPlane = (hovered: OriginPlane | null) => {
+    const highlightPickerPlane = (
+      hovered: OriginPlane | null,
+      selected: OriginPlane | null = null,
+    ) => {
       for (const p of picker) {
         const isHovered = p.plane === hovered;
-        p.mesh.material.opacity = isHovered ? 0.28 : 0.1;
-        (p.border.material as CAD.LineBasicMaterial).opacity = isHovered ? 0.9 : 0.35;
+        const isSelected = p.plane === selected;
+        // Origin planes keep their orientation hue. As in the main desktop
+        // viewport, hover only brightens that hue; it never borrows the
+        // generic cyan edge state.
+        p.mesh.material.color.setHex(p.baseColor);
+        p.mesh.material.opacity = isSelected ? 0.34 : isHovered ? 0.28 : 0.10;
+        const border = p.border.material as CAD.LineBasicMaterial;
+        border.color.setHex(p.baseColor);
+        border.opacity = isSelected ? 0.98 : isHovered ? 0.92 : 0.42;
       }
     };
-    const highlightDatumPlane = (datumId: number | null, picking: boolean) => {
+    const highlightDatumPlane = (
+      hoveredDatumId: number | null,
+      selectedDatumId: number | null,
+      picking: boolean,
+    ) => {
       datumGroup.traverse((object) => {
-        if (!(object instanceof CAD.Mesh) || object.userData.datumPlaneId === undefined) {
+        if (object.userData.datumPlaneId === undefined) {
           return;
         }
-        const material = object.material as CAD.MeshBasicMaterial;
-        material.opacity =
-          object.userData.datumPlaneId === datumId ? 0.32 : picking ? 0.14 : 0.08;
+        const datumId = object.userData.datumPlaneId as number;
+        const selected = datumId === selectedDatumId;
+        const hovered = datumId === hoveredDatumId;
+        const color = selected
+          ? COLOR_EDGE_SELECTED
+          : hovered
+            ? COLOR_EDGE_HOVER
+            : picking
+              ? COLOR_PICK_NORMAL
+              : 0xd8a64d;
+        if (object instanceof CAD.Mesh) {
+          const material = object.material as CAD.MeshBasicMaterial;
+          material.color.setHex(color);
+          material.opacity = selected ? 0.3 : hovered ? 0.24 : picking ? 0.1 : 0.08;
+        } else if (object instanceof CAD.LineSegments) {
+          const material = object.material as CAD.LineBasicMaterial;
+          material.color.setHex(color);
+          material.opacity = selected || hovered ? 1 : picking ? 0.72 : 0.7;
+        }
       });
+    };
+
+    const applyReferencePickHighlights = (
+      state: ReturnType<typeof useAppStore.getState>,
+    ) => {
+      const feedback = pickFeedbackForState(state);
+      const selected = feedback.selectedReferencePlane;
+      const hovered = feedback.hoveredReferencePlane;
+      highlightPickerPlane(
+        hovered?.type === 'origin_plane' ? hovered.plane : null,
+        selected?.type === 'origin_plane' ? selected.plane : null,
+      );
+      highlightDatumPlane(
+        hovered?.type === 'datum_plane' ? hovered.datum_id : null,
+        selected?.type === 'datum_plane' ? selected.datum_id : null,
+        referencePickerVisible(state),
+      );
     };
 
     // --- Sketch scene: entities, glyphs, preview, markers ---
@@ -976,8 +1196,12 @@ export function Viewport() {
     const scaledSprites: Array<{ sprite: CAD.Sprite; px: number }> = [];
 
     const glyphTextureCache = new Map<string, CAD.CanvasTexture>();
-    const glyphTexture = (text: string, selected = false): CAD.CanvasTexture => {
-      const cacheKey = `${text}|${selected ? 1 : 0}`;
+    const glyphTexture = (
+      text: string,
+      selected = false,
+      icon: ConstraintIconKind | null = null,
+    ): CAD.CanvasTexture => {
+      const cacheKey = `${text}|${icon ?? 'text'}|${selected ? 1 : 0}`;
       const cached = glyphTextureCache.get(cacheKey);
       if (cached) return cached;
       const canvas = window.document.createElement('canvas');
@@ -988,19 +1212,14 @@ export function Viewport() {
         ctx.fillStyle = CSS_ACCENT;
         ctx.fillRect(4, 8, 56, 48);
       }
-      if (text === 'fix') {
-        // Padlock glyph for Fix constraints.
-        ctx.strokeStyle = selected ? CSS_GRIP_FILL : CSS_INK;
-        ctx.lineWidth = 5;
-        ctx.strokeRect(16, 30, 32, 24);
-        ctx.beginPath();
-        ctx.arc(32, 30, 11, Math.PI, 0);
-        ctx.stroke();
+      ctx.globalAlpha = selected ? 1 : 0.62;
+      if (icon) {
+        drawConstraintIcon(ctx, icon, selected ? CSS_GRIP_FILL : CSS_MUTE);
       } else {
         ctx.font = '600 40px -apple-system, Segoe UI, Roboto, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = selected ? CSS_GRIP_FILL : CSS_INK;
+        ctx.fillStyle = selected ? CSS_GRIP_FILL : CSS_MUTE;
         // Fit multi-character fallbacks (Tg, Col, Sym) inside the same
         // constant-pixel chip instead of clipping their first/last letters.
         ctx.fillText(text, 32, 34, 56);
@@ -1018,6 +1237,23 @@ export function Viewport() {
       return new CAD.CanvasTexture(canvas);
     };
 
+    // Constraint-state points: a hollow ring retains visible freedom; a
+    // filled dot means the point has no remaining solver degrees of freedom.
+    // Vertex colors tint these white alpha masks for hover and selection.
+    const freeGripTexture = markerTexture((ctx) => {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 9;
+      ctx.beginPath();
+      ctx.arc(32, 32, 22, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+    const definedGripTexture = markerTexture((ctx) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(32, 32, 24, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
     // Snap marker: filled square with an accent border.
     const snapTexture = markerTexture((ctx) => {
       ctx.fillStyle = CSS_GRIP_FILL;
@@ -1029,18 +1265,6 @@ export function Viewport() {
     // Midpoint snap marker: green outlined up-triangle.
     const midpointTexture = markerTexture((ctx) => {
       ctx.strokeStyle = CSS_FINISH;
-      ctx.lineWidth = 5;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(32, 14);
-      ctx.lineTo(50, 48);
-      ctx.lineTo(14, 48);
-      ctx.closePath();
-      ctx.stroke();
-    });
-    // Selected midpoint snap marker: same geometry, accent stroke.
-    const midpointTextureSelected = markerTexture((ctx) => {
-      ctx.strokeStyle = CSS_DIMENSION_SELECTED;
       ctx.lineWidth = 5;
       ctx.lineJoin = 'round';
       ctx.beginPath();
@@ -1167,6 +1391,8 @@ export function Viewport() {
     let cachedThreadAppearances: ViewportState['bodyAppearances'] | undefined;
     let cachedThreadSolution: ReturnType<typeof effectiveAssemblySolution> | undefined;
     let cachedThreadLines: NativeViewportTransient['lines'] = [];
+    /** Viewport-local logical pixels, offset from the physical pointer. */
+    let activeToolCursorScreen: [number, number] | null = null;
 
     /**
      * Convert the CPU interaction scene into a small semantic payload for
@@ -1208,8 +1434,8 @@ export function Viewport() {
         pattern: NativeViewportLinePattern,
       ) =>
         `${color.map((value) => value.toFixed(4)).join(',')}|${width.toFixed(2)}|${pattern}`;
-      const pointKey = (color: Rgba, radius: number) =>
-        `${color.map((value) => value.toFixed(4)).join(',')}|${radius.toFixed(4)}`;
+      const pointKey = (color: Rgba, radius: number, hollow: boolean) =>
+        `${color.map((value) => value.toFixed(4)).join(',')}|${radius.toFixed(4)}|${hollow ? 1 : 0}`;
       const appendSegment = (
         color: Rgba,
         width: number,
@@ -1243,11 +1469,12 @@ export function Viewport() {
         color: Rgba,
         radius: number,
         point: CAD.Vector3,
+        hollow = false,
       ) => {
-        const key = pointKey(color, radius);
+        const key = pointKey(color, radius, hollow);
         let layer = pointLayers.get(key);
         if (!layer) {
-          layer = { color, radius, positions: [] };
+          layer = { color, radius, hollow, positions: [] };
           pointLayers.set(key, layer);
         }
         layer.positions.push(point.x, point.y, point.z);
@@ -1304,18 +1531,27 @@ export function Viewport() {
             ? object.userData.nativeAnnotationColor
             : COLOR_DIMENSION;
         const color = new CAD.Color(colorValue);
+        const opacity =
+          typeof object.userData.nativeAnnotationOpacity === 'number'
+            ? object.userData.nativeAnnotationOpacity
+            : 1;
         annotations.push({
           screen: [
             ((projected.x + 1) * screenRect.width) / 2,
             ((1 - projected.y) * screenRect.height) / 2,
           ],
-          color: [color.r, color.g, color.b, 1],
+          color: [color.r, color.g, color.b, opacity],
           text,
           kind:
             object.userData.nativeAnnotationKind === 'constraint'
               ? 'constraint'
               : 'dimension',
           selected: object.userData.nativeAnnotationSelected === true,
+          icon:
+            object.userData.nativeAnnotationKind === 'constraint'
+            && typeof object.userData.nativeConstraintIcon === 'string'
+              ? object.userData.nativeConstraintIcon as RelationConstraintIconKind
+              : undefined,
         });
       };
       const collectRoot = (
@@ -1364,7 +1600,12 @@ export function Viewport() {
                     material?.opacity ?? 1,
                   ]
                 : rgbaFor(material);
-              appendPoint(color, radius, transientPosition);
+              appendPoint(
+                color,
+                radius,
+                transientPosition,
+                object.userData.nativePointHollow === true,
+              );
             }
             return;
           }
@@ -1441,15 +1682,9 @@ export function Viewport() {
           meshEdges: true,
           annotations: true,
         });
-        collectRoot(glyphGroup, { annotations: true });
+        collectRoot(glyphGroup, { lines: true, annotations: true });
         collectRoot(entityGroup, { points: true });
       }
-      collectRoot(finishedGroup, {
-        lines: true,
-        points: true,
-        include: (object) => object.userData.finishedSketchEmphasis === true,
-      });
-
       // Profile fills are rebuilt from the exact serialized sketch basis, not
       // from the CPU pick proxy's transform matrix. That makes the pixels and
       // the eventual OCCT operation share one orientation contract on XY,
@@ -3061,6 +3296,28 @@ export function Viewport() {
           kind: snapMarkerKind,
         };
       }
+      if (
+        transientState.mode === 'sketch'
+        && transientState.navTool === 'select'
+        && activeToolCursorScreen
+      ) {
+        const pending = transientState.pendingConstraintTool;
+        const constraintIcon = pending ? TOOL_CONSTRAINT_ICON[pending] : undefined;
+        const tool = transientState.activeTool
+          ? SKETCH_TOOL_CURSOR[transientState.activeTool]
+          : undefined;
+        if (constraintIcon || tool) {
+          const color = new CAD.Color(constraintIcon ? CSS_CONSTRAINT : CSS_INK);
+          annotations.push({
+            screen: activeToolCursorScreen,
+            color: [color.r, color.g, color.b, 0.92],
+            text: pending ?? transientState.activeTool ?? 'tool',
+            kind: 'tool',
+            icon: constraintIcon,
+            toolIcon: constraintIcon ? undefined : tool?.nativeIcon,
+          });
+        }
+      }
       return {
         lines: [...lineLayers.values()],
         points: [...pointLayers.values()],
@@ -3069,23 +3326,6 @@ export function Viewport() {
         annotations,
         marker,
       };
-    };
-
-    const addScreenLine = (
-      group: CAD.Group,
-      a: Vec2,
-      b: Vec2,
-      color: number,
-      linewidth: number,
-    ) => {
-      const geometry = new PolylineGeometry();
-      geometry.setPositions([a.x, a.y, 0.05, b.x, b.y, 0.05]);
-      const material = new ScreenLineMaterial({ color, linewidth, depthTest: false });
-      material.resolution.set(surface.domElement.clientWidth, surface.domElement.clientHeight);
-      lineMaterials.add(material);
-      const line = new ScreenPolyline(geometry, material);
-      line.renderOrder = 4;
-      group.add(line);
     };
 
     /** Screen-width polyline (tessellated circles/arcs, rectangle previews). */
@@ -3170,6 +3410,96 @@ export function Viewport() {
       return lines;
     };
 
+    const viewportRelativeLinewidth = (base: number) =>
+      base * viewportInteractionScale(
+        surface.domElement.clientWidth,
+        surface.domElement.clientHeight,
+      );
+
+    const addViewportRelativePolyline = (
+      group: CAD.Group,
+      positions: number[],
+      color: number,
+      baseLinewidth: number,
+      renderOrder = 0,
+      depthTest = true,
+      opacity = 1,
+    ) => {
+      const line = addScreenPolyline(
+        group,
+        positions,
+        color,
+        viewportRelativeLinewidth(baseLinewidth),
+        renderOrder,
+        depthTest,
+        opacity,
+      );
+      line.material.viewportRelativeLinewidthBase = baseLinewidth;
+      return line;
+    };
+
+    const addViewportRelativeSegments = (
+      group: CAD.Group,
+      positions: number[],
+      color: number,
+      baseLinewidth: number,
+      renderOrder: number,
+      depthTest: boolean,
+      opacity = 1,
+    ) => {
+      const lines = addScreenSegments(
+        group,
+        positions,
+        color,
+        viewportRelativeLinewidth(baseLinewidth),
+        renderOrder,
+        depthTest,
+        opacity,
+      );
+      lines.material.viewportRelativeLinewidthBase = baseLinewidth;
+      return lines;
+    };
+
+    const addPickPolyline = (
+      group: CAD.Group,
+      positions: number[],
+      color: number,
+      linewidth: number,
+      renderOrder: number,
+      depthTest = false,
+      opacity = 1,
+    ) => {
+      return addViewportRelativePolyline(
+        group,
+        positions,
+        color,
+        linewidth,
+        renderOrder,
+        depthTest,
+        opacity,
+      );
+    };
+
+    const addPickSegments = (
+      group: CAD.Group,
+      positions: number[],
+      color: number,
+      linewidth: number,
+      renderOrder: number,
+      depthTest: boolean,
+      opacity = 1,
+    ) => {
+      return addViewportRelativeSegments(
+        group,
+        positions,
+        color,
+        linewidth,
+        renderOrder,
+        depthTest,
+        opacity,
+      );
+    };
+
     const constraintSprites: Array<{
       sprite: CAD.Sprite;
       constraintId: number;
@@ -3177,9 +3507,16 @@ export function Viewport() {
       label: string;
       anchor: Vec2;
       preferredDir: Vec2 | null;
+      fixedPosition?: boolean;
+    }> = [];
+    const rightAngleMarks: Array<{
+      lines: ScreenLineSegments;
+      hitSprite: CAD.Sprite;
+      frame: NonNullable<ReturnType<typeof rightAngleGlyphFrame>>;
     }> = [];
     const CONSTRAINT_GRIP_HALF_PX = 4;
     const CONSTRAINT_GLYPH_GAP_PX = 10;
+    const RIGHT_ANGLE_MARK_PX = 14;
     let constraintGlyphGripObstacles: Vec2[] = [];
     let constraintGlyphLayoutWorldPerPixel = Number.NaN;
 
@@ -3198,8 +3535,9 @@ export function Viewport() {
         : Number.POSITIVE_INFINITY;
       if (!force && relativeScaleChange < 1e-6) return;
 
+      const movableSprites = constraintSprites.filter(({ fixedPosition }) => !fixedPosition);
       const positions = layoutConstraintGlyphs(
-        constraintSprites.map(({ anchor, px, preferredDir }) => ({
+        movableSprites.map(({ anchor, px, preferredDir }) => ({
           anchor,
           glyphPx: px,
           preferredDir,
@@ -3212,8 +3550,38 @@ export function Viewport() {
         },
       );
       positions.forEach((position, index) => {
-        constraintSprites[index].sprite.position.set(position.x, position.y, 0.2);
+        movableSprites[index].sprite.position.set(position.x, position.y, 0.2);
       });
+      for (const mark of rightAngleMarks) {
+        const size = Math.max(
+          Math.min(currentWorldPerPixel * RIGHT_ANGLE_MARK_PX, mark.frame.maxSize * 0.24),
+          Math.min(currentWorldPerPixel * 5, mark.frame.maxSize * 0.12),
+        );
+        const { vertex, directionA, directionB } = mark.frame;
+        const onA = {
+          x: vertex.x + directionA.x * size,
+          y: vertex.y + directionA.y * size,
+        };
+        const inner = {
+          x: onA.x + directionB.x * size,
+          y: onA.y + directionB.y * size,
+        };
+        const onB = {
+          x: vertex.x + directionB.x * size,
+          y: vertex.y + directionB.y * size,
+        };
+        (mark.lines.geometry as SegmentListGeometry).setPositions([
+          onA.x, onA.y, 0.21,
+          inner.x, inner.y, 0.21,
+          inner.x, inner.y, 0.21,
+          onB.x, onB.y, 0.21,
+        ]);
+        mark.hitSprite.position.set(
+          vertex.x + (directionA.x + directionB.x) * size * 0.7,
+          vertex.y + (directionA.y + directionB.y) * size * 0.7,
+          0.22,
+        );
+      }
       constraintGlyphLayoutWorldPerPixel = currentWorldPerPixel;
     };
 
@@ -3252,6 +3620,7 @@ export function Viewport() {
       clearGroup(entityGroup);
       clearGroup(glyphGroup);
       constraintSprites.length = 0;
+      rightAngleMarks.length = 0;
       constraintGlyphGripObstacles = [];
       constraintGlyphLayoutWorldPerPixel = Number.NaN;
       // Drop per-entity sprite registrations (origin/snap markers persist).
@@ -3286,49 +3655,84 @@ export function Viewport() {
                 : COLOR_SKETCH;
       const emphasized = (id: number) =>
         selectedSet.has(id) || id === hoveredEntity || constraintPartnerIds.has(id);
-      const lineWidthOf = (id: number) => (emphasized(id) ? 2 : 1.25);
+      const pickEmphasized = (id: number) =>
+        selectedSet.has(id) || id === hoveredEntity;
+      const lineWidthOf = (id: number) =>
+        selectedSet.has(id) || id === hoveredEntity
+          ? selectedSet.has(id)
+            ? VIEWPORT_INTERACTION_STROKE_PX.selected
+            : VIEWPORT_INTERACTION_STROKE_PX.hover
+          : constraintPartnerIds.has(id)
+            ? 2.5
+            : VIEWPORT_INTERACTION_STROKE_PX.normal;
 
       const lines = new Map<number, { start: Vec2; end: Vec2 }>();
       const gripPoints: Array<{ x: number; y: number; id: number; fd: boolean }> = [];
+      const addActiveCurve = (
+        id: number,
+        positions: number[],
+        color: number,
+      ) => {
+        if (pickEmphasized(id)) {
+          addPickPolyline(
+            entityGroup,
+            positions,
+            color,
+            lineWidthOf(id),
+            6,
+          );
+        } else {
+          addViewportRelativePolyline(
+            entityGroup,
+            positions,
+            color,
+            lineWidthOf(id),
+          );
+        }
+      };
       for (const entity of sketch.entities) {
         const color = colorOf(entity.id, entity.fully_defined);
         switch (entity.kind) {
           case 'line':
             if (entity.consumed) break;
             lines.set(entity.id, { start: entity.start, end: entity.end });
-            addScreenLine(
-              entityGroup,
-              entity.start,
-              entity.end,
-              color,
-              lineWidthOf(entity.id),
-            );
+            addActiveCurve(entity.id, [
+              entity.start.x,
+              entity.start.y,
+              0.05,
+              entity.end.x,
+              entity.end.y,
+              0.05,
+            ], color);
             break;
           case 'point':
             gripPoints.push({ x: entity.position.x, y: entity.position.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'circle':
-            addScreenPolyline(
-              entityGroup,
+            addActiveCurve(
+              entity.id,
               tessellateCircle(entity.center, entity.radius),
               color,
-              lineWidthOf(entity.id),
             );
             gripPoints.push({ x: entity.center.x, y: entity.center.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'arc':
-            addScreenPolyline(
-              entityGroup,
-              tessellateArc(entity.center, entity.radius, entity.start_angle, entity.end_angle),
+            addActiveCurve(
+              entity.id,
+              tessellateArc(
+                entity.center,
+                entity.radius,
+                entity.start_angle,
+                entity.end_angle,
+              ),
               color,
-              lineWidthOf(entity.id),
             );
             gripPoints.push({ x: entity.center.x, y: entity.center.y, id: entity.id, fd: entity.fully_defined });
             break;
           case 'spline': {
             const pts: number[] = [];
             for (const q of entity.tessellation) pts.push(q.x, q.y, 0.05);
-            addScreenPolyline(entityGroup, pts, color, lineWidthOf(entity.id));
+            addActiveCurve(entity.id, pts, color);
             for (const q of entity.points) {
               gripPoints.push({ x: q.x, y: q.y, id: entity.id, fd: entity.fully_defined });
             }
@@ -3344,6 +3748,8 @@ export function Viewport() {
           points: typeof gripPoints,
           size: number,
           renderOrder: number,
+          hollow: boolean,
+          colorOverride?: number,
         ) => {
           if (points.length === 0) return;
           const positions: number[] = [];
@@ -3351,7 +3757,7 @@ export function Viewport() {
           const c = new CAD.Color();
           for (const point of points) {
             positions.push(point.x, point.y, 0.1);
-            c.setHex(colorOf(point.id, point.fd));
+            c.setHex(colorOverride ?? colorOf(point.id, point.fd));
             colors.push(c.r, c.g, c.b);
           }
           const geometry = new CAD.BufferGeometry();
@@ -3368,20 +3774,45 @@ export function Viewport() {
             sizeAttenuation: false,
             vertexColors: true,
             depthTest: false,
+            map: hollow ? freeGripTexture : definedGripTexture,
+            transparent: true,
+            alphaTest: 0.2,
           });
           const grips = new CAD.Points(geometry, material);
+          grips.userData.nativePointHollow = hollow;
           grips.renderOrder = renderOrder;
           entityGroup.add(grips);
         };
         addGripLayer(
-          gripPoints.filter((point) => !emphasized(point.id)),
+          gripPoints.filter((point) => !emphasized(point.id) && point.fd),
           5,
           5,
+          false,
         );
         addGripLayer(
-          gripPoints.filter((point) => emphasized(point.id)),
+          gripPoints.filter((point) => !emphasized(point.id) && !point.fd),
+          7,
+          5,
+          true,
+        );
+        addGripLayer(
+          gripPoints.filter((point) => pickEmphasized(point.id)),
+          13,
+          5,
+          false,
+          COLOR_PICK_HALO,
+        );
+        addGripLayer(
+          gripPoints.filter((point) => emphasized(point.id) && point.fd),
           8,
           6,
+          false,
+        );
+        addGripLayer(
+          gripPoints.filter((point) => emphasized(point.id) && !point.fd),
+          10,
+          6,
+          true,
         );
       }
 
@@ -3406,12 +3837,15 @@ export function Viewport() {
         selected: boolean,
         anchor: Vec2,
         preferredDir: Vec2 | null = null,
-        colorHex = new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_INK).getHex(),
+        colorHex = new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_MUTE).getHex(),
+        icon: RelationConstraintIconKind | null = null,
       ) => {
         sprite.userData.nativeAnnotationText = label;
         sprite.userData.nativeAnnotationKind = 'constraint';
         sprite.userData.nativeAnnotationColor = colorHex;
+        sprite.userData.nativeAnnotationOpacity = selected ? 1 : 0.62;
         sprite.userData.nativeAnnotationSelected = selected;
+        sprite.userData.nativeConstraintIcon = icon;
         sprite.userData.constraintId = constraintId;
         sprite.position.set(anchor.x, anchor.y, 0.2);
         glyphGroup.add(sprite);
@@ -3425,10 +3859,48 @@ export function Viewport() {
         });
       };
 
-      const constraintGlyphPx = (label: string, selected: boolean) => {
-        const multiCharacter = Array.from(label).length > 1;
-        if (selected) return multiCharacter ? 24 : 20;
-        return multiCharacter ? 18 : 15;
+      const constraintGlyphPx = (_label: string, selected: boolean) =>
+        selected ? 22 : 18;
+
+      const registerRightAngleMark = (
+        constraintId: number,
+        selected: boolean,
+        frame: NonNullable<ReturnType<typeof rightAngleGlyphFrame>>,
+      ) => {
+        const label = CONSTRAINT_EXISTENCE_GLYPH.perpendicular;
+        const icon = CONSTRAINT_TYPE_ICON.perpendicular;
+        const hitPx = constraintGlyphPx(label, selected);
+        const hitSprite = makeSprite(glyphTexture(label, selected, icon), hitPx, 7);
+        // The mathematical square is rendered by geometry aligned to the
+        // constrained lines. This hidden sprite only supplies its forgiving,
+        // screen-space selection target.
+        hitSprite.visible = false;
+        hitSprite.userData.constraintId = constraintId;
+        hitSprite.position.set(frame.vertex.x, frame.vertex.y, 0.22);
+        glyphGroup.add(hitSprite);
+        constraintSprites.push({
+          sprite: hitSprite,
+          constraintId,
+          px: hitPx,
+          label,
+          anchor: { ...frame.vertex },
+          preferredDir: null,
+          fixedPosition: true,
+        });
+
+        const color = new CAD.Color(
+          selected ? CSS_DIMENSION_SELECTED : CSS_MUTE,
+        ).getHex();
+        const lines = addScreenSegments(
+          glyphGroup,
+          [],
+          color,
+          selected ? 2.2 : 1.6,
+          7,
+          false,
+          selected ? 1 : 0.62,
+        );
+        rightAngleMarks.push({ lines, hitSprite, frame });
       };
 
       // Dimensional constraints have full line/arrow/text annotations in
@@ -3457,9 +3929,10 @@ export function Viewport() {
             y: (a.position.y + b.position.y) / 2,
           };
           const label = CONSTRAINT_EXISTENCE_GLYPH[constraint.type];
+          const icon = CONSTRAINT_TYPE_ICON[constraint.type];
           const glyphPx = constraintGlyphPx(label, selected);
           const preferredDir = horizontal ? { x: 0, y: -1 } : { x: 1, y: 0 };
-          const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
+          const sprite = makeSprite(glyphTexture(label, selected, icon), glyphPx, 7);
           registerConstraintSprite(
             sprite,
             constraint.id,
@@ -3468,6 +3941,8 @@ export function Viewport() {
             selected,
             mid,
             preferredDir,
+            undefined,
+            icon,
           );
           continue;
         }
@@ -3481,10 +3956,11 @@ export function Viewport() {
           const dx = line.end.x - line.start.x;
           const dy = line.end.y - line.start.y;
           const len = Math.hypot(dx, dy) || 1;
-          const glyphPx = selected ? 18 : 13;
+          const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+          const glyphPx = constraintGlyphPx(CONSTRAINT_EXISTENCE_GLYPH.midpoint, selected);
           const preferredDir = { x: -dy / len, y: dx / len };
           const sprite = makeSprite(
-            selected ? midpointTextureSelected : midpointTexture,
+            glyphTexture(CONSTRAINT_EXISTENCE_GLYPH.midpoint, selected, icon),
             glyphPx,
             7,
           );
@@ -3496,7 +3972,8 @@ export function Viewport() {
             selected,
             mid,
             preferredDir,
-            new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
+            undefined,
+            icon,
           );
           continue;
         }
@@ -3514,9 +3991,10 @@ export function Viewport() {
                 ? constraint.position
                 : null;
           if (!position) continue;
-          const glyphPx = selected ? 18 : 13;
+          const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+          const glyphPx = constraintGlyphPx(CONSTRAINT_EXISTENCE_GLYPH[constraint.type], selected);
           const sprite = makeSprite(
-            selected ? midpointTextureSelected : midpointTexture,
+            glyphTexture(CONSTRAINT_EXISTENCE_GLYPH[constraint.type], selected, icon),
             glyphPx,
             7,
           );
@@ -3528,7 +4006,8 @@ export function Viewport() {
             selected,
             position,
             null,
-            new CAD.Color(selected ? CSS_DIMENSION_SELECTED : CSS_FINISH).getHex(),
+            undefined,
+            icon,
           );
           continue;
         }
@@ -3541,11 +4020,12 @@ export function Viewport() {
               y: (line.start.y + line.end.y) / 2,
             };
             const label = CONSTRAINT_EXISTENCE_GLYPH[constraint.type];
+            const icon = CONSTRAINT_TYPE_ICON[constraint.type];
             const glyphPx = constraintGlyphPx(label, selected);
             const preferredDir = constraint.type === 'horizontal'
               ? { x: 0, y: -1 }
               : { x: 1, y: 0 };
-            const sprite = makeSprite(glyphTexture(label, selected), glyphPx, 7);
+            const sprite = makeSprite(glyphTexture(label, selected, icon), glyphPx, 7);
             registerConstraintSprite(
               sprite,
               constraint.id,
@@ -3554,6 +4034,8 @@ export function Viewport() {
               selected,
               mid,
               preferredDir,
+              undefined,
+              icon,
             );
             continue;
           }
@@ -3572,7 +4054,12 @@ export function Viewport() {
                         y: (target.start.y + target.end.y) / 2,
                       };
             const glyphPx = selected ? 22 : 16;
-            const sprite = makeSprite(glyphTexture('fix', selected), glyphPx, 7);
+            const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+            const sprite = makeSprite(
+              glyphTexture(CONSTRAINT_EXISTENCE_GLYPH.fix, selected, icon),
+              glyphPx,
+              7,
+            );
             registerConstraintSprite(
               sprite,
               constraint.id,
@@ -3580,7 +4067,43 @@ export function Viewport() {
               CONSTRAINT_EXISTENCE_GLYPH.fix,
               selected,
               anchor,
+              null,
+              undefined,
+              icon,
             );
+            continue;
+          }
+        }
+
+        // Peer relations on spatially separate features repeat the same mark
+        // on every peer. Perpendicular/Tangent remain single marks when their
+        // visible finite features share the resolved intersection/contact.
+        const distributedTargets = distributedRelationGlyphTargets(constraint, byId);
+        if (distributedTargets.length > 0) {
+          const glyph = CONSTRAINT_EXISTENCE_GLYPH[constraint.type];
+          const glyphPx = constraintGlyphPx(glyph, selected);
+          const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+          for (const target of distributedTargets) {
+            const sprite = makeSprite(glyphTexture(glyph, selected, icon), glyphPx, 7);
+            registerConstraintSprite(
+              sprite,
+              constraint.id,
+              glyphPx,
+              glyph,
+              selected,
+              target.anchor,
+              target.preferredDir,
+              undefined,
+              icon,
+            );
+          }
+          continue;
+        }
+
+        if (constraint.type === 'perpendicular') {
+          const frame = rightAngleGlyphFrame(constraint, byId);
+          if (frame) {
+            registerRightAngleMark(constraint.id, selected, frame);
             continue;
           }
         }
@@ -3606,7 +4129,12 @@ export function Viewport() {
                   });
           if (!anchor) continue;
           const glyphPx = constraintGlyphPx(singlePointGlyph, selected);
-          const sprite = makeSprite(glyphTexture(singlePointGlyph, selected), glyphPx, 7);
+          const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+          const sprite = makeSprite(
+            glyphTexture(singlePointGlyph, selected, icon),
+            glyphPx,
+            7,
+          );
           registerConstraintSprite(
             sprite,
             constraint.id,
@@ -3614,6 +4142,9 @@ export function Viewport() {
             singlePointGlyph,
             selected,
             anchor,
+            null,
+            undefined,
+            icon,
           );
           continue;
         }
@@ -3632,7 +4163,8 @@ export function Viewport() {
                 y: anchors.reduce((sum, point) => sum + point.y, 0) / anchors.length,
               };
         const glyphPx = constraintGlyphPx(glyph, selected);
-        const sprite = makeSprite(glyphTexture(glyph, selected), glyphPx, 7);
+        const icon = CONSTRAINT_TYPE_ICON[constraint.type];
+        const sprite = makeSprite(glyphTexture(glyph, selected, icon), glyphPx, 7);
         registerConstraintSprite(
           sprite,
           constraint.id,
@@ -3640,6 +4172,9 @@ export function Viewport() {
           glyph,
           selected,
           anchor,
+          null,
+          undefined,
+          icon,
         );
       }
       refreshConstraintGlyphLayout(worldPerPixel(), true);
@@ -5649,14 +6184,16 @@ export function Viewport() {
     ): { point: Vec2; target: SnapTarget } => {
       const state = store.getState();
       if (!state.palette.snap) return { point: p, target: { kind: 'none' } };
+      const gridPoint = {
+        x: snapToGrid(p.x, sketchGridStep),
+        y: snapToGrid(p.y, sketchGridStep),
+      };
+      const gridAcquired = Math.hypot(gridPoint.x - p.x, gridPoint.y - p.y)
+        <= worldPerPixel() * GRID_CAPTURE_PX;
       if (suppressRelations) {
-        return {
-          point: {
-            x: snapToGrid(p.x, sketchGridStep),
-            y: snapToGrid(p.y, sketchGridStep),
-          },
-          target: { kind: 'grid' },
-        };
+        return gridAcquired
+          ? { point: gridPoint, target: { kind: 'grid' } }
+          : { point: p, target: { kind: 'none' } };
       }
       const tolerance = worldPerPixel() * MODIFY_CAPTURE_PX;
       const sketch = state.activeSketch;
@@ -5803,13 +6340,9 @@ export function Viewport() {
           };
         }
       }
-      return {
-        point: {
-          x: snapToGrid(p.x, sketchGridStep),
-          y: snapToGrid(p.y, sketchGridStep),
-        },
-        target: { kind: 'grid' },
-      };
+      return gridAcquired
+        ? { point: gridPoint, target: { kind: 'grid' } }
+        : { point: p, target: { kind: 'none' } };
     };
 
     /** Preserve the raw cursor ray for line H/V inference. Magnetic point,
@@ -5837,7 +6370,9 @@ export function Viewport() {
      * horizontal/vertical axis through an existing point may consume the
      * segment's remaining freedom (free endpoint, typed angle, or typed
      * length). The engine recomputes the exact intersection and persists the
-     * relation; this function only performs screen-space acquisition.
+     * dotted guide. Tracking intentionally does not create a persistent
+     * point-pair constraint; this function only performs screen-space
+     * acquisition.
      */
     const acquireLineIntent = (
       p: Vec2,
@@ -5850,7 +6385,7 @@ export function Viewport() {
       // crossing at that same coordinate). That would manufacture a
       // degenerate/diagonal preview before H/V intent gets a chance to win.
       const acquired = acquireCreateSnap(p, allowMidpoint, anchor, ctrlHeld);
-      if (acquired.target.kind !== 'grid') {
+      if (acquired.target.kind !== 'grid' && acquired.target.kind !== 'none') {
         return {
           hint: acquired.point,
           tracking: null,
@@ -7405,13 +7940,37 @@ export function Viewport() {
         switch (ent.kind) {
           case 'line':
             if (ent.consumed) break;
-            addScreenPolyline(picksGroup, [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14], COLOR_SELECTED, 2);
+            addPickPolyline(
+              picksGroup,
+              [ent.start.x, ent.start.y, 0.14, ent.end.x, ent.end.y, 0.14],
+              COLOR_SELECTED,
+              VIEWPORT_INTERACTION_STROKE_PX.selected,
+              20,
+            );
             break;
           case 'arc':
-            addScreenPolyline(picksGroup, tessellateArc(ent.center, ent.radius, ent.start_angle, ent.end_angle, 0.14), COLOR_SELECTED, 2);
+            addPickPolyline(
+              picksGroup,
+              tessellateArc(
+                ent.center,
+                ent.radius,
+                ent.start_angle,
+                ent.end_angle,
+                0.14,
+              ),
+              COLOR_SELECTED,
+              VIEWPORT_INTERACTION_STROKE_PX.selected,
+              20,
+            );
             break;
           case 'circle':
-            addScreenPolyline(picksGroup, tessellateCircle(ent.center, ent.radius, 0.14), COLOR_SELECTED, 2);
+            addPickPolyline(
+              picksGroup,
+              tessellateCircle(ent.center, ent.radius, 0.14),
+              COLOR_SELECTED,
+              VIEWPORT_INTERACTION_STROKE_PX.selected,
+              20,
+            );
             break;
         }
       }
@@ -7505,6 +8064,7 @@ export function Viewport() {
      * whether it is present at all. */
     const rebuildFinished = () => {
       const s = store.getState();
+      const feedback = pickFeedbackForState(s);
       const hidden = hiddenSketchNames();
       const holeSupportPlane = s.holeDialogFeature === null
         ? null
@@ -7544,29 +8104,26 @@ export function Viewport() {
         g.quaternion.setFromRotationMatrix(new CAD.Matrix4().makeBasis(u, v, n));
         g.position.set(...sketch.basis.origin);
         for (const ent of sketch.entities) {
-          const axisSelected =
-            s.revolveAxisSelection?.sketchName === sketch.name &&
-            s.revolveAxisSelection.entityId === ent.id;
-          const axisHovered =
-            s.revolveAxisHover?.sketchName === sketch.name &&
-            s.revolveAxisHover.entityId === ent.id;
-          const curveSelected = s.curvePicker?.selected.some(
-            (candidate) =>
-              candidate.sketchName === sketch.name && candidate.entityId === ent.id,
-          ) ?? false;
-          const curveHovered =
-            s.curvePicker?.hovered?.sketchName === sketch.name &&
-            s.curvePicker.hovered.entityId === ent.id;
-          const color = axisSelected || curveSelected
-            ? COLOR_SELECTED
-            : axisHovered || curveHovered
+          const entityFeedback = finishedSketchEntityFeedback(
+            feedback,
+            sketch.name,
+            ent.id,
+          );
+          const selected = entityFeedback === 'selected';
+          const hovered = entityFeedback === 'hovered';
+          const color = selected
+            ? COLOR_ACCENT
+            : hovered
               ? COLOR_HOVER
               : COLOR_FINISHED;
-          const selected = axisSelected || curveSelected;
-          const hovered = axisHovered || curveHovered;
           const emphasized = selected || hovered;
           const gripColor = emphasized ? color : COLOR_FINISHED_POINT;
-          const linewidth = emphasized ? 1.15 * 1.5 : 1.15;
+          const linewidth = selected
+            ? VIEWPORT_INTERACTION_STROKE_PX.selected
+            : hovered
+              ? VIEWPORT_INTERACTION_STROKE_PX.hover
+              : VIEWPORT_INTERACTION_STROKE_PX.normal;
+          const renderOrder = emphasized ? 22 : 14;
           const opacity = selected ? 1 : hovered ? 0.95 : 0.42;
           // Mirror the active-sketch point grips in solid mode. Point
           // entities cover line endpoints; curved centers and spline fit
@@ -7596,10 +8153,10 @@ export function Viewport() {
                 entity_id: candidate.entityId,
                 ...candidate.kind,
               };
-              const selected = s.holePositionSelections.some((pick) =>
+              const selected = feedback.selectedSketchPoints.some((pick) =>
                 sameSketchPoint(ref, pick),
               );
-              const hovered = sameSketchPoint(ref, s.holePositionHover);
+              const hovered = sameSketchPoint(ref, feedback.hoveredSketchPoint);
               const world = new CAD.Vector3(
                 sketch.basis.origin[0]
                   + sketch.basis.u[0] * candidate.point.x
@@ -7632,23 +8189,42 @@ export function Viewport() {
               }
             }
           }
+          const addFinishedCurve = (positions: number[]) => {
+            const line = emphasized
+              ? addPickPolyline(
+                  g,
+                  positions,
+                  color,
+                  linewidth,
+                  renderOrder,
+                  false,
+                  opacity,
+                )
+              : addViewportRelativePolyline(
+                  g,
+                  positions,
+                  color,
+                  linewidth,
+                  renderOrder,
+                  false,
+                  opacity,
+                );
+            line.userData.finishedSketchEmphasis = emphasized;
+          };
           switch (ent.kind) {
             case 'line': {
-              const line = addScreenPolyline(
-                g,
-                [ent.start.x, ent.start.y, 0.02, ent.end.x, ent.end.y, 0.02],
-                color,
-                linewidth,
-                14,
-                false,
-                opacity,
-              );
-              line.userData.finishedSketchEmphasis = emphasized;
+              addFinishedCurve([
+                ent.start.x,
+                ent.start.y,
+                0.02,
+                ent.end.x,
+                ent.end.y,
+                0.02,
+              ]);
               break;
             }
             case 'arc': {
-              const line = addScreenPolyline(
-                g,
+              addFinishedCurve(
                 tessellateArc(
                   ent.center,
                   ent.radius,
@@ -7656,26 +8232,13 @@ export function Viewport() {
                   ent.end_angle,
                   0.02,
                 ),
-                color,
-                linewidth,
-                14,
-                false,
-                opacity,
               );
-              line.userData.finishedSketchEmphasis = emphasized;
               break;
             }
             case 'circle': {
-              const line = addScreenPolyline(
-                g,
+              addFinishedCurve(
                 tessellateCircle(ent.center, ent.radius, 0.02),
-                color,
-                linewidth,
-                14,
-                false,
-                opacity,
               );
-              line.userData.finishedSketchEmphasis = emphasized;
               break;
             }
             case 'spline': {
@@ -7683,16 +8246,7 @@ export function Viewport() {
               for (const q of ent.tessellation) {
                 positions.push(q.x, q.y, 0.02);
               }
-              const line = addScreenPolyline(
-                g,
-                positions,
-                color,
-                linewidth,
-                14,
-                false,
-                opacity,
-              );
-              line.userData.finishedSketchEmphasis = emphasized;
+              addFinishedCurve(positions);
               break;
             }
           }
@@ -7753,6 +8307,17 @@ export function Viewport() {
             depthTest: false,
             depthWrite: false,
           });
+          const haloMaterial = new CAD.PointsMaterial({
+            size: 12,
+            sizeAttenuation: false,
+            color: COLOR_PICK_HALO,
+            depthTest: false,
+            depthWrite: false,
+          });
+          const halo = new CAD.Points(geometry, haloMaterial);
+          halo.renderOrder = 15;
+          halo.userData.pickFeedbackHalo = true;
+          g.add(halo);
           const points = new CAD.Points(geometry, material);
           points.renderOrder = 16;
           points.userData.finishedSketchEmphasis = true;
@@ -7794,7 +8359,7 @@ export function Viewport() {
           addHolePointLayer(
             hoveredHolePointPositions,
             14,
-            COLOR_EDGE,
+            COLOR_PICK_HALO,
             17,
             'hole-hover-outline',
           );
@@ -7812,7 +8377,7 @@ export function Viewport() {
           addHolePointLayer(
             selectedHolePointPositions,
             12,
-            COLOR_EDGE,
+            COLOR_PICK_HALO,
             17,
             'hole-selected-outline',
           );
@@ -7842,11 +8407,21 @@ export function Viewport() {
 
     const rebuildProfilePicker = () => {
       clearGroup(profileGroup);
-      const pickerState = store.getState().profilePicker;
+      const state = store.getState();
+      const pickerState = state.profilePicker;
       if (!pickerState) return;
+      const feedback = pickFeedbackForState(state);
       const hidden = hiddenSketchNames();
       for (const entry of pickerState.catalog) {
         if (hidden.has(entry.sketch_name)) continue;
+        if (
+          pickerState.owner === 'revolve'
+          && !revolveProfileAcceptsAxis(
+            pickerState.catalog,
+            entry.sketch_name,
+            state.revolveAxisSelection,
+          )
+        ) continue;
         const group = new CAD.Group();
         const u = new CAD.Vector3(...entry.basis.u);
         const v = new CAD.Vector3(...entry.basis.v);
@@ -7871,16 +8446,22 @@ export function Viewport() {
             sketch_name: entry.sketch_name,
             profile_index: profile.index,
           };
-          const selected = pickerState.selected.some((candidate) => sameProfile(candidate, ref));
-          const hovered = sameProfile(pickerState.hovered, ref);
-          for (const z of [0.045, -0.045]) {
+          const selected = feedback.selectedProfiles.some((candidate) =>
+            sameProfile(candidate, ref),
+          );
+          const hovered = sameProfile(feedback.hoveredProfile, ref);
+          {
+            // This is a CPU picking proxy, not a visible Bevy overlay. Keep a
+            // single double-sided region on the exact sketch plane. Display
+            // offsets made coplanar/opposite-normal sketches compete by
+            // overlay distance rather than by their actual bounded regions.
             const geometry = new CAD.ShapeGeometry(shape);
             const material = new CAD.MeshBasicMaterial({
               color: selected
                 ? COLOR_EDGE_SELECTED
                 : hovered
                   ? COLOR_EDGE_HOVER
-                  : 0x2e86b6,
+                  : COLOR_PICK_NORMAL,
               transparent: true,
               opacity: selected ? 0.3 : hovered ? 0.24 : 0.13,
               side: CAD.DoubleSide,
@@ -7893,10 +8474,11 @@ export function Viewport() {
               polygonOffsetUnits: -2,
             });
             const mesh = new CAD.Mesh(geometry, material);
-            mesh.position.z = z;
             mesh.renderOrder = 12;
             mesh.userData.profileSurface = true;
             mesh.userData.profileRef = ref;
+            mesh.userData.profileOuterArea = Math.abs(profile.area);
+            mesh.userData.profileFeatureId = entry.feature_id;
             group.add(mesh);
           }
           if (selected || hovered) {
@@ -7908,11 +8490,13 @@ export function Viewport() {
                 point.y,
                 0.07,
               ]);
-              const outline = addScreenPolyline(
+              const outline = addPickPolyline(
                 group,
                 positions,
                 selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
-                1.5,
+                selected
+                  ? VIEWPORT_INTERACTION_STROKE_PX.selected
+                  : VIEWPORT_INTERACTION_STROKE_PX.hover,
                 18,
               );
               outline.userData.profileRef = ref;
@@ -7927,173 +8511,176 @@ export function Viewport() {
     };
 
     const pickFinishedProfile = (event: PointerEvent): ProfileRefDto | null => {
-      if (!store.getState().profilePicker) return null;
+      const state = store.getState();
+      const owner = state.profilePicker?.owner;
+      if (
+        !owner
+        || !pickAccepts(activePickForState(state), 'profile')
+      ) return null;
       raycaster.setFromCamera(ndcFromEvent(event), camera);
-      const hit = raycaster
-        .intersectObjects(profileGroup.children, true)
-        .find((candidate) => candidate.object.userData.profileSurface === true);
-      if (!hit) return null;
-      return (hit.object.userData.profileRef as ProfileRefDto | undefined) ?? null;
+      const hits: ProfileRegionHit[] = [];
+      for (const candidate of raycaster.intersectObjects(profileGroup.children, true)) {
+        if (candidate.object.userData.profileSurface !== true) continue;
+        const profile = candidate.object.userData.profileRef as ProfileRefDto | undefined;
+        if (!profile) continue;
+        if (owner === 'revolve' && !revolveProfileAcceptsAxis(
+            state.profilePicker?.catalog ?? [],
+            profile.sketch_name,
+            state.revolveAxisSelection,
+          )) continue;
+        hits.push({
+          reference: profile,
+          distance: candidate.distance,
+          outerArea: candidate.object.userData.profileOuterArea as number,
+          featureId: candidate.object.userData.profileFeatureId as number,
+        });
+      }
+      return pickProfileRegion(hits);
     };
 
-    /** Screen-space pick for finished straight sketch lines while the
-     * non-modal Revolve panel is open. This preserves a stable sketch/entity
-     * reference instead of converting the click to transient axis numbers. */
+    type FinishedSketchEntityRef = { sketchName: string; entityId: number };
+    const finishedSketchEntityKey = (reference: FinishedSketchEntityRef) =>
+      `${reference.sketchName}:${reference.entityId}`;
+
+    const localPolylineForFinishedEntity = (entity: EntityDto): Vec2[] => {
+      if (entity.kind === 'line') return [entity.start, entity.end];
+      if (entity.kind === 'spline') return entity.tessellation;
+      const positions = entity.kind === 'arc'
+        ? tessellateArc(
+            entity.center,
+            entity.radius,
+            entity.start_angle,
+            entity.end_angle,
+          )
+        : entity.kind === 'circle'
+          ? tessellateCircle(entity.center, entity.radius)
+          : [];
+      const points: Vec2[] = [];
+      for (let index = 0; index + 1 < positions.length; index += 3) {
+        points.push({ x: positions[index], y: positions[index + 1] });
+      }
+      return points;
+    };
+
+    const applyClipMatrix = (value: ClipPoint, matrix: CAD.Matrix4): ClipPoint => {
+      const elements = matrix.elements;
+      return {
+        x: elements[0] * value.x + elements[4] * value.y
+          + elements[8] * value.z + elements[12] * value.w,
+        y: elements[1] * value.x + elements[5] * value.y
+          + elements[9] * value.z + elements[13] * value.w,
+        z: elements[2] * value.x + elements[6] * value.y
+          + elements[10] * value.z + elements[14] * value.w,
+        w: elements[3] * value.x + elements[7] * value.y
+          + elements[11] * value.z + elements[15] * value.w,
+      };
+    };
+
+    const sketchPointToClip = (sketch: SketchDto, point: Vec2): ClipPoint => {
+      const basis = sketch.basis;
+      const world = {
+        x: basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y,
+        y: basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y,
+        z: basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y,
+        w: 1,
+      };
+      return applyClipMatrix(
+        applyClipMatrix(world, camera.matrixWorldInverse),
+        camera.projectionMatrix,
+      );
+    };
+
+    /** One clipped, screen-space implementation for every finished-sketch
+     * line/curve picker. It matches what the renderer leaves visible at the
+     * frustum and resolves every pointer sample independently. */
+    const pickFinishedSketchEntity = (
+      event: PointerEvent,
+      valid: ReadonlySet<string>,
+      geometry: 'line' | 'curve',
+    ): ScreenPick<FinishedSketchEntityRef> | null => {
+      camera.updateMatrixWorld(true);
+      const hidden = hiddenSketchNames();
+      const candidates: Array<ClipPolylineCandidate<FinishedSketchEntityRef>> = [];
+      for (const sketch of store.getState().finishedSketches) {
+        if (hidden.has(sketch.name)) continue;
+        for (const entity of sketch.entities) {
+          if (geometry === 'line' && entity.kind !== 'line') continue;
+          if (geometry === 'curve' && entity.kind === 'point') continue;
+          if (geometry === 'curve' && entity.kind === 'line' && entity.consumed) continue;
+          const reference = { sketchName: sketch.name, entityId: entity.id };
+          const key = finishedSketchEntityKey(reference);
+          if (!valid.has(key)) continue;
+          const localPoints = localPolylineForFinishedEntity(entity);
+          if (localPoints.length < 2) continue;
+          candidates.push({
+            key,
+            value: reference,
+            polylines: [localPoints.map((point) => sketchPointToClip(sketch, point))],
+          });
+        }
+      }
+      const rect = surface.domElement.getBoundingClientRect();
+      return pickClipPolylineCandidate(
+        candidates,
+        { x: event.clientX, y: event.clientY },
+        { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      );
+    };
+
+    /** Straight-line Revolve picker. Before a profile exists, any visible
+     * sketch line can establish the plane; afterward only coplanar lines are
+     * eligible. */
     const pickFinishedSketchLine = (
       event: PointerEvent,
-    ): { sketchName: string; entityId: number } | null => {
-      const s = store.getState();
-      if (s.revolveDialogFeature === null) return null;
-      const hidden = hiddenSketchNames();
-      const rect = surface.domElement.getBoundingClientRect();
-      const distanceToSegment = (
-        px: number,
-        py: number,
-        ax: number,
-        ay: number,
-        bx: number,
-        by: number,
-      ) => {
-        const dx = bx - ax;
-        const dy = by - ay;
-        const length2 = dx * dx + dy * dy;
-        const t = length2 <= 1e-9
-          ? 0
-          : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / length2));
-        return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-      };
-      const toScreen = (sketch: SketchDto, point: Vec2) => {
-        const basis = sketch.basis;
-        const world = new CAD.Vector3(
-          basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y,
-          basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y,
-          basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y,
-        ).project(camera);
-        if (world.z < -1 || world.z > 1) return null;
-        return {
-          x: rect.left + ((world.x + 1) * rect.width) / 2,
-          y: rect.top + ((1 - world.y) * rect.height) / 2,
-        };
-      };
-      let best: { sketchName: string; entityId: number; distance: number } | null = null;
-      for (const sketch of s.finishedSketches) {
-        if (hidden.has(sketch.name)) continue;
-        for (const entity of sketch.entities) {
-          if (entity.kind !== 'line') continue;
-          const start = toScreen(sketch, entity.start);
-          const end = toScreen(sketch, entity.end);
-          if (!start || !end) continue;
-          const distance = distanceToSegment(
-            event.clientX,
-            event.clientY,
-            start.x,
-            start.y,
-            end.x,
-            end.y,
-          );
-          if (distance <= MODIFY_CAPTURE_PX && (!best || distance < best.distance)) {
-            best = { sketchName: sketch.name, entityId: entity.id, distance };
-          }
-        }
-      }
-      return best ? { sketchName: best.sketchName, entityId: best.entityId } : null;
+    ): ScreenPick<FinishedSketchEntityRef> | null => {
+      const state = store.getState();
+      if (
+        state.revolveDialogFeature === null
+        || !pickAccepts(activePickForState(state), 'sketch-line')
+      ) return null;
+      const picker = state.profilePicker;
+      if (!picker || picker.owner !== 'revolve') return null;
+      const options = picker.selected.length > 0
+        ? revolveAxisLineOptions(picker.catalog, picker.sketchName)
+        : allRevolveAxisLineOptions(picker.catalog);
+      return pickFinishedSketchEntity(
+        event,
+        new Set(options.map((option) =>
+          finishedSketchEntityKey({
+            sketchName: option.sketchName,
+            entityId: option.line.entity_id,
+          }))),
+        'line',
+      );
     };
 
-    /** Shared screen-space picker for Sweep paths/rails, Loft
-     * centerlines/rails, and Rib centerlines. */
+    /** Sweep paths/rails, Loft centerlines/rails, and Rib centerlines share
+     * the same clipped, stateless finished-entity picker. */
     const pickFinishedSketchCurve = (
       event: PointerEvent,
-    ): { sketchName: string; entityId: number } | null => {
-      const s = store.getState();
-      const pickerState = s.curvePicker;
-      if (!pickerState) return null;
+    ): ScreenPick<FinishedSketchEntityRef> | null => {
+      const state = store.getState();
+      const picker = state.curvePicker;
+      if (!picker) return null;
+      if (
+        modelingPickTargetForGeometry(state.modelingPickTarget, 'sketch-curve')
+          !== picker.owner
+        || !pickAccepts(activePickForState(state), 'sketch-curve')
+      ) return null;
       const valid = new Set(
-        pickerState.catalog.flatMap((entry) =>
-          entry.path_curves.map((curve) => `${entry.sketch_name}:${curve.entity_id}`),
+        picker.catalog.flatMap((entry) =>
+          entry.path_curves.map((curve) =>
+            finishedSketchEntityKey({
+              sketchName: entry.sketch_name,
+              entityId: curve.entity_id,
+            })),
         ),
       );
-      const hidden = hiddenSketchNames();
-      const rect = surface.domElement.getBoundingClientRect();
-      const toScreen = (sketch: SketchDto, point: Vec2) => {
-        const basis = sketch.basis;
-        const projected = new CAD.Vector3(
-          basis.origin[0] + basis.u[0] * point.x + basis.v[0] * point.y,
-          basis.origin[1] + basis.u[1] * point.x + basis.v[1] * point.y,
-          basis.origin[2] + basis.u[2] * point.x + basis.v[2] * point.y,
-        ).project(camera);
-        if (projected.z < -1 || projected.z > 1) return null;
-        return {
-          x: rect.left + ((projected.x + 1) * rect.width) / 2,
-          y: rect.top + ((1 - projected.y) * rect.height) / 2,
-        };
-      };
-      const distanceToSegment = (
-        point: { x: number; y: number },
-        start: { x: number; y: number },
-        end: { x: number; y: number },
-      ) => {
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const length2 = dx * dx + dy * dy;
-        const t = length2 <= 1e-9
-          ? 0
-          : Math.max(
-              0,
-              Math.min(
-                1,
-                ((point.x - start.x) * dx + (point.y - start.y) * dy) / length2,
-              ),
-            );
-        return Math.hypot(
-          point.x - (start.x + t * dx),
-          point.y - (start.y + t * dy),
-        );
-      };
-      let best: { sketchName: string; entityId: number; distance: number } | null = null;
-      for (const sketch of s.finishedSketches) {
-        if (hidden.has(sketch.name)) continue;
-        for (const entity of sketch.entities) {
-          if (!valid.has(`${sketch.name}:${entity.id}`)) continue;
-          let localPoints: Vec2[] = [];
-          if (entity.kind === 'line' && !entity.consumed) localPoints = [entity.start, entity.end];
-          if (entity.kind === 'arc') {
-            const positions = tessellateArc(
-              entity.center,
-              entity.radius,
-              entity.start_angle,
-              entity.end_angle,
-            );
-            for (let index = 0; index + 1 < positions.length; index += 3) {
-              localPoints.push({ x: positions[index], y: positions[index + 1] });
-            }
-          }
-          if (entity.kind === 'circle') {
-            const positions = tessellateCircle(entity.center, entity.radius);
-            for (let index = 0; index + 1 < positions.length; index += 3) {
-              localPoints.push({ x: positions[index], y: positions[index + 1] });
-            }
-          }
-          if (entity.kind === 'spline') localPoints = entity.tessellation;
-          const points = localPoints
-            .map((point) => toScreen(sketch, point))
-            .filter((point): point is { x: number; y: number } => point !== null);
-          let distance = Number.POSITIVE_INFINITY;
-          for (let index = 1; index < points.length; index += 1) {
-            distance = Math.min(
-              distance,
-              distanceToSegment(
-                { x: event.clientX, y: event.clientY },
-                points[index - 1],
-                points[index],
-              ),
-            );
-          }
-          if (distance <= MODIFY_CAPTURE_PX && (!best || distance < best.distance)) {
-            best = { sketchName: sketch.name, entityId: entity.id, distance };
-          }
-        }
-      }
-      return best ? { sketchName: best.sketchName, entityId: best.entityId } : null;
+      return pickFinishedSketchEntity(
+        event,
+        valid,
+        'curve',
+      );
     };
 
     /** Body IDs hidden from the browser tree. */
@@ -8137,10 +8724,7 @@ export function Viewport() {
 
     const rebuildDatumPlanes = () => {
       const s = store.getState();
-      const pickingReferences =
-        s.mode === 'pickPlane' ||
-        s.constructionPlanePickTarget === 'first_reference' ||
-        s.constructionPlanePickTarget === 'second_reference';
+      const pickingReferences = referencePickerVisible(s);
       const hidden = hiddenDatumIds();
       clearGroup(datumGroup);
       for (const definition of s.datumPlanes) {
@@ -8182,44 +8766,22 @@ export function Viewport() {
             gapSize: 3,
           }),
         );
+        border.userData.datumPlaneId = definition.datum_id;
         border.computeLineDistances();
         group.add(mesh, border);
         datumGroup.add(group);
       }
-      highlightDatumPlane(null, pickingReferences);
-    };
-
-    const activeBodyFeaturePickMode = (
-      state: ReturnType<typeof useAppStore.getState>,
-    ): BodyFeaturePickMode | null => {
-      const kind = state.bodyFeatureDialog?.kind;
-      if (kind === 'external_thread') return 'face-single';
-      if (kind === 'shell') return 'face-multi';
-      if (kind === 'split_body') return 'body-single';
-      if (
-        kind === 'move_copy'
-        || kind === 'combine'
-        || kind === 'mirror'
-        || kind === 'rectangular_pattern'
-        || kind === 'circular_pattern'
-      ) {
-        return 'body-multi';
-      }
-      return null;
+      applyReferencePickHighlights(s);
     };
 
     const updateSolidStyles = () => {
       const s = store.getState();
-      const selectedBodyIds = new Set(s.selectedBodies);
-      const selectedFaceIds = new Set(s.selectedFaces);
+      const feedback = pickFeedbackForState(s);
+      const sharedEdgeMode = activeSolidEdgePickMode(s);
+      const selectedBodyIds = new Set(feedback.selectedBodyIds);
+      const selectedFaceIds = new Set(feedback.selectedFaceIds);
       const hidden = hiddenBodyIds();
-      const bodyPickMode = activeBodyFeaturePickMode(s);
-      const hoveredBodyId =
-        bodyPickMode === 'body-multi' || bodyPickMode === 'body-single'
-          ? s.solidScene.bodies.find((body) =>
-              body.faces.some((face) => face.id === s.hoveredFace),
-            )?.id ?? null
-          : null;
+      const hoveredBodyId = feedback.hoveredBodyId;
       const faceHighlights: Array<{
         bodyId: number;
         occurrenceId: number | null;
@@ -8230,6 +8792,7 @@ export function Viewport() {
       clearGroup(solidBodyHighlightGroup);
       clearGroup(solidFaceHighlightGroup);
       clearGroup(solidEdgeHighlightGroup);
+      clearGroup(solidPointHighlightGroup);
       solidGroup.traverse((object) => {
         if (object instanceof CAD.Mesh && object.userData.solidFace === true) {
           const material = object.material as CAD.MeshStandardMaterial;
@@ -8241,8 +8804,9 @@ export function Viewport() {
             : bodySelectionIndex >= 0;
           const faceSelected = selectedFaceIds.has(object.userData.faceId as number)
             && (s.selectedOccurrenceId === null || occurrenceId === s.selectedOccurrenceId);
-          const faceHovered = object.userData.faceId === s.hoveredFace
-            && (s.hoveredOccurrenceId === null || occurrenceId === s.hoveredOccurrenceId);
+          const faceHovered = object.userData.faceId === feedback.hoveredFaceId
+            && (feedback.hoveredOccurrenceId === null
+              || occurrenceId === feedback.hoveredOccurrenceId);
           material.color.setHex(
             faceSelected
               ? COLOR_FACE_SELECTED
@@ -8254,8 +8818,14 @@ export function Viewport() {
                     : COLOR_BODY_TOOL
                   : bodyBaseColor(bodyId, s.bodyAppearances),
           );
-          material.emissive.setHex(faceSelected ? 0x063b55 : faceHovered ? 0x05293a : 0x000000);
-          material.emissiveIntensity = faceSelected || faceHovered ? 0.32 : 0;
+          material.emissive.setHex(
+            faceSelected
+              ? COLOR_EDGE_SELECTED
+              : faceHovered
+                ? COLOR_EDGE_HOVER
+                : 0x000000,
+          );
+          material.emissiveIntensity = faceSelected || faceHovered ? 0.12 : 0;
           if (faceSelected || faceHovered) {
             faceHighlights.push({
               bodyId,
@@ -8269,21 +8839,27 @@ export function Viewport() {
         } else if (object instanceof CAD.Line && object.userData.solidEdge === true) {
           const material = object.material as CAD.LineBasicMaterial;
           const occurrenceId = object.userData.occurrenceId as number | null | undefined;
-          const selected = s.selectedEdges.includes(object.userData.edgeId as number)
+          const selected = feedback.selectedEdgeIds.includes(object.userData.edgeId as number)
             && (s.selectedOccurrenceId === null || occurrenceId === s.selectedOccurrenceId);
-          const hovered = object.userData.edgeId === s.hoveredEdge
-            && (s.hoveredOccurrenceId === null || occurrenceId === s.hoveredOccurrenceId);
+          const hovered = object.userData.edgeId === feedback.hoveredEdgeId
+            && (feedback.hoveredOccurrenceId === null
+              || occurrenceId === feedback.hoveredOccurrenceId);
+          const eligible = sharedEdgeMode !== null
+            && (sharedEdgeMode !== 'refinable' || object.userData.refinable === true)
+            && (sharedEdgeMode !== 'straight' || object.userData.straight === true);
           material.color.setHex(
             selected
               ? COLOR_EDGE_SELECTED
               : hovered
                 ? COLOR_EDGE_HOVER
-                : selectedBodyIds.has(object.userData.bodyId as number)
-                  ? 0x0d75a5
-                  : COLOR_EDGE,
+                : eligible
+                  ? COLOR_PICK_NORMAL
+                  : selectedBodyIds.has(object.userData.bodyId as number)
+                    ? COLOR_EDGE_SELECTED
+                    : COLOR_EDGE,
           );
           material.opacity =
-            selected || hovered || selectedBodyIds.has(object.userData.bodyId as number)
+            selected || hovered || eligible || selectedBodyIds.has(object.userData.bodyId as number)
               ? 1
               : 0.72;
           material.depthTest = !(selected || hovered);
@@ -8293,11 +8869,13 @@ export function Viewport() {
 
       for (const face of faceHighlights) {
         if (face.positions.length < 6) continue;
-        const outline = addScreenSegments(
+        const outline = addPickSegments(
           solidFaceHighlightGroup,
           face.positions,
           face.selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
-          1.5,
+          face.selected
+            ? VIEWPORT_INTERACTION_STROKE_PX.selected
+            : VIEWPORT_INTERACTION_STROKE_PX.hover,
           19,
           !face.selected,
         );
@@ -8330,15 +8908,15 @@ export function Viewport() {
         }
         if (positions.length < 6) continue;
         const toolBody = selected && selectedIndex > 0;
-        const outline = addScreenSegments(
+        const outline = addPickSegments(
           solidBodyHighlightGroup,
           positions,
           selected
-            ? toolBody
-              ? COLOR_EDGE_SELECTED
-              : COLOR_FACE_SELECTED
+            ? COLOR_EDGE_SELECTED
             : COLOR_EDGE_HOVER,
-          1.5,
+          selected
+            ? VIEWPORT_INTERACTION_STROKE_PX.selected
+            : VIEWPORT_INTERACTION_STROKE_PX.hover,
           16,
           true,
         );
@@ -8355,8 +8933,8 @@ export function Viewport() {
       for (const body of s.solidScene.bodies) {
         if (hidden.has(body.id)) continue;
         for (const edge of body.edges) {
-          const selected = s.selectedEdges.includes(edge.id);
-          const hovered = edge.id === s.hoveredEdge;
+          const selected = feedback.selectedEdgeIds.includes(edge.id);
+          const hovered = edge.id === feedback.hoveredEdgeId;
           if ((!selected && !hovered) || edge.points.length < 2) continue;
           const positions = edge.points.flatMap((point) => [
             point.x,
@@ -8372,11 +8950,13 @@ export function Viewport() {
                   || candidate.userData.occurrenceId === s.hoveredOccurrenceId),
           );
           for (const instance of instances) {
-            const line = addScreenPolyline(
+            const line = addPickPolyline(
               solidEdgeHighlightGroup,
               positions,
               selected ? COLOR_EDGE_SELECTED : COLOR_EDGE_HOVER,
-              1.5,
+              selected
+                ? VIEWPORT_INTERACTION_STROKE_PX.selected
+                : VIEWPORT_INTERACTION_STROKE_PX.hover,
               selected ? 23 : 21,
             );
             line.userData.edgeId = edge.id;
@@ -8389,6 +8969,49 @@ export function Viewport() {
             );
           }
         }
+      }
+
+      const addSurfacePointLayer = (
+        point: Point3Dto,
+        size: number,
+        color: number,
+        order: number,
+        kind: 'hover' | 'selected',
+      ) => {
+        const geometry = new CAD.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new CAD.Float32BufferAttribute([point.x, point.y, point.z], 3),
+        );
+        const material = new CAD.PointsMaterial({
+          size,
+          sizeAttenuation: false,
+          color,
+          depthTest: false,
+          depthWrite: false,
+        });
+        const marker = new CAD.Points(geometry, material);
+        marker.renderOrder = order;
+        marker.userData.surfacePointHighlightKind = kind;
+        solidPointHighlightGroup.add(marker);
+      };
+      if (feedback.hoveredSurfacePoint) {
+        addSurfacePointLayer(
+          feedback.hoveredSurfacePoint,
+          12,
+          COLOR_EDGE_HOVER,
+          24,
+          'hover',
+        );
+      }
+      if (feedback.selectedSurfacePoint) {
+        addSurfacePointLayer(
+          feedback.selectedSurfacePoint,
+          14,
+          COLOR_EDGE_SELECTED,
+          25,
+          'selected',
+        );
       }
     };
 
@@ -8843,36 +9466,116 @@ export function Viewport() {
       edgeId: number;
       point: Point3Dto;
     } | null => {
-      raycaster.setFromCamera(ndcFromEvent(event), camera);
-      raycaster.params.Line = {
-        threshold: Math.max(0.15, worldPerPixel() * 6),
+      camera.updateMatrixWorld(true);
+      solidGroup.updateMatrixWorld(true);
+      type SolidEdgeCandidate = {
+        bodyId: number;
+        occurrenceId: number | null;
+        edgeId: number;
+        worldPoints: CAD.Vector3[];
       };
-      const hit = raycaster
-        .intersectObjects(solidGroup.children, true)
-        .find((candidate) =>
-          candidate.object.userData.solidEdge === true
-          && (mode !== 'refinable' || candidate.object.userData.refinable === true)
-          && (mode !== 'straight' || candidate.object.userData.straight === true));
-      if (!hit) return null;
-      return {
-        bodyId: hit.object.userData.bodyId as number,
-        occurrenceId: (hit.object.userData.occurrenceId as number | null | undefined) ?? null,
-        edgeId: hit.object.userData.edgeId as number,
-        point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+      const candidates: Array<ClipPolylineCandidate<SolidEdgeCandidate>> = [];
+      solidGroup.traverse((object) => {
+        if (!(object instanceof CAD.Line) || object.userData.solidEdge !== true) return;
+        if (mode === 'refinable' && object.userData.refinable !== true) return;
+        if (mode === 'straight' && object.userData.straight !== true) return;
+        const position = object.geometry.getAttribute('position');
+        if (!position || position.count < 2) return;
+        const worldPoints: CAD.Vector3[] = [];
+        const clipPoints: ClipPoint[] = [];
+        for (let index = 0; index < position.count; index += 1) {
+          const world = new CAD.Vector3(
+            position.getX(index),
+            position.getY(index),
+            position.getZ(index),
+          ).applyMatrix4(object.matrixWorld);
+          worldPoints.push(world);
+          clipPoints.push(applyClipMatrix(
+            applyClipMatrix({ x: world.x, y: world.y, z: world.z, w: 1 }, camera.matrixWorldInverse),
+            camera.projectionMatrix,
+          ));
+        }
+        const bodyId = object.userData.bodyId as number;
+        const occurrenceId =
+          (object.userData.occurrenceId as number | null | undefined) ?? null;
+        const edgeId = object.userData.edgeId as number;
+        candidates.push({
+          key: `${bodyId}:${occurrenceId ?? 'base'}:${edgeId}`,
+          value: { bodyId, occurrenceId, edgeId, worldPoints },
+          polylines: [clipPoints],
+        });
+      });
+      if (candidates.length === 0) return null;
+
+      const rect = surface.domElement.getBoundingClientRect();
+      const viewport = {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
       };
+      const pointer = { x: event.clientX, y: event.clientY };
+      let available = candidates;
+      while (available.length > 0) {
+        const picked = pickClipPolylineCandidate(available, pointer, viewport, {
+          enterRadiusPx: 14,
+        });
+        if (!picked) return null;
+        const points = picked.value.worldPoints;
+        const start = points[picked.segment.segmentIndex];
+        const end = points[picked.segment.segmentIndex + 1];
+        if (!start || !end) return null;
+        const world = start.clone().lerp(end, picked.segment.ratio);
+
+        // Screen-space geometry fixes view-angle sensitivity, while this
+        // depth check prevents a back-side edge hidden by a nearer face from
+        // becoming an invisible hit target.
+        raycaster.setFromCamera(ndcFromEvent(event), camera);
+        const faceHit = raycaster
+          .intersectObjects(solidGroup.children, true)
+          .find((candidate) => candidate.object.userData.solidFace === true);
+        const edgeDistance = raycaster.ray.origin.distanceTo(world);
+        const depthTolerance = Math.max(0.01, worldPerPixel() * 3);
+        if (faceHit && edgeDistance > faceHit.distance + depthTolerance) {
+          available = available.filter((candidate) => candidate.key !== picked.key);
+          continue;
+        }
+        return {
+          bodyId: picked.value.bodyId,
+          occurrenceId: picked.value.occurrenceId,
+          edgeId: picked.value.edgeId,
+          point: { x: world.x, y: world.y, z: world.z },
+        };
+      }
+      return null;
     };
 
     const activeSolidEdgePickMode = (
       state: ReturnType<typeof useAppStore.getState>,
     ): Exclude<SolidEdgePickMode, 'any'> | null => {
+      return activeEdgePickMode(activePickForState(state));
+    };
+
+    const pickEligibleBodyFeatureHit = (
+      event: PointerEvent,
+      state: ReturnType<typeof useAppStore.getState>,
+      mode: ModelingBodyPickMode,
+    ): ReturnType<typeof pickSolidFace> => {
+      const candidate = pickSolidFace(event);
+      if (!candidate) return null;
+      const candidateFace = state.solidScene.bodies
+        .find((body) => body.id === candidate.bodyId)
+        ?.faces.find((face) => face.id === candidate.faceId);
+      const activePick = activePickForState(state);
       if (
-        state.filletDialogFeature !== null
-        || state.chamferDialogFeature !== null
-      ) {
-        return 'refinable';
-      }
-      if (state.constructionPlanePickTarget === 'axis_edge') return 'straight';
-      return null;
+        activePick?.owner === 'modeling'
+        && activePick.spec.sameBody
+        && state.selectedBody !== null
+        && candidate.bodyId !== state.selectedBody
+      ) return null;
+      if (mode === 'face-cylinder-single' && !candidateFace?.cylinder) return null;
+      if (mode === 'face-planar-single' && !candidateFace?.plane) return null;
+      return candidate;
     };
 
     type ConstructionReferenceHit = {
@@ -8884,18 +9587,10 @@ export function Viewport() {
     const pickConstructionReference = (
       event: PointerEvent,
     ): ConstructionReferenceHit | null => {
-      const face = pickSolidFace(event);
-      if (face?.planar) {
-        return {
-          reference: { type: 'planar_face', face_id: face.faceId },
-          label: t('sketch.planarFace'),
-          face: {
-            bodyId: face.bodyId,
-            faceId: face.faceId,
-            point: face.point,
-          },
-        };
-      }
+      // Reference-plane overlays are deliberately drawn above the model while
+      // this picker is active, so they must also win the hit test in their
+      // visible area. Otherwise an origin plane enclosed by a body can be seen
+      // but can never be selected because the underlying face swallows it.
       raycaster.setFromCamera(ndcFromEvent(event), camera);
       const datumHit = raycaster
         .intersectObjects(datumGroup.children, true)
@@ -8911,13 +9606,66 @@ export function Viewport() {
         };
       }
       const plane = pickOriginPlane(event);
-      if (!plane) return null;
-      const definition = PICKER_PLANES.find((candidate) => candidate.plane === plane)!;
+      if (plane) {
+        const definition = PICKER_PLANES.find((candidate) => candidate.plane === plane)!;
+        return {
+          reference: { type: 'origin_plane', plane },
+          label: t(definition.labelKey),
+          face: null,
+        };
+      }
+      const face = pickSolidFace(event);
+      if (!face?.planar) return null;
       return {
-        reference: { type: 'origin_plane', plane },
-        label: t(definition.labelKey),
-        face: null,
+        reference: { type: 'planar_face', face_id: face.faceId },
+        label: t('sketch.planarFace'),
+        face: {
+          bodyId: face.bodyId,
+          faceId: face.faceId,
+          point: face.point,
+        },
       };
+    };
+
+    const updateReferencePickHover = (
+      event: PointerEvent,
+      state: ReturnType<typeof useAppStore.getState>,
+      validCursor: 'pointer' | 'crosshair',
+      emptyCursor: '' | 'not-allowed',
+      reportNonPlanarFace = false,
+    ): ConstructionReferenceHit | null => {
+      updateReferencePlaneInteractionScale();
+      const referenceHit = pickConstructionReference(event);
+      const reference = referenceHit?.reference;
+      const invalidFace = !referenceHit && reportNonPlanarFace
+        ? pickSolidFace(event)
+        : null;
+      state.setHoveredFace(
+        reference?.type === 'planar_face' ? reference.face_id : null,
+      );
+      state.setHoveredDatumPlane(
+        reference?.type === 'datum_plane' ? reference.datum_id : null,
+      );
+      state.setHoveredPlane(
+        reference?.type === 'origin_plane' ? reference.plane : null,
+      );
+      applyReferencePickHighlights(store.getState());
+      const tag = planeTagRef.current;
+      if (tag) {
+        if (referenceHit || invalidFace) {
+          const rect = surface.domElement.getBoundingClientRect();
+          tag.textContent = referenceHit?.label ?? t('sketch.nonPlanarFace');
+          tag.style.display = 'block';
+          tag.style.left = `${event.clientX - rect.left + 14}px`;
+          tag.style.top = `${event.clientY - rect.top + 12}px`;
+        } else {
+          tag.style.display = 'none';
+        }
+      }
+      surface.domElement.style.cursor = referenceHit
+        ? validCursor
+        : invalidFace ? 'not-allowed' : emptyCursor;
+      return referenceHit;
     };
 
     const renderEntityGhost = (group: CAD.Group, ent: EntityDto, dx: number, dy: number) => {
@@ -9182,10 +9930,46 @@ export function Viewport() {
       releaseJointSelection(state);
       state.clearSolidSelection();
     };
+    const hideActiveToolCursor = () => {
+      activeToolCursorScreen = null;
+      const badge = toolCursorRef.current;
+      if (badge) badge.style.display = 'none';
+    };
+    const updateActiveToolCursor = (state: ViewportState, event: PointerEvent) => {
+      const hasTool = state.pendingConstraintTool !== null || state.activeTool !== null;
+      if (state.mode !== 'sketch' || state.navTool !== 'select' || !hasTool) {
+        hideActiveToolCursor();
+        return;
+      }
+      const rect = surface.domElement.getBoundingClientRect();
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      const badgeHalf = 12;
+      const gap = 18;
+      const centerX = localX + gap + badgeHalf < rect.width
+        ? localX + gap
+        : localX - gap;
+      const centerY = localY + gap + badgeHalf < rect.height
+        ? localY + gap
+        : localY - gap;
+      activeToolCursorScreen = [centerX, centerY];
+
+      // Browser/WebGL fallback owns the equivalent SVG badge. The native
+      // child viewport renders the semantic annotation directly, avoiding a
+      // moving DOM cutout and its per-pointer layout IPC cost.
+      const badge = toolCursorRef.current;
+      if (!badge) return;
+      if (nativeViewportIsActive()) {
+        badge.style.display = 'none';
+        return;
+      }
+      badge.style.display = 'flex';
+      badge.style.transform = `translate3d(${centerX - badgeHalf}px, ${centerY - badgeHalf}px, 0)`;
+    };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
-
+      updateActiveToolCursor(state, e);
       if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
         const drag = jointMotionDrag;
         const dx = e.clientX - drag.startX;
@@ -9322,67 +10106,7 @@ export function Viewport() {
       }
 
       if (state.mode === 'pickPlane') {
-        updateReferencePlaneInteractionScale();
-        const faceHit = pickSolidFace(e);
-        if (faceHit) {
-          highlightDatumPlane(null, true);
-          state.setHoveredPlane(null);
-          state.setHoveredDatumPlane(null);
-          state.setHoveredFace(faceHit.planar ? faceHit.faceId : null);
-          const tag = planeTagRef.current;
-          if (tag) {
-            const rect = surface.domElement.getBoundingClientRect();
-            tag.textContent = faceHit.planar
-              ? t('sketch.planarFace')
-              : t('sketch.nonPlanarFace');
-            tag.style.display = 'block';
-            tag.style.left = `${e.clientX - rect.left + 14}px`;
-            tag.style.top = `${e.clientY - rect.top + 12}px`;
-          }
-          surface.domElement.style.cursor = faceHit.planar ? 'pointer' : 'not-allowed';
-          return;
-        }
-        state.setHoveredFace(null);
-        raycaster.setFromCamera(ndcFromEvent(e), camera);
-        const datumHit = raycaster
-          .intersectObjects(datumGroup.children, true)
-          .find((hit) => hit.object.userData.datumPlaneId !== undefined);
-        if (datumHit) {
-          state.setHoveredPlane(null);
-          const datumId = datumHit.object.userData.datumPlaneId as number;
-          state.setHoveredDatumPlane(datumId);
-          highlightDatumPlane(datumId, true);
-          const tag = planeTagRef.current;
-          if (tag) {
-            const rect = surface.domElement.getBoundingClientRect();
-            tag.textContent =
-              (datumHit.object.userData.datumPlaneName as string | undefined) ??
-              t('browser.constructionPlane');
-            tag.style.display = 'block';
-            tag.style.left = `${e.clientX - rect.left + 14}px`;
-            tag.style.top = `${e.clientY - rect.top + 12}px`;
-          }
-          surface.domElement.style.cursor = 'pointer';
-          return;
-        }
-        state.setHoveredDatumPlane(null);
-        highlightDatumPlane(null, true);
-        const plane = pickOriginPlane(e);
-        if (plane !== state.hoveredPlane) state.setHoveredPlane(plane);
-        const tag = planeTagRef.current;
-        if (tag) {
-          if (plane) {
-            const def = PICKER_PLANES.find((d) => d.plane === plane)!;
-            const rect = surface.domElement.getBoundingClientRect();
-            tag.textContent = t(def.labelKey);
-            tag.style.display = 'block';
-            tag.style.left = `${e.clientX - rect.left + 14}px`;
-            tag.style.top = `${e.clientY - rect.top + 12}px`;
-          } else {
-            tag.style.display = 'none';
-          }
-        }
-        surface.domElement.style.cursor = plane ? 'pointer' : '';
+        updateReferencePickHover(e, state, 'pointer', '', true);
         return;
       }
 
@@ -9392,56 +10116,55 @@ export function Viewport() {
           state.setHoveredFace(null);
           state.setHoveredEdge(null);
           state.setHoveredOccurrenceId(null);
+          state.setModelingPointHover(null);
           state.setRevolveAxisHover(null);
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
           return;
         }
-        const constructionReferencePicking =
-          state.constructionPlanePickTarget === 'first_reference' ||
-          state.constructionPlanePickTarget === 'second_reference';
-        if (constructionReferencePicking) {
-          updateReferencePlaneInteractionScale();
-          const referenceHit = pickConstructionReference(e);
-          const reference = referenceHit?.reference;
-          state.setHoveredFace(
-            reference?.type === 'planar_face' ? reference.face_id : null,
+        const activePick = activePickForState(state);
+        if (!pickAccepts(activePick, 'surface-point')) {
+          state.setModelingPointHover(null);
+        }
+        if (pickAccepts(activePick, 'reference-plane')) {
+          const referenceHit = updateReferencePickHover(
+            e,
+            state,
+            'crosshair',
+            'not-allowed',
           );
-          state.setHoveredDatumPlane(
-            reference?.type === 'datum_plane' ? reference.datum_id : null,
-          );
-          state.setHoveredPlane(
-            reference?.type === 'origin_plane' ? reference.plane : null,
-          );
-          highlightDatumPlane(
-            reference?.type === 'datum_plane' ? reference.datum_id : null,
-            true,
-          );
-          highlightPickerPlane(
-            reference?.type === 'origin_plane' ? reference.plane : null,
-          );
-          const tag = planeTagRef.current;
-          if (tag) {
-            if (referenceHit) {
-              const rect = surface.domElement.getBoundingClientRect();
-              tag.textContent = referenceHit.label;
-              tag.style.display = 'block';
-              tag.style.left = `${e.clientX - rect.left + 14}px`;
-              tag.style.top = `${e.clientY - rect.top + 12}px`;
-            } else {
-              tag.style.display = 'none';
-            }
+          const referenceIsPrimary = activePick?.owner !== 'modeling'
+            || modelingPickTargetForGeometry(
+              state.modelingPickTarget,
+              'reference-plane',
+            ) === state.modelingPickTarget;
+          // While a body field is primary, a click on a model face still
+          // means body. Only an unmistakable origin/datum overlay takes the
+          // cross-route to the companion plane field.
+          if (referenceIsPrimary || (referenceHit && !referenceHit.face)) {
+            state.setHoveredEdge(null);
+            state.setHoveredProfilePick(null);
+            state.setHoveredCurvePick(null);
+            return;
           }
+        }
+        if (pickAccepts(activePick, 'surface-point')) {
+          const pointHit = pickSolidFace(e);
+          state.setHoveredFace(pointHit?.faceId ?? null);
+          state.setHoveredOccurrenceId(pointHit?.occurrenceId ?? null);
+          state.setModelingPointHover(pointHit?.point ?? null);
           state.setHoveredEdge(null);
           state.setHoveredProfilePick(null);
           state.setHoveredCurvePick(null);
-          surface.domElement.style.cursor = referenceHit ? 'crosshair' : 'not-allowed';
+          surface.domElement.style.cursor = pointHit ? 'crosshair' : 'not-allowed';
           return;
         }
         // Hole placement owns finished-sketch points while its dialog is
         // open. Resolve it before the generic curve/profile pickers so a line
         // endpoint cannot be swallowed by its parent line's hover target.
         if (state.holeDialogFeature !== null) {
+          // A visible sketch point on a planar face can satisfy both the
+          // support and position roles in one deliberate viewport click.
           const point = pickFinishedSketchPoint(e);
           const face = point ? null : pickSolidFace(e);
           state.setHolePositionHover(point?.pick ?? null);
@@ -9449,27 +10172,80 @@ export function Viewport() {
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
-          state.setHoveredFace(point?.face.faceId ?? (face?.planar ? face.faceId : null));
           state.setHoveredOccurrenceId(null);
-          surface.domElement.style.cursor = point || face?.planar ? 'crosshair' : '';
+          const validFace = pickAccepts(activePick, 'planar-face') && face?.planar
+            ? face
+            : null;
+          state.setHoveredFace(point?.face.faceId ?? validFace?.faceId ?? null);
+          surface.domElement.style.cursor = point || validFace ? 'crosshair' : 'not-allowed';
           return;
         }
-        const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
+        const edgePickMode = activeSolidEdgePickMode(state);
+        if (edgePickMode) {
+          const edgeHit = pickSolidEdge(e, edgePickMode);
+          if (edgeHit) {
+            state.setRevolveAxisHover(null);
+            state.setHoveredCurvePick(null);
+            state.setHoveredProfilePick(null);
+            state.setHoveredEdge(edgeHit.edgeId);
+            state.setHoveredFace(null);
+            state.setHoveredOccurrenceId(edgeHit.occurrenceId);
+            surface.domElement.style.cursor = 'crosshair';
+            return;
+          }
+        }
+        const axisLine = pickFinishedSketchLine(e);
+        const profileHit = pickFinishedProfile(e);
+        const profileAlreadySelected = profileHit !== null && (
+          state.profilePicker?.selected.some((candidate) =>
+            sameProfile(candidate, profileHit)
+          ) ?? false
+        );
+        // `pickFinishedSketchLine` already applies the shared forgiving
+        // screen-space envelope. Do not add a
+        // second pixel-perfect threshold here: that made the hover appear
+        // only when the pointer happened to land almost exactly on the
+        // rasterized line, despite the picker reporting a valid hit.
+        const axisWins = linePickWinsOverProfile(
+          axisLine?.distancePx ?? null,
+          profileHit !== null,
+          profileAlreadySelected,
+          activePick?.target === 'revolve_axis',
+        );
+        state.setRevolveAxisHover(axisWins && axisLine ? axisLine.value : null);
+        if (axisWins && axisLine) {
+          state.setHoveredProfilePick(null);
+          state.setHoveredEdge(null);
+          state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
+          surface.domElement.style.cursor = 'crosshair';
+          return;
+        }
+        const curve = pickFinishedSketchCurve(e);
+        state.setHoveredCurvePick(curve?.value ?? null);
+        if (curve) {
+          state.setHoveredProfilePick(null);
+          state.setHoveredEdge(null);
+          state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
+          surface.domElement.style.cursor = 'crosshair';
+          return;
+        }
+        state.setHoveredProfilePick(profileHit);
+        if (profileHit) {
+          state.setHoveredEdge(null);
+          state.setHoveredFace(null);
+          state.setHoveredOccurrenceId(null);
+          surface.domElement.style.cursor = 'crosshair';
+          return;
+        }
+        // Exact sketch geometry is tested before broad face/body hits. This
+        // keeps a centerline or profile selectable when it is drawn on a
+        // model face, while an empty part of the face still selects the body
+        // or companion face role.
+        const bodyFeaturePickMode = modelingBodyPickMode(state.modelingPickTarget);
         if (bodyFeaturePickMode) {
-          const candidate = pickSolidFace(e);
-          const candidateFace = candidate
-            ? state.solidScene.bodies
-                .find((body) => body.id === candidate.bodyId)
-                ?.faces.find((face) => face.id === candidate.faceId)
-            : null;
-          const faceHit =
-            bodyFeaturePickMode === 'face-multi'
-            && state.selectedBody !== null
-            && candidate?.bodyId !== state.selectedBody
-              ? null
-              : bodyFeaturePickMode === 'face-single' && !candidateFace?.cylinder
-                ? null
-                : candidate;
+          const faceHit = pickEligibleBodyFeatureHit(e, state, bodyFeaturePickMode);
           state.setRevolveAxisHover(null);
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
@@ -9479,45 +10255,14 @@ export function Viewport() {
           surface.domElement.style.cursor = faceHit ? 'crosshair' : '';
           return;
         }
-        const edgePickMode = activeSolidEdgePickMode(state);
         if (edgePickMode) {
-          const edgeHit = pickSolidEdge(e, edgePickMode);
           state.setRevolveAxisHover(null);
           state.setHoveredCurvePick(null);
           state.setHoveredProfilePick(null);
-          state.setHoveredEdge(edgeHit?.edgeId ?? null);
-          state.setHoveredFace(null);
-          state.setHoveredOccurrenceId(edgeHit?.occurrenceId ?? null);
-          surface.domElement.style.cursor = edgeHit ? 'crosshair' : '';
-          return;
-        }
-        const axisLine = pickFinishedSketchLine(e);
-        state.setRevolveAxisHover(axisLine);
-        if (axisLine) {
-          state.setHoveredProfilePick(null);
           state.setHoveredEdge(null);
           state.setHoveredFace(null);
           state.setHoveredOccurrenceId(null);
-          surface.domElement.style.cursor = 'crosshair';
-          return;
-        }
-        const curve = pickFinishedSketchCurve(e);
-        state.setHoveredCurvePick(curve);
-        if (curve) {
-          state.setHoveredProfilePick(null);
-          state.setHoveredEdge(null);
-          state.setHoveredFace(null);
-          state.setHoveredOccurrenceId(null);
-          surface.domElement.style.cursor = 'crosshair';
-          return;
-        }
-        const profileHit = pickFinishedProfile(e);
-        state.setHoveredProfilePick(profileHit);
-        if (profileHit) {
-          state.setHoveredEdge(null);
-          state.setHoveredFace(null);
-          state.setHoveredOccurrenceId(null);
-          surface.domElement.style.cursor = 'crosshair';
+          surface.domElement.style.cursor = '';
           return;
         }
         if (state.profilePicker?.owner === 'extrude') {
@@ -9539,7 +10284,7 @@ export function Viewport() {
         if (state.jointDialogOpen) {
           const generation = ++jointHoverPickGeneration;
           if (nativeViewportIsActive()) {
-            void pickNativeViewport(e, container)
+            void pickNativeViewport(e, container, 'jointConnector')
               .then((hit) => {
                 const current = store.getState();
                 if (generation !== jointHoverPickGeneration || !current.jointDialogOpen) return;
@@ -9550,7 +10295,7 @@ export function Viewport() {
               })
               .catch(() => undefined);
           } else {
-            const edgeHit = pickSolidEdge(e);
+            const edgeHit = pickSolidEdge(e, 'any');
             const edgeConnector = edgeHit
               ? jointConnectorFromEdge(edgeHit.bodyId, edgeHit.edgeId, edgeHit.occurrenceId)
               : null;
@@ -9569,7 +10314,7 @@ export function Viewport() {
           return;
         }
         jointHoverPickGeneration += 1;
-        const edgeHit = pickSolidEdge(e);
+        const edgeHit = pickSolidEdge(e, 'any');
         const hit = edgeHit ? null : pickSolidFace(e);
         state.setHoveredEdge(edgeHit?.edgeId ?? null);
         state.setHoveredFace(hit?.faceId ?? null);
@@ -9598,7 +10343,13 @@ export function Viewport() {
 
       // Start a drag after a 3 px press threshold: dimension text first,
       // then rubber-band point drags.
-      if (downInfo && !dragging && !dimDragging && state.activeTool === null) {
+      if (
+        downInfo &&
+        !dragging &&
+        !dimDragging &&
+        state.activeTool === null &&
+        state.pendingConstraintTool === null
+      ) {
         const moved = Math.hypot(e.clientX - downInfo.x, e.clientY - downInfo.y);
         if (moved > 3) {
           if (downInfo.dimCandidate !== null) {
@@ -9730,16 +10481,12 @@ export function Viewport() {
       state.setHoveredCurvePick(null);
       state.setHoveredProfilePick(null);
       state.setHolePositionHover(null);
+      state.setModelingPointHover(null);
       state.setJointConnectorHover(null);
-      highlightDatumPlane(
-        null,
-        state.mode === 'pickPlane' ||
-          state.constructionPlanePickTarget === 'first_reference' ||
-          state.constructionPlanePickTarget === 'second_reference',
-      );
-      highlightPickerPlane(null);
+      applyReferencePickHighlights(store.getState());
       const tag = planeTagRef.current;
       if (tag) tag.style.display = 'none';
+      hideActiveToolCursor();
       surface.domElement.style.cursor = '';
     };
 
@@ -9782,8 +10529,14 @@ export function Viewport() {
             state.toggleHolePositionSelection(pointHit.pick);
             return;
           }
+          if (!pickAccepts(activePickForState(state), 'planar-face')) return;
           const faceHit = pickSolidFace(e);
           if (faceHit?.planar) {
+            const routedTarget = modelingPickTargetForGeometry(
+              state.modelingPickTarget,
+              'planar-face',
+            );
+            if (routedTarget) state.setModelingPickTarget(routedTarget);
             state.setHolePositionSelections([]);
             state.setSelectedBody(faceHit.bodyId);
             state.setSelectedFace(faceHit.faceId);
@@ -9795,7 +10548,7 @@ export function Viewport() {
         if (state.jointDialogOpen) {
           const generation = ++jointClickPickGeneration;
           if (nativeViewportIsActive()) {
-            void pickNativeViewport(e, container)
+            void pickNativeViewport(e, container, 'jointConnector')
               .then((hit) => {
                 const current = store.getState();
                 if (generation !== jointClickPickGeneration || !current.jointDialogOpen || !hit) {
@@ -9893,70 +10646,60 @@ export function Viewport() {
             return;
           }
         }
-        const constructionReferencePicking =
-          state.constructionPlanePickTarget === 'first_reference' ||
-          state.constructionPlanePickTarget === 'second_reference';
-        if (constructionReferencePicking) {
+        const activePick = activePickForState(state);
+        if (pickAccepts(activePick, 'reference-plane')) {
           const referenceHit = pickConstructionReference(e);
-          if (!referenceHit) return;
-          if (referenceHit.face) {
-            state.selectSolidFeature(
-              'face',
-              referenceHit.face.bodyId,
-              referenceHit.face.faceId,
-              referenceHit.face.point,
-              state.constructionPlanePickTarget === 'second_reference',
-            );
-          } else {
-            state.clearSolidSelection();
+          const referenceIsPrimary = activePick?.owner !== 'modeling'
+            || modelingPickTargetForGeometry(
+              state.modelingPickTarget,
+              'reference-plane',
+            ) === state.modelingPickTarget;
+          if (referenceHit && (referenceIsPrimary || !referenceHit.face)) {
+            if (activePick?.owner === 'modeling') {
+              const routedTarget = modelingPickTargetForGeometry(
+                state.modelingPickTarget,
+                'reference-plane',
+              );
+              if (routedTarget) state.setModelingPickTarget(routedTarget);
+            }
+            if (referenceHit.face) {
+              state.selectSolidFeature(
+                'face',
+                referenceHit.face.bodyId,
+                referenceHit.face.faceId,
+                referenceHit.face.point,
+                activePick?.owner === 'construction-plane'
+                  && activePick.target === 'second_reference',
+              );
+            } else {
+              state.clearSolidSelection();
+            }
+            if (activePick?.owner === 'construction-plane') {
+              state.setConstructionPlanePickedReference(referenceHit.reference);
+            } else {
+              state.setModelingPlaneSelection(referenceHit.reference);
+            }
+            return;
           }
-          state.setConstructionPlanePickedReference(referenceHit.reference);
-          return;
+          if (referenceIsPrimary) return;
         }
-        const bodyFeaturePickMode = activeBodyFeaturePickMode(state);
-        if (bodyFeaturePickMode) {
-          const candidate = pickSolidFace(e);
-          const candidateFace = candidate
-            ? state.solidScene.bodies
-                .find((body) => body.id === candidate.bodyId)
-                ?.faces.find((face) => face.id === candidate.faceId)
-            : null;
-          const faceHit =
-            bodyFeaturePickMode === 'face-multi'
-            && state.selectedBody !== null
-            && candidate?.bodyId !== state.selectedBody
-              ? null
-              : bodyFeaturePickMode === 'face-single' && !candidateFace?.cylinder
-                ? null
-                : candidate;
-          if (!faceHit) return;
+        if (pickAccepts(activePick, 'surface-point')) {
+          const pointHit = pickSolidFace(e);
+          if (!pointHit) return;
+          state.setSelectedBody(pointHit.bodyId);
+          state.setSelectedFace(pointHit.faceId);
+          state.setSelectedFacePoint(pointHit.point);
           state.setSelectedEdges([]);
-          if (bodyFeaturePickMode === 'face-multi' || bodyFeaturePickMode === 'face-single') {
-            if (state.selectedBody === null) state.setSelectedBody(faceHit.bodyId);
-            state.selectSolidFeature(
-              'face',
-              faceHit.bodyId,
-              faceHit.faceId,
-              faceHit.point,
-              bodyFeaturePickMode === 'face-multi',
-            );
-          } else {
-            state.setSelectedFace(null);
-            state.selectSolidFeature(
-              'body',
-              faceHit.bodyId,
-              faceHit.bodyId,
-              null,
-              bodyFeaturePickMode === 'body-multi',
-            );
-          }
           return;
         }
         const edgePickMode = activeSolidEdgePickMode(state);
         if (edgePickMode) {
           const edgeHit = pickSolidEdge(e, edgePickMode);
           if (edgeHit) {
-            if (state.constructionPlanePickTarget === 'axis_edge') {
+            if (
+              activePick?.owner === 'construction-plane'
+              && activePick.target === 'axis_edge'
+            ) {
               state.selectSolidFeature(
                 'edge',
                 edgeHit.bodyId,
@@ -9966,6 +10709,11 @@ export function Viewport() {
               );
               state.setConstructionPlanePickedEdge(edgeHit);
             } else if (edgePickMode === 'refinable') {
+              const routedTarget = modelingPickTargetForGeometry(
+                state.modelingPickTarget,
+                'refinable-edge',
+              );
+              if (routedTarget) state.setModelingPickTarget(routedTarget);
               const current =
                 state.selectedBody === edgeHit.bodyId ? state.selectedEdges : [];
               state.setSelectedBody(edgeHit.bodyId);
@@ -9977,6 +10725,11 @@ export function Viewport() {
                   : [...current, edgeHit.edgeId],
               );
             } else {
+              const routedTarget = modelingPickTargetForGeometry(
+                state.modelingPickTarget,
+                'straight-edge',
+              );
+              if (routedTarget) state.setModelingPickTarget(routedTarget);
               state.selectSolidFeature(
                 'edge',
                 edgeHit.bodyId,
@@ -9985,27 +10738,113 @@ export function Viewport() {
                 false,
               );
             }
+            return;
           }
-          return;
         }
         const axisLine = pickFinishedSketchLine(e);
-        if (axisLine) {
-          state.setRevolveAxisSelection(axisLine);
+        const profileHit = pickFinishedProfile(e);
+        const profileAlreadySelected = profileHit !== null && (
+          state.profilePicker?.selected.some((candidate) =>
+            sameProfile(candidate, profileHit)
+          ) ?? false
+        );
+        // The screen-space picker is the single authority for both hover and
+        // click. Keeping click and hover on the same envelope prevents the
+        // selected line from working when its preceding hover did not.
+        const axisWins = linePickWinsOverProfile(
+          axisLine?.distancePx ?? null,
+          profileHit !== null,
+          profileAlreadySelected,
+          activePick?.target === 'revolve_axis',
+        );
+        if (axisWins && axisLine) {
+          state.setRevolveAxisSelection(axisLine.value);
+          // Axis-first and profile-first are equally valid. Once the single
+          // axis is satisfied, advance to the repeatable profile role.
+          state.setModelingPickTarget('revolve_profile');
           return;
         }
         const curve = pickFinishedSketchCurve(e);
         if (curve) {
-          state.toggleCurvePick(curve);
+          const routedTarget = modelingPickTargetForGeometry(
+            state.modelingPickTarget,
+            'sketch-curve',
+          );
+          if (routedTarget) state.setModelingPickTarget(routedTarget);
+          state.toggleCurvePick(curve.value);
           return;
         }
-        const profileHit = pickFinishedProfile(e);
         if (profileHit) {
+          const routedTarget = modelingPickTargetForGeometry(
+            state.modelingPickTarget,
+            'profile',
+          );
+          if (routedTarget) state.setModelingPickTarget(routedTarget);
           if (state.profilePicker?.owner === 'extrude') {
             state.clearSolidSelection();
           }
           state.toggleProfilePick(profileHit);
+          if (state.profilePicker?.owner === 'revolve') {
+            const next = store.getState();
+            const hasProfiles = (next.profilePicker?.selected.length ?? 0) > 0;
+            // A first profile asks for the missing axis. Additional profiles
+            // remain directly clickable even while that axis role is active.
+            next.setModelingPickTarget(
+              hasProfiles && next.revolveAxisSelection === null
+                ? 'revolve_axis'
+                : 'revolve_profile',
+            );
+          }
           return;
         }
+        const bodyFeaturePickMode = modelingBodyPickMode(state.modelingPickTarget);
+        if (bodyFeaturePickMode) {
+          const faceHit = pickEligibleBodyFeatureHit(e, state, bodyFeaturePickMode);
+          if (!faceHit) return;
+          const geometry = bodyFeaturePickMode === 'face-cylinder-single'
+            ? 'cylindrical-face'
+            : bodyFeaturePickMode === 'face-planar-single'
+              ? 'planar-face'
+              : bodyFeaturePickMode === 'face-multi'
+                ? 'face'
+                : pickAccepts(activePick, 'component')
+                  ? 'component'
+                  : 'body';
+          const routedTarget = modelingPickTargetForGeometry(
+            state.modelingPickTarget,
+            geometry,
+          );
+          if (routedTarget) state.setModelingPickTarget(routedTarget);
+          state.setSelectedEdges([]);
+          if (
+            bodyFeaturePickMode === 'face-multi'
+            || bodyFeaturePickMode === 'face-cylinder-single'
+            || bodyFeaturePickMode === 'face-planar-single'
+          ) {
+            if (state.selectedBody === null) state.setSelectedBody(faceHit.bodyId);
+            state.selectSolidFeature(
+              'face',
+              faceHit.bodyId,
+              faceHit.faceId,
+              faceHit.point,
+              bodyFeaturePickMode === 'face-multi',
+            );
+          } else {
+            state.setSelectedFace(null);
+            if (geometry === 'component') {
+              state.setSelectedOccurrenceId(faceHit.occurrenceId);
+            }
+            state.selectSolidFeature(
+              'body',
+              faceHit.bodyId,
+              faceHit.bodyId,
+              null,
+              bodyFeaturePickMode === 'body-multi',
+            );
+          }
+          return;
+        }
+        if (edgePickMode) return;
         if (state.profilePicker?.owner === 'extrude') {
           const faceHit = pickSolidFace(e);
           if (faceHit?.planar) {
@@ -10411,7 +11250,10 @@ export function Viewport() {
             releasePick.entityId !== null
               ? null
               : (releasePick.constraintId ?? downInfo.constraintCandidate);
-          if (dimCand !== null) {
+          if (state.pendingConstraintTool !== null) {
+            lastDimensionClick = null;
+            if (cand !== null) selectForPendingConstraint(cand);
+          } else if (dimCand !== null) {
             const now = performance.now();
             const repeated = lastDimensionClick !== null
               && lastDimensionClick.dimId === dimCand
@@ -10486,20 +11328,15 @@ export function Viewport() {
       const state = store.getState();
       if (state.mode !== 'pickPlane' || state.navTool !== 'select') return;
       const pointer = event as unknown as PointerEvent;
-      const faceHit = pickSolidFace(pointer);
-      if (faceHit?.planar) {
-        pickPlanarFace(faceHit.faceId, faceHit.point);
-        return;
+      const referenceHit = pickConstructionReference(pointer);
+      if (!referenceHit) return;
+      if (referenceHit.reference.type === 'planar_face' && referenceHit.face) {
+        pickPlanarFace(referenceHit.face.faceId, referenceHit.face.point);
+      } else if (referenceHit.reference.type === 'datum_plane') {
+        void pickDatumPlane(referenceHit.reference.datum_id);
+      } else if (referenceHit.reference.type === 'origin_plane') {
+        void pickPlane(referenceHit.reference.plane);
       }
-      raycaster.setFromCamera(ndcFromEvent(pointer), camera);
-      const datumHit = raycaster
-        .intersectObjects(datumGroup.children, true)
-        .find((hit) => hit.object.userData.datumPlaneId !== undefined);
-      if (datumHit) {
-        void pickDatumPlane(datumHit.object.userData.datumPlaneId as number);
-        return;
-      }
-      if (state.hoveredPlane) void pickPlane(state.hoveredPlane);
     };
 
     const onDoubleClick = (e: MouseEvent) => {
@@ -10580,6 +11417,11 @@ export function Viewport() {
           e.stopPropagation();
           return;
         }
+        if (state.modelingPickTarget !== null) {
+          state.setModelingPickTarget(null);
+          e.stopPropagation();
+          return;
+        }
         if (
           state.selectedBody !== null ||
           state.selectedBodies.length > 0 ||
@@ -10594,7 +11436,10 @@ export function Viewport() {
       }
       if (state.mode !== 'sketch') return;
       // Esc ladder: cancel run → exit tool → clear selection.
-      if (toolRun) {
+      if (state.pendingConstraintTool !== null) {
+        state.setPendingConstraintTool(null);
+        e.stopPropagation();
+      } else if (toolRun) {
         endToolRun();
         e.stopPropagation();
       } else if (state.activeTool !== null) {
@@ -10607,11 +11452,38 @@ export function Viewport() {
       }
     };
 
+    const onConstraintContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      const state = store.getState();
+      if (state.mode !== 'sketch' || state.activeTool !== null) {
+        setConstraintContextMenu(null);
+        return;
+      }
+      const pointer = event as unknown as PointerEvent;
+      const dimensionId = pickDimensionAtPointer(pointer);
+      const constraintId = dimensionId === null ? pickConstraintAtPointer(pointer) : null;
+      if (dimensionId === null && constraintId === null) {
+        setConstraintContextMenu(null);
+        return;
+      }
+      event.stopPropagation();
+      state.setSelectedConstraint(constraintId);
+      state.setSelectedDimension(dimensionId);
+      state.setSelectedEntity(null);
+      state.setSelectedEntities([]);
+      setConstraintContextMenu({
+        target: dimensionId !== null ? 'dimension' : 'constraint',
+        id: dimensionId ?? constraintId!,
+        point: { x: event.clientX, y: event.clientY },
+      });
+    };
+
     surface.domElement.addEventListener('pointermove', onPointerMove);
     surface.domElement.addEventListener('pointerleave', onPointerLeave);
     surface.domElement.addEventListener('pointerdown', onPointerDown);
     surface.domElement.addEventListener('click', onCanvasClick);
     surface.domElement.addEventListener('dblclick', onDoubleClick);
+    surface.domElement.addEventListener('contextmenu', onConstraintContextMenu);
     window.addEventListener('pointerup', onPointerUp);
     const cancelModalNavigation = () => {
       if (navDrag?.tool === 'zoomWindow') hideZoomRect();
@@ -11087,6 +11959,11 @@ export function Viewport() {
     };
     (
       window as unknown as {
+        __nativeViewportPresentation?: () => unknown;
+      }
+    ).__nativeViewportPresentation = () => collectNativeViewportPresentation();
+    (
+      window as unknown as {
         __profileVisualState?: (
           sketchName: string,
           profileIndex: number,
@@ -11224,6 +12101,7 @@ export function Viewport() {
           overlayWidths: number[];
           overlayColors: string[];
           overlayKinds: string[];
+          overlayHoverOffsets: number[];
         } | null;
       }
     ).__solidEdgeVisualState = (edgeId) => {
@@ -11235,6 +12113,7 @@ export function Viewport() {
         overlayWidths: number[];
         overlayColors: string[];
         overlayKinds: string[];
+        overlayHoverOffsets: number[];
       } | null = null;
       solidGroup.traverse((object) => {
         if (
@@ -11252,6 +12131,7 @@ export function Viewport() {
             overlayWidths: [],
             overlayColors: [],
             overlayKinds: [],
+            overlayHoverOffsets: [],
           };
         }
       });
@@ -11265,6 +12145,7 @@ export function Viewport() {
           result.overlayWidths.push(material.linewidth);
           result.overlayColors.push(material.color.getHexString());
           result.overlayKinds.push(object.userData.edgeHighlightKind as string);
+          result.overlayHoverOffsets.push(material.hoverCompanionOffsetPx);
         }
       });
       return result;
@@ -11276,6 +12157,9 @@ export function Viewport() {
           lineWidths: number[];
           lineOpacities: number[];
           lineEmphasis: boolean[];
+          lineColors: string[];
+          lineRenderOrders: number[];
+          lineHoverOffsets: number[];
           pointDepthTests: boolean[];
           pointSizes: number[];
           pointOpacities: number[];
@@ -11291,6 +12175,9 @@ export function Viewport() {
       const lineWidths: number[] = [];
       const lineOpacities: number[] = [];
       const lineEmphasis: boolean[] = [];
+      const lineColors: string[] = [];
+      const lineRenderOrders: number[] = [];
+      const lineHoverOffsets: number[] = [];
       const pointDepthTests: boolean[] = [];
       const pointSizes: number[] = [];
       const pointOpacities: number[] = [];
@@ -11300,6 +12187,7 @@ export function Viewport() {
       const pointPositionCounts: number[] = [];
       let pointCount = 0;
       finishedGroup.traverse((object) => {
+        if (object.userData.pickFeedbackHalo === true) return;
         if (object instanceof CAD.Points) {
           const material = object.material as CAD.PointsMaterial;
           pointDepthTests.push(material.depthTest);
@@ -11322,6 +12210,9 @@ export function Viewport() {
           lineWidths.push(material.linewidth);
           lineOpacities.push(material.opacity);
           lineEmphasis.push(object.userData.finishedSketchEmphasis === true);
+          lineColors.push(material.color.getHexString());
+          lineRenderOrders.push(object.renderOrder);
+          lineHoverOffsets.push(material.hoverCompanionOffsetPx);
         }
       });
       return {
@@ -11329,6 +12220,9 @@ export function Viewport() {
         lineWidths,
         lineOpacities,
         lineEmphasis,
+        lineColors,
+        lineRenderOrders,
+        lineHoverOffsets,
         pointDepthTests,
         pointSizes,
         pointOpacities,
@@ -11351,7 +12245,11 @@ export function Viewport() {
     let prevMode = store.getState().mode;
     let lastReferencePickerVisible = referencePickerVisible(store.getState());
     let lastSketch: SketchDto | null = null;
-    let lastHoveredPlane: OriginPlane | null = null;
+    const initialReferenceFeedback = pickFeedbackForState(store.getState());
+    let lastReferenceHighlightKey = JSON.stringify({
+      hovered: initialReferenceFeedback.hoveredReferencePlane,
+      selected: initialReferenceFeedback.selectedReferencePlane,
+    });
     let lastLookAtNonce = store.getState().lookAtNonce;
     let lastSelection: {
       sel: number | null;
@@ -11384,6 +12282,7 @@ export function Viewport() {
     rebuildFinished(); // initial (finished sketches may already be loaded)
     let lastProfilePicker = store.getState().profilePicker;
     let lastProfileHidden = store.getState().hidden;
+    let lastProfileAxisSelection = store.getState().revolveAxisSelection;
     rebuildProfilePicker();
     let lastSolidScene = store.getState().solidScene;
     let lastSolidHidden = store.getState().hidden;
@@ -11445,6 +12344,8 @@ export function Viewport() {
       hover: store.getState().hoveredFace,
       edges: store.getState().selectedEdges.join(','),
       edgeHover: store.getState().hoveredEdge,
+      point: JSON.stringify(store.getState().selectedFacePoint),
+      pointHover: JSON.stringify(store.getState().modelingPointHover),
     };
     rebuildSolids();
     refreshSharedOrbitPivot();
@@ -11489,8 +12390,7 @@ export function Viewport() {
       if (referencesVisible !== lastReferencePickerVisible) {
         lastReferencePickerVisible = referencesVisible;
         setPickerVisible(referencesVisible);
-        highlightPickerPlane(null);
-        highlightDatumPlane(null, referencesVisible);
+        applyReferencePickHighlights(s);
       }
       // Finished-sketch rendering: refresh on list or eye-toggle change.
       if (
@@ -11519,9 +12419,14 @@ export function Viewport() {
         rebuildFinished();
         refreshSharedOrbitPivot();
       }
-      if (s.profilePicker !== lastProfilePicker || s.hidden !== lastProfileHidden) {
+      if (
+        s.profilePicker !== lastProfilePicker
+        || s.hidden !== lastProfileHidden
+        || s.revolveAxisSelection !== lastProfileAxisSelection
+      ) {
         lastProfilePicker = s.profilePicker;
         lastProfileHidden = s.hidden;
+        lastProfileAxisSelection = s.revolveAxisSelection;
         rebuildProfilePicker();
       }
       if (
@@ -11574,6 +12479,8 @@ export function Viewport() {
         s.hoveredFace !== lastSolidSelection.hover
         || s.selectedEdges.join(',') !== lastSolidSelection.edges
         || s.hoveredEdge !== lastSolidSelection.edgeHover
+        || JSON.stringify(s.selectedFacePoint) !== lastSolidSelection.point
+        || JSON.stringify(s.modelingPointHover) !== lastSolidSelection.pointHover
       ) {
         lastSolidSelection = {
           body: s.selectedBody,
@@ -11583,6 +12490,8 @@ export function Viewport() {
           hover: s.hoveredFace,
           edges: s.selectedEdges.join(','),
           edgeHover: s.hoveredEdge,
+          point: JSON.stringify(s.selectedFacePoint),
+          pointHover: JSON.stringify(s.modelingPointHover),
         };
         updateSolidStyles();
       }
@@ -11644,9 +12553,14 @@ export function Viewport() {
         }
       }
 
-      if (s.hoveredPlane !== lastHoveredPlane) {
-        lastHoveredPlane = s.hoveredPlane;
-        highlightPickerPlane(s.hoveredPlane);
+      const referenceFeedback = pickFeedbackForState(s);
+      const referenceHighlightKey = JSON.stringify({
+        hovered: referenceFeedback.hoveredReferencePlane,
+        selected: referenceFeedback.selectedReferencePlane,
+      });
+      if (referenceHighlightKey !== lastReferenceHighlightKey) {
+        lastReferenceHighlightKey = referenceHighlightKey;
+        applyReferencePickHighlights(s);
       }
 
       if (s.lookAtNonce !== lastLookAtNonce) {
@@ -11718,7 +12632,13 @@ export function Viewport() {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       surface.setSize(w, h);
-      for (const material of lineMaterials) material.resolution.set(w, h);
+      const interactionScale = viewportInteractionScale(w, h);
+      for (const material of lineMaterials) {
+        material.resolution.set(w, h);
+        if (material.viewportRelativeLinewidthBase !== null) {
+          material.linewidth = material.viewportRelativeLinewidthBase * interactionScale;
+        }
+      }
       wakeControllerFrame();
     });
     resizeObserver.observe(container);
@@ -11851,6 +12771,7 @@ export function Viewport() {
       surface.domElement.removeEventListener('pointerdown', onPointerDown);
       surface.domElement.removeEventListener('click', onCanvasClick);
       surface.domElement.removeEventListener('dblclick', onDoubleClick);
+      surface.domElement.removeEventListener('contextmenu', onConstraintContextMenu);
       surface.domElement.removeEventListener('wheel', cancelCameraAnimation);
       surface.domElement.removeEventListener('wheel', onWheelNav, { capture: true });
       window.removeEventListener('pointerup', onNavPointerUp);
@@ -11887,6 +12808,7 @@ export function Viewport() {
         __finishedSketchVisualState?: unknown;
         __sketchGridStep?: unknown;
         __nativeViewportTransient?: unknown;
+        __nativeViewportPresentation?: unknown;
       };
       delete w.__cameraApi;
       delete w.__sketchToScreen;
@@ -11898,9 +12820,28 @@ export function Viewport() {
       delete w.__finishedSketchVisualState;
       delete w.__sketchGridStep;
       delete w.__nativeViewportTransient;
+      delete w.__nativeViewportPresentation;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const constraintMenuEntries: ContextMenuEntry[] = constraintContextMenu
+    ? [
+        {
+          type: 'item',
+          id: 'remove-constraint',
+          label: t('constraints.remove'),
+          icon: <Trash2 size={14} strokeWidth={1.7} />,
+          danger: true,
+          onSelect: () => {
+            const { id, target } = constraintContextMenu;
+            setConstraintContextMenu(null);
+            if (target === 'dimension') void deleteDimension(id);
+            else void deleteConstraint(id);
+          },
+        },
+      ]
+    : [];
 
   return (
     <div
@@ -11932,6 +12873,24 @@ export function Viewport() {
         className="pointer-events-none absolute z-10 gap-1"
         style={{ display: 'none' }}
       />
+      {/* Active command identity follows the cursor without becoming a pick target. */}
+      {cursorUiIcon && (
+        <div
+          ref={toolCursorRef}
+          data-testid="active-tool-cursor"
+          data-active-tool-icon={cursorUiIcon}
+          data-native-hud="tool-cursor"
+          className="pointer-events-none absolute left-0 top-0 z-20 hidden h-6 w-6 items-center justify-center rounded border border-edge/80 bg-header/75 text-mute shadow-md shadow-black/20 backdrop-blur-sm"
+          style={{ display: 'none' }}
+          aria-hidden="true"
+        >
+          <ToolIcon
+            id={cursorUiIcon}
+            size={16}
+            tone={pendingConstraintTool ? 'constraint' : undefined}
+          />
+        </div>
+      )}
       {/* Zoom Window drag rect. */}
       <div
         ref={zoomRectRef}
@@ -11960,6 +12919,14 @@ export function Viewport() {
         onSixDof={(motion) => apiRef.current?.navigateSixDof(motion)}
         getSixDofDriverView={() => apiRef.current?.getSixDofDriverView() ?? null}
       />
+      {constraintContextMenu && (
+        <ContextMenu
+          point={constraintContextMenu.point}
+          entries={constraintMenuEntries}
+          ariaLabel={t('constraints.contextMenu')}
+          onClose={() => setConstraintContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

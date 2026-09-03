@@ -485,9 +485,9 @@
     "yAxis": "Skizzen-Y-Achse",
     "sketchLine": "Skizzenlinie",
     "axisLine": "Achsenlinie",
-    "pickAxisLine": "Sichtbare Skizzenlinie im Canvas klicken oder unten auswählen.",
+    "pickAxisLine": "Beliebige sichtbare koplanare Skizzenlinie einschließlich einer geraden Profilkante klicken oder unten auswählen.",
     "line": "Linie",
-    "noLines": "Keine geraden Linien in dieser Skizze",
+    "noLines": "Keine koplanaren geraden Skizzenlinien",
     "customAxis": "Benutzerdefinierte Skizzenachse",
     "originX": "Ursprung X",
     "originY": "Ursprung Y",
@@ -655,6 +655,7 @@
   },
   "selectionReadout": {
     "title": "AUSWAHL",
+    "constraintTitle": "RANDBEDINGUNG",
     "selectedOnly": "Ausgewählt",
     "approximate": "≈ aus Darstellungsgeometrie",
     "kinds": {
@@ -717,9 +718,13 @@
   },
   "constraints": {
     "ok": "OK",
+    "contextMenu": "Randbedingungsaktionen",
+    "remove": "Randbedingung entfernen",
     "conflictTitle": "Randbedingung kann nicht hinzugefügt werden",
     "invalidTitle": "Ungültige Auswahl",
     "unsupported": "Diese Randbedingung wird noch nicht unterstützt.",
+    "selectFeatures": "Wählen Sie 2 Elemente für {constraint} ({count}/2, Esc zum Abbrechen).",
+    "selectHorizontalVertical": "Wählen Sie eine Linie oder 2 Punkte für {constraint} ({count} ausgewählt, Esc zum Abbrechen).",
     "needs": {
       "hv": "Horizontal/Vertikal benötigt eine oder mehrere Linien oder genau zwei Punkte.",
       "coincident": "Koinzidenz benötigt zwei Entitäten (Punkt auf Punkt/Linie/Kreis).",

@@ -485,9 +485,9 @@
     "yAxis": "Eje Y del croquis",
     "sketchLine": "Línea del croquis",
     "axisLine": "Línea de eje",
-    "pickAxisLine": "Haga clic en una línea de croquis visible en la ventana gráfica o elija una a continuación.",
+    "pickAxisLine": "Haga clic en cualquier línea de croquis coplanaria visible, incluido un borde recto del perfil, o elija una a continuación.",
     "line": "Línea",
-    "noLines": "No hay líneas rectas en este croquis",
+    "noLines": "No hay líneas de croquis rectas coplanarias",
     "customAxis": "Eje de croquis personalizado",
     "originX": "Origen X",
     "originY": "Origen Y",
@@ -655,6 +655,7 @@
   },
   "selectionReadout": {
     "title": "SELECCIÓN",
+    "constraintTitle": "RESTRICCIÓN",
     "selectedOnly": "Seleccionado",
     "approximate": "≈ desde la geometría de visualización",
     "kinds": {
@@ -717,9 +718,13 @@
   },
   "constraints": {
     "ok": "Aceptar",
+    "contextMenu": "Acciones de restricción",
+    "remove": "Eliminar restricción",
     "conflictTitle": "No se puede añadir la restricción",
     "invalidTitle": "Selección no válida",
     "unsupported": "Esta restricción aún no se admite.",
+    "selectFeatures": "Seleccione 2 elementos para {constraint} ({count}/2, Esc para cancelar).",
+    "selectHorizontalVertical": "Seleccione una línea o 2 puntos para {constraint} ({count} seleccionados, Esc para cancelar).",
     "needs": {
       "hv": "Horizontal/Vertical requiere una o más líneas o exactamente dos puntos.",
       "coincident": "Coincidente requiere dos entidades (punto sobre punto/línea/círculo).",

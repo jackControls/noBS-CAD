@@ -21,6 +21,57 @@ async function freshPage() {
 }
 
 const state = (page) => page.evaluate(() => window.__appStore.getState());
+
+async function selectProfile(page, owner, sketchName) {
+  return page.evaluate(({ ownerName, targetSketch }) => {
+    const store = window.__appStore.getState();
+    const picker = store.profilePicker;
+    if (!picker || picker.owner !== ownerName) {
+      throw new Error(`expected ${ownerName} profile picker`);
+    }
+    const entry = picker.catalog.find((candidate) => candidate.sketch_name === targetSketch);
+    const profile = entry?.profiles.find((candidate) => candidate.nesting_depth % 2 === 0);
+    if (!profile) throw new Error(`no closed profile in ${targetSketch}`);
+    store.replaceProfilePicks(
+      ownerName,
+      [{ sketch_name: targetSketch, profile_index: profile.index }],
+      targetSketch,
+    );
+    return profile.index;
+  }, { ownerName: owner, targetSketch: sketchName });
+}
+
+async function selectProfiles(page, owner, sketchNames) {
+  await page.evaluate(({ ownerName, targets }) => {
+    const store = window.__appStore.getState();
+    const picker = store.profilePicker;
+    if (!picker || picker.owner !== ownerName) {
+      throw new Error(`expected ${ownerName} profile picker`);
+    }
+    const selected = targets.map((targetSketch) => {
+      const entry = picker.catalog.find((candidate) => candidate.sketch_name === targetSketch);
+      const profile = entry?.profiles.find((candidate) => candidate.nesting_depth % 2 === 0);
+      if (!profile) throw new Error(`no closed profile in ${targetSketch}`);
+      return { sketch_name: targetSketch, profile_index: profile.index };
+    });
+    store.replaceProfilePicks(ownerName, selected, targets.at(-1) ?? '');
+  }, { ownerName: owner, targets: sketchNames });
+}
+
+async function selectCurves(page, owner, sketchName, entityIds) {
+  await page.evaluate(({ ownerName, targetSketch, ids }) => {
+    const store = window.__appStore.getState();
+    if (store.curvePicker?.owner !== ownerName) {
+      throw new Error(`expected ${ownerName} curve picker`);
+    }
+    store.replaceCurvePicks(
+      ownerName,
+      ids.map((entityId) => ({ sketchName: targetSketch, entityId })),
+      targetSketch,
+    );
+  }, { ownerName: owner, targetSketch: sketchName, ids: entityIds });
+}
+
 async function clickSketch(page, x, y) {
   const point = await page.evaluate(([sx, sy]) => window.__sketchToScreen(sx, sy), [x, y]);
   await page.mouse.click(point.x, point.y);
@@ -79,6 +130,21 @@ async function finishSketch(page) {
 async function extrude(page, distance = 20) {
   await page.locator('button[title="Extrude"]').first().click();
   await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const store = window.__appStore.getState();
+    const picker = store.profilePicker;
+    if (!picker || picker.owner !== 'extrude') throw new Error('expected Extrude profile picker');
+    const entry = [...picker.catalog]
+      .reverse()
+      .find((candidate) => candidate.profiles.some((profile) => profile.nesting_depth % 2 === 0));
+    const profile = entry?.profiles.find((candidate) => candidate.nesting_depth % 2 === 0);
+    if (!entry || !profile) throw new Error('no profile available for Extrude');
+    store.replaceProfilePicks(
+      'extrude',
+      [{ sketch_name: entry.sketch_name, profile_index: profile.index }],
+      entry.sketch_name,
+    );
+  });
   await page.getByTestId('extrude-distance').fill(String(distance));
   await page.getByTestId('extrude-submit').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy && window.__appStore.getState().solidScene.bodies.length > 0, undefined, { timeout: 60_000 });
@@ -127,45 +193,108 @@ console.log('1. sketch-line axis Revolve Cut');
 
   await beginSketch(page, 'XY');
   await rectangle(page, 10, -10, 20, 10);
+  await finishSketch(page);
+  const profileSketch = (await state(page)).finishedSketches.at(-1);
+  const boundaryAxis = profileSketch.entities.find(
+    (entity) =>
+      entity.kind === 'line'
+      && Math.abs(entity.start.x - 10) < 1e-6
+      && Math.abs(entity.end.x - 10) < 1e-6,
+  );
+
+  // A line-only sketch on the same XY plane remains independently eligible;
+  // selecting it must not replace the closed profile sketch.
+  await beginSketch(page, 'XY');
   await line(page, 0, -20, 0, 20);
   await finishSketch(page);
-  const latest = (await state(page)).finishedSketches.at(-1);
-  const axis = latest.entities.find((entity) => entity.kind === 'line' && Math.abs(entity.start.x) < 1e-6 && Math.abs(entity.end.x) < 1e-6);
+  const axisSketch = (await state(page)).finishedSketches.at(-1);
+  const independentAxis = axisSketch.entities.find(
+    (entity) =>
+      entity.kind === 'line'
+      && Math.abs(entity.start.x) < 1e-6
+      && Math.abs(entity.end.x) < 1e-6,
+  );
   await page.locator('button[title="Revolve"]').click();
   await page.getByTestId('revolve-dialog').waitFor({ state: 'visible' });
-  await page.getByTestId('revolve-axis').selectOption('line');
-  const axisOptions = await page.getByTestId('revolve-axis-line').locator('option').evaluateAll((options) => options.map((option) => option.value));
-  check('Revolve exposes the selected sketch line as an axis', Boolean(axis) && axisOptions.includes(String(axis.id)));
-  const axisMidpoint = await page.evaluate(() => window.__worldToScreen(0, 0, 0));
-  await page.mouse.click(axisMidpoint.x, axisMidpoint.y);
-  await page.waitForFunction(
-    (entityId) => window.__appStore.getState().revolveAxisSelection?.entityId === entityId,
-    axis.id,
+  check(
+    'Revolve uses viewport fields instead of an opaque geometry dropdown',
+    await page.getByTestId('revolve-axis-line-mode').isVisible()
+      && await page.getByTestId('revolve-dialog').locator('[data-testid="revolve-axis-line"]').count() === 0,
   );
+  await selectProfile(page, 'revolve', profileSketch.name);
   await page.waitForFunction(
-    (entityId) =>
-      document.querySelector('[data-testid="revolve-axis-line"]')?.value === String(entityId),
-    axis.id,
+    ([sketchName]) => {
+      const picker = window.__appStore.getState().profilePicker;
+      return picker?.owner === 'revolve'
+        && picker.selected.some((profile) => profile.sketch_name === sketchName);
+    },
+    [profileSketch.name],
   );
-  check('Viewport click selects the stable Revolve axis line', await page.getByTestId('revolve-axis-line').inputValue() === String(axis.id));
+  await page.getByTestId('revolve-axis-selection').click();
+  check(
+    'Revolve starts its axis step in viewport-pick mode',
+    (await state(page)).modelingPickTarget === 'revolve_axis',
+  );
+
+  const independentMidpoint = await page.evaluate(() => window.__worldToScreen(0, 0, 0));
+  await page.mouse.click(independentMidpoint.x, independentMidpoint.y);
+  await page.waitForFunction(
+    ([sketchName, entityId]) => {
+      const selection = window.__appStore.getState().revolveAxisSelection;
+      return selection?.sketchName === sketchName && selection.entityId === entityId;
+    },
+    [axisSketch.name, independentAxis.id],
+  );
+  check(
+    'a line-only coplanar sketch can be picked without replacing the profile',
+    (await state(page)).profilePicker.sketchName === profileSketch.name,
+  );
+
+  const boundaryMidpoint = await page.evaluate(() => window.__worldToScreen(10, 0, 0));
+  await page.mouse.click(boundaryMidpoint.x, boundaryMidpoint.y);
+  await page.waitForFunction(
+    ([sketchName, entityId]) => {
+      const selection = window.__appStore.getState().revolveAxisSelection;
+      return selection?.sketchName === sketchName && selection.entityId === entityId;
+    },
+    [profileSketch.name, boundaryAxis.id],
+  );
+  const selectedAxis = (await state(page)).revolveAxisSelection;
+  check(
+    'a straight profile boundary can be picked as the stable axis',
+    selectedAxis?.sketchName === profileSketch.name
+      && selectedAxis.entityId === boundaryAxis.id,
+  );
   const finishedVisual = await page.evaluate(() => window.__finishedSketchVisualState());
   const emphasizedWidths = finishedVisual.lineWidths.filter(
     (_, index) => finishedVisual.lineEmphasis[index],
   );
   check(
-    'selected finished-sketch curves are only 50% wider than default',
+    'selected finished-sketch curves use the high-contrast foreground stroke',
     emphasizedWidths.length > 0 &&
-      emphasizedWidths.every((width) => Math.abs(width - 1.725) < 1e-6),
+      emphasizedWidths.every((width) => width >= 3)
+      && finishedVisual.lineRenderOrders.some((order, index) =>
+        finishedVisual.lineEmphasis[index] && order >= 22),
     JSON.stringify(emphasizedWidths),
   );
   const nativeCurvePresentation = await page.evaluate(
-    () => window.__nativeViewportTransient(),
+    () => window.__nativeViewportPresentation(),
   );
   check(
     'Bevy receives selected finished-sketch curves for Revolve/Sweep/Loft/Rib',
-    nativeCurvePresentation.lines.some((layer) => layer.segments.length >= 6),
+    nativeCurvePresentation.selectedFinishedSketchEntities.some(
+      (reference) =>
+        reference.sketchName === profileSketch.name
+        && reference.entityId === boundaryAxis.id,
+    ),
   );
   await page.getByTestId('solid-operation').selectOption('cut');
+  await page.evaluate((bodyId) => {
+    window.__appStore.getState().replaceSelectedBodies([bodyId]);
+  }, base.id);
+  await page.waitForFunction(
+    () => !document.querySelector('[data-testid="revolve-ok"]')?.disabled,
+  );
   await page.getByTestId('revolve-ok').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy, undefined, { timeout: 60_000 });
   const app = await state(page);
@@ -180,6 +309,7 @@ console.log('2. profile Sweep along a curved analytic path');
   await beginSketch(page, 'XY');
   await rectangle(page, -10, -10, 10, 10);
   await finishSketch(page);
+  const profileSketch = (await state(page)).finishedSketches.at(-1);
   await beginSketch(page, 'YZ');
   await arc3pt(page, 0, 0, 10, 0, 20, 20);
   await finishSketch(page);
@@ -187,8 +317,19 @@ console.log('2. profile Sweep along a curved analytic path');
   const pathArc = pathSketch.entities.find((entity) => entity.kind === 'arc');
   await page.locator('button[title="Sweep"]').click();
   await page.getByTestId('sweep-dialog').waitFor({ state: 'visible' });
-  await page.waitForTimeout(700);
-  check('Sweep lists the analytic arc as a path curve', Boolean(pathArc) && await page.getByTestId(`sweep-path-${pathArc.id}`).isChecked());
+  check(
+    'Sweep opens with viewport profile selection active',
+    (await state(page)).modelingPickTarget === 'sweep_profile',
+  );
+  await selectProfile(page, 'sweep', profileSketch.name);
+  await page.getByTestId('sweep-path-selection').click();
+  await selectCurves(page, 'sweep_path', pathSketch.name, [pathArc.id]);
+  check(
+    'Sweep accepts the analytic arc through its viewport-backed path field',
+    (await state(page)).curvePicker.selected.some(
+      (curve) => curve.sketchName === pathSketch.name && curve.entityId === pathArc.id,
+    ),
+  );
   await page.getByTestId('sweep-orientation').selectOption('frenet');
   await page.getByTestId('sweep-transition').selectOption('round_corner');
   await page.getByTestId('sweep-force-c1').check();
@@ -206,6 +347,7 @@ console.log('3. Sweep with a separate guide rail');
   await beginSketch(page, 'XY');
   await rectangle(page, -10, -10, 10, 10);
   await finishSketch(page);
+  const profileSketch = (await state(page)).finishedSketches.at(-1);
   await beginSketch(page, 'YZ');
   await line(page, 0, 0, 0, 30);
   await line(page, 10, 0, 10, 30);
@@ -214,10 +356,34 @@ console.log('3. Sweep with a separate guide rail');
   const guideLines = guideSketch.entities.filter((entity) => entity.kind === 'line');
   await page.locator('button[title="Sweep"]').click();
   await page.getByTestId('sweep-dialog').waitFor({ state: 'visible' });
+  await selectProfile(page, 'sweep', profileSketch.name);
+  await page.getByTestId('sweep-path-selection').click();
+  await selectCurves(page, 'sweep_path', guideSketch.name, [guideLines[0].id]);
   await page.getByTestId('sweep-guide-enabled').check();
-  await page.getByTestId('sweep-guide-sketch').selectOption(guideSketch.name);
-  await page.getByTestId(`sweep-guide-${guideLines[0].id}`).uncheck();
-  await page.getByTestId(`sweep-guide-${guideLines[1].id}`).check();
+  const retainedPathFeedback = await page.evaluate(
+    () => window.__nativeViewportPresentation().selectedFinishedSketchEntities,
+  );
+  check(
+    'selected path stays highlighted while the guide field owns the picker',
+    retainedPathFeedback.some(
+      (reference) =>
+        reference.sketchName === guideSketch.name
+        && reference.entityId === guideLines[0].id,
+    ),
+  );
+  await selectCurves(page, 'sweep_guide', guideSketch.name, [guideLines[1].id]);
+  const pathAndGuideFeedback = await page.evaluate(
+    () => window.__nativeViewportPresentation().selectedFinishedSketchEntities,
+  );
+  check(
+    'shared feedback keeps both completed curve fields visible',
+    guideLines.every((line) =>
+      pathAndGuideFeedback.some(
+        (reference) =>
+          reference.sketchName === guideSketch.name
+          && reference.entityId === line.id,
+      )),
+  );
   await page.getByTestId('sweep-force-c1').check();
   await page.getByTestId('sweep-ok').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy && window.__appStore.getState().solidScene.bodies.length === 1, undefined, { timeout: 60_000 });
@@ -233,6 +399,7 @@ console.log('4. Loft between origin and planar-face profiles');
   await beginSketch(page, 'XY');
   await rectangle(page, -15, -15, 15, 15);
   await finishSketch(page);
+  const baseSketch = (await state(page)).finishedSketches.at(-1);
   await extrude(page, 20);
   let app = await state(page);
   const body = app.solidScene.bodies[0];
@@ -264,6 +431,7 @@ console.log('4. Loft between origin and planar-face profiles');
   await page.waitForTimeout(900);
   await rectangle(page, -7, -7, 7, 7);
   await finishSketch(page);
+  const topSketch = (await state(page)).finishedSketches.at(-1);
   await page.mouse.click(1200, 750);
   await page.waitForFunction(() => window.__appStore.getState().selectedFace === null);
   await beginSketch(page, 'XZ');
@@ -274,13 +442,22 @@ console.log('4. Loft between origin and planar-face profiles');
   const loftPathLines = loftPathSketch.entities.filter((entity) => entity.kind === 'line');
   await page.locator('button[title="Loft"]').click();
   await page.getByTestId('loft-dialog').waitFor({ state: 'visible' });
+  await selectProfiles(page, 'loft', [baseSketch.name, topSketch.name]);
   await page.getByTestId('loft-continuity').selectOption('g2');
   await page.getByTestId('loft-centerline-enabled').check();
-  await page.getByTestId('loft-centerline-sketch').selectOption(loftPathSketch.name);
+  await selectCurves(
+    page,
+    'loft_centerline',
+    loftPathSketch.name,
+    [loftPathLines[0].id],
+  );
   await page.getByTestId('loft-guide-enabled').check();
-  await page.getByTestId('loft-guide-sketch').selectOption(loftPathSketch.name);
-  await page.getByTestId(`loft-guide-${loftPathLines[0].id}`).uncheck();
-  await page.getByTestId(`loft-guide-${loftPathLines[1].id}`).check();
+  await selectCurves(
+    page,
+    'loft_guide',
+    loftPathSketch.name,
+    [loftPathLines[1].id],
+  );
   await page.getByTestId('loft-ok').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy && window.__appStore.getState().solidScene.bodies.length === 2, undefined, { timeout: 60_000 });
   app = await state(page);
@@ -299,7 +476,13 @@ console.log('5. Rib from a curved analytic centerline');
   const ribArc = ribSketch.entities.find((entity) => entity.kind === 'arc');
   await page.locator('button[title="Rib"]').click();
   await page.getByTestId('rib-dialog').waitFor({ state: 'visible' });
-  check('Rib lists the analytic arc as a centerline', Boolean(ribArc) && await page.getByTestId(`rib-centerline-${ribArc.id}`).isChecked());
+  await selectCurves(page, 'rib_centerline', ribSketch.name, [ribArc.id]);
+  check(
+    'Rib accepts the analytic arc through its viewport-backed centerline field',
+    (await state(page)).curvePicker.selected.some(
+      (curve) => curve.sketchName === ribSketch.name && curve.entityId === ribArc.id,
+    ),
+  );
   await page.getByTestId('rib-ok').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy && window.__appStore.getState().solidScene.bodies.length === 1, undefined, { timeout: 60_000 });
   const app = await state(page);
@@ -319,9 +502,16 @@ console.log('6. Rib To Next against a target body');
   await beginSketch(page, 'XY');
   await line(page, -10, 0, 10, 0);
   await finishSketch(page);
+  const ribSketch = (await state(page)).finishedSketches.at(-1);
+  const ribLine = ribSketch.entities.find((entity) => entity.kind === 'line');
   await page.locator('button[title="Rib"]').click();
   await page.getByTestId('rib-dialog').waitFor({ state: 'visible' });
+  await selectCurves(page, 'rib_centerline', ribSketch.name, [ribLine.id]);
   await page.getByTestId('solid-operation').selectOption('join');
+  await page.getByTestId('rib-targets-selection').click();
+  await page.evaluate((targetBodyId) => {
+    window.__appStore.getState().replaceSelectedBodies([targetBodyId]);
+  }, bodyId);
   await page.getByTestId('rib-extent').selectOption('to_next');
   await page.getByTestId('rib-ok').click();
   await page.waitForFunction(() => !window.__appStore.getState().solidBusy, undefined, { timeout: 60_000 });

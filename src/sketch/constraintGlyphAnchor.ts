@@ -4,7 +4,8 @@
  * Geometric constraint badges (H/V, coincident, tangent, …) are **not**
  * solver variables. After the sketch solves, the viewport:
  *
- * 1. Resolves a relation **anchor** (contact / shared point / midpoint / …).
+ * 1. Resolves one shared relation **anchor** (contact / shared point /
+ *    midpoint / …), or one anchor on each spatially separate participant.
  * 2. Offsets the badge with {@link offsetGlyphFromAnchor} by a screen-pixel
  *    nudge (`gripHalf + glyphHalf + gap`) so the chip does not cover grips.
  * 3. Hit-tests badges only in sketch **Select** (`activeTool === null`).
@@ -254,6 +255,294 @@ export function singlePointRelationAnchor(
     default:
       return null;
   }
+}
+
+export interface DistributedRelationGlyphTarget {
+  /** Feature receiving this copy of the relation mark. */
+  entityId: number;
+  /** Point on the visible feature from which the mark is offset. */
+  anchor: Vec2;
+  /** Direction away from the feature / relation group. */
+  preferredDir: Vec2 | null;
+}
+
+export interface RightAngleGlyphFrame {
+  /** Visible intersection of the two finite line segments. */
+  vertex: Vec2;
+  /** Unit directions from the vertex into the chosen visible quadrant. */
+  directionA: Vec2;
+  directionB: Vec2;
+  /** Maximum available length on either constrained segment. */
+  maxSize: number;
+}
+
+function entityVisualCenter(entity: EntityDto): Vec2 {
+  switch (entity.kind) {
+    case 'point':
+      return entity.position;
+    case 'line':
+      return mid(entity.start, entity.end);
+    case 'circle':
+    case 'arc':
+      return entity.center;
+    case 'spline': {
+      const points = entity.tessellation.length > 0
+        ? entity.tessellation
+        : entity.points;
+      return points[Math.floor(points.length / 2)] ?? { x: 0, y: 0 };
+    }
+  }
+}
+
+function positiveSweep(start: number, end: number): number {
+  let sweep = end - start;
+  while (sweep <= 0) sweep += Math.PI * 2;
+  while (sweep > Math.PI * 2) sweep -= Math.PI * 2;
+  return sweep;
+}
+
+function pointOnSegment(point: Vec2, start: Vec2, end: Vec2): boolean {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq < 1e-18) return nearPoint(point, start);
+  const t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq;
+  if (t < -1e-6 || t > 1 + 1e-6) return false;
+  const projection = { x: start.x + t * dx, y: start.y + t * dy };
+  return nearPoint(point, projection, Math.sqrt(lengthSq));
+}
+
+function nearPoint(a: Vec2, b: Vec2, scale = 1): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= 1e-6 * Math.max(1, scale);
+}
+
+/** Whether a solved relation point is actually on the visible, finite feature. */
+function entityContainsVisiblePoint(entity: EntityDto, point: Vec2): boolean {
+  switch (entity.kind) {
+    case 'point':
+      return nearPoint(entity.position, point);
+    case 'line':
+      return pointOnSegment(point, entity.start, entity.end);
+    case 'circle':
+      return Math.abs(
+        Math.hypot(point.x - entity.center.x, point.y - entity.center.y)
+          - Math.abs(entity.radius),
+      ) <= 1e-6 * Math.max(1, Math.abs(entity.radius));
+    case 'arc': {
+      const radius = Math.abs(entity.radius);
+      const radialError = Math.abs(
+        Math.hypot(point.x - entity.center.x, point.y - entity.center.y) - radius,
+      );
+      if (radialError > 1e-6 * Math.max(1, radius)) return false;
+      const angle = Math.atan2(point.y - entity.center.y, point.x - entity.center.x);
+      const sweep = positiveSweep(entity.start_angle, entity.end_angle);
+      const relative = positiveSweep(entity.start_angle, angle);
+      return relative <= sweep + 1e-6 || nearPoint(point, {
+        x: entity.center.x + Math.cos(entity.start_angle) * entity.radius,
+        y: entity.center.y + Math.sin(entity.start_angle) * entity.radius,
+      }, radius);
+    }
+    case 'spline': {
+      const points = entity.tessellation.length > 1
+        ? entity.tessellation
+        : entity.points;
+      return points.some((candidate, index) =>
+        index > 0 && pointOnSegment(point, points[index - 1], candidate));
+    }
+  }
+}
+
+function visibleLineDirection(
+  line: Extract<EntityDto, { kind: 'line' }>,
+  vertex: Vec2,
+): { direction: Vec2; available: number } | null {
+  const toStart = { x: line.start.x - vertex.x, y: line.start.y - vertex.y };
+  const toEnd = { x: line.end.x - vertex.x, y: line.end.y - vertex.y };
+  const startDistance = Math.hypot(toStart.x, toStart.y);
+  const endDistance = Math.hypot(toEnd.x, toEnd.y);
+  const vector = endDistance >= startDistance ? toEnd : toStart;
+  const available = Math.max(startDistance, endDistance);
+  if (available < 1e-9) return null;
+  return {
+    direction: { x: vector.x / available, y: vector.y / available },
+    available,
+  };
+}
+
+/**
+ * Geometry-aligned frame for the standard mathematical right-angle square.
+ * Disjoint finite segments return null and use repeated perpendicular icons
+ * on their individual features instead.
+ */
+export function rightAngleGlyphFrame(
+  constraint: ConstraintDto,
+  byId: Map<number, EntityDto>,
+): RightAngleGlyphFrame | null {
+  if (
+    constraint.type !== 'perpendicular'
+    || constraint.a == null
+    || constraint.b == null
+  ) {
+    return null;
+  }
+  const a = byId.get(constraint.a);
+  const b = byId.get(constraint.b);
+  if (a?.kind !== 'line' || b?.kind !== 'line') return null;
+  const vertex = perpendicularRelationPoint(a, b);
+  if (
+    !vertex
+    || !entityContainsVisiblePoint(a, vertex)
+    || !entityContainsVisiblePoint(b, vertex)
+  ) {
+    return null;
+  }
+  const alongA = visibleLineDirection(a, vertex);
+  const alongB = visibleLineDirection(b, vertex);
+  if (!alongA || !alongB) return null;
+  return {
+    vertex,
+    directionA: alongA.direction,
+    directionB: alongB.direction,
+    maxSize: Math.min(alongA.available, alongB.available),
+  };
+}
+
+function relationParticipantIds(constraint: ConstraintDto): number[] {
+  switch (constraint.type) {
+    case 'parallel':
+    case 'equal':
+    case 'collinear':
+    case 'perpendicular':
+    case 'tangent':
+      return constraint.a == null || constraint.b == null
+        ? []
+        : [constraint.a, constraint.b];
+    case 'symmetry':
+    case 'equal_distance':
+      // The axis/origin is a datum for the relation. The repeated marks belong
+      // to the two peer features whose relationship it describes.
+      return constraint.a == null || constraint.b == null
+        ? []
+        : [constraint.a, constraint.b];
+    default:
+      return [];
+  }
+}
+
+function featureGlyphTarget(
+  entity: EntityDto,
+  groupCenter: Vec2,
+  index: number,
+  count: number,
+): DistributedRelationGlyphTarget {
+  const center = entityVisualCenter(entity);
+  const fallbackAngle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(count, 1);
+  const fallback = { x: Math.cos(fallbackAngle), y: Math.sin(fallbackAngle) };
+  const away = normalize({
+    x: center.x - groupCenter.x,
+    y: center.y - groupCenter.y,
+  }) ?? fallback;
+
+  switch (entity.kind) {
+    case 'line': {
+      const dx = entity.end.x - entity.start.x;
+      const dy = entity.end.y - entity.start.y;
+      let normal = normalize({ x: -dy, y: dx }) ?? fallback;
+      if (normal.x * away.x + normal.y * away.y < 0) {
+        normal = { x: -normal.x, y: -normal.y };
+      } else if (Math.abs(normal.x * away.x + normal.y * away.y) < 1e-9 && index % 2 === 1) {
+        normal = { x: -normal.x, y: -normal.y };
+      }
+      return { entityId: entity.id, anchor: center, preferredDir: normal };
+    }
+    case 'circle': {
+      const radius = Math.abs(entity.radius);
+      return {
+        entityId: entity.id,
+        anchor: {
+          x: entity.center.x + away.x * radius,
+          y: entity.center.y + away.y * radius,
+        },
+        preferredDir: away,
+      };
+    }
+    case 'arc': {
+      const angle = entity.start_angle
+        + positiveSweep(entity.start_angle, entity.end_angle) * 0.5;
+      const radial = { x: Math.cos(angle), y: Math.sin(angle) };
+      return {
+        entityId: entity.id,
+        anchor: {
+          x: entity.center.x + radial.x * entity.radius,
+          y: entity.center.y + radial.y * entity.radius,
+        },
+        preferredDir: radial,
+      };
+    }
+    case 'spline': {
+      const points = entity.tessellation.length > 1
+        ? entity.tessellation
+        : entity.points;
+      const middle = Math.floor(points.length / 2);
+      const before = points[Math.max(0, middle - 1)] ?? center;
+      const after = points[Math.min(points.length - 1, middle + 1)] ?? center;
+      let normal = normalize({ x: -(after.y - before.y), y: after.x - before.x }) ?? away;
+      if (normal.x * away.x + normal.y * away.y < 0) {
+        normal = { x: -normal.x, y: -normal.y };
+      }
+      return { entityId: entity.id, anchor: center, preferredDir: normal };
+    }
+    case 'point':
+      return { entityId: entity.id, anchor: center, preferredDir: away };
+  }
+}
+
+/**
+ * Return one glyph target per spatially separate peer feature.
+ *
+ * Parallel, Equal, Collinear, Symmetry and Equal Distance always repeat their
+ * semantic mark on the peer features. Perpendicular and Tangent keep one mark
+ * at a visible shared intersection/contact, but repeat it when their finite
+ * features are disjoint even though their mathematical carriers still meet.
+ */
+export function distributedRelationGlyphTargets(
+  constraint: ConstraintDto,
+  byId: Map<number, EntityDto>,
+): DistributedRelationGlyphTarget[] {
+  const ids = [...new Set(relationParticipantIds(constraint))];
+  const entities = ids
+    .map((id) => byId.get(id))
+    .filter((entity): entity is EntityDto => entity != null);
+  if (entities.length < 2) return [];
+
+  if (constraint.type === 'perpendicular' || constraint.type === 'tangent') {
+    const shared = singlePointRelationAnchor(constraint, byId);
+    if (shared && entities.every((entity) => entityContainsVisiblePoint(entity, shared))) {
+      return [];
+    }
+  }
+
+  const centers = entities.map(entityVisualCenter);
+  const groupCenter = {
+    x: centers.reduce((sum, point) => sum + point.x, 0) / centers.length,
+    y: centers.reduce((sum, point) => sum + point.y, 0) / centers.length,
+  };
+  const targets = entities.map((entity, index) =>
+    featureGlyphTarget(entity, groupCenter, index, entities.length));
+  if (constraint.type === 'parallel') {
+    // Parallel marks belong just inside the gap between their carriers. This
+    // keeps the repeated pair visually associated without drifting away from
+    // the lines or turning the relation into one detached center label.
+    for (const target of targets) {
+      if (target.preferredDir) {
+        target.preferredDir = {
+          x: -target.preferredDir.x,
+          y: -target.preferredDir.y,
+        };
+      }
+    }
+  }
+  return targets;
 }
 
 /** Default preferred nudge: north-east in sketch UV. */

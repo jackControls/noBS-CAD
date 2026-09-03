@@ -233,15 +233,16 @@ try {
     2,
     'both selected Hole positions use the committed marker',
   );
+  const nativeHoleFeedback = await page.evaluate(
+    () => window.__nativeViewportPresentation(),
+  );
+  assert.equal(
+    nativeHoleFeedback.selectedSketchPoints.length,
+    2,
+    'Bevy receives both associative Hole positions through the shared picker presentation',
+  );
   const nativeHolePresentation = await page.evaluate(
     () => window.__nativeViewportTransient(),
-  );
-  assert.ok(
-    nativeHolePresentation.points.reduce(
-      (count, layer) => count + layer.positions.length / 3,
-      0,
-    ) >= 4,
-    'Bevy receives both outlined and filled associative Hole position markers',
   );
   assert.ok(
     nativeHolePresentation.triangles.some((layer) => layer.positions.length >= 18),

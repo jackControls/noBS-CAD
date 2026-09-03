@@ -66,6 +66,15 @@ import {
 } from '../navigationPreferences';
 import type { BrowserNode, DocumentDto, NodeId } from '../types/document';
 import { normalizeDrawingDocument } from '../drawing/sheet';
+import type {
+  ConstructionPlanePickTarget,
+  ModelingPickTarget,
+} from '../modeling/viewportPicker';
+
+export type {
+  ConstructionPlanePickTarget,
+  ModelingPickTarget,
+} from '../modeling/viewportPicker';
 
 function emptyProjectVisibility(): ProjectVisibilityDto {
   return {
@@ -421,6 +430,12 @@ export interface SolidCurvePicker {
   owner: SolidCurvePickOwner;
   catalog: ProfileCatalogItemDto[];
   selected: FinishedSketchCurveRef[];
+  /** Selections retained by every field in the currently open command. The
+   * active `selected` list remains the edit target; this map lets the shared
+   * viewport keep completed path/guide fields visibly selected. */
+  selectionsByOwner: Partial<
+    Record<SolidCurvePickOwner, FinishedSketchCurveRef[]>
+  >;
   hovered: FinishedSketchCurveRef | null;
   sketchName: string;
 }
@@ -530,15 +545,11 @@ export type SolidCommandPreview =
   | MoveCopyCommandPreview;
 
 export type ConstructionPlaneKind = 'offset' | 'midplane' | 'at_angle';
-export type ConstructionPlanePickTarget =
-  | 'first_reference'
-  | 'second_reference'
-  | 'axis_edge'
-  | null;
 export interface ConstructionPlanePickedEdge {
   bodyId: number;
   edgeId: number;
 }
+
 export type BodyFeatureKind =
   | 'move_copy'
   | 'external_thread'
@@ -571,7 +582,7 @@ const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
 const INITIAL_SIX_DOF_SPEED = readSixDofSpeed();
 
-interface AppState {
+export interface AppState {
   mode: AppMode;
   /** Active ribbon tab id ('solid', 'sketch', ...). */
   activeTab: string;
@@ -604,6 +615,8 @@ interface AppState {
   selectedEntity: number | null;
   /** Multi-select set for constraint application (shift/ctrl-click). */
   selectedEntities: number[];
+  /** Two-entity relation waiting for viewport picks. */
+  pendingConstraintTool: string | null;
   /** Selected dimension (constraint id) for edit/delete/drag (D9). */
   selectedDimension: number | null;
   /** Selected geometric constraint for highlight/delete. */
@@ -690,6 +703,8 @@ interface AppState {
   selectedFaces: number[];
   hoveredFace: number | null;
   selectedFacePoint: Point3Dto | null;
+  /** Exact cursor point shown while a modeling point picker is active. */
+  modelingPointHover: Point3Dto | null;
   /** Face awaiting the sketch-coordinate-origin choice. */
   sketchPlaneFace: number | null;
   selectedEdges: number[];
@@ -721,6 +736,10 @@ interface AppState {
   constructionPlanePickTarget: ConstructionPlanePickTarget;
   constructionPlanePickedReference: PlaneRef | null;
   constructionPlanePickedEdge: ConstructionPlanePickedEdge | null;
+  /** Exactly one modeling geometry field owns viewport input at a time. */
+  modelingPickTarget: ModelingPickTarget | null;
+  /** Generic plane result for Mirror and Split Body viewport picking. */
+  modelingPlaneSelection: PlaneRef | null;
   bodyFeatureDialog: { kind: BodyFeatureKind; featureId: number } | null;
   sketchPatternDialog: 'rectangular' | 'circular' | null;
   /** File chooser/export operation that must keep the active tab stable. */
@@ -827,6 +846,7 @@ interface AppState {
   setNavTool: (tool: NavTool) => void;
   setSelectedEntity: (id: number | null) => void;
   setSelectedEntities: (ids: number[]) => void;
+  setPendingConstraintTool: (tool: string | null) => void;
   setSelectedDimension: (id: number | null) => void;
   setSelectedConstraint: (id: number | null) => void;
   setDimEditor: (editor: { dimId: number; initial: string; x: number; y: number } | null) => void;
@@ -859,6 +879,7 @@ interface AppState {
   setSelectedFace: (id: number | null) => void;
   setHoveredFace: (id: number | null) => void;
   setSelectedFacePoint: (point: Point3Dto | null) => void;
+  setModelingPointHover: (point: Point3Dto | null) => void;
   openSketchPlaneOrigin: (faceId: number) => void;
   closeSketchPlaneOrigin: () => void;
   setSelectedEdges: (ids: number[]) => void;
@@ -927,6 +948,8 @@ interface AppState {
   setConstructionPlanePickTarget: (target: ConstructionPlanePickTarget) => void;
   setConstructionPlanePickedReference: (reference: PlaneRef) => void;
   setConstructionPlanePickedEdge: (edge: ConstructionPlanePickedEdge) => void;
+  setModelingPickTarget: (target: ModelingPickTarget | null) => void;
+  setModelingPlaneSelection: (reference: PlaneRef | null) => void;
   openBodyFeatureDialog: (kind: BodyFeatureKind, featureId?: number) => void;
   closeBodyFeatureDialog: () => void;
   openSketchPatternDialog: (kind: 'rectangular' | 'circular') => void;
@@ -951,6 +974,7 @@ function resetDocumentUiState(): Partial<AppState> {
     navTool: 'select',
     selectedEntity: null,
     selectedEntities: [],
+    pendingConstraintTool: null,
     selectedDimension: null,
     selectedConstraint: null,
     dimEditor: null,
@@ -999,6 +1023,7 @@ function resetDocumentUiState(): Partial<AppState> {
     selectedFaces: [],
     hoveredFace: null,
     selectedFacePoint: null,
+    modelingPointHover: null,
     sketchPlaneFace: null,
     selectedEdges: [],
     hoveredEdge: null,
@@ -1021,6 +1046,8 @@ function resetDocumentUiState(): Partial<AppState> {
     constructionPlanePickTarget: null,
     constructionPlanePickedReference: null,
     constructionPlanePickedEdge: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
     bodyFeatureDialog: null,
     sketchPatternDialog: null,
     solidBusy: false,
@@ -1067,6 +1094,7 @@ export const useAppStore = create<AppState>()((set) => ({
   navTool: 'select',
   selectedEntity: null,
   selectedEntities: [],
+  pendingConstraintTool: null,
   selectedDimension: null,
   selectedConstraint: null,
   dimEditor: null,
@@ -1112,6 +1140,7 @@ export const useAppStore = create<AppState>()((set) => ({
   selectedFaces: [],
   hoveredFace: null,
   selectedFacePoint: null,
+  modelingPointHover: null,
   sketchPlaneFace: null,
   selectedEdges: [],
   hoveredEdge: null,
@@ -1134,6 +1163,8 @@ export const useAppStore = create<AppState>()((set) => ({
   constructionPlanePickTarget: null,
   constructionPlanePickedReference: null,
   constructionPlanePickedEdge: null,
+  modelingPickTarget: null,
+  modelingPlaneSelection: null,
   bodyFeatureDialog: null,
   sketchPatternDialog: null,
   projectBusy: false,
@@ -1150,6 +1181,7 @@ export const useAppStore = create<AppState>()((set) => ({
       mode,
       // In sketch mode the tab strip collapses to a single SKETCH tab.
       activeTab: mode === 'sketch' ? 'sketch' : s.activeTab === 'sketch' ? 'solid' : s.activeTab,
+      pendingConstraintTool: mode === 'sketch' ? s.pendingConstraintTool : null,
       jointPreviewSolution: mode === 'solid' ? s.jointPreviewSolution : null,
       jointMotionPreview: mode === 'solid' ? s.jointMotionPreview : null,
       mechanismPreview: mode === 'solid' ? s.mechanismPreview : null,
@@ -1871,6 +1903,7 @@ export const useAppStore = create<AppState>()((set) => ({
       selectedFace: null,
       selectedFaces: [],
       selectedFacePoint: null,
+      modelingPointHover: null,
       selectedEdges: [],
       selectedOccurrenceId: null,
     }));
@@ -2091,7 +2124,12 @@ export const useAppStore = create<AppState>()((set) => ({
   // sketch interaction. Switching tools (including Escape -> Select) must
   // always dismiss it; otherwise the editor can outlive the Dimension tool.
   setActiveTool: (tool) =>
-    set({ activeTool: tool, dimEditor: null, sketchPatternDialog: null }),
+    set({
+      activeTool: tool,
+      pendingConstraintTool: null,
+      dimEditor: null,
+      sketchPatternDialog: null,
+    }),
 
   setNavTool: (tool) => set({ navTool: tool }),
 
@@ -2099,6 +2137,9 @@ export const useAppStore = create<AppState>()((set) => ({
     set((s) => (s.selectedEntity === id ? s : { selectedEntity: id })),
 
   setSelectedEntities: (ids) => set({ selectedEntities: ids }),
+
+  setPendingConstraintTool: (pendingConstraintTool) =>
+    set({ pendingConstraintTool }),
 
   setSelectedDimension: (id) =>
     set((s) => (s.selectedDimension === id ? s : { selectedDimension: id })),
@@ -2298,6 +2339,22 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setSelectedFacePoint: (point) => set({ selectedFacePoint: point }),
 
+  setModelingPointHover: (point) =>
+    set((state) => {
+      const current = state.modelingPointHover;
+      if (
+        current === point
+        || (
+          current !== null
+          && point !== null
+          && Math.abs(current.x - point.x) <= 1e-6
+          && Math.abs(current.y - point.y) <= 1e-6
+          && Math.abs(current.z - point.z) <= 1e-6
+        )
+      ) return state;
+      return { modelingPointHover: point };
+    }),
+
   openSketchPlaneOrigin: (faceId) => set({ sketchPlaneFace: faceId }),
 
   closeSketchPlaneOrigin: () => set({ sketchPlaneFace: null }),
@@ -2384,6 +2441,7 @@ export const useAppStore = create<AppState>()((set) => ({
       selectedFace: null,
       selectedFaces: [],
       selectedFacePoint: null,
+      modelingPointHover: null,
       selectedEdges: [],
       hoveredFace: null,
       hoveredEdge: null,
@@ -2471,14 +2529,25 @@ export const useAppStore = create<AppState>()((set) => ({
     ),
 
   configureCurvePicker: (owner, catalog, selected, sketchName) =>
-    set({
-      curvePicker: {
-        owner,
-        catalog,
-        selected,
-        hovered: null,
-        sketchName,
-      },
+    set((state) => {
+      const command = owner.split('_', 1)[0];
+      const previousCommand = state.curvePicker?.owner.split('_', 1)[0];
+      const selectionsByOwner = command === previousCommand
+        ? state.curvePicker?.selectionsByOwner ?? {}
+        : {};
+      return {
+        curvePicker: {
+          owner,
+          catalog,
+          selected,
+          selectionsByOwner: {
+            ...selectionsByOwner,
+            [owner]: selected,
+          },
+          hovered: null,
+          sketchName,
+        },
+      };
     }),
 
   toggleCurvePick: (curve) =>
@@ -2502,6 +2571,10 @@ export const useAppStore = create<AppState>()((set) => ({
         curvePicker: {
           ...picker,
           selected,
+          selectionsByOwner: {
+            ...picker.selectionsByOwner,
+            [picker.owner]: selected,
+          },
           sketchName: curve.sketchName,
         },
       };
@@ -2515,6 +2588,10 @@ export const useAppStore = create<AppState>()((set) => ({
             curvePicker: {
               ...state.curvePicker,
               selected,
+              selectionsByOwner: {
+                ...state.curvePicker.selectionsByOwner,
+                [owner]: selected,
+              },
               sketchName:
                 sketchName ??
                 selected[selected.length - 1]?.sketchName ??
@@ -2562,6 +2639,8 @@ export const useAppStore = create<AppState>()((set) => ({
             holeDialogFeature: null,
             profilePicker: null,
             curvePicker: null,
+            modelingPickTarget: null,
+            modelingPlaneSelection: null,
           },
     ),
 
@@ -2570,6 +2649,8 @@ export const useAppStore = create<AppState>()((set) => ({
       extrudeDialogFeature: null,
       profilePicker: state.profilePicker?.owner === 'extrude' ? null : state.profilePicker,
       solidCommandPreview: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     })),
 
   openRevolveDialog: (featureId = 0) =>
@@ -2586,6 +2667,8 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   closeRevolveDialog: () =>
@@ -2595,6 +2678,8 @@ export const useAppStore = create<AppState>()((set) => ({
       revolveAxisHover: null,
       profilePicker: null,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   setRevolveAxisSelection: (selection) => set({ revolveAxisSelection: selection }),
@@ -2625,6 +2710,8 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   closeSweepDialog: () =>
@@ -2632,6 +2719,8 @@ export const useAppStore = create<AppState>()((set) => ({
       sweepDialogFeature: null,
       profilePicker: state.profilePicker?.owner === 'sweep' ? null : state.profilePicker,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     })),
 
   openLoftDialog: (featureId = 0) =>
@@ -2648,6 +2737,8 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   closeLoftDialog: () =>
@@ -2655,6 +2746,8 @@ export const useAppStore = create<AppState>()((set) => ({
       loftDialogFeature: null,
       profilePicker: state.profilePicker?.owner === 'loft' ? null : state.profilePicker,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     })),
 
   openRibDialog: (featureId = 0) =>
@@ -2671,9 +2764,16 @@ export const useAppStore = create<AppState>()((set) => ({
       holeDialogFeature: null,
       profilePicker: null,
       curvePicker: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
-  closeRibDialog: () => set({ ribDialogFeature: null, curvePicker: null }),
+  closeRibDialog: () => set({
+    ribDialogFeature: null,
+    curvePicker: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
+  }),
 
   openFilletDialog: (featureId = 0) => set({
     filletDialogFeature: featureId,
@@ -2688,9 +2788,16 @@ export const useAppStore = create<AppState>()((set) => ({
     curvePicker: null,
     hoveredFace: null,
     hoveredEdge: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
   }),
 
-  closeFilletDialog: () => set({ filletDialogFeature: null, hoveredEdge: null }),
+  closeFilletDialog: () => set({
+    filletDialogFeature: null,
+    hoveredEdge: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
+  }),
 
   openChamferDialog: (featureId = 0) => set({
     chamferDialogFeature: featureId,
@@ -2705,9 +2812,16 @@ export const useAppStore = create<AppState>()((set) => ({
     curvePicker: null,
     hoveredFace: null,
     hoveredEdge: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
   }),
 
-  closeChamferDialog: () => set({ chamferDialogFeature: null, hoveredEdge: null }),
+  closeChamferDialog: () => set({
+    chamferDialogFeature: null,
+    hoveredEdge: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
+  }),
 
   openHoleDialog: (featureId = 0) => set({
     holeDialogFeature: featureId,
@@ -2723,6 +2837,8 @@ export const useAppStore = create<AppState>()((set) => ({
     profilePicker: null,
     curvePicker: null,
     solidCommandPreview: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
   }),
 
   closeHoleDialog: () => set({
@@ -2731,6 +2847,8 @@ export const useAppStore = create<AppState>()((set) => ({
     holePositionHover: null,
     hoveredFace: null,
     solidCommandPreview: null,
+    modelingPickTarget: null,
+    modelingPlaneSelection: null,
   }),
 
   setHolePositionSelections: (selections) => set({ holePositionSelections: selections }),
@@ -2808,6 +2926,8 @@ export const useAppStore = create<AppState>()((set) => ({
         profilePicker: null,
         curvePicker: null,
         solidCommandPreview: null,
+        modelingPickTarget: null,
+        modelingPlaneSelection: null,
       };
     }),
 
@@ -2818,6 +2938,8 @@ export const useAppStore = create<AppState>()((set) => ({
       constructionPlanePickedReference: null,
       constructionPlanePickedEdge: null,
       solidCommandPreview: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   setConstructionPlanePickTarget: (target) =>
@@ -2832,6 +2954,12 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setConstructionPlanePickedEdge: (edge) =>
     set({ constructionPlanePickedEdge: edge }),
+
+  setModelingPickTarget: (target) =>
+    set({ modelingPickTarget: target, modelingPointHover: null }),
+
+  setModelingPlaneSelection: (reference) =>
+    set({ modelingPlaneSelection: reference }),
 
   openBodyFeatureDialog: (kind, featureId = 0) =>
     set({
@@ -2851,10 +2979,17 @@ export const useAppStore = create<AppState>()((set) => ({
       profilePicker: null,
       curvePicker: null,
       solidCommandPreview: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
     }),
 
   closeBodyFeatureDialog: () =>
-    set({ bodyFeatureDialog: null, solidCommandPreview: null }),
+    set({
+      bodyFeatureDialog: null,
+      solidCommandPreview: null,
+      modelingPickTarget: null,
+      modelingPlaneSelection: null,
+    }),
 
   openSketchPatternDialog: (kind) =>
     set({

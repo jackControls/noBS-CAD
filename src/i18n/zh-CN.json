@@ -485,9 +485,9 @@
     "yAxis": "草图 Y 轴",
     "sketchLine": "草图线",
     "axisLine": "轴线",
-    "pickAxisLine": "点击画布中可见的草图线，或在下方选择。",
+    "pickAxisLine": "点击任意可见的共面草图直线（包括轮廓直边），或在下方选择。",
     "line": "线",
-    "noLines": "此草图中没有直线",
+    "noLines": "没有共面的草图直线",
     "customAxis": "自定义草图轴",
     "originX": "原点 X",
     "originY": "原点 Y",
@@ -655,6 +655,7 @@
   },
   "selectionReadout": {
     "title": "选择",
+    "constraintTitle": "约束",
     "selectedOnly": "已选择",
     "approximate": "≈ 来自显示几何体",
     "kinds": {
@@ -717,9 +718,13 @@
   },
   "constraints": {
     "ok": "确定",
+    "contextMenu": "约束操作",
+    "remove": "删除约束",
     "conflictTitle": "无法添加约束",
     "invalidTitle": "选择无效",
     "unsupported": "此约束暂不支持。",
+    "selectFeatures": "为{constraint}选择 2 个特征（已选 {count}/2，按 Esc 取消）。",
+    "selectHorizontalVertical": "为{constraint}选择一条直线或 2 个点（已选 {count} 个，按 Esc 取消）。",
     "needs": {
       "hv": "水平/垂直约束需要一条或多条直线，或恰好两个点。",
       "coincident": "重合约束需要两个实体（点与点/直线/圆重合）。",

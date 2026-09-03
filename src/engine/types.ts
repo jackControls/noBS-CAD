@@ -456,6 +456,8 @@ export interface RevolveRequest {
   profile_indices: number[];
   axis_origin: Vec2;
   axis_direction: Vec2;
+  /** Sketch that owns the stable axis line. Omitted legacy values use sketch_name. */
+  axis_line_sketch_name?: string | null;
   axis_line_entity_id?: number | null;
   angle_deg: number;
   flip: boolean;

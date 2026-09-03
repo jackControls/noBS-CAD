@@ -13,6 +13,9 @@ export interface NbcadManifest {
   format: string;
   container_version: typeof NBCAD_CONTAINER_VERSION;
   model: 'model.json';
+  /** Matches model.json; absent in archives written before schema 3. The ZIP
+   * container version is independent of the engine's model schema. */
+  model_schema_version?: number;
   application: string;
   application_version: string;
   saved_at: string;
@@ -30,6 +33,7 @@ export function createNbcadArchive(modelJson: string): Uint8Array {
     format: NBCAD_FORMAT,
     container_version: NBCAD_CONTAINER_VERSION,
     model: 'model.json',
+    model_schema_version: model.schema_version as number,
     application: 'noBS CAD',
     application_version: '0.1.0',
     saved_at: new Date().toISOString(),
@@ -90,7 +94,17 @@ export function readNbcadArchive(bytes: Uint8Array): {
   if (manifest.format !== NBCAD_FORMAT && manifest.format !== LEGACY_PROJECT_FORMAT) {
     throw new Error(`Unsupported project format '${manifest.format}'.`);
   }
+  const modelJson = strFromU8(modelBytes);
+  if (manifest.model_schema_version !== undefined) {
+    const model = JSON.parse(modelJson) as { schema_version?: unknown };
+    if (
+      !Number.isInteger(manifest.model_schema_version)
+      || manifest.model_schema_version !== model.schema_version
+    ) {
+      throw new Error('The project manifest and model schema versions do not match.');
+    }
+  }
   // The Rust model loader performs the authoritative schema validation and
   // normalizes the one explicitly supported pre-rename format identifier.
-  return { manifest, modelJson: strFromU8(modelBytes) };
+  return { manifest, modelJson };
 }
