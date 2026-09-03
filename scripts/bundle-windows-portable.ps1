@@ -23,13 +23,25 @@ function Invoke-Checked {
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
     throw "The Windows portable bundle must be built on Windows"
 }
-if ($Target -ne "x86_64-pc-windows-msvc") {
-    throw "Only the x86_64-pc-windows-msvc portable target is currently supported"
+$targetInfo = @{
+    "x86_64-pc-windows-msvc" = @{
+        Architecture = "x64"
+        VcpkgTriplet = "x64-windows"
+        VcRedistArchitecture = "x64"
+    }
+    "aarch64-pc-windows-msvc" = @{
+        Architecture = "arm64"
+        VcpkgTriplet = "arm64-windows"
+        VcRedistArchitecture = "arm64"
+    }
+}[$Target]
+if ($null -eq $targetInfo) {
+    throw "Unsupported Windows portable target '$Target'. Supported targets are x86_64-pc-windows-msvc and aarch64-pc-windows-msvc"
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OcctRoot)) {
-    $OcctRoot = Join-Path $projectRoot "vcpkg_installed\x64-windows"
+    $OcctRoot = Join-Path $projectRoot "vcpkg_installed\$($targetInfo.VcpkgTriplet)"
 }
 $OcctRoot = [System.IO.Path]::GetFullPath($OcctRoot)
 
@@ -48,7 +60,7 @@ if (-not $occtBin) {
 }
 
 $env:OCCT_ROOT = $OcctRoot
-$env:VCPKG_TARGET_TRIPLET = "x64-windows"
+$env:VCPKG_TARGET_TRIPLET = $targetInfo.VcpkgTriplet
 
 Push-Location $projectRoot
 try {
@@ -77,7 +89,7 @@ try {
     $version = [string]$tauriConfig.version
     $releaseRoot = Split-Path -Parent $executable
     $portableRoot = Join-Path $releaseRoot "bundle\portable"
-    $packageName = "noBS-CAD-$version-windows-x64"
+    $packageName = "noBS-CAD-$version-windows-$($targetInfo.Architecture)"
     $packageDir = Join-Path $portableRoot $packageName
     $zipPath = Join-Path $portableRoot "$packageName.zip"
     $checksumPath = "$zipPath.sha256"
@@ -127,15 +139,15 @@ try {
         $env:GITHUB_SHA
     }
     @"
-noBS CAD $version — Windows x64 portable build
+noBS CAD $version — Windows $($targetInfo.Architecture) portable build
 
 Run noBS-CAD.exe directly; no installation is required.
 
 System requirements:
 - Windows 10 version 1803 or newer, or Windows 11
 - Microsoft Edge WebView2 Runtime supplied by Windows
-- Microsoft Visual C++ v14 x64 Redistributable
-  https://aka.ms/vc14/vc_redist.x64.exe
+- Microsoft Visual C++ v14 $($targetInfo.VcRedistArchitecture) Redistributable
+  https://aka.ms/vc14/vc_redist.$($targetInfo.VcRedistArchitecture).exe
 - A graphics adapter and driver accepted by wgpu's DX12 or Vulkan backend
 
 The Visual C++ runtime is intentionally not copied into this directory.

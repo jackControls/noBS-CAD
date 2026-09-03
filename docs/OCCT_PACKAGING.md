@@ -1,7 +1,7 @@
 # OCCT Packaging and Browser/WASM Strategy
 
-Status: implemented for the current macOS, Windows x64, Ubuntu 26.04 x64, and
-browser baseline.
+Status: implemented for the current macOS, Windows x64 and ARM64, Ubuntu 26.04
+x64, and browser baseline.
 
 ## 1. Ownership boundary
 
@@ -153,9 +153,9 @@ The default manual option, `diagnostic`, remains ad-hoc signed.
 
 ## 4. Reproducible Windows portable build
 
-The first Windows target is x64 Windows 10 version 1803 or newer and Windows
-11. It uses the system WebView2 runtime and requires Microsoft's centrally
-installed Visual C++ v14 x64 Redistributable.
+Windows targets are x64 and ARM64 on Windows 10 version 1803 or newer and
+Windows 11. They use the system WebView2 runtime and require Microsoft's
+centrally installed matching Visual C++ v14 Redistributable.
 
 The root `vcpkg.json` pins both the vcpkg registry and OCCT 7.9.3. The Windows
 packager compiles the Tauri executable with `--no-bundle`, copies the complete
@@ -163,15 +163,18 @@ DLL set from the isolated vcpkg prefix beside the executable, adds licenses,
 and creates a ZIP plus SHA-256 file:
 
 ```powershell
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
-npm run bundle:windows:portable
+$target = "x86_64-pc-windows-msvc" # Use aarch64-pc-windows-msvc for ARM64.
+$triplet = "x64-windows" # Use arm64-windows for ARM64.
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
+npm run bundle:windows:portable -- -Target $target
 ```
 
 The desktop packaging GitHub Actions workflow uses one lightweight path
 classifier and then conditionally runs the affected package jobs. It builds the
-Windows package on `windows-2025` and the Apple-silicon DMG on `macos-15`,
-launch-smoke-tests both packaged executables, and uploads the package plus its
-SHA-256 file. Documentation-only pull requests skip both expensive runners.
+x64 Windows package on `windows-2025`, the ARM64 Windows package on
+`windows-11-vs2026-arm`, and the Apple-silicon DMG on `macos-15`,
+launch-smoke-tests each packaged executable, and uploads the package plus its
+SHA-256 file. Documentation-only pull requests skip the expensive runners.
 See [Windows portable packaging](WINDOWS_PACKAGING.md) for exact Windows setup
 and runtime requirements.
 
@@ -235,9 +238,9 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
   releases to an immutable 7.9.3 SDK artifact before treating the workflow as a
   reproducible release authority.
 - Windows CI: use the committed vcpkg baseline and OCCT 7.9.3 override,
-  installed as the dynamic `x64-windows` triplet. Preserve vcpkg binary
-  packages in an ABI-keyed CI cache; a cache miss must rebuild from the pinned
-  sources.
+  installed as the dynamic `x64-windows` or `arm64-windows` triplet. Preserve
+  vcpkg binary packages in an ABI-keyed CI cache; a cache miss must rebuild
+  from the pinned sources.
 - Linux CI: build on `ubuntu-26.04`, consume Ubuntu's OCCT 7.9 packages, create
   both DEB and AppImage artifacts, and verify Vulkan viewport startup under
   headless X11 and Weston/XWayland sessions.

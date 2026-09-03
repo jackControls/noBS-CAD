@@ -151,10 +151,26 @@ jobs:
             report("Linux", "linux_should_build", linuxMatches);
 
   build-windows-portable:
-    name: Windows x64 portable ZIP
+    name: Windows ${{ matrix.architecture }} portable ZIP
     needs: classify_changes
     if: needs.classify_changes.outputs.windows_should_build == 'true'
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2025
+            runner_cache_key: windows-2025-x64-windows-msvc
+            rust_target: x86_64-pc-windows-msvc
+            vcpkg_triplet: x64-windows
+            msvc_component: Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+          - architecture: arm64
+            runner: windows-11-vs2026-arm
+            runner_cache_key: windows-11-vs2026-arm-arm64-windows-msvc
+            rust_target: aarch64-pc-windows-msvc
+            vcpkg_triplet: arm64-windows
+            msvc_component: Microsoft.VisualStudio.Component.VC.Tools.ARM64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
       # Pull-request/manual packages retain symbols for diagnostics. A v* tag
@@ -182,10 +198,11 @@ jobs:
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $requiredComponent = "${{ matrix.msvc_component }}"
           $installationRoot = & $vswhere `
             -latest `
             -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -requires $requiredComponent `
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installationRoot)) {
             throw "Visual Studio C++ Build Tools were not found"
@@ -208,7 +225,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-installed-v1-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Restore vcpkg binary cache
         if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
@@ -216,7 +233,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-binary-v2-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Report OpenCASCADE cache source
         shell: pwsh
@@ -242,7 +259,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup target add x86_64-pc-windows-msvc
+          rustup target add ${{ matrix.rust_target }}
           rustup target add wasm32-unknown-unknown
 
       - name: Install JavaScript dependencies
@@ -268,7 +285,7 @@ jobs:
         shell: pwsh
         run: |
           & .\.vcpkg\vcpkg.exe install `
-            --triplet x64-windows `
+            --triplet ${{ matrix.vcpkg_triplet }} `
             --x-manifest-root="$env:GITHUB_WORKSPACE" `
             --x-install-root="$env:VCPKG_INSTALL_ROOT"
           if ($LASTEXITCODE -ne 0) {
@@ -282,51 +299,52 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-binary-v2-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Save installed OpenCASCADE tree
         if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-installed-v1-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Build portable ZIP
         shell: pwsh
         env:
-          OCCT_ROOT: ${{ env.VCPKG_INSTALL_ROOT }}\x64-windows
-        run: npm run bundle:windows:portable
+          OCCT_ROOT: ${{ env.VCPKG_INSTALL_ROOT }}\${{ matrix.vcpkg_triplet }}
+        run: npm run bundle:windows:portable -- -Target ${{ matrix.rust_target }}
 
       - name: Verify packaged native viewport
         shell: pwsh
         run: |
           $package = Get-ChildItem `
-            "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\portable" `
+            "src-tauri\target\${{ matrix.rust_target }}\release\bundle\portable" `
             -Directory |
+            Where-Object { $_.Name -like "*-windows-${{ matrix.architecture }}" } |
             Select-Object -First 1
           if (-not $package) {
             throw "Portable package directory was not created"
           }
           & .\scripts\verify-windows-viewport.ps1 `
             -PackageDirectory $package.FullName `
-            -DiagnosticsDirectory "$env:RUNNER_TEMP\nbcad-viewport-diagnostics"
+            -DiagnosticsDirectory "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}"
 
       - name: Upload Windows viewport diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-windows-viewport-diagnostics
-          path: ${{ runner.temp }}\nbcad-viewport-diagnostics
+          name: noBS-CAD-windows-${{ matrix.architecture }}-viewport-diagnostics
+          path: ${{ runner.temp }}\nbcad-viewport-diagnostics\${{ matrix.architecture }}
           if-no-files-found: warn
           retention-days: 7
 
       - name: Upload portable release
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-0.1.0-windows-x64
+          name: noBS-CAD-0.1.0-windows-${{ matrix.architecture }}
           path: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.zip
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/*.sha256
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/portable/*.zip
+            src-tauri/target/${{ matrix.rust_target }}/release/bundle/portable/*.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 7

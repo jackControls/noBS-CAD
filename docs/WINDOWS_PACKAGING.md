@@ -1,25 +1,27 @@
 # Windows portable packaging
 
-Status: experimental x64 release path validated by GitHub Actions.
+Status: experimental x64 and ARM64 portable release paths.
 
 ## Supported baseline
 
 The first Windows build intentionally has a narrow support target:
 
 - Windows 10 version 1803 or newer, or Windows 11;
-- x64 (`x86_64-pc-windows-msvc`);
+- x64 (`x86_64-pc-windows-msvc`) and ARM64 (`aarch64-pc-windows-msvc`);
 - a portable ZIP rather than an installer;
 - the system Microsoft Edge WebView2 Runtime;
-- the centrally installed Microsoft Visual C++ v14 x64 Redistributable.
+- the matching centrally installed Microsoft Visual C++ v14 Redistributable.
 
 WebView2 is not copied into the ZIP. Microsoft distributes it with the
 supported Windows versions above. The Visual C++ runtime is also not copied
 app-locally: Microsoft recommends the centrally installed Redistributable so
 security and servicing updates can be applied independently.
 
-Permanent Microsoft x64 Redistributable download:
+Permanent Microsoft Redistributable downloads:
 
 <https://aka.ms/vc14/vc_redist.x64.exe>
+
+<https://aka.ms/vc14/vc_redist.arm64.exe>
 
 ## Native viewport architecture
 
@@ -50,10 +52,11 @@ geometry is unchanged.
 
 The root `vcpkg.json` pins the vcpkg registry and overrides Open CASCADE
 Technology to 7.9.3, the same OCCT line used by the macOS build. The manifest
-installs a dynamic x64 Windows prefix under:
+installs a dynamic Windows prefix for the selected target under:
 
 ```text
 vcpkg_installed/x64-windows
+vcpkg_installed/arm64-windows
 ```
 
 The portable packager copies every DLL from that prefix's `bin` directory.
@@ -63,31 +66,30 @@ DLL names maintained by hand.
 
 ## Local Windows build
 
-Install:
+Install the Visual Studio C++ Build Tools (including the architecture you are
+building), a current Windows SDK, Node.js and npm, Rust, `wasm-pack` 0.13.1,
+and vcpkg at the commit pinned by `vcpkg.json`.
 
-- Visual Studio C++ Build Tools with **Desktop development with C++**;
-- a current Windows SDK;
-- Node.js and npm;
-- Rust with the MSVC and WebAssembly targets;
-- `wasm-pack` 0.13.1;
-- vcpkg at the commit pinned by `vcpkg.json`.
-
-From PowerShell:
+From PowerShell, select the matching Rust target and vcpkg triplet:
 
 ```powershell
-rustup target add x86_64-pc-windows-msvc
+# x64; substitute aarch64-pc-windows-msvc and arm64-windows for ARM64.
+$target = "x86_64-pc-windows-msvc"
+$triplet = "x64-windows"
+
+rustup target add $target
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack --version 0.13.1 --locked
 npm ci
 
 .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
 .\.vcpkg\vcpkg.exe install `
-  --triplet x64-windows `
+  --triplet $triplet `
   --x-manifest-root="$PWD" `
   --x-install-root="$PWD\vcpkg_installed"
 
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
-npm run bundle:windows:portable
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
+npm run bundle:windows:portable -- -Target $target
 ```
 
 The command rebuilds the Rust WebAssembly frontend package, compiles the
@@ -95,10 +97,10 @@ release Tauri executable without creating an installer, gathers the native
 runtime DLLs and license notices, and writes:
 
 ```text
-src-tauri/target/x86_64-pc-windows-msvc/release/bundle/portable/
-├── noBS-CAD-0.1.0-windows-x64/
-├── noBS-CAD-0.1.0-windows-x64.zip
-└── noBS-CAD-0.1.0-windows-x64.zip.sha256
+src-tauri/target/<rust-target>/release/bundle/portable/
+├── noBS-CAD-0.1.0-windows-<architecture>/
+├── noBS-CAD-0.1.0-windows-<architecture>.zip
+└── noBS-CAD-0.1.0-windows-<architecture>.zip.sha256
 ```
 
 The directory contains `noBS-CAD.exe`, the OCCT dependency DLLs, a runtime
@@ -107,13 +109,14 @@ Microsoft Visual C++ runtime.
 
 ## GitHub Actions
 
-`.github/workflows/desktop-packages.yml` runs the Windows job on a standard
-`windows-2025` runner for pull requests to `main`, version tags, and manual
-dispatches. It:
+`.github/workflows/desktop-packages.yml` runs an x64 job on `windows-2025`
+and an ARM64 job on the GitHub-hosted `windows-11-vs2026-arm` runner for pull
+requests to `main`, version tags, and manual dispatches. Both jobs:
 
 1. checks out the pinned vcpkg registry;
 2. restores an ABI-keyed vcpkg binary cache when one is available;
-3. installs OCCT 7.9.3 for `x64-windows`, compiling only on a cache miss;
+3. installs OCCT 7.9.3 for the matching `x64-windows` or `arm64-windows`
+   vcpkg triplet, compiling only on a cache miss;
 4. creates the portable ZIP;
 5. launches the packaged executable long enough to catch missing DLL or
    WebView startup failures;
@@ -135,7 +138,7 @@ bounded.
 
 - The portable executable is not yet Authenticode-signed, so Microsoft
   SmartScreen can warn when it is downloaded.
-- Windows ARM64 and 32-bit builds are not produced.
+- 32-bit builds are not produced.
 - The Visual C++ Redistributable is a documented prerequisite rather than an
   installer-managed dependency.
 - The portable ZIP has no shortcuts, file associations, updater, or
