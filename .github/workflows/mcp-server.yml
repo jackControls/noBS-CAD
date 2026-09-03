@@ -112,3 +112,49 @@ jobs:
         run: |
           cargo test --locked -p xtask
           if ($LASTEXITCODE -ne 0) { throw "xtask tests failed" }
+
+  # Linux MCP tests use Ubuntu 26.04 apt OCCT 7.9 (same SDK contract as
+  # desktop-packages / scripts/docker/ubuntu-26.04.Dockerfile). Host-neutral
+  # linux-engine-tests stay on ubuntu-24.04 because they do not link OCCT.
+  mcp-tests-linux:
+    name: MCP tests (Ubuntu)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install OpenCASCADE 7.9 SDK (Ubuntu packages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            clang \
+            cmake \
+            libocct-data-exchange-7.9 \
+            libocct-foundation-dev \
+            libocct-modeling-algorithms-dev \
+            libocct-modeling-data-dev \
+            ninja-build
+
+          # Ubuntu's STEP development package recommends the VTK/IVTK SDK,
+          # which noBS CAD does not use. Extract its headers after installing
+          # the exact OCCT runtime and lower-level development libraries.
+          pushd "$RUNNER_TEMP"
+          apt-get download libocct-data-exchange-dev
+          package="$(find . -maxdepth 1 -name 'libocct-data-exchange-dev_*.deb' -print -quit)"
+          test -n "$package"
+          sudo dpkg-deb --extract "$package" /
+          popd
+
+      - name: MCP server tests
+        shell: bash
+        # build.rs probes /usr when OCCT_ROOT is unset; set it explicitly.
+        env:
+          OCCT_ROOT: /usr
+        run: cargo test --manifest-path mcp-server/Cargo.toml

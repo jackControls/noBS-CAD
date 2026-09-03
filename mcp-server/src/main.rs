@@ -452,19 +452,19 @@ impl CadServer {
                 Some(current),
             ));
         }
+        let identity = session::session_identity(&session_id);
         let seq = session::write_inbox_op(
             &session_id,
-            &session::InboxOp {
-                name: name.to_string(),
-                arguments: op_arguments,
-                base_generation,
-            },
+            &session::InboxOp::unstamped(name.to_string(), op_arguments, base_generation)
+                .with_identity(&identity),
         )?;
         Ok(json!({
             "submitted": true,
             "seq": seq,
             "path": format!("inbox/{seq}.json"),
             "session_id": session_id,
+            "window_id": identity.window_id,
+            "document_id": identity.document_id,
             "session_mode": "ui_owned_apply",
             "writeback": false,
             "applied": false,
@@ -4195,6 +4195,210 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn write_box_session_with_identity(
+        unique: &str,
+        window_id: &str,
+        document_id: &str,
+        process_id: &str,
+    ) -> (Value, String) {
+        let (update, model_json) = write_box_session(unique);
+        // write_box_session already wrote heartbeat without window identity —
+        // overwrite with the published multi-window identity stamp.
+        session::write_session(
+            unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"session_id":"{unique}","window_id":"{window_id}","document_id":"{document_id}","project_session_id":"{document_id}","process_instance_id":"{process_id}"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+        (update, model_json)
+    }
+
+    fn write_two_window_process_lease(
+        dir: &std::path::Path,
+        process_id: &str,
+        session_a: &str,
+        session_b: &str,
+    ) {
+        let processes = dir.join("_ui").join("processes");
+        std::fs::create_dir_all(&processes).unwrap();
+        std::fs::write(
+            processes.join(format!("{process_id}.json")),
+            serde_json::to_string_pretty(&json!({
+                "process_instance_id": process_id,
+                "updated_ms": session::now_ms(),
+                "windows": [
+                    {
+                        "window_id": "main",
+                        "active_document_id": "tab-a",
+                        "active_session_id": session_a,
+                    },
+                    {
+                        "window_id": "secondary",
+                        "active_document_id": "tab-b",
+                        "active_session_id": session_b,
+                    }
+                ],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn attach_submit_on_window_a_does_not_clobber_window_b() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let session_a = session::test_session_uuid();
+        let session_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (session::now_ms().wrapping_add(41)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-clobber-{session_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update_a, model_a) =
+            write_box_session_with_identity(&session_a, "main", "tab-a", "proc-clobber");
+        let (_update_b, model_b) =
+            write_box_session_with_identity(&session_b, "secondary", "tab-b", "proc-clobber");
+        write_two_window_process_lease(&dir, "proc-clobber", &session_a, &session_b);
+        let body_id = update_a["scene"]["bodies"][0]["id"].clone();
+        let model_b_before = model_b.clone();
+
+        let mut server = CadServer::new().unwrap();
+        let attached = server
+            .call_tool(
+                "cad_attach",
+                json!({"window_id": "main", "document_id": "tab-a"}),
+            )
+            .unwrap();
+        assert_eq!(attached["session_id"], session_a);
+        assert_eq!(attached["window_id"], "main");
+
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(submitted["submitted"], true);
+        assert_eq!(submitted["seq"], 1);
+        assert_eq!(submitted["session_id"], session_a);
+        assert_eq!(submitted["window_id"], "main");
+        assert_eq!(submitted["document_id"], "tab-a");
+
+        let inbox_a = session::read_session_file(&session_a, "inbox/1.json").unwrap();
+        let parsed_a: Value = serde_json::from_str(&inbox_a).unwrap();
+        assert_eq!(parsed_a["session_id"], session_a);
+        assert_eq!(parsed_a["window_id"], "main");
+        assert_eq!(parsed_a["document_id"], "tab-a");
+        assert!(
+            session::pending_inbox_seqs(&session_b).unwrap().is_empty(),
+            "window B inbox must stay empty"
+        );
+        assert!(
+            !dir.join(&session_b).join("inbox").exists()
+                || session::pending_inbox_seqs(&session_b).unwrap().is_empty()
+        );
+        let model_b_after = session::read_session_file(&session_b, "model.json").unwrap();
+        assert_eq!(
+            model_b_after, model_b_before,
+            "window B model.json must be unchanged"
+        );
+        assert_eq!(
+            session::read_session_file(&session_a, "model.json").unwrap(),
+            model_a,
+            "submit must not write model.json on A either"
+        );
+
+        let list = server.call_tool("cad_list_sessions", json!({})).unwrap();
+        assert_eq!(list["windows"].as_array().unwrap().len(), 2);
+        let window_ids: Vec<_> = list["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["window_id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(window_ids.contains(&"main".to_string()));
+        assert!(window_ids.contains(&"secondary".to_string()));
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn switch_attach_to_b_submit_does_not_land_in_a() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let session_a = session::test_session_uuid();
+        let session_b = format!(
+            "00000000-0000-4000-8000-{:012x}",
+            (session::now_ms().wrapping_add(43)) & 0xffffffffffff
+        );
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-switch-{session_a}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update_a, _) =
+            write_box_session_with_identity(&session_a, "main", "tab-a", "proc-switch");
+        let (update_b, _) =
+            write_box_session_with_identity(&session_b, "secondary", "tab-b", "proc-switch");
+        write_two_window_process_lease(&dir, "proc-switch", &session_a, &session_b);
+        let body_a = update_a["scene"]["bodies"][0]["id"].clone();
+        let body_b = update_b["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"window_id": "main"}))
+            .unwrap();
+        server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_a),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(session::pending_inbox_seqs(&session_a).unwrap(), vec![1]);
+        let a_pending_after_first = session::pending_inbox_seqs(&session_a).unwrap().len();
+
+        server.call_tool("cad_detach", json!({})).unwrap();
+        let attached_b = server
+            .call_tool("cad_attach", json!({"window_id": "secondary"}))
+            .unwrap();
+        assert_eq!(attached_b["session_id"], session_b);
+
+        let submitted_b = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_b),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(submitted_b["submitted"], true);
+        assert_eq!(submitted_b["session_id"], session_b);
+        assert_eq!(submitted_b["window_id"], "secondary");
+        assert_eq!(session::pending_inbox_seqs(&session_b).unwrap(), vec![1]);
+        assert_eq!(
+            session::pending_inbox_seqs(&session_a).unwrap().len(),
+            a_pending_after_first,
+            "A pending seqs must not grow after switch+submit on B"
+        );
+        let inbox_b = session::read_session_file(&session_b, "inbox/1.json").unwrap();
+        let parsed_b: Value = serde_json::from_str(&inbox_b).unwrap();
+        assert_eq!(parsed_b["session_id"], session_b);
+        assert_eq!(parsed_b["window_id"], "secondary");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn apply_inbox_helper_on_separate_manager_then_refresh_sees_body() {
         let _guard = session::ENV_LOCK.lock().unwrap();
@@ -4290,11 +4494,11 @@ mod tests {
 
         session::write_inbox_op(
             &unique,
-            &session::InboxOp {
-                name: "solid_mirror".to_string(),
-                arguments: solid_mirror_args(&body_id),
-                base_generation: 99,
-            },
+            &session::InboxOp::unstamped(
+                "solid_mirror".to_string(),
+                solid_mirror_args(&body_id),
+                99,
+            ),
         )
         .unwrap();
         let mut applied = false;
@@ -9125,11 +9329,7 @@ mod tests {
 
         session::write_inbox_op(
             &unique,
-            &session::InboxOp {
-                name: "assembly_delete_joint".to_string(),
-                arguments: json!({"id": 1}),
-                base_generation: 1,
-            },
+            &session::InboxOp::unstamped("assembly_delete_joint".to_string(), json!({"id": 1}), 1),
         )
         .unwrap();
         server
