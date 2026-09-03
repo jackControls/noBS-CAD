@@ -288,6 +288,9 @@ pub struct ViewportCamera {
     pub vertical_fov_degrees: f32,
 }
 
+/// 90 mm full-frame-equivalent vertical field of view.
+const DEFAULT_VERTICAL_FOV_DEGREES: f32 = 15.2;
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewportLinePattern {
@@ -451,7 +454,7 @@ impl Default for ViewportCamera {
             position: [170.0, -170.0, 130.0],
             target: [0.0, 0.0, 0.0],
             up: [0.0, 0.0, 1.0],
-            vertical_fov_degrees: 45.0,
+            vertical_fov_degrees: DEFAULT_VERTICAL_FOV_DEGREES,
         }
     }
 }
