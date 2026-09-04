@@ -26,6 +26,10 @@
 //! - Debounced snapshot publish may only raise `engine_revision` to the
 //!   published generation (never regress it). Heartbeat-only refreshes do
 //!   not bump the counter.
+//! - Every heartbeat carries the last fully written `published_generation`
+//!   plus the latest `model_generation` / `active_sketch_generation`.
+//!   Keepalives preserve those fences, so MCP never mistakes liveness for a
+//!   completed snapshot write.
 //! - `reserve` captures `engine_revision`; `write` rejects the snapshot if
 //!   the revision advanced during the JS export window (mutation-between-
 //!   export-and-write). Frontend retries with a fresh reserve.
@@ -68,7 +72,14 @@ const UNBOUND_PROJECT: &str = "__unbound__";
 struct ProjectPublisher {
     session_id: String,
     next_generation: u64,
+    /// Latest generation whose snapshot files were fully written. This stays
+    /// behind `engine_revision` while a post-mutation export is pending.
     last_applied_generation: u64,
+    /// Latest published generation that replaced `model.json`. Active-sketch
+    /// snapshots deliberately retain the previous completed model.
+    last_model_generation: Option<u64>,
+    /// Latest published generation represented by `active-sketch.json`.
+    active_sketch_generation: Option<u64>,
     /// Authoritative live-engine revision for inbox OCC (see module docs).
     engine_revision: u64,
     /// generation → `engine_revision` captured at reserve. Write rejects if
@@ -82,6 +93,8 @@ impl ProjectPublisher {
             session_id: Uuid::new_v4().to_string(),
             next_generation: 0,
             last_applied_generation: 0,
+            last_model_generation: None,
+            active_sketch_generation: None,
             engine_revision: 0,
             pending_exports: HashMap::new(),
         }
@@ -424,6 +437,17 @@ impl SessionBridgeState {
         fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
         let _ = clear_closed_tombstone(&project.session_id);
 
+        let published_generation = parsed.generation;
+        let model_generation = if parsed.model_json.is_some() {
+            Some(published_generation)
+        } else {
+            project.last_model_generation
+        };
+        let active_sketch_generation = parsed
+            .active_sketch_json
+            .as_ref()
+            .map(|_| published_generation);
+
         let focus_body = serde_json::to_string_pretty(&json!({
             "focus": parsed.focus,
             "session_id": project.session_id,
@@ -439,13 +463,17 @@ impl SessionBridgeState {
 
         let heartbeat_body = serde_json::to_string_pretty(&json!({
             "updated_ms": now_ms(),
-            "generation": parsed.generation,
+            "generation": published_generation,
+            "published_generation": published_generation,
+            "model_generation": model_generation,
+            "active_sketch_generation": active_sketch_generation,
             "session_id": project.session_id,
             "window_id": window_label,
             "project_session_id": project_session_id,
             "document_id": project_session_id,
             "process_instance_id": process_instance_id,
             "session_mode": "read_only_snapshot",
+            "kind": "snapshot",
         }))
         .map_err(|error| format!("encode heartbeat.json: {error}"))?;
 
@@ -462,9 +490,11 @@ impl SessionBridgeState {
         atomic_write(&dir.join("focus.json"), &focus_body)?;
         atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)?;
 
-        project.last_applied_generation = parsed.generation;
-        if parsed.generation > project.engine_revision {
-            project.engine_revision = parsed.generation;
+        project.last_applied_generation = published_generation;
+        project.last_model_generation = model_generation;
+        project.active_sketch_generation = active_sketch_generation;
+        if published_generation > project.engine_revision {
+            project.engine_revision = published_generation;
         }
 
         Ok(json!({
@@ -472,7 +502,10 @@ impl SessionBridgeState {
             "session_id": project.session_id,
             "window_id": window_label,
             "session_dir": dir.display().to_string(),
-            "generation": parsed.generation,
+            "generation": published_generation,
+            "published_generation": published_generation,
+            "model_generation": model_generation,
+            "active_sketch_generation": active_sketch_generation,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
             "document_id": project_session_id,
@@ -513,6 +546,9 @@ impl SessionBridgeState {
         let heartbeat_body = serde_json::to_string_pretty(&json!({
             "updated_ms": now_ms(),
             "generation": project.engine_revision,
+            "published_generation": project.last_applied_generation,
+            "model_generation": project.last_model_generation,
+            "active_sketch_generation": project.active_sketch_generation,
             "session_id": project.session_id,
             "window_id": window_label,
             "project_session_id": project_session_id,
@@ -529,6 +565,9 @@ impl SessionBridgeState {
             "session_id": project.session_id,
             "window_id": window_label,
             "generation": project.engine_revision,
+            "published_generation": project.last_applied_generation,
+            "model_generation": project.last_model_generation,
+            "active_sketch_generation": project.active_sketch_generation,
             "engine_revision": project.engine_revision,
             "project_session_id": project_session_id,
             "document_id": project_session_id,
@@ -612,6 +651,9 @@ fn write_engine_revision_heartbeat(
     let heartbeat_body = serde_json::to_string_pretty(&json!({
         "updated_ms": now_ms(),
         "generation": project.engine_revision,
+        "published_generation": project.last_applied_generation,
+        "model_generation": project.last_model_generation,
+        "active_sketch_generation": project.active_sketch_generation,
         "session_id": project.session_id,
         "window_id": window_id,
         "project_session_id": project_session_id,
@@ -1491,9 +1533,12 @@ mod tests {
         let after = fs::read_to_string(dir.join(&session_id).join("model.json")).unwrap();
         assert_eq!(before, after);
         let beat = fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap();
-        assert!(
-            beat.contains("\"kind\": \"heartbeat\"") || beat.contains("\"kind\":\"heartbeat\"")
-        );
+        let beat: Value = serde_json::from_str(&beat).unwrap();
+        assert_eq!(beat["kind"], "heartbeat");
+        assert_eq!(beat["generation"], generation);
+        assert_eq!(beat["published_generation"], generation);
+        assert_eq!(beat["model_generation"], generation);
+        assert_eq!(beat["active_sketch_generation"], Value::Null);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
@@ -1519,12 +1564,27 @@ mod tests {
             !dir.join(&session_id).join("model.json").exists(),
             "a live sketch must publish even before the first completed project snapshot"
         );
+        let editing_beat: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(editing_beat["kind"], "snapshot");
+        assert_eq!(editing_beat["published_generation"], first);
+        assert_eq!(editing_beat["model_generation"], Value::Null);
+        assert_eq!(editing_beat["active_sketch_generation"], first);
 
         let (_, second) = reserve(&state, "main");
         state
             .write_for_window("main", payload(&session_id, second, "finished"))
             .unwrap();
         assert!(!sketch_path.exists());
+        let finished_beat: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(finished_beat["published_generation"], second);
+        assert_eq!(finished_beat["model_generation"], second);
+        assert_eq!(finished_beat["active_sketch_generation"], Value::Null);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
@@ -1639,6 +1699,24 @@ mod tests {
             Some(generation + 1)
         );
         assert_eq!(read_session_generation(&session_id), Some(generation + 1));
+        let revision_beat: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(revision_beat["kind"], "engine_revision");
+        assert_eq!(revision_beat["generation"], generation + 1);
+        assert_eq!(revision_beat["published_generation"], generation);
+        assert_eq!(revision_beat["model_generation"], generation);
+
+        state.heartbeat_for_window("main").unwrap();
+        let keepalive_beat: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(&session_id).join("heartbeat.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(keepalive_beat["kind"], "heartbeat");
+        assert_eq!(keepalive_beat["generation"], generation + 1);
+        assert_eq!(keepalive_beat["published_generation"], generation);
+        assert_eq!(keepalive_beat["model_generation"], generation);
 
         write_inbox(
             &session_id,
