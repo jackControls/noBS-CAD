@@ -45,7 +45,8 @@ report where it breaks down.
 The current application includes:
 
 - a native Bevy/wgpu desktop viewport beneath the React interface, packaged
-  with Tauri for Apple-silicon macOS, x64 Windows, and x64 Ubuntu 26.04 LTS;
+  with Tauri for Apple-silicon macOS, x64 and ARM64 Windows, and x64 Ubuntu
+  26.04 LTS;
 - parametric sketches with dimensions, geometric constraints, snapping,
   construction geometry, patterns, trim/extend, and fillet/chamfer tools;
 - extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
@@ -209,23 +210,25 @@ npm run bundle:linux
 See [Ubuntu 26.04 packaging](docs/LINUX_PACKAGING.md) for dependencies,
 artifacts, X11/XWayland verification, and 3D-input permissions.
 
-### Windows x64 portable build
+### Windows x64 and ARM64 portable builds
 
 The Windows release path targets Windows 10 version 1803 or newer and Windows
 11. It produces a portable ZIP rather than an installer, uses the WebView2
 runtime supplied by Windows, and requires Microsoft's centrally installed
-Visual C++ v14 x64 Redistributable. The desktop build uses the same native Bevy
-viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS remain
-the real menu, tab, dialog, and accessibility interface.
+matching Visual C++ v14 Redistributable. The desktop build uses the same native
+Bevy viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS
+remain the real menu, tab, dialog, and accessibility interface.
 
 The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
 SDK, Rust, Node.js, `wasm-pack`, and the pinned OCCT 7.9.3 vcpkg dependency.
 After installing the pinned vcpkg manifest:
 
 ```powershell
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
+$target = "x86_64-pc-windows-msvc" # Use aarch64-pc-windows-msvc for ARM64.
+$triplet = "x64-windows" # Use arm64-windows for ARM64.
+$env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
 npm ci
-npm run bundle:windows:portable
+npm run bundle:windows:portable -- -Target $target
 ```
 
 See [Windows portable packaging](docs/WINDOWS_PACKAGING.md) for the complete
