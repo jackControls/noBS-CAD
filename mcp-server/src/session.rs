@@ -1120,28 +1120,86 @@ pub fn inbox_op_receipt(session_id: &str, seq: u64) -> Result<InboxReceipt, Stri
     Ok(InboxReceipt::Pending)
 }
 
-/// True when the UI publisher has written a post-apply snapshot usable by
-/// `cad_refresh`.
+/// A fully-written publisher snapshot observed after an inbox op's base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotPublication {
+    pub published_generation: u64,
+    pub model_generation: Option<u64>,
+    pub active_sketch_generation: Option<u64>,
+}
+
+impl SnapshotPublication {
+    pub fn model_published(self) -> bool {
+        self.model_generation == Some(self.published_generation)
+    }
+
+    pub fn active_sketch_published(self) -> bool {
+        self.active_sketch_generation == Some(self.published_generation)
+    }
+
+    pub fn snapshot_kind(self) -> &'static str {
+        match (self.model_published(), self.active_sketch_published()) {
+            (true, true) => "model_and_active_sketch",
+            (true, false) => "model",
+            (false, true) => "active_sketch",
+            (false, false) => "metadata",
+        }
+    }
+}
+
+/// Return a publisher snapshot only when it is newer than the submitted base
+/// and has caught up to the current engine revision.
 ///
-/// Native inbox apply first bumps heartbeat with `kind: "engine_revision"`
-/// (generation = base+1) before archiving the seq; the TS publisher then
-/// writes `model.json` and a heartbeat **without** that kind. Waiting only
-/// for generation > base races the model write. Tests that call
-/// [`publish_applied_snapshot`] also omit `kind: "engine_revision"`.
-pub fn snapshot_publish_ready(session_id: &str, base_generation: u64) -> bool {
+/// `generation` alone is not a publish fence: native apply and lightweight
+/// keepalives both write heartbeat.json without writing model.json. The native
+/// publisher therefore carries `published_generation` plus separate model and
+/// active-sketch generations through every heartbeat. Requiring the published
+/// generation to equal the engine generation also waits past a later UI mutate
+/// that landed while this call was polling.
+pub fn snapshot_publication_after(
+    session_id: &str,
+    base_generation: u64,
+) -> Option<SnapshotPublication> {
     let Ok(body) = read_session_file(session_id, "heartbeat.json") else {
-        return false;
+        return None;
     };
     let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
-    let Some(generation) = parsed.get("generation").and_then(Value::as_u64) else {
-        return false;
-    };
-    if generation <= base_generation {
-        return false;
+    let engine_generation = parsed.get("generation").and_then(Value::as_u64)?;
+    let published_generation = parsed.get("published_generation").and_then(Value::as_u64)?;
+    if published_generation <= base_generation || published_generation != engine_generation {
+        return None;
     }
-    match parsed.get("kind").and_then(Value::as_str) {
-        Some("engine_revision") => false,
-        _ => true,
+    if parsed
+        .get("session_id")
+        .and_then(Value::as_str)
+        .is_some_and(|published_session| published_session != session_id)
+    {
+        return None;
+    }
+    Some(SnapshotPublication {
+        published_generation,
+        model_generation: read_optional_u64(&parsed, "model_generation"),
+        active_sketch_generation: read_optional_u64(&parsed, "active_sketch_generation"),
+    })
+}
+
+fn empty_publication_fields() -> Value {
+    json!({
+        "published_generation": Value::Null,
+        "model_generation": Value::Null,
+        "active_sketch_generation": Value::Null,
+        "model_published": false,
+        "active_sketch_published": false,
+        "snapshot_kind": Value::Null,
+    })
+}
+
+fn insert_publication_fields(target: &mut Value, fields: &Value) {
+    let (Some(target), Some(fields)) = (target.as_object_mut(), fields.as_object()) else {
+        return;
+    };
+    for (key, value) in fields {
+        target.insert(key.clone(), value.clone());
     }
 }
 
@@ -1150,8 +1208,8 @@ fn clamp_await_timeout_ms(timeout_ms: u64) -> u64 {
 }
 
 /// Poll disk until the inbox seq has an applied/failed receipt and (for
-/// applied) the publisher heartbeat is past `kind: engine_revision`, or until
-/// `timeout_ms` elapses. `timeout_ms == 0` is a single observation.
+/// applied) an explicit publisher generation has caught up to the engine, or
+/// until `timeout_ms` elapses. `timeout_ms == 0` is a single observation.
 ///
 /// Does **not** write `model.json`. Does **not** claim in-process co-link.
 pub fn await_inbox_apply(
@@ -1177,7 +1235,7 @@ pub fn await_inbox_apply(
                 name,
                 base_generation,
             } => {
-                return Ok(json!({
+                let mut result = json!({
                     "status": "failed",
                     "timed_out": false,
                     "seq": seq,
@@ -1194,14 +1252,24 @@ pub fn await_inbox_apply(
                     "writeback": false,
                     "elapsed_ms": elapsed_ms,
                     "hint": "inbox op was dead-lettered; cad_refresh will not see a successful apply",
-                }));
+                });
+                insert_publication_fields(&mut result, &empty_publication_fields());
+                return Ok(result);
             }
             InboxReceipt::Applied {
                 base_generation,
                 name,
             } => {
-                let published = snapshot_publish_ready(session_id, base_generation);
-                if published {
+                if let Some(publication) = snapshot_publication_after(session_id, base_generation) {
+                    let model_published = publication.model_published();
+                    let active_sketch_published = publication.active_sketch_published();
+                    let hint = if model_published {
+                        "UI applied and completed model snapshot published; call cad_refresh (or await with refresh:true) to load it"
+                    } else if active_sketch_published {
+                        "UI applied and active-sketch snapshot published; completed model.json is unchanged, so MCP model refresh is intentionally skipped"
+                    } else {
+                        "UI applied and publisher metadata advanced, but no completed model or active-sketch snapshot was published"
+                    };
                     return Ok(json!({
                         "status": "applied",
                         "timed_out": false,
@@ -1209,20 +1277,27 @@ pub fn await_inbox_apply(
                         "session_id": session_id,
                         "name": name,
                         "base_generation": base_generation,
-                        "current_generation": current_generation,
+                        "current_generation": publication.published_generation,
                         "applied": true,
                         "dead_lettered": false,
                         "published": true,
+                        "published_generation": publication.published_generation,
+                        "model_generation": publication.model_generation,
+                        "active_sketch_generation": publication.active_sketch_generation,
+                        "model_published": model_published,
+                        "active_sketch_published": active_sketch_published,
+                        "snapshot_kind": publication.snapshot_kind(),
                         "refreshed": false,
                         "session_mode": "ui_owned_apply",
                         "writeback": false,
                         "elapsed_ms": elapsed_ms,
-                        "hint": "UI applied and published; call cad_refresh (or await with refresh:true) to load the snapshot",
+                        "hint": hint,
                     }));
                 }
-                // Applied but publisher still on engine_revision heartbeat.
+                // Applied, but the explicit publisher generation has not caught
+                // up to the current engine generation yet.
                 if timeout_ms == 0 || now_ms() >= deadline {
-                    return Ok(json!({
+                    let mut result = json!({
                         "status": "timeout",
                         "timed_out": true,
                         "seq": seq,
@@ -1237,8 +1312,10 @@ pub fn await_inbox_apply(
                         "session_mode": "ui_owned_apply",
                         "writeback": false,
                         "elapsed_ms": elapsed_ms,
-                        "hint": "apply receipt present but publisher snapshot not ready (heartbeat still kind=engine_revision or generation not advanced); retry cad_await_apply",
-                    }));
+                        "hint": "apply receipt present but publisher snapshot has not caught up to the engine generation; retry cad_await_apply",
+                    });
+                    insert_publication_fields(&mut result, &empty_publication_fields());
+                    return Ok(result);
                 }
             }
             InboxReceipt::Pending => {
@@ -1248,7 +1325,7 @@ pub fn await_inbox_apply(
                     } else {
                         "timeout"
                     };
-                    return Ok(json!({
+                    let mut result = json!({
                         "status": status,
                         "timed_out": timeout_ms != 0,
                         "seq": seq,
@@ -1262,7 +1339,9 @@ pub fn await_inbox_apply(
                         "writeback": false,
                         "elapsed_ms": elapsed_ms,
                         "hint": "still waiting for UI inbox apply receipt (inbox/applied/<seq>.json or inbox/failed/<seq>.json)",
-                    }));
+                    });
+                    insert_publication_fields(&mut result, &empty_publication_fields());
+                    return Ok(result);
                 }
             }
         }
@@ -1284,9 +1363,13 @@ pub fn publish_applied_snapshot(session_id: &str, model_json: &str) -> Result<u6
     let heartbeat = serde_json::to_string_pretty(&json!({
         "updated_ms": now_ms(),
         "generation": next,
+        "published_generation": next,
+        "model_generation": next,
+        "active_sketch_generation": Value::Null,
         "session_id": session_id,
         "session_mode": "ui_owned_apply",
         "writeback": false,
+        "kind": "snapshot",
     }))
     .map_err(|error| format!("encode heartbeat: {error}"))?;
     write_session(session_id, "heartbeat.json", &heartbeat)?;
@@ -2544,7 +2627,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_publish_ready_rejects_engine_revision_kind() {
+    fn snapshot_publication_rejects_engine_and_keepalive_until_snapshot() {
         let _guard = ENV_LOCK.lock().unwrap();
         let unique = test_session_uuid();
         let dir = std::env::temp_dir().join(format!("nbcad-sessions-pubready-{unique}"));
@@ -2555,28 +2638,48 @@ mod tests {
             &unique,
             "heartbeat.json",
             &format!(
-                r#"{{"updated_ms":{},"generation":2,"session_id":"{unique}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"session_id":"{unique}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
                 now_ms()
             ),
         )
         .unwrap();
         assert!(
-            !snapshot_publish_ready(&unique, 1),
+            snapshot_publication_after(&unique, 1).is_none(),
             "engine_revision heartbeat must not count as published"
+        );
+
+        // The lightweight keepalive overwrites kind but preserves the last
+        // completed publication fence. It must not unblock await.
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"session_id":"{unique}","kind":"heartbeat","session_mode":"read_only_snapshot"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        assert!(
+            snapshot_publication_after(&unique, 1).is_none(),
+            "keepalive must not masquerade as a completed publish"
         );
 
         write_session(
             &unique,
             "heartbeat.json",
             &format!(
-                r#"{{"updated_ms":{},"generation":2,"session_id":"{unique}","session_mode":"read_only_snapshot"}}"#,
+                r#"{{"updated_ms":{},"generation":2,"published_generation":2,"model_generation":2,"active_sketch_generation":null,"session_id":"{unique}","kind":"snapshot","session_mode":"read_only_snapshot"}}"#,
                 now_ms()
             ),
         )
         .unwrap();
-        assert!(snapshot_publish_ready(&unique, 1));
+        let publication = snapshot_publication_after(&unique, 1).expect("snapshot ready");
+        assert_eq!(publication.published_generation, 2);
+        assert!(publication.model_published());
+        assert!(!publication.active_sketch_published());
+        assert_eq!(publication.snapshot_kind(), "model");
         assert!(
-            !snapshot_publish_ready(&unique, 2),
+            snapshot_publication_after(&unique, 2).is_none(),
             "generation must advance past base"
         );
 
@@ -2621,12 +2724,22 @@ mod tests {
                 &session_for_worker,
                 "heartbeat.json",
                 &format!(
-                    r#"{{"updated_ms":{},"generation":2,"session_id":"{session_for_worker}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                    r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{session_for_worker}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
                     now_ms()
                 ),
             )
             .unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            write_session(
+                &session_for_worker,
+                "heartbeat.json",
+                &format!(
+                    r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{session_for_worker}","kind":"heartbeat","session_mode":"read_only_snapshot"}}"#,
+                    now_ms()
+                ),
+            )
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(60));
             publish_applied_snapshot(&session_for_worker, r#"{"version":1,"name":"After"}"#)
                 .unwrap();
         });
@@ -2637,9 +2750,70 @@ mod tests {
         assert_eq!(result["timed_out"], false);
         assert_eq!(result["applied"], true);
         assert_eq!(result["published"], true);
+        assert_eq!(result["model_published"], true);
+        assert_eq!(result["active_sketch_published"], false);
+        assert_eq!(result["snapshot_kind"], "model");
         assert_eq!(result["seq"], seq);
         assert_eq!(result["writeback"], false);
         assert!(result["current_generation"].as_u64().unwrap() > 1);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn await_inbox_apply_reports_active_sketch_without_model_publish() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-await-sketch-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        fs::create_dir_all(dir.join(&unique)).unwrap();
+        write_session(&unique, "model.json", r#"{"version":1,"name":"Completed"}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{unique}","kind":"snapshot"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+        let seq = write_inbox_op(
+            &unique,
+            &InboxOp::unstamped(
+                "sketch_begin".to_string(),
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+                1,
+            ),
+        )
+        .unwrap();
+        apply_inbox_op(&unique, |_name, _args| Ok(json!({"ok": true}))).unwrap();
+        write_session(
+            &unique,
+            "active-sketch.json",
+            r#"{"name":"Sketch1","entities":[]}"#,
+        )
+        .unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":2,"model_generation":1,"active_sketch_generation":2,"session_id":"{unique}","kind":"snapshot"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let result = await_inbox_apply(&unique, seq, 0, 20).unwrap();
+        assert_eq!(result["status"], "applied");
+        assert_eq!(result["published"], true);
+        assert_eq!(result["published_generation"], 2);
+        assert_eq!(result["model_generation"], 1);
+        assert_eq!(result["active_sketch_generation"], 2);
+        assert_eq!(result["model_published"], false);
+        assert_eq!(result["active_sketch_published"], true);
+        assert_eq!(result["snapshot_kind"], "active_sketch");
+        assert_eq!(result["refreshed"], false);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

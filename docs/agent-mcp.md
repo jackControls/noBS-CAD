@@ -30,9 +30,11 @@ Needs native OCCT (`OCCT_ROOT` when not in a default install). Logs stay on
 6. Optional UI snapshot: `cad_list_sessions` → `cad_attach` by `session_id`,
    `window_id`, or `document_id` → inspect. Mutates while attached go through
    `cad_submit` (inbox; UI applies). Prefer `cad_await_apply` with the returned
-   `seq` (waits for apply receipt + publisher, optional refresh) instead of
-   racing `cad_refresh`. Goldens do not require attach. Do not write
-   `model.json` from MCP.
+   `seq` (waits for apply receipt + an explicit publisher generation) instead
+   of racing `cad_refresh`. Completed-model publishes optionally refresh;
+   active-sketch-only publishes are reported without reloading stale
+   `model.json`. Goldens do not require attach. Do not write `model.json` from
+   MCP.
 
 Soft disclosure: out-of-focus tools stay **callable**; results may include
 `_disclosure`.

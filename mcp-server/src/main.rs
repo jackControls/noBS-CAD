@@ -475,7 +475,9 @@ impl CadServer {
     }
 
     /// Wait for a submitted inbox seq's apply receipt + publisher snapshot.
-    /// Optional `refresh` (default true) reloads the attached snapshot on success.
+    /// Optional `refresh` (default true) reloads a newly published completed
+    /// model. Active-sketch-only snapshots are reported but not misrepresented
+    /// as a model refresh.
     fn await_inbox_apply(&mut self, arguments: &Value) -> Result<Value, String> {
         let Some(session_id) = self.attached_document_id.clone() else {
             return Err(session::not_attached_error());
@@ -502,8 +504,12 @@ impl CadServer {
             .get("published")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let model_published = result
+            .get("model_published")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let status = result.get("status").and_then(Value::as_str).unwrap_or("");
-        if refresh && status == "applied" && published {
+        if refresh && status == "applied" && published && model_published {
             self.load_snapshot_model(&session_id)?;
             self.apply_snapshot_focus(&session_id);
             if let Some(object) = result.as_object_mut() {
@@ -3181,7 +3187,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_await_apply",
             "Await UI apply receipt for submitted inbox seq",
-            "While attached, poll until inbox/applied/<seq>.json or inbox/failed/<seq>.json appears. For applied ops, also wait until the UI publisher heartbeat is past kind=engine_revision (model.json ready), then optionally cad_refresh (refresh default true). timeout_ms 0 is a single status probe. Still snapshot/UI-owned apply — not in-process co-link. Does not write model.json.",
+            "While attached, poll until inbox/applied/<seq>.json or inbox/failed/<seq>.json appears. For applied ops, also wait until an explicit published_generation catches up to the engine. Completed-model publications optionally cad_refresh (refresh default true); active-sketch-only publications return model_published:false, active_sketch_published:true, refreshed:false because model.json intentionally remains the last completed model. timeout_ms 0 is a single status probe. Still snapshot/UI-owned apply — not in-process co-link. Does not write model.json.",
             object_schema(
                 json!({
                     "seq": {
@@ -3201,7 +3207,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "refresh": {
                         "type": "boolean",
-                        "description": "When status=applied and published, reload the attached snapshot (default true)"
+                        "description": "When status=applied and model_published=true, reload the completed model snapshot (default true); active-sketch-only snapshots are reported without reloading stale model.json"
                     }
                 }),
                 &["seq"],
@@ -4682,11 +4688,22 @@ mod tests {
                     &session_for_worker,
                     "heartbeat.json",
                     &format!(
-                        r#"{{"updated_ms":{},"generation":2,"session_id":"{session_for_worker}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                        r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{session_for_worker}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
                         session::now_ms()
                     ),
                 )?;
                 std::thread::sleep(std::time::Duration::from_millis(30));
+                // The 10 s keepalive can land in this window. It changes kind
+                // but must preserve the still-pending publication fence.
+                session::write_session(
+                    &session_for_worker,
+                    "heartbeat.json",
+                    &format!(
+                        r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{session_for_worker}","kind":"heartbeat","session_mode":"read_only_snapshot"}}"#,
+                        session::now_ms()
+                    ),
+                )?;
+                std::thread::sleep(std::time::Duration::from_millis(60));
                 session::publish_applied_snapshot(&session_for_worker, &model_json)?;
                 Ok(result)
             })
@@ -4709,6 +4726,8 @@ mod tests {
         worker.join().unwrap();
         assert_eq!(awaited["status"], "applied");
         assert_eq!(awaited["published"], true);
+        assert_eq!(awaited["model_published"], true);
+        assert_eq!(awaited["active_sketch_published"], false);
         assert_eq!(awaited["refreshed"], true);
         assert_eq!(awaited["timed_out"], false);
         assert_eq!(awaited["writeback"], false);
@@ -4720,6 +4739,71 @@ mod tests {
             after_count > before_count,
             "await+refresh must load applied body (before {before_count}, after {after_count})"
         );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cad_await_apply_does_not_refresh_active_sketch_only_snapshot() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-await-sketch-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&unique);
+
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        let before = server.call_tool("solid_scene", json!({})).unwrap();
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "sketch_begin",
+                    "arguments": {
+                        "plane": {"type": "origin_plane", "plane": "xy"}
+                    },
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        let seq = submitted["seq"].as_u64().unwrap();
+        session::apply_inbox_op(&unique, |_name, _args| Ok(json!({"ok": true}))).unwrap();
+        session::write_session(
+            &unique,
+            "active-sketch.json",
+            r#"{"name":"Sketch1","entities":[]}"#,
+        )
+        .unwrap();
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":2,"model_generation":1,"active_sketch_generation":2,"session_id":"{unique}","kind":"snapshot"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let awaited = server
+            .call_tool(
+                "cad_await_apply",
+                json!({"seq": seq, "timeout_ms": 0, "refresh": true}),
+            )
+            .unwrap();
+        assert_eq!(awaited["status"], "applied");
+        assert_eq!(awaited["published"], true);
+        assert_eq!(awaited["model_published"], false);
+        assert_eq!(awaited["active_sketch_published"], true);
+        assert_eq!(awaited["snapshot_kind"], "active_sketch");
+        assert_eq!(awaited["refreshed"], false);
+        assert!(awaited["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("active-sketch"));
+        assert_eq!(server.call_tool("solid_scene", json!({})).unwrap(), before);
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
