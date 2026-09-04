@@ -148,6 +148,9 @@ function hasMovableJointPath(
 const HOME_POSITION = new CAD.Vector3(170, -170, 130);
 const HOME_TARGET = new CAD.Vector3(0, 0, 0);
 const WORLD_UP = new CAD.Vector3(0, 0, 1);
+// A 90 mm full-frame lens has a 15.2° vertical field of view. Keep this in
+// sync with the native viewport's default projection.
+const DEFAULT_VERTICAL_FOV_DEGREES = 15.2;
 const AXIS_LENGTH = 120;
 let preservedCameraSnapshot: CameraSnapshot | null = null;
 
@@ -428,7 +431,12 @@ export function Viewport() {
     surface.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     const scene = new CAD.Scene();
-    const camera = new CAD.PerspectiveCamera(45, 1, 0.1, 20000);
+    const camera = new CAD.PerspectiveCamera(
+      DEFAULT_VERTICAL_FOV_DEGREES,
+      1,
+      0.1,
+      20000,
+    );
     const initialTarget = preservedCameraSnapshot
       ? new CAD.Vector3(...preservedCameraSnapshot.target)
       : HOME_TARGET.clone();
