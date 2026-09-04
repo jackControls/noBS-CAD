@@ -261,6 +261,287 @@ try {
   );
 
   await buildHistory();
+  await page.evaluate(() => window.__appStore.getState().markClean());
+
+  console.log('0c. Timeline edit evaluates the selected feature at its input boundary');
+  const completedSceneBeforeEdit = await page.evaluate(() =>
+    structuredClone(window.__appStore.getState().solidScene),
+  );
+  const completedHistoryBeforeEdit = await page.evaluate(() => ({
+    rollback: window.__appStore.getState().document.rollback_index,
+    features: window.__appStore.getState().document.features.map((feature) => feature.name),
+    finishedSketches: window.__appStore.getState().finishedSketches.map((sketch) => sketch.name),
+  }));
+  const extrudeForHistoryEdit = page
+    .locator('[data-feature-id]')
+    .filter({ hasText: 'Extrude1' })
+    .first();
+  await extrudeForHistoryEdit.dblclick();
+  await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    () => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === 1
+        && state.solidScene.bodies.length === 0
+        && state.finishedSketches.map((sketch) => sketch.name).join(',') === 'Sketch1'
+        && state.historyEdit?.featureId === state.document.features.find(
+          (feature) => feature.name === 'Extrude1',
+        )?.id
+        && !state.solidBusy;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+  assert.deepEqual(
+    await page.evaluate(() => window.__appStore.getState().document.features.map((feature) => feature.name)),
+    ['Sketch1', 'Extrude1', 'Chamfer1'],
+    'editing must preserve the selected and downstream history definitions while hiding their output',
+  );
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().dirty),
+    false,
+    'opening a history editor must not dirty a clean project',
+  );
+  assert.equal(
+    await page.getByTestId('file-menu-button').isDisabled(),
+    true,
+    'project file actions must remain locked for the full history edit',
+  );
+  assert.equal(
+    await page.getByTestId('project-title').isDisabled(),
+    true,
+    'project tabs must remain locked for the full history edit',
+  );
+  await page
+    .getByTestId('extrude-dialog')
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .last()
+    .click();
+  await page.waitForFunction(
+    (expectedRollback) => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === expectedRollback
+        && state.historyEdit === null
+        && !state.solidBusy;
+    },
+    completedHistoryBeforeEdit.rollback,
+    { timeout: 60_000 },
+  );
+  assert.deepEqual(
+    await page.evaluate(() => structuredClone(window.__appStore.getState().solidScene)),
+    completedSceneBeforeEdit,
+    'cancelling an edit must restore the completed scene, including downstream Chamfer1',
+  );
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      features: window.__appStore.getState().document.features.map((feature) => feature.name),
+      finishedSketches: window.__appStore.getState().finishedSketches.map((sketch) => sketch.name),
+    })),
+    {
+      features: completedHistoryBeforeEdit.features,
+      finishedSketches: completedHistoryBeforeEdit.finishedSketches,
+    },
+  );
+  assert.equal(
+    await page.evaluate(() => window.__appStore.getState().dirty),
+    false,
+    'cancelling a history editor must restore the prior dirty state',
+  );
+
+  console.log('0c2. Cancelling a history edit preserves a pending Solid Redo');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await extrudeForHistoryEdit.dblclick();
+  await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await page
+    .getByTestId('extrude-dialog')
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .last()
+    .click();
+  await page.waitForFunction(
+    () => window.__appStore.getState().historyEdit === null
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    () =>
+      window.__appStore
+        .getState()
+        .document.features.map((feature) => feature.name)
+        .join(',') === 'Sketch1,Extrude1,Chamfer1'
+      && !window.__appStore.getState().solidBusy,
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  console.log('0d. Finishing an edit rebuilds the selected and downstream features');
+  await extrudeForHistoryEdit.dblclick();
+  await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await page.getByTestId('extrude-submit').click();
+  await page.waitForFunction(
+    (expectedRollback) => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === expectedRollback
+        && state.historyEdit === null
+        && state.solidScene.bodies.length === 1
+        && !state.solidBusy;
+    },
+    completedHistoryBeforeEdit.rollback,
+    { timeout: 60_000 },
+  );
+  assert.deepEqual(
+    await page.evaluate(() => structuredClone(window.__appStore.getState().solidScene)),
+    completedSceneBeforeEdit,
+    'finishing an unchanged edit must replay the downstream Chamfer1 output',
+  );
+
+  console.log('0e. A future construction plane still opens at its input boundary');
+  const futureDatum = await page.evaluate(async () => {
+    const engine = window.__engine;
+    const store = window.__appStore.getState();
+    const created = await engine.createDatumPlane({
+      source: {
+        type: 'offset',
+        reference: { type: 'origin_plane', plane: 'xy' },
+        distance: 12,
+      },
+    });
+    store.applyDatumPlaneUpdate(created);
+    const beforeDatum = await engine.setRollback(1);
+    store.applySolidUpdate(beforeDatum);
+    store.setFinishedSketches(await engine.finishedSketches());
+    store.applyDatumPlaneUpdate({
+      document: beforeDatum.document,
+      planes: await engine.datumPlaneDefinitions(),
+    });
+    const feature = beforeDatum.document.features.find(
+      (candidate) => candidate.kind === 'construction_plane',
+    );
+    if (!feature) throw new Error('construction-plane feature was not created');
+    return {
+      id: feature.id,
+      beforeIndex: beforeDatum.document.features.findIndex(
+        (candidate) => candidate.id === feature.id,
+      ),
+    };
+  });
+  await page.waitForFunction(
+    () => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === 1
+        && state.datumPlanes.length === 0
+        && !state.solidBusy;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.locator(`[data-feature-id="${futureDatum.id}"]`).dblclick();
+  await page.getByTestId('construction-plane-dialog').waitFor({ state: 'visible' });
+  await page.waitForFunction(
+    (datum) => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === datum.beforeIndex
+        && state.historyEdit?.featureId === datum.id
+        && !state.solidBusy;
+    },
+    futureDatum,
+    { timeout: 60_000 },
+  );
+  await page
+    .getByTestId('construction-plane-dialog')
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .last()
+    .click();
+  await page.waitForFunction(
+    () => {
+      const state = window.__appStore.getState();
+      return state.document.rollback_index === 1
+        && state.historyEdit === null
+        && !state.solidBusy;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  // The following Undo/Redo assertions start from the original three-feature
+  // model, not the datum-plane scenario used to exercise future selections.
+  await buildHistory();
+
+  console.log('0f. Finishing a sketch edit restores downstream solid history');
+  const sceneBeforeSketchEdit = await page.evaluate(() =>
+    structuredClone(window.__appStore.getState().solidScene),
+  );
+  const sketchForHistoryEdit = page
+    .locator('[data-feature-id]')
+    .filter({ hasText: 'Sketch1' })
+    .first();
+  await sketchForHistoryEdit.dblclick();
+  await page.waitForFunction(
+    () => {
+      const state = window.__appStore.getState();
+      return state.mode === 'sketch'
+        && state.document.rollback_index === 0
+        && state.solidScene.bodies.length === 0
+        && state.historyEdit?.featureId === state.document.features.find(
+          (feature) => feature.name === 'Sketch1',
+        )?.id
+        && !state.solidBusy;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+  const sketchEntityCountBeforeUndo = await page.evaluate(
+    () => window.__appStore.getState().activeSketch.entities.length,
+  );
+  await page.evaluate(async () => {
+    const result = await window.__engine.addPoint({ position: { x: 31, y: 23 } });
+    window.__appStore.getState().setActiveSketch(result.sketch);
+  });
+  await page.waitForFunction(
+    (count) => window.__appStore.getState().activeSketch.entities.length === count + 1,
+    sketchEntityCountBeforeUndo,
+  );
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction(
+    (count) => window.__appStore.getState().activeSketch.entities.length === count,
+    sketchEntityCountBeforeUndo,
+  );
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(
+    (count) => window.__appStore.getState().activeSketch.entities.length === count + 1,
+    sketchEntityCountBeforeUndo,
+  );
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .last()
+    .click();
+  await page.waitForFunction(
+    () => {
+      const state = window.__appStore.getState();
+      return state.mode === 'solid'
+        && state.document.rollback_index === state.document.features.length
+        && state.historyEdit === null
+        && !state.solidBusy;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+  assert.deepEqual(
+    await page.evaluate(() => structuredClone(window.__appStore.getState().solidScene)),
+    sceneBeforeSketchEdit,
+    'finishing a sketch edit must rebuild Extrude1 and Chamfer1',
+  );
 
   console.log('1. Cmd/Ctrl+Z removes the latest feature from history');
   await page.keyboard.press('ControlOrMeta+z');

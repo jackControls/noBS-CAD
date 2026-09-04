@@ -44,6 +44,7 @@
     "noOpenProject": "Cree o abra un diseño antes de guardar.",
     "finishBeforeSave": "Finalice el croquis activo antes de guardar el proyecto.",
     "finishBeforeTabSwitch": "Finalice el croquis activo antes de cambiar de documento.",
+    "finishBeforeFeatureEdit": "Finalice o cancele la edición de la operación activa antes de usar acciones de archivo del proyecto.",
     "tabUnavailable": "Esta pestaña de documento ya no está disponible.",
     "discardConfirm": "¿Abrir otro proyecto y descartar los cambios sin guardar actuales?",
     "closeDiscardConfirm": "¿Cerrar este diseño y descartar sus cambios sin guardar?",

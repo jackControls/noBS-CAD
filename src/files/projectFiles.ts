@@ -100,10 +100,17 @@ function normalizedProjectName(name: string): string {
     .trim();
 }
 
+function assertNoFeatureEdit(): void {
+  if (useAppStore.getState().historyEdit) {
+    throw new Error(translate('file.finishBeforeFeatureEdit'));
+  }
+}
+
 /** Rename the project model without silently changing its current file path.
  * The next Save persists the name to that file; Save As also adopts the new
  * filename as the project name. */
 export async function renameProject(requestedName?: string): Promise<boolean> {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.document === null) {
     throw new Error(translate('file.noOpenProject'));
@@ -123,6 +130,7 @@ export async function renameProject(requestedName?: string): Promise<boolean> {
 }
 
 export async function saveProject(saveAs = false): Promise<boolean> {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.document === null) {
     throw new Error(translate('file.noOpenProject'));
@@ -210,6 +218,7 @@ export async function closeProject(tabId?: string): Promise<boolean> {
 /** Save every dirty retained tab before application quit. A cancelled native
  * file picker aborts quitting without silently discarding any later tab. */
 export async function saveAllUnsavedProjects(): Promise<boolean> {
+  if (useAppStore.getState().historyEdit) return false;
   const initialState = useAppStore.getState();
   const dirtyIds = initialState.projectTabs
     .filter((tab) => (
@@ -228,6 +237,7 @@ export async function saveAllUnsavedProjects(): Promise<boolean> {
 }
 
 export async function openProject(): Promise<boolean> {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.dirty) {
     const decision = await requestUnsavedDecision(
@@ -275,6 +285,7 @@ export async function openProject(): Promise<boolean> {
 }
 
 export async function exportStep(selectedOnly: boolean): Promise<boolean> {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeStep'));
@@ -373,6 +384,7 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
 }
 
 function meshExportBodyIds(selectedOnly: boolean): number[] {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeMesh'));
@@ -450,6 +462,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 function assertBodyTransferAllowed(): void {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeStepImport'));
@@ -547,6 +560,7 @@ export async function exportBodyAsStep(bodyId: number): Promise<boolean> {
  * exchange bytes are embedded in the project archive so recompute works on
  * browser, macOS, and Windows without retaining an external file path. */
 export async function importStep(): Promise<boolean> {
+  assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeStepImport'));

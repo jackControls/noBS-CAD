@@ -61,6 +61,7 @@ export function ProjectMenuControls() {
     && !s.drawingSheetSetupOpen);
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
+  const historyEditing = useAppStore((s) => s.historyEdit !== null);
   const setProjectBusy = useAppStore((s) => s.setProjectBusy);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setDrawingProfileExportOpen = useAppStore((s) => s.setDrawingProfileExportOpen);
@@ -70,7 +71,7 @@ export function ProjectMenuControls() {
   const anchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const interactionBusy = busy || modelBusy || projectBusy;
+  const interactionBusy = busy || modelBusy || projectBusy || historyEditing;
 
   const updateMenuPosition = useCallback(() => {
     const anchor = anchorRef.current;
@@ -161,7 +162,7 @@ export function ProjectMenuControls() {
 
   const run = (action: () => Promise<unknown>) => {
     const state = useAppStore.getState();
-    if (state.projectBusy || state.solidBusy) return;
+    if (state.projectBusy || state.solidBusy || state.historyEdit) return;
     setMenuOpen(false);
     setBusy(true);
     setProjectBusy(true);
@@ -375,9 +376,10 @@ export function ProjectTabBar() {
   const activeWorkspaceTab = useAppStore((s) => s.activeTab);
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
+  const historyEditing = useAppStore((s) => s.historyEdit !== null);
   const [busy, setBusy] = useState(false);
   const activeTabRef = useRef<HTMLDivElement>(null);
-  const interactionBusy = busy || modelBusy || projectBusy;
+  const interactionBusy = busy || modelBusy || projectBusy || historyEditing;
 
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({
@@ -388,6 +390,7 @@ export function ProjectTabBar() {
   }, [activeProjectTabId]);
 
   const run = (action: () => Promise<unknown>) => {
+    if (useAppStore.getState().historyEdit) return;
     setBusy(true);
     void action()
       .catch((error) => {

@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Blend, LoaderCircle, MousePointer2, Triangle, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import {
+  cancelTimelineFeatureEdit,
   submitSolidChamfer,
   submitSolidFillet,
   tangentChainEdges,
@@ -100,7 +101,7 @@ function SolidEdgeDialog({ kind }: { kind: 'fillet' | 'chamfer' }) {
   };
   const closeDialog = () => {
     setHoveredEdge(null);
-    close();
+    void cancelTimelineFeatureEdit(close);
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();

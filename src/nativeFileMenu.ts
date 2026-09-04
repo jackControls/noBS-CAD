@@ -50,7 +50,7 @@ export function nativeMacMenuOwnsFileCommands(): boolean {
 function menuFlags() {
   const state = useAppStore.getState();
   return {
-    busy: state.projectBusy || state.solidBusy,
+    busy: state.projectBusy || state.solidBusy || state.historyEdit !== null,
     documentOpen: state.document !== null,
     hasBodies: state.solidScene.bodies.length > 0,
     hasSelectedBody: state.selectedBody !== null,
@@ -67,7 +67,7 @@ function menuFlags() {
 /** Same guard + error surface as the in-app menu's click handler. */
 function run(action: () => Promise<unknown> | void): void {
   const state = useAppStore.getState();
-  if (state.projectBusy || state.solidBusy) return;
+  if (state.projectBusy || state.solidBusy || state.historyEdit) return;
   useAppStore.getState().setProjectBusy(true);
   Promise.resolve()
     .then(() => action())

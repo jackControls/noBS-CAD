@@ -11,6 +11,7 @@ import { useTranslation } from './i18n';
 import { useAppStore } from './store/appStore';
 import {
   cancelPlanePick,
+  cancelTimelineFeatureEdit,
   deleteDimension,
   deleteConstraint,
   deleteEntities,
@@ -218,7 +219,7 @@ export default function App() {
       }
       const s = useAppStore.getState();
       const runProjectAction = (action: () => Promise<unknown>) => {
-        if (s.projectBusy || s.solidBusy) return;
+        if (s.projectBusy || s.solidBusy || s.historyEdit) return;
         s.setProjectBusy(true);
         void action()
           .catch((error) => {
@@ -273,16 +274,34 @@ export default function App() {
         if (s.drawingPendingViewKind !== null) s.setDrawingPendingViewKind(null);
         // Sketch-mode Esc (end chain / deselect) is handled by the Viewport.
         if (s.mode === 'pickPlane') cancelPlanePick();
-        if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();
-        if (s.revolveDialogFeature !== null) s.closeRevolveDialog();
-        if (s.sweepDialogFeature !== null) s.closeSweepDialog();
-        if (s.loftDialogFeature !== null) s.closeLoftDialog();
-        if (s.ribDialogFeature !== null) s.closeRibDialog();
-        if (s.filletDialogFeature !== null) s.closeFilletDialog();
-        if (s.chamferDialogFeature !== null) s.closeChamferDialog();
-        if (s.holeDialogFeature !== null) s.closeHoleDialog();
-        if (s.constructionPlaneDialog !== null) s.closeConstructionPlaneDialog();
-        if (s.bodyFeatureDialog !== null) s.closeBodyFeatureDialog();
+        const hasFeatureDialog =
+          s.extrudeDialogFeature !== null ||
+          s.revolveDialogFeature !== null ||
+          s.sweepDialogFeature !== null ||
+          s.loftDialogFeature !== null ||
+          s.ribDialogFeature !== null ||
+          s.filletDialogFeature !== null ||
+          s.chamferDialogFeature !== null ||
+          s.holeDialogFeature !== null ||
+          s.constructionPlaneDialog !== null ||
+          s.bodyFeatureDialog !== null;
+        const closeFeatureDialogs = () => {
+          if (s.extrudeDialogFeature !== null) s.closeExtrudeDialog();
+          if (s.revolveDialogFeature !== null) s.closeRevolveDialog();
+          if (s.sweepDialogFeature !== null) s.closeSweepDialog();
+          if (s.loftDialogFeature !== null) s.closeLoftDialog();
+          if (s.ribDialogFeature !== null) s.closeRibDialog();
+          if (s.filletDialogFeature !== null) s.closeFilletDialog();
+          if (s.chamferDialogFeature !== null) s.closeChamferDialog();
+          if (s.holeDialogFeature !== null) s.closeHoleDialog();
+          if (s.constructionPlaneDialog !== null) s.closeConstructionPlaneDialog();
+          if (s.bodyFeatureDialog !== null) s.closeBodyFeatureDialog();
+        };
+        if (hasFeatureDialog && s.historyEdit) {
+          void cancelTimelineFeatureEdit(closeFeatureDialogs);
+        } else {
+          closeFeatureDialogs();
+        }
         if (s.sketchPatternDialog !== null) s.closeSketchPatternDialog();
         if (s.jointDialogOpen) s.setJointDialogOpen(false);
         return;

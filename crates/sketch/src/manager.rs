@@ -545,8 +545,17 @@ impl SketchManager {
     // --- Solid feature history / recompute contract (M2) ---
 
     pub fn profile_catalog(&self) -> Vec<ProfileCatalogItemDto> {
+        self.profile_catalog_at(self.document.features().rollback_index)
+    }
+
+    /// Build a profile catalog for an explicit history stage. Replays choose
+    /// their target stage before committing it to `rollback_index`, so they
+    /// cannot rely on the currently displayed stage here.
+    fn profile_catalog_at(&self, rollback_index: usize) -> Vec<ProfileCatalogItemDto> {
+        let active = self.active_feature_ids_at(rollback_index);
         self.finished
             .iter()
+            .filter(|finished| active.contains(&finished.feature_id))
             .map(|finished| profile_catalog_item(&finished.session.dto(), finished.feature_id))
             .collect()
     }
@@ -1988,7 +1997,7 @@ impl SketchManager {
         let active = self.active_feature_ids_at(index);
         let plan = self
             .solids
-            .prepare_recompute_resilient(&self.profile_catalog(), &active)
+            .prepare_recompute_resilient(&self.profile_catalog_at(index), &active)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
         self.document.features_mut().set_rollback_index(index);
         Ok(plan)

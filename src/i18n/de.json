@@ -44,6 +44,7 @@
     "noOpenProject": "Erstellen oder öffnen Sie eine Konstruktion, bevor Sie speichern.",
     "finishBeforeSave": "Beenden Sie die aktive Skizze, bevor Sie das Projekt speichern.",
     "finishBeforeTabSwitch": "Beenden Sie die aktive Skizze, bevor Sie Dokumente wechseln.",
+    "finishBeforeFeatureEdit": "Beenden oder verwerfen Sie die aktive Feature-Bearbeitung, bevor Sie Projektdateiaktionen verwenden.",
     "tabUnavailable": "Dieser Dokument-Tab ist nicht mehr verfügbar.",
     "discardConfirm": "Ein anderes Projekt öffnen und die aktuellen ungespeicherten Änderungen verwerfen?",
     "closeDiscardConfirm": "Diese Konstruktion schließen und ihre ungespeicherten Änderungen verwerfen?",
