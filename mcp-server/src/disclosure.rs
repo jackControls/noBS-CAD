@@ -496,6 +496,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_compare_solids"
             | "cad_submit"
             | "cad_await_apply"
+            | "cad_session_status"
     );
     if spine {
         let pack = match name {

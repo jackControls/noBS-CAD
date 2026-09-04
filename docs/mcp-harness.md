@@ -23,11 +23,11 @@ machine (or CI runner).
 | Topic | Current state |
 |-------|----------------|
 | Transport | **stdio** JSON-RPC (`nbcad-mcp`) — logs on **stderr** |
-| Tools | Modeling tools + control/export helpers (includes `cad_await_apply`) |
+| Tools | Modeling tools + control/export helpers (includes `cad_await_apply`, `cad_session_status`) |
 | Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
 | Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
-| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_await_apply` waits for apply receipt + an explicit publisher generation. Completed models may refresh; active-sketch-only publishes are reported separately. Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
+| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_await_apply` waits for apply receipt + an explicit publisher generation; `cad_session_status` reports attached vs live generation / stale / pending inbox / heartbeat. Completed models may refresh; active-sketch-only publishes are reported separately. Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
 | Geometry | Same native OCCT replay path as desktop when OCCT is available |
 | Export | STEP + STL + **3MF** (`solid_export_*`, `material_catalog`); 3MF preferred for slicers |
 
@@ -74,7 +74,8 @@ With attach:
 3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Direct mutates while attached return structured `session_read_only`; inspect/export/control stay callable. Only names in the shared `nbcad-mcp-mutate` map are accepted.
 4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge. Successful applies archive to `inbox/applied/<seq>.json`.
 5. `cad_await_apply` — poll until the submit seq has an applied/failed receipt; for applied, also require an explicit `published_generation` equal to the current engine generation. Keepalives preserve that fence and cannot masquerade as a publish. If `model_generation` matches, optional `refresh` (default true) reloads the completed model. While a sketch transaction is active, the publisher advances `active_sketch_generation` but intentionally retains the previous completed `model.json`; await returns `model_published:false`, `active_sketch_published:true`, and `refreshed:false`. `timeout_ms: 0` is a single status probe. This closes the manual `cad_refresh` race for agents; it is still **not** in-process shared memory.
-6. `cad_refresh` — explicit re-read of the attached session from disk (still available; prefer `cad_await_apply` after submit).
+6. `cad_session_status` — while attached, report `attached_generation` (captured at attach/refresh) vs live heartbeat `generation` (publisher engine revision), `published_generation` / model / active-sketch fields when present, `stale` when those diverge (UI undo/edit), heartbeat age/kind/stale, pending inbox seqs, and the latest applied/failed receipt if any. Headless returns `attached:false` / `code:not_attached` as a clear status object (not an error). Still snapshot protocol — not in-process co-link.
+7. `cad_refresh` — explicit re-read of the attached session from disk (still available; prefer `cad_await_apply` after submit).
 7. `cad_detach` — clears the attached session id.
 This is **UI-owned apply**, not in-process shared memory. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
@@ -122,10 +123,18 @@ counts so a rebuilt history can be checked against the imported solid.
 
 | Capability | Today | Target | Issue |
 |------------|-------|--------|-------|
-| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). `cad_await_apply` waits for apply receipt + explicit publish fence; it refreshes only a newly published completed model and reports active-sketch-only snapshots separately. Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
+| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). `cad_await_apply` waits for apply receipt + explicit publish fence; `cad_session_status` exposes attached vs live generation / stale / pending inbox so agents can see UI undo/edit. Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
 | Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
 | Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id`; attach+submit isolated per published window (identity-stamped inbox; mismatch dead-letters). Stdio still one doc per process; **not** a live broker | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
 | In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
+
+## Slice note (`cad_session_status`)
+Agents can already `cad_await_apply` after their own submit. `cad_session_status`
+lets them notice **UI-side** undo/edit without inventing in-process co-link:
+compare `attached_generation` to live heartbeat `generation`, inspect pending
+inbox seqs and the latest apply receipt, and read heartbeat age/kind. Headless
+returns a clear `not_attached` status. [#11](https://github.com/jackControls/noBS-CAD/issues/11)
+remains open until true in-process shared memory.
 
 ## Slice note (`cad_await_apply`)
 Agents used to `cad_submit` then race a manual `cad_refresh`. `cad_await_apply`
