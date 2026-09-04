@@ -1,6 +1,11 @@
+import { useEffect } from 'react';
 import type { ExtrudeOperation } from '../engine/types';
 import { useTranslation } from '../i18n';
-import { useAppStore } from '../store/appStore';
+import {
+  useAppStore,
+  type ModelingPickTarget,
+} from '../store/appStore';
+import { ViewportSelectionField } from './ViewportSelectionField';
 
 const INPUT_CLASS =
   'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
@@ -11,6 +16,14 @@ interface Props {
   setOperation: (operation: ExtrudeOperation) => void;
   targetBodies: number[];
   setTargetBodies: (ids: number[]) => void;
+  pickTarget: Extract<
+    ModelingPickTarget,
+    | 'extrude_targets'
+    | 'revolve_targets'
+    | 'sweep_targets'
+    | 'loft_targets'
+    | 'rib_targets'
+  >;
 }
 
 /** Shared boolean-operation controls for all sketch-driven solid tools. */
@@ -19,15 +32,25 @@ export function SolidOperationFields({
   setOperation,
   targetBodies,
   setTargetBodies,
+  pickTarget,
 }: Props) {
   const { t } = useTranslation();
   const bodies = useAppStore((state) => state.solidScene.bodies);
-  const toggleBody = (id: number) => {
-    setTargetBodies(
-      targetBodies.includes(id)
-        ? targetBodies.filter((candidate) => candidate !== id)
-        : [...targetBodies, id],
-    );
+  const selectedBodies = useAppStore((state) => state.selectedBodies);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
+  const replaceSelectedBodies = useAppStore((state) => state.replaceSelectedBodies);
+  const targetSelectionTestId = `${pickTarget.replace(/_/g, '-')}-selection`;
+
+  useEffect(() => {
+    if (modelingPickTarget !== pickTarget) return;
+    const valid = selectedBodies.filter((id) => bodies.some((body) => body.id === id));
+    if (valid.join(',') !== targetBodies.join(',')) setTargetBodies(valid);
+  }, [bodies, modelingPickTarget, pickTarget, selectedBodies, setTargetBodies, targetBodies]);
+
+  const activateTargets = () => {
+    replaceSelectedBodies(targetBodies);
+    setModelingPickTarget(pickTarget);
   };
 
   return (
@@ -37,7 +60,15 @@ export function SolidOperationFields({
         <select
           data-testid="solid-operation"
           value={operation}
-          onChange={(event) => setOperation(event.target.value as ExtrudeOperation)}
+          onChange={(event) => {
+            const next = event.target.value as ExtrudeOperation;
+            setOperation(next);
+            if (next === 'new_body') {
+              if (modelingPickTarget === pickTarget) setModelingPickTarget(null);
+            } else {
+              activateTargets();
+            }
+          }}
           className={INPUT_CLASS}
         >
           <option value="new_body">{t('extrude.newBody')}</option>
@@ -48,29 +79,24 @@ export function SolidOperationFields({
       </label>
 
       {operation !== 'new_body' && (
-        <fieldset>
-          <legend className={LABEL_CLASS}>{t('extrude.targetBodies')}</legend>
-          <div className="space-y-1 rounded border border-edge bg-header p-2">
-            {bodies.length === 0 ? (
-              <p className="text-xs text-mute">{t('extrude.noTargetBodies')}</p>
-            ) : (
-              bodies.map((body) => (
-                <label
-                  key={body.id}
-                  className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                >
-                  <input
-                    type="checkbox"
-                    checked={targetBodies.includes(body.id)}
-                    onChange={() => toggleBody(body.id)}
-                    className="accent-accent"
-                  />
-                  {body.name}
-                </label>
-              ))
-            )}
-          </div>
-        </fieldset>
+        <ViewportSelectionField
+          testId={targetSelectionTestId}
+          label={t('extrude.targetBodies')}
+          status={targetBodies.length > 0
+            ? `${targetBodies.length} ${targetBodies.length === 1 ? 'body' : 'bodies'} selected`
+            : bodies.length === 0
+              ? t('extrude.noTargetBodies')
+              : 'Click target bodies in the viewport'}
+          hint="Use Shift/Ctrl/Cmd or continue clicking to select more than one body."
+          active={modelingPickTarget === pickTarget}
+          hasSelection={targetBodies.length > 0}
+          onActivate={activateTargets}
+          onClear={() => {
+            setTargetBodies([]);
+            replaceSelectedBodies([]);
+            setModelingPickTarget(pickTarget);
+          }}
+        />
       )}
     </>
   );

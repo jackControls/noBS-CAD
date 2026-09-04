@@ -21,6 +21,19 @@ const clickSketch = async (x, y) => {
   const point = await sketchToScreen(x, y);
   await page.mouse.click(point.x, point.y);
 };
+const pickOriginPlaneFromViewport = async (plane) => {
+  for (let y = 140; y <= 720; y += 35) {
+    for (let x = 220; x <= 1060; x += 35) {
+      await page.mouse.move(x, y);
+      await page.waitForTimeout(10);
+      if ((await state()).hoveredPlane === plane) {
+        await page.mouse.click(x, y);
+        return;
+      }
+    }
+  }
+  throw new Error(`could not select the ${plane.toUpperCase()} origin plane in the viewport`);
+};
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -61,12 +74,21 @@ try {
   await page.getByTestId('pick-construction-first-reference').click();
   assert.equal((await state()).constructionPlanePickTarget, 'first_reference');
 
-  const reference = planeDialog.getByLabel('Reference plane');
-  await reference.selectOption('origin:xz');
+  const referencePicker = page.getByTestId('pick-construction-first-reference');
+  await pickOriginPlaneFromViewport('xz');
+  await page.waitForFunction(
+    () => document.querySelector('[data-testid="pick-construction-first-reference"]')
+      ?.textContent?.includes('XZ origin plane'),
+  );
   assert.equal(
     (await state()).constructionPlanePickTarget,
     null,
-    'choosing a reference from the field ends viewport selection',
+    'choosing a visible reference in the viewport ends selection',
+  );
+  assert.match(
+    (await referencePicker.textContent()) ?? '',
+    /XZ origin plane/i,
+    'the field names the visually selected reference',
   );
   const distance = planeDialog.getByLabel('Offset distance (mm)');
   await page.waitForFunction(
@@ -74,6 +96,11 @@ try {
       && document.activeElement.type === 'number'
       && document.activeElement.closest('[data-testid="construction-plane-dialog"]') !== null,
   );
+  // Let the command's requestAnimationFrame-based focus/select handoff settle
+  // before simulating a much faster-than-human key sequence.
+  await page.evaluate(() => new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve)),
+  ));
   await page.keyboard.type('25');
   assert.equal(
     await distance.inputValue(),
@@ -81,14 +108,18 @@ try {
     'choosing required geometry focuses and replaces the complete measurement',
   );
 
-  await reference.click();
+  await referencePicker.click();
+  assert.equal(
+    await referencePicker.evaluate((element) => element === document.activeElement),
+    true,
+    'the viewport selection field is keyboard focusable',
+  );
   await page.keyboard.press('Tab');
   assert.equal(
-    await page
-      .getByTestId('pick-construction-first-reference')
+    await planeDialog.getByRole('button', { name: 'Clear' })
       .evaluate((element) => element === document.activeElement),
     true,
-    'Tab reaches the accessible viewport Pick action after the reference field',
+    'Tab reaches the clear action for the selected reference',
   );
   await page.keyboard.press('Tab');
   assert.equal(
@@ -105,14 +136,39 @@ try {
   await planeDialog.getByRole('button', { name: 'Cancel' }).click();
 
   // The expression-capable inline sketch dimension editor uses the same
-  // primitive in text mode.
-  await page.evaluate(() =>
-    window.__appStore.getState().setDimEditor({
-      dimId: 999,
-      initial: '=50/2',
-      x: 500,
-      y: 300,
-    }),
+  // primitive in text mode. Use a real driving dimension: the production
+  // editor intentionally rejects stale/nonexistent constraint ids.
+  const expressionDimensionId = await page.evaluate(async () => {
+    const engine = window.__engine;
+    const store = window.__appStore.getState();
+    let sketch = await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
+    sketch = await engine.setGridSnap(false);
+    store.setActiveSketch(sketch);
+    store.setMode('sketch');
+    const line = await engine.addLine({
+      from: { x: -45, y: 35 },
+      to_raw: { x: -20, y: 35 },
+      ctrl_held: true,
+    });
+    const dimensioned = await engine.addDimension({
+      entities: [line.entity_id],
+      text_pos: { x: -32.5, y: 43 },
+    });
+    store.setActiveSketch(dimensioned.sketch);
+    const dimension = dimensioned.sketch.dimensions.find(
+      (candidate) => candidate.mode === 'driving' && candidate.entities.includes(line.entity_id),
+    );
+    if (!dimension) throw new Error('missing expression test dimension');
+    return dimension.constraint_id;
+  });
+  await page.evaluate(
+    (dimId) => window.__appStore.getState().setDimEditor({
+        dimId,
+        initial: '=50/2',
+        x: 500,
+        y: 300,
+      }),
+    expressionDimensionId,
   );
   const expressionInput = page.locator('[data-dimension-input][type="text"]');
   await expressionInput.waitFor({ state: 'visible' });
@@ -176,15 +232,7 @@ try {
   );
   await expressionInput.press('Escape');
 
-  // Exercise the custom sketch dynamic-input system.
-  await page.getByRole('button', { name: 'Create Sketch' }).first().click();
-  await page.waitForTimeout(250);
-  const xyPlane = page.getByText('XY Plane', { exact: true });
-  if (!(await xyPlane.isVisible())) {
-    await page.getByRole('button', { name: 'Origin' }).click();
-  }
-  await xyPlane.click();
-  await page.waitForFunction(() => window.__appStore.getState().mode === 'sketch');
+  // Exercise the custom sketch dynamic-input system in that same sketch.
   await page.locator('button[title="Rectangle"]').click();
   await clickSketch(-30, -20);
   const previewPoint = await sketchToScreen(20, 10);

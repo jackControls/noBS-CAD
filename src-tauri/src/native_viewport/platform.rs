@@ -19,7 +19,8 @@ use bevy::{
 use nbcad_core::{BodyAppearance, PlaneBasis};
 use nbcad_sketch::{BodyPoseDto, EntityDto, InstanceBodyPoseDto, SketchDto, Vec2 as SketchVec2};
 use nbcad_solid::{
-    BodyDto, DatumPlaneDefinitionDto, FaceDto, ProfileCatalogItemDto, ProfileLoopDto, SolidSceneDto,
+    BodyDto, DatumPlaneDefinitionDto, FaceDto, Point2Dto, ProfileCatalogItemDto, ProfileLoopDto,
+    SketchPointKindDto, SketchPointRefDto, SolidSceneDto,
 };
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
@@ -101,13 +102,17 @@ use {
     gtk::prelude::*,
 };
 
-use super::ui::{self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme};
+use super::profile_outline::{base_curve_remainder, profile_outline_segments, BaseCurveRemainder};
+use super::ui::{
+    self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme,
+};
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use super::ViewportRect;
 use super::{
-    NativePick, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera, ViewportHud,
-    ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel, ViewportOriginPlane,
-    ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind, ViewportSnapMarker,
+    NativePick, NativePickPurpose, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera,
+    ViewportHud, ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel,
+    ViewportOriginPlane, ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind,
+    ViewportSnapMarker,
 };
 use crate::state::BOOTSTRAP_SESSION_ID;
 
@@ -119,13 +124,48 @@ const INITIAL_PHYSICAL_SIZE: u32 = 32;
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
 const SKETCH_LINE_WIDTH: f32 = 1.25;
+const FINISHED_SKETCH_OFFSET: f32 = 0.05;
+const PROFILE_PICK_OFFSET: f32 = 0.08;
+// Direct line feedback must occupy the exact profile-perimeter geometry. If
+// it is even slightly behind that perimeter, selecting a profile edge as a
+// Revolve axis records the right state but leaves no visible selected line.
+const DIRECT_PICK_FEEDBACK_OFFSET: f32 = PROFILE_PICK_OFFSET;
+// Gizmo widths are expressed in physical pixels after
+// `configure_viewport_line_widths` applies the backing scale. A base width of
+// one therefore renders as roughly one logical desktop pixel on Retina while
+// remaining visible on a 1x display. Do not quarter this value: that produces
+// a sub-pixel stroke which Metal can effectively hide.
+const PICK_FEEDBACK_LINE_WIDTH: f32 = 1.0;
+// A selected/hovered finished-sketch curve is already reinforced by a
+// high-contrast state color. Keep this direct replacement slightly finer
+// than the general pick overlay so it does not visually thicken profile
+// geometry, while staying above Metal's unreliable quarter-pixel range.
+const DIRECT_PICK_FEEDBACK_LINE_WIDTH: f32 = 0.75;
+// A profile border is one fine stroke, not a colored line inside a halo.
+// Keep its width separate so changes cannot resize point/origin feedback.
+const PROFILE_BORDER_LINE_WIDTH: f32 = 0.75;
+// Bevy's meaningful 3D gizmo depth-bias domain is [-1, 1], where -1 is
+// always in front. Values outside that domain can clip the entire gizmo pass
+// on Metal. Keep ordinary sketch references behind the two interaction
+// layers, and keep each narrow color stroke in front of its wider halo.
+const PICK_FEEDBACK_DEPTH_BIAS: f32 = -0.98;
+const PICK_FEEDBACK_HALO_LINE_WIDTH: f32 = 2.0;
+const PICK_FEEDBACK_HALO_DEPTH_BIAS: f32 = -0.96;
+// A directly hovered/selected curve must remain in front of a selected
+// profile perimeter when they are the exact same geometry. A later draw call
+// in the same gizmo group is not sufficient because the two strokes are
+// batched with the same depth bias.
+const DIRECT_PICK_FEEDBACK_DEPTH_BIAS: f32 = -1.0;
+const VIEWPORT_LINE_REFERENCE_DIAGONAL: f32 = 1200.0;
+const VIEWPORT_LINE_SCALE_MIN: f32 = 0.9;
+const VIEWPORT_LINE_SCALE_MAX: f32 = 1.6;
 /// Below this projected radius, per-edge gizmos cost more CPU/GPU bandwidth
 /// than the outline information they can convey. Bevy still renders the
 /// retained shaded mesh and selected/hovered geometry always bypasses LOD.
 const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
-const SKETCH_DEPTH_BIAS: f32 = -1.0;
+const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
-const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.999;
+const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
 const SKETCH_POINT_RADIUS_PX: f32 = 2.5;
 const SKETCH_POINT_OUTLINE_RADIUS_PX: f32 = 3.25;
 const HIGHLIGHT_LINE_WIDTH: f32 = 2.0;
@@ -605,6 +645,7 @@ impl PlatformNativeViewport {
         y: f32,
         camera: Option<ViewportCamera>,
         logical_size: Option<(f32, f32)>,
+        purpose: NativePickPurpose,
     ) -> Result<Option<NativePick>, String> {
         let started = Instant::now();
         let result = {
@@ -621,6 +662,7 @@ impl PlatformNativeViewport {
                 &state.hidden_body_ids,
                 &state.body_poses,
                 &state.instance_body_poses,
+                purpose,
             )
         };
         if let Ok(mut current) = self.metrics.lock() {
@@ -2191,6 +2233,18 @@ struct CadHighlightGizmos;
 struct CadSketchGizmos;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadPickFeedbackGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadDirectPickFeedbackGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadProfileBorderGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadPickFeedbackHaloGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadSketchPointOutlineGizmos;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -2256,6 +2310,10 @@ fn build_bevy_app(
     app.add_plugins(plugins)
         .init_gizmo_group::<CadHighlightGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
+        .init_gizmo_group::<CadPickFeedbackHaloGizmos>()
+        .init_gizmo_group::<CadPickFeedbackGizmos>()
+        .init_gizmo_group::<CadDirectPickFeedbackGizmos>()
+        .init_gizmo_group::<CadProfileBorderGizmos>()
         .init_gizmo_group::<CadSketchPointOutlineGizmos>()
         .init_gizmo_group::<CadSketchPointGizmos>();
 
@@ -2327,20 +2385,30 @@ fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut gizmo_config: ResMut<GizmoConfigStore>,
 ) {
+    configure_viewport_line_widths(
+        &mut gizmo_config,
+        VIEWPORT_LINE_REFERENCE_DIAGONAL * 0.8,
+        VIEWPORT_LINE_REFERENCE_DIAGONAL * 0.6,
+        1.0,
+    );
     let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
-    highlight_config.line.width = HIGHLIGHT_LINE_WIDTH;
     highlight_config.depth_bias = -1.0;
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
-    sketch_config.line.width = SKETCH_LINE_WIDTH;
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a
     // face (or behind a body) remains readable until its eye toggle is hidden.
     sketch_config.depth_bias = SKETCH_DEPTH_BIAS;
+    let (pick_feedback_config, _) = gizmo_config.config_mut::<CadPickFeedbackGizmos>();
+    pick_feedback_config.depth_bias = PICK_FEEDBACK_DEPTH_BIAS;
+    let (direct_pick_feedback_config, _) = gizmo_config.config_mut::<CadDirectPickFeedbackGizmos>();
+    direct_pick_feedback_config.depth_bias = DIRECT_PICK_FEEDBACK_DEPTH_BIAS;
+    let (profile_border_config, _) = gizmo_config.config_mut::<CadProfileBorderGizmos>();
+    profile_border_config.depth_bias = PICK_FEEDBACK_DEPTH_BIAS;
+    let (pick_halo_config, _) = gizmo_config.config_mut::<CadPickFeedbackHaloGizmos>();
+    pick_halo_config.depth_bias = PICK_FEEDBACK_HALO_DEPTH_BIAS;
     let (point_outline_config, _) = gizmo_config.config_mut::<CadSketchPointOutlineGizmos>();
-    point_outline_config.line.width = SKETCH_POINT_OUTLINE_WIDTH;
     point_outline_config.depth_bias = SKETCH_POINT_OUTLINE_DEPTH_BIAS;
     let (point_config, _) = gizmo_config.config_mut::<CadSketchPointGizmos>();
-    point_config.line.width = SKETCH_LINE_WIDTH;
     point_config.depth_bias = SKETCH_DEPTH_BIAS;
 
     let camera = ViewportCamera::default();
@@ -2656,6 +2724,68 @@ fn world_per_pixel_at(camera: ViewportCamera, viewport: ViewportSizeResource, or
     2.0 * depth * (camera.vertical_fov_degrees.to_radians() * 0.5).tan() / height
 }
 
+fn viewport_line_logical_scale(logical_width: f32, logical_height: f32) -> f32 {
+    if !logical_width.is_finite()
+        || !logical_height.is_finite()
+        || logical_width <= 0.0
+        || logical_height <= 0.0
+    {
+        return 1.0;
+    }
+    (logical_width.hypot(logical_height) / VIEWPORT_LINE_REFERENCE_DIAGONAL)
+        .clamp(VIEWPORT_LINE_SCALE_MIN, VIEWPORT_LINE_SCALE_MAX)
+}
+
+fn viewport_line_raster_scale(logical_width: f32, logical_height: f32, backing_scale: f32) -> f32 {
+    viewport_line_logical_scale(logical_width, logical_height)
+        * if backing_scale.is_finite() {
+            backing_scale.max(0.5)
+        } else {
+            1.0
+        }
+}
+
+fn configure_viewport_line_widths(
+    gizmo_config: &mut GizmoConfigStore,
+    logical_width: f32,
+    logical_height: f32,
+    backing_scale: f32,
+) {
+    let scale = viewport_line_raster_scale(logical_width, logical_height, backing_scale);
+    gizmo_config.config_mut::<CadHighlightGizmos>().0.line.width = HIGHLIGHT_LINE_WIDTH * scale;
+    gizmo_config.config_mut::<CadSketchGizmos>().0.line.width = SKETCH_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadPickFeedbackGizmos>()
+        .0
+        .line
+        .width = PICK_FEEDBACK_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadDirectPickFeedbackGizmos>()
+        .0
+        .line
+        .width = DIRECT_PICK_FEEDBACK_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadProfileBorderGizmos>()
+        .0
+        .line
+        .width = PROFILE_BORDER_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadPickFeedbackHaloGizmos>()
+        .0
+        .line
+        .width = PICK_FEEDBACK_HALO_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadSketchPointOutlineGizmos>()
+        .0
+        .line
+        .width = SKETCH_POINT_OUTLINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CadSketchPointGizmos>()
+        .0
+        .line
+        .width = SKETCH_LINE_WIDTH * scale;
+}
+
 fn reference_plane_half_size(
     camera: ViewportCamera,
     viewport: ViewportSizeResource,
@@ -2845,14 +2975,24 @@ fn apply_native_presentation_styles(
         };
         if let Some(mut material) = materials.get_mut(&handle.0) {
             let hovered = state.hovered_datum_plane_id == Some(plane.datum_id);
-            material.base_color = Color::srgba(
-                0.85,
-                0.65,
-                0.30,
-                if hovered {
-                    0.32
+            let selected = state.selected_datum_plane_id == Some(plane.datum_id);
+            let color = if selected {
+                palette.0.selection
+            } else if hovered {
+                palette.0.hover
+            } else if state.mode == ViewportMode::PickPlane {
+                palette.0.active_sketch
+            } else {
+                [0.85, 0.65, 0.30]
+            };
+            material.base_color = rgba(
+                color,
+                if selected {
+                    0.30
+                } else if hovered {
+                    0.24
                 } else if state.mode == ViewportMode::PickPlane {
-                    0.14
+                    0.10
                 } else {
                     0.08
                 },
@@ -2869,8 +3009,18 @@ fn apply_native_presentation_styles(
         };
         if let Some(mut material) = materials.get_mut(&handle.0) {
             let hovered = state.hovered_origin_plane == Some(plane.plane);
-            material.base_color =
-                origin_plane_color(plane.plane, if hovered { 0.28 } else { 0.10 });
+            let selected = state.selected_origin_plane == Some(plane.plane);
+            let base_color = origin_plane_color(&palette.0, plane.plane);
+            material.base_color = rgba(
+                base_color,
+                if selected {
+                    0.34
+                } else if hovered {
+                    0.28
+                } else {
+                    0.10
+                },
+            );
         }
     }
 }
@@ -3251,17 +3401,20 @@ fn rebuild_native_annotations(
     };
 
     for annotation in &preview.value.annotations {
-        if annotation.text.trim().is_empty()
+        if (annotation.text.trim().is_empty()
+            && annotation.icon.is_none()
+            && annotation.tool_icon.is_none())
             || !annotation.screen[0].is_finite()
             || !annotation.screen[1].is_finite()
         {
             continue;
         }
         let constraint = annotation.kind == ViewportAnnotationKind::Constraint;
+        let tool = annotation.kind == ViewportAnnotationKind::Tool;
         let selected = annotation.selected;
         // `screen` is the projected center of the browser-side sprite, which
-        // is also the pick target. Center every native label on that point so
-        // clicking the visible H/V/∥/Tg glyph hits the same coordinates.
+        // is also the pick target. Center every native mark on that point so
+        // clicking the visible toolbar-derived glyph hits the same location.
         let annotation_transform = UiTransform::from_translation(Val2::percent(-50.0, -50.0));
         let foreground = if selected {
             rgb(palette.0.ink)
@@ -3273,16 +3426,20 @@ fn rebuild_native_annotations(
                 annotation.color[3].clamp(0.0, 1.0),
             )
         };
-        let (min_width, min_height, pad_x, pad_y, radius, font_size) = if constraint {
+        let (min_width, min_height, pad_x, pad_y, radius, font_size, border) = if constraint {
             if selected {
-                (28.0, 24.0, 4.0, 2.0, 5.0, 11.0)
+                (28.0, 24.0, 2.0, 1.0, 5.0, 11.0, 2.0)
             } else {
-                (22.0, 20.0, 2.0, 1.0, 4.0, 9.0)
+                // Existing relations read as quiet marks on the geometry,
+                // not as a field of opaque UI buttons.
+                (22.0, 22.0, 0.0, 0.0, 0.0, 9.0, 0.0)
             }
+        } else if tool {
+            (24.0, 24.0, 3.0, 3.0, 5.0, 9.0, 1.0)
         } else if selected {
-            (28.0, 20.0, 5.0, 2.0, 5.0, 11.0)
+            (28.0, 20.0, 5.0, 2.0, 5.0, 11.0, 2.0)
         } else {
-            (24.0, 18.0, 4.0, 2.0, 5.0, 10.0)
+            (24.0, 18.0, 4.0, 2.0, 5.0, 10.0, 1.0)
         };
         commands
             .spawn((
@@ -3298,22 +3455,19 @@ fn rebuild_native_annotations(
                     padding: UiRect::axes(px(pad_x), px(pad_y)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border: UiRect::all(px(if selected { 2.0 } else { 1.0 })),
+                    border: UiRect::all(px(border)),
                     border_radius: BorderRadius::all(px(radius)),
                     ..default()
                 },
                 annotation_transform,
                 BackgroundColor(if selected {
                     rgba(palette.0.accent, 0.92)
+                } else if tool {
+                    rgba(palette.0.header, 0.78)
+                } else if constraint {
+                    Color::NONE
                 } else {
-                    rgba(
-                        if constraint {
-                            palette.0.background
-                        } else {
-                            palette.0.header
-                        },
-                        if constraint { 0.78 } else { 0.90 },
-                    )
+                    rgba(palette.0.header, 0.90)
                 }),
                 BorderColor::all(rgba(
                     if selected {
@@ -3321,21 +3475,47 @@ fn rebuild_native_annotations(
                     } else {
                         palette.0.ui_edge
                     },
-                    if selected { 1.0 } else { 0.88 },
+                    if border == 0.0 {
+                        0.0
+                    } else if selected {
+                        1.0
+                    } else {
+                        0.82
+                    },
                 )),
-                ZIndex(18),
+                ZIndex(if tool { 22 } else { 18 }),
             ))
-            .with_child((
-                Text::new(annotation.text.clone()),
-                // Same system UI font as the HUD — Bevy's embedded default
-                // lacks many CAD marks and otherwise renders tofu rectangles.
-                ViewportUiTheme::from_palette(&palette.0).text(
-                    &assets,
-                    font_size,
-                    FontWeight::NORMAL,
-                ),
-                TextColor(foreground),
-            ));
+            .with_children(|root| {
+                if constraint {
+                    if let Some(icon) = annotation.icon {
+                        ui::spawn_constraint_icon(
+                            root,
+                            icon,
+                            foreground,
+                            if selected { 20.0 } else { 18.0 },
+                        );
+                        return;
+                    }
+                } else if tool {
+                    if let Some(icon) = annotation.icon {
+                        ui::spawn_constraint_icon(root, icon, foreground, 17.0);
+                        return;
+                    }
+                    if let Some(icon) = annotation.tool_icon {
+                        ui::spawn_tool_icon(root, icon, foreground, 16.0);
+                        return;
+                    }
+                }
+                root.spawn((
+                    Text::new(annotation.text.clone()),
+                    ViewportUiTheme::from_palette(&palette.0).text(
+                        &assets,
+                        font_size,
+                        FontWeight::NORMAL,
+                    ),
+                    TextColor(foreground),
+                ));
+            });
     }
 }
 
@@ -3435,11 +3615,11 @@ fn origin_plane_bases() -> [(&'static str, PlaneBasis, Color); 3] {
     ]
 }
 
-fn origin_plane_color(plane: ViewportOriginPlane, alpha: f32) -> Color {
+fn origin_plane_color(palette: &ViewportPalette, plane: ViewportOriginPlane) -> [f32; 3] {
     match plane {
-        ViewportOriginPlane::Xy => Color::srgba(0.25, 0.60, 0.94, alpha),
-        ViewportOriginPlane::Xz => Color::srgba(0.31, 0.74, 0.47, alpha),
-        ViewportOriginPlane::Yz => Color::srgba(0.88, 0.36, 0.39, alpha),
+        ViewportOriginPlane::Xy => palette.origin_plane_xy,
+        ViewportOriginPlane::Xz => palette.origin_plane_xz,
+        ViewportOriginPlane::Yz => palette.origin_plane_yz,
     }
 }
 
@@ -3627,6 +3807,10 @@ fn draw_cad_gizmos(
     mut sketch_point_outlines: Gizmos<CadSketchPointOutlineGizmos>,
     mut sketch_points: Gizmos<CadSketchPointGizmos>,
     mut highlights: Gizmos<CadHighlightGizmos>,
+    mut pick_halo: Gizmos<CadPickFeedbackHaloGizmos>,
+    mut pick_feedback: Gizmos<CadPickFeedbackGizmos>,
+    mut direct_pick_feedback: Gizmos<CadDirectPickFeedbackGizmos>,
+    mut profile_borders: Gizmos<CadProfileBorderGizmos>,
     model: Res<ModelResource>,
     camera: Res<CameraResource>,
     viewport: Res<ViewportSizeResource>,
@@ -3638,6 +3822,20 @@ fn draw_cad_gizmos(
     let state = &presentation.0;
     let fine = rgba(palette.0.grid_fine, 0.28);
     let major = rgba(palette.0.grid_major, 0.48);
+
+    // This viewport renders only when a bridge command marks it dirty. Bevy's
+    // gizmo mesh updater drops a config group's asset handle when that group
+    // emits no vertices. The next hover/selection then spends its only frame
+    // recreating the asset, so the feedback can remain invisible until some
+    // later pointer transition happens to render a second frame. Keep every
+    // transient interaction group resident with a degenerate transparent
+    // segment. It produces no pixels, but makes the first frame after an
+    // invalid -> valid picker transition update an existing GPU asset.
+    keep_gizmo_asset_resident(&mut highlights);
+    keep_gizmo_asset_resident(&mut pick_halo);
+    keep_gizmo_asset_resident(&mut pick_feedback);
+    keep_gizmo_asset_resident(&mut direct_pick_feedback);
+    keep_gizmo_asset_resident(&mut profile_borders);
 
     if state.mode == ViewportMode::Sketch {
         if let Some(sketch) = &model.active_sketch {
@@ -3655,16 +3853,24 @@ fn draw_cad_gizmos(
                 "XZ" => ViewportOriginPlane::Xz,
                 _ => ViewportOriginPlane::Yz,
             };
-            let alpha = if state.hovered_origin_plane == Some(plane) {
+            let selected = state.selected_origin_plane == Some(plane);
+            let hovered = state.hovered_origin_plane == Some(plane);
+            let base_color = origin_plane_color(&palette.0, plane);
+            let alpha = if selected {
+                0.98
+            } else if hovered {
                 0.92
             } else {
                 0.42
             };
+            // Origin planes are orientation references. Match main's desktop
+            // interaction: hover brightens the permanent blue/green/red
+            // plane; it never gains the generic cyan picker outline.
             draw_plane_outline(
                 &mut highlights,
                 &basis,
                 origin_half_size,
-                origin_plane_color(plane, alpha),
+                rgba(base_color, alpha),
             );
         }
         gizmos.sphere(
@@ -3700,25 +3906,32 @@ fn draw_cad_gizmos(
             continue;
         }
         let hovered = state.hovered_datum_plane_id == Some(plane.datum_id.0);
+        let selected = state.selected_datum_plane_id == Some(plane.datum_id.0);
         let origin = basis_vector(plane.basis.origin);
         let half_size = reference_plane_half_size(camera.camera, *viewport, origin);
-        draw_plane_outline(
-            &mut gizmos,
-            &plane.basis,
-            half_size,
-            Color::srgba(
-                0.88,
-                0.68,
-                0.32,
-                if hovered {
-                    0.98
-                } else if state.mode == ViewportMode::PickPlane {
-                    0.76
+        if selected || hovered {
+            draw_plane_outline(
+                &mut highlights,
+                &plane.basis,
+                half_size,
+                rgb(if selected {
+                    palette.0.selection
                 } else {
-                    0.56
+                    palette.0.hover
+                }),
+            );
+        } else {
+            draw_plane_outline(
+                &mut sketch_gizmos,
+                &plane.basis,
+                half_size,
+                if state.mode == ViewportMode::PickPlane {
+                    rgba(palette.0.active_sketch, 0.72)
+                } else {
+                    Color::srgba(0.88, 0.68, 0.32, 0.56)
                 },
-            ),
-        );
+            );
+        }
     }
 
     for body in &model.scene.bodies {
@@ -3764,7 +3977,13 @@ fn draw_cad_gizmos(
                     rgb(palette.0.edge_hover)
                 };
                 for edge in &body.edges {
-                    draw_edge_segments(&mut highlights, edge, color, &body_transform);
+                    draw_edge_segments(
+                        &mut pick_halo,
+                        edge,
+                        rgb(palette.0.pick_halo),
+                        &body_transform,
+                    );
+                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform);
                 }
             }
 
@@ -3775,9 +3994,12 @@ fn draw_cad_gizmos(
                     && state
                         .hovered_occurrence_id
                         .is_none_or(|hovered| occurrence_id == Some(hovered));
+                let eligible = (state.pick_refinable_edges && edge.refinable)
+                    || (state.pick_straight_edges && edge_is_straight(edge));
                 if !draw_default_edges
                     && !selected
                     && !hovered
+                    && !eligible
                     && selected_body_index.is_none()
                     && !hovered_body
                 {
@@ -3787,6 +4009,8 @@ fn draw_cad_gizmos(
                     palette.0.edge_selected
                 } else if hovered {
                     palette.0.edge_hover
+                } else if eligible {
+                    palette.0.finished_sketch
                 } else if selected_body_index.is_some() {
                     palette.0.body_selected_edge
                 } else {
@@ -3795,7 +4019,13 @@ fn draw_cad_gizmos(
                 draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
                 if selected || hovered {
                     draw_edge_segments(
-                        &mut highlights,
+                        &mut pick_halo,
+                        edge,
+                        rgb(palette.0.pick_halo),
+                        &body_transform,
+                    );
+                    draw_edge_segments(
+                        &mut pick_feedback,
                         edge,
                         rgb(if selected {
                             palette.0.edge_selected
@@ -3837,7 +4067,12 @@ fn draw_cad_gizmos(
             face.occurrence_id,
         );
         for (start, end) in &face.boundary {
-            highlights.line(
+            pick_halo.line(
+                transform.transform_point(*start),
+                transform.transform_point(*end),
+                rgb(palette.0.pick_halo),
+            );
+            pick_feedback.line(
                 transform.transform_point(*start),
                 transform.transform_point(*end),
                 color,
@@ -3850,10 +4085,52 @@ fn draw_cad_gizmos(
             continue;
         }
         let curve_color = rgba(palette.0.finished_sketch, 0.58);
+        let profile_loops = model
+            .profile_catalog
+            .iter()
+            .filter(|catalog| state.profile_picker_active && catalog.sketch_name == sketch.name)
+            .flat_map(|catalog| {
+                catalog.profiles.iter().filter(|profile| {
+                    let outer_index = if profile.nesting_depth % 2 == 0 {
+                        Some(profile.index)
+                    } else {
+                        profile.parent_index
+                    };
+                    state.candidate_profiles.iter().any(|reference| {
+                        reference.sketch_name == catalog.sketch_name
+                            && Some(reference.profile_index) == outer_index
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
         let point_color = rgb(palette.0.finished_sketch_point);
         let point_outline_color = rgba(palette.0.finished_sketch_point_outline, 0.96);
         for entity in &sketch.entities {
-            draw_sketch_curve(&mut sketch_gizmos, &sketch.basis, entity, curve_color);
+            let (entity_id, _) = sketch_entity_style(entity);
+            let direct_feedback = state
+                .selected_finished_sketch_entities
+                .iter()
+                .any(|candidate| {
+                    candidate.sketch_name == sketch.name && candidate.entity_id == entity_id
+                })
+                || state
+                    .hovered_finished_sketch_entity
+                    .as_ref()
+                    .is_some_and(|candidate| {
+                        candidate.sketch_name == sketch.name && candidate.entity_id == entity_id
+                    });
+            // The direct feedback pass replaces this base stroke. Rendering
+            // both colors on the same curve produces a flickering, low-
+            // contrast result at oblique camera angles.
+            if !direct_feedback {
+                draw_base_curve_outside_profiles(
+                    &mut sketch_gizmos,
+                    &sketch.basis,
+                    entity,
+                    curve_color,
+                    &profile_loops,
+                );
+            }
             draw_sketch_entity_grips(
                 &mut sketch_point_outlines,
                 &sketch.basis,
@@ -3862,6 +4139,7 @@ fn draw_cad_gizmos(
                 *viewport,
                 SKETCH_POINT_OUTLINE_RADIUS_PX,
                 point_outline_color,
+                false,
             );
             draw_sketch_entity_grips(
                 &mut sketch_points,
@@ -3871,6 +4149,7 @@ fn draw_cad_gizmos(
                 *viewport,
                 SKETCH_POINT_RADIUS_PX,
                 point_color,
+                false,
             );
         }
     }
@@ -3884,6 +4163,33 @@ fn draw_cad_gizmos(
             if state.hidden_sketch_names.contains(&catalog.sketch_name) {
                 continue;
             }
+            // A direct line replaces every coincident profile stroke, not
+            // just the finished-sketch base curve. Otherwise the profile's
+            // wider candidate/halo/perimeter still surrounds the thin accent
+            // and makes selection look covered by the original geometry.
+            let replacement_lines = model
+                .finished_sketches
+                .iter()
+                .filter(|sketch| sketch.name == catalog.sketch_name)
+                .flat_map(|sketch| &sketch.entities)
+                .filter_map(|entity| {
+                    let EntityDto::Line { id, start, end, .. } = entity else {
+                        return None;
+                    };
+                    let directly_highlighted = state
+                        .selected_finished_sketch_entities
+                        .iter()
+                        .chain(state.hovered_finished_sketch_entity.iter())
+                        .any(|reference| {
+                            reference.sketch_name == catalog.sketch_name
+                                && reference.entity_id == id.0
+                        });
+                    directly_highlighted.then_some([
+                        Point2Dto::new(start.x, start.y),
+                        Point2Dto::new(end.x, end.y),
+                    ])
+                })
+                .collect::<Vec<_>>();
             for profile in catalog
                 .profiles
                 .iter()
@@ -3903,30 +4209,173 @@ fn draw_cad_gizmos(
                     candidate.sketch_name == catalog.sketch_name
                         && candidate.profile_index == profile.index
                 });
-                let candidate_color = rgba(palette.0.finished_sketch, 0.94);
-                draw_profile_loop(&mut sketch_gizmos, &catalog.basis, profile, candidate_color);
+                let color = if selected {
+                    rgb(palette.0.edge_selected)
+                } else if hovered {
+                    rgb(palette.0.edge_hover)
+                } else {
+                    rgba(palette.0.finished_sketch, 0.94)
+                };
+                let mut outline = profile_outline_segments(&profile.points, &replacement_lines);
                 for hole in catalog.profiles.iter().filter(|candidate| {
                     candidate.nesting_depth % 2 == 1
                         && candidate.parent_index == Some(profile.index)
                 }) {
-                    draw_profile_loop(&mut sketch_gizmos, &catalog.basis, hole, candidate_color);
+                    outline.extend(profile_outline_segments(&hole.points, &replacement_lines));
                 }
-                if selected || hovered {
-                    let color = rgb(if selected {
-                        palette.0.edge_selected
-                    } else {
-                        palette.0.edge_hover
-                    });
-                    draw_profile_loop(&mut highlights, &catalog.basis, profile, color);
-                    for hole in catalog.profiles.iter().filter(|candidate| {
-                        candidate.nesting_depth % 2 == 1
-                            && candidate.parent_index == Some(profile.index)
-                    }) {
-                        draw_profile_loop(&mut highlights, &catalog.basis, hole, color);
-                    }
+                draw_profile_segments(&mut profile_borders, &catalog.basis, &outline, color);
+            }
+        }
+    }
+
+    // Render direct pick feedback after every candidate layer and in its own
+    // front-most gizmo group. Some modeling commands keep a selected profile
+    // alive while one of its boundary lines is the axis/path input. Those two
+    // strokes are identical in screen space, so source order alone cannot
+    // prevent the gold profile perimeter from masking hover/selection.
+    for sketch in &model.finished_sketches {
+        if state.hidden_sketch_names.contains(&sketch.name) {
+            continue;
+        }
+        for entity in &sketch.entities {
+            let (entity_id, _) = sketch_entity_style(entity);
+            let selected = state
+                .selected_finished_sketch_entities
+                .iter()
+                .any(|candidate| {
+                    candidate.sketch_name == sketch.name && candidate.entity_id == entity_id
+                });
+            let hovered = state
+                .hovered_finished_sketch_entity
+                .as_ref()
+                .is_some_and(|candidate| {
+                    candidate.sketch_name == sketch.name && candidate.entity_id == entity_id
+                });
+            if selected {
+                // The application accent identifies an accepted command
+                // input even when it is also one edge of a gold/orange
+                // selected profile.
+                draw_sketch_curve_at_offset(
+                    &mut direct_pick_feedback,
+                    &sketch.basis,
+                    entity,
+                    rgb(palette.0.accent),
+                    DIRECT_PICK_FEEDBACK_OFFSET,
+                );
+            } else if hovered {
+                // Hover replaces the exact source curve with one logical
+                // pixel of state color. A halo or displaced companion makes
+                // normal CAD geometry look materially thicker than it is.
+                draw_sketch_curve_at_offset(
+                    &mut direct_pick_feedback,
+                    &sketch.basis,
+                    entity,
+                    rgb(palette.0.hover),
+                    DIRECT_PICK_FEEDBACK_OFFSET,
+                );
+            }
+
+            for reference in state.selected_sketch_points.iter().filter(|reference| {
+                reference.sketch_name == sketch.name && reference.entity_id == entity_id
+            }) {
+                if let Some(position) = referenced_sketch_point(entity, reference) {
+                    draw_sketch_grip(
+                        &mut pick_halo,
+                        &sketch.basis,
+                        position,
+                        camera.camera,
+                        *viewport,
+                        6.0,
+                        rgb(palette.0.pick_halo),
+                        false,
+                    );
+                    draw_sketch_grip(
+                        &mut pick_feedback,
+                        &sketch.basis,
+                        position,
+                        camera.camera,
+                        *viewport,
+                        6.0,
+                        rgb(palette.0.edge_selected),
+                        false,
+                    );
+                }
+            }
+            if let Some(reference) = state.hovered_sketch_point.as_ref().filter(|reference| {
+                reference.sketch_name == sketch.name
+                    && reference.entity_id == entity_id
+                    && !state.selected_sketch_points.contains(reference)
+            }) {
+                if let Some(position) = referenced_sketch_point(entity, reference) {
+                    draw_sketch_grip(
+                        &mut pick_halo,
+                        &sketch.basis,
+                        position,
+                        camera.camera,
+                        *viewport,
+                        7.0,
+                        rgb(palette.0.pick_halo),
+                        false,
+                    );
+                    draw_sketch_grip(
+                        &mut pick_feedback,
+                        &sketch.basis,
+                        position,
+                        camera.camera,
+                        *viewport,
+                        7.0,
+                        rgb(palette.0.edge_hover),
+                        false,
+                    );
                 }
             }
         }
+    }
+
+    let (camera_right, camera_up) = camera_facing_axes(camera.camera);
+    if let Some(point) = &state.hovered_surface_point {
+        let world = Vec3::new(point.x as f32, point.y as f32, point.z as f32);
+        let radius = screen_space_disc_radius(camera.camera, *viewport, world, 6.0);
+        draw_filled_disc(
+            &mut pick_halo,
+            world,
+            camera_right,
+            camera_up,
+            radius,
+            rgb(palette.0.pick_halo),
+            6,
+        );
+        draw_filled_disc(
+            &mut pick_feedback,
+            world,
+            camera_right,
+            camera_up,
+            radius,
+            rgb(palette.0.edge_hover),
+            6,
+        );
+    }
+    if let Some(point) = &state.selected_surface_point {
+        let world = Vec3::new(point.x as f32, point.y as f32, point.z as f32);
+        let radius = screen_space_disc_radius(camera.camera, *viewport, world, 7.0);
+        draw_filled_disc(
+            &mut pick_halo,
+            world,
+            camera_right,
+            camera_up,
+            radius,
+            rgb(palette.0.pick_halo),
+            7,
+        );
+        draw_filled_disc(
+            &mut pick_feedback,
+            world,
+            camera_right,
+            camera_up,
+            radius,
+            rgb(palette.0.edge_selected),
+            7,
+        );
     }
 
     if let Some(sketch) = &model.active_sketch {
@@ -3937,14 +4386,8 @@ fn draw_cad_gizmos(
             *viewport,
             3.5,
             |entity| {
-                let (id, fully_defined) = sketch_entity_style(entity);
-                Some(rgb(if state.selected_sketch_entity_ids.contains(&id) {
-                    palette.0.selection
-                } else if state.constraint_related_sketch_entity_ids.contains(&id) {
-                    palette.0.constraint_related
-                } else if state.hovered_sketch_entity_id == Some(id) {
-                    palette.0.hover
-                } else if fully_defined {
+                let (_, fully_defined) = sketch_entity_style(entity);
+                Some(rgb(if fully_defined {
                     palette.0.defined_sketch
                 } else {
                     palette.0.active_sketch
@@ -3952,19 +4395,32 @@ fn draw_cad_gizmos(
             },
         );
         draw_sketch(
-            &mut highlights,
+            &mut pick_feedback,
             sketch,
             camera.camera,
             *viewport,
             5.0,
             |entity| {
                 let (id, _) = sketch_entity_style(entity);
+                if state.hovered_sketch_entity_id == Some(id) {
+                    Some(rgb(palette.0.hover))
+                } else {
+                    None
+                }
+            },
+        );
+        draw_sketch(
+            &mut highlights,
+            sketch,
+            camera.camera,
+            *viewport,
+            4.5,
+            |entity| {
+                let (id, _) = sketch_entity_style(entity);
                 if state.selected_sketch_entity_ids.contains(&id) {
                     Some(rgb(palette.0.selection))
                 } else if state.constraint_related_sketch_entity_ids.contains(&id) {
                     Some(rgb(palette.0.constraint_related))
-                } else if state.hovered_sketch_entity_id == Some(id) {
-                    Some(rgb(palette.0.hover))
                 } else {
                     None
                 }
@@ -4042,11 +4498,29 @@ fn draw_cad_gizmos(
             let right = forward.cross(up_hint).normalize_or_zero();
             let right = if right == Vec3::ZERO { Vec3::X } else { right };
             let up = right.cross(forward).normalize_or_zero();
-            // One chord row per logical pixel keeps large markers solid;
-            // small ones bottom out at the cheap sketch-grip density.
-            let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
-            let half_steps = ((radius / world_per_pixel.max(0.001)).ceil() as i32).clamp(4, 96);
-            draw_filled_disc(&mut highlights, center, right, up, radius, color, half_steps);
+            if layer.hollow {
+                let ring = (0..24)
+                    .map(|index| {
+                        let angle = index as f32 / 24.0 * std::f32::consts::TAU;
+                        center + right * (angle.cos() * radius) + up * (angle.sin() * radius)
+                    })
+                    .collect::<Vec<_>>();
+                draw_marker_loop(&mut highlights, &ring, color);
+            } else {
+                // One chord row per logical pixel keeps large markers solid;
+                // small ones bottom out at the cheap sketch-grip density.
+                let world_per_pixel = world_per_pixel_at(camera.camera, *viewport, center);
+                let half_steps = ((radius / world_per_pixel.max(0.001)).ceil() as i32).clamp(4, 96);
+                draw_filled_disc(
+                    &mut highlights,
+                    center,
+                    right,
+                    up,
+                    radius,
+                    color,
+                    half_steps,
+                );
+            }
         }
     }
 
@@ -4059,6 +4533,10 @@ fn draw_cad_gizmos(
             &palette.0,
         );
     }
+}
+
+fn keep_gizmo_asset_resident<Config: GizmoConfigGroup>(gizmos: &mut Gizmos<Config>) {
+    gizmos.line(Vec3::ZERO, Vec3::ZERO, Color::NONE);
 }
 
 fn draw_snap_marker(
@@ -4233,6 +4711,33 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     }
 }
 
+fn edge_is_straight(edge: &nbcad_solid::EdgeDto) -> bool {
+    if edge.circle.is_some() || edge.points.len() < 2 {
+        return false;
+    }
+    let first = Vec3::new(
+        edge.points[0].x as f32,
+        edge.points[0].y as f32,
+        edge.points[0].z as f32,
+    );
+    let last_point = &edge.points[edge.points.len() - 1];
+    let last = Vec3::new(
+        last_point.x as f32,
+        last_point.y as f32,
+        last_point.z as f32,
+    );
+    let direction = last - first;
+    let length = direction.length();
+    if length <= 1e-6 {
+        return false;
+    }
+    let unit = direction / length;
+    edge.points.iter().all(|point| {
+        let offset = Vec3::new(point.x as f32, point.y as f32, point.z as f32) - first;
+        offset.cross(unit).length() <= (length * 1e-5).max(1e-5)
+    })
+}
+
 fn face_boundary_segments(body: &BodyDto, face: &FaceDto) -> Vec<(Vec3, Vec3)> {
     let start = face.first_index as usize;
     let end = start
@@ -4341,7 +4846,49 @@ fn draw_sketch<Config, ColorFor>(
             viewport,
             point_radius_px,
             color,
+            !sketch_entity_style(entity).1,
         );
+    }
+}
+
+fn draw_base_curve_outside_profiles<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    entity: &EntityDto,
+    color: Color,
+    profiles: &[&ProfileLoopDto],
+) {
+    match base_curve_remainder(entity, profiles) {
+        BaseCurveRemainder::Complete => draw_sketch_curve(gizmos, basis, entity, color),
+        BaseCurveRemainder::Lines(segments) => {
+            for [start, end] in segments {
+                gizmos.line(
+                    sketch_world(basis, start.x, start.y, FINISHED_SKETCH_OFFSET),
+                    sketch_world(basis, end.x, end.y, FINISHED_SKETCH_OFFSET),
+                    color,
+                );
+            }
+        }
+        BaseCurveRemainder::Circular(ranges) => {
+            let (center, radius) = match entity {
+                EntityDto::Arc { center, radius, .. }
+                | EntityDto::Circle { center, radius, .. } => (center, radius),
+                _ => return,
+            };
+            for [start, end] in ranges {
+                let sweep = end - start;
+                let segments = ((sweep.abs() * 20.0).ceil() as usize).clamp(12, 128);
+                draw_parametric_curve(gizmos, segments, color, |ratio| {
+                    let angle = start + sweep * ratio;
+                    sketch_world(
+                        basis,
+                        center.x + radius * angle.cos(),
+                        center.y + radius * angle.sin(),
+                        FINISHED_SKETCH_OFFSET,
+                    )
+                });
+            }
+        }
     }
 }
 
@@ -4351,12 +4898,22 @@ fn draw_sketch_curve<Config: GizmoConfigGroup>(
     entity: &EntityDto,
     color: Color,
 ) {
+    draw_sketch_curve_at_offset(gizmos, basis, entity, color, FINISHED_SKETCH_OFFSET);
+}
+
+fn draw_sketch_curve_at_offset<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    basis: &PlaneBasis,
+    entity: &EntityDto,
+    color: Color,
+    offset: f32,
+) {
     match entity {
         EntityDto::Point { .. } => {}
         EntityDto::Line { start, end, .. } => {
             gizmos.line(
-                sketch_world(basis, start.x, start.y, 0.05),
-                sketch_world(basis, end.x, end.y, 0.05),
+                sketch_world(basis, start.x, start.y, offset),
+                sketch_world(basis, end.x, end.y, offset),
                 color,
             );
         }
@@ -4378,7 +4935,7 @@ fn draw_sketch_curve<Config: GizmoConfigGroup>(
                     basis,
                     center.x + radius * angle.cos(),
                     center.y + radius * angle.sin(),
-                    0.05,
+                    offset,
                 )
             });
         }
@@ -4389,15 +4946,15 @@ fn draw_sketch_curve<Config: GizmoConfigGroup>(
                     basis,
                     center.x + radius * angle.cos(),
                     center.y + radius * angle.sin(),
-                    0.05,
+                    offset,
                 )
             });
         }
         EntityDto::Spline { tessellation, .. } => {
             for pair in tessellation.windows(2) {
                 gizmos.line(
-                    sketch_world(basis, pair[0].x, pair[0].y, 0.05),
-                    sketch_world(basis, pair[1].x, pair[1].y, 0.05),
+                    sketch_world(basis, pair[0].x, pair[0].y, offset),
+                    sketch_world(basis, pair[1].x, pair[1].y, offset),
                     color,
                 );
             }
@@ -4413,6 +4970,7 @@ fn draw_sketch_entity_grips<Config: GizmoConfigGroup>(
     viewport: ViewportSizeResource,
     point_radius_px: f32,
     color: Color,
+    hollow: bool,
 ) {
     for position in sketch_grip_positions(entity) {
         draw_sketch_grip(
@@ -4423,6 +4981,7 @@ fn draw_sketch_entity_grips<Config: GizmoConfigGroup>(
             viewport,
             point_radius_px,
             color,
+            hollow,
         );
     }
 }
@@ -4438,6 +4997,23 @@ fn sketch_grip_positions(entity: &EntityDto) -> &[SketchVec2] {
     }
 }
 
+fn referenced_sketch_point<'a>(
+    entity: &'a EntityDto,
+    reference: &SketchPointRefDto,
+) -> Option<&'a SketchVec2> {
+    match (entity, &reference.point) {
+        (EntityDto::Point { position, .. }, SketchPointKindDto::Point) => Some(position),
+        (EntityDto::Line { start, .. }, SketchPointKindDto::Start) => Some(start),
+        (EntityDto::Line { end, .. }, SketchPointKindDto::End) => Some(end),
+        (EntityDto::Arc { center, .. }, SketchPointKindDto::Center)
+        | (EntityDto::Circle { center, .. }, SketchPointKindDto::Center) => Some(center),
+        (EntityDto::Spline { points, .. }, SketchPointKindDto::FitPoint { index }) => {
+            points.get(*index as usize)
+        }
+        _ => None,
+    }
+}
+
 fn draw_sketch_grip<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     basis: &PlaneBasis,
@@ -4446,11 +5022,24 @@ fn draw_sketch_grip<Config: GizmoConfigGroup>(
     viewport: ViewportSizeResource,
     point_radius_px: f32,
     color: Color,
+    hollow: bool,
 ) {
     let point = sketch_world(basis, position.x, position.y, 0.05);
     let radius = screen_space_disc_radius(camera, viewport, point, point_radius_px);
     let (right, up) = camera_facing_axes(camera);
-    draw_filled_disc(gizmos, point, right, up, radius, color, 4);
+    if hollow {
+        let segments = 24;
+        for index in 0..segments {
+            let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
+            let next_angle = (index + 1) as f32 / segments as f32 * std::f32::consts::TAU;
+            let start = point + right * (angle.cos() * radius) + up * (angle.sin() * radius);
+            let end =
+                point + right * (next_angle.cos() * radius) + up * (next_angle.sin() * radius);
+            gizmos.line(start, end, color);
+        }
+    } else {
+        draw_filled_disc(gizmos, point, right, up, radius, color, 4);
+    }
 }
 
 /// Gizmos do not expose a filled world-space disc primitive. A handful of
@@ -4533,21 +5122,16 @@ fn sketch_world(basis: &PlaneBasis, x: f64, y: f64, offset: f32) -> Vec3 {
     ) + basis_vector(basis.normal) * offset
 }
 
-fn draw_profile_loop<Config: GizmoConfigGroup>(
+fn draw_profile_segments<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     basis: &PlaneBasis,
-    profile: &ProfileLoopDto,
+    segments: &[[Point2Dto; 2]],
     color: Color,
 ) {
-    if profile.points.len() < 2 {
-        return;
-    }
-    for index in 0..profile.points.len() {
-        let start = profile.points[index];
-        let end = profile.points[(index + 1) % profile.points.len()];
+    for [start, end] in segments {
         gizmos.line(
-            sketch_world(basis, start.x, start.y, 0.08),
-            sketch_world(basis, end.x, end.y, 0.08),
+            sketch_world(basis, start.x, start.y, PROFILE_PICK_OFFSET),
+            sketch_world(basis, end.x, end.y, PROFILE_PICK_OFFSET),
             color,
         );
     }
@@ -4784,6 +5368,15 @@ fn apply_render_command(
                     .resource_mut::<ViewportSizeResource>();
                 viewport.logical_width = logical_width as f32;
                 viewport.logical_height = logical_height as f32;
+            }
+            {
+                let mut gizmo_config = runtime.app.world_mut().resource_mut::<GizmoConfigStore>();
+                configure_viewport_line_widths(
+                    &mut gizmo_config,
+                    logical_width as f32,
+                    logical_height as f32,
+                    scale_factor as f32,
+                );
             }
             let palette_changed = runtime.app.world().resource::<PaletteResource>().0 != palette;
             if palette_changed {
@@ -5079,6 +5672,7 @@ fn pick_occt_scene(
     hidden_body_ids: &[u64],
     body_poses: &[BodyPoseDto],
     instance_body_poses: &[InstanceBodyPoseDto],
+    purpose: NativePickPurpose,
 ) -> Option<NativePick> {
     if viewport.0 <= 1.0 || viewport.1 <= 1.0 {
         return None;
@@ -5132,6 +5726,7 @@ fn pick_occt_scene(
                 direction,
                 world_per_pixel_factor,
                 &mut best,
+                purpose,
             );
         }
     }
@@ -5146,6 +5741,7 @@ fn pick_body(
     direction: Vec3,
     world_per_pixel_factor: f32,
     best: &mut Option<NativePick>,
+    purpose: NativePickPurpose,
 ) {
     let inverse_rotation = transform.rotation.inverse();
     for face in &body.faces {
@@ -5201,6 +5797,12 @@ fn pick_body(
             });
         }
 
+        // These full disks are joint-placement aids, not trimmed B-rep
+        // faces. In ordinary selection they can fill a real hole or extend
+        // beyond a partial revolution and falsely turn background into a hit.
+        if purpose != NativePickPurpose::JointConnector {
+            continue;
+        }
         let Some(cylinder) = face.cylinder else {
             continue;
         };
@@ -5270,6 +5872,11 @@ fn pick_body(
         }
     }
 
+    // Ordinary edge selection has its own screen-space picker. Analytic
+    // connector rings must not masquerade as face hits with face_id = 0.
+    if purpose != NativePickPurpose::JointConnector {
+        return;
+    }
     for edge in &body.edges {
         let Some(circle) = edge.circle.filter(|circle| circle.closed) else {
             continue;
@@ -5520,6 +6127,34 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 mod tests {
     use super::*;
 
+    #[test]
+    fn shared_native_edge_eligibility_distinguishes_straight_from_bent_edges() {
+        let edge = |points: &[[f64; 3]]| nbcad_solid::EdgeDto {
+            id: nbcad_core::EdgeId(1),
+            key: "edge".to_string(),
+            points: points
+                .iter()
+                .map(|point| nbcad_solid::Point3Dto {
+                    x: point[0],
+                    y: point[1],
+                    z: point[2],
+                })
+                .collect(),
+            circle: None,
+            refinable: true,
+        };
+        assert!(edge_is_straight(&edge(&[
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ])));
+        assert!(!edge_is_straight(&edge(&[
+            [0.0, 0.0, 0.0],
+            [5.0, 1.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ])));
+    }
+
     fn assert_engine_ok(response: String) -> serde_json::Value {
         let envelope: serde_json::Value =
             serde_json::from_str(&response).expect("engine response should be JSON");
@@ -5658,7 +6293,7 @@ mod tests {
         .expect("standalone sketch point should deserialize");
 
         assert_eq!(sketch_grip_positions(&point), &[SketchVec2::ZERO]);
-        assert_eq!(SKETCH_DEPTH_BIAS, -1.0);
+        assert!((-1.0..=1.0).contains(&SKETCH_DEPTH_BIAS));
         assert!(SKETCH_POINT_OUTLINE_DEPTH_BIAS > SKETCH_DEPTH_BIAS);
         assert!(SKETCH_LINE_WIDTH < HIGHLIGHT_LINE_WIDTH);
         assert!(SKETCH_POINT_OUTLINE_WIDTH > SKETCH_LINE_WIDTH);
@@ -5666,6 +6301,50 @@ mod tests {
         assert!(SKETCH_POINT_OUTLINE_RADIUS_PX > SKETCH_POINT_RADIUS_PX);
         assert!(SKETCH_POINT_OUTLINE_RADIUS_PX < 3.5);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
+    }
+
+    #[test]
+    fn interaction_line_weight_tracks_logical_viewport_and_backing_density() {
+        assert_eq!(DIRECT_PICK_FEEDBACK_OFFSET, PROFILE_PICK_OFFSET);
+        assert_eq!(PICK_FEEDBACK_LINE_WIDTH, 1.0);
+        assert_eq!(DIRECT_PICK_FEEDBACK_LINE_WIDTH, 0.75);
+        assert_eq!(PROFILE_BORDER_LINE_WIDTH, DIRECT_PICK_FEEDBACK_LINE_WIDTH);
+        assert!(PROFILE_BORDER_LINE_WIDTH < SKETCH_LINE_WIDTH);
+        assert!(DIRECT_PICK_FEEDBACK_LINE_WIDTH < PICK_FEEDBACK_LINE_WIDTH);
+        assert!(PICK_FEEDBACK_LINE_WIDTH < SKETCH_LINE_WIDTH);
+        assert!(HIGHLIGHT_LINE_WIDTH > PICK_FEEDBACK_LINE_WIDTH);
+        assert_eq!(
+            PICK_FEEDBACK_HALO_LINE_WIDTH,
+            PICK_FEEDBACK_LINE_WIDTH * 2.0
+        );
+        for bias in [
+            SKETCH_DEPTH_BIAS,
+            SKETCH_POINT_OUTLINE_DEPTH_BIAS,
+            PICK_FEEDBACK_HALO_DEPTH_BIAS,
+            PICK_FEEDBACK_DEPTH_BIAS,
+            DIRECT_PICK_FEEDBACK_DEPTH_BIAS,
+        ] {
+            assert!(
+                (-1.0..=1.0).contains(&bias),
+                "gizmo depth bias {bias} must stay inside Bevy's documented range",
+            );
+        }
+        assert!(SKETCH_DEPTH_BIAS > PICK_FEEDBACK_HALO_DEPTH_BIAS);
+        assert!(PICK_FEEDBACK_HALO_DEPTH_BIAS > PICK_FEEDBACK_DEPTH_BIAS);
+        assert!(PICK_FEEDBACK_DEPTH_BIAS > DIRECT_PICK_FEEDBACK_DEPTH_BIAS);
+        assert!((viewport_line_logical_scale(960.0, 720.0) - 1.0).abs() < 1.0e-6);
+        assert!(viewport_line_logical_scale(1600.0, 1000.0) > 1.0);
+        assert_eq!(
+            viewport_line_logical_scale(10_000.0, 10_000.0),
+            VIEWPORT_LINE_SCALE_MAX
+        );
+        assert_eq!(
+            viewport_line_logical_scale(320.0, 240.0),
+            VIEWPORT_LINE_SCALE_MIN
+        );
+        let logical = viewport_line_raster_scale(1600.0, 1000.0, 1.0);
+        let retina = viewport_line_raster_scale(1600.0, 1000.0, 2.0);
+        assert!((retina - logical * 2.0).abs() < 1.0e-6);
     }
 
     #[test]
@@ -5683,10 +6362,8 @@ mod tests {
         let near = Vec3::ZERO;
         let far = Vec3::new(0.0, 0.0, -90.0);
 
-        let near_radius =
-            screen_space_disc_radius(camera, viewport, near, SKETCH_POINT_RADIUS_PX);
-        let far_radius =
-            screen_space_disc_radius(camera, viewport, far, SKETCH_POINT_RADIUS_PX);
+        let near_radius = screen_space_disc_radius(camera, viewport, near, SKETCH_POINT_RADIUS_PX);
+        let far_radius = screen_space_disc_radius(camera, viewport, far, SKETCH_POINT_RADIUS_PX);
         let near_world_per_pixel = world_per_pixel_at(camera, viewport, near);
         let far_world_per_pixel = world_per_pixel_at(camera, viewport, far);
 
@@ -6051,6 +6728,7 @@ mod tests {
             &[],
             &[],
             &[],
+            NativePickPurpose::Geometry,
         )
         .expect("center ray should hit the OCCT box");
         assert_eq!(hit.body_id, scene.bodies[0].id.0);
@@ -6070,6 +6748,7 @@ mod tests {
                 &[scene.bodies[0].id.0],
                 &[],
                 &[],
+                NativePickPurpose::Geometry,
             )
             .is_none(),
             "browser-hidden bodies must not remain pickable"
@@ -6093,6 +6772,7 @@ mod tests {
             &[],
             &[translated],
             &[],
+            NativePickPurpose::Geometry,
         )
         .expect("native picking must follow the solved body pose");
         assert!((moved_hit.point[0] - 40.0).abs() < 1.0e-4);
@@ -6167,6 +6847,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                NativePickPurpose::Geometry,
             ));
         }
         let average_micros = started.elapsed().as_secs_f64() * 100.0;
@@ -6237,6 +6918,7 @@ mod tests {
                 &[],
                 &[],
                 &instances,
+                NativePickPurpose::Geometry,
             )
             .expect("each visible occurrence should be independently pickable");
             assert_eq!(hit.body_id, body_id.0);
@@ -6276,6 +6958,146 @@ mod tests {
             mesh_ids[0].1, mesh_ids[1].1,
             "reusable occurrences must retain one shared GPU mesh asset",
         );
+    }
+
+    #[test]
+    fn native_pick_purpose_defaults_to_geometry_and_requires_explicit_connector_opt_in() {
+        assert_eq!(NativePickPurpose::default(), NativePickPurpose::Geometry);
+        assert_eq!(
+            serde_json::from_str::<NativePickPurpose>(r#""geometry""#).unwrap(),
+            NativePickPurpose::Geometry,
+        );
+        assert_eq!(
+            serde_json::from_str::<NativePickPurpose>(r#""jointConnector""#).unwrap(),
+            NativePickPurpose::JointConnector,
+        );
+        assert!(serde_json::from_str::<NativePickPurpose>(r#""unknown""#).is_err());
+    }
+
+    #[test]
+    fn native_geometry_picker_ignores_virtual_caps_on_an_actual_partial_revolve() {
+        let state = crate::state::AppState::new();
+        state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xz"}"#);
+        state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":2.0,"y":0.0},
+                "p2":{"x":5.0,"y":10.0},
+                "ctrl_held":true
+            }"#,
+        );
+        state.engine_call("end_sketch", "");
+        let response = state.solid_revolve(
+            r#"{
+                "sketch_name":"Sketch1",
+                "profile_indices":[0],
+                "axis_origin":{"x":0.0,"y":0.0},
+                "axis_direction":{"x":0.0,"y":1.0},
+                "angle_deg":80.0,
+                "flip":false,
+                "operation":"new_body",
+                "target_body_ids":[]
+            }"#,
+        );
+        let (_, _, scene, _, _, _, _, _, _, _) = state.viewport_snapshot();
+        assert_eq!(scene.bodies.len(), 1, "{response}");
+        assert!(scene.errors.is_empty());
+        let body = &scene.bodies[0];
+        assert!(body.faces.iter().any(|face| face.cylinder.is_some()));
+
+        // This ray lies in the missing sector, inside the old full-disk
+        // connector proxy but outside every physical face of the 80° part.
+        let empty_sector_camera = ViewportCamera {
+            position: [-3.0, 0.0, 50.0],
+            target: [-3.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            vertical_fov_degrees: 45.0,
+        };
+        let pick = |scene: &SolidSceneDto, camera, purpose| {
+            pick_occt_scene(
+                scene,
+                camera,
+                (800.0, 600.0),
+                400.0,
+                300.0,
+                &[],
+                &[],
+                &[],
+                purpose,
+            )
+        };
+        assert!(
+            pick(&scene, empty_sector_camera, NativePickPurpose::Geometry).is_none(),
+            "empty space beside a partial revolve must not select its cylindrical wall",
+        );
+        let connector = pick(
+            &scene,
+            empty_sector_camera,
+            NativePickPurpose::JointConnector,
+        )
+        .expect("explicit joint picking retains the virtual opening target");
+        assert_eq!(
+            connector.connector_kind.as_deref(),
+            Some("virtual_circular_face")
+        );
+
+        let top = body
+            .faces
+            .iter()
+            .find(|face| {
+                face.plane
+                    .as_ref()
+                    .is_some_and(|plane| plane.normal[2].abs() > 0.99 && plane.origin[2] > 9.99)
+            })
+            .expect("partial revolve has a physical top cap");
+        let triangle = &body.mesh.indices[top.first_index as usize..top.first_index as usize + 3];
+        let center = triangle
+            .iter()
+            .map(|index| mesh_position(body, *index).unwrap())
+            .sum::<Vec3>()
+            / 3.0;
+        let cap_camera = ViewportCamera {
+            position: (center + Vec3::Z * 50.0).to_array(),
+            target: center.to_array(),
+            ..empty_sector_camera
+        };
+        for purpose in [
+            NativePickPurpose::Geometry,
+            NativePickPurpose::JointConnector,
+        ] {
+            let cap = pick(&scene, cap_camera, purpose).expect("physical cap remains selectable");
+            assert_eq!(cap.face_id, top.id.0, "{purpose:?} at {center:?}: {cap:?}");
+            assert_ne!(cap.connector_kind.as_deref(), Some("virtual_circular_face"));
+            assert!((Vec3::from_array(cap.point) - center).length() < 1.0e-4);
+        }
+
+        // A real part behind the missing sector must win; merely discarding
+        // a virtual hit after nearest-hit resolution would lose this target.
+        state.engine_call("begin_sketch", r#"{"type":"origin_plane","plane":"xy"}"#);
+        state.engine_call(
+            "add_rectangle",
+            r#"{
+                "mode":"two_point",
+                "p1":{"x":-4.0,"y":-1.0},
+                "p2":{"x":-2.0,"y":1.0},
+                "ctrl_held":true
+            }"#,
+        );
+        state.engine_call("end_sketch", "");
+        let response = state.solid_extrude(
+            r#"{
+                "sketch_name":"Sketch2", "profile_indices":[0],
+                "operation":"new_body", "extent":{"type":"distance","distance":5.0},
+                "taper_angle_deg":0.0, "flip":true, "target_body_ids":[]
+            }"#,
+        );
+        let (_, _, scene, _, _, _, _, _, _, _) = state.viewport_snapshot();
+        assert_eq!(scene.bodies.len(), 2, "{response}");
+        let behind = pick(&scene, empty_sector_camera, NativePickPurpose::Geometry)
+            .expect("real geometry behind a virtual disk remains selectable");
+        assert_eq!(behind.body_id, scene.bodies[1].id.0);
+        assert!(behind.point[2].abs() < 1.0e-4);
     }
 
     #[test]
@@ -6345,6 +7167,28 @@ mod tests {
             bodies: vec![body],
             errors: vec![],
         };
+        for x in [0.0, 8.0] {
+            assert!(
+                pick_occt_scene(
+                    &scene,
+                    ViewportCamera {
+                        position: [x, 0.0, 50.0],
+                        target: [x, 0.0, 0.0],
+                        up: [0.0, 1.0, 0.0],
+                        vertical_fov_degrees: 45.0,
+                    },
+                    (800.0, 600.0),
+                    400.0,
+                    300.0,
+                    &[],
+                    &[],
+                    &[],
+                    NativePickPurpose::Geometry,
+                )
+                .is_none(),
+                "ordinary face picking must not hit virtual openings or connector rings at x={x}",
+            );
+        }
         let hit = pick_occt_scene(
             &scene,
             ViewportCamera {
@@ -6359,6 +7203,7 @@ mod tests {
             &[],
             &[],
             &[],
+            NativePickPurpose::JointConnector,
         )
         .expect("the otherwise empty cylinder opening should be pickable");
         assert_eq!(hit.connector_kind.as_deref(), Some("virtual_circular_face"));
@@ -6379,6 +7224,7 @@ mod tests {
             &[],
             &[],
             &[],
+            NativePickPurpose::JointConnector,
         )
         .expect("the exact outer chamfer rim should be pickable");
         assert_eq!(rim_hit.connector_kind.as_deref(), Some("circular_edge"));
@@ -6401,6 +7247,7 @@ mod tests {
             &[],
             &[],
             &[],
+            NativePickPurpose::Geometry,
         )
         .expect("the physical internal cylinder wall should remain pickable");
         assert_eq!(wall_hit.connector_kind.as_deref(), Some("cylindrical_face"));

@@ -24,6 +24,10 @@ import {
   Type,
   type LucideIcon,
 } from 'lucide-react';
+import {
+  ConstraintIconContent,
+  TOOL_CONSTRAINT_ICON,
+} from '../sketch/constraintIcons';
 
 /* ------------------------------------------------------------------ */
 /* Product-owned CAD diagrams                                          */
@@ -324,73 +328,17 @@ const GLYPHS: Record<string, ReactNode> = {
     </>
   ),
   // Constraints: geometric relation plus a small construction cue.
-  coincident: (
-    <>
-      <path d="M4 18L12 10M20 18l-8-8" />
-      <circle cx="12" cy="10" r="2.2" />
-      <path d="M12 3v4M5 10h4M15 10h4" />
-    </>
-  ),
-  midpointC: (
-    <>
-      <path d="M3 18h18" />
-      <path d="M12 6l4 7H8l4-7z" />
-      <path d="M12 13v5" strokeDasharray="2 2" />
-    </>
-  ),
-  collinear: (
-    <>
-      <path d="M3 18L21 6" strokeDasharray="2 2" />
-      <path d="M4 15l6-4M14 9l6-4" />
-      <circle cx="12" cy="10" r="1.2" />
-    </>
-  ),
-  hv: (
-    <>
-      <path d="M5 4v15h15" />
-      <path d="M9 8h4M9 8v4" strokeDasharray="2 2" />
-    </>
-  ),
-  parallel: (
-    <>
-      <path d="M5 19L10 5M14 19l5-14" />
-      <path d="M7 10l3-1M14 15l3-1" />
-    </>
-  ),
-  perpendicular: (
-    <>
-      <path d="M5 4v15h15" />
-      <path d="M5 14h5v5" />
-    </>
-  ),
-  tangent: (
-    <>
-      <circle cx="11" cy="14" r="6" />
-      <path d="M4 7l16 5" />
-      <circle cx="11" cy="9.2" r="1.2" />
-    </>
-  ),
-  concentric: (
-    <>
-      <circle cx="12" cy="12" r="8" />
-      <circle cx="12" cy="12" r="4" />
-      <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-    </>
-  ),
-  symmetry: (
-    <>
-      <path d="M12 3v18" strokeDasharray="2 2" />
-      <path d="M4 7l5 5-5 5M20 7l-5 5 5 5" />
-      <path d="M7 12h10" />
-    </>
-  ),
-  fix: (
-    <>
-      <path d="M7 11V8a5 5 0 0 1 10 0v3" />
-      <rect x="5" y="11" width="14" height="10" rx="2" />
-      <circle cx="12" cy="16" r="1.3" fill="currentColor" stroke="none" />
-    </>
-  ),
+  coincident: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.coincident} />,
+  midpointC: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.midpointC} />,
+  collinear: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.collinear} />,
+  hv: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.hv} />,
+  equal: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.equal} />,
+  parallel: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.parallel} />,
+  perpendicular: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.perpendicular} />,
+  tangent: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.tangent} />,
+  concentric: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.concentric} />,
+  symmetry: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.symmetry} />,
+  fix: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.fix} />,
   autoConstrain: (
     <>
       <path d="M4 19V7h10" />

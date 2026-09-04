@@ -1,15 +1,18 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import { cancelTimelineFeatureEdit, submitRevolve } from '../engine/controller';
 import type { ExtrudeOperation, ProfileCatalogItemDto } from '../engine/types';
 import { useTranslation } from '../i18n';
+import {
+  allRevolveAxisLineOptions,
+  revolveAxisLineOptions,
+} from '../lib/revolveAxis';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
 import { SolidOperationFields } from './SolidOperationFields';
+import { ViewportSelectionField } from './ViewportSelectionField';
 
-const INPUT_CLASS =
-  'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
 const LABEL_CLASS = 'mb-1 block text-[10px] font-semibold uppercase tracking-wide text-mute';
 
 type AxisPreset = 'x' | 'y' | 'line' | 'custom';
@@ -21,8 +24,6 @@ export function RevolveDialog() {
   const close = useAppStore((state) => state.closeRevolveDialog);
   const cancel = () => void cancelTimelineFeatureEdit(close);
   const busy = useAppStore((state) => state.solidBusy);
-  const scene = useAppStore((state) => state.solidScene);
-  const selectedBody = useAppStore((state) => state.selectedBody);
   const viewportAxis = useAppStore((state) => state.revolveAxisSelection);
   const setViewportAxis = useAppStore((state) => state.setRevolveAxisSelection);
   const profilePicker = useAppStore((state) =>
@@ -30,12 +31,14 @@ export function RevolveDialog() {
   );
   const configureProfilePicker = useAppStore((state) => state.configureProfilePicker);
   const replaceProfilePicks = useAppStore((state) => state.replaceProfilePicks);
-  const toggleProfilePick = useAppStore((state) => state.toggleProfilePick);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [axisPreset, setAxisPreset] = useState<AxisPreset>('y');
+  const [axisPreset, setAxisPreset] = useState<AxisPreset>('line');
+  const [axisLineSketchName, setAxisLineSketchName] = useState<string | null>(null);
   const [axisLineEntityId, setAxisLineEntityId] = useState<number | null>(null);
   const [originX, setOriginX] = useState('0');
   const [originY, setOriginY] = useState('0');
@@ -49,9 +52,26 @@ export function RevolveDialog() {
   const profileIndices = profilePicker?.selected
     .filter((profile) => profile.sketch_name === sketchName)
     .map((profile) => profile.profile_index) ?? [];
+  const usableCatalog = useMemo(
+    () => catalog.filter((entry) =>
+      entry.profiles.some((profile) => profile.nesting_depth % 2 === 0)),
+    [catalog],
+  );
+  const axisLineOptions = useMemo(
+    () => profileIndices.length > 0
+      ? revolveAxisLineOptions(catalog, sketchName)
+      : allRevolveAxisLineOptions(catalog),
+    [catalog, profileIndices.length, sketchName],
+  );
+  const selectedAxisLine = axisLineOptions.find(
+    (option) =>
+      option.sketchName === axisLineSketchName
+      && option.line.entity_id === axisLineEntityId,
+  );
 
   useEffect(() => {
     if (openFeature === null) return;
+    const initiallySelectedBody = useAppStore.getState().selectedBody;
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
@@ -62,19 +82,20 @@ export function RevolveDialog() {
           engine.revolveDefinitions(),
         ]);
         if (cancelled) return;
-        const usable = nextCatalog.filter((entry) => entry.profiles.some((profile) => profile.nesting_depth % 2 === 0));
+        const usable = nextCatalog.filter((entry) =>
+          entry.profiles.some((profile) => profile.nesting_depth % 2 === 0));
         const edit =
           openFeature > 0
             ? definitions.find((definition) => definition.feature_id === openFeature)
             : undefined;
         const initialSketch = edit?.sketch_name ?? usable[usable.length - 1]?.sketch_name ?? '';
-        const entry = usable.find((item) => item.sketch_name === initialSketch);
-        setCatalog(usable);
-        const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
-        const initialIndices = edit?.profile_indices ?? (eligible.length === 1 ? [eligible[0].index] : []);
+        // Keep line-only sketches in the catalog: they can provide a stable
+        // coplanar axis even though they cannot provide a closed profile.
+        setCatalog(nextCatalog);
+        const initialIndices = edit?.profile_indices ?? [];
         configureProfilePicker(
           'revolve',
-          usable,
+          nextCatalog,
           initialIndices.map((profile_index) => ({
             sketch_name: initialSketch,
             profile_index,
@@ -91,14 +112,31 @@ export function RevolveDialog() {
         setTargetBodies(
           edit?.target_body_ids.length
             ? edit.target_body_ids
-            : selectedBody !== null
-              ? [selectedBody]
-              : scene.bodies[0]
-                ? [scene.bodies[0].id]
-                : [],
+            : initiallySelectedBody !== null
+              ? [initiallySelectedBody]
+              : [],
         );
-        const initialAxisLine = edit?.axis_line_entity_id ?? entry?.lines[0]?.entity_id ?? null;
-        setAxisLineEntityId(initialAxisLine);
+        const availableAxes = revolveAxisLineOptions(nextCatalog, initialSketch);
+        const savedAxisSketch = edit?.axis_line_sketch_name ?? initialSketch;
+        const savedAxis = edit?.axis_line_entity_id != null
+          ? availableAxes.find(
+              (option) =>
+                option.sketchName === savedAxisSketch
+                && option.line.entity_id === edit.axis_line_entity_id,
+            )
+          : undefined;
+        const initialAxis = savedAxis ?? null;
+        // Preserve a broken saved reference instead of silently retargeting
+        // the feature. It remains visibly invalid and disables OK until the
+        // user deliberately chooses a replacement axis.
+        setAxisLineSketchName(
+          edit?.axis_line_entity_id != null
+            ? savedAxisSketch
+            : initialAxis?.sketchName ?? null,
+        );
+        setAxisLineEntityId(
+          edit?.axis_line_entity_id ?? initialAxis?.line.entity_id ?? null,
+        );
         const origin = edit?.axis_origin;
         const direction = edit?.axis_direction;
         setAxisPreset(
@@ -110,12 +148,18 @@ export function RevolveDialog() {
               ? 'y'
               : edit
                 ? 'custom'
-                : 'y',
+                : 'line',
         );
         setViewportAxis(
-          edit?.axis_line_entity_id != null
-            ? { sketchName: initialSketch, entityId: edit.axis_line_entity_id }
+          savedAxis
+            ? {
+                sketchName: savedAxis.sketchName,
+                entityId: savedAxis.line.entity_id,
+              }
             : null,
+        );
+        setModelingPickTarget(
+          initialIndices.length === 0 ? 'revolve_profile' : 'revolve_axis',
         );
       })
       .catch((error: unknown) => {
@@ -129,29 +173,29 @@ export function RevolveDialog() {
     return () => {
       cancelled = true;
     };
-  }, [configureProfilePicker, openFeature, scene.bodies, selectedBody, setViewportAxis, t]);
+  }, [
+    configureProfilePicker,
+    openFeature,
+    setModelingPickTarget,
+    setViewportAxis,
+    t,
+  ]);
 
   useEffect(() => {
     if (openFeature === null || viewportAxis === null || catalog.length === 0) return;
-    const entry = catalog.find((item) => item.sketch_name === viewportAxis.sketchName);
-    if (!entry?.lines.some((line) => line.entity_id === viewportAxis.entityId)) return;
-    if (sketchName !== entry.sketch_name) {
-      const eligible = entry.profiles.filter((profile) => profile.nesting_depth % 2 === 0);
-      replaceProfilePicks(
-        'revolve',
-        eligible.length === 1
-          ? [{ sketch_name: entry.sketch_name, profile_index: eligible[0].index }]
-          : [],
-        entry.sketch_name,
-      );
-    }
+    const eligibleAxis = axisLineOptions.find(
+      (option) =>
+        option.sketchName === viewportAxis.sketchName
+        && option.line.entity_id === viewportAxis.entityId,
+    );
+    if (!eligibleAxis) return;
     setAxisPreset('line');
+    setAxisLineSketchName(viewportAxis.sketchName);
     setAxisLineEntityId(viewportAxis.entityId);
-  }, [catalog, openFeature, replaceProfilePicks, sketchName, viewportAxis]);
+  }, [axisLineOptions, catalog, openFeature, viewportAxis]);
 
   if (openFeature === null) return null;
 
-  const selectedCatalog = catalog.find((entry) => entry.sketch_name === sketchName);
   const numbers = [originX, originY, directionX, directionY, angle].map(Number);
   const [ox, oy, dx, dy, angleDeg] = numbers;
   const canSubmit =
@@ -161,38 +205,25 @@ export function RevolveDialog() {
     sketchName.length > 0 &&
     profileIndices.length > 0 &&
     (axisPreset === 'line'
-      ? axisLineEntityId !== null
+      ? selectedAxisLine !== undefined
       : numbers.every(Number.isFinite) && Math.hypot(dx, dy) > 1e-9) &&
     Math.abs(angleDeg) > 1e-9 &&
     Math.abs(angleDeg) <= 360 &&
     (operation === 'new_body' || targetBodies.length > 0);
 
-  const chooseSketch = (name: string) => {
-    const entry = catalog.find((item) => item.sketch_name === name);
-    const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
-    replaceProfilePicks(
-      'revolve',
-      eligible.length === 1
-        ? [{ sketch_name: name, profile_index: eligible[0].index }]
-        : [],
-      name,
-    );
-    const firstLine = entry?.lines[0]?.entity_id ?? null;
-    setAxisLineEntityId(firstLine);
-    setViewportAxis(
-      axisPreset === 'line' && firstLine !== null
-        ? { sketchName: name, entityId: firstLine }
-        : null,
-    );
-  };
-
   const chooseAxis = (preset: AxisPreset) => {
     setAxisPreset(preset);
-    setViewportAxis(
-      preset === 'line' && axisLineEntityId !== null
-        ? { sketchName, entityId: axisLineEntityId }
-        : null,
-    );
+    if (preset === 'line') {
+      // Preset modes retain the line choice locally but do not display it as
+      // an active axis. Restore the same validated identity used by submit.
+      setViewportAxis(selectedAxisLine
+        ? { sketchName: selectedAxisLine.sketchName, entityId: selectedAxisLine.line.entity_id }
+        : null);
+      setModelingPickTarget('revolve_axis');
+      return;
+    }
+    setModelingPickTarget(null);
+    setViewportAxis(null);
     if (preset === 'x') {
       setOriginX('0');
       setOriginY('0');
@@ -206,10 +237,6 @@ export function RevolveDialog() {
     }
   };
 
-  const toggleProfile = (index: number) => {
-    toggleProfilePick({ sketch_name: sketchName, profile_index: index });
-  };
-
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
@@ -219,6 +246,8 @@ export function RevolveDialog() {
         profile_indices: profileIndices,
         axis_origin: { x: ox, y: oy },
         axis_direction: { x: dx, y: dy },
+        axis_line_sketch_name:
+          axisPreset === 'line' ? axisLineSketchName : null,
         axis_line_entity_id: axisPreset === 'line' ? axisLineEntityId : null,
         angle_deg: angleDeg,
         flip,
@@ -265,98 +294,80 @@ export function RevolveDialog() {
             <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
               {loadError}
             </p>
-          ) : catalog.length === 0 ? (
+          ) : usableCatalog.length === 0 ? (
             <p className="rounded border border-edge bg-header p-2 text-xs leading-5 text-mute">
               {t('revolve.noProfiles')}
             </p>
           ) : (
             <>
-              <label>
-                <span className={LABEL_CLASS}>{t('revolve.sketch')}</span>
-                <select
-                  data-testid="revolve-sketch"
-                  value={sketchName}
-                  onChange={(event) => chooseSketch(event.target.value)}
-                  className={INPUT_CLASS}
-                >
-                  {catalog.map((entry) => (
-                    <option key={entry.sketch_name} value={entry.sketch_name}>
-                      {entry.sketch_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ViewportSelectionField
+                testId="revolve-profile-selection"
+                label={t('revolve.profiles')}
+                status={profileIndices.length > 0
+                  ? `${profileIndices.length} ${profileIndices.length === 1 ? 'profile' : 'profiles'} selected${sketchName ? ` · ${sketchName}` : ''}`
+                  : 'Click a closed profile in the viewport'}
+                hint="Selected regions are highlighted in the model. Click this field to change them."
+                active={modelingPickTarget === 'revolve_profile'}
+                hasSelection={profileIndices.length > 0}
+                onActivate={() => setModelingPickTarget('revolve_profile')}
+                onClear={() => {
+                  replaceProfilePicks('revolve', [], sketchName);
+                  setModelingPickTarget('revolve_profile');
+                }}
+              />
 
               <fieldset>
-                <legend className={LABEL_CLASS}>{t('revolve.profiles')}</legend>
-                <p className="mb-1.5 text-[10px] leading-4 text-mute">
-                  {t('solidProfile.pickHint')}
-                </p>
-                <div className="space-y-1 rounded border border-edge bg-header p-2">
-                  {selectedCatalog?.profiles.filter((profile) => profile.nesting_depth % 2 === 0).map((profile) => (
-                    <label
-                      key={profile.index}
-                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
+                <legend className={LABEL_CLASS}>{t('revolve.axis')}</legend>
+                <div
+                  role="radiogroup"
+                  aria-label={t('revolve.axis')}
+                  className="grid grid-cols-2 gap-1"
+                >
+                  {([
+                    ['line', t('revolve.sketchLine')],
+                    ['x', t('revolve.xAxis')],
+                    ['y', t('revolve.yAxis')],
+                    ['custom', t('revolve.customAxis')],
+                  ] as Array<[AxisPreset, string]>).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={axisPreset === value}
+                      data-testid={`revolve-axis-${value}-mode`}
+                      onClick={() => chooseAxis(value)}
+                      className={`h-8 rounded border px-2 text-[11px] font-medium transition-colors ${
+                        axisPreset === value
+                          ? 'border-accent bg-accent/20 text-ink'
+                          : 'border-edge bg-header text-mute hover:border-accent/60 hover:bg-edge hover:text-ink'
+                      }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={profileIndices.includes(profile.index)}
-                        onChange={() => toggleProfile(profile.index)}
-                        className="accent-accent"
-                      />
-                      <span className="flex-1">
-                        {t('revolve.profile')} {profile.index + 1}
-                      </span>
-                      <span className="text-[10px] text-mute">
-                        {Math.abs(profile.area).toFixed(2)} mm²
-                      </span>
-                    </label>
+                      {label}
+                    </button>
                   ))}
                 </div>
               </fieldset>
 
-              <label>
-                <span className={LABEL_CLASS}>{t('revolve.axis')}</span>
-                <select
-                  data-testid="revolve-axis"
-                  value={axisPreset}
-                  onChange={(event) => chooseAxis(event.target.value as AxisPreset)}
-                  className={INPUT_CLASS}
-                >
-                  <option value="x">{t('revolve.xAxis')}</option>
-                  <option value="y">{t('revolve.yAxis')}</option>
-                  <option value="line">{t('revolve.sketchLine')}</option>
-                  <option value="custom">{t('revolve.customAxis')}</option>
-                </select>
-              </label>
-
               {axisPreset === 'line' && (
-                <label>
-                  <span className={LABEL_CLASS}>{t('revolve.axisLine')}</span>
-                  <span className="mb-1 block text-[10px] leading-4 text-mute">
-                    {t('revolve.pickAxisLine')}
-                  </span>
-                  <select
-                    data-testid="revolve-axis-line"
-                    value={axisLineEntityId ?? ''}
-                    onChange={(event) => {
-                      const entityId = Number(event.target.value);
-                      setAxisLineEntityId(entityId);
-                      setViewportAxis({ sketchName, entityId });
-                    }}
-                    className={INPUT_CLASS}
-                  >
-                    {selectedCatalog?.lines.length ? (
-                      selectedCatalog.lines.map((line) => (
-                        <option key={line.entity_id} value={line.entity_id}>
-                          {t('revolve.line')} {line.entity_id}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">{t('revolve.noLines')}</option>
-                    )}
-                  </select>
-                </label>
+                <ViewportSelectionField
+                  testId="revolve-axis-selection"
+                  label={t('revolve.axisLine')}
+                  status={selectedAxisLine
+                    ? `Straight line selected · ${selectedAxisLine.sketchName}`
+                    : axisLineOptions.length > 0
+                      ? 'Click a straight line in the viewport'
+                      : t('revolve.noLines')}
+                  hint={t('revolve.pickAxisLine')}
+                  active={modelingPickTarget === 'revolve_axis'}
+                  hasSelection={selectedAxisLine !== undefined}
+                  onActivate={() => setModelingPickTarget('revolve_axis')}
+                  onClear={() => {
+                    setAxisLineSketchName(null);
+                    setAxisLineEntityId(null);
+                    setViewportAxis(null);
+                    setModelingPickTarget('revolve_axis');
+                  }}
+                />
               )}
 
               {axisPreset === 'custom' && (
@@ -400,6 +411,7 @@ export function RevolveDialog() {
                 setOperation={setOperation}
                 targetBodies={targetBodies}
                 setTargetBodies={setTargetBodies}
+                pickTarget="revolve_targets"
               />
 
               <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">

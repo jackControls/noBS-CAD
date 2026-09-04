@@ -11,6 +11,7 @@ use crate::entity::EntityId;
 use crate::geometry::Vec2;
 use crate::params::ParamId;
 use crate::plane::{PlaneBasis, PlaneRef};
+use crate::sketch::DimensionMode;
 
 /// Project-owned visibility choices for model objects shown in the Browser.
 ///
@@ -170,16 +171,17 @@ pub struct BeginSketchRequest {
     pub face_origin: FaceSketchOrigin,
 }
 
-/// One driving dimension in a snapshot: constraint + parameter binding +
-/// annotation placement for the renderer.
+/// One dimension in a snapshot. Driving dimensions carry a parameter;
+/// reference dimensions carry only their live measured value and annotation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DimensionDto {
     pub constraint_id: ConstraintId,
+    pub mode: DimensionMode,
     /// "distance" | "radius" | "diameter" | "angle"
     pub kind: String,
     pub entities: Vec<EntityId>,
-    pub param_id: ParamId,
-    pub param_name: String,
+    pub param_id: Option<ParamId>,
+    pub param_name: Option<String>,
     pub param_expression: Option<String>,
     pub value: f64,
     /// Formatted annotation text (mm/deg, 2 decimals; Ø/R prefixes).
@@ -235,6 +237,7 @@ pub enum SnapTarget {
 pub enum Inference {
     Horizontal,
     Vertical,
+    Perpendicular,
     Coincident,
 }
 
@@ -495,6 +498,12 @@ pub struct EditDimensionRequest {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetDimensionModeRequest {
+    pub constraint_id: ConstraintId,
+    pub mode: DimensionMode,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MoveDimensionRequest {
     pub constraint_id: ConstraintId,
@@ -704,6 +713,9 @@ pub struct PointRequest {
     /// creation and its point-on-curve relation are one atomic command.
     #[serde(default)]
     pub coincident_with: Option<EntityId>,
+    /// Temporarily suppress inferred point/origin/carrier relations.
+    #[serde(default)]
+    pub ctrl_held: bool,
 }
 
 // --- Results ---

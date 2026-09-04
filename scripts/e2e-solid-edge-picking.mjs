@@ -52,6 +52,22 @@ try {
     { timeout: 60_000 },
   );
   await page.waitForTimeout(500);
+  const interactionMetrics = () => page.evaluate(() => {
+    const css = getComputedStyle(document.documentElement);
+    const surface = document.querySelector('canvas[data-cad-interaction-surface="true"]');
+    const scale = Math.min(
+      1.6,
+      Math.max(0.9, Math.hypot(surface.clientWidth, surface.clientHeight) / 1200),
+    );
+    return {
+      hover: css.getPropertyValue('--cad-pick-hover').trim().slice(1),
+      selected: css.getPropertyValue('--cad-pick-selected').trim().slice(1),
+      hoverLineWidth: 1 * scale,
+      selectedLineWidth: 2 * scale,
+      viewport: [surface.clientWidth, surface.clientHeight],
+    };
+  });
+  const interactionColors = await interactionMetrics();
 
   const candidates = await page.evaluate(() => {
     const body = window.__appStore.getState().solidScene.bodies[0];
@@ -105,8 +121,16 @@ try {
     'hovered usable edge should get one restrained preselection stroke',
   );
   assert.ok(
-    visual.overlayWidths.every((width) => Math.abs(width - 1.5) < 1e-6),
-    'hover preselection should be exactly 50% wider than the topology line',
+    visual.overlayWidths.every(
+      (width) => Math.abs(width - interactionColors.hoverLineWidth) < 1e-6,
+    ),
+    'hover preselection should use the one-pixel viewport-relative interaction stroke',
+  );
+  assert.deepEqual(visual.overlayColors, [interactionColors.hover]);
+  assert.deepEqual(
+    visual.overlayHoverOffsets,
+    [0],
+    'hover feedback should remain exactly on the picked edge without a companion stroke',
   );
   assert.equal(visual.renderOrder, 4);
 
@@ -125,12 +149,64 @@ try {
     'selected edge should retain one persistent stroke',
   );
   assert.ok(
-    visual.overlayWidths.every((width) => Math.abs(width - 1.5) < 1e-6),
-    'selected edge should remain exactly 50% wider than default',
+    visual.overlayWidths.every(
+      (width) => Math.abs(width - interactionColors.selectedLineWidth) < 1e-6,
+    ),
+    'selected edge should use the viewport-relative interaction stroke',
   );
+  assert.deepEqual(visual.overlayColors, [interactionColors.selected]);
+  assert.deepEqual(visual.overlayHoverOffsets, [0]);
   assert.equal(visual.depthTest, false);
   assert.equal(visual.renderOrder, 5);
   assert.match(await filletSelection.innerText(), /1 edge selected/);
+
+  const originalContainerStyle = await page.evaluate(() => {
+    const surface = document.querySelector('canvas[data-cad-interaction-surface="true"]');
+    const container = surface.parentElement;
+    const previousStyle = container.getAttribute('style');
+    container.style.inset = 'auto';
+    container.style.left = '0';
+    container.style.top = '0';
+    container.style.width = '840px';
+    container.style.height = '520px';
+    return previousStyle;
+  });
+  await page.waitForFunction(() => {
+    const surface = document.querySelector('canvas[data-cad-interaction-surface="true"]');
+    return surface.clientWidth === 840 && surface.clientHeight === 520;
+  });
+  const compactInteraction = await interactionMetrics();
+  assert.ok(
+    compactInteraction.selectedLineWidth < interactionColors.selectedLineWidth,
+    `interaction stroke should shrink with the logical viewport (${interactionColors.viewport.join('x')} -> ${compactInteraction.viewport.join('x')})`,
+  );
+  await page.waitForFunction(
+    ([edgeId, expectedWidth]) => {
+      const resizedVisual = window.__solidEdgeVisualState(edgeId);
+      return resizedVisual.overlayWidths.length > 0
+        && resizedVisual.overlayWidths.every(
+          (width) => Math.abs(width - expectedWidth) < 1e-6,
+        );
+    },
+    [candidates[0].edgeId, compactInteraction.selectedLineWidth],
+  );
+
+  await page.evaluate((previousStyle) => {
+    const surface = document.querySelector('canvas[data-cad-interaction-surface="true"]');
+    const container = surface.parentElement;
+    if (previousStyle === null) container.removeAttribute('style');
+    else container.setAttribute('style', previousStyle);
+  }, originalContainerStyle);
+  await page.waitForFunction(
+    ([edgeId, expectedWidth]) => {
+      const restoredVisual = window.__solidEdgeVisualState(edgeId);
+      return restoredVisual.overlayWidths.length > 0
+        && restoredVisual.overlayWidths.every(
+          (width) => Math.abs(width - expectedWidth) < 1e-6,
+        );
+    },
+    [candidates[0].edgeId, interactionColors.selectedLineWidth],
+  );
 
   await page.mouse.click(candidates[1].screen.x, candidates[1].screen.y);
   await page.waitForFunction(
@@ -176,7 +252,12 @@ try {
     candidates[2].edgeId,
   );
   assert.deepEqual(visual.overlayKinds, ['selected']);
-  assert.deepEqual(visual.overlayWidths, [1.5]);
+  assert.ok(
+    visual.overlayWidths.every(
+      (width) => Math.abs(width - interactionColors.selectedLineWidth) < 1e-6,
+    ),
+  );
+  assert.deepEqual(visual.overlayColors, [interactionColors.selected]);
   await page.getByTestId('solid-chamfer-ok').click();
   await page.waitForFunction(
     () => {

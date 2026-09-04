@@ -13,6 +13,8 @@
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod platform;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod profile_outline;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
@@ -22,7 +24,10 @@ pub mod ui_lab;
 
 use nbcad_core::BodyAppearance;
 use nbcad_sketch::{BodyPoseDto, InstanceBodyPoseDto, SketchDto};
-use nbcad_solid::{DatumPlaneDefinitionDto, ProfileCatalogItemDto, ProfileRefDto, SolidSceneDto};
+use nbcad_solid::{
+    DatumPlaneDefinitionDto, Point3Dto, ProfileCatalogItemDto, ProfileRefDto, SketchPointRefDto,
+    SolidSceneDto,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{App, AppHandle};
 
@@ -72,6 +77,10 @@ pub struct ViewportPalette {
     pub edge: [f32; 3],
     pub edge_hover: [f32; 3],
     pub edge_selected: [f32; 3],
+    pub pick_halo: [f32; 3],
+    pub origin_plane_xy: [f32; 3],
+    pub origin_plane_xz: [f32; 3],
+    pub origin_plane_yz: [f32; 3],
     pub active_sketch: [f32; 3],
     pub defined_sketch: [f32; 3],
     pub hover: [f32; 3],
@@ -97,21 +106,25 @@ impl Default for ViewportPalette {
             grid_fine: [58.0 / 255.0, 63.0 / 255.0, 71.0 / 255.0],
             grid_major: [77.0 / 255.0, 84.0 / 255.0, 95.0 / 255.0],
             body: [139.0 / 255.0, 155.0 / 255.0, 172.0 / 255.0],
-            body_selected: [105.0 / 255.0, 169.0 / 255.0, 212.0 / 255.0],
+            body_selected: [169.0 / 255.0, 103.0 / 255.0, 37.0 / 255.0],
             body_tool: [181.0 / 255.0, 138.0 / 255.0, 67.0 / 255.0],
-            body_selected_edge: [13.0 / 255.0, 117.0 / 255.0, 165.0 / 255.0],
-            face_hover: [158.0 / 255.0, 213.0 / 255.0, 243.0 / 255.0],
-            face_selected: [48.0 / 255.0, 174.0 / 255.0, 232.0 / 255.0],
+            body_selected_edge: [1.0, 208.0 / 255.0, 0.0],
+            face_hover: [35.0 / 255.0, 138.0 / 255.0, 157.0 / 255.0],
+            face_selected: [207.0 / 255.0, 119.0 / 255.0, 21.0 / 255.0],
             edge: [41.0 / 255.0, 51.0 / 255.0, 61.0 / 255.0],
-            edge_hover: [88.0 / 255.0, 199.0 / 255.0, 1.0],
-            edge_selected: [1.0, 200.0 / 255.0, 87.0 / 255.0],
-            active_sketch: [93.0 / 255.0, 169.0 / 255.0, 1.0],
+            edge_hover: [0.0, 245.0 / 255.0, 1.0],
+            edge_selected: [1.0, 208.0 / 255.0, 0.0],
+            pick_halo: [1.0, 1.0, 1.0],
+            origin_plane_xy: [87.0 / 255.0, 168.0 / 255.0, 1.0],
+            origin_plane_xz: [85.0 / 255.0, 201.0 / 255.0, 120.0 / 255.0],
+            origin_plane_yz: [1.0, 112.0 / 255.0, 120.0 / 255.0],
+            active_sketch: [134.0 / 255.0, 169.0 / 255.0, 199.0 / 255.0],
             defined_sketch: [232.0 / 255.0, 233.0 / 255.0, 236.0 / 255.0],
-            hover: [1.0, 209.0 / 255.0, 102.0 / 255.0],
-            selection: [196.0 / 255.0, 185.0 / 255.0, 1.0],
+            hover: [0.0, 245.0 / 255.0, 1.0],
+            selection: [1.0, 208.0 / 255.0, 0.0],
             constraint_related: [62.0 / 255.0, 207.0 / 255.0, 154.0 / 255.0],
-            finished_sketch: [74.0 / 255.0, 199.0 / 255.0, 1.0],
-            finished_sketch_point: [1.0, 159.0 / 255.0, 67.0 / 255.0],
+            finished_sketch: [134.0 / 255.0, 169.0 / 255.0, 199.0 / 255.0],
+            finished_sketch_point: [134.0 / 255.0, 169.0 / 255.0, 199.0 / 255.0],
             finished_sketch_point_outline: [21.0 / 255.0, 25.0 / 255.0, 31.0 / 255.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
         }
@@ -142,6 +155,8 @@ pub struct ViewportPresentation {
     pub mode: ViewportMode,
     pub hovered_origin_plane: Option<ViewportOriginPlane>,
     pub hovered_datum_plane_id: Option<u64>,
+    pub selected_origin_plane: Option<ViewportOriginPlane>,
+    pub selected_datum_plane_id: Option<u64>,
     #[serde(default)]
     pub selected_body_ids: Vec<u64>,
     pub selected_occurrence_id: Option<u64>,
@@ -154,12 +169,24 @@ pub struct ViewportPresentation {
     pub selected_edge_ids: Vec<u64>,
     pub hovered_edge_id: Option<u64>,
     #[serde(default)]
+    pub pick_refinable_edges: bool,
+    #[serde(default)]
+    pub pick_straight_edges: bool,
+    #[serde(default)]
     pub selected_sketch_entity_ids: Vec<u64>,
     /// Entities referenced by the UI-selected geometric constraint. Distinct
     /// from selection so Bevy can paint a related-highlight color.
     #[serde(default)]
     pub constraint_related_sketch_entity_ids: Vec<u64>,
     pub hovered_sketch_entity_id: Option<u64>,
+    #[serde(default)]
+    pub selected_finished_sketch_entities: Vec<FinishedSketchEntityPickRef>,
+    pub hovered_finished_sketch_entity: Option<FinishedSketchEntityPickRef>,
+    #[serde(default)]
+    pub selected_sketch_points: Vec<SketchPointRefDto>,
+    pub hovered_sketch_point: Option<SketchPointRefDto>,
+    pub selected_surface_point: Option<Point3Dto>,
+    pub hovered_surface_point: Option<Point3Dto>,
     #[serde(default)]
     pub hidden_body_ids: Vec<u64>,
     #[serde(default)]
@@ -180,6 +207,13 @@ pub struct ViewportPresentation {
     /// Per-occurrence display rows; several rows may reuse one source body.
     #[serde(default)]
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishedSketchEntityPickRef {
+    pub sketch_name: String,
+    pub entity_id: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -309,6 +343,10 @@ pub struct ViewportPointLayer {
     /// Approximate world-space marker radius derived from the current camera.
     #[serde(default)]
     pub radius: f32,
+    /// Hollow means this marker retains solver freedom; filled means fully
+    /// constrained (or a command-specific solid handle).
+    #[serde(default)]
+    pub hollow: bool,
     /// World-space point positions, packed as x, y, z.
     #[serde(default)]
     pub positions: Vec<f32>,
@@ -349,6 +387,51 @@ pub enum ViewportAnnotationKind {
     #[default]
     Dimension,
     Constraint,
+    Tool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportConstraintIcon {
+    HorizontalVertical,
+    Horizontal,
+    Vertical,
+    HorizontalPoints,
+    VerticalPoints,
+    Coincident,
+    Tangent,
+    Equal,
+    Parallel,
+    Perpendicular,
+    Fix,
+    Midpoint,
+    Concentric,
+    Collinear,
+    Symmetry,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportToolIcon {
+    Line,
+    MidpointLine,
+    Point,
+    Rectangle,
+    Circle,
+    Arc,
+    Dimension,
+    Fillet,
+    Chamfer,
+    Offset,
+    Trim,
+    Extend,
+    Break,
+    Mirror,
+    MoveCopy,
+    Scale,
+    Polygon,
+    Slot,
+    Spline,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -367,6 +450,10 @@ pub struct ViewportAnnotation {
     pub kind: ViewportAnnotationKind,
     #[serde(default)]
     pub selected: bool,
+    #[serde(default)]
+    pub icon: Option<ViewportConstraintIcon>,
+    #[serde(default)]
+    pub tool_icon: Option<ViewportToolIcon>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -419,6 +506,16 @@ impl Default for ViewportCamera {
             vertical_fov_degrees: DEFAULT_VERTICAL_FOV_DEGREES,
         }
     }
+}
+
+/// Ordinary selection must hit physical geometry. Joint creation explicitly
+/// opts into virtual cylinder openings and analytic connector targets.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum NativePickPurpose {
+    #[default]
+    Geometry,
+    JointConnector,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -600,15 +697,16 @@ impl NativeViewport {
         y: f32,
         camera: Option<ViewportCamera>,
         logical_size: Option<(f32, f32)>,
+        purpose: NativePickPurpose,
     ) -> Result<Option<NativePick>, String> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
-            self.inner.pick(x, y, camera, logical_size)
+            self.inner.pick(x, y, camera, logical_size, purpose)
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
-            let _ = (x, y, camera, logical_size);
+            let _ = (x, y, camera, logical_size, purpose);
             Err("the embedded native viewport is unavailable on this platform".to_string())
         }
     }

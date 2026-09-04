@@ -53,9 +53,10 @@ pub use dto::{
     MoveCopyRequest, MoveDimensionRequest, MovePointRequest, MovePointResult, OffsetPreviewDto,
     OffsetRequest, PointRequest, PolygonRequest, PreviewCurve, PreviewDto, ProjectVisibilityDto,
     RectangleMode, RectangleRequest, RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest,
-    SegmentRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto,
-    SlotMode, SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult,
-    TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
+    SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest,
+    SetGridStepRequest, SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest,
+    ToggleFixBatchRequest, ToolResult, TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest,
+    UndoResult,
 };
 pub use entity::{Entity, EntityId};
 pub use expr::{
@@ -88,5 +89,5 @@ pub use nbcad_assembly::{
 pub use params::{ParamId, ParamKind, ParamTable, Parameter};
 pub use plane::{FaceId, OriginPlane, PlaneBasis, PlaneError, PlaneRef};
 pub use session::{SessionError, SketchSession};
-pub use sketch::{DofReport, Sketch, SketchSnapshot, SolveError};
+pub use sketch::{DimensionMode, DofReport, Sketch, SketchSnapshot, SolveError};
 pub use solver::Analysis;

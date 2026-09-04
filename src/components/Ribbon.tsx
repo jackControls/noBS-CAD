@@ -369,6 +369,10 @@ function Button({
   const toolActive = useAppStore(
     (s) =>
       (button.action === 'sketchTool' && s.activeTool === button.payload)
+      || (
+        button.action === 'applyConstraint'
+        && s.pendingConstraintTool === button.payload
+      )
       || (button.action === 'drawingTool' && s.drawingTool === button.payload)
       || (
         button.action === 'drawingAddView'
@@ -395,6 +399,7 @@ function Button({
     <button
       type="button"
       data-ribbon-button={button.id}
+      aria-pressed={toolActive}
       title={t(button.labelKey)}
       disabled={!enabled}
       onClick={enabled ? () => onAction(button.action, button.payload) : undefined}

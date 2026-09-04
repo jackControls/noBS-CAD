@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use native_viewport::{
-    NativePick, NativeViewport, NativeViewportMetrics, ViewportCamera, ViewportLayout,
-    ViewportModel, ViewportPresentation, ViewportPreview,
+    NativePick, NativePickPurpose, NativeViewport, NativeViewportMetrics, ViewportCamera,
+    ViewportLayout, ViewportModel, ViewportPresentation, ViewportPreview,
 };
 use nbcad_core::DocumentDto;
 use serde::Serialize;
@@ -175,9 +175,10 @@ async fn native_viewport_pick(
     camera: Option<ViewportCamera>,
     logical_width: Option<f32>,
     logical_height: Option<f32>,
+    purpose: Option<NativePickPurpose>,
 ) -> Result<Option<NativePick>, String> {
     let logical_size = logical_width.zip(logical_height);
-    viewport.pick(x, y, camera, logical_size)
+    viewport.pick(x, y, camera, logical_size, purpose.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -238,22 +239,53 @@ engine_command!(engine_document_set_name, "document_set_name");
 engine_command!(
     engine_project_export_model,
     "project_export_model",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(engine_end_sketch, "end_sketch", no_payload);
-engine_command!(engine_finished_sketches, "finished_sketches", no_payload, read);
+engine_command!(
+    engine_finished_sketches,
+    "finished_sketches",
+    no_payload,
+    read
+);
 engine_command!(engine_edit_sketch, "edit_sketch");
 engine_command!(engine_active_sketch, "active_sketch", no_payload, read);
 engine_command!(engine_profile_catalog, "profile_catalog", no_payload, read);
 engine_command!(engine_solid_scene, "solid_scene", no_payload, read);
-engine_command!(engine_body_appearances, "body_appearances", no_payload, read);
-engine_command!(engine_project_visibility, "project_visibility", no_payload, read);
+engine_command!(
+    engine_body_appearances,
+    "body_appearances",
+    no_payload,
+    read
+);
+engine_command!(
+    engine_project_visibility,
+    "project_visibility",
+    no_payload,
+    read
+);
 engine_command!(engine_project_set_visibility, "project_set_visibility");
-engine_command!(engine_drawing_document, "drawing_document", no_payload, read);
+engine_command!(
+    engine_drawing_document,
+    "drawing_document",
+    no_payload,
+    read
+);
 engine_command!(engine_drawing_set_document, "drawing_set_document");
-engine_command!(engine_assembly_document, "assembly_document", no_payload, read);
+engine_command!(
+    engine_assembly_document,
+    "assembly_document",
+    no_payload,
+    read
+);
 engine_command!(engine_assembly_set_document, "assembly_set_document");
-engine_command!(engine_assembly_solution, "assembly_solution", no_payload, read);
+engine_command!(
+    engine_assembly_solution,
+    "assembly_solution",
+    no_payload,
+    read
+);
 engine_command!(
     engine_assembly_create_component,
     "assembly_create_component"
@@ -282,7 +314,11 @@ engine_command!(
     engine_assembly_set_occurrence_pose,
     "assembly_set_occurrence_pose"
 );
-engine_command!(engine_assembly_preview_joint, "assembly_preview_joint", read);
+engine_command!(
+    engine_assembly_preview_joint,
+    "assembly_preview_joint",
+    read
+);
 engine_command!(engine_assembly_create_joint, "assembly_create_joint");
 engine_command!(engine_assembly_update_joint, "assembly_update_joint");
 engine_command!(
@@ -394,39 +430,68 @@ fn engine_drawing_projection(state: tauri::State<'_, AppState>, payload: &str) -
 engine_command!(
     engine_extrude_definitions,
     "extrude_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(
     engine_revolve_definitions,
     "revolve_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
-engine_command!(engine_sweep_definitions, "sweep_definitions", no_payload, read);
-engine_command!(engine_loft_definitions, "loft_definitions", no_payload, read);
+engine_command!(
+    engine_sweep_definitions,
+    "sweep_definitions",
+    no_payload,
+    read
+);
+engine_command!(
+    engine_loft_definitions,
+    "loft_definitions",
+    no_payload,
+    read
+);
 engine_command!(engine_rib_definitions, "rib_definitions", no_payload, read);
-engine_command!(engine_fillet_definitions, "fillet_definitions", no_payload, read);
+engine_command!(
+    engine_fillet_definitions,
+    "fillet_definitions",
+    no_payload,
+    read
+);
 engine_command!(
     engine_chamfer_definitions,
     "chamfer_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
-engine_command!(engine_hole_definitions, "hole_definitions", no_payload, read);
+engine_command!(
+    engine_hole_definitions,
+    "hole_definitions",
+    no_payload,
+    read
+);
 engine_command!(
     engine_datum_plane_definitions,
     "datum_plane_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(
     engine_body_feature_definitions,
     "body_feature_definitions",
-    no_payload, read
+    no_payload,
+    read
 );
 engine_command!(engine_datum_plane_create, "datum_plane_create");
 engine_command!(engine_datum_plane_edit, "datum_plane_edit");
 engine_command!(engine_preview_segment, "preview_segment", read);
 engine_command!(engine_eval_expression, "eval_expression", read);
 engine_command!(engine_add_line, "add_line");
-engine_command!(engine_preview_segment_locked, "preview_segment_locked", read);
+engine_command!(
+    engine_preview_segment_locked,
+    "preview_segment_locked",
+    read
+);
 engine_command!(engine_add_line_locked, "add_line_locked");
 engine_command!(engine_add_point, "add_point");
 engine_command!(engine_add_line_midpoint, "add_line_midpoint");
@@ -442,6 +507,7 @@ engine_command!(engine_add_constraint, "add_constraint");
 engine_command!(engine_add_constraints, "add_constraints");
 engine_command!(engine_add_dimension, "add_dimension");
 engine_command!(engine_edit_dimension, "edit_dimension");
+engine_command!(engine_set_dimension_mode, "set_dimension_mode");
 engine_command!(engine_move_dimension, "move_dimension");
 engine_command!(engine_delete_dimension, "delete_dimension");
 engine_command!(engine_delete_constraint, "delete_constraint");
@@ -1015,6 +1081,7 @@ pub fn run() {
             engine_add_constraints,
             engine_add_dimension,
             engine_edit_dimension,
+            engine_set_dimension_mode,
             engine_move_dimension,
             engine_delete_dimension,
             engine_delete_constraint,

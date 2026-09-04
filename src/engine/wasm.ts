@@ -148,6 +148,7 @@ import type {
   MirrorRequest,
   MoveCopyRequest,
   MoveDimensionRequest,
+  SetDimensionModeRequest,
   MovePointRequest,
   MovePointResult,
   OffsetPreviewDto,
@@ -921,6 +922,10 @@ export class WasmEngine implements Engine {
 
   async editDimension(request: EditDimensionRequest): Promise<AddConstraintResult> {
     return unwrapEnvelope(this.inner.edit_dimension(JSON.stringify(request)));
+  }
+
+  async setDimensionMode(request: SetDimensionModeRequest): Promise<AddConstraintResult> {
+    return unwrapEnvelope(this.inner.set_dimension_mode(JSON.stringify(request)));
   }
 
   async moveDimension(request: MoveDimensionRequest): Promise<AddConstraintResult> {

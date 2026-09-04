@@ -3,16 +3,19 @@
 //! module of `session` — it uses the
 //! session's private fields directly.
 
+use std::collections::HashMap;
+
 use crate::constraint::{Constraint, ConstraintId};
 use crate::dto::{
     AddConstraintResult, DimensionDto, DimensionRequest, EditDimensionRequest,
-    MoveDimensionRequest, ToolResult,
+    MoveDimensionRequest, SetDimensionModeRequest, ToolResult,
 };
 use crate::entity::{Entity, EntityId, AXIS_SENTINEL};
 use crate::expr::{self, ExprError};
 use crate::geometry::Vec2;
 use crate::params::{ParamId, ParamKind};
 use crate::session::{SessionError, SketchSession};
+use crate::sketch::DimensionMode;
 
 impl From<ExprError> for SessionError {
     fn from(e: ExprError) -> Self {
@@ -117,28 +120,35 @@ impl SketchSession {
     /// the whole mutation (including the new parameter) is rolled back.
     pub(crate) fn add_constraint_bound(
         &mut self,
-        constraint: Constraint,
+        mut constraint: Constraint,
         param: ParamId,
         text_pos: Vec2,
         record_undo: bool,
     ) -> Result<ConstraintId, SessionError> {
-        let before_rank = crate::solver::analyze(&self.sketch).rank;
+        if let Err(error) = self.reject_duplicate_relation(&constraint) {
+            self.sketch.params_mut().remove(param);
+            return Err(error);
+        }
+        if let Some(value) = self
+            .sketch
+            .params()
+            .get(param)
+            .map(|parameter| parameter.value)
+        {
+            constraint.set_dimension_value(value);
+        }
         let before = self.sketch.snapshot();
         let cid = self.sketch.add_constraint(constraint);
         self.sketch.bind_dimension(cid, param, text_pos);
 
-        let analysis = crate::solver::solve(&mut self.sketch, &[]);
+        let analysis = self.solve_constraint_operation_with_recovery(&[constraint]);
         let new_residual = crate::solver::constraint_residual(&self.sketch, cid);
-        let rank_increased = analysis.rank > before_rank;
-        if !analysis.converged || (!rank_increased && new_residual > 1e-6) {
-            let rejected = self.describe_constraint(cid);
-            let conflicts_with = self.find_conflicts(cid, constraint);
+        if !analysis.converged || new_residual > 1e-6 {
+            let error = self.classify_constraint_failure(cid, constraint);
             self.sketch.restore(before);
+            self.sketch.params_mut().remove(param);
             self.recompute();
-            return Err(SessionError::OverConstrained {
-                rejected,
-                conflicts_with,
-            });
+            return Err(error);
         }
         self.analysis = Some(analysis);
         if record_undo {
@@ -273,8 +283,72 @@ impl SketchSession {
             )),
         };
 
+        if self
+            .sketch
+            .equivalent_driving_constraint(&constraint, None)
+            .is_some()
+        {
+            if request.value_text.is_some() {
+                return Err(SessionError::InvalidConstraint(
+                    "This measurement is already driven; a reference dimension reports geometry and cannot accept a target value"
+                        .to_string(),
+                ));
+            }
+            if self
+                .sketch
+                .equivalent_reference_constraint(&constraint, None)
+                .is_some()
+            {
+                return Err(SessionError::InvalidConstraint(
+                    "A reference dimension already reports this measurement".to_string(),
+                ));
+            }
+            let before = self.sketch.snapshot();
+            let mut reference = constraint;
+            reference.set_dimension_value(measured);
+            let cid = self.sketch.add_constraint(reference);
+            self.sketch.bind_reference_dimension(cid, text_pos);
+            self.sketch.sync_dimension_constraint_values();
+            self.push_command(before);
+            return Ok(ToolResult {
+                entities: ids,
+                sketch: self.dto(),
+            });
+        }
+
+        // Capture the undo state before allocating the parameter. Previously
+        // Undo restored a snapshot that already contained an orphan `dN`.
+        let before = self.sketch.snapshot();
+        let rank_before = crate::solver::analyze(&self.sketch).rank;
         let param = self.param_from_text(kind, request.value_text.as_deref(), measured)?;
-        self.add_constraint_bound(constraint, param, text_pos, true)?;
+        let cid = match self.add_constraint_bound(constraint, param, text_pos, false) {
+            Ok(cid) => cid,
+            Err(error) => {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+        };
+        let redundant = self
+            .analysis
+            .as_ref()
+            .is_some_and(|analysis| analysis.rank <= rank_before);
+        if redundant {
+            if request.value_text.is_some() {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(SessionError::InvalidConstraint(
+                    "This measurement is already determined by existing constraints; create a reference dimension instead"
+                        .to_string(),
+                ));
+            }
+            self.sketch.unbind_dim_param(&cid);
+            self.sketch.set_dim_mode(cid, DimensionMode::Reference);
+            self.sketch.params_mut().remove(param);
+            self.recompute();
+            self.sketch.sync_dimension_constraint_values();
+        }
+        self.push_command(before);
         Ok(ToolResult {
             entities: ids,
             sketch: self.dto(),
@@ -287,6 +361,12 @@ impl SketchSession {
         &mut self,
         request: EditDimensionRequest,
     ) -> Result<AddConstraintResult, SessionError> {
+        if self.sketch.is_reference_dimension(&request.constraint_id) {
+            return Err(SessionError::InvalidConstraint(
+                "Reference dimensions report solved geometry and cannot be edited; make the dimension driving first"
+                    .to_string(),
+            ));
+        }
         let before = self.sketch.snapshot();
         let Some(pid) = self.sketch.dim_param(&request.constraint_id) else {
             return Err(SessionError::InvalidConstraint(
@@ -300,6 +380,15 @@ impl SketchSession {
             .ok_or_else(|| {
                 SessionError::InvalidConstraint("dimension constraint is missing".to_string())
             })?;
+        let before_dimensions = self
+            .sketch
+            .constraints()
+            .filter(|(cid, constraint)| {
+                !self.sketch.is_reference_dimension(cid)
+                    && constraint.kind() == crate::constraint::ConstraintKind::Dimensional
+            })
+            .map(|(cid, constraint)| (cid, *constraint))
+            .collect::<HashMap<_, _>>();
         if let Err(error) = self
             .sketch
             .params_mut()
@@ -310,24 +399,166 @@ impl SketchSession {
             self.recompute();
             return Err(error);
         }
+        // The edited parameter can reevaluate dependent expressions, so
+        // materialize every bound value before solving and serializing.
+        self.sketch.sync_dimension_constraint_values();
 
-        let analysis = crate::solver::solve(&mut self.sketch, &[]);
+        // A formula edit can update more than the dimension the user opened.
+        // Preserve the unmeasured property of every dimension whose target
+        // actually changed, while leaving unchanged constraints to do their
+        // ordinary persistent job. If two changed dimensions intentionally
+        // own both size and direction, the bounded recovery path falls back
+        // to the pure solve rather than keeping either old value.
+        let changed_dimensions = self
+            .sketch
+            .constraints()
+            .filter_map(|(cid, current)| {
+                (!self.sketch.is_reference_dimension(&cid)
+                    && current.kind() == crate::constraint::ConstraintKind::Dimensional
+                    && before_dimensions.get(&cid).copied() != Some(*current))
+                .then_some(*current)
+            })
+            .collect::<Vec<_>>();
+        let analysis = self.solve_constraint_operation_with_recovery(&changed_dimensions);
         let residual = crate::solver::constraint_residual(&self.sketch, request.constraint_id);
         if !analysis.converged || residual > 1e-6 {
-            let rejected = self.describe_constraint(request.constraint_id);
-            let conflicts_with = self.find_conflicts(request.constraint_id, constraint);
+            let error = self.classify_constraint_failure(request.constraint_id, constraint);
             self.sketch.restore(before);
             self.recompute();
-            return Err(SessionError::OverConstrained {
-                rejected,
-                conflicts_with,
-            });
+            return Err(error);
         }
 
         self.analysis = Some(analysis);
         self.push_command(before);
         Ok(AddConstraintResult {
             constraint_id: request.constraint_id,
+            sketch: self.dto(),
+        })
+    }
+
+    /// Convert a dimension between solver-driving and read-only reference
+    /// modes. Conversion is undoable and never leaves orphan parameters.
+    pub fn set_dimension_mode(
+        &mut self,
+        request: SetDimensionModeRequest,
+    ) -> Result<AddConstraintResult, SessionError> {
+        let cid = request.constraint_id;
+        let constraint = self
+            .sketch
+            .constraint(cid)
+            .copied()
+            .filter(|constraint| {
+                constraint.kind() == crate::constraint::ConstraintKind::Dimensional
+                    && self.sketch.dim_placement(&cid).is_some()
+            })
+            .ok_or_else(|| {
+                SessionError::InvalidConstraint("entity is not a dimension".to_string())
+            })?;
+        if self.sketch.dim_mode(&cid) == request.mode {
+            return Ok(AddConstraintResult {
+                constraint_id: cid,
+                sketch: self.dto(),
+            });
+        }
+
+        match request.mode {
+            DimensionMode::Reference => {
+                let pid = self.sketch.dim_param(&cid).ok_or_else(|| {
+                    SessionError::InvalidConstraint(
+                        "driving dimension has no parameter binding".to_string(),
+                    )
+                })?;
+                let parameter = self.sketch.params().get(pid).ok_or_else(|| {
+                    SessionError::InvalidConstraint(
+                        "driving dimension parameter is missing".to_string(),
+                    )
+                })?;
+                let name = parameter.name.clone();
+                let used_by = self
+                    .sketch
+                    .params()
+                    .all()
+                    .iter()
+                    .filter(|candidate| candidate.id != pid)
+                    .filter_map(|candidate| {
+                        let expression = candidate.expression.as_deref()?;
+                        let ast = expr::parse(expression).ok()?;
+                        expr::referenced_idents(&ast)
+                            .contains(&name)
+                            .then_some(candidate.name.as_str())
+                    })
+                    .collect::<Vec<_>>();
+                if !used_by.is_empty() {
+                    return Err(SessionError::InvalidConstraint(format!(
+                        "Cannot make {name} a reference dimension because it is used by {}",
+                        used_by.join(", ")
+                    )));
+                }
+
+                let before = self.sketch.snapshot();
+                self.sketch.unbind_dim_param(&cid);
+                self.sketch.set_dim_mode(cid, DimensionMode::Reference);
+                self.sketch.params_mut().remove(pid);
+                self.recompute();
+                self.sketch.sync_dimension_constraint_values();
+                self.push_command(before);
+            }
+            DimensionMode::Driving => {
+                if self
+                    .sketch
+                    .equivalent_driving_constraint(&constraint, Some(cid))
+                    .is_some()
+                {
+                    return Err(SessionError::InvalidConstraint(
+                        "Another driving dimension already controls this measurement; remove or make it reference first"
+                            .to_string(),
+                    ));
+                }
+                let measured = self
+                    .sketch
+                    .measure_dimension_constraint(constraint)
+                    .ok_or_else(|| {
+                        SessionError::InvalidConstraint(
+                            "Cannot measure this reference dimension".to_string(),
+                        )
+                    })?;
+                let kind = if matches!(constraint, Constraint::Angle { .. }) {
+                    ParamKind::Angle
+                } else {
+                    ParamKind::Length
+                };
+                let before = self.sketch.snapshot();
+                let rank_before = crate::solver::analyze(&self.sketch).rank;
+                let pid = self.param_from_text(kind, None, measured)?;
+                let mut driving = constraint;
+                driving.set_dimension_value(measured);
+                self.sketch.replace_constraint(cid, driving);
+                let placement = self.sketch.dim_placement(&cid).unwrap_or(Vec2::ZERO);
+                self.sketch.bind_dimension(cid, pid, placement);
+                let analysis = crate::solver::solve(&mut self.sketch, &[]);
+                let residual = crate::solver::constraint_residual(&self.sketch, cid);
+                if !analysis.converged || residual > 1e-6 || analysis.rank <= rank_before {
+                    if analysis.converged && residual <= 1e-6 && analysis.rank <= rank_before {
+                        self.sketch.restore(before);
+                        self.recompute();
+                        return Err(SessionError::InvalidConstraint(
+                            "Existing constraints already determine this measurement, so it must remain a reference dimension"
+                                .to_string(),
+                        ));
+                    }
+                    let error = self.classify_constraint_failure(cid, driving);
+                    self.sketch.restore(before);
+                    self.recompute();
+                    return Err(error);
+                }
+                self.analysis = Some(analysis);
+                self.sketch.sync_dimension_constraint_values();
+                self.push_command(before);
+            }
+        }
+
+        Ok(AddConstraintResult {
+            constraint_id: cid,
             sketch: self.dto(),
         })
     }
@@ -528,22 +759,45 @@ impl SketchSession {
                 if !matches!(kind, "distance" | "radius" | "diameter" | "angle") {
                     return None;
                 }
-                let pid = self.sketch.dim_param(&cid)?;
-                let param = self.sketch.params().get(pid)?;
-                let text = match kind {
-                    "diameter" => format!("Ø{:.2}", param.value),
-                    "radius" => format!("R{:.2}", param.value),
-                    "angle" => format!("{:.2}°", param.value),
-                    _ => format!("{:.2}", param.value),
+                let mode = self.sketch.dim_mode(&cid);
+                let (pid, param_name, param_expression, value) = match mode {
+                    DimensionMode::Driving => {
+                        let pid = self.sketch.dim_param(&cid)?;
+                        let param = self.sketch.params().get(pid)?;
+                        (
+                            Some(pid),
+                            Some(param.name.clone()),
+                            param.expression.clone(),
+                            param.value,
+                        )
+                    }
+                    DimensionMode::Reference => (
+                        None,
+                        None,
+                        None,
+                        self.sketch.measure_dimension_constraint(*c)?,
+                    ),
+                };
+                let value_text = match kind {
+                    "diameter" => format!("Ø{value:.2}"),
+                    "radius" => format!("R{value:.2}"),
+                    "angle" => format!("{value:.2}°"),
+                    _ => format!("{value:.2}"),
+                };
+                let text = if mode == DimensionMode::Reference {
+                    format!("({value_text})")
+                } else {
+                    value_text
                 };
                 Some(DimensionDto {
                     constraint_id: cid,
+                    mode,
                     kind: kind.to_string(),
                     entities: c.referenced_entities(),
                     param_id: pid,
-                    param_name: param.name.clone(),
-                    param_expression: param.expression.clone(),
-                    value: param.value,
+                    param_name,
+                    param_expression,
+                    value,
                     text,
                     text_pos: self.sketch.dim_placement(&cid).unwrap_or(Vec2::ZERO),
                 })

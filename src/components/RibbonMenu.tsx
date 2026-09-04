@@ -65,6 +65,7 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
   drawingSheetReady: boolean;
 }) {
   const { t } = useTranslation();
+  const activeConstraintTool = useAppStore((state) => state.pendingConstraintTool);
 
   if (entry.type === 'separator') {
     return <div className="mx-2 my-1 h-px bg-edge" />;
@@ -78,6 +79,7 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
       && !entry.children
       && (!actionRequiresDrawingSheet(entry.action) || drawingSheetReady),
   );
+  const active = entry.action === 'applyConstraint' && activeConstraintTool === entry.payload;
   const activate = () => {
     if (!clickable) return;
     run(entry.action, entry.payload);
@@ -91,12 +93,15 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
       data-ribbon-menu-id={entry.id}
       data-ribbon-menu-item
       data-enabled={available ? 'true' : 'false'}
+      data-active={active ? 'true' : 'false'}
+      aria-current={active ? 'true' : undefined}
       tabIndex={available ? 0 : -1}
       className={cx(
         'group relative flex h-7 items-center gap-2 px-3 text-xs outline-none transition-colors duration-75',
         available
           ? 'cursor-pointer text-ink hover:bg-accent/40 focus-visible:bg-accent/40'
           : 'cursor-default text-mute/40 hover:bg-edge/70',
+        active && 'bg-accent/25',
       )}
       onClick={clickable ? activate : undefined}
       onKeyDown={

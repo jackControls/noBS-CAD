@@ -44,7 +44,9 @@ import {
   presetsForSeries,
   threadDtoFromPreset,
 } from '../lib/threadStandards';
+import { isStraightSolidEdge } from '../solidEdgeEligibility';
 import { DimensionInput } from './DimensionInput';
+import { ViewportSelectionField } from './ViewportSelectionField';
 import { MoveCopyManipulator } from './viewport/MoveCopyManipulator';
 
 const INPUT =
@@ -519,16 +521,24 @@ export function BodyFeatureDialog() {
   const selectedBodies = useAppStore((state) => state.selectedBodies);
   const selectedFace = useAppStore((state) => state.selectedFace);
   const selectedFaces = useAppStore((state) => state.selectedFaces);
+  const selectedEdges = useAppStore((state) => state.selectedEdges);
+  const selectedFacePoint = useAppStore((state) => state.selectedFacePoint);
   const replaceSelectedBodies = useAppStore(
     (state) => state.replaceSelectedBodies,
   );
   const replaceSelectedFaces = useAppStore(
     (state) => state.replaceSelectedFaces,
   );
+  const setSelectedEdges = useAppStore((state) => state.setSelectedEdges);
+  const modelingPickTarget = useAppStore((state) => state.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((state) => state.setModelingPickTarget);
+  const modelingPlaneSelection = useAppStore((state) => state.modelingPlaneSelection);
+  const setModelingPlaneSelection = useAppStore((state) => state.setModelingPlaneSelection);
   const datumPlanes = useAppStore((state) => state.datumPlanes);
   const assembly = useAppStore((state) => state.assemblyDocument);
   const assemblySolution = useAppStore((state) => state.assemblySolution);
   const selectedOccurrenceId = useAppStore((state) => state.selectedOccurrenceId);
+  const setSelectedOccurrenceId = useAppStore((state) => state.setSelectedOccurrenceId);
   const moveCopyOccurrence = useAppStore((state) => state.moveCopyOccurrence);
   const [definitions, setDefinitions] = useState<BodyFeatureDefinitionDto[]>([]);
   const [bodyId, setBodyId] = useState(0);
@@ -556,7 +566,7 @@ export function BodyFeatureDialog() {
   const [threadFlip, setThreadFlip] = useState(false);
   const [thickness, setThickness] = useState('2');
   const [inward, setInward] = useState(true);
-  const [plane, setPlane] = useState('origin:yz');
+  const [plane, setPlane] = useState('');
   const [direction, setDirection] = useState<[string, string, string]>([
     '10',
     '0',
@@ -635,7 +645,7 @@ export function BodyFeatureDialog() {
         if (!face.plane) return;
         result.push({
           value: `face:${face.id}`,
-          label: `${body.name} · planar face ${index + 1} (#${face.id})`,
+          label: `${body.name} · planar face ${index + 1}`,
           reference: { type: 'planar_face', face_id: face.id },
         });
       });
@@ -673,14 +683,14 @@ export function BodyFeatureDialog() {
               )
             : undefined;
         const fallbackBody =
-          selectedBodies[selectedBodies.length - 1] ?? selectedBody ?? bodies[0]?.id ?? 0;
+          current.selectedBodies[current.selectedBodies.length - 1] ?? current.selectedBody ?? 0;
         const directlySelectedBodies =
-          selectedBodies.length > 0
-            ? selectedBodies.filter((id) => bodies.some((body) => body.id === id))
+          current.selectedBodies.length > 0
+            ? current.selectedBodies.filter((id) => bodies.some((body) => body.id === id))
             : fallbackBody > 0
               ? [fallbackBody]
               : [];
-        const directlySelectedFaces = selectedFaces.filter((faceId) =>
+        const directlySelectedFaces = current.selectedFaces.filter((faceId) =>
           bodies
             .find((body) => body.id === fallbackBody)
             ?.faces.some((face) => face.id === faceId),
@@ -688,9 +698,7 @@ export function BodyFeatureDialog() {
         const defaultToolBodyIds =
           directlySelectedBodies.length > 1
             ? directlySelectedBodies.slice(1)
-            : initializeSelection && bodies.find((body) => body.id !== fallbackBody)
-              ? [bodies.find((body) => body.id !== fallbackBody)!.id]
-              : [];
+            : [];
         const syncBodies = (ids: number[]) => {
           if (current.selectedBodies.join(',') !== ids.join(',')) {
             current.replaceSelectedBodies(ids);
@@ -705,11 +713,11 @@ export function BodyFeatureDialog() {
           }
         };
         const selectedPlane =
-          selectedFace !== null &&
+          current.selectedFace !== null &&
           bodies.some((body) =>
-            body.faces.some((face) => face.id === selectedFace && face.plane !== null),
+            body.faces.some((face) => face.id === current.selectedFace && face.plane !== null),
           )
-            ? `face:${selectedFace}`
+            ? `face:${current.selectedFace}`
             : null;
         setBodyId(fallbackBody);
         setBodyIds(directlySelectedBodies);
@@ -720,18 +728,21 @@ export function BodyFeatureDialog() {
             ? dialog.kind === 'external_thread'
               ? directlySelectedFaces.slice(-1)
               : directlySelectedFaces
-            : selectedFace !== null &&
+            : current.selectedFace !== null &&
                 bodies
                   .find((body) => body.id === fallbackBody)
-                  ?.faces.some((face) => face.id === selectedFace)
-              ? [selectedFace]
+                  ?.faces.some((face) => face.id === current.selectedFace)
+              ? [current.selectedFace]
               : [],
         );
-        if (
-          selectedPlane &&
-          (dialog.kind === 'mirror' || dialog.kind === 'split_body')
-        ) {
-          setPlane(selectedPlane);
+        if (dialog.kind === 'mirror' || dialog.kind === 'split_body') {
+          if (selectedPlane) {
+            setPlane(selectedPlane);
+            current.setModelingPlaneSelection(optionReference(planeOptions, selectedPlane));
+          } else if (!edit && initializeSelection) {
+            setPlane('');
+            current.setModelingPlaneSelection(null);
+          }
         }
         if (!edit) {
           if (dialog.kind === 'move_copy') {
@@ -750,14 +761,14 @@ export function BodyFeatureDialog() {
             }
             const occurrence = smartMoveOccurrence(
               assembly,
-              selectedOccurrenceId,
+              current.selectedOccurrenceId,
               directlySelectedBodies,
             );
             setMoveObjectType(occurrence ? 'component' : 'bodies');
             setOccurrenceId(
-              occurrence?.id ?? assembly.component_structure.occurrences[0]?.id ?? 0,
+              occurrence?.id ?? 0,
             );
-            if (initializeSelection && occurrence && selectedOccurrenceId !== occurrence.id) {
+            if (initializeSelection && occurrence && current.selectedOccurrenceId !== occurrence.id) {
               current.setSelectedOccurrenceId(occurrence.id);
             }
             const centerIds = occurrence
@@ -797,6 +808,25 @@ export function BodyFeatureDialog() {
           } else {
             syncBodies(directlySelectedBodies);
           }
+          current.setModelingPickTarget(
+            dialog.kind === 'move_copy'
+              ? useAppStore.getState().selectedOccurrenceId !== null
+                ? 'move_component'
+                : 'move_bodies'
+              : dialog.kind === 'external_thread'
+                ? 'external_thread_face'
+                : dialog.kind === 'shell'
+                  ? 'shell_faces'
+                  : dialog.kind === 'mirror'
+                    ? 'mirror_bodies'
+                    : dialog.kind === 'rectangular_pattern'
+                      ? 'rectangular_pattern_bodies'
+                      : dialog.kind === 'circular_pattern'
+                        ? 'circular_pattern_bodies'
+                        : dialog.kind === 'combine'
+                          ? 'combine_target'
+                          : 'split_body',
+          );
           return;
         }
         if (!initializeSelection) return;
@@ -893,6 +923,23 @@ export function BodyFeatureDialog() {
           setPlane(planeValue(edit.plane));
           syncBodies([edit.body_id]);
         }
+        current.setModelingPickTarget(
+          edit.type === 'move_copy'
+            ? 'move_bodies'
+            : edit.type === 'external_thread'
+              ? 'external_thread_face'
+              : edit.type === 'shell'
+                ? 'shell_faces'
+                : edit.type === 'mirror'
+                  ? 'mirror_bodies'
+                  : edit.type === 'rectangular_pattern'
+                    ? 'rectangular_pattern_bodies'
+                    : edit.type === 'circular_pattern'
+                      ? 'circular_pattern_bodies'
+                      : edit.type === 'combine'
+                        ? 'combine_target'
+                        : 'split_body',
+        );
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
@@ -912,14 +959,149 @@ export function BodyFeatureDialog() {
   }, [
     bodies,
     dialog,
-    selectedBodies,
-    selectedBody,
-    selectedFace,
-    selectedFaces,
     assembly,
     assemblySolution,
-    selectedOccurrenceId,
+    planeOptions,
   ]);
+
+  useEffect(() => {
+    if (!dialog || !modelingPickTarget) return;
+    if (modelingPickTarget === 'move_bodies' && dialog.kind === 'move_copy') {
+      setBodyIds(selectedBodies);
+    } else if (modelingPickTarget === 'mirror_bodies' && dialog.kind === 'mirror') {
+      setBodyIds(selectedBodies);
+    } else if (
+      modelingPickTarget === 'rectangular_pattern_bodies'
+      && dialog.kind === 'rectangular_pattern'
+    ) {
+      setBodyIds(selectedBodies);
+    } else if (
+      modelingPickTarget === 'circular_pattern_bodies'
+      && dialog.kind === 'circular_pattern'
+    ) {
+      setBodyIds(selectedBodies);
+    } else if (modelingPickTarget === 'combine_target' && dialog.kind === 'combine') {
+      const id = selectedBodies[selectedBodies.length - 1] ?? selectedBody ?? 0;
+      if (id > 0) {
+        setTargetBodyId(id);
+        setToolBodyIds((current) => current.filter((candidate) => candidate !== id));
+      }
+    } else if (modelingPickTarget === 'combine_tools' && dialog.kind === 'combine') {
+      setToolBodyIds(selectedBodies.filter((id) => id !== targetBodyId));
+    } else if (modelingPickTarget === 'split_body' && dialog.kind === 'split_body') {
+      const id = selectedBodies[selectedBodies.length - 1] ?? selectedBody ?? 0;
+      if (id > 0) setBodyId(id);
+    }
+  }, [dialog, modelingPickTarget, selectedBodies, selectedBody, targetBodyId]);
+
+  useEffect(() => {
+    if (!dialog) return;
+    if (modelingPickTarget === 'external_thread_face' && dialog.kind === 'external_thread') {
+      if (selectedBody === null || selectedFace === null) return;
+      const face = bodies
+        .find((candidate) => candidate.id === selectedBody)
+        ?.faces.find((candidate) => candidate.id === selectedFace);
+      if (!face?.cylinder) return;
+      threadFaceKeyRef.current = null;
+      setBodyId(selectedBody);
+      setFaceIds([selectedFace]);
+    } else if (modelingPickTarget === 'shell_faces' && dialog.kind === 'shell') {
+      if (selectedBody === null) {
+        setBodyId(0);
+        setFaceIds([]);
+        return;
+      }
+      setBodyId(selectedBody);
+      setFaceIds(selectedFaces);
+    }
+  }, [bodies, dialog, modelingPickTarget, selectedBody, selectedFace, selectedFaces]);
+
+  useEffect(() => {
+    if (!dialog || selectedEdges.length === 0) return;
+    const edgeId = selectedEdges[selectedEdges.length - 1];
+    const edge = bodies
+      .flatMap((candidate) => candidate.edges)
+      .find((candidate) => candidate.id === edgeId);
+    if (!edge || !isStraightSolidEdge(edge.points) || edge.points.length < 2) return;
+    const start = edge.points[0];
+    const end = edge.points[edge.points.length - 1];
+    const directionValues: [string, string, string] = [
+      String(end.x - start.x),
+      String(end.y - start.y),
+      String(end.z - start.z),
+    ];
+    if (modelingPickTarget === 'move_direction' && dialog.kind === 'move_copy') {
+      setMoveDirection(directionValues);
+    } else if (modelingPickTarget === 'move_axis' && dialog.kind === 'move_copy') {
+      setMoveAxis(directionValues);
+    } else if (
+      modelingPickTarget === 'rectangular_pattern_direction'
+      && dialog.kind === 'rectangular_pattern'
+    ) {
+      setDirection(directionValues);
+    } else if (
+      modelingPickTarget === 'rectangular_pattern_second_direction'
+      && dialog.kind === 'rectangular_pattern'
+    ) {
+      setSecondDirection(directionValues);
+    } else if (
+      modelingPickTarget === 'circular_pattern_axis'
+      && dialog.kind === 'circular_pattern'
+    ) {
+      setAxisOrigin([String(start.x), String(start.y), String(start.z)]);
+      setAxisDirection(directionValues);
+    }
+  }, [bodies, dialog, modelingPickTarget, selectedEdges]);
+
+  useEffect(() => {
+    if (!dialog || !modelingPlaneSelection) return;
+    if (
+      (modelingPickTarget === 'mirror_plane' && dialog.kind === 'mirror')
+      || (modelingPickTarget === 'split_plane' && dialog.kind === 'split_body')
+    ) {
+      setPlane(planeValue(modelingPlaneSelection));
+    }
+  }, [dialog, modelingPickTarget, modelingPlaneSelection]);
+
+  useEffect(() => {
+    if (!dialog || !selectedFacePoint) return;
+    const values: [string, string, string] = [
+      String(selectedFacePoint.x),
+      String(selectedFacePoint.y),
+      String(selectedFacePoint.z),
+    ];
+    if (modelingPickTarget === 'move_from' && dialog.kind === 'move_copy') {
+      setMoveFrom(values);
+      setModelingPickTarget('move_to');
+    } else if (modelingPickTarget === 'move_to' && dialog.kind === 'move_copy') {
+      setMoveTo(values);
+    } else if (modelingPickTarget === 'move_pivot' && dialog.kind === 'move_copy') {
+      setMovePivot(values);
+    }
+  }, [dialog, modelingPickTarget, selectedFacePoint, setModelingPickTarget]);
+
+  useEffect(() => {
+    if (
+      dialog?.kind !== 'move_copy'
+      || modelingPickTarget !== 'move_component'
+      || selectedOccurrenceId === null
+    ) return;
+    const occurrence = assembly.component_structure.occurrences.find(
+      (candidate) => candidate.id === selectedOccurrenceId,
+    );
+    const component = assembly.component_structure.definitions.find(
+      (candidate) => candidate.id === occurrence?.component_id,
+    );
+    if (!occurrence || !component) return;
+    setOccurrenceId(occurrence.id);
+    const center = componentPivot(
+      bodies,
+      component.body_ids,
+      component.local_coordinate_system,
+      occurrenceWorldPose(occurrence, assemblySolution),
+    );
+    setMovePivot([String(center.x), String(center.y), String(center.z)]);
+  }, [assembly, assemblySolution, bodies, dialog?.kind, modelingPickTarget, selectedOccurrenceId]);
 
   useEffect(() => {
     if (dialog?.kind !== 'external_thread') {
@@ -1119,7 +1301,7 @@ export function BodyFeatureDialog() {
         Number.isFinite(thicknessValue) &&
         thicknessValue > 0
       : kind === 'mirror'
-        ? bodyIds.length > 0
+        ? bodyIds.length > 0 && plane !== ''
         : kind === 'rectangular_pattern'
           ? bodyIds.length > 0 &&
             validVector(directionValue) &&
@@ -1147,34 +1329,8 @@ export function BodyFeatureDialog() {
               ? targetBodyId > 0 &&
                 toolBodyIds.length > 0 &&
                 !toolBodyIds.includes(targetBodyId)
-              : bodyId > 0);
+              : bodyId > 0 && plane !== '');
 
-  const toggleBody = (id: number) => {
-    const next = bodyIds.includes(id)
-      ? bodyIds.filter((candidate) => candidate !== id)
-      : [...bodyIds, id];
-    setBodyIds(next);
-    replaceSelectedBodies(next);
-  };
-  const toggleFace = (id: number) => {
-    const next = faceIds.includes(id)
-      ? faceIds.filter((candidate) => candidate !== id)
-      : [...faceIds, id];
-    setFaceIds(next);
-    replaceSelectedFaces(bodyId, next);
-  };
-  const toggleTool = (id: number) => {
-    const next = toolBodyIds.includes(id)
-      ? toolBodyIds.filter((candidate) => candidate !== id)
-      : [...toolBodyIds, id];
-    setToolBodyIds(next);
-    replaceSelectedBodies([targetBodyId, ...next]);
-  };
-  const chooseShellBody = (id: number) => {
-    setBodyId(id);
-    setFaceIds([]);
-    replaceSelectedBodies([id]);
-  };
   const applyThreadPreset = (presetId: string) => {
     if (presetId === 'custom') {
       setThreadPresetId('custom');
@@ -1198,17 +1354,6 @@ export function BodyFeatureDialog() {
     setThreadPitch(String(preset.pitchMm));
     setThreadClass(next.class);
     setThreadDesignation(next.designation);
-  };
-  const chooseThreadBody = (id: number) => {
-    threadFaceKeyRef.current = null;
-    setBodyId(id);
-    setFaceIds([]);
-    replaceSelectedBodies([id]);
-  };
-  const chooseThreadFace = (id: number) => {
-    threadFaceKeyRef.current = null;
-    setFaceIds([id]);
-    replaceSelectedFaces(bodyId, [id]);
   };
   const chooseThreadStandard = (standard: HoleThreadStandard) => {
     const series: HoleThreadSeries = standard === 'iso_metric' ? 'metric_coarse' : 'unc';
@@ -1237,16 +1382,49 @@ export function BodyFeatureDialog() {
     if (preset) applyThreadPreset(preset.id);
     else setThreadPresetId('custom');
   };
-  const chooseTarget = (id: number) => {
-    const nextTools = toolBodyIds.filter((candidate) => candidate !== id);
-    setTargetBodyId(id);
-    setToolBodyIds(nextTools);
-    replaceSelectedBodies([id, ...nextTools]);
+  const activateBodyPicker = (
+    target: Extract<
+      NonNullable<typeof modelingPickTarget>,
+      | 'move_bodies'
+      | 'mirror_bodies'
+      | 'rectangular_pattern_bodies'
+      | 'circular_pattern_bodies'
+      | 'combine_target'
+      | 'combine_tools'
+      | 'split_body'
+    >,
+    ids: number[],
+  ) => {
+    replaceSelectedBodies(ids);
+    setModelingPickTarget(target);
   };
-  const chooseSplitBody = (id: number) => {
-    setBodyId(id);
-    replaceSelectedBodies([id]);
+  const activateFacePicker = (
+    target: 'external_thread_face' | 'shell_faces',
+    ownerBodyId: number,
+    ids: number[],
+  ) => {
+    if (ownerBodyId > 0) replaceSelectedFaces(ownerBodyId, ids);
+    else replaceSelectedBodies([]);
+    setModelingPickTarget(target);
   };
+  const activateEdgePicker = (
+    target:
+      | 'move_direction'
+      | 'move_axis'
+      | 'rectangular_pattern_direction'
+      | 'rectangular_pattern_second_direction'
+      | 'circular_pattern_axis',
+  ) => {
+    setModelingPickTarget(target);
+  };
+  const activatePlanePicker = (target: 'mirror_plane' | 'split_plane') => {
+    const selected = planeOptions.find((option) => option.value === plane)?.reference;
+    setModelingPlaneSelection(selected ?? null);
+    setModelingPickTarget(target);
+  };
+  const selectedBodyNames = (ids: number[]) => ids
+    .map((id) => bodies.find((candidate) => candidate.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
 
   const resolveMove = () => {
     if (moveMode === 'free') {
@@ -1502,42 +1680,48 @@ export function BodyFeatureDialog() {
   };
 
   const Icon = ICONS[kind];
+  const bodyPickTarget = kind === 'move_copy'
+    ? 'move_bodies'
+    : kind === 'mirror'
+      ? 'mirror_bodies'
+      : kind === 'rectangular_pattern'
+        ? 'rectangular_pattern_bodies'
+        : 'circular_pattern_bodies';
+  const pickedBodyNames = selectedBodyNames(bodyIds);
   const bodyChecklist = (
-    <fieldset>
-      <legend className={LABEL}>Bodies</legend>
-      <div className="max-h-32 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">
-        {bodies.map((candidate) => (
-          <label
-            key={candidate.id}
-            className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-          >
-            <input
-              type="checkbox"
-              checked={bodyIds.includes(candidate.id)}
-              onChange={() => toggleBody(candidate.id)}
-              className="accent-accent"
-            />
-            {candidate.name}
-          </label>
-        ))}
-      </div>
-    </fieldset>
+    <ViewportSelectionField
+      testId={`${bodyPickTarget}-selection`}
+      label="Bodies"
+      status={bodyIds.length > 0
+        ? `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected${pickedBodyNames.length <= 2 ? ` · ${pickedBodyNames.join(', ')}` : ''}`
+        : 'Click bodies in the viewport'}
+      hint="Continue clicking, or use Shift/Ctrl/Cmd, to select multiple bodies."
+      active={modelingPickTarget === bodyPickTarget}
+      hasSelection={bodyIds.length > 0}
+      onActivate={() => activateBodyPicker(bodyPickTarget, bodyIds)}
+      onClear={() => {
+        setBodyIds([]);
+        activateBodyPicker(bodyPickTarget, []);
+      }}
+    />
   );
+  const planeTarget = kind === 'mirror' ? 'mirror_plane' : 'split_plane';
+  const planeLabel = planeOptions.find((option) => option.value === plane)?.label;
   const planeField = (
-    <label>
-      <span className={LABEL}>Reference plane</span>
-      <select
-        value={plane}
-        onChange={(event) => setPlane(event.target.value)}
-        className={INPUT}
-      >
-        {planeOptions.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    <ViewportSelectionField
+      testId={`${planeTarget}-selection`}
+      label="Reference plane"
+      status={planeLabel ?? 'Click a planar face or visible reference plane'}
+      hint="The chosen plane is highlighted directly in the viewport."
+      active={modelingPickTarget === planeTarget}
+      hasSelection={plane !== ''}
+      onActivate={() => activatePlanePicker(planeTarget)}
+      onClear={() => {
+        setPlane('');
+        setModelingPlaneSelection(null);
+        setModelingPickTarget(planeTarget);
+      }}
+    />
   );
 
   return (
@@ -1607,7 +1791,14 @@ export function BodyFeatureDialog() {
                       key={value}
                       type="button"
                       disabled={value === 'component' && assembly.component_structure.occurrences.length === 0}
-                      onClick={() => setMoveObjectType(value)}
+                      onClick={() => {
+                        setMoveObjectType(value);
+                        if (value === 'bodies') activateBodyPicker('move_bodies', bodyIds);
+                        else {
+                          setSelectedOccurrenceId(occurrenceId > 0 ? occurrenceId : null);
+                          setModelingPickTarget('move_component');
+                        }
+                      }}
                       className={`h-8 rounded border text-xs font-medium ${
                         moveObjectType === value
                           ? 'border-accent bg-accent/15 text-accent'
@@ -1620,38 +1811,24 @@ export function BodyFeatureDialog() {
                 </div>
               </fieldset>
               {moveObjectType === 'bodies' ? bodyChecklist : (
-                <label>
-                  <span className={LABEL}>Component occurrence</span>
-                  <select
-                    value={occurrenceId}
-                    onChange={(event) => {
-                      const id = Number(event.target.value);
-                      setOccurrenceId(id);
-                      const occurrence = assembly.component_structure.occurrences.find(
-                        (candidate) => candidate.id === id,
-                      );
-                      const component = assembly.component_structure.definitions.find(
-                        (definition) => definition.id === occurrence?.component_id,
-                      );
-                      const ids = component?.body_ids ?? [];
-                      const center = occurrence && component
-                        ? componentPivot(
-                            bodies,
-                            ids,
-                            component.local_coordinate_system,
-                            occurrenceWorldPose(occurrence, assemblySolution),
-                          )
-                        : selectionBoundsCenter(bodies, ids);
-                      setMovePivot([String(center.x), String(center.y), String(center.z)]);
+                <div>
+                  <ViewportSelectionField
+                    testId="move-component-selection"
+                    label="Component occurrence"
+                    status={moveOccurrence ? `${moveOccurrence.name} selected` : 'Click a component in the viewport'}
+                    hint="The clicked occurrence is selected by its visible geometry."
+                    active={modelingPickTarget === 'move_component'}
+                    hasSelection={Boolean(moveOccurrence)}
+                    onActivate={() => {
+                      setSelectedOccurrenceId(occurrenceId > 0 ? occurrenceId : null);
+                      setModelingPickTarget('move_component');
                     }}
-                    className={INPUT}
-                  >
-                    {assembly.component_structure.occurrences.map((occurrence) => (
-                      <option key={occurrence.id} value={occurrence.id}>
-                        {occurrence.name}
-                      </option>
-                    ))}
-                  </select>
+                    onClear={() => {
+                      setOccurrenceId(0);
+                      setSelectedOccurrenceId(null);
+                      setModelingPickTarget('move_component');
+                    }}
+                  />
                   {moveOccurrenceCluster.length > 1 && moveOccurrenceAnchorId === occurrenceId && (
                     <span className="mt-1 block text-[10px] leading-4 text-mute">
                       This is the mechanism anchor. Move/Copy keeps all {moveOccurrenceCluster.length} connected components together.
@@ -1662,7 +1839,7 @@ export function BodyFeatureDialog() {
                       This component is constrained by the mechanism. Move the anchored component or use joint motion dragging instead.
                     </span>
                   )}
-                </label>
+                </div>
               )}
               {moveObjectType === 'bodies' && (() => {
                 const candidate = smartMoveOccurrence(assembly, null, bodyIds);
@@ -1676,7 +1853,14 @@ export function BodyFeatureDialog() {
                 <span className={LABEL}>Move type</span>
                 <select
                   value={moveMode}
-                  onChange={(event) => setMoveMode(event.target.value as MoveMode)}
+                  onChange={(event) => {
+                    const next = event.target.value as MoveMode;
+                    setMoveMode(next);
+                    if (next === 'translate') setModelingPickTarget('move_direction');
+                    else if (next === 'rotate') setModelingPickTarget('move_axis');
+                    else if (next === 'point_to_point') setModelingPickTarget('move_from');
+                    else setModelingPickTarget(moveObjectType === 'component' ? 'move_component' : 'move_bodies');
+                  }}
                   className={INPUT}
                 >
                   <option value="free">Free move — XYZ + XYZ rotation</option>
@@ -1700,6 +1884,19 @@ export function BodyFeatureDialog() {
                 </>
               ) : moveMode === 'translate' ? (
                 <>
+                  <ViewportSelectionField
+                    testId="move-direction-selection"
+                    label="Direction reference"
+                    status={modelingPickTarget === 'move_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                    active={modelingPickTarget === 'move_direction'}
+                    hasSelection={validVector(moveDirectionValue)}
+                    onActivate={() => activateEdgePicker('move_direction')}
+                    onClear={() => {
+                      setMoveDirection(['0', '0', '0']);
+                      setSelectedEdges([]);
+                      activateEdgePicker('move_direction');
+                    }}
+                  />
                   <VectorFields label="Direction" values={moveDirection} onChange={setMoveDirection} />
                   <label>
                     <span className={LABEL}>Distance (mm)</span>
@@ -1708,6 +1905,19 @@ export function BodyFeatureDialog() {
                 </>
               ) : moveMode === 'rotate' ? (
                 <>
+                  <ViewportSelectionField
+                    testId="move-axis-selection"
+                    label="Rotation axis"
+                    status={modelingPickTarget === 'move_axis' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter an axis below'}
+                    active={modelingPickTarget === 'move_axis'}
+                    hasSelection={validVector(moveAxisValue)}
+                    onActivate={() => activateEdgePicker('move_axis')}
+                    onClear={() => {
+                      setMoveAxis(['0', '0', '0']);
+                      setSelectedEdges([]);
+                      activateEdgePicker('move_axis');
+                    }}
+                  />
                   <VectorFields label="Axis" values={moveAxis} onChange={setMoveAxis} />
                   <label>
                     <span className={LABEL}>Angle (degrees)</span>
@@ -1725,12 +1935,50 @@ export function BodyFeatureDialog() {
                 </>
               ) : (
                 <>
+                  <ViewportSelectionField
+                    testId="move-from-selection"
+                    label="From point"
+                    status="Click a point in the viewport, or enter coordinates below"
+                    active={modelingPickTarget === 'move_from'}
+                    hasSelection={finiteVector(moveFromValue)}
+                    onActivate={() => setModelingPickTarget('move_from')}
+                    onClear={() => {
+                      setMoveFrom(['0', '0', '0']);
+                      setModelingPickTarget('move_from');
+                    }}
+                  />
                   <VectorFields label="From point" unit="mm" values={moveFrom} onChange={setMoveFrom} />
+                  <ViewportSelectionField
+                    testId="move-to-selection"
+                    label="To point"
+                    status="Click a point in the viewport, or enter coordinates below"
+                    active={modelingPickTarget === 'move_to'}
+                    hasSelection={finiteVector(moveToValue)}
+                    onActivate={() => setModelingPickTarget('move_to')}
+                    onClear={() => {
+                      setMoveTo(['0', '0', '0']);
+                      setModelingPickTarget('move_to');
+                    }}
+                  />
                   <VectorFields label="To point" unit="mm" values={moveTo} onChange={setMoveTo} />
                 </>
               )}
               {(moveMode === 'free' || moveMode === 'rotate') && (
-                <VectorFields label="Rotation pivot" unit="mm" values={movePivot} onChange={setMovePivot} />
+                <>
+                  <ViewportSelectionField
+                    testId="move-pivot-selection"
+                    label="Rotation pivot"
+                    status="Click a point in the viewport, or enter coordinates below"
+                    active={modelingPickTarget === 'move_pivot'}
+                    hasSelection={finiteVector(movePivotValue)}
+                    onActivate={() => setModelingPickTarget('move_pivot')}
+                    onClear={() => {
+                      setMovePivot(['0', '0', '0']);
+                      setModelingPickTarget('move_pivot');
+                    }}
+                  />
+                  <VectorFields label="Rotation pivot" unit="mm" values={movePivot} onChange={setMovePivot} />
+                </>
               )}
               <label className="flex cursor-pointer items-start gap-2 rounded border border-edge bg-header p-2 text-xs text-ink">
                 <input
@@ -1752,62 +2000,23 @@ export function BodyFeatureDialog() {
             </>
           ) : kind === 'external_thread' ? (
             <>
-              <label>
-                <span className={LABEL}>Body</span>
-                <select
-                  data-testid="external-thread-body"
-                  value={bodyId}
-                  onChange={(event) => chooseThreadBody(Number(event.target.value))}
-                  className={INPUT}
-                >
-                  {bodies.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <fieldset>
-                <legend className={LABEL}>Cylindrical surface</legend>
-                <div className="rounded border border-accent/50 bg-accent/10 p-2 text-[10px] leading-4 text-ink">
-                  Select one analytic exterior cylinder in the viewport or list. The
-                  exact OCCT face remains associated with this feature.
-                </div>
-                <div
-                  data-testid="external-thread-faces"
-                  className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2"
-                >
-                  {body?.faces.some((face) => face.cylinder) ? body.faces.map((face, index) => {
-                    if (!face.cylinder) return null;
-                    const orientation = cylindricalFaceOrientation(body, face.id, face.cylinder);
-                    return (
-                      <label
-                        key={face.id}
-                        className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-ink hover:bg-edge"
-                      >
-                        <input
-                          type="radio"
-                          name="external-thread-face"
-                          checked={faceIds[0] === face.id}
-                          onChange={() => chooseThreadFace(face.id)}
-                          className="accent-accent"
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          Face {index + 1} · Ø{(face.cylinder.radius * 2).toFixed(3)} mm
-                        </span>
-                        <span className={`text-[9px] ${orientation !== null && orientation <= 0.1 ? 'text-warn' : 'text-mute'}`}>
-                          {orientation !== null && orientation <= 0.1 ? 'interior' : 'exterior'}
-                        </span>
-                      </label>
-                    );
-                  }) : (
-                    <p className="px-1 py-2 text-[10px] text-mute">
-                      This body has no analytic cylindrical surfaces.
-                    </p>
-                  )}
-                </div>
-              </fieldset>
+              <ViewportSelectionField
+                testId="external-thread-faces"
+                label="Cylindrical surface"
+                status={threadCylinder && body
+                  ? `${body.name} · exterior cylinder Ø${(threadCylinder.radius * 2).toFixed(3)} mm selected`
+                  : 'Click an exterior cylindrical surface in the viewport'}
+                hint="Only analytic cylindrical faces are accepted; internal hole walls are rejected."
+                active={modelingPickTarget === 'external_thread_face'}
+                hasSelection={Boolean(threadCylinder && body)}
+                onActivate={() => activateFacePicker('external_thread_face', bodyId, faceIds)}
+                onClear={() => {
+                  threadFaceKeyRef.current = null;
+                  setBodyId(0);
+                  setFaceIds([]);
+                  activateFacePicker('external_thread_face', 0, []);
+                }}
+              />
 
               {threadCylinder && (
                 <div className="rounded border border-edge bg-header p-2 text-[10px] leading-4 text-mute">
@@ -2002,39 +2211,22 @@ export function BodyFeatureDialog() {
             </>
           ) : kind === 'shell' ? (
             <>
-              <label>
-                <span className={LABEL}>Body</span>
-                <select
-                  value={bodyId}
-                  onChange={(event) => chooseShellBody(Number(event.target.value))}
-                  className={INPUT}
-                >
-                  {bodies.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <fieldset>
-                <legend className={LABEL}>Faces to remove</legend>
-                <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">
-                  {body?.faces.map((face, index) => (
-                    <label
-                      key={face.id}
-                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={faceIds.includes(face.id)}
-                        onChange={() => toggleFace(face.id)}
-                        className="accent-accent"
-                      />
-                      Face {index + 1} (#{face.id})
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
+              <ViewportSelectionField
+                testId="shell-face-selection"
+                label="Faces to remove"
+                status={faceIds.length > 0 && body
+                  ? `${faceIds.length} ${faceIds.length === 1 ? 'face' : 'faces'} selected · ${body.name}`
+                  : 'Click faces to remove in the viewport'}
+                hint="All selected faces must belong to the same body."
+                active={modelingPickTarget === 'shell_faces'}
+                hasSelection={faceIds.length > 0}
+                onActivate={() => activateFacePicker('shell_faces', bodyId, faceIds)}
+                onClear={() => {
+                  setBodyId(0);
+                  setFaceIds([]);
+                  activateFacePicker('shell_faces', 0, []);
+                }}
+              />
               <label>
                 <span className={LABEL}>Wall thickness (mm)</span>
                 <DimensionInput
@@ -2063,6 +2255,19 @@ export function BodyFeatureDialog() {
           ) : kind === 'rectangular_pattern' ? (
             <>
               {bodyChecklist}
+              <ViewportSelectionField
+                testId="rectangular-pattern-direction-selection"
+                label="First direction reference"
+                status={modelingPickTarget === 'rectangular_pattern_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                active={modelingPickTarget === 'rectangular_pattern_direction'}
+                hasSelection={validVector(directionValue)}
+                onActivate={() => activateEdgePicker('rectangular_pattern_direction')}
+                onClear={() => {
+                  setDirection(['0', '0', '0']);
+                  setSelectedEdges([]);
+                  activateEdgePicker('rectangular_pattern_direction');
+                }}
+              />
               <VectorFields
                 label="First direction"
                 values={direction}
@@ -2092,13 +2297,30 @@ export function BodyFeatureDialog() {
                 <input
                   type="checkbox"
                   checked={secondEnabled}
-                  onChange={(event) => setSecondEnabled(event.target.checked)}
+                  onChange={(event) => {
+                    setSecondEnabled(event.target.checked);
+                    if (event.target.checked) setModelingPickTarget('rectangular_pattern_second_direction');
+                    else if (modelingPickTarget === 'rectangular_pattern_second_direction') setModelingPickTarget('rectangular_pattern_direction');
+                  }}
                   className="accent-accent"
                 />
                 Add a second direction
               </label>
               {secondEnabled && (
                 <>
+                  <ViewportSelectionField
+                    testId="rectangular-pattern-second-direction-selection"
+                    label="Second direction reference"
+                    status={modelingPickTarget === 'rectangular_pattern_second_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                    active={modelingPickTarget === 'rectangular_pattern_second_direction'}
+                    hasSelection={validVector(secondDirectionValue)}
+                    onActivate={() => activateEdgePicker('rectangular_pattern_second_direction')}
+                    onClear={() => {
+                      setSecondDirection(['0', '0', '0']);
+                      setSelectedEdges([]);
+                      activateEdgePicker('rectangular_pattern_second_direction');
+                    }}
+                  />
                   <VectorFields
                     label="Second direction"
                     values={secondDirection}
@@ -2129,6 +2351,21 @@ export function BodyFeatureDialog() {
           ) : kind === 'circular_pattern' ? (
             <>
               {bodyChecklist}
+              <ViewportSelectionField
+                testId="circular-pattern-axis-selection"
+                label="Axis reference"
+                status={modelingPickTarget === 'circular_pattern_axis' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter the axis below'}
+                hint="A selected edge supplies both the axis origin and direction."
+                active={modelingPickTarget === 'circular_pattern_axis'}
+                hasSelection={validVector(axisDirectionValue) && finiteVector(axisOriginValue)}
+                onActivate={() => activateEdgePicker('circular_pattern_axis')}
+                onClear={() => {
+                  setAxisOrigin(['0', '0', '0']);
+                  setAxisDirection(['0', '0', '0']);
+                  setSelectedEdges([]);
+                  activateEdgePicker('circular_pattern_axis');
+                }}
+              />
               <VectorFields
                 label="Axis origin"
                 values={axisOrigin}
@@ -2162,41 +2399,38 @@ export function BodyFeatureDialog() {
             </>
           ) : kind === 'combine' ? (
             <>
-              <label>
-                <span className={LABEL}>Target body</span>
-                <select
-                  value={targetBodyId}
-                  onChange={(event) => chooseTarget(Number(event.target.value))}
-                  className={INPUT}
-                >
-                  {bodies.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <fieldset>
-                <legend className={LABEL}>Tool bodies</legend>
-                <div className="max-h-32 space-y-1 overflow-y-auto rounded border border-edge bg-header p-2">
-                  {bodies
-                    .filter((candidate) => candidate.id !== targetBodyId)
-                    .map((candidate) => (
-                      <label
-                        key={candidate.id}
-                        className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={toolBodyIds.includes(candidate.id)}
-                          onChange={() => toggleTool(candidate.id)}
-                          className="accent-accent"
-                        />
-                        {candidate.name}
-                      </label>
-                    ))}
-                </div>
-              </fieldset>
+              <ViewportSelectionField
+                testId="combine-target-selection"
+                label="Target body"
+                status={targetBodyId > 0
+                  ? `${bodies.find((candidate) => candidate.id === targetBodyId)?.name ?? 'Body'} selected`
+                  : 'Click the target body in the viewport'}
+                active={modelingPickTarget === 'combine_target'}
+                hasSelection={targetBodyId > 0}
+                onActivate={() => activateBodyPicker('combine_target', targetBodyId > 0 ? [targetBodyId] : [])}
+                onClear={() => {
+                  setTargetBodyId(0);
+                  activateBodyPicker('combine_target', []);
+                }}
+              />
+              <ViewportSelectionField
+                testId="combine-tools-selection"
+                label="Tool bodies"
+                status={toolBodyIds.length > 0
+                  ? `${toolBodyIds.length} tool ${toolBodyIds.length === 1 ? 'body' : 'bodies'} selected`
+                  : targetBodyId > 0 ? 'Click one or more tool bodies' : 'Select a target body first'}
+                hint="The target remains distinct from the tool-body selection."
+                active={modelingPickTarget === 'combine_tools'}
+                hasSelection={toolBodyIds.length > 0}
+                onActivate={() => activateBodyPicker(
+                  'combine_tools',
+                  targetBodyId > 0 ? [targetBodyId, ...toolBodyIds] : toolBodyIds,
+                )}
+                onClear={() => {
+                  setToolBodyIds([]);
+                  activateBodyPicker('combine_tools', targetBodyId > 0 ? [targetBodyId] : []);
+                }}
+              />
               <label>
                 <span className={LABEL}>Operation</span>
                 <select
@@ -2223,22 +2457,20 @@ export function BodyFeatureDialog() {
             </>
           ) : (
             <>
-              <label>
-                <span className={LABEL}>Body to split</span>
-                <select
-                  value={bodyId}
-                  onChange={(event) =>
-                    chooseSplitBody(Number(event.target.value))
-                  }
-                  className={INPUT}
-                >
-                  {bodies.map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ViewportSelectionField
+                testId="split-body-selection"
+                label="Body to split"
+                status={bodyId > 0
+                  ? `${bodies.find((candidate) => candidate.id === bodyId)?.name ?? 'Body'} selected`
+                  : 'Click the body to split in the viewport'}
+                active={modelingPickTarget === 'split_body'}
+                hasSelection={bodyId > 0}
+                onActivate={() => activateBodyPicker('split_body', bodyId > 0 ? [bodyId] : [])}
+                onClear={() => {
+                  setBodyId(0);
+                  activateBodyPicker('split_body', []);
+                }}
+              />
               {planeField}
             </>
           )}

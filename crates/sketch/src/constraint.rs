@@ -58,6 +58,19 @@ pub enum Constraint {
         a: EntityId,
         b: EntityId,
     },
+    /// Keep a point or circular-curve center at the sketch origin. This is
+    /// the persistent result of an intentional origin snap; unlike `Fix`, it
+    /// constrains only the two translational degrees of freedom.
+    OriginCoincident {
+        entity: EntityId,
+    },
+    /// Keep a circle/arc center on a selected sketch point. Point-on-curve
+    /// coincidence has different semantics, so center acquisition needs its
+    /// own visible, removable relation.
+    CenterCoincident {
+        point: EntityId,
+        curve: EntityId,
+    },
     Tangent {
         a: EntityId,
         b: EntityId,
@@ -158,6 +171,149 @@ pub enum Constraint {
 }
 
 impl Constraint {
+    /// Whether two constraints express the same geometric or dimensional
+    /// relation. Operand order is normalized for commutative relations and
+    /// dimensional target values are intentionally ignored: two driving
+    /// dimensions cannot independently control the same measurement.
+    pub fn same_relation(&self, other: &Self) -> bool {
+        fn unordered_pair_eq(a: EntityId, b: EntityId, c: EntityId, d: EntityId) -> bool {
+            (a == c && b == d) || (a == d && b == c)
+        }
+
+        match (*self, *other) {
+            (Constraint::Horizontal { entity: a }, Constraint::Horizontal { entity: b })
+            | (Constraint::Vertical { entity: a }, Constraint::Vertical { entity: b })
+            | (
+                Constraint::OriginCoincident { entity: a },
+                Constraint::OriginCoincident { entity: b },
+            )
+            | (Constraint::Fix { entity: a }, Constraint::Fix { entity: b })
+            | (Constraint::Radius { entity: a, .. }, Constraint::Radius { entity: b, .. })
+            | (Constraint::Diameter { entity: a, .. }, Constraint::Diameter { entity: b, .. })
+            | (Constraint::Radius { entity: a, .. }, Constraint::Diameter { entity: b, .. })
+            | (Constraint::Diameter { entity: a, .. }, Constraint::Radius { entity: b, .. }) => {
+                a == b
+            }
+            (
+                Constraint::HorizontalPoints { a, b },
+                Constraint::HorizontalPoints { a: c, b: d },
+            )
+            | (Constraint::VerticalPoints { a, b }, Constraint::VerticalPoints { a: c, b: d })
+            | (Constraint::Coincident { a, b }, Constraint::Coincident { a: c, b: d })
+            | (Constraint::Tangent { a, b }, Constraint::Tangent { a: c, b: d })
+            | (Constraint::Equal { a, b }, Constraint::Equal { a: c, b: d })
+            | (Constraint::Parallel { a, b }, Constraint::Parallel { a: c, b: d })
+            | (Constraint::Perpendicular { a, b }, Constraint::Perpendicular { a: c, b: d })
+            | (Constraint::Midpoint { a, b }, Constraint::Midpoint { a: c, b: d })
+            | (Constraint::Concentric { a, b }, Constraint::Concentric { a: c, b: d })
+            | (Constraint::Collinear { a, b }, Constraint::Collinear { a: c, b: d })
+            | (Constraint::Angle { a, b, .. }, Constraint::Angle { a: c, b: d, .. }) => {
+                unordered_pair_eq(a, b, c, d)
+            }
+            (
+                Constraint::Symmetry { a, b, axis },
+                Constraint::Symmetry {
+                    a: c,
+                    b: d,
+                    axis: other_axis,
+                },
+            ) => axis == other_axis && unordered_pair_eq(a, b, c, d),
+            (
+                Constraint::CenterCoincident { point, curve },
+                Constraint::CenterCoincident {
+                    point: other_point,
+                    curve: other_curve,
+                },
+            ) => point == other_point && curve == other_curve,
+            (
+                Constraint::ArcEndpointCoincident { point, arc, end },
+                Constraint::ArcEndpointCoincident {
+                    point: other_point,
+                    arc: other_arc,
+                    end: other_end,
+                },
+            ) => point == other_point && arc == other_arc && end == other_end,
+            (
+                Constraint::ReferenceMidpoint { point, edge, .. },
+                Constraint::ReferenceMidpoint {
+                    point: other_point,
+                    edge: other_edge,
+                    ..
+                },
+            ) => point == other_point && edge == other_edge,
+            (
+                Constraint::SpanMidpoint { point, start, end },
+                Constraint::SpanMidpoint {
+                    point: other_point,
+                    start: other_start,
+                    end: other_end,
+                },
+            ) => point == other_point && unordered_pair_eq(start, end, other_start, other_end),
+            (
+                Constraint::EqualDistance { origin, a, b },
+                Constraint::EqualDistance {
+                    origin: other_origin,
+                    a: c,
+                    b: d,
+                },
+            ) => origin == other_origin && unordered_pair_eq(a, b, c, d),
+            (
+                Constraint::Distance { from, to, .. },
+                Constraint::Distance {
+                    from: other_from,
+                    to: other_to,
+                    ..
+                },
+            ) => match (to, other_to) {
+                (None, None) => from == other_from,
+                (Some(to), Some(other_to)) => unordered_pair_eq(from, to, other_from, other_to),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Relations that are algebraically incompatible on the same entities,
+    /// independent of solver convergence. Keeping these small, explicit
+    /// proofs separate from heuristic graph connectivity prevents false
+    /// conflict accusations.
+    pub fn directly_conflicts_with(&self, other: &Self) -> bool {
+        fn unordered_pair_eq(a: EntityId, b: EntityId, c: EntityId, d: EntityId) -> bool {
+            (a == c && b == d) || (a == d && b == c)
+        }
+
+        match (*self, *other) {
+            (
+                Constraint::Horizontal { entity: horizontal },
+                Constraint::Vertical { entity: vertical },
+            )
+            | (
+                Constraint::Vertical { entity: vertical },
+                Constraint::Horizontal { entity: horizontal },
+            ) => horizontal == vertical,
+            (Constraint::HorizontalPoints { a, b }, Constraint::VerticalPoints { a: c, b: d })
+            | (Constraint::VerticalPoints { a: c, b: d }, Constraint::HorizontalPoints { a, b })
+            | (Constraint::Parallel { a, b }, Constraint::Perpendicular { a: c, b: d })
+            | (Constraint::Perpendicular { a: c, b: d }, Constraint::Parallel { a, b }) => {
+                unordered_pair_eq(a, b, c, d)
+            }
+            _ => false,
+        }
+    }
+
+    /// Replace the serialized fallback value of a dimensional constraint.
+    /// The bound parameter remains authoritative; keeping this copy in sync
+    /// makes snapshots and flattened API DTOs truthful as well.
+    pub fn set_dimension_value(&mut self, target: f64) {
+        match self {
+            Constraint::Distance { value, .. }
+            | Constraint::Radius { value, .. }
+            | Constraint::Diameter { value, .. }
+            | Constraint::Angle { value, .. } => *value = target,
+            _ => {}
+        }
+    }
+
     /// Stable snake_case kind string (matches the serde tag).
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -166,6 +322,8 @@ impl Constraint {
             Constraint::HorizontalPoints { .. } => "horizontal_points",
             Constraint::VerticalPoints { .. } => "vertical_points",
             Constraint::Coincident { .. } => "coincident",
+            Constraint::OriginCoincident { .. } => "origin_coincident",
+            Constraint::CenterCoincident { .. } => "center_coincident",
             Constraint::Tangent { .. } => "tangent",
             Constraint::Equal { .. } => "equal",
             Constraint::Parallel { .. } => "parallel",
@@ -201,10 +359,12 @@ impl Constraint {
         match *self {
             Constraint::Horizontal { entity }
             | Constraint::Vertical { entity }
+            | Constraint::OriginCoincident { entity }
             | Constraint::Fix { entity }
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
             Constraint::ReferenceMidpoint { point, .. } => vec![point],
+            Constraint::CenterCoincident { point, curve } => vec![point, curve],
             Constraint::Coincident { a, b }
             | Constraint::HorizontalPoints { a, b }
             | Constraint::VerticalPoints { a, b }
@@ -274,5 +434,53 @@ mod tests {
             .referenced_entities(),
             vec![a, b]
         );
+        assert_eq!(
+            Constraint::OriginCoincident { entity: a }.referenced_entities(),
+            vec![a]
+        );
+        assert_eq!(
+            Constraint::CenterCoincident { point: a, curve: b }.referenced_entities(),
+            vec![a, b]
+        );
+    }
+
+    #[test]
+    fn same_relation_normalizes_commutative_operands_and_dimension_values() {
+        let (a, b, axis) = (EntityId(1), EntityId(2), EntityId(3));
+        assert!(Constraint::Parallel { a, b }.same_relation(&Constraint::Parallel { a: b, b: a }));
+        assert!(
+            Constraint::Symmetry { a, b, axis }.same_relation(&Constraint::Symmetry {
+                a: b,
+                b: a,
+                axis,
+            })
+        );
+        assert!(Constraint::Distance {
+            from: a,
+            to: Some(b),
+            value: 10.0,
+        }
+        .same_relation(&Constraint::Distance {
+            from: b,
+            to: Some(a),
+            value: 25.0,
+        }));
+        assert!(!Constraint::Parallel { a, b }.same_relation(&Constraint::Perpendicular { a, b }));
+        assert!(Constraint::Parallel { a, b }
+            .directly_conflicts_with(&Constraint::Perpendicular { a: b, b: a }));
+        assert!(Constraint::Radius {
+            entity: a,
+            value: 5.0,
+        }
+        .same_relation(&Constraint::Diameter {
+            entity: a,
+            value: 10.0,
+        }));
+        assert!(Constraint::OriginCoincident { entity: a }
+            .same_relation(&Constraint::OriginCoincident { entity: a }));
+        assert!(Constraint::CenterCoincident { point: a, curve: b }
+            .same_relation(&Constraint::CenterCoincident { point: a, curve: b }));
+        assert!(!Constraint::CenterCoincident { point: a, curve: b }
+            .same_relation(&Constraint::CenterCoincident { point: b, curve: a }));
     }
 }

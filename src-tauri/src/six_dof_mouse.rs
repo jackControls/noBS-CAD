@@ -334,6 +334,23 @@ mod mac_driver {
         }
     }
 
+    unsafe fn copy_device_state(argument: *const c_void) -> Option<ConnexionDeviceState> {
+        if argument.is_null() {
+            return None;
+        }
+
+        // The framework promises `kConnexionDeviceStateSize` readable bytes,
+        // but its packed C ABI does not promise that the callback pointer has
+        // Rust's alignment for `ConnexionDeviceState`. Forming `&*argument`
+        // would therefore be undefined behavior and debug Rust deliberately
+        // aborts when it observes a misaligned report. Copy the short record
+        // before inspecting it; `read_unaligned` is specifically defined for
+        // this FFI case and leaves the rest of the callback on aligned storage.
+        Some(unsafe {
+            std::ptr::read_unaligned(argument.cast::<ConnexionDeviceState>())
+        })
+    }
+
     struct CallbackState {
         app: AppHandle,
         client_id: u16,
@@ -362,10 +379,12 @@ mod mac_driver {
         message_type: u32,
         argument: *mut c_void,
     ) {
-        if message_type != CONNEXION_MESSAGE_DEVICE_STATE || argument.is_null() {
+        if message_type != CONNEXION_MESSAGE_DEVICE_STATE {
             return;
         }
-        let device = unsafe { &*argument.cast::<ConnexionDeviceState>() };
+        let Some(device) = (unsafe { copy_device_state(argument) }) else {
+            return;
+        };
         let Ok(mut guard) = callback_state().lock() else {
             return;
         };
@@ -378,7 +397,7 @@ mod mac_driver {
         if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
             let _ = callback
                 .app
-                .emit("six-dof-mouse-motion", canonical_motion(device));
+                .emit("six-dof-mouse-motion", canonical_motion(&device));
         }
         let buttons = device.buttons();
         if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
@@ -607,6 +626,47 @@ mod mac_driver {
                     rotation: Some([40, 50, 60]),
                 }
             );
+        }
+
+        #[test]
+        fn mac_driver_copies_misaligned_callback_records_before_reading_them() {
+            let mut storage = [0_u8; std::mem::size_of::<ConnexionDeviceState>() + 2];
+            let base = storage.as_mut_ptr();
+            let offset = if (base as usize) % 2 == 0 { 1 } else { 0 };
+            let report = unsafe { base.add(offset) };
+            assert_ne!((report as usize) % 2, 0);
+
+            let write = |field_offset: usize, bytes: &[u8]| unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    report.add(field_offset),
+                    bytes.len(),
+                );
+            };
+            write(2, &17_u16.to_ne_bytes());
+            write(4, &CONNEXION_COMMAND_HANDLE_AXIS.to_ne_bytes());
+            for (index, value) in [10_i16, 20, 30, 40, 50, 60].into_iter().enumerate() {
+                write(30 + index * 2, &value.to_ne_bytes());
+            }
+            write(44, &0x8000_0005_u32.to_ne_bytes());
+
+            let device = unsafe { copy_device_state(report.cast()) }
+                .expect("a non-null callback record should be copied");
+            assert_eq!(device.client, 17);
+            assert_eq!(device.command, CONNEXION_COMMAND_HANDLE_AXIS);
+            assert_eq!(device.buttons(), 0x8000_0005);
+            assert_eq!(
+                canonical_motion(&device),
+                MotionPacket {
+                    translation: Some([10, 20, 30]),
+                    rotation: Some([40, 50, 60]),
+                }
+            );
+        }
+
+        #[test]
+        fn mac_driver_rejects_a_null_callback_record() {
+            assert!(unsafe { copy_device_state(std::ptr::null()) }.is_none());
         }
     }
 }

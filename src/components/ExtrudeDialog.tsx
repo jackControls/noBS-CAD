@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Box, LoaderCircle, MousePointerClick, X } from 'lucide-react';
+import { Box, LoaderCircle, X } from 'lucide-react';
 import { getEngine } from '../engine';
 import { cancelTimelineFeatureEdit, submitExtrude } from '../engine/controller';
 import type {
@@ -16,6 +16,7 @@ import {
 } from '../lib/extrudeInference';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
+import { ViewportSelectionField } from './ViewportSelectionField';
 import { ExtrudeManipulator } from './viewport/ExtrudeManipulator';
 
 type ExtentType = ExtrudeExtent['type'];
@@ -43,10 +44,13 @@ export function ExtrudeDialog() {
   );
   const configureProfilePicker = useAppStore((s) => s.configureProfilePicker);
   const replaceProfilePicks = useAppStore((s) => s.replaceProfilePicks);
-  const toggleProfilePick = useAppStore((s) => s.toggleProfilePick);
   const clearSolidSelection = useAppStore((s) => s.clearSolidSelection);
+  const selectedBodies = useAppStore((s) => s.selectedBodies);
+  const replaceSelectedBodies = useAppStore((s) => s.replaceSelectedBodies);
   const setSelectedBody = useAppStore((s) => s.setSelectedBody);
   const setSelectedFace = useAppStore((s) => s.setSelectedFace);
+  const modelingPickTarget = useAppStore((s) => s.modelingPickTarget);
+  const setModelingPickTarget = useAppStore((s) => s.setModelingPickTarget);
   const setSolidCommandPreview = useAppStore((s) => s.setSolidCommandPreview);
 
   const [catalog, setCatalog] = useState<ProfileCatalogItemDto[]>([]);
@@ -128,9 +132,7 @@ export function ExtrudeDialog() {
             : edit?.sketch_name ??
               usable[usable.length - 1]?.sketch_name ??
               '';
-        const entry = usable.find((item) => item.sketch_name === initialSketch);
-        const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
-        const initialIndices = edit?.profile_indices ?? (eligible.length === 1 ? [eligible[0].index] : []);
+        const initialIndices = edit?.profile_indices ?? [];
         configureProfilePicker(
           'extrude',
           usable,
@@ -167,9 +169,7 @@ export function ExtrudeDialog() {
               ? [initialSource.body_id]
             : selectedBody !== null
               ? [selectedBody]
-              : scene.bodies[0]
-                ? [scene.bodies[0].id]
-                : [],
+              : [],
         );
 
         const extent = edit?.extent ?? { type: 'distance', distance: 10 };
@@ -179,11 +179,9 @@ export function ExtrudeDialog() {
         const preferredFace =
           extent.type === 'to_face'
             ? extent.face_id
-            : selectedFace !== null &&
-                planarFaces.some((face) => face.id === selectedFace)
-              ? selectedFace
-              : planarFaces[0]?.id ?? null;
+            : null;
         setToFace(preferredFace);
+        setModelingPickTarget('extrude_source');
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -203,6 +201,7 @@ export function ExtrudeDialog() {
     scene.bodies,
     setSelectedBody,
     setSelectedFace,
+    setModelingPickTarget,
     t,
   ]);
 
@@ -219,25 +218,35 @@ export function ExtrudeDialog() {
         (face) => face.id === selectedFace
           && (selectedBody === null || face.bodyId === selectedBody),
       );
-  const sourceFace = useMemo(
-    () => profileIndices.length === 0
-      ? selectedPlanarFace
-        ? { body_id: selectedPlanarFace.bodyId, face_id: selectedPlanarFace.id }
-        : savedSourceFace
-      : null,
-    [profileIndices.length, savedSourceFace, selectedPlanarFace],
-  );
-  const sourceBasis = selectedCatalog?.basis
-    ?? selectedPlanarFace?.basis
-    ?? (sourceFace ? savedSourceBasis : null);
+  // The global face slot is the active pick, not the accepted source. A stop
+  // face or target-body pick must never change the source identity or basis.
+  const sourceFace = profileIndices.length === 0 ? savedSourceFace : null;
+  const sourceBasis = sourceFace ? savedSourceBasis : selectedCatalog?.basis;
   useEffect(() => {
-    if (profileIndices.length !== 0 || !selectedPlanarFace) return;
+    if (openFeature === null || loading || modelingPickTarget !== 'extrude_source') return;
+    if (profileIndices.length !== 0) {
+      setSavedSourceFace(null);
+      setSavedSourceBasis(null);
+      return;
+    }
+    if (!selectedPlanarFace) return;
     setSavedSourceFace({
       body_id: selectedPlanarFace.bodyId,
       face_id: selectedPlanarFace.id,
     });
     setSavedSourceBasis(selectedPlanarFace.basis);
-  }, [profileIndices.length, selectedPlanarFace]);
+  }, [loading, modelingPickTarget, openFeature, profileIndices.length, selectedPlanarFace]);
+  useEffect(() => {
+    if (modelingPickTarget !== 'extrude_targets') return;
+    const valid = selectedBodies.filter((id) => scene.bodies.some((body) => body.id === id));
+    if (valid.join(',') === targetBodies.join(',')) return;
+    setOperationManual(true);
+    setTargetBodies(valid);
+  }, [modelingPickTarget, scene.bodies, selectedBodies, targetBodies]);
+  useEffect(() => {
+    if (openFeature === null || loading || modelingPickTarget !== 'extrude_to_face') return;
+    if (selectedPlanarFace) setToFace(selectedPlanarFace.id);
+  }, [loading, modelingPickTarget, openFeature, selectedPlanarFace]);
   const distanceNumber = Number(distance);
   const secondDistanceNumber = Number(secondDistance);
   const taperNumber = Number(taper);
@@ -536,44 +545,44 @@ export function ExtrudeDialog() {
   const chooseOperation = (value: ExtrudeOperation) => {
     setOperationManual(true);
     setOperation(value);
-  };
-
-  const chooseSketch = (name: string) => {
-    if (name === '') {
-      clearSolidSelection();
-      setSavedSourceFace(null);
-      setSavedSourceBasis(null);
-      replaceProfilePicks('extrude', [], '');
-      return;
+    if (value === 'new_body') {
+      // Restore the source slot before activating it; otherwise a previously
+      // selected stop face would be consumed as a new source on this switch.
+      activateSourcePicker();
+    } else {
+      replaceSelectedBodies(targetBodies);
+      setModelingPickTarget('extrude_targets');
     }
-    clearSolidSelection();
-    setSavedSourceFace(null);
-    setSavedSourceBasis(null);
-    const entry = catalog.find((item) => item.sketch_name === name);
-    const eligible = entry?.profiles.filter((profile) => profile.nesting_depth % 2 === 0) ?? [];
-    replaceProfilePicks(
+  };
+  const activateSourcePicker = () => {
+    configureProfilePicker(
       'extrude',
-      eligible.length === 1
-        ? [{ sketch_name: name, profile_index: eligible[0].index }]
-        : [],
-      name,
+      catalog,
+      profilePicker?.selected ?? [],
+      sketchName,
     );
+    if (sourceFace) {
+      setSelectedBody(sourceFace.body_id);
+      setSelectedFace(sourceFace.face_id);
+    } else {
+      clearSolidSelection();
+    }
+    setModelingPickTarget('extrude_source');
   };
-
-  const toggleProfile = (profileSketchName: string, index: number) => {
+  const clearSource = () => {
     clearSolidSelection();
     setSavedSourceFace(null);
     setSavedSourceBasis(null);
-    toggleProfilePick({ sketch_name: profileSketchName, profile_index: index });
+    replaceProfilePicks('extrude', [], '');
+    setModelingPickTarget('extrude_source');
   };
-
-  const toggleBody = (id: number) => {
-    setOperationManual(true);
-    setTargetBodies((current) =>
-      current.includes(id)
-        ? current.filter((candidate) => candidate !== id)
-        : [...current, id],
-    );
+  const activateTargetPicker = () => {
+    replaceSelectedBodies(targetBodies);
+    setModelingPickTarget('extrude_targets');
+  };
+  const activateToFacePicker = () => {
+    clearSolidSelection();
+    setModelingPickTarget('extrude_to_face');
   };
 
   const commit = () => {
@@ -696,7 +705,7 @@ export function ExtrudeDialog() {
   const sourceFaceLabel = sourceFace
     ? planarFaces.find(
         (face) => face.id === sourceFace.face_id && face.bodyId === sourceFace.body_id,
-      )?.label ?? `${t('extrude.face')} #${sourceFace.face_id}`
+      )?.label ?? t('extrude.face')
     : null;
 
   if (openFeature === null) return null;
@@ -765,118 +774,21 @@ export function ExtrudeDialog() {
             </div>
           ) : (
             <>
-              <label>
-                <span className={LABEL_CLASS}>{t('extrude.sketch')}</span>
-                <select
-                  data-testid="extrude-sketch"
-                  value={sketchName}
-                  onChange={(event) => chooseSketch(event.target.value)}
-                  className={INPUT_CLASS}
-                >
-                  <option value="">{t('extrude.anyVisibleSketch')}</option>
-                  {catalog.map((entry) => (
-                    <option key={entry.sketch_name} value={entry.sketch_name}>
-                      {entry.sketch_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <fieldset>
-                <legend className={LABEL_CLASS}>{t('extrude.sources')}</legend>
-                <div
-                  data-testid="extrude-profile-selection-state"
-                  className="mb-2 rounded border border-accent/70 bg-accent/10 p-2"
-                >
-                  <div className="flex items-center gap-2 text-xs font-semibold text-ink">
-                    <MousePointerClick size={14} className="shrink-0 text-accent" />
-                    <span className="flex-1">{t('extrude.selectingSources')}</span>
-                    <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent">
-                      {t('extrude.selectedSourceCount').replace(
-                        '{count}',
-                        String(sourceFace ? 1 : profileIndices.length),
-                      )}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[10px] leading-4 text-mute">
-                    {t('extrude.selectingSourcesHint')}
-                  </p>
-                  <button
-                    type="button"
-                    data-testid="extrude-clear-profiles"
-                    disabled={!sourceFace && profileIndices.length === 0 && sketchName === ''}
-                    onClick={() => {
-                      clearSolidSelection();
-                      setSavedSourceFace(null);
-                      setSavedSourceBasis(null);
-                      replaceProfilePicks('extrude', [], '');
-                    }}
-                    className="mt-1.5 h-6 rounded border border-edge bg-header px-2 text-[10px] text-ink hover:border-accent/70 hover:bg-edge disabled:opacity-40"
-                  >
-                    {t('extrude.clearAndReselect')}
-                  </button>
-                </div>
-                <div className="space-y-1 rounded border border-edge bg-header p-2">
-                  {sourceFace && sourceFaceLabel && (
-                    <label className="flex cursor-pointer items-center gap-2 rounded bg-accent/10 px-1 py-1 text-xs text-ink">
-                      <input
-                        type="checkbox"
-                        checked
-                        onChange={() => {
-                          clearSolidSelection();
-                          setSavedSourceFace(null);
-                          setSavedSourceBasis(null);
-                        }}
-                        className="accent-accent"
-                      />
-                      <span className="flex-1">{sourceFaceLabel}</span>
-                      <span className="text-[10px] text-accent">
-                        {t('extrude.exactFace')}
-                      </span>
-                    </label>
-                  )}
-                  {(selectedCatalog ? [selectedCatalog] : catalog).map((entry) => (
-                    <div key={entry.sketch_name}>
-                      {!selectedCatalog && (
-                        <div className="px-1 pb-1 pt-1 text-[10px] font-semibold text-mute">
-                          {entry.sketch_name}
-                        </div>
-                      )}
-                      {entry.profiles
-                        .filter((profile) => profile.nesting_depth % 2 === 0)
-                        .map((profile) => {
-                          const checked = profilePicker?.selected.some(
-                            (candidate) =>
-                              candidate.sketch_name === entry.sketch_name
-                              && candidate.profile_index === profile.index,
-                          ) ?? false;
-                          return (
-                            <label
-                              key={`${entry.sketch_name}:${profile.index}`}
-                              className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleProfile(entry.sketch_name, profile.index)}
-                                className="accent-accent"
-                              />
-                              <span className="flex-1">
-                                {t('extrude.profile')} {profile.index + 1}
-                              </span>
-                              <span className="text-[10px] text-mute">
-                                {Math.abs(profile.area).toFixed(2)} mm²
-                              </span>
-                            </label>
-                          );
-                        })}
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-1.5 text-[10px] leading-4 text-mute">
-                  {t('extrude.livePreview')}
-                </p>
-              </fieldset>
+              <ViewportSelectionField
+                testId="extrude-profile-selection-state"
+                clearTestId="extrude-clear-profiles"
+                label={t('extrude.sources')}
+                status={sourceFace && sourceFaceLabel
+                  ? `${sourceFaceLabel} selected`
+                  : profileIndices.length > 0
+                    ? `${profileIndices.length} ${profileIndices.length === 1 ? 'profile' : 'profiles'} selected${sketchName ? ` · ${sketchName}` : ''}`
+                    : 'Click closed profiles or a planar face in the viewport'}
+                hint={t('extrude.selectingSourcesHint')}
+                active={modelingPickTarget === 'extrude_source'}
+                hasSelection={Boolean(sourceFace) || profileIndices.length > 0}
+                onActivate={activateSourcePicker}
+                onClear={clearSource}
+              />
 
               <fieldset>
                 <legend className={LABEL_CLASS}>{t('extrude.operation')}</legend>
@@ -931,38 +843,32 @@ export function ExtrudeDialog() {
               </fieldset>
 
               {booleanOperation && (
-                <fieldset>
-                  <legend className={LABEL_CLASS}>{t('extrude.targetBodies')}</legend>
-                  <div className="space-y-1 rounded border border-edge bg-header p-2">
-                    {scene.bodies.length === 0 ? (
-                      <p className="text-xs text-mute">
-                        {operation === 'join' && profileIndices.length > 1
-                          ? t('extrude.joinProfilesNoTarget')
-                          : t('extrude.noTargetBodies')}
-                      </p>
-                    ) : (
-                      scene.bodies.map((body) => (
-                        <label
-                          key={body.id}
-                          className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs text-ink hover:bg-edge"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={targetBodies.includes(body.id)}
-                            onChange={() => toggleBody(body.id)}
-                            className="accent-accent"
-                          />
-                          {body.name}
-                        </label>
-                      ))
-                    )}
-                  </div>
+                <div>
+                  <ViewportSelectionField
+                    testId="extrude-target-selection"
+                    label={t('extrude.targetBodies')}
+                    status={targetBodies.length > 0
+                      ? `${targetBodies.length} ${targetBodies.length === 1 ? 'body' : 'bodies'} selected`
+                      : operation === 'join' && profileIndices.length > 1
+                        ? t('extrude.joinProfilesNoTarget')
+                        : 'Click target bodies in the viewport'}
+                    hint="Continue clicking, or use Shift/Ctrl/Cmd, to select multiple target bodies."
+                    active={modelingPickTarget === 'extrude_targets'}
+                    hasSelection={targetBodies.length > 0}
+                    onActivate={activateTargetPicker}
+                    onClear={() => {
+                      setOperationManual(true);
+                      setTargetBodies([]);
+                      replaceSelectedBodies([]);
+                      setModelingPickTarget('extrude_targets');
+                    }}
+                  />
                   {joinsProfilesIntoNewBody && (
                     <p className="mt-1 text-[10px] leading-4 text-accent">
                       {t('extrude.joinProfilesNoTarget')}
                     </p>
                   )}
-                </fieldset>
+                </div>
               )}
 
               <label>
@@ -970,7 +876,12 @@ export function ExtrudeDialog() {
                 <select
                   data-testid="extrude-extent"
                   value={extentType}
-                  onChange={(event) => setExtentType(event.target.value as ExtentType)}
+                  onChange={(event) => {
+                    const next = event.target.value as ExtentType;
+                    setExtentType(next);
+                    if (next === 'to_face') activateToFacePicker();
+                    else if (modelingPickTarget === 'extrude_to_face') activateSourcePicker();
+                  }}
                   className={INPUT_CLASS}
                 >
                   <option value="distance">{t('extrude.distance')}</option>
@@ -1017,23 +928,21 @@ export function ExtrudeDialog() {
               )}
 
               {extentType === 'to_face' && (
-                <label>
-                  <span className={LABEL_CLASS}>{t('extrude.targetFace')}</span>
-                  <select
-                    value={toFace ?? ''}
-                    onChange={(event) => setToFace(Number(event.target.value))}
-                    className={INPUT_CLASS}
-                  >
-                    <option value="" disabled>
-                      {t('extrude.chooseFace')}
-                    </option>
-                    {planarFaces.map((face) => (
-                      <option key={face.id} value={face.id}>
-                        {face.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <ViewportSelectionField
+                  testId="extrude-to-face-selection"
+                  label={t('extrude.targetFace')}
+                  status={toFace === null
+                    ? 'Click a planar face in the viewport'
+                    : `${planarFaces.find((face) => face.id === toFace)?.label ?? 'Planar face'} selected`}
+                  hint="The selected face is highlighted in the model."
+                  active={modelingPickTarget === 'extrude_to_face'}
+                  hasSelection={toFace !== null}
+                  onActivate={activateToFacePicker}
+                  onClear={() => {
+                    setToFace(null);
+                    activateToFacePicker();
+                  }}
+                />
               )}
 
               <label>

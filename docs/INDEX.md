@@ -40,6 +40,14 @@
 | [community/ANNOUNCEMENT_DRAFTS.md](community/ANNOUNCEMENT_DRAFTS.md) | Maintainers | Before public announcements |
 | [community/DISCUSSIONS_WELCOME.md](community/DISCUSSIONS_WELCOME.md) | Maintainers | First Discussions post |
 
+## Sketch / viewport interaction
+
+| Doc | Notes |
+|-----|-------|
+| [SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md) | Executable 25×25 ordered constraint/dimension matrix and operation-ownership policy |
+| [MODELING_VIEWPORT_SELECTION.md](MODELING_VIEWPORT_SELECTION.md) | Shared picker roles, selection ownership, and command coverage |
+| [VIEWPORT_INTERACTION_THEME.md](VIEWPORT_INTERACTION_THEME.md) | Light/dark interaction states, native rendering rules, and visual validation |
+
 ## Packaging / provenance
 
 | Doc | Notes |

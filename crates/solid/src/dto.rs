@@ -264,6 +264,10 @@ pub struct RevolveRequest {
     pub profile_indices: Vec<u32>,
     pub axis_origin: Point2Dto,
     pub axis_direction: Point2Dto,
+    /// Sketch that owns `axis_line_entity_id`. Legacy definitions omit this
+    /// and resolve the line from `sketch_name`.
+    #[serde(default)]
+    pub axis_line_sketch_name: Option<String>,
     /// When present, the stable line entity replaces the manual axis values.
     /// The values above remain as a backwards-compatible fallback for older
     /// project files and X/Y/custom axes.
@@ -729,6 +733,8 @@ pub struct RevolveDefinitionDto {
     pub profile_indices: Vec<u32>,
     pub axis_origin: Point2Dto,
     pub axis_direction: Point2Dto,
+    #[serde(default)]
+    pub axis_line_sketch_name: Option<String>,
     #[serde(default)]
     pub axis_line_entity_id: Option<u64>,
     pub angle_deg: f64,

@@ -349,7 +349,12 @@
   "dimEditor": {
     "placeholder": "value or =formula",
     "title": "Edit dimension (value or formula)",
-    "errorTitle": "Cannot edit dimension"
+    "errorTitle": "Cannot edit dimension",
+    "makeReference": "Reference",
+    "makeDriving": "Make driving",
+    "makeReferenceDescription": "Stop controlling geometry and report the solved measurement",
+    "makeDrivingDescription": "Use the current measurement to control geometry",
+    "referenceDescription": "Reference dimension — reports solved geometry"
   },
   "navbar": {
     "orbit": "Orbit",
@@ -481,9 +486,9 @@
     "yAxis": "Sketch Y axis",
     "sketchLine": "Sketch line",
     "axisLine": "Axis line",
-    "pickAxisLine": "Click a visible sketch line in the canvas, or choose one below.",
+    "pickAxisLine": "Click any visible coplanar sketch line, including a straight profile edge, or choose one below.",
     "line": "Line",
-    "noLines": "No straight lines in this sketch",
+    "noLines": "No coplanar straight sketch lines",
     "customAxis": "Custom sketch axis",
     "originX": "Origin X",
     "originY": "Origin Y",
@@ -651,6 +656,7 @@
   },
   "selectionReadout": {
     "title": "SELECTION",
+    "constraintTitle": "CONSTRAINT",
     "selectedOnly": "Selected",
     "approximate": "≈ from display geometry",
     "kinds": {
@@ -713,11 +719,15 @@
   },
   "constraints": {
     "ok": "OK",
+    "contextMenu": "Constraint actions",
+    "remove": "Remove constraint",
     "conflictTitle": "Cannot add constraint",
     "invalidTitle": "Invalid selection",
     "unsupported": "This constraint is not supported yet.",
+    "selectFeatures": "Select 2 features for {constraint} ({count}/2, Esc to cancel).",
+    "selectHorizontalVertical": "Select a line or 2 points for {constraint} ({count} selected, Esc to cancel).",
     "needs": {
-      "hv": "Horizontal/Vertical needs one or more lines.",
+      "hv": "Horizontal/Vertical needs one or more lines, or exactly two points.",
       "coincident": "Coincident needs two entities (point on point/line/circle).",
       "tangent": "Tangent needs a line and a circle/arc, or two circles/arcs.",
       "equal": "Equal needs two lines or two circles/arcs.",

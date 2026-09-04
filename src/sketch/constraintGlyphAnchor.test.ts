@@ -7,12 +7,26 @@
  *
  * Run: `npm run test:constraint-glyphs`
  */
-import type { ConstraintDto, EntityDto, Vec2 } from '../engine/types';
+import type {
+  ConstraintDto,
+  EntityDto,
+  GeometricConstraintType,
+  Vec2,
+} from '../engine/types';
 import {
+  CONSTRAINT_EXISTENCE_GLYPH,
+  distributedRelationGlyphTargets,
   layoutConstraintGlyphs,
   offsetGlyphFromAnchor,
+  rightAngleGlyphFrame,
   singlePointRelationAnchor,
 } from './constraintGlyphAnchor';
+import { constraintReferencedEntityIds } from './constraintRefs';
+import {
+  CONSTRAINT_ICON_PRIMITIVES,
+  CONSTRAINT_TYPE_ICON,
+  TOOL_CONSTRAINT_ICON,
+} from './constraintIcons';
 
 let failures = 0;
 
@@ -56,6 +70,94 @@ function tangent(
 console.log('constraint glyph anchors');
 
 {
+  const geometricTypes = [
+    'horizontal',
+    'vertical',
+    'horizontal_points',
+    'vertical_points',
+    'coincident',
+    'origin_coincident',
+    'center_coincident',
+    'tangent',
+    'equal',
+    'parallel',
+    'perpendicular',
+    'fix',
+    'midpoint',
+    'reference_midpoint',
+    'span_midpoint',
+    'concentric',
+    'collinear',
+    'symmetry',
+    'arc_endpoint_coincident',
+    'equal_distance',
+  ] satisfies GeometricConstraintType[];
+  check(
+    'every geometric constraint has a non-empty existence glyph',
+    geometricTypes.every((type) => CONSTRAINT_EXISTENCE_GLYPH[type].trim().length > 0),
+  );
+  check(
+    'every geometric constraint resolves to shared toolbar/viewport artwork',
+    geometricTypes.every(
+      (type) => CONSTRAINT_ICON_PRIMITIVES[CONSTRAINT_TYPE_ICON[type]].length > 0,
+    ),
+  );
+  check(
+    'perpendicular retains an explicit semantic fallback label',
+    CONSTRAINT_EXISTENCE_GLYPH.perpendicular === '⊥',
+    CONSTRAINT_EXISTENCE_GLYPH.perpendicular,
+  );
+  check(
+    'perpendicular artwork includes a dedicated right-angle square',
+    CONSTRAINT_ICON_PRIMITIVES.perpendicular.some(
+      (primitive) => primitive.type === 'path' && primitive.d === 'M5 14h5v5',
+    ),
+  );
+  check(
+    'combined Horizontal/Vertical command remains visually distinct from Perpendicular',
+    TOOL_CONSTRAINT_ICON.hv !== TOOL_CONSTRAINT_ICON.perpendicular
+      && CONSTRAINT_ICON_PRIMITIVES[TOOL_CONSTRAINT_ICON.hv].length > 0,
+  );
+}
+
+{
+  const point: EntityDto = {
+    kind: 'point',
+    id: 7,
+    position: { x: 0, y: 0 },
+    fully_defined: true,
+  };
+  const centered = circle(8, { x: 12, y: -4 }, 5);
+  const originAnchor = singlePointRelationAnchor(
+    { id: 1, type: 'origin_coincident', entity: 7 },
+    byId(point, centered),
+  );
+  check(
+    'origin coincidence has a visible anchor on its acquired entity',
+    !!originAnchor && near(originAnchor, point.position),
+    JSON.stringify(originAnchor),
+  );
+  const centerAnchor = singlePointRelationAnchor(
+    { id: 2, type: 'center_coincident', point: 7, curve: 8 },
+    byId(point, centered),
+  );
+  check(
+    'center coincidence has a visible anchor on its acquired point',
+    !!centerAnchor && near(centerAnchor, point.position),
+    JSON.stringify(centerAnchor),
+  );
+  check(
+    'center coincidence highlights both the point and curve',
+    constraintReferencedEntityIds({
+      id: 2,
+      type: 'center_coincident',
+      point: 7,
+      curve: 8,
+    }).join(',') === '7,8',
+  );
+}
+
+{
   // External: centers 30 apart, radii 10+20. Contact at (10, 0) from origin.
   const left = circle(1, { x: 0, y: 0 }, 10);
   const right = circle(2, { x: 30, y: 0 }, 20);
@@ -66,6 +168,88 @@ console.log('constraint glyph anchors');
   check('external circle-circle contact (a,b)', !!ab && near(ab, expected), JSON.stringify(ab));
   check('external circle-circle contact (b,a)', !!ba && near(ba, expected), JSON.stringify(ba));
   check('external order-independent', !!ab && !!ba && near(ab, ba));
+}
+
+{
+  const midpointPoint: EntityDto = {
+    kind: 'point',
+    id: 7,
+    position: { x: 12, y: -4 },
+    fully_defined: false,
+  };
+  const map = byId(midpointPoint);
+  const spanAnchor = singlePointRelationAnchor(
+    { id: 1, type: 'span_midpoint', point: 7, start: 8, end: 9 },
+    map,
+  );
+  check(
+    'internal span-midpoint relation retains a visible point anchor',
+    !!spanAnchor && near(spanAnchor, midpointPoint.position),
+    JSON.stringify(spanAnchor),
+  );
+  const spanRefs = constraintReferencedEntityIds({
+    id: 1,
+    type: 'span_midpoint',
+    point: 7,
+    start: 8,
+    end: 9,
+  });
+  check(
+    'span-midpoint relation highlights its point and both carriers',
+    spanRefs.join(',') === '7,8,9',
+    spanRefs.join(','),
+  );
+}
+
+{
+  const endpoint: EntityDto = {
+    kind: 'point',
+    id: 7,
+    position: { x: 5, y: 6 },
+    fully_defined: false,
+  };
+  const arc: EntityDto = {
+    kind: 'arc',
+    id: 8,
+    center: { x: 0, y: 0 },
+    radius: 10,
+    start_angle: 0,
+    end_angle: Math.PI / 2,
+    fully_defined: false,
+  };
+  const constraint: ConstraintDto = {
+    id: 1,
+    type: 'arc_endpoint_coincident',
+    point: 7,
+    arc: 8,
+    end: 'end',
+  };
+  const anchor = singlePointRelationAnchor(constraint, byId(endpoint, arc));
+  check(
+    'internal arc-endpoint coincidence retains a visible point anchor',
+    !!anchor && near(anchor, endpoint.position),
+    JSON.stringify(anchor),
+  );
+  check(
+    'internal arc relation references both visible entities',
+    constraintReferencedEntityIds(constraint).join(',') === '7,8',
+    constraintReferencedEntityIds(constraint).join(','),
+  );
+}
+
+{
+  const equalDistance: ConstraintDto = {
+    id: 1,
+    type: 'equal_distance',
+    origin: 1,
+    a: 2,
+    b: 3,
+  };
+  check(
+    'equal-distance relation includes its origin in glyph placement',
+    constraintReferencedEntityIds(equalDistance).join(',') === '2,3,1',
+    constraintReferencedEntityIds(equalDistance).join(','),
+  );
 }
 
 {
@@ -116,6 +300,96 @@ console.log('constraint glyph anchors');
     'perpendicular order-independent',
     !!ab && !!ba && near(ab, ba),
     JSON.stringify(ba),
+  );
+  const distributed = distributedRelationGlyphTargets(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    map,
+  );
+  check(
+    'disjoint perpendicular features receive one marker each',
+    distributed.length === 2
+      && distributed.map((target) => target.entityId).join(',') === '1,2',
+    JSON.stringify(distributed),
+  );
+}
+
+{
+  const horizontal = line(1, { x: -10, y: 0 }, { x: 10, y: 0 });
+  const vertical = line(2, { x: 0, y: -10 }, { x: 0, y: 10 });
+  const distributed = distributedRelationGlyphTargets(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    byId(horizontal, vertical),
+  );
+  check(
+    'intersecting perpendicular features retain one shared square marker',
+    distributed.length === 0,
+    JSON.stringify(distributed),
+  );
+}
+
+{
+  const upper = line(1, { x: 0, y: 10 }, { x: 20, y: 10 });
+  const lower = line(2, { x: 0, y: 0 }, { x: 20, y: 0 });
+  const targets = distributedRelationGlyphTargets(
+    { id: 1, type: 'parallel', a: 1, b: 2 },
+    byId(upper, lower),
+  );
+  check(
+    'parallel marks repeat on both lines',
+    targets.length === 2
+      && near(targets[0].anchor, { x: 10, y: 10 })
+      && near(targets[1].anchor, { x: 10, y: 0 }),
+    JSON.stringify(targets),
+  );
+  check(
+    'parallel marks offset into the space between the lines',
+    targets[0].preferredDir?.y === -1 && targets[1].preferredDir?.y === 1,
+    JSON.stringify(targets.map((target) => target.preferredDir)),
+  );
+}
+
+{
+  const horizontal = line(1, { x: -10, y: 0 }, { x: 10, y: 0 });
+  const vertical = line(2, { x: 0, y: -10 }, { x: 0, y: 10 });
+  const frame = rightAngleGlyphFrame(
+    { id: 1, type: 'perpendicular', a: 1, b: 2 },
+    byId(horizontal, vertical),
+  );
+  check(
+    'intersecting perpendicular lines expose an aligned square frame',
+    !!frame
+      && near(frame.vertex, { x: 0, y: 0 })
+      && Math.abs(
+        frame.directionA.x * frame.directionB.x
+          + frame.directionA.y * frame.directionB.y,
+      ) < 1e-9
+      && Math.abs(frame.maxSize - 10) < 1e-9,
+    JSON.stringify(frame),
+  );
+  const disjoint = rightAngleGlyphFrame(
+    { id: 2, type: 'perpendicular', a: 1, b: 3 },
+    byId(horizontal, line(3, { x: 20, y: 10 }, { x: 20, y: 20 })),
+  );
+  check(
+    'disjoint perpendicular lines do not draw a detached square',
+    disjoint === null,
+    JSON.stringify(disjoint),
+  );
+}
+
+{
+  const left = circle(1, { x: -10, y: 0 }, 4);
+  const right = circle(2, { x: 10, y: 0 }, 6);
+  const targets = distributedRelationGlyphTargets(
+    { id: 1, type: 'equal', a: 1, b: 2 },
+    byId(left, right),
+  );
+  check(
+    'equal-circle marks repeat on the visible circumferences',
+    targets.length === 2
+      && near(targets[0].anchor, { x: -14, y: 0 })
+      && near(targets[1].anchor, { x: 16, y: 0 }),
+    JSON.stringify(targets),
   );
 }
 

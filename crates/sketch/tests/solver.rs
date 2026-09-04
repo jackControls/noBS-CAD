@@ -60,6 +60,20 @@ fn line(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> (Vec2, Vec
     }
 }
 
+fn point(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> Vec2 {
+    match dto.entities.iter().find(|entity| entity.id() == id) {
+        Some(EntityDto::Point { position, .. }) => *position,
+        other => panic!("expected point, got {other:?}"),
+    }
+}
+
+fn circle(dto: &nbcad_sketch::SketchDto, id: nbcad_sketch::EntityId) -> (Vec2, f64) {
+    match dto.entities.iter().find(|entity| entity.id() == id) {
+        Some(EntityDto::Circle { center, radius, .. }) => (*center, *radius),
+        other => panic!("expected circle, got {other:?}"),
+    }
+}
+
 fn close(a: Vec2, b: Vec2) -> bool {
     a.distance(b) < 1e-7
 }
@@ -70,7 +84,7 @@ fn close(a: Vec2, b: Vec2) -> bool {
 fn dof_counts_free_line_then_h_then_fixed_rectangle() {
     let mut s = session();
     // Free line: 2 points × 2 = 4 DOF.
-    let l = s.add_line(v(0.0, 0.0), v(50.0, 30.0), true).unwrap();
+    let l = s.add_line(v(3.0, 7.0), v(53.0, 37.0), true).unwrap();
     assert_eq!(l.sketch.dof.value, 4);
 
     // +Horizontal → 3 DOF.
@@ -84,7 +98,7 @@ fn dof_counts_free_line_then_h_then_fixed_rectangle() {
     // anchors → fully defined.
     let mut s = session();
     let rect = s
-        .add_rectangle(RectangleMode::TwoPoint, v(0.0, 0.0), v(40.0, 20.0))
+        .add_rectangle(RectangleMode::TwoPoint, v(5.0, 7.0), v(45.0, 27.0))
         .unwrap();
     let lines: Vec<_> = rect
         .sketch
@@ -132,6 +146,749 @@ fn parallel_and_perpendicular_hold_and_count_dof() {
     let db = b1 - b0;
     assert!((da.x * db.y - da.y * db.x).abs() < 1e-7);
     assert_eq!(dto.dof.value, 8 - 1);
+}
+
+#[test]
+fn adding_parallel_preserves_authored_line_lengths_without_persisting_a_length_lock() {
+    let mut s = session();
+    // Reproduce the live failure: a fixed L-shaped reference and a third line
+    // sharing its fixed origin. The old direction-only solve could reduce the
+    // angular residual by sending the third endpoint thousands of millimetres
+    // away instead of rotating the finite segment.
+    let vertical = s
+        .add_line(v(0.0, 0.0), v(0.0, 40.094_115_730_976), true)
+        .unwrap();
+    let top = s
+        .add_line(
+            v(0.0, 40.094_115_730_976),
+            v(40.094_115_730_976, 40.094_115_730_976),
+            true,
+        )
+        .unwrap();
+    let bottom = s.add_line(v(0.0, 0.0), v(40.0, -1.0), true).unwrap();
+    assert_eq!(vertical.start_point_id, bottom.start_point_id);
+
+    s.add_constraint(Constraint::Vertical {
+        entity: vertical.entity_id,
+    })
+    .unwrap();
+    s.toggle_fix(vertical.start_point_id).unwrap();
+    s.add_constraint(Constraint::Perpendicular {
+        a: vertical.entity_id,
+        b: top.entity_id,
+    })
+    .unwrap();
+    s.add_constraint(Constraint::Equal {
+        a: vertical.entity_id,
+        b: top.entity_id,
+    })
+    .unwrap();
+
+    let before = s.dto();
+    let (top_a, top_b) = line(&before, top.entity_id);
+    let (bottom_a, bottom_b) = line(&before, bottom.entity_id);
+    let top_length = top_a.distance(top_b);
+    let bottom_length = bottom_a.distance(bottom_b);
+
+    let solved = s
+        .add_constraint(Constraint::Parallel {
+            a: top.entity_id,
+            b: bottom.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let (top_a, top_b) = line(&solved, top.entity_id);
+    let (bottom_a, bottom_b) = line(&solved, bottom.entity_id);
+    let top_direction = top_b - top_a;
+    let bottom_direction = bottom_b - bottom_a;
+    assert!(
+        (top_direction.x * bottom_direction.y - top_direction.y * bottom_direction.x).abs() < 1e-7,
+        "parallelism must hold"
+    );
+    assert!((top_a.distance(top_b) - top_length).abs() < 1e-7);
+    assert!((bottom_a.distance(bottom_b) - bottom_length).abs() < 1e-7);
+    assert!(
+        bottom_a.distance(bottom_b) < 100.0,
+        "line must not run away"
+    );
+    assert_eq!(solved.dof.value, 2, "temporary stays must not consume DOF");
+
+    // The preservation equation is operation-local. A later explicit drag is
+    // still allowed to change the undimensioned line's length.
+    let moved = s
+        .move_point(move_req(bottom.end_point_id, v(60.0, 0.0)))
+        .unwrap()
+        .sketch;
+    let (bottom_a, bottom_b) = line(&moved, bottom.entity_id);
+    assert!((bottom_a.distance(bottom_b) - 60.0).abs() < 1e-7);
+}
+
+#[test]
+fn parallel_length_preservation_is_stable_with_disconnected_constrained_geometry() {
+    let mut s = session();
+    let first_point = s.add_point(v(-12.0, 8.0)).unwrap().entities[0];
+    let second_point = s.add_point(v(15.0, 11.0)).unwrap().entities[0];
+    s.add_constraint(Constraint::HorizontalPoints {
+        a: first_point,
+        b: second_point,
+    })
+    .unwrap();
+    for index in 0..9 {
+        let line = s
+            .add_line(
+                v(-30.0, -30.0 - index as f64 * 3.0),
+                v(-10.0, -29.5 - index as f64 * 3.0),
+                true,
+            )
+            .unwrap();
+        s.add_constraint(Constraint::Horizontal {
+            entity: line.entity_id,
+        })
+        .unwrap();
+    }
+
+    let vertical = s
+        .add_line(v(100.0, 0.0), v(100.0, 40.094_115_730_976), true)
+        .unwrap();
+    let top = s
+        .add_line(
+            v(100.0, 40.094_115_730_976),
+            v(140.094_115_730_976, 40.094_115_730_976),
+            true,
+        )
+        .unwrap();
+    let bottom = s.add_line(v(100.0, 0.0), v(140.0, -1.0), true).unwrap();
+    s.add_constraints(vec![
+        Constraint::Vertical {
+            entity: vertical.entity_id,
+        },
+        Constraint::Perpendicular {
+            a: vertical.entity_id,
+            b: top.entity_id,
+        },
+        Constraint::Equal {
+            a: vertical.entity_id,
+            b: top.entity_id,
+        },
+    ])
+    .unwrap();
+    s.toggle_fix(vertical.start_point_id).unwrap();
+
+    let before = s.dto();
+    let top_length = {
+        let (a, b) = line(&before, top.entity_id);
+        a.distance(b)
+    };
+    let bottom_length = {
+        let (a, b) = line(&before, bottom.entity_id);
+        a.distance(b)
+    };
+    let solved = s
+        .add_constraint(Constraint::Parallel {
+            a: top.entity_id,
+            b: bottom.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let (top_a, top_b) = line(&solved, top.entity_id);
+    let (bottom_a, bottom_b) = line(&solved, bottom.entity_id);
+    assert!((top_a.distance(top_b) - top_length).abs() < 1e-7);
+    assert!((bottom_a.distance(bottom_b) - bottom_length).abs() < 1e-7);
+}
+
+#[test]
+fn direction_only_constraints_preserve_authored_line_lengths() {
+    let cases = [
+        (
+            "horizontal",
+            Constraint::Horizontal {
+                entity: EntityId(0),
+            },
+        ),
+        (
+            "vertical",
+            Constraint::Vertical {
+                entity: EntityId(0),
+            },
+        ),
+    ];
+
+    for (name, template) in cases {
+        let mut s = session();
+        let line_result = s.add_line(v(5.0, 7.0), v(42.0, 31.0), true).unwrap();
+        let before = s.dto();
+        let (before_start, before_end) = line(&before, line_result.entity_id);
+        let before_length = before_start.distance(before_end);
+        let constraint = match template {
+            Constraint::Horizontal { .. } => Constraint::Horizontal {
+                entity: line_result.entity_id,
+            },
+            Constraint::Vertical { .. } => Constraint::Vertical {
+                entity: line_result.entity_id,
+            },
+            _ => unreachable!(),
+        };
+        let solved = s
+            .add_constraint(constraint)
+            .unwrap_or_else(|error| panic!("{name} failed: {error}"))
+            .sketch;
+        let (start, end) = line(&solved, line_result.entity_id);
+        assert!(
+            (start.distance(end) - before_length).abs() < 1e-7,
+            "{name} changed length from {before_length} to {}",
+            start.distance(end)
+        );
+    }
+}
+
+#[test]
+fn perpendicular_and_angle_preserve_both_line_lengths() {
+    for use_angle_dimension in [false, true] {
+        let mut s = session();
+        let first = s.add_line(v(0.0, 0.0), v(37.0, 11.0), true).unwrap();
+        let second = s.add_line(v(10.0, 30.0), v(31.0, 68.0), true).unwrap();
+        let before = s.dto();
+        let first_length = {
+            let (a, b) = line(&before, first.entity_id);
+            a.distance(b)
+        };
+        let second_length = {
+            let (a, b) = line(&before, second.entity_id);
+            a.distance(b)
+        };
+
+        let constraint = if use_angle_dimension {
+            Constraint::Angle {
+                a: first.entity_id,
+                b: second.entity_id,
+                value: 90.0,
+            }
+        } else {
+            Constraint::Perpendicular {
+                a: first.entity_id,
+                b: second.entity_id,
+            }
+        };
+        let solved = s.add_constraint(constraint).unwrap().sketch;
+        for (id, expected) in [
+            (first.entity_id, first_length),
+            (second.entity_id, second_length),
+        ] {
+            let (a, b) = line(&solved, id);
+            assert!(
+                (a.distance(b) - expected).abs() < 1e-7,
+                "{} changed line {id:?} from {expected} to {}",
+                if use_angle_dimension {
+                    "angle"
+                } else {
+                    "perpendicular"
+                },
+                a.distance(b)
+            );
+        }
+    }
+}
+
+#[test]
+fn parallel_keeps_the_reference_chain_and_rotates_only_the_free_follower_end() {
+    let mut s = session();
+    let bottom = s.add_line(v(0.0, 0.0), v(30.0, 0.0), true).unwrap();
+    let right = s.add_line(v(30.0, 0.0), v(36.0, 24.0), true).unwrap();
+    let top = s.add_line(v(36.0, 24.0), v(2.0, 30.0), true).unwrap();
+
+    s.toggle_fix(bottom.start_point_id).unwrap();
+    s.add_constraint(Constraint::Horizontal {
+        entity: bottom.entity_id,
+    })
+    .unwrap();
+    s.add_constraint(Constraint::Perpendicular {
+        a: bottom.entity_id,
+        b: right.entity_id,
+    })
+    .unwrap();
+
+    let before = s.dto();
+    let before_bottom = line(&before, bottom.entity_id);
+    let before_right = line(&before, right.entity_id);
+    let before_top = line(&before, top.entity_id);
+    let top_length = before_top.0.distance(before_top.1);
+
+    let solved = s
+        .add_constraint(Constraint::Parallel {
+            a: bottom.entity_id,
+            b: top.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let after_bottom = line(&solved, bottom.entity_id);
+    let after_right = line(&solved, right.entity_id);
+    let after_top = line(&solved, top.entity_id);
+
+    assert!(close(after_bottom.0, before_bottom.0));
+    assert!(close(after_bottom.1, before_bottom.1));
+    assert!(close(after_right.0, before_right.0));
+    assert!(close(after_right.1, before_right.1));
+    assert!(close(after_top.0, before_top.0));
+    assert!((after_top.0.distance(after_top.1) - top_length).abs() < 1e-7);
+    let bottom_direction = after_bottom.1 - after_bottom.0;
+    let top_direction = after_top.1 - after_top.0;
+    let cross = bottom_direction.x * top_direction.y - bottom_direction.y * top_direction.x;
+    assert!(cross.abs() < 1e-7);
+}
+
+#[test]
+fn point_axis_alignment_preserves_the_pair_distance() {
+    for horizontal in [false, true] {
+        let mut s = session();
+        let first = s.add_point(v(3.0, 7.0)).unwrap().entities[0];
+        let second = s.add_point(v(31.0, 29.0)).unwrap().entities[0];
+        let before_distance = point(&s.dto(), first).distance(point(&s.dto(), second));
+        let constraint = if horizontal {
+            Constraint::HorizontalPoints {
+                a: first,
+                b: second,
+            }
+        } else {
+            Constraint::VerticalPoints {
+                a: first,
+                b: second,
+            }
+        };
+        let solved = s.add_constraint(constraint).unwrap().sketch;
+        let after_distance = point(&solved, first).distance(point(&solved, second));
+        assert!(
+            (after_distance - before_distance).abs() < 1e-7,
+            "point alignment changed distance from {before_distance} to {after_distance}"
+        );
+    }
+}
+
+fn assert_same_bearing(before: Vec2, after: Vec2, label: &str) {
+    let scale = before.length() * after.length();
+    assert!(scale > 1e-12, "{label}: degenerate direction");
+    let cross = before.x * after.y - before.y * after.x;
+    assert!(
+        cross.abs() / scale < 1e-7 && before.dot(after) > 0.0,
+        "{label}: bearing changed from {before:?} to {after:?}"
+    );
+}
+
+#[test]
+fn equal_changes_size_only_and_uses_the_first_selection_as_reference() {
+    let mut s = session();
+    let reference = s.add_line(v(0.0, 0.0), v(48.0, 14.0), true).unwrap();
+    let target = s.add_line(v(10.0, 30.0), v(26.0, 54.0), true).unwrap();
+    let before = s.dto();
+    let (reference_a, reference_b) = line(&before, reference.entity_id);
+    let (target_a, target_b) = line(&before, target.entity_id);
+    let reference_direction = reference_b - reference_a;
+    let target_direction = target_b - target_a;
+
+    let solved = s
+        .add_constraint(Constraint::Equal {
+            a: reference.entity_id,
+            b: target.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let (reference_a2, reference_b2) = line(&solved, reference.entity_id);
+    let (target_a2, target_b2) = line(&solved, target.entity_id);
+    assert!(
+        (reference_a2.distance(reference_b2) - reference_direction.length()).abs() < 1e-7,
+        "reference length changed from {} to {}",
+        reference_direction.length(),
+        reference_a2.distance(reference_b2)
+    );
+    assert!((target_a2.distance(target_b2) - reference_direction.length()).abs() < 1e-7);
+    assert_same_bearing(
+        reference_direction,
+        reference_b2 - reference_a2,
+        "equal reference",
+    );
+    assert_same_bearing(target_direction, target_b2 - target_a2, "equal target");
+
+    let mut s = session();
+    let reference = s
+        .add_circle(CircleMode::CenterDiameter, v(5.0, 7.0), v(15.0, 7.0))
+        .unwrap()
+        .entities[0];
+    let target = s
+        .add_circle(CircleMode::CenterDiameter, v(40.0, 30.0), v(46.0, 30.0))
+        .unwrap()
+        .entities[0];
+    let before = s.dto();
+    let (reference_center, reference_radius) = circle(&before, reference);
+    let (target_center, _) = circle(&before, target);
+    let solved = s
+        .add_constraint(Constraint::Equal {
+            a: reference,
+            b: target,
+        })
+        .unwrap()
+        .sketch;
+    let (reference_center2, reference_radius2) = circle(&solved, reference);
+    let (target_center2, target_radius2) = circle(&solved, target);
+    assert!(close(reference_center2, reference_center));
+    assert!(close(target_center2, target_center));
+    assert!((reference_radius2 - reference_radius).abs() < 1e-7);
+    assert!((target_radius2 - reference_radius).abs() < 1e-7);
+}
+
+#[test]
+fn position_constraints_preserve_carrier_shape_and_curve_size() {
+    // Point-on-line coincidence and midpoint placement own position, not the
+    // carrier line's size or angle.
+    for midpoint in [false, true] {
+        let mut s = session();
+        let carrier = s.add_line(v(2.0, 5.0), v(43.0, 18.0), true).unwrap();
+        let marker = s.add_point(v(25.0, 37.0)).unwrap().entities[0];
+        let before = s.dto();
+        let (before_a, before_b) = line(&before, carrier.entity_id);
+        let before_direction = before_b - before_a;
+        let constraint = if midpoint {
+            Constraint::Midpoint {
+                a: marker,
+                b: carrier.entity_id,
+            }
+        } else {
+            Constraint::Coincident {
+                a: marker,
+                b: carrier.entity_id,
+            }
+        };
+        let solved = s.add_constraint(constraint).unwrap().sketch;
+        let (after_a, after_b) = line(&solved, carrier.entity_id);
+        assert!((after_a.distance(after_b) - before_direction.length()).abs() < 1e-7);
+        assert_same_bearing(
+            before_direction,
+            after_b - after_a,
+            if midpoint { "midpoint" } else { "coincident" },
+        );
+    }
+
+    // Point-on-circle coincidence keeps the authored radius.
+    let mut s = session();
+    let curve = s
+        .add_circle(CircleMode::CenterDiameter, v(10.0, 10.0), v(18.0, 10.0))
+        .unwrap()
+        .entities[0];
+    let marker = s.add_point(v(32.0, 27.0)).unwrap().entities[0];
+    let radius = circle(&s.dto(), curve).1;
+    let solved = s
+        .add_constraint(Constraint::Coincident {
+            a: marker,
+            b: curve,
+        })
+        .unwrap()
+        .sketch;
+    assert!(
+        (circle(&solved, curve).1 - radius).abs() < 1e-7,
+        "coincident radius changed from {radius} to {}",
+        circle(&solved, curve).1
+    );
+}
+
+#[test]
+fn tangent_preserves_line_lengths_and_curve_radii() {
+    let mut s = session();
+    let line_result = s.add_line(v(0.0, 0.0), v(47.0, 13.0), true).unwrap();
+    let curve = s
+        .add_circle(CircleMode::CenterDiameter, v(25.0, 35.0), v(34.0, 35.0))
+        .unwrap()
+        .entities[0];
+    let before = s.dto();
+    let (line_a, line_b) = line(&before, line_result.entity_id);
+    let radius = circle(&before, curve).1;
+    let solved = s
+        .add_constraint(Constraint::Tangent {
+            a: line_result.entity_id,
+            b: curve,
+        })
+        .unwrap()
+        .sketch;
+    let (line_a2, line_b2) = line(&solved, line_result.entity_id);
+    assert!((line_a2.distance(line_b2) - line_a.distance(line_b)).abs() < 1e-7);
+    assert!((circle(&solved, curve).1 - radius).abs() < 1e-7);
+
+    let mut s = session();
+    let first = s
+        .add_circle(CircleMode::CenterDiameter, v(0.0, 0.0), v(6.0, 0.0))
+        .unwrap()
+        .entities[0];
+    let second = s
+        .add_circle(CircleMode::CenterDiameter, v(30.0, 8.0), v(39.0, 8.0))
+        .unwrap()
+        .entities[0];
+    let first_radius = circle(&s.dto(), first).1;
+    let second_radius = circle(&s.dto(), second).1;
+    let solved = s
+        .add_constraint(Constraint::Tangent {
+            a: first,
+            b: second,
+        })
+        .unwrap()
+        .sketch;
+    assert!(
+        (circle(&solved, first).1 - first_radius).abs() < 1e-7,
+        "first tangent radius changed from {first_radius} to {}",
+        circle(&solved, first).1
+    );
+    assert!(
+        (circle(&solved, second).1 - second_radius).abs() < 1e-7,
+        "second tangent radius changed from {second_radius} to {}",
+        circle(&solved, second).1
+    );
+}
+
+#[test]
+fn concentric_and_collinear_change_position_or_angle_without_resizing() {
+    let mut s = session();
+    let first = s
+        .add_circle(CircleMode::CenterDiameter, v(0.0, 0.0), v(7.0, 0.0))
+        .unwrap()
+        .entities[0];
+    let second = s
+        .add_circle(CircleMode::CenterDiameter, v(30.0, 20.0), v(41.0, 20.0))
+        .unwrap()
+        .entities[0];
+    let first_radius = circle(&s.dto(), first).1;
+    let second_radius = circle(&s.dto(), second).1;
+    let solved = s
+        .add_constraint(Constraint::Concentric {
+            a: first,
+            b: second,
+        })
+        .unwrap()
+        .sketch;
+    assert!((circle(&solved, first).1 - first_radius).abs() < 1e-7);
+    assert!((circle(&solved, second).1 - second_radius).abs() < 1e-7);
+
+    let mut s = session();
+    let first = s.add_line(v(0.0, 0.0), v(36.0, 8.0), true).unwrap();
+    let second = s.add_line(v(10.0, 30.0), v(27.0, 67.0), true).unwrap();
+    let before = s.dto();
+    let (first_before_a, first_before_b) = line(&before, first.entity_id);
+    let (second_before_a, second_before_b) = line(&before, second.entity_id);
+    let first_length = { first_before_a.distance(first_before_b) };
+    let second_length = { second_before_a.distance(second_before_b) };
+    let solved = s
+        .add_constraint(Constraint::Collinear {
+            a: first.entity_id,
+            b: second.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let (first_a, first_b) = line(&solved, first.entity_id);
+    let (second_a, second_b) = line(&solved, second.entity_id);
+    assert!((first_a.distance(first_b) - first_length).abs() < 1e-7);
+    assert!((second_a.distance(second_b) - second_length).abs() < 1e-7);
+    assert!(close(first_a, first_before_a));
+    assert!(close(first_b, first_before_b));
+
+    let reference_direction = (first_before_b - first_before_a) * (1.0 / first_length);
+    let reference_midpoint = (first_before_a + first_before_b) * 0.5;
+    let before_along =
+        ((second_before_a + second_before_b) * 0.5 - reference_midpoint).dot(reference_direction);
+    let after_along = ((second_a + second_b) * 0.5 - reference_midpoint).dot(reference_direction);
+    assert!(
+        (after_along - before_along).abs() < 1e-7,
+        "collinear slid the target along its reference: {before_along} -> {after_along}"
+    );
+}
+
+#[test]
+fn size_dimensions_preserve_bearings_and_unmeasured_shape() {
+    let mut s = session();
+    let line_result = s.add_line(v(5.0, 8.0), v(38.0, 29.0), true).unwrap();
+    let before = s.dto();
+    let (before_a, before_b) = line(&before, line_result.entity_id);
+    let before_direction = before_b - before_a;
+    let solved = s
+        .add_constraint(Constraint::Distance {
+            from: line_result.entity_id,
+            to: None,
+            value: 70.0,
+        })
+        .unwrap()
+        .sketch;
+    let (after_a, after_b) = line(&solved, line_result.entity_id);
+    assert!((after_a.distance(after_b) - 70.0).abs() < 1e-7);
+    assert_same_bearing(before_direction, after_b - after_a, "line length dimension");
+
+    let mut s = session();
+    let first = s.add_point(v(3.0, 4.0)).unwrap().entities[0];
+    let second = s.add_point(v(24.0, 31.0)).unwrap().entities[0];
+    let before_direction = point(&s.dto(), second) - point(&s.dto(), first);
+    let solved = s
+        .add_constraint(Constraint::Distance {
+            from: first,
+            to: Some(second),
+            value: 55.0,
+        })
+        .unwrap()
+        .sketch;
+    let after_direction = point(&solved, second) - point(&solved, first);
+    assert!((after_direction.length() - 55.0).abs() < 1e-7);
+    assert_same_bearing(
+        before_direction,
+        after_direction,
+        "point distance dimension",
+    );
+
+    let mut s = session();
+    let carrier = s.add_line(v(0.0, 0.0), v(42.0, 11.0), true).unwrap();
+    let marker = s.add_point(v(20.0, 31.0)).unwrap().entities[0];
+    let before = s.dto();
+    let (before_a, before_b) = line(&before, carrier.entity_id);
+    let before_direction = before_b - before_a;
+    let solved = s
+        .add_constraint(Constraint::Distance {
+            from: marker,
+            to: Some(carrier.entity_id),
+            value: 18.0,
+        })
+        .unwrap()
+        .sketch;
+    let (after_a, after_b) = line(&solved, carrier.entity_id);
+    assert!((after_a.distance(after_b) - before_direction.length()).abs() < 1e-7);
+    assert_same_bearing(before_direction, after_b - after_a, "point-line distance");
+
+    let mut s = session();
+    let curve = s
+        .add_circle(CircleMode::CenterDiameter, v(12.0, 14.0), v(19.0, 14.0))
+        .unwrap()
+        .entities[0];
+    let before_center = circle(&s.dto(), curve).0;
+    let solved = s
+        .add_constraint(Constraint::Diameter {
+            entity: curve,
+            value: 24.0,
+        })
+        .unwrap()
+        .sketch;
+    let (after_center, after_radius) = circle(&solved, curve);
+    assert!(close(before_center, after_center));
+    assert!((after_radius - 12.0).abs() < 1e-7);
+}
+
+#[test]
+fn line_and_radial_offset_dimensions_do_not_distort_their_references() {
+    let mut s = session();
+    let first = s.add_line(v(0.0, 0.0), v(39.0, 9.0), true).unwrap();
+    let second = s.add_line(v(12.0, 26.0), v(49.0, 41.0), true).unwrap();
+    let before = s.dto();
+    let (first_a, first_b) = line(&before, first.entity_id);
+    let (second_a, second_b) = line(&before, second.entity_id);
+    let first_direction = first_b - first_a;
+    let second_direction = second_b - second_a;
+    let solved = s
+        .add_constraint(Constraint::Distance {
+            from: first.entity_id,
+            to: Some(second.entity_id),
+            value: 20.0,
+        })
+        .unwrap()
+        .sketch;
+    let (first_a2, first_b2) = line(&solved, first.entity_id);
+    let (second_a2, second_b2) = line(&solved, second.entity_id);
+    assert!((first_a2.distance(first_b2) - first_direction.length()).abs() < 1e-7);
+    assert!((second_a2.distance(second_b2) - second_direction.length()).abs() < 1e-7);
+    assert_same_bearing(first_direction, first_b2 - first_a2, "first offset line");
+    assert_same_bearing(
+        second_direction,
+        second_b2 - second_a2,
+        "second offset line",
+    );
+
+    let mut s = session();
+    let reference = s
+        .add_circle(CircleMode::CenterDiameter, v(0.0, 0.0), v(5.0, 0.0))
+        .unwrap()
+        .entities[0];
+    let target = s
+        .add_circle(CircleMode::CenterDiameter, v(0.0, 0.0), v(8.0, 0.0))
+        .unwrap()
+        .entities[0];
+    let before = s.dto();
+    let (reference_center, reference_radius) = circle(&before, reference);
+    let (target_center, _) = circle(&before, target);
+    let solved = s
+        .add_constraint(Constraint::Distance {
+            from: reference,
+            to: Some(target),
+            value: 6.0,
+        })
+        .unwrap()
+        .sketch;
+    let (reference_center2, reference_radius2) = circle(&solved, reference);
+    let (target_center2, target_radius2) = circle(&solved, target);
+    assert!(close(reference_center, reference_center2));
+    assert!(close(target_center, target_center2));
+    assert!((reference_radius2 - reference_radius).abs() < 1e-7);
+    assert!((target_radius2 - (reference_radius + 6.0)).abs() < 1e-7);
+}
+
+#[test]
+fn axis_angle_dimension_changes_angle_without_changing_length() {
+    let mut s = session();
+    let line_result = s.add_line(v(3.0, 4.0), v(31.0, 29.0), true).unwrap();
+    let before_length = {
+        let (a, b) = line(&s.dto(), line_result.entity_id);
+        a.distance(b)
+    };
+    let solved = s
+        .add_constraint(Constraint::Angle {
+            a: line_result.entity_id,
+            b: EntityId(0),
+            value: 30.0,
+        })
+        .unwrap()
+        .sketch;
+    let (a, b) = line(&solved, line_result.entity_id);
+    let direction = b - a;
+    assert!((direction.length() - before_length).abs() < 1e-7);
+    assert!((direction.y.atan2(direction.x).to_degrees() - 30.0).abs() < 1e-7);
+}
+
+#[test]
+fn symmetry_preserves_the_datum_shape_and_first_line_size() {
+    let mut s = session();
+    let reference = s.add_line(v(8.0, 9.0), v(36.0, 18.0), true).unwrap();
+    let target = s.add_line(v(-13.0, 11.0), v(-29.0, 28.0), true).unwrap();
+    let axis = s.add_line(v(1.0, -20.0), v(4.0, 50.0), true).unwrap();
+    let before = s.dto();
+    let (reference_a, reference_b) = line(&before, reference.entity_id);
+    let (axis_a, axis_b) = line(&before, axis.entity_id);
+    let reference_length = reference_a.distance(reference_b);
+    let axis_direction = axis_b - axis_a;
+
+    let solved = s
+        .add_constraint(Constraint::Symmetry {
+            a: reference.entity_id,
+            b: target.entity_id,
+            axis: axis.entity_id,
+        })
+        .unwrap()
+        .sketch;
+    let (reference_a2, reference_b2) = line(&solved, reference.entity_id);
+    let (target_a2, target_b2) = line(&solved, target.entity_id);
+    let (axis_a2, axis_b2) = line(&solved, axis.entity_id);
+    assert!((reference_a2.distance(reference_b2) - reference_length).abs() < 1e-7);
+    assert!((target_a2.distance(target_b2) - reference_length).abs() < 1e-7);
+    assert!((axis_a2.distance(axis_b2) - axis_direction.length()).abs() < 1e-7);
+    assert_same_bearing(axis_direction, axis_b2 - axis_a2, "symmetry axis");
+}
+
+#[test]
+fn applying_fix_does_not_move_the_entity_it_records() {
+    let mut s = session();
+    let line_result = s.add_line(v(4.0, 7.0), v(39.0, 21.0), true).unwrap();
+    let before = s.dto();
+    let (before_a, before_b) = line(&before, line_result.entity_id);
+    let solved = s.toggle_fix(line_result.entity_id).unwrap().sketch;
+    let (after_a, after_b) = line(&solved, line_result.entity_id);
+    assert!(close(before_a, after_a));
+    assert!(close(before_b, after_b));
 }
 
 #[test]
@@ -295,6 +1052,82 @@ fn symmetry_of_two_points_about_a_line() {
 }
 
 #[test]
+fn symmetry_converges_from_ordinary_offsets_with_a_free_axis() {
+    for offset in [5.0, 12.0] {
+        let mut s = session();
+        let axis = s.add_line(v(40.0, -60.0), v(40.0, -20.0), true).unwrap();
+        s.add_constraint(Constraint::Vertical {
+            entity: axis.entity_id,
+        })
+        .unwrap();
+        let a = s.add_point(v(30.0, -40.0)).unwrap().entities[0];
+        let b = s
+            .add_point(v(50.0 + offset, -40.0 + offset))
+            .unwrap()
+            .entities[0];
+
+        s.add_constraint(Constraint::Symmetry {
+            a,
+            b,
+            axis: axis.entity_id,
+        })
+        .unwrap_or_else(|error| panic!("offset {offset} failed: {error}"));
+
+        let dto = s.dto();
+        let (axis_start, axis_end) = line(&dto, axis.entity_id);
+        let axis_direction = axis_end - axis_start;
+        let pa = point(&dto, a);
+        let pb = point(&dto, b);
+        let midpoint = (pa + pb) * 0.5;
+        let midpoint_cross = axis_direction.x * (midpoint.y - axis_start.y)
+            - axis_direction.y * (midpoint.x - axis_start.x);
+        assert!(
+            midpoint_cross.abs() / axis_direction.length() < 1e-7,
+            "offset {offset}: midpoint is not on the axis"
+        );
+        assert!(
+            (pb - pa).dot(axis_direction).abs() / ((pb - pa).length() * axis_direction.length())
+                < 1e-7,
+            "offset {offset}: mirrored segment is not perpendicular"
+        );
+    }
+}
+
+#[test]
+fn circle_tangent_converges_without_inflating_unconstrained_radii() {
+    for center_distance in [15.0, 30.0] {
+        let mut s = session();
+        let first = s
+            .add_circle(CircleMode::CenterDiameter, v(0.0, 0.0), v(5.0, 0.0))
+            .unwrap()
+            .entities[0];
+        let second = s
+            .add_circle(
+                CircleMode::CenterDiameter,
+                v(center_distance, 0.0),
+                v(center_distance + 5.0, 0.0),
+            )
+            .unwrap()
+            .entities[0];
+
+        s.add_constraint(Constraint::Tangent {
+            a: first,
+            b: second,
+        })
+        .unwrap_or_else(|error| panic!("distance {center_distance} failed: {error}"));
+
+        let dto = s.dto();
+        let (first_center, first_radius) = circle(&dto, first);
+        let (second_center, second_radius) = circle(&dto, second);
+        assert!((first_center.distance(second_center) - first_radius - second_radius).abs() < 1e-6);
+        assert!(
+            (first_radius - 5.0).abs() < 0.05 && (second_radius - 5.0).abs() < 0.05,
+            "distance {center_distance}: radii changed to {first_radius}, {second_radius}"
+        );
+    }
+}
+
+#[test]
 fn fix_pins_geometry_and_blocks_conflicting_moves() {
     let mut s = session();
     let l = s.add_line(v(0.0, 0.0), v(50.0, 0.0), true).unwrap();
@@ -355,23 +1188,64 @@ fn perpendicular_conflicting_with_parallel_is_rejected_and_named() {
 }
 
 #[test]
-fn duplicate_horizontal_is_accepted_as_consistent_redundancy() {
+fn duplicate_horizontal_is_rejected_without_polluting_the_graph() {
     let mut s = session();
     let l = s.add_line(v(0.0, 0.0), v(50.0, 0.0), true).unwrap();
     s.add_constraint(Constraint::Horizontal {
         entity: l.entity_id,
     })
     .unwrap();
-    // Same constraint again: consistent (no new equation rank) but not
-    // inconsistent → accepted (harmless redundancy).
-    let r = s.add_constraint(Constraint::Horizontal {
-        entity: l.entity_id,
-    });
+    let r = s
+        .add_constraint(Constraint::Horizontal {
+            entity: l.entity_id,
+        })
+        .unwrap_err();
     assert!(
-        r.is_ok(),
-        "redundant-but-consistent should pass: {:?}",
-        r.err()
+        r.to_string().contains("already exists"),
+        "unexpected duplicate message: {r}"
     );
+    assert_eq!(s.dto().constraints.len(), 1);
+}
+
+#[test]
+fn narrow_axis_inference_does_not_flatten_a_deliberate_shallow_diagonal() {
+    let mut s = session();
+    let eight_degrees = 8.0_f64.to_radians();
+    let diagonal = s
+        .add_line(v(0.0, 0.0), v(100.0, eight_degrees.tan() * 100.0), false)
+        .unwrap();
+    let (_, diagonal_end) = line(&diagonal.sketch, diagonal.entity_id);
+    assert!(
+        diagonal_end.y > 10.0,
+        "8° line was flattened: {diagonal_end:?}"
+    );
+    assert!(!diagonal
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(
+            constraint.constraint,
+            Constraint::Horizontal { entity } if entity == diagonal.entity_id
+        )));
+
+    let two_degrees = 2.0_f64.to_radians();
+    let inferred = s
+        .add_line(
+            v(0.0, 30.0),
+            v(100.0, 30.0 + two_degrees.tan() * 100.0),
+            false,
+        )
+        .unwrap();
+    let (_, inferred_end) = line(&inferred.sketch, inferred.entity_id);
+    assert!((inferred_end.y - 30.0).abs() < 1e-9);
+    assert!(inferred
+        .sketch
+        .constraints
+        .iter()
+        .any(|constraint| matches!(
+            constraint.constraint,
+            Constraint::Horizontal { entity } if entity == inferred.entity_id
+        )));
 }
 
 #[test]
@@ -845,6 +1719,44 @@ fn bulk_constraints_and_fix_toggle_are_atomic_single_undo_actions() {
     assert_eq!(undone.constraints, before_error.constraints);
 }
 
+#[test]
+fn equivalent_carrier_relations_are_rejected_inside_one_batch() {
+    let mut s = session();
+    let line = s.add_line(v(0.0, 0.0), v(20.0, 1.0), true).unwrap();
+    let error = s
+        .add_constraints(vec![
+            Constraint::Horizontal {
+                entity: line.entity_id,
+            },
+            Constraint::HorizontalPoints {
+                a: line.start_point_id,
+                b: line.end_point_id,
+            },
+        ])
+        .unwrap_err();
+    assert!(error.to_string().contains("already exists"));
+    assert!(s.dto().constraints.is_empty());
+}
+
+#[test]
+fn carrier_endpoint_contradiction_names_the_actual_constraint() {
+    let mut s = session();
+    let line = s.add_line(v(0.0, 0.0), v(20.0, 1.0), true).unwrap();
+    s.add_constraint(Constraint::Horizontal {
+        entity: line.entity_id,
+    })
+    .unwrap();
+    let error = s
+        .add_constraint(Constraint::VerticalPoints {
+            a: line.start_point_id,
+            b: line.end_point_id,
+        })
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("conflicts with horizontal"), "{message}");
+    assert_eq!(s.dto().constraints.len(), 1);
+}
+
 // --- Undo covers solver motion --------------------------------------------------
 
 #[test]
@@ -896,7 +1808,7 @@ fn typed_angle_snaps_its_free_distance_to_the_active_grid() {
 }
 
 #[test]
-fn line_tracking_is_exact_and_persists_as_a_point_relation() {
+fn line_tracking_is_exact_but_remains_a_temporary_placement_aid() {
     let mut s = session();
     let reference = s.add_point(v(0.0, 5.0)).unwrap().entities[0];
     let result = s
@@ -919,7 +1831,7 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .unwrap();
     let (_, endpoint) = line(&result.sketch, result.entity_id);
     assert!(close(endpoint, v(15.0, 5.0)));
-    assert!(result.sketch.constraints.iter().any(|constraint| matches!(
+    assert!(!result.sketch.constraints.iter().any(|constraint| matches!(
         constraint.constraint,
         Constraint::HorizontalPoints { a, b }
             if a == reference && b == result.end_point_id
@@ -929,16 +1841,8 @@ fn line_tracking_is_exact_and_persists_as_a_point_relation() {
         .move_point(move_req(reference, v(0.0, 7.0)))
         .unwrap()
         .sketch;
-    let reference_position = moved
-        .entities
-        .iter()
-        .find_map(|entity| match entity {
-            EntityDto::Point { id, position, .. } if *id == reference => Some(*position),
-            _ => None,
-        })
-        .unwrap();
     let (_, moved_endpoint) = line(&moved, result.entity_id);
-    assert!((moved_endpoint.y - reference_position.y).abs() < 1e-7);
+    assert!((moved_endpoint.y - 5.0).abs() < 1e-7);
 }
 
 #[test]

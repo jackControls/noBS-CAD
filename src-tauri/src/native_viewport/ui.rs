@@ -14,7 +14,10 @@ use bevy::{
     ui::{BoxShadow, UiTransform},
 };
 
-use super::{ViewportCamera, ViewportHud, ViewportHudSelection, ViewportPalette};
+use super::{
+    ViewportCamera, ViewportConstraintIcon, ViewportHud, ViewportHudSelection, ViewportPalette,
+    ViewportToolIcon,
+};
 
 pub(crate) const DIAL_CENTER: f32 = 38.0;
 const DIAL_AXIS_LENGTH: f32 = 25.0;
@@ -892,6 +895,359 @@ fn spawn_segment(
     ));
 }
 
+fn spawn_scaled_segment(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    segment: (f32, f32, f32, f32),
+    scale: f32,
+    color: Color,
+) {
+    let (x1, y1, x2, y2) = segment;
+    let delta = Vec2::new((x2 - x1) * scale, (y2 - y1) * scale);
+    let length = delta.length().max(0.5);
+    let midpoint = Vec2::new((x1 + x2) * 0.5 * scale, (y1 + y2) * 0.5 * scale);
+    let thickness = (1.55 * scale).clamp(1.15, 1.8);
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(midpoint.x - length * 0.5),
+            top: px(midpoint.y - thickness * 0.5),
+            width: px(length),
+            height: px(thickness),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
+        UiTransform::from_rotation(Rot2::radians(delta.y.atan2(delta.x))),
+        BackgroundColor(color),
+    ));
+}
+
+fn spawn_icon_ring(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    left: f32,
+    top: f32,
+    diameter: f32,
+    scale: f32,
+    color: Color,
+) {
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(left * scale),
+            top: px(top * scale),
+            width: px(diameter * scale),
+            height: px(diameter * scale),
+            border: UiRect::all(px((1.45 * scale).clamp(1.0, 1.7))),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
+        BorderColor::all(color),
+    ));
+}
+
+fn spawn_icon_dot(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    center_x: f32,
+    center_y: f32,
+    diameter: f32,
+    scale: f32,
+    color: Color,
+) {
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px((center_x - diameter * 0.5) * scale),
+            top: px((center_y - diameter * 0.5) * scale),
+            width: px(diameter * scale),
+            height: px(diameter * scale),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
+        BackgroundColor(color),
+    ));
+}
+
+fn spawn_icon_rect(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    rect: (f32, f32, f32, f32),
+    radius: f32,
+    scale: f32,
+    color: Color,
+) {
+    let (left, top, width, height) = rect;
+    parent.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(left * scale),
+            top: px(top * scale),
+            width: px(width * scale),
+            height: px(height * scale),
+            border: UiRect::all(px((1.45 * scale).clamp(1.0, 1.7))),
+            border_radius: BorderRadius::all(px(radius * scale)),
+            ..default()
+        },
+        BorderColor::all(color),
+    ));
+}
+
+/// Native counterpart of the shared 24×24 React constraint inventory. These
+/// procedural strokes keep the Metal/DX12/Vulkan child viewport visually
+/// identical without raster assets or font-dependent Unicode substitutes.
+pub(crate) fn spawn_constraint_icon(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    icon: ViewportConstraintIcon,
+    color: Color,
+    size: f32,
+) {
+    let scale = size / 24.0;
+    parent
+        .spawn(Node {
+            position_type: PositionType::Relative,
+            width: px(size),
+            height: px(size),
+            ..default()
+        })
+        .with_children(|canvas| {
+            let segments: &[(f32, f32, f32, f32)] = match icon {
+                ViewportConstraintIcon::HorizontalVertical => &[
+                    (4.0, 7.0, 20.0, 7.0),
+                    (17.0, 4.0, 17.0, 20.0),
+                    (13.0, 7.0, 17.0, 7.0),
+                    (17.0, 7.0, 17.0, 11.0),
+                ],
+                ViewportConstraintIcon::Horizontal => &[(4.0, 12.0, 20.0, 12.0)],
+                ViewportConstraintIcon::Vertical => &[(12.0, 4.0, 12.0, 20.0)],
+                ViewportConstraintIcon::HorizontalPoints => &[(5.0, 12.0, 19.0, 12.0)],
+                ViewportConstraintIcon::VerticalPoints => &[(12.0, 5.0, 12.0, 19.0)],
+                ViewportConstraintIcon::Coincident => &[
+                    (4.0, 18.0, 12.0, 10.0),
+                    (20.0, 18.0, 12.0, 10.0),
+                    (12.0, 3.0, 12.0, 7.0),
+                    (5.0, 10.0, 9.0, 10.0),
+                    (15.0, 10.0, 19.0, 10.0),
+                ],
+                ViewportConstraintIcon::Tangent => &[(4.0, 7.0, 20.0, 12.0)],
+                ViewportConstraintIcon::Equal => &[(5.0, 9.0, 19.0, 9.0), (5.0, 15.0, 19.0, 15.0)],
+                ViewportConstraintIcon::Parallel => &[
+                    (5.0, 19.0, 10.0, 5.0),
+                    (14.0, 19.0, 19.0, 5.0),
+                    (7.0, 10.0, 10.0, 9.0),
+                    (14.0, 15.0, 17.0, 14.0),
+                ],
+                ViewportConstraintIcon::Perpendicular => &[
+                    (5.0, 4.0, 5.0, 19.0),
+                    (5.0, 19.0, 20.0, 19.0),
+                    (5.0, 14.0, 10.0, 14.0),
+                    (10.0, 14.0, 10.0, 19.0),
+                ],
+                ViewportConstraintIcon::Fix => &[
+                    (7.0, 11.0, 7.0, 8.0),
+                    (7.0, 8.0, 9.0, 4.5),
+                    (9.0, 4.5, 15.0, 4.5),
+                    (15.0, 4.5, 17.0, 8.0),
+                    (17.0, 8.0, 17.0, 11.0),
+                ],
+                ViewportConstraintIcon::Midpoint => &[
+                    (3.0, 18.0, 21.0, 18.0),
+                    (12.0, 6.0, 8.0, 13.0),
+                    (8.0, 13.0, 16.0, 13.0),
+                    (16.0, 13.0, 12.0, 6.0),
+                    (12.0, 13.0, 12.0, 18.0),
+                ],
+                ViewportConstraintIcon::Concentric => &[],
+                ViewportConstraintIcon::Collinear => &[
+                    (3.0, 18.0, 9.0, 14.0),
+                    (10.5, 13.0, 15.0, 10.0),
+                    (16.5, 9.0, 21.0, 6.0),
+                    (4.0, 15.0, 10.0, 11.0),
+                    (14.0, 9.0, 20.0, 5.0),
+                ],
+                ViewportConstraintIcon::Symmetry => &[
+                    (12.0, 3.0, 12.0, 8.0),
+                    (12.0, 10.0, 12.0, 14.0),
+                    (12.0, 16.0, 12.0, 21.0),
+                    (4.0, 7.0, 9.0, 12.0),
+                    (9.0, 12.0, 4.0, 17.0),
+                    (20.0, 7.0, 15.0, 12.0),
+                    (15.0, 12.0, 20.0, 17.0),
+                    (7.0, 12.0, 17.0, 12.0),
+                ],
+            };
+            for &segment in segments {
+                spawn_scaled_segment(canvas, segment, scale, color);
+            }
+            match icon {
+                ViewportConstraintIcon::HorizontalPoints => {
+                    spawn_icon_dot(canvas, 5.0, 12.0, 3.6, scale, color);
+                    spawn_icon_dot(canvas, 19.0, 12.0, 3.6, scale, color);
+                }
+                ViewportConstraintIcon::VerticalPoints => {
+                    spawn_icon_dot(canvas, 12.0, 5.0, 3.6, scale, color);
+                    spawn_icon_dot(canvas, 12.0, 19.0, 3.6, scale, color);
+                }
+                ViewportConstraintIcon::Coincident => {
+                    spawn_icon_ring(canvas, 9.8, 7.8, 4.4, scale, color);
+                }
+                ViewportConstraintIcon::Tangent => {
+                    spawn_icon_ring(canvas, 5.0, 8.0, 12.0, scale, color);
+                    spawn_icon_dot(canvas, 11.0, 9.2, 2.4, scale, color);
+                }
+                ViewportConstraintIcon::Fix => {
+                    spawn_icon_rect(canvas, (5.0, 11.0, 14.0, 10.0), 2.0, scale, color);
+                    spawn_icon_dot(canvas, 12.0, 16.0, 2.6, scale, color);
+                }
+                ViewportConstraintIcon::Concentric => {
+                    spawn_icon_ring(canvas, 4.0, 4.0, 16.0, scale, color);
+                    spawn_icon_ring(canvas, 8.0, 8.0, 8.0, scale, color);
+                    spawn_icon_dot(canvas, 12.0, 12.0, 2.0, scale, color);
+                }
+                ViewportConstraintIcon::Collinear => {
+                    spawn_icon_dot(canvas, 12.0, 10.0, 2.4, scale, color);
+                }
+                _ => {}
+            }
+        });
+}
+
+/// Compact active sketch-command symbol used beside the pointer. The shapes
+/// intentionally follow the corresponding toolbar diagrams at a quieter size.
+pub(crate) fn spawn_tool_icon(
+    parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    icon: ViewportToolIcon,
+    color: Color,
+    size: f32,
+) {
+    let scale = size / 16.0;
+    parent
+        .spawn(Node {
+            position_type: PositionType::Relative,
+            width: px(size),
+            height: px(size),
+            ..default()
+        })
+        .with_children(|canvas| {
+            let segments: &[(f32, f32, f32, f32)] = match icon {
+                ViewportToolIcon::Line | ViewportToolIcon::MidpointLine => {
+                    &[(2.0, 13.0, 14.0, 3.0)]
+                }
+                ViewportToolIcon::Point => &[(3.0, 8.0, 13.0, 8.0), (8.0, 3.0, 8.0, 13.0)],
+                ViewportToolIcon::Rectangle => &[
+                    (2.0, 3.0, 14.0, 3.0),
+                    (14.0, 3.0, 14.0, 13.0),
+                    (14.0, 13.0, 2.0, 13.0),
+                    (2.0, 13.0, 2.0, 3.0),
+                ],
+                ViewportToolIcon::Circle => &[],
+                ViewportToolIcon::Arc => &[
+                    (3.0, 12.0, 5.0, 7.0),
+                    (5.0, 7.0, 9.0, 4.0),
+                    (9.0, 4.0, 14.0, 5.0),
+                ],
+                ViewportToolIcon::Dimension => &[
+                    (2.0, 4.0, 2.0, 12.0),
+                    (14.0, 4.0, 14.0, 12.0),
+                    (2.0, 8.0, 14.0, 8.0),
+                    (2.0, 8.0, 5.0, 6.0),
+                    (2.0, 8.0, 5.0, 10.0),
+                    (14.0, 8.0, 11.0, 6.0),
+                    (14.0, 8.0, 11.0, 10.0),
+                ],
+                ViewportToolIcon::Fillet => &[
+                    (2.0, 13.0, 2.0, 7.0),
+                    (2.0, 7.0, 5.0, 4.0),
+                    (5.0, 4.0, 13.0, 4.0),
+                ],
+                ViewportToolIcon::Chamfer => &[
+                    (2.0, 13.0, 2.0, 8.0),
+                    (2.0, 8.0, 6.0, 4.0),
+                    (6.0, 4.0, 14.0, 4.0),
+                ],
+                ViewportToolIcon::Offset => &[
+                    (2.0, 13.0, 2.0, 5.0),
+                    (2.0, 5.0, 10.0, 5.0),
+                    (6.0, 15.0, 6.0, 9.0),
+                    (6.0, 9.0, 14.0, 9.0),
+                ],
+                ViewportToolIcon::Trim => &[
+                    (3.0, 3.0, 13.0, 13.0),
+                    (13.0, 3.0, 3.0, 13.0),
+                    (6.0, 8.0, 10.0, 8.0),
+                ],
+                ViewportToolIcon::Extend => &[
+                    (2.0, 14.0, 8.0, 8.0),
+                    (8.0, 8.0, 14.0, 2.0),
+                    (11.0, 2.0, 14.0, 2.0),
+                    (14.0, 2.0, 14.0, 5.0),
+                ],
+                ViewportToolIcon::Break => &[
+                    (2.0, 14.0, 7.0, 9.0),
+                    (9.0, 7.0, 14.0, 2.0),
+                    (6.0, 6.0, 9.0, 8.0),
+                    (10.0, 10.0, 7.0, 8.0),
+                ],
+                ViewportToolIcon::Mirror => &[
+                    (8.0, 1.0, 8.0, 15.0),
+                    (2.0, 12.0, 6.0, 8.0),
+                    (6.0, 8.0, 2.0, 4.0),
+                    (14.0, 12.0, 10.0, 8.0),
+                    (10.0, 8.0, 14.0, 4.0),
+                ],
+                ViewportToolIcon::MoveCopy => &[
+                    (8.0, 1.0, 8.0, 15.0),
+                    (1.0, 8.0, 15.0, 8.0),
+                    (8.0, 1.0, 6.0, 4.0),
+                    (8.0, 1.0, 10.0, 4.0),
+                    (15.0, 8.0, 12.0, 6.0),
+                    (15.0, 8.0, 12.0, 10.0),
+                ],
+                ViewportToolIcon::Scale => &[
+                    (3.0, 13.0, 13.0, 3.0),
+                    (13.0, 3.0, 9.0, 3.0),
+                    (13.0, 3.0, 13.0, 7.0),
+                    (3.0, 13.0, 6.0, 13.0),
+                    (3.0, 13.0, 3.0, 10.0),
+                ],
+                ViewportToolIcon::Polygon => &[
+                    (8.0, 1.5, 13.5, 5.0),
+                    (13.5, 5.0, 12.0, 12.5),
+                    (12.0, 12.5, 4.0, 12.5),
+                    (4.0, 12.5, 2.5, 5.0),
+                    (2.5, 5.0, 8.0, 1.5),
+                ],
+                ViewportToolIcon::Slot => &[],
+                ViewportToolIcon::Spline => &[
+                    (2.0, 12.0, 5.0, 6.0),
+                    (5.0, 6.0, 9.0, 10.0),
+                    (9.0, 10.0, 14.0, 3.0),
+                ],
+            };
+            for &segment in segments {
+                spawn_scaled_segment(canvas, segment, scale, color);
+            }
+            match icon {
+                ViewportToolIcon::Line => {
+                    spawn_icon_dot(canvas, 2.0, 13.0, 2.4, scale, color);
+                    spawn_icon_dot(canvas, 14.0, 3.0, 2.4, scale, color);
+                }
+                ViewportToolIcon::MidpointLine => {
+                    spawn_icon_dot(canvas, 2.0, 13.0, 2.2, scale, color);
+                    spawn_icon_dot(canvas, 14.0, 3.0, 2.2, scale, color);
+                    spawn_icon_dot(canvas, 8.0, 8.0, 2.6, scale, color);
+                }
+                ViewportToolIcon::Point => {
+                    spawn_icon_ring(canvas, 5.5, 5.5, 5.0, scale, color);
+                }
+                ViewportToolIcon::Circle => {
+                    spawn_icon_ring(canvas, 2.0, 2.0, 12.0, scale, color);
+                    spawn_icon_dot(canvas, 8.0, 8.0, 2.0, scale, color);
+                }
+                ViewportToolIcon::Slot => {
+                    spawn_icon_rect(canvas, (2.0, 5.0, 12.0, 6.0), 3.0, scale, color);
+                }
+                _ => {}
+            }
+        });
+}
+
 fn spawn_selection_hud(
     commands: &mut Commands,
     camera: Entity,
@@ -1335,21 +1691,25 @@ pub(crate) fn light_reference_palette() -> ViewportPalette {
         grid_fine: [197.0 / 255.0, 206.0 / 255.0, 215.0 / 255.0],
         grid_major: [170.0 / 255.0, 182.0 / 255.0, 194.0 / 255.0],
         body: [159.0 / 255.0, 179.0 / 255.0, 197.0 / 255.0],
-        body_selected: [79.0 / 255.0, 152.0 / 255.0, 197.0 / 255.0],
+        body_selected: [195.0 / 255.0, 93.0 / 255.0, 42.0 / 255.0],
         body_tool: [210.0 / 255.0, 160.0 / 255.0, 75.0 / 255.0],
-        body_selected_edge: [13.0 / 255.0, 117.0 / 255.0, 165.0 / 255.0],
-        face_hover: [126.0 / 255.0, 185.0 / 255.0, 219.0 / 255.0],
-        face_selected: [22.0 / 255.0, 137.0 / 255.0, 192.0 / 255.0],
+        body_selected_edge: [184.0 / 255.0, 50.0 / 255.0, 0.0],
+        face_hover: [46.0 / 255.0, 114.0 / 255.0, 197.0 / 255.0],
+        face_selected: [195.0 / 255.0, 79.0 / 255.0, 24.0 / 255.0],
         edge: [67.0 / 255.0, 81.0 / 255.0, 94.0 / 255.0],
-        edge_hover: [0.0, 124.0 / 255.0, 174.0 / 255.0],
-        edge_selected: [184.0 / 255.0, 95.0 / 255.0, 0.0],
-        active_sketch: [8.0 / 255.0, 125.0 / 255.0, 204.0 / 255.0],
+        edge_hover: [0.0, 79.0 / 255.0, 216.0 / 255.0],
+        edge_selected: [184.0 / 255.0, 50.0 / 255.0, 0.0],
+        pick_halo: [23.0 / 255.0, 33.0 / 255.0, 43.0 / 255.0],
+        origin_plane_xy: [11.0 / 255.0, 99.0 / 255.0, 182.0 / 255.0],
+        origin_plane_xz: [37.0 / 255.0, 121.0 / 255.0, 66.0 / 255.0],
+        origin_plane_yz: [181.0 / 255.0, 50.0 / 255.0, 58.0 / 255.0],
+        active_sketch: [56.0 / 255.0, 86.0 / 255.0, 106.0 / 255.0],
         defined_sketch: [37.0 / 255.0, 43.0 / 255.0, 50.0 / 255.0],
-        hover: [0.0, 110.0 / 255.0, 174.0 / 255.0],
-        selection: [102.0 / 255.0, 84.0 / 255.0, 199.0 / 255.0],
+        hover: [0.0, 79.0 / 255.0, 216.0 / 255.0],
+        selection: [184.0 / 255.0, 50.0 / 255.0, 0.0],
         constraint_related: [15.0 / 255.0, 143.0 / 255.0, 107.0 / 255.0],
-        finished_sketch: [0.0, 127.0 / 255.0, 180.0 / 255.0],
-        finished_sketch_point: [107.0 / 255.0, 45.0 / 255.0, 0.0],
+        finished_sketch: [56.0 / 255.0, 86.0 / 255.0, 106.0 / 255.0],
+        finished_sketch_point: [56.0 / 255.0, 86.0 / 255.0, 106.0 / 255.0],
         finished_sketch_point_outline: [1.0, 1.0, 1.0],
         preview: [20.0 / 255.0, 127.0 / 255.0, 190.0 / 255.0],
     }

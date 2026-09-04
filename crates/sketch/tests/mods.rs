@@ -32,6 +32,13 @@ fn close(a: Vec2, b: Vec2) -> bool {
     a.distance(b) < 1e-7
 }
 
+fn circle(dto: &nbcad_sketch::SketchDto, id: EntityId) -> (Vec2, f64) {
+    match dto.entities.iter().find(|entity| entity.id() == id) {
+        Some(EntityDto::Circle { center, radius, .. }) => (*center, *radius),
+        other => panic!("expected circle, got {other:?}"),
+    }
+}
+
 /// Two lines sharing the origin corner (L shape): x-axis then y-axis.
 fn l_shape(s: &mut SketchSession) -> (nbcad_sketch::EntityId, nbcad_sketch::EntityId) {
     let l1 = s.add_line(v(0.0, 0.0), v(50.0, 0.0), true).unwrap();
@@ -803,6 +810,64 @@ fn offset_is_parametric_and_editable() {
     let distance =
         (direction.x * (q.y - a.y) - direction.y * (q.x - a.x)).abs() / direction.length();
     assert!((distance - 15.0).abs() < 1e-6, "distance={distance}");
+}
+
+#[test]
+fn radial_offset_edit_keeps_the_reference_radius_and_shared_center() {
+    let mut s = session();
+    let source = s
+        .add_circle(
+            nbcad_sketch::CircleMode::CenterDiameter,
+            v(5.0, 8.0),
+            v(15.0, 8.0),
+        )
+        .unwrap()
+        .entities[0];
+    let result = s
+        .offset_curve_op(&OffsetRequest {
+            entity: source,
+            distance_text: "3".to_string(),
+            cursor: v(20.0, 8.0),
+        })
+        .unwrap();
+    let target = result
+        .sketch
+        .entities
+        .iter()
+        .find_map(|entity| match entity {
+            EntityDto::Circle { id, .. } if *id != source => Some(*id),
+            _ => None,
+        })
+        .expect("offset circle");
+    let (source_center, source_radius) = circle(&result.sketch, source);
+    let dimension = result
+        .sketch
+        .dimensions
+        .iter()
+        .find(|dimension| {
+            dimension.entities.contains(&source) && dimension.entities.contains(&target)
+        })
+        .expect("radial offset dimension");
+    let edited = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: dimension.constraint_id,
+            text: "6".to_string(),
+        })
+        .unwrap()
+        .sketch;
+    let (source_center2, source_radius2) = circle(&edited, source);
+    let (target_center2, target_radius2) = circle(&edited, target);
+    assert!(close(source_center, source_center2));
+    assert!(close(source_center2, target_center2));
+    assert!(
+        (source_radius2 - source_radius).abs() < 1e-7,
+        "reference radius changed from {source_radius} to {source_radius2}; target={target_radius2}"
+    );
+    assert!(
+        (target_radius2 - (source_radius + 6.0)).abs() < 1e-7,
+        "target radius is {target_radius2}, expected {}",
+        source_radius + 6.0
+    );
 }
 
 #[test]

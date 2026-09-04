@@ -203,11 +203,11 @@ try {
   await page.waitForTimeout(500);
   s = await sketch();
   const circle = s.entities.find((e) => e.kind === 'circle');
-  // The edge click at x=58 is unambiguously closest to the x=60 grid line,
-  // so the corrected second-point snap produces a 20 mm radius.
+  // Selective grid capture leaves an edge click outside the small magnetic
+  // radius at its authored coordinate instead of rounding all free space.
   check(
-    'circle: edge click honors snap acquisition',
-    !!circle && Math.abs(circle.radius - 20) < 0.01,
+    'circle: edge click remains free outside grid capture radius',
+    !!circle && Math.abs(circle.radius - 18) < 0.01,
     circle ? `r=${circle.radius}` : 'none',
   );
   await shot('06c-circle');
@@ -270,9 +270,22 @@ try {
   await page.waitForTimeout(400);
   s = await sketch();
   check('parallel applied via panel', s.constraints.some((c) => c.type === 'parallel'));
+  check(
+    'successful constraint clears its consumed selection',
+    (await state()).selectedEntities.length === 0 && (await state()).selectedEntity === null,
+  );
   await shot('07b-parallel-applied');
 
-  // Perpendicular now conflicts (D4.2) → dialog.
+  // Reselect explicitly for a second command. Perpendicular now conflicts
+  // (D4.2) → dialog.
+  m = mid(hLines[0]);
+  await clickSketch(m.x, m.y);
+  m = mid(hLines[1]);
+  const secondMidpoint = await sketchToScreen(m.x, m.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(secondMidpoint.x, secondMidpoint.y);
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(250);
   await page.click('button[title="Perpendicular"]');
   await page.waitForTimeout(500);
   const dialogVisible = await page.locator('div[role="dialog"]').isVisible();

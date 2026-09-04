@@ -21,11 +21,20 @@
   --accent-rgb: 116 99 216;
   --finish: #58a65c; /* FINISH SKETCH green */
   --finish-rgb: 88 166 92;
-  --sketchline: #5da9ff; /* sketch entity blue */
-  --sketchline-rgb: 93 169 255;
+  /* Shared viewport interaction states. Keep 2D sketch geometry and every
+     3D modeling picker on this same normal -> hover -> selected sequence. */
+  --cad-pick-normal: #86a9c7;
+  --cad-pick-hover: #00f5ff;
+  --cad-pick-selected: #ffd000;
+  --cad-pick-halo: #ffffff;
+  --cad-origin-plane-xy: #57a8ff;
+  --cad-origin-plane-xz: #55c978;
+  --cad-origin-plane-yz: #ff7078;
+  --sketchline: #86a9c7; /* normal interactive sketch geometry */
+  --sketchline-rgb: 134 169 199;
   --dimgreen: #aecb1e; /* dimension green */
   --dimgreen-rgb: 174 203 30;
-  --cad-dimension-selected: #c4b9ff;
+  --cad-dimension-selected: #ffd000;
   --warn: #e05555; /* warning / over-constraint red */
   --warn-rgb: 224 85 85;
   --vp-top: #31353d; /* viewport gradient top */
@@ -35,24 +44,24 @@
   --viewport: #2a2d33;
   --viewport-rgb: 42 45 51;
   --cad-defined: #e8e9ec;
-  --cad-hover: #ffd166;
-  --cad-sketch-selected: #c4b9ff;
+  --cad-hover: #00f5ff;
+  --cad-sketch-selected: #ffd000;
   /* Entities referenced by a selected geometric constraint (not true selection). */
   --cad-constraint-related: #3ecf9a;
   --cad-preview: #8fc4ff;
-  --cad-finished: #4ac7ff;
-  --cad-finished-point: #ff9f43;
+  --cad-finished: #86a9c7;
+  --cad-finished-point: #86a9c7;
   --cad-finished-point-outline: #15191f;
   --cad-body: #8b9bac;
-  --cad-body-selected: #69a9d4;
+  --cad-body-selected: #a96725;
   --cad-body-tool: #b58a43;
-  --cad-face-hover: #9ed5f3;
-  --cad-face-selected: #30aee8;
+  --cad-face-hover: #238a9d;
+  --cad-face-selected: #cf7715;
   --cad-edge: #29333d;
-  --cad-edge-hover: #58c7ff;
-  --cad-edge-selected: #ffc857;
+  --cad-edge-hover: #00f5ff;
+  --cad-edge-selected: #ffd000;
   --cad-thread-cosmetic: #70c4ee;
-  --cad-hole-point-selected: #ffd166;
+  --cad-hole-point-selected: #ffd000;
   --cad-ground-fine: #3a3f47;
   --cad-ground-major: #4d545f;
   --cad-sketch-grid-fine: #41474f;
@@ -79,11 +88,19 @@
   --accent-rgb: 102 84 199;
   --finish: #3f8e48;
   --finish-rgb: 63 142 72;
-  --sketchline: #087dcc;
-  --sketchline-rgb: 8 125 204;
+  --cad-pick-normal: #38566a;
+  --cad-pick-hover: #004fd8;
+  --cad-pick-selected: #b83200;
+  --cad-pick-halo: #17212b;
+  --cad-origin-plane-xy: #0b63b6;
+  --cad-origin-plane-xz: #257942;
+  --cad-origin-plane-yz: #b5323a;
+  --sketchline: #38566a;
+  --sketchline-rgb: 56 86 106;
   --dimgreen: #344600;
   --dimgreen-rgb: 52 70 0;
-  --cad-dimension-selected: #2e1b78;
+  /* Darker related variant retains text contrast on light model faces. */
+  --cad-dimension-selected: #7a1f00;
   --warn: #c64242;
   --warn-rgb: 198 66 66;
   --vp-top: #eef2f6;
@@ -93,23 +110,23 @@
   --viewport: #dce3ea;
   --viewport-rgb: 220 227 234;
   --cad-defined: #252b32;
-  --cad-hover: #9c4400;
-  --cad-sketch-selected: #5038a8;
+  --cad-hover: #004fd8;
+  --cad-sketch-selected: #b83200;
   --cad-constraint-related: #0f8f6b;
   --cad-preview: #147fbe;
-  --cad-finished: #007fb4;
-  --cad-finished-point: #6b2d00;
+  --cad-finished: #38566a;
+  --cad-finished-point: #38566a;
   --cad-finished-point-outline: #ffffff;
   --cad-body: #9fb3c5;
-  --cad-body-selected: #4f98c5;
+  --cad-body-selected: #c35d2a;
   --cad-body-tool: #d2a04b;
-  --cad-face-hover: #7eb9db;
-  --cad-face-selected: #1689c0;
+  --cad-face-hover: #2e72c5;
+  --cad-face-selected: #c34f18;
   --cad-edge: #43515e;
-  --cad-edge-hover: #007cae;
-  --cad-edge-selected: #b85f00;
+  --cad-edge-hover: #004fd8;
+  --cad-edge-selected: #b83200;
   --cad-thread-cosmetic: #155d82;
-  --cad-hole-point-selected: #ffd43b;
+  --cad-hole-point-selected: #7a1f00;
   --cad-ground-fine: #c5ced7;
   --cad-ground-major: #aab6c2;
   --cad-sketch-grid-fine: #cfd7df;

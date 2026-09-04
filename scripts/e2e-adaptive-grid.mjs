@@ -3,7 +3,8 @@
  * - visible/snap spacing becomes finer and coarser with camera zoom;
  * - the browser engine accepts a one-micrometer grid;
  * - a typed angle keeps its exact direction while its free distance snaps;
- * - point-axis tracking crosses the WASM boundary and becomes associative;
+ * - point-axis tracking crosses the WASM boundary but remains a temporary guide;
+ * - geometric and dimensional indications expose secondary-click removal;
  * - an off-grid anchor still infers Horizontal from the raw cursor ray.
  */
 import assert from 'node:assert/strict';
@@ -70,7 +71,7 @@ try {
     await engine.setGridStep(0.001);
     const micro = await engine.previewSegment({
       from: { x: 20, y: 20 },
-      to_raw: { x: 12.3454, y: 8.7656 },
+      to_raw: { x: 12.34515, y: 8.76585 },
       ctrl_held: true,
     });
     await engine.setGridStep(5);
@@ -106,14 +107,24 @@ try {
       ctrl_held: false,
       tracking: { point: referenceId, axis: 'horizontal' },
     });
+    await engine.addPoint({ position: { x: 0, y: 0 } });
     await engine.setGridStep(10);
-    const nearHorizontalY = 15 + 30 * Math.tan((9.5 * Math.PI) / 180);
+    // Stay just inside the product's intentionally narrow 3° H/V inference
+    // cone; larger deviations must remain free rather than flattening intent.
+    const nearHorizontalY = 15 + 30 * Math.tan((2.5 * Math.PI) / 180);
     const horizontal = await engine.previewSegment({
       from: { x: 0, y: 15 },
       to_raw: { x: 30, y: nearHorizontalY },
       ctrl_held: false,
     });
-    return { micro, horizontal, lockedAngleGrid, referenceId, trackedPreview, trackedLine };
+    return {
+      micro,
+      horizontal,
+      lockedAngleGrid,
+      referenceId,
+      trackedPreview,
+      trackedLine,
+    };
   });
   assert.ok(Math.abs(engineChecks.micro.snapped_to.x - 12.345) < 1e-9);
   assert.ok(Math.abs(engineChecks.micro.snapped_to.y - 8.766) < 1e-9);
@@ -127,13 +138,13 @@ try {
   assert.equal(engineChecks.trackedPreview.tracking.axis, 'horizontal');
   assert.equal(engineChecks.trackedPreview.tracking.point, engineChecks.referenceId);
   assert.ok(
-    engineChecks.trackedLine.sketch.constraints.some(
+    !engineChecks.trackedLine.sketch.constraints.some(
       (constraint) =>
         constraint.type === 'horizontal_points'
         && constraint.a === engineChecks.referenceId
         && constraint.b === engineChecks.trackedLine.end_point_id,
     ),
-    'tracked endpoint should keep an associative horizontal point relation',
+    'alignment tracking must not create a hidden point-pair relation',
   );
 
   // Make a real off-grid start point, then draw from it with grid snap on.
@@ -148,6 +159,22 @@ try {
     await engine.setGridStep(10);
   });
   await page.waitForTimeout(250);
+  await page.waitForFunction(() => {
+    const layers = window.__nativeViewportTransient().points;
+    return layers.some((layer) => layer.hollow === true)
+      && layers.some((layer) => layer.hollow !== true);
+  });
+  const pointStateLayers = await page.evaluate(
+    () => window.__nativeViewportTransient().points,
+  );
+  assert.ok(
+    pointStateLayers.some((layer) => layer.hollow === true),
+    'free sketch points should use hollow grips',
+  );
+  assert.ok(
+    pointStateLayers.some((layer) => layer.hollow !== true),
+    'fully-defined sketch points should use filled grips',
+  );
   await page.click('button[title="Line"]');
   await page.waitForFunction(
     () => window.__appStore.getState().activeTool === 'line',
@@ -157,7 +184,7 @@ try {
     () => window.__appStore.getState().dynInput.active,
   );
   const uiEndX = -30;
-  const nearHorizontalY = 15 + 30 * Math.tan((9.5 * Math.PI) / 180);
+  const nearHorizontalY = 15 + 30 * Math.tan((2.5 * Math.PI) / 180);
   const nearHorizontalPoint = await sketchToScreen(uiEndX, nearHorizontalY);
   const targetStack = await page.evaluate(
     ({ x, y }) =>
@@ -199,13 +226,16 @@ try {
 
   // Exercise the viewport acquisition and presentation path, not only the
   // engine DTO. A free endpoint near y=5 should show the unambiguous Y ALIGN
-  // tracking label plus a second transient line for the temporary guide, then
-  // persist the point-pair relation.
+  // tracking label plus a second transient line for the temporary guide. The
+  // committed endpoint is exact, but the guide must not become a relation.
   if ((await state()).activeTool !== 'line') {
     await page.click('button[title="Line"]');
   }
   const trackedBefore = activeSketch.constraints.filter(
     (constraint) => constraint.type === 'horizontal_points',
+  ).length;
+  const trackedLinesBefore = activeSketch.entities.filter(
+    (entity) => entity.kind === 'line',
   ).length;
   await clickSketch(5, 25);
   await page.waitForFunction(() => window.__appStore.getState().dynInput.active);
@@ -233,12 +263,22 @@ try {
   await page.mouse.click(trackedTarget.x, trackedTarget.y);
   await page.waitForFunction(
     (before) =>
-      window.__appStore.getState().activeSketch.constraints.filter(
-        (constraint) => constraint.type === 'horizontal_points',
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'line',
       ).length > before,
+    trackedLinesBefore,
+  );
+  const trackedAfter = (await state()).activeSketch;
+  assert.equal(
+    trackedAfter.constraints.filter(
+      (constraint) => constraint.type === 'horizontal_points',
+    ).length,
     trackedBefore,
+    'temporary tracking must leave the persistent constraint graph unchanged',
   );
   await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.__appStore.getState().activeTool === null);
 
   // Exact curve acquisition outranks grid fallback. The vertical line starts
   // at x=21.5 and meets the diagonal at y=18.5, which is intentionally not a
@@ -391,6 +431,12 @@ try {
       afterShort.entities.filter((entity) => entity.kind === 'line'),
     )}`,
   );
+  const shortDimension = afterShort.dimensions.find(
+    (dimension) =>
+      dimension.entities.includes(short.id)
+      && Math.abs(dimension.value - 0.5) < 1e-9,
+  );
+  assert.ok(shortDimension, 'typed 0.5 mm input should create a removable driving dimension');
   for (const carrier of [chainSetup.horizontal, chainSetup.diagonal]) {
     assert.ok(
       afterShort.constraints.some(
@@ -457,11 +503,116 @@ try {
     ),
     'the chained vertical turn should retain perpendicular design intent',
   );
+  await page.waitForFunction(
+    () => window.__nativeViewportTransient().annotations.some(
+      (annotation) =>
+        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
+    ),
+  );
+  const perpendicularAnnotations = await page.evaluate(
+    () => window.__nativeViewportTransient().annotations.filter(
+      (annotation) =>
+        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
+    ),
+  );
+  assert.ok(
+    perpendicularAnnotations.length > 0,
+    `perpendicular relation must emit a standard visible glyph; annotations=${JSON.stringify(
+      perpendicularAnnotations,
+    )}`,
+  );
   await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.__appStore.getState().activeTool === null);
+
+  const removeAtAnnotation = async (annotation, constraintId, target) => {
+    const canvasBox = await canvas.boundingBox();
+    assert.ok(canvasBox, 'sketch viewport should be visible for a context-menu gesture');
+    const targetPoint = {
+      x: canvasBox.x + annotation.screen[0],
+      y: canvasBox.y + annotation.screen[1],
+    };
+    const targetStack = await page.evaluate(
+      ({ x, y }) => ({
+        activeTool: window.__appStore.getState().activeTool,
+        mode: window.__appStore.getState().mode,
+        elements: document.elementsFromPoint(x, y).map((element) => ({
+          tag: element.tagName,
+          className: typeof element.className === 'string' ? element.className : '',
+        })),
+      }),
+      targetPoint,
+    );
+    await page.mouse.click(
+      targetPoint.x,
+      targetPoint.y,
+      { button: 'right' },
+    );
+    const removeItem = page.locator('[data-context-menu-item="remove-constraint"]');
+    await page.waitForTimeout(250);
+    assert.equal(
+      await removeItem.count(),
+      1,
+      `secondary click should open the removal menu; target=${JSON.stringify({
+        annotation,
+        targetPoint,
+        targetStack,
+      })}`,
+    );
+    await removeItem.click();
+    if (target === 'dimension') {
+      await page.waitForFunction(
+        (id) => !window.__appStore.getState().activeSketch.dimensions.some(
+          (dimension) => dimension.constraint_id === id,
+        ),
+        constraintId,
+      );
+    } else {
+      await page.waitForFunction(
+        (id) => !window.__appStore.getState().activeSketch.constraints.some(
+          (constraint) => constraint.id === id,
+        ),
+        constraintId,
+      );
+    }
+  };
+
+  const perpendicularConstraint = afterTurn.constraints.find(
+    (constraint) =>
+      constraint.type === 'perpendicular'
+      && ((constraint.a === short.id && constraint.b === upright.id)
+        || (constraint.a === upright.id && constraint.b === short.id)),
+  );
+  assert.ok(perpendicularConstraint);
+  const perpendicularAnnotation = await page.evaluate(
+    () => window.__nativeViewportTransient().annotations.find(
+      (annotation) =>
+        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
+    ),
+  );
+  assert.ok(perpendicularAnnotation);
+  await removeAtAnnotation(
+    perpendicularAnnotation,
+    perpendicularConstraint.id,
+    'constraint',
+  );
+
+  const dimensionAnnotation = await page.evaluate(
+    (text) => window.__nativeViewportTransient().annotations.find(
+      (annotation) => annotation.kind === 'dimension' && annotation.text === text,
+    ),
+    shortDimension.text,
+  );
+  assert.ok(dimensionAnnotation, 'typed dimension should remain visibly selectable');
+  await removeAtAnnotation(
+    dimensionAnnotation,
+    shortDimension.constraint_id,
+    'dimension',
+  );
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
 
   console.log(
-    `  [ok] adaptive grid, exact crossings, 0.5 mm chain turns, point tracking, off-grid H inference, and curve-over-grid priority (${initialStep} → ${zoomedStep} mm)`,
+    `  [ok] adaptive grid, temporary tracking, exact crossings, 0.5 mm chain turns, constraint menus, off-grid H inference, and curve-over-grid priority (${initialStep} → ${zoomedStep} mm)`,
   );
 } finally {
   await browser.close();

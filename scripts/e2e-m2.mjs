@@ -107,6 +107,77 @@ const worldToScreen = ([x, y, z]) =>
     ([wx, wy, wz]) => window.__worldToScreen(wx, wy, wz),
     [x, y, z],
   );
+const selectLatestExtrudeProfile = async () => {
+  await page.evaluate(() => {
+    const store = window.__appStore.getState();
+    const picker = store.profilePicker;
+    if (!picker || picker.owner !== 'extrude') {
+      throw new Error('expected Extrude profile picker');
+    }
+    const entry = [...picker.catalog]
+      .reverse()
+      .find((candidate) =>
+        candidate.profiles.some((profile) => profile.nesting_depth % 2 === 0),
+      );
+    const profile = entry?.profiles.find(
+      (candidate) => candidate.nesting_depth % 2 === 0,
+    );
+    if (!entry || !profile) throw new Error('no closed profile available for Extrude');
+    store.replaceProfilePicks(
+      'extrude',
+      [{ sketch_name: entry.sketch_name, profile_index: profile.index }],
+      entry.sketch_name,
+    );
+  });
+  await page.waitForFunction(
+    () => window.__appStore.getState().profilePicker?.selected.length === 1,
+  );
+};
+const pickOriginPlaneFromViewport = async (plane) => {
+  const diagnostics = [];
+  const worldSamples = plane === 'xy'
+    ? [[35, -35, 0], [40, -30, 0], [30, -40, 0], [35, 35, 0], [-35, -35, 0]]
+    : [];
+  for (const world of worldSamples) {
+    const point = await worldToScreen(world);
+    if (!point || point.x < 245 || point.x > 1100 || point.y < 130 || point.y > 855) {
+      continue;
+    }
+    await page.mouse.move(point.x, point.y);
+    await page.waitForTimeout(20);
+    const hover = await page.evaluate(() => ({
+      plane: window.__appStore.getState().hoveredPlane,
+      face: window.__appStore.getState().hoveredFace,
+      datum: window.__appStore.getState().hoveredDatumPlane,
+    }));
+    diagnostics.push({ world, point, hover });
+    if (hover.plane === plane) {
+      await page.mouse.click(point.x, point.y);
+      return;
+    }
+  }
+  for (let y = 170; y <= 810; y += 50) {
+    for (let x = 270; x <= 1070; x += 50) {
+      await page.mouse.move(x, y);
+      await page.waitForTimeout(20);
+      const hover = await page.evaluate(() => ({
+        plane: window.__appStore.getState().hoveredPlane,
+        face: window.__appStore.getState().hoveredFace,
+        datum: window.__appStore.getState().hoveredDatumPlane,
+      }));
+      if (diagnostics.length < 12 && (hover.plane || hover.face || hover.datum)) {
+        diagnostics.push({ point: { x, y }, hover });
+      }
+      if (hover.plane === plane) {
+        await page.mouse.click(x, y);
+        return;
+      }
+    }
+  }
+  throw new Error(
+    `could not acquire the ${plane.toUpperCase()} origin plane in the viewport: ${JSON.stringify(diagnostics)}`,
+  );
+};
 
 function faceCentroid(body, face) {
   const point = [0, 0, 0];
@@ -126,6 +197,17 @@ function faceCentroid(body, face) {
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1300);
+  const interactionLineWidths = await page.evaluate(() => {
+    const surface = document.querySelector('canvas[data-cad-interaction-surface="true"]');
+    const scale = Math.min(
+      1.6,
+      Math.max(0.9, Math.hypot(surface.clientWidth, surface.clientHeight) / 1200),
+    );
+    return {
+      hover: 1 * scale,
+      selected: 2 * scale,
+    };
+  });
 
   console.log('1. rectangular sketch');
   await page.getByRole('button', { name: 'Create Sketch' }).first().click();
@@ -154,13 +236,13 @@ try {
   await dialog.waitFor({ state: 'visible' });
   await page.waitForFunction(
     () => !window.__appStore.getState().solidBusy &&
-      document.querySelectorAll('[data-testid="extrude-dialog"] input[type="checkbox"]').length > 0,
+      window.__appStore.getState().profilePicker?.owner === 'extrude',
   );
   check(
-    'closed profile is selected by default',
-    await dialog.locator('input[type="checkbox"]').first().isChecked(),
+    'Extrude starts with viewport source selection instead of guessing a profile',
+    (await page.evaluate(() => window.__appStore.getState().profilePicker?.selected.length)) === 0 &&
+      (await page.evaluate(() => window.__appStore.getState().modelingPickTarget)) === 'extrude_source',
   );
-  await dialog.locator('input[type="checkbox"]').first().uncheck();
   const profilePoint = await worldToScreen([0, 0, 0]);
   const profileRef = await page.evaluate(() => {
     const picker = window.__appStore.getState().profilePicker;
@@ -185,7 +267,7 @@ try {
     'eligible profile hover gets a screen-space boundary',
     hoverProfileVisual.overlayKinds.includes('hover') &&
       hoverProfileVisual.overlayWidths.every(
-        (width) => Math.abs(width - 1.5) < 1e-6,
+        (width) => Math.abs(width - interactionLineWidths.hover) < 1e-6,
       ),
     JSON.stringify(hoverProfileVisual),
   );
@@ -200,10 +282,9 @@ try {
   );
   check(
     'an enclosed profile can be selected directly in the viewport',
-    await dialog.locator('input[type="checkbox"]').first().isChecked() &&
-      selectedProfileVisual.overlayKinds.includes('selected') &&
+    selectedProfileVisual.overlayKinds.includes('selected') &&
       selectedProfileVisual.overlayWidths.every(
-        (width) => Math.abs(width - 1.5) < 1e-6,
+        (width) => Math.abs(width - interactionLineWidths.selected) < 1e-6,
       ),
     JSON.stringify(selectedProfileVisual),
   );
@@ -365,7 +446,7 @@ try {
     'selected face keeps a restrained perimeter',
     selectedFaceVisual.overlayKinds.includes('selected') &&
       selectedFaceVisual.overlayWidths.every(
-        (width) => Math.abs(width - 1.5) < 1e-6,
+        (width) => Math.abs(width - interactionLineWidths.selected) < 1e-6,
       ),
     JSON.stringify(selectedFaceVisual),
   );
@@ -493,7 +574,8 @@ try {
       nbcadBytes[1] === 0x4b &&
       manifest.format === 'nbcad-project' &&
       manifest.container_version === 1 &&
-      model.schema_version === 2,
+      model.schema_version === 3 &&
+      manifest.model_schema_version === model.schema_version,
   );
   check(
     'project model saves sketches/history/Extrude IDs but no mesh scene',
@@ -618,6 +700,7 @@ try {
   const beforeCutFaceCount = app.solidScene.bodies[0].faces.length;
   await page.locator('button[title="Extrude"]').first().click();
   await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await selectLatestExtrudeProfile();
   const signedDialog = page.getByTestId('extrude-dialog');
   check(
     'all Extrude Boolean operations are visible',
@@ -636,16 +719,16 @@ try {
       document
         .querySelector('[data-extrude-operation="join"]')
         ?.getAttribute('aria-checked') === 'true' &&
-      document.querySelectorAll(
-        '[data-testid="extrude-dialog"] input[type="checkbox"]',
-      )[1]?.checked === true,
+      document
+        .querySelector('[data-testid="extrude-target-selection"]')
+        ?.textContent?.includes('1 body selected'),
   );
   check(
     'an outward face Extrude initially proposes Join with its support body',
     await signedDialog
       .locator('[data-extrude-operation="join"]')
       .getAttribute('aria-checked') === 'true' &&
-      await signedDialog.locator('input[type="checkbox"]').nth(1).isChecked(),
+      /1 body selected/i.test(await page.getByTestId('extrude-target-selection').innerText()),
   );
   await page.getByTestId('extrude-canvas-distance').fill('-10');
   await page.waitForFunction(
@@ -660,7 +743,7 @@ try {
       await signedDialog
         .locator('[data-extrude-operation="cut"]')
         .getAttribute('aria-checked') === 'true' &&
-      await signedDialog.locator('input[type="checkbox"]').nth(1).isChecked(),
+      /1 body selected/i.test(await page.getByTestId('extrude-target-selection').innerText()),
   );
   await page.getByTestId('extrude-submit').click();
   await page.waitForFunction(
@@ -688,7 +771,12 @@ try {
   await page.locator('button[title="Offset Plane"]').click();
   const offsetDialog = page.getByTestId('construction-plane-dialog');
   await offsetDialog.waitFor({ state: 'visible' });
-  await offsetDialog.getByLabel('Reference plane').selectOption('origin:xy');
+  await pickOriginPlaneFromViewport('xy');
+  await page.waitForFunction(
+    () => document
+      .querySelector('[data-testid="pick-construction-first-reference"]')
+      ?.textContent?.includes('XY origin plane'),
+  );
   await offsetDialog.getByLabel('Offset distance (mm)').fill('30');
   await page.getByTestId('construction-plane-ok').click();
   await page.waitForFunction(
@@ -737,6 +825,7 @@ try {
   const beforeOffsetCutFaceCount = app.solidScene.bodies[0].faces.length;
   await page.locator('button[title="Extrude"]').first().click();
   await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await selectLatestExtrudeProfile();
   check(
     'a detached extrusion pointing away from all bodies proposes New Body',
     await page
@@ -761,10 +850,9 @@ try {
       .locator('[data-extrude-operation="cut"]')
       .getAttribute('aria-checked') === 'true' &&
       await page
-        .getByTestId('extrude-dialog')
-        .locator('input[type="checkbox"]')
-        .nth(1)
-        .isChecked(),
+        .getByTestId('extrude-target-selection')
+        .innerText()
+        .then((text) => /1 body selected/i.test(text)),
   );
   await page.getByTestId('extrude-submit').click();
   await page.waitForFunction(
@@ -791,10 +879,13 @@ try {
   console.log('8. analytic sketch arcs survive browser Extrude');
   await page.getByRole('button', { name: 'Create Sketch' }).first().click();
   await page.waitForTimeout(250);
-  if (!(await page.getByText('XY Plane', { exact: true }).isVisible())) {
+  const xyPlaneRow = page
+    .getByTestId('browser-panel')
+    .getByText('XY Plane', { exact: true });
+  if (!(await xyPlaneRow.isVisible())) {
     await page.getByRole('button', { name: 'Origin' }).click();
   }
-  await page.getByText('XY Plane', { exact: true }).click();
+  await xyPlaneRow.click();
   await page.waitForFunction(() => window.__appStore.getState().mode === 'sketch');
   await page.locator('button[title="Slot"]').click();
   await clickSketch(-25, -35);
@@ -807,6 +898,7 @@ try {
   await page.waitForFunction(() => window.__appStore.getState().mode === 'solid');
   await page.locator('button[title="Extrude"]').first().click();
   await page.getByTestId('extrude-dialog').waitFor({ state: 'visible' });
+  await selectLatestExtrudeProfile();
   await page
     .getByTestId('extrude-dialog')
     .locator('[data-extrude-operation="new_body"]')

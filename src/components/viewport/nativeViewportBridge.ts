@@ -4,11 +4,20 @@ import { useAppStore } from '../../store/appStore';
 import type {
   BodyPoseDto,
   InstanceBodyPoseDto,
+  Point3Dto,
   ProfileRefDto,
+  SketchPointRefDto,
 } from '../../engine/types';
+import type { ConstraintIconKind } from '../../sketch/constraintIcons';
 import type { MoveCopyCommandPreview } from '../../store/appStore';
 import type { BrowserNode } from '../../types/document';
 import { constraintReferencedEntityIds } from '../../sketch/constraintRefs';
+import { activeEdgePickMode, pickAccepts } from '../../modeling/viewportPicker';
+import {
+  collectAppViewportPickFeedback,
+  type FinishedSketchEntityPickRef,
+} from '../../modeling/viewportPickFeedback';
+import { revolveProfileAcceptsAxis } from '../../lib/revolveAxis';
 
 export interface NativeCameraState {
   position: [number, number, number];
@@ -17,7 +26,7 @@ export interface NativeCameraState {
   verticalFovDegrees: number;
 }
 
-interface NativeViewportMetrics {
+export interface NativeViewportMetrics {
   available: boolean;
   ready: boolean;
   startupError: string | null;
@@ -78,6 +87,10 @@ interface NativePalette {
   edge: [number, number, number];
   edgeHover: [number, number, number];
   edgeSelected: [number, number, number];
+  pickHalo: [number, number, number];
+  originPlaneXy: [number, number, number];
+  originPlaneXz: [number, number, number];
+  originPlaneYz: [number, number, number];
   activeSketch: [number, number, number];
   definedSketch: [number, number, number];
   hover: [number, number, number];
@@ -116,6 +129,8 @@ interface NativePresentation {
   mode: 'solid' | 'pick_plane' | 'sketch';
   hoveredOriginPlane: 'xy' | 'xz' | 'yz' | null;
   hoveredDatumPlaneId: number | null;
+  selectedOriginPlane: 'xy' | 'xz' | 'yz' | null;
+  selectedDatumPlaneId: number | null;
   selectedBodyIds: number[];
   selectedOccurrenceId: number | null;
   hoveredOccurrenceId: number | null;
@@ -124,10 +139,18 @@ interface NativePresentation {
   hoveredFaceId: number | null;
   selectedEdgeIds: number[];
   hoveredEdgeId: number | null;
+  pickRefinableEdges: boolean;
+  pickStraightEdges: boolean;
   selectedSketchEntityIds: number[];
   /** Entities owned by the selected geometric constraint (not true selection). */
   constraintRelatedSketchEntityIds: number[];
   hoveredSketchEntityId: number | null;
+  selectedFinishedSketchEntities: FinishedSketchEntityPickRef[];
+  hoveredFinishedSketchEntity: FinishedSketchEntityPickRef | null;
+  selectedSketchPoints: SketchPointRefDto[];
+  hoveredSketchPoint: SketchPointRefDto | null;
+  selectedSurfacePoint: Point3Dto | null;
+  hoveredSurfacePoint: Point3Dto | null;
   hiddenBodyIds: number[];
   hiddenDatumPlaneIds: number[];
   hiddenSketchNames: string[];
@@ -152,6 +175,8 @@ export interface NativeViewportLineLayer {
 export interface NativeViewportPointLayer {
   color: [number, number, number, number];
   radius: number;
+  /** Hollow rings retain geometric freedom; filled dots are fully constrained. */
+  hollow?: boolean;
   positions: number[];
 }
 
@@ -178,9 +203,34 @@ export interface NativeViewportAnnotation {
   screen: [number, number];
   color: [number, number, number, number];
   text: string;
-  kind: 'dimension' | 'constraint';
+  kind: 'dimension' | 'constraint' | 'tool';
   selected?: boolean;
+  /** Semantic constraint artwork shared with the command toolbar. */
+  icon?: ConstraintIconKind;
+  /** Semantic sketch-command artwork shown beside an active-tool cursor. */
+  toolIcon?: NativeViewportToolIcon;
 }
+
+export type NativeViewportToolIcon =
+  | 'line'
+  | 'midpoint_line'
+  | 'point'
+  | 'rectangle'
+  | 'circle'
+  | 'arc'
+  | 'dimension'
+  | 'fillet'
+  | 'chamfer'
+  | 'offset'
+  | 'trim'
+  | 'extend'
+  | 'break'
+  | 'mirror'
+  | 'move_copy'
+  | 'scale'
+  | 'polygon'
+  | 'slot'
+  | 'spline';
 
 export type NativeViewportSnapKind =
   | 'grid'
@@ -469,21 +519,25 @@ function collectPalette(): NativePalette {
     gridFine: cssRgb('--cad-ground-fine', '#3a3f47'),
     gridMajor: cssRgb('--cad-ground-major', '#4d545f'),
     body: cssRgb('--cad-body', '#8b9bac'),
-    bodySelected: cssRgb('--cad-body-selected', '#69a9d4'),
+    bodySelected: cssRgb('--cad-body-selected', '#a96725'),
     bodyTool: cssRgb('--cad-body-tool', '#b58a43'),
-    bodySelectedEdge: [13 / 255, 117 / 255, 165 / 255],
-    faceHover: cssRgb('--cad-face-hover', '#9ed5f3'),
-    faceSelected: cssRgb('--cad-face-selected', '#30aee8'),
+    bodySelectedEdge: cssRgb('--cad-pick-selected', '#ffd000'),
+    faceHover: cssRgb('--cad-face-hover', '#238a9d'),
+    faceSelected: cssRgb('--cad-face-selected', '#cf7715'),
     edge: cssRgb('--cad-edge', '#29333d'),
-    edgeHover: cssRgb('--cad-edge-hover', '#58c7ff'),
-    edgeSelected: cssRgb('--cad-edge-selected', '#ffc857'),
-    activeSketch: cssRgb('--sketchline', '#5da9ff'),
+    edgeHover: cssRgb('--cad-pick-hover', '#00f5ff'),
+    edgeSelected: cssRgb('--cad-pick-selected', '#ffd000'),
+    pickHalo: cssRgb('--cad-pick-halo', '#ffffff'),
+    originPlaneXy: cssRgb('--cad-origin-plane-xy', '#57a8ff'),
+    originPlaneXz: cssRgb('--cad-origin-plane-xz', '#55c978'),
+    originPlaneYz: cssRgb('--cad-origin-plane-yz', '#ff7078'),
+    activeSketch: cssRgb('--cad-pick-normal', '#86a9c7'),
     definedSketch: cssRgb('--cad-defined', '#e8e9ec'),
-    hover: cssRgb('--cad-hover', '#ffd166'),
-    selection: cssRgb('--cad-sketch-selected', '#c4b9ff'),
+    hover: cssRgb('--cad-pick-hover', '#00f5ff'),
+    selection: cssRgb('--cad-pick-selected', '#ffd000'),
     constraintRelated: cssRgb('--cad-constraint-related', '#3ecf9a'),
-    finishedSketch: cssRgb('--cad-finished', '#4ac7ff'),
-    finishedSketchPoint: cssRgb('--cad-finished-point', '#ff9f43'),
+    finishedSketch: cssRgb('--cad-pick-normal', '#86a9c7'),
+    finishedSketchPoint: cssRgb('--cad-pick-normal', '#86a9c7'),
     finishedSketchPointOutline: cssRgb(
       '--cad-finished-point-outline',
       '#15191f',
@@ -736,22 +790,8 @@ function moveCopyPresentationPoses(
 
 export function collectNativeViewportPresentation(): NativePresentation {
   const state = useAppStore.getState();
-  const bodyHoverKinds = new Set([
-    'move_copy',
-    'combine',
-    'mirror',
-    'rectangular_pattern',
-    'circular_pattern',
-    'split_body',
-  ]);
-  const hoveredBodyId =
-    state.hoveredFace !== null &&
-    state.bodyFeatureDialog !== null &&
-    bodyHoverKinds.has(state.bodyFeatureDialog.kind)
-      ? state.solidScene.bodies.find((body) =>
-          body.faces.some((face) => face.id === state.hoveredFace),
-        )?.id ?? null
-      : null;
+  const pickerFeedback = collectAppViewportPickFeedback(state);
+  const edgePickMode = activeEdgePickMode(pickerFeedback.activePick);
   const selectedSketchEntityIds = [...new Set(state.selectedEntities)];
   if (
     state.selectedEntity !== null &&
@@ -786,27 +826,49 @@ export function collectNativeViewportPresentation(): NativePresentation {
     solved.instance_body_poses,
     movePreview,
   );
-
   return {
     mode:
       state.mode === 'pickPlane' ||
-      state.constructionPlanePickTarget === 'first_reference' ||
-      state.constructionPlanePickTarget === 'second_reference'
+      pickAccepts(pickerFeedback.activePick, 'reference-plane')
         ? 'pick_plane'
         : state.mode,
     hoveredOriginPlane: state.hoveredPlane,
     hoveredDatumPlaneId: state.hoveredDatumPlane,
-    selectedBodyIds: state.selectedBodies,
+    selectedOriginPlane:
+      pickerFeedback.selectedReferencePlane?.type === 'origin_plane'
+        ? pickerFeedback.selectedReferencePlane.plane
+        : null,
+    selectedDatumPlaneId:
+      pickerFeedback.selectedReferencePlane?.type === 'datum_plane'
+        ? pickerFeedback.selectedReferencePlane.datum_id
+        : null,
+    selectedBodyIds: pickerFeedback.selectedBodyIds,
     selectedOccurrenceId: state.selectedOccurrenceId,
     hoveredOccurrenceId: state.hoveredOccurrenceId,
-    hoveredBodyId,
-    selectedFaceIds: state.selectedFaces,
-    hoveredFaceId: state.hoveredFace,
-    selectedEdgeIds: state.selectedEdges,
-    hoveredEdgeId: state.hoveredEdge,
+    hoveredBodyId: pickerFeedback.hoveredBodyId,
+    selectedFaceIds: pickerFeedback.selectedFaceIds,
+    hoveredFaceId: pickerFeedback.hoveredFaceId,
+    selectedEdgeIds: pickerFeedback.selectedEdgeIds,
+    hoveredEdgeId: pickerFeedback.hoveredEdgeId,
+    pickRefinableEdges: edgePickMode === 'refinable',
+    pickStraightEdges: edgePickMode === 'straight',
     selectedSketchEntityIds,
     constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,
+    selectedFinishedSketchEntities:
+      pickerFeedback.selectedFinishedSketchEntities,
+    hoveredFinishedSketchEntity:
+      pickerFeedback.hoveredFinishedSketchEntity,
+    selectedSketchPoints: pickerFeedback.selectedSketchPoints.map(
+      ({ world: _world, ...reference }) => reference,
+    ),
+    hoveredSketchPoint: pickerFeedback.hoveredSketchPoint
+      ? (({ world: _world, ...reference }) => reference)(
+          pickerFeedback.hoveredSketchPoint,
+        )
+      : null,
+    selectedSurfacePoint: pickerFeedback.selectedSurfacePoint,
+    hoveredSurfacePoint: pickerFeedback.hoveredSurfacePoint,
     hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
     hiddenDatumPlaneIds: hiddenReferences(
       browser,
@@ -816,16 +878,24 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hiddenSketchNames: hiddenNames(browser, state.hidden, 'sketch'),
     profilePickerActive: state.profilePicker !== null,
     candidateProfiles:
-      state.profilePicker?.catalog.flatMap((entry) =>
-        entry.profiles
+      state.profilePicker?.catalog.flatMap((entry) => {
+        if (
+          state.profilePicker?.owner === 'revolve'
+          && !revolveProfileAcceptsAxis(
+            state.profilePicker.catalog,
+            entry.sketch_name,
+            state.revolveAxisSelection,
+          )
+        ) return [];
+        return entry.profiles
           .filter((profile) => profile.nesting_depth % 2 === 0)
           .map((profile) => ({
             sketch_name: entry.sketch_name,
             profile_index: profile.index,
-          })),
-      ) ?? [],
-    selectedProfiles: state.profilePicker?.selected ?? [],
-    hoveredProfile: state.profilePicker?.hovered ?? null,
+          }));
+      }) ?? [],
+    selectedProfiles: pickerFeedback.selectedProfiles,
+    hoveredProfile: pickerFeedback.hoveredProfile,
     bodyPoses,
     instanceBodyPoses,
   };
@@ -1633,6 +1703,8 @@ function previewKey(preview: NativeViewportTransient): string {
     annotation.color.forEach(addNumber);
     addString(annotation.text);
     addString(annotation.kind);
+    if (annotation.icon) addString(annotation.icon);
+    if (annotation.toolIcon) addString(annotation.toolIcon);
     addNumber(annotation.selected ? 1 : 0);
   }
   preview.marker?.position.forEach(addNumber);
@@ -1710,6 +1782,7 @@ export function syncNativeViewportCamera(
 export async function pickNativeViewport(
   event: PointerEvent,
   container: HTMLElement,
+  purpose: 'geometry' | 'jointConnector' = 'geometry',
 ): Promise<NativeViewportPick | null> {
   if (!active) return null;
   const rect = container.getBoundingClientRect();
@@ -1719,5 +1792,6 @@ export async function pickNativeViewport(
     camera: latestCamera,
     logicalWidth: rect.width,
     logicalHeight: rect.height,
+    purpose,
   });
 }
