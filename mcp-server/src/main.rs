@@ -126,6 +126,9 @@ struct CadServer {
     /// Session id last successfully loaded via read-only `cad_attach` / `cad_refresh`.
     /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
+    /// Heartbeat `generation` captured at the last successful attach/refresh.
+    /// Compared by `cad_session_status` against the live publisher generation.
+    attached_generation: Option<u64>,
     pending_recompute_transaction: Option<u64>,
     /// Forward record of successful mutating `tools/call` entries for `cad_script`.
     tool_trace: Vec<Value>,
@@ -138,6 +141,7 @@ impl CadServer {
             kernel: OcctKernel::new().map_err(|error| error.to_string())?,
             disclosure: DisclosureState::new(),
             attached_document_id: None,
+            attached_generation: None,
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
         })
@@ -357,6 +361,7 @@ impl CadServer {
             "cad_refresh" => self.refresh_read_only_snapshot()?,
             "cad_detach" => {
                 let previous = self.attached_document_id.take();
+                self.attached_generation = None;
                 json!({
                     "detached": true,
                     "session_id": previous,
@@ -367,6 +372,7 @@ impl CadServer {
             "cad_compare_solids" => compare_solids_summary(&self.manager.solid_scene()),
             "cad_submit" => self.submit_inbox_op(&arguments)?,
             "cad_await_apply" => self.await_inbox_apply(&arguments)?,
+            "cad_session_status" => self.session_status()?,
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
@@ -388,6 +394,7 @@ impl CadServer {
         self.load_snapshot_model(session_id)?;
         self.apply_snapshot_focus(session_id);
         self.attached_document_id = Some(session_id.to_string());
+        self.attached_generation = session::read_heartbeat_generation(session_id).ok();
         Ok(json!({
             "attached": true,
             "session_id": session_id,
@@ -396,6 +403,7 @@ impl CadServer {
             "focus": self.disclosure.active().as_str(),
             "session_mode": "read_only_snapshot",
             "writeback": false,
+            "attached_generation": self.attached_generation,
             "heartbeat": session::heartbeat_meta(session_id),
         }))
     }
@@ -407,12 +415,14 @@ impl CadServer {
         };
         self.load_snapshot_model(&session_id)?;
         self.apply_snapshot_focus(&session_id);
+        self.attached_generation = session::read_heartbeat_generation(&session_id).ok();
         Ok(json!({
             "refreshed": true,
             "session_id": session_id,
             "focus": self.disclosure.active().as_str(),
             "session_mode": "read_only_snapshot",
             "writeback": false,
+            "attached_generation": self.attached_generation,
         }))
     }
 
@@ -512,6 +522,7 @@ impl CadServer {
         if refresh && status == "applied" && published && model_published {
             self.load_snapshot_model(&session_id)?;
             self.apply_snapshot_focus(&session_id);
+            self.attached_generation = session::read_heartbeat_generation(&session_id).ok();
             if let Some(object) = result.as_object_mut() {
                 object.insert("refreshed".to_string(), Value::Bool(true));
                 object.insert(
@@ -524,6 +535,16 @@ impl CadServer {
             }
         }
         Ok(result)
+    }
+
+    /// Observe attached vs live publisher generation, heartbeat age/stale,
+    /// pending inbox, and last apply receipt. Headless returns a clear
+    /// `not_attached` status object (not an error).
+    fn session_status(&self) -> Result<Value, String> {
+        let Some(session_id) = self.attached_document_id.as_deref() else {
+            return Ok(session::not_attached_status_json());
+        };
+        session::session_status_json(session_id, self.attached_generation)
     }
 
     fn load_snapshot_model(&mut self, session_id: &str) -> Result<(), String> {
@@ -901,6 +922,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_detach"
             | "cad_submit"
             | "cad_await_apply"
+            | "cad_session_status"
             | "cad_document"
             | "cad_project_model"
             | "sketch_active"
@@ -954,7 +976,7 @@ fn session_lock_error(code: &str, session_id: Option<&str>) -> String {
         "writeback": false,
         "session_mode": "read_only_snapshot",
         "session_id": session_id,
-        "hint": "cad_submit for mutates while attached; cad_await_apply after submit; cad_refresh to re-read UI; cad_detach to fork headless"
+        "hint": "cad_submit for mutates while attached; cad_await_apply after submit; cad_session_status for attach vs live generation; cad_refresh to re-read UI; cad_detach to fork headless"
     }))
     .unwrap_or_else(|_| {
         format!(
@@ -3213,6 +3235,12 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &["seq"],
             ),
         ),
+        ToolSpec::control(
+            "cad_session_status",
+            "Report attached session status vs live publisher",
+            "While attached, report session_id/window_id/document_id, attached_generation vs live heartbeat generation (engine revision), published/model/active-sketch generations when present, whether the MCP snapshot is stale, heartbeat age/kind/stale, pending inbox seqs, and the latest applied/failed receipt if any. Headless (not attached) returns attached:false / code:not_attached as a clear status object — not an error. Still snapshot/UI-owned apply — not in-process co-link. Does not write model.json.",
+            empty_schema(),
+        ),
     ];
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
@@ -3242,6 +3270,7 @@ fn records_in_script(name: &str) -> bool {
             | "cad_detach"
             | "cad_submit"
             | "cad_await_apply"
+            | "cad_session_status"
             | "sketch_active"
             | "sketch_finished"
             | "sketch_profiles"
@@ -3721,8 +3750,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 23,
-            "119 modeling tools plus 8 print helpers and 15 control tools"
+            MODELING_TOOL_COUNT + 24,
+            "119 modeling tools plus 8 print helpers and 16 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3753,6 +3782,7 @@ mod tests {
                             | "cad_compare_solids"
                             | "cad_submit"
                             | "cad_await_apply"
+                            | "cad_session_status"
                     )
                 )
             })
@@ -3813,6 +3843,7 @@ mod tests {
                     | "cad_compare_solids"
                     | "cad_submit"
                     | "cad_await_apply"
+                    | "cad_session_status"
             ) {
                 continue;
             }
@@ -4640,6 +4671,92 @@ mod tests {
         assert_eq!(parsed["code"], "not_attached");
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "ui_owned_apply");
+    }
+
+    #[test]
+    fn cad_session_status_headless_is_not_attached_not_error() {
+        let mut server = CadServer::new().unwrap();
+        let status = server
+            .call_tool("cad_session_status", json!({}))
+            .expect("headless status must succeed");
+        assert_eq!(status["attached"], false);
+        assert_eq!(status["code"], "not_attached");
+        assert_eq!(status["writeback"], false);
+        assert_eq!(status["pending_inbox_count"], 0);
+        assert!(status["last_apply_receipt"].is_null());
+    }
+
+    #[test]
+    fn cad_session_status_reports_stale_pending_and_receipt() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-status-tool-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (update, _) = write_box_session(&unique);
+        let body_id = update["scene"]["bodies"][0]["id"].clone();
+
+        let mut server = CadServer::new().unwrap();
+        let attached = server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        assert_eq!(attached["attached_generation"], 1);
+        assert_eq!(server.attached_generation, Some(1));
+
+        let status = server.call_tool("cad_session_status", json!({})).unwrap();
+        assert_eq!(status["attached"], true);
+        assert_eq!(status["session_id"], unique);
+        assert_eq!(status["attached_generation"], 1);
+        assert_eq!(status["generation"], 1);
+        assert_eq!(status["stale"], false);
+        assert_eq!(status["pending_inbox_count"], 0);
+
+        let submitted = server
+            .call_tool(
+                "cad_submit",
+                json!({
+                    "name": "solid_mirror",
+                    "arguments": solid_mirror_args(&body_id),
+                    "base_generation": 1
+                }),
+            )
+            .unwrap();
+        assert_eq!(submitted["seq"], 1);
+
+        // UI undo/edit advances live generation while MCP stays on attach base.
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":2,"model_generation":2,"session_id":"{unique}","kind":"snapshot","session_mode":"read_only_snapshot"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let stale = server.call_tool("cad_session_status", json!({})).unwrap();
+        assert_eq!(stale["stale"], true);
+        assert_eq!(stale["attached_generation"], 1);
+        assert_eq!(stale["generation"], 2);
+        assert_eq!(stale["pending_inbox"], json!([1]));
+        assert_eq!(stale["pending_inbox_count"], 1);
+        assert_eq!(stale["heartbeat_kind"], "snapshot");
+
+        // Stale head dead-letters; status shows last failed receipt.
+        let _ = session::apply_inbox_op(&unique, |_n, _a| Ok(json!({}))).expect_err("stale");
+        let after = server.call_tool("cad_session_status", json!({})).unwrap();
+        assert_eq!(after["pending_inbox_count"], 0);
+        assert_eq!(after["last_apply_receipt"]["seq"], 1);
+        assert_eq!(after["last_apply_receipt"]["status"], "failed");
+
+        let detached = server.call_tool("cad_detach", json!({})).unwrap();
+        assert_eq!(detached["detached"], true);
+        assert!(server.attached_generation.is_none());
+        let headless = server.call_tool("cad_session_status", json!({})).unwrap();
+        assert_eq!(headless["attached"], false);
+        assert_eq!(headless["code"], "not_attached");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
