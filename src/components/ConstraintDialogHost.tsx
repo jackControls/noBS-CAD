@@ -1,7 +1,7 @@
 /**
  * Modal host for constraint feedback: invalid selections and D4.2
- * over-constraint conflicts (lists the rejected constraint and the
- * conflicting ones, OK to dismiss).
+ * over-constraint conflicts/redundancies (lists the rejected relation and
+ * the existing relations responsible, OK to dismiss).
  */
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/appStore';

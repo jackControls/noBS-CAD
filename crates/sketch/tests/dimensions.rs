@@ -976,8 +976,9 @@ fn formula_dimensions_chain_and_edit_reevaluates_dependents() {
     assert_eq!(dto.dimensions[1].text, "25.00");
     assert_eq!(dto.dimensions[1].param_expression.as_deref(), Some("d1/2"));
 
-    // Edit d1 → both lines update (starts anchored for determinism).
-    s.toggle_fix(l1.start_point_id).unwrap();
+    // Edit d1 → both lines update (starts anchored for determinism). The
+    // first start was already acquired at the origin, so adding Fix there
+    // would now be correctly rejected as a redundant relation.
     s.toggle_fix(l2.start_point_id).unwrap();
     let cid = dto.dimensions[0].constraint_id;
     let r = s

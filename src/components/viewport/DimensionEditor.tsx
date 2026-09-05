@@ -35,6 +35,7 @@ export function DimensionEditor() {
     const report = err instanceof EngineError
       ? err.data as
         | {
+            reason?: 'conflict' | 'redundant';
             rejected: { kind: string; entities: Array<{ label: string }> };
             conflicts_with: Array<{ kind: string; entities: Array<{ label: string }> }>;
           }

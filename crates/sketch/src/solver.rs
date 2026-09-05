@@ -2364,6 +2364,30 @@ pub fn constraint_residual(sketch: &Sketch, cid: ConstraintId) -> f64 {
         .fold(0.0_f64, |a, b| a.max(b))
 }
 
+/// Jacobian rank of the current solved geometry while omitting every row
+/// owned by `excluded` constraints.
+///
+/// Rank comparisons for constraint admission must be made at one geometric
+/// state. Comparing the old sketch's rank with the newly solved sketch's rank
+/// can misclassify nonlinear relations when the solve moves through a
+/// singular pose. This helper keeps the final geometry fixed and changes only
+/// the equation set.
+pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[ConstraintId]) -> usize {
+    let map = build_var_map(sketch);
+    let eqs = build_equations(sketch, &map, &[]);
+    let x = read_values(sketch, &map);
+    let (_, jac) = eval_all(&eqs, &x, map.n);
+    let retained = eqs
+        .iter()
+        .zip(jac)
+        .filter_map(|((owner, _), row)| {
+            let omitted = owner.is_some_and(|cid| excluded.contains(&cid));
+            (!omitted).then_some(row)
+        })
+        .collect::<Vec<_>>();
+    rank_of(&retained, map.n).0
+}
+
 fn finish_analysis(
     sketch: &Sketch,
     map: &VarMap,

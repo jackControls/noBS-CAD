@@ -71,9 +71,9 @@ fn format_number(v: f64) -> String {
 }
 
 /// Errors of the sketch-session API. Serialized at the host boundary; the
-/// OverConstrained carries structured conflict data (D4.2), while
-/// ConstraintSolveFailed deliberately does not invent a culprit when the
-/// numerical solver cannot establish one.
+/// OverConstrained and RedundantConstraint carry structured relation data
+/// (D4.2), while ConstraintSolveFailed deliberately does not invent a culprit
+/// when the numerical solver cannot establish one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionError {
     /// `begin_sketch` while another sketch is being edited.
@@ -108,6 +108,13 @@ pub enum SessionError {
     OverConstrained {
         rejected: ConstraintDesc,
         conflicts_with: Vec<ConstraintDesc>,
+    },
+    /// The proposed relation is already implied by the existing graph. It is
+    /// geometrically consistent, but contributes zero independent rank and
+    /// would therefore make the sketch redundantly constrained.
+    RedundantConstraint {
+        rejected: ConstraintDesc,
+        implied_by: Vec<ConstraintDesc>,
     },
     /// The proposed relation could not be solved, and leave-one-out analysis
     /// did not prove that any existing constraint caused the failure.
@@ -183,6 +190,51 @@ impl fmt::Display for SessionError {
                     f,
                     "Cannot add {} between {}: conflicts with {}",
                     rejected.kind, ents, conflicts
+                )
+            }
+            SessionError::RedundantConstraint {
+                rejected,
+                implied_by,
+            } => {
+                let ents = rejected
+                    .entities
+                    .iter()
+                    .map(|entity| entity.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                if implied_by.is_empty() {
+                    return write!(
+                        f,
+                        "Cannot add {} between {}: existing constraints already determine this relation",
+                        rejected.kind, ents
+                    );
+                }
+                if implied_by.len() > 4 {
+                    return write!(
+                        f,
+                        "Cannot add {} between {}: this relation is already determined by {} related constraints",
+                        rejected.kind,
+                        ents,
+                        implied_by.len()
+                    );
+                }
+                let dependencies = implied_by
+                    .iter()
+                    .map(|constraint| {
+                        let entities = constraint
+                            .entities
+                            .iter()
+                            .map(|entity| entity.label.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("{}({})", constraint.kind, entities)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "Cannot add {} between {}: this relation is already determined by {}",
+                    rejected.kind, ents, dependencies
                 )
             }
             SessionError::ConstraintSolveFailed { rejected } => {
@@ -1652,11 +1704,13 @@ impl SketchSession {
         }
 
         let before = self.sketch.snapshot();
-        let before_rank = solver::analyze(&self.sketch).rank;
         let id = self.sketch.add_constraint(constraint);
         let analysis = solver::solve(&mut self.sketch, &[]);
         let residual = solver::constraint_residual(&self.sketch, id);
-        if !analysis.converged || residual > INCONSISTENT_EPS || analysis.rank <= before_rank {
+        if !analysis.converged
+            || residual > INCONSISTENT_EPS
+            || analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[id])
+        {
             self.sketch.restore(before);
             return None;
         }
@@ -3174,6 +3228,12 @@ impl SketchSession {
             self.recompute();
             return Err(error);
         }
+        if analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[cid]) {
+            let error = self.classify_redundant_constraint(cid, constraint);
+            self.sketch.restore(before);
+            self.recompute();
+            return Err(error);
+        }
 
         self.analysis = Some(analysis);
         self.push_command(before);
@@ -3232,6 +3292,19 @@ impl SketchSession {
                 .or_else(|| added.last().copied())
                 .expect("non-empty batch");
             let error = self.classify_constraint_failure(cid, constraint);
+            self.sketch.restore(before);
+            self.recompute();
+            return Err(error);
+        }
+        if let Some((cid, constraint)) = added
+            .iter()
+            .rev()
+            .find(|(cid, _)| {
+                analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[*cid])
+            })
+            .copied()
+        {
+            let error = self.classify_redundant_constraint(cid, constraint);
             self.sketch.restore(before);
             self.recompute();
             return Err(error);
@@ -3316,6 +3389,7 @@ impl SketchSession {
             }
         }
         let before = self.sketch.snapshot();
+        let mut added = Vec::new();
         for entity in &entities {
             if let Some(cid) = self.sketch.fix_constraint_on(*entity) {
                 self.sketch.remove_constraint(cid);
@@ -3325,6 +3399,7 @@ impl SketchSession {
                     .add_constraint(Constraint::Fix { entity: *entity });
                 let targets = self.unknown_values(*entity);
                 self.sketch.set_fix_targets(cid, targets);
+                added.push((cid, Constraint::Fix { entity: *entity }));
             }
         }
         let analysis = solver::solve(&mut self.sketch, &[]);
@@ -3334,6 +3409,19 @@ impl SketchSession {
             return Err(SessionError::InvalidConstraint(
                 "Fix/Unfix conflicts with existing constraints".to_string(),
             ));
+        }
+        if let Some((cid, constraint)) = added
+            .iter()
+            .rev()
+            .find(|(cid, _)| {
+                analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[*cid])
+            })
+            .copied()
+        {
+            let error = self.classify_redundant_constraint(cid, constraint);
+            self.sketch.restore(before);
+            self.recompute();
+            return Err(error);
         }
         self.analysis = Some(analysis);
         self.push_command(before);
@@ -4600,6 +4688,110 @@ impl SketchSession {
         true
     }
 
+    /// Classify a consistent zero-rank relation separately from a genuine
+    /// contradiction. The related constraints are dependencies, not
+    /// blockers: removing one of them makes the proposed relation independent.
+    fn classify_redundant_constraint(
+        &self,
+        cid: ConstraintId,
+        constraint: Constraint,
+    ) -> SessionError {
+        SessionError::RedundantConstraint {
+            rejected: self.describe_constraint(cid),
+            implied_by: self.find_redundancy_dependencies(cid, constraint),
+        }
+    }
+
+    /// Existing relations in the same structural/constraint component as a
+    /// proposed one. Carrier lines and their endpoint points belong to the
+    /// same component even though the solver stores their unknowns on points.
+    fn related_constraints(
+        &self,
+        new_cid: ConstraintId,
+        new_constraint: Constraint,
+    ) -> Vec<(ConstraintId, Constraint)> {
+        let mut component_entities = new_constraint
+            .referenced_entities()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let constraints = self
+            .sketch
+            .constraints()
+            .filter(|(cid, _)| *cid != new_cid && !self.sketch.is_reference_dimension(cid))
+            .map(|(cid, constraint)| (cid, *constraint))
+            .collect::<Vec<_>>();
+        let mut candidates = BTreeSet::new();
+        loop {
+            let mut changed = false;
+            for (entity_id, entity) in self.sketch.entities() {
+                let referenced = entity.referenced_entities();
+                if component_entities.contains(&entity_id)
+                    || referenced
+                        .iter()
+                        .any(|reference| component_entities.contains(reference))
+                {
+                    changed |= component_entities.insert(entity_id);
+                    for reference in referenced {
+                        changed |= component_entities.insert(reference);
+                    }
+                }
+            }
+            for (cid, constraint) in &constraints {
+                let referenced = constraint.referenced_entities();
+                if referenced
+                    .iter()
+                    .any(|entity| component_entities.contains(entity))
+                {
+                    changed |= candidates.insert(*cid);
+                    for entity in referenced {
+                        changed |= component_entities.insert(entity);
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        constraints
+            .into_iter()
+            .filter(|(cid, _)| candidates.contains(cid))
+            .collect()
+    }
+
+    /// Name the constraints that make `new_constraint` dependent. For each
+    /// related relation, remove it and compare the rank with and without the
+    /// proposed relation. A positive gain in that reduced graph proves the
+    /// existing relation participates in the dependency circuit.
+    fn find_redundancy_dependencies(
+        &self,
+        new_cid: ConstraintId,
+        new_constraint: Constraint,
+    ) -> Vec<ConstraintDesc> {
+        let related = self.related_constraints(new_cid, new_constraint);
+        let mut dependencies = related
+            .iter()
+            .filter_map(|(cid, _)| {
+                let with_new = solver::rank_excluding_constraints(&self.sketch, &[*cid]);
+                let without_both =
+                    solver::rank_excluding_constraints(&self.sketch, &[*cid, new_cid]);
+                (with_new > without_both).then(|| self.describe_constraint(*cid))
+            })
+            .collect::<Vec<_>>();
+
+        // A legacy sketch may already contain alternate redundant paths, in
+        // which case removing any single relation does not expose the new
+        // row's rank. The complete connected component still collectively
+        // proves the implication; report it rather than fabricating a direct
+        // conflict or returning an empty diagnostic.
+        if dependencies.is_empty() {
+            dependencies = related
+                .iter()
+                .map(|(cid, _)| self.describe_constraint(*cid))
+                .collect();
+        }
+        dependencies
+    }
+
     /// Return an over-constraint only when removing a named relation proves
     /// that it is a culprit. Otherwise report numerical non-convergence
     /// truthfully without fabricating a connected constraint list.
@@ -4631,53 +4823,11 @@ impl SketchSession {
         new_cid: ConstraintId,
         new_constraint: Constraint,
     ) -> Vec<ConstraintDesc> {
-        let mut component_entities = new_constraint
-            .referenced_entities()
-            .into_iter()
+        let constraints = self.related_constraints(new_cid, new_constraint);
+        let candidates = constraints
+            .iter()
+            .map(|(cid, _)| *cid)
             .collect::<BTreeSet<_>>();
-        let constraints = self
-            .sketch
-            .constraints()
-            .filter(|(cid, _)| *cid != new_cid && !self.sketch.is_reference_dimension(cid))
-            .map(|(cid, constraint)| (cid, *constraint))
-            .collect::<Vec<_>>();
-        let mut candidates = BTreeSet::new();
-        loop {
-            let mut changed = false;
-            // Constraint references often name a carrier line while Fix and
-            // Coincident relations name its endpoint entities. Traverse both
-            // directions of that structural ownership before walking the
-            // constraint graph, otherwise a fully fixed line appears
-            // unrelated to the Fix constraints that actually pin it.
-            for (entity_id, entity) in self.sketch.entities() {
-                let referenced = entity.referenced_entities();
-                if component_entities.contains(&entity_id)
-                    || referenced
-                        .iter()
-                        .any(|reference| component_entities.contains(reference))
-                {
-                    changed |= component_entities.insert(entity_id);
-                    for reference in referenced {
-                        changed |= component_entities.insert(reference);
-                    }
-                }
-            }
-            for (cid, constraint) in &constraints {
-                let referenced = constraint.referenced_entities();
-                if referenced
-                    .iter()
-                    .any(|entity| component_entities.contains(entity))
-                {
-                    changed |= candidates.insert(*cid);
-                    for entity in referenced {
-                        changed |= component_entities.insert(entity);
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
 
         let snapshot = self.sketch.snapshot();
         self.sketch.remove_constraint(new_cid);

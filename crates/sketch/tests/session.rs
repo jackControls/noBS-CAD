@@ -376,8 +376,8 @@ fn point_tool_keeps_a_dimensioned_point_on_a_virtual_line_extension() {
     assert!(placed.y.abs() < 1e-8);
 
     // Lock the carrier so editing a distance can only move the acquired
-    // point along its infinite support.
-    s.toggle_fix(line.start_point_id).unwrap();
+    // point along its infinite support. The start point is already attached
+    // to the origin, so only the far endpoint still needs a Fix relation.
     s.toggle_fix(line.end_point_id).unwrap();
     let dimension = s
         .add_dimension(DimensionRequest {
@@ -985,6 +985,59 @@ fn host_envelope_ok_and_error_shapes() {
         .as_str()
         .unwrap()
         .contains("unknown engine method"));
+}
+
+#[test]
+fn host_redundant_constraint_envelope_distinguishes_dependency_from_conflict() {
+    let mut manager = SketchManager::new();
+    let begun = host::handle(
+        &mut manager,
+        "begin_sketch",
+        r#"{"type":"origin_plane","plane":"xy"}"#,
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&begun).unwrap()["ok"],
+        true
+    );
+
+    let add_line = |manager: &mut SketchManager, from: Vec2, to: Vec2| {
+        let payload = serde_json::json!({
+            "from": from,
+            "to_raw": to,
+            "ctrl_held": true,
+        })
+        .to_string();
+        let result = host::handle(manager, "add_line", &payload);
+        let envelope: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(envelope["ok"], true, "{envelope}");
+        envelope["value"]["entity_id"].as_u64().unwrap()
+    };
+
+    let bottom = add_line(&mut manager, v(0.0, 0.0), v(40.0, 0.0));
+    let right = add_line(&mut manager, v(40.0, 0.0), v(40.0, 25.0));
+    let top = add_line(&mut manager, v(0.0, 25.0), v(40.0, 25.0));
+    for payload in [
+        serde_json::json!({ "type": "parallel", "a": bottom, "b": top }),
+        serde_json::json!({ "type": "perpendicular", "a": bottom, "b": right }),
+    ] {
+        let result = host::handle(&mut manager, "add_constraint", &payload.to_string());
+        let envelope: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(envelope["ok"], true, "{envelope}");
+    }
+
+    let redundant = host::handle(
+        &mut manager,
+        "add_constraint",
+        &serde_json::json!({ "type": "perpendicular", "a": top, "b": right }).to_string(),
+    );
+    let envelope: serde_json::Value = serde_json::from_str(&redundant).unwrap();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["data"]["reason"], "redundant");
+    let dependencies = envelope["data"]["conflicts_with"].as_array().unwrap();
+    assert!(dependencies.iter().any(|item| item["kind"] == "parallel"));
+    assert!(dependencies
+        .iter()
+        .any(|item| item["kind"] == "perpendicular"));
 }
 
 #[test]

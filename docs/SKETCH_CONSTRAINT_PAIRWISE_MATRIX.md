@@ -72,6 +72,21 @@ Every one of those 625 cells is repeated on two disconnected sketch islands.
 That second matrix proves that solving the current island does not move an
 already-solved, unrelated island. Total ordered pair scenarios: **1,250**.
 
+### Higher-order dependency circuits
+
+The pairwise matrix is exhaustive for two-command permutations, but it cannot
+detect a relation implied only by two or more existing relations. For example,
+`A ∥ B` followed by `B ⟂ C` already determines `A ⟂ C`; all three individual
+relations are valid, but accepting the closing relation would make the graph
+redundant.
+
+The rank-based admission policy and the representative direction, equality,
+incidence, tangency, center, symmetry, anchoring, and dimension circuits are
+recorded in
+[`SKETCH_OVERCONSTRAINT_HARDENING.md`](SKETCH_OVERCONSTRAINT_HARDENING.md)
+and executed by
+[`crates/sketch/tests/overconstraint_hardening.rs`](../crates/sketch/tests/overconstraint_hardening.rs).
+
 The seven public dimension-selection forms also run through the command API in
 both relation-first and dimension-first order: line length, point distance,
 point-line distance, line angle, parallel-line offset, circle diameter, and
@@ -210,6 +225,7 @@ adjustment opt-in and tolerance-bounded, and commit only after review.
 
 ```sh
 cargo test -p nbcad-sketch --test constraint_pair_permutations
+cargo test -p nbcad-sketch --test overconstraint_hardening
 ```
 
 Related UI verification:

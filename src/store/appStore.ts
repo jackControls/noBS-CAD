@@ -386,12 +386,13 @@ export interface DynInput {
   pending: boolean;
 }
 
-/** Modal shown for invalid constraint combos and D4.2 conflicts. */
+/** Modal shown for invalid constraint combos and D4.2 relation rejection. */
 export interface ConstraintDialog {
   titleKey: string;
   message: string;
-  /** Structured D4.2 conflict report when available. */
+  /** Structured D4.2 conflict/redundancy report when available. */
   conflicts?: {
+    reason?: 'conflict' | 'redundant';
     rejected: { kind: string; entities: Array<{ label: string }> };
     conflicts_with: Array<{ kind: string; entities: Array<{ label: string }> }>;
   };

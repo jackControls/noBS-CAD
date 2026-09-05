@@ -302,10 +302,7 @@ fn fillet_resolves_overlapping_line_to_the_adjacent_corner_carrier() {
     let setup = s
         .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
         .expect("overlapping setup line");
-    s.add_constraint(nbcad_sketch::Constraint::Fix {
-        entity: setup.start_point_id,
-    })
-    .expect("origin anchor");
+    // The authored origin acquisition already anchors this endpoint.
 
     let bottom = s
         .add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
@@ -377,10 +374,7 @@ fn one_fillet_may_exactly_consume_a_short_overlapping_carrier() {
     let setup = s
         .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
         .expect("overlapping setup line");
-    s.add_constraint(nbcad_sketch::Constraint::Fix {
-        entity: setup.start_point_id,
-    })
-    .expect("origin anchor");
+    // The authored origin acquisition already anchors this endpoint.
 
     s.add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
         .expect("bottom outline");
@@ -466,10 +460,7 @@ fn chamfer_resolves_overlapping_line_to_the_adjacent_corner_carrier() {
     let setup = s
         .add_line(v(0.0, 0.0), v(-10.0, 0.0), false)
         .expect("overlapping setup line");
-    s.add_constraint(nbcad_sketch::Constraint::Fix {
-        entity: setup.start_point_id,
-    })
-    .expect("origin anchor");
+    // The authored origin acquisition already anchors this endpoint.
     let bottom = s
         .add_line(v(-10.0, 0.0), v(10.0, 0.0), false)
         .unwrap()
@@ -536,10 +527,17 @@ fn fillet_preserves_midpoint_datum_across_original_corner_span() {
                 if a == centerline.end_point_id && b == bottom
         )
     }));
-    s.add_constraint(nbcad_sketch::Constraint::Vertical {
-        entity: centerline.entity_id,
-    })
-    .expect("construction line stays vertical");
+    let before_redundant = s.dto();
+    let redundant = s
+        .add_constraint(nbcad_sketch::Constraint::Vertical {
+            entity: centerline.entity_id,
+        })
+        .expect_err("the two midpoint relations already make the centerline vertical");
+    assert!(matches!(
+        redundant,
+        nbcad_sketch::SessionError::RedundantConstraint { .. }
+    ));
+    assert_eq!(s.dto(), before_redundant);
 
     let result = s.fillet_lines(&FilletRequest {
         l1: top,
