@@ -1,8 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Target = "x86_64-pc-windows-msvc",
-    [string]$OcctRoot = $env:OCCT_ROOT,
-    [switch]$SkipWasmOpt
+    [string]$OcctRoot = $env:OCCT_ROOT
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,13 +64,6 @@ $env:VCPKG_TARGET_TRIPLET = $targetInfo.VcpkgTriplet
 
 Push-Location $projectRoot
 try {
-    $wasmBuildArguments = @("run", "build:wasm")
-    if ($SkipWasmOpt) {
-        # wasm-pack 0.13.1 has no prebuilt wasm-opt binary for a Windows ARM64
-        # host. This preserves the Rust release build and skips only Binaryen.
-        $wasmBuildArguments += @("--", "--no-opt")
-    }
-    Invoke-Checked "npm.cmd" $wasmBuildArguments
     Invoke-Checked "npx.cmd" @(
         "tauri",
         "build",

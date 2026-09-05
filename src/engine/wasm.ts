@@ -2,10 +2,12 @@
  * WasmEngine — engine adapter for the browser preview/dev path.
  *
  * Loads the wasm-pack bundle (`npm run build:wasm` →
- * `src/engine-wasm/pkg/`, gitignored) and exposes the same `Engine`
- * interface as the Tauri host. The bundle is wasm-pack `--target web`; Vite
- * handles its `new URL(..., import.meta.url)` wasm asset natively, so no
- * Vite plugin is required.
+ * `src/engine-wasm/pkg/`) and exposes the same `Engine` interface as the
+ * Tauri host. The generated JavaScript and WASM are gitignored; only their
+ * TypeScript declaration is retained so native desktop builds can type-check
+ * without compiling the browser engine. The bundle is wasm-pack `--target
+ * web`; Vite handles its `new URL(..., import.meta.url)` wasm asset natively,
+ * so no Vite plugin is required.
  */
 import init, { WasmEngine as WasmEngineInner } from '../engine-wasm/pkg/nbcad_wasm';
 import { unwrapEnvelope, type Engine } from './index';

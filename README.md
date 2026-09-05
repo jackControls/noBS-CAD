@@ -203,7 +203,6 @@ and OCCT packages already installed:
 
 ```sh
 npm ci
-cargo install wasm-pack --version 0.13.1 --locked
 npm run bundle:linux
 ```
 
@@ -220,7 +219,7 @@ Bevy viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS
 remain the real menu, tab, dialog, and accessibility interface.
 
 The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
-SDK, Rust, Node.js, `wasm-pack`, and the pinned OCCT 7.9.3 vcpkg dependency.
+SDK, Rust, Node.js, and the pinned OCCT 7.9.3 vcpkg dependency.
 After installing the pinned vcpkg manifest:
 
 ```powershell
@@ -239,8 +238,7 @@ setup, output layout, runtime requirements, and GitHub Actions workflow.
 The macOS packaging path uses Tauri with OCCT 7.9.x.
 
 ```sh
-brew install opencascade wasm-pack
-rustup target add wasm32-unknown-unknown
+brew install opencascade
 npm ci
 npm run bundle:macos
 ```

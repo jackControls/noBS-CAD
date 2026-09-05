@@ -55,10 +55,6 @@ const lgpl21 = firstExisting(
 copyFileSync(occtCopyright, join(licenseRoot, 'OCCT-copyright.txt'));
 copyFileSync(lgpl21, join(licenseRoot, 'LGPL-2.1.txt'));
 
-execFileSync('npm', ['run', 'build:wasm'], {
-  cwd: projectRoot,
-  stdio: 'inherit',
-});
 execFileSync(
   'npx',
   [

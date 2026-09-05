@@ -51,14 +51,13 @@ The authoritative dependency list is in
 - GTK 3, WebKitGTK 4.1, Ayatana AppIndicator and librsvg;
 - Vulkan, Wayland, X11/XKB and udev development files;
 - OCCT 7.9 foundation, modeling and data-exchange libraries/headers;
-- Rust stable, Node 22, npm and `wasm-pack` 0.13.1; and
+- Rust stable, Node 22 and npm; and
 - Tauri packaging utilities including `patchelf`, `file`, and FUSE 2.
 
 After installing those dependencies:
 
 ```sh
 npm ci
-cargo install wasm-pack --version 0.13.1 --locked
 npm run bundle:linux
 ```
 
