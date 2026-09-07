@@ -2421,8 +2421,9 @@ export interface EntityDesc {
   label: string;
 }
 
-/** D4.2 conflict report (carried on the error envelope as `data`). */
+/** D4.2 conflict/redundancy report (carried on the error envelope as `data`). */
 export interface ConflictReport {
+  reason?: 'conflict' | 'redundant';
   rejected: { id: number; kind: string; entities: EntityDesc[] };
   conflicts_with: Array<{ id: number; kind: string; entities: EntityDesc[] }>;
 }

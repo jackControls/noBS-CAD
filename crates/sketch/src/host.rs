@@ -368,7 +368,26 @@ fn to_json<R: Serialize>(result: Result<R, SessionError>) -> String {
             } => serde_json::json!({
                 "ok": false,
                 "error": e.to_string(),
-                "data": { "rejected": rejected, "conflicts_with": conflicts_with },
+                "data": {
+                    "reason": "conflict",
+                    "rejected": rejected,
+                    "conflicts_with": conflicts_with,
+                },
+            })
+            .to_string(),
+            SessionError::RedundantConstraint {
+                rejected,
+                implied_by,
+            } => serde_json::json!({
+                "ok": false,
+                "error": e.to_string(),
+                // Keep the established report shape for existing clients;
+                // `reason` distinguishes dependency from contradiction.
+                "data": {
+                    "reason": "redundant",
+                    "rejected": rejected,
+                    "conflicts_with": implied_by,
+                },
             })
             .to_string(),
             _ => err_json(e.to_string()),

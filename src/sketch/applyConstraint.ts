@@ -1,7 +1,7 @@
 /**
  * Constraint application from the CONSTRAIN panel (M1b): validate the
  * current selection for the chosen constraint, call the engine, and surface
- * invalid combos / D4.2 over-constraint conflicts in a modal dialog.
+ * invalid combos / D4.2 conflict and redundancy reports in a modal dialog.
  */
 import { EngineError, getEngine } from '../engine';
 import type { ConstraintPayload, EntityDto } from '../engine/types';
@@ -331,7 +331,7 @@ export async function applyConstraintById(
   } catch (err) {
     if (err instanceof EngineError) {
       const report = err.data as
-        | { rejected: { kind: string; entities: Array<{ label: string }> }; conflicts_with: Array<{ kind: string; entities: Array<{ label: string }> }> }
+        | { reason?: 'conflict' | 'redundant'; rejected: { kind: string; entities: Array<{ label: string }> }; conflicts_with: Array<{ kind: string; entities: Array<{ label: string }> }> }
         | undefined;
       s.setConstraintDialog({
         titleKey: report ? 'constraints.conflictTitle' : 'constraints.invalidTitle',

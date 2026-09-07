@@ -99,7 +99,7 @@ pub struct ConstraintDto {
     pub constraint: Constraint,
 }
 
-/// Human-readable entity reference for the over-constraint conflict report,
+/// Human-readable entity reference for an over-constraint rejection report,
 /// e.g. `{"id": 5, "label": "Line5"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityDesc {
@@ -107,7 +107,7 @@ pub struct EntityDesc {
     pub label: String,
 }
 
-/// Human-readable constraint description for the conflict report, e.g.
+/// Human-readable constraint description for the rejection report, e.g.
 /// "Perpendicular between Line3 and Line5".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConstraintDesc {

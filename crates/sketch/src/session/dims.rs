@@ -319,7 +319,6 @@ impl SketchSession {
         // Capture the undo state before allocating the parameter. Previously
         // Undo restored a snapshot that already contained an orphan `dN`.
         let before = self.sketch.snapshot();
-        let rank_before = crate::solver::analyze(&self.sketch).rank;
         let param = self.param_from_text(kind, request.value_text.as_deref(), measured)?;
         let cid = match self.add_constraint_bound(constraint, param, text_pos, false) {
             Ok(cid) => cid,
@@ -329,10 +328,7 @@ impl SketchSession {
                 return Err(error);
             }
         };
-        let redundant = self
-            .analysis
-            .as_ref()
-            .is_some_and(|analysis| analysis.rank <= rank_before);
+        let redundant = crate::solver::constraints_are_redundant(&self.sketch, &[cid]);
         if redundant {
             if request.value_text.is_some() {
                 self.sketch.restore(before);
@@ -528,7 +524,6 @@ impl SketchSession {
                     ParamKind::Length
                 };
                 let before = self.sketch.snapshot();
-                let rank_before = crate::solver::analyze(&self.sketch).rank;
                 let pid = self.param_from_text(kind, None, measured)?;
                 let mut driving = constraint;
                 driving.set_dimension_value(measured);
@@ -537,8 +532,11 @@ impl SketchSession {
                 self.sketch.bind_dimension(cid, pid, placement);
                 let analysis = crate::solver::solve(&mut self.sketch, &[]);
                 let residual = crate::solver::constraint_residual(&self.sketch, cid);
-                if !analysis.converged || residual > 1e-6 || analysis.rank <= rank_before {
-                    if analysis.converged && residual <= 1e-6 && analysis.rank <= rank_before {
+                let redundant = analysis.converged
+                    && residual <= 1e-6
+                    && crate::solver::constraints_are_redundant(&self.sketch, &[cid]);
+                if !analysis.converged || residual > 1e-6 || redundant {
+                    if redundant {
                         self.sketch.restore(before);
                         self.recompute();
                         return Err(SessionError::InvalidConstraint(
