@@ -5,8 +5,9 @@
 //! relations and therefore cannot be exposed by pairwise tests alone.
 
 use nbcad_sketch::{
-    CircleMode, Constraint, DimensionMode, DimensionRequest, EntityId, OriginPlane, PlaneRef,
-    SessionError, SketchSession, Vec2,
+    CircleMode, Constraint, DimensionMode, DimensionRequest, DragPhase, EntityDto, EntityId,
+    MovePointRequest, OriginPlane, PlaneRef, RectangleMode, SessionError, SetDimensionModeRequest,
+    SketchDto, SketchSession, Vec2,
 };
 
 const XY: PlaneRef = PlaneRef::OriginPlane {
@@ -19,6 +20,12 @@ fn v(x: f64, y: f64) -> Vec2 {
 
 fn session() -> SketchSession {
     SketchSession::new("overconstraint hardening", XY, XY.basis().unwrap(), false)
+}
+
+fn assert_undo_restores(session: &mut SketchSession, before: &SketchDto) {
+    let mut expected = before.clone();
+    expected.can_redo = true;
+    assert_eq!(session.undo().unwrap().sketch, expected);
 }
 
 fn line(session: &mut SketchSession, a: Vec2, b: Vec2) -> EntityId {
@@ -305,21 +312,328 @@ fn a_satisfied_relation_on_fixed_geometry_is_redundant_but_fixing_partial_geomet
 }
 
 #[test]
-fn redundant_batch_is_rejected_as_one_atomic_command() {
+fn a_batch_keeps_an_independent_subset_of_its_dependency_circuit() {
     let mut s = session();
     let a = line(&mut s, v(0.0, 0.0), v(20.0, 0.0));
     let b = line(&mut s, v(0.0, 10.0), v(20.0, 10.0));
     let c = line(&mut s, v(0.0, 20.0), v(20.0, 20.0));
     let before = s.dto();
-    let error = s
+    let result = s
         .add_constraints(vec![
             Constraint::Parallel { a, b },
             Constraint::Parallel { a: b, b: c },
             Constraint::Parallel { a, b: c },
         ])
+        .unwrap();
+    assert_eq!(result.sketch.constraints.len(), 2);
+    assert_eq!(
+        result.sketch.constraints[0].constraint,
+        Constraint::Parallel { a, b }
+    );
+    assert_eq!(
+        result.sketch.constraints[1].constraint,
+        Constraint::Parallel { a: b, b: c }
+    );
+    assert_redundant(&mut s, Constraint::Parallel { a, b: c }, &["parallel"]);
+    assert_undo_restores(&mut s, &before);
+    assert_eq!(s.redo().unwrap().sketch, result.sketch);
+}
+
+#[test]
+fn bulk_fix_of_a_connected_rectangle_is_reversible_in_one_step() {
+    for at_origin in [false, true] {
+        for include_points in [false, true] {
+            let mut s = session();
+            let first = if at_origin { Vec2::ZERO } else { v(10.0, 10.0) };
+            s.add_rectangle(RectangleMode::TwoPoint, first, first + v(40.0, 30.0))
+                .unwrap();
+            let before = s.dto();
+            let ids = before
+                .entities
+                .iter()
+                .filter(|e| include_points || matches!(e, EntityDto::Line { .. }))
+                .map(EntityDto::id)
+                .collect::<Vec<_>>();
+            assert!(!before.dof.fully_defined);
+            let fixed = s.toggle_fix_entities(ids.clone()).unwrap().sketch;
+            assert!(fixed.dof.fully_defined);
+            assert_eq!(
+                fixed
+                    .constraints
+                    .iter()
+                    .filter(|c| matches!(c.constraint, Constraint::Fix { .. }))
+                    .count(),
+                ids.len()
+            );
+            assert_eq!(
+                fixed.entities.iter().map(EntityDto::id).collect::<Vec<_>>(),
+                before
+                    .entities
+                    .iter()
+                    .map(EntityDto::id)
+                    .collect::<Vec<_>>()
+            );
+            assert_undo_restores(&mut s, &before);
+            assert_eq!(s.redo().unwrap().sketch, fixed);
+
+            let unfixed = s.toggle_fix_entities(ids).unwrap().sketch;
+            assert_eq!(unfixed.constraints, before.constraints);
+            assert_eq!(unfixed.entities, before.entities);
+            assert_eq!(unfixed.dof, before.dof);
+            assert_undo_restores(&mut s, &fixed);
+            assert_eq!(s.redo().unwrap().sketch, unfixed);
+        }
+    }
+}
+
+#[test]
+fn mixed_fix_unfix_can_release_an_anchor_even_if_the_new_anchor_is_implied() {
+    let mut s = session();
+    let datum = point(&mut s, Vec2::ZERO);
+    let free_line = line(&mut s, v(10.0, 10.0), v(30.0, 15.0));
+    s.toggle_fix(free_line).unwrap();
+    let before = s.dto();
+    let result = s
+        .toggle_fix_entities(vec![datum, free_line])
+        .unwrap()
+        .sketch;
+    assert!(!result.dof.fully_defined);
+    assert!(s.sketch().fix_constraint_on(free_line).is_none());
+    assert!(s.sketch().fix_constraint_on(datum).is_some());
+    assert_undo_restores(&mut s, &before);
+    assert_eq!(s.redo().unwrap().sketch, result);
+}
+
+#[test]
+fn bulk_hv_on_parallel_lines_keeps_one_new_driver_in_either_order() {
+    for horizontal in [false, true] {
+        for reversed in [false, true] {
+            let mut s = session();
+            let direction = if horizontal {
+                v(20.0, 5.0)
+            } else {
+                v(5.0, 20.0)
+            };
+            let a = line(&mut s, v(10.0, 10.0), v(10.0, 10.0) + direction);
+            let b = line(&mut s, v(40.0, 40.0), v(40.0, 40.0) + direction);
+            s.add_constraint(Constraint::Parallel { a, b }).unwrap();
+            let before = s.dto();
+            let ids = if reversed { [b, a] } else { [a, b] };
+            let constraints = ids.map(|entity| {
+                if horizontal {
+                    Constraint::Horizontal { entity }
+                } else {
+                    Constraint::Vertical { entity }
+                }
+            });
+            let after = s.add_constraints(constraints.to_vec()).unwrap().sketch;
+            assert_eq!(after.constraints.len(), before.constraints.len() + 1);
+            assert_eq!(after.constraints.last().unwrap().constraint, constraints[0]);
+            for id in ids {
+                let (start, end) = s.sketch().resolved_line(id).unwrap();
+                let delta = end - start;
+                assert!((if horizontal { delta.y } else { delta.x }).abs() < 1e-7);
+                assert!((delta.length() - direction.length()).abs() < 1e-7);
+            }
+            assert_undo_restores(&mut s, &before);
+            assert_eq!(s.redo().unwrap().sketch, after);
+        }
+    }
+}
+
+#[test]
+fn wholly_implied_and_contradictory_batches_still_reject_atomically() {
+    let mut s = session();
+    let a = line(&mut s, v(0.0, 0.0), v(20.0, 0.0));
+    let b = line(&mut s, v(0.0, 10.0), v(20.0, 10.0));
+    let c = line(&mut s, v(0.0, 20.0), v(20.0, 20.0));
+    s.add_constraint(Constraint::Parallel { a, b }).unwrap();
+    s.add_constraint(Constraint::Parallel { a: b, b: c })
+        .unwrap();
+    s.add_constraint(Constraint::Horizontal { entity: a })
+        .unwrap();
+    let before = s.dto();
+    let error = s
+        .add_constraints(vec![
+            Constraint::Horizontal { entity: b },
+            Constraint::Horizontal { entity: c },
+        ])
         .unwrap_err();
     assert!(matches!(error, SessionError::RedundantConstraint { .. }));
     assert_eq!(s.dto(), before);
+
+    let mut s = session();
+    let free = line(&mut s, v(0.0, 0.0), v(20.0, 5.0));
+    let fixed = line(&mut s, v(40.0, 0.0), v(40.0, 20.0));
+    s.toggle_fix(fixed).unwrap();
+    let before = s.dto();
+    s.add_constraints(vec![
+        Constraint::Horizontal { entity: free },
+        Constraint::Horizontal { entity: fixed },
+    ])
+    .unwrap_err();
+    assert_eq!(
+        s.dto(),
+        before,
+        "a conflict must not leave the first member applied"
+    );
+}
+
+fn tangent_fixture(
+    radius: f64,
+    angle: f64,
+    center: Vec2,
+) -> (SketchSession, EntityId, EntityId, EntityId, Vec2) {
+    let mut s = session();
+    let normal = v(angle.cos(), angle.sin());
+    let tangent = v(-normal.y, normal.x);
+    let contact = center + normal * radius;
+    let curve = s
+        .add_circle_selective(CircleMode::CenterDiameter, center, contact, true)
+        .unwrap()
+        .entities[0];
+    let carrier = line(
+        &mut s,
+        contact - tangent * (2.0 * radius),
+        contact + tangent * (2.0 * radius),
+    );
+    let p = s
+        .add_point_on_selective(contact, None, true)
+        .unwrap()
+        .entities[0];
+    s.toggle_fix(curve).unwrap();
+    s.toggle_fix(carrier).unwrap();
+    (s, curve, carrier, p, contact)
+}
+
+#[test]
+fn tangent_point_incidence_is_independent_in_both_orders_and_rotated_poses() {
+    for (radius, angle, center) in [
+        (5.0, 0.0, v(10.0, 10.0)),
+        (1.0, 0.63, v(-25.0, 33.0)),
+        (500.0, std::f64::consts::FRAC_PI_2, v(1000.0, -2000.0)),
+    ] {
+        for circle_first in [false, true] {
+            let (mut s, curve, carrier, p, contact) = tangent_fixture(radius, angle, center);
+            let [first, second] = if circle_first {
+                [curve, carrier]
+            } else {
+                [carrier, curve]
+            };
+            s.add_constraint(Constraint::Coincident { a: p, b: first })
+                .unwrap();
+            let before = s.dto();
+            let after = s
+                .add_constraint(Constraint::Coincident { a: p, b: second })
+                .unwrap()
+                .sketch;
+            assert!(s.sketch().point_position(p).unwrap().distance(contact) < 1e-7);
+            assert_eq!(after.constraints.len(), before.constraints.len() + 1);
+            assert_undo_restores(&mut s, &before);
+            assert_eq!(s.redo().unwrap().sketch, after);
+        }
+    }
+}
+
+#[test]
+fn tangent_point_cannot_leave_the_line_until_its_new_incidence_is_removed() {
+    let (mut s, curve, carrier, p, contact) = tangent_fixture(5.0, 0.0, v(10.0, 10.0));
+    s.add_constraint(Constraint::Coincident { a: p, b: curve })
+        .unwrap();
+    let attached = s
+        .add_constraint(Constraint::Coincident { a: p, b: carrier })
+        .unwrap()
+        .constraint_id;
+    let target = v(10.0, 15.0);
+    s.move_point(MovePointRequest {
+        point_id: p,
+        to_raw: target,
+        phase: DragPhase::Single,
+        ctrl_held: true,
+    })
+    .unwrap();
+    assert!(s.sketch().point_position(p).unwrap().distance(contact) < 1e-7);
+    s.delete_constraint(attached).unwrap();
+    s.move_point(MovePointRequest {
+        point_id: p,
+        to_raw: target,
+        phase: DragPhase::Single,
+        ctrl_held: true,
+    })
+    .unwrap();
+    assert!(s.sketch().point_position(p).unwrap().distance(target) < 1e-7);
+}
+
+#[test]
+fn batch_admission_keeps_a_singular_incidence_and_rejects_redundant_typed_drivers() {
+    let (mut s, curve, carrier, p, contact) = tangent_fixture(5.0, 0.0, v(10.0, 10.0));
+    s.add_constraint(Constraint::Coincident { a: p, b: curve })
+        .unwrap();
+    let free = line(&mut s, v(40.0, 40.0), v(60.0, 45.0));
+    let before = s.dto();
+    let after = s
+        .add_constraints(vec![
+            Constraint::Coincident { a: p, b: carrier },
+            Constraint::Horizontal { entity: free },
+        ])
+        .unwrap()
+        .sketch;
+    assert_eq!(after.constraints.len(), before.constraints.len() + 2);
+    assert!(s.sketch().point_position(p).unwrap().distance(contact) < 1e-7);
+    assert_undo_restores(&mut s, &before);
+    assert_eq!(s.redo().unwrap().sketch, after);
+
+    let mut s = session();
+    let fixed = line(&mut s, v(0.0, 0.0), v(20.0, 0.0));
+    let free = line(&mut s, v(40.0, 40.0), v(60.0, 45.0));
+    s.toggle_fix(fixed).unwrap();
+    let before = s.dto();
+    s.add_constraints(vec![
+        Constraint::Horizontal { entity: free },
+        Constraint::Distance {
+            from: fixed,
+            to: None,
+            value: 20.0,
+        },
+    ])
+    .unwrap_err();
+    assert_eq!(
+        s.dto(),
+        before,
+        "do not discard an explicit driver while keeping the other batch members"
+    );
+}
+
+#[test]
+fn a_variable_measurement_at_a_stationary_pose_stays_driving() {
+    let (mut s, curve, _, p, _) = tangent_fixture(5.0, 0.0, v(10.0, 10.0));
+    let carrier = line(&mut s, v(20.0, 0.0), v(20.0, 20.0));
+    s.toggle_fix(carrier).unwrap();
+    s.add_constraint(Constraint::Coincident { a: p, b: curve })
+        .unwrap();
+    let result = s
+        .add_dimension(DimensionRequest {
+            entities: vec![p, carrier],
+            text_pos: v(17.0, 8.0),
+            value_text: None,
+        })
+        .unwrap()
+        .sketch;
+    let dimension = &result.dimensions[0];
+    assert_eq!(dimension.mode, DimensionMode::Driving);
+    let cid = dimension.constraint_id;
+    s.set_dimension_mode(SetDimensionModeRequest {
+        constraint_id: cid,
+        mode: DimensionMode::Reference,
+    })
+    .unwrap();
+    let converted = s
+        .set_dimension_mode(SetDimensionModeRequest {
+            constraint_id: cid,
+            mode: DimensionMode::Driving,
+        })
+        .unwrap();
+    assert_eq!(converted.sketch.dimensions[0].mode, DimensionMode::Driving);
 }
 
 #[test]

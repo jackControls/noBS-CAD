@@ -14,7 +14,7 @@
 //! used for constraint-state coloring (an entity is fully defined when none
 //! of its unknowns are free).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::constraint::{ArcEndpoint, Constraint, ConstraintId};
 use crate::entity::{Entity, EntityId, AXIS_SENTINEL};
@@ -2386,6 +2386,140 @@ pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[Constraint
         })
         .collect::<Vec<_>>();
     rank_of(&retained, map.n).0
+}
+
+/// Decide admission at the solved pose, without mistaking a singular
+/// Jacobian for a geometric implication. At a line/circle tangency, for
+/// example, the two incidence rows have the same first derivative although
+/// a point on the circle can still move away from the line.
+pub(crate) fn constraints_are_redundant(sketch: &Sketch, proposed: &[ConstraintId]) -> bool {
+    let map = build_var_map(sketch);
+    let eqs = build_equations(sketch, &map, &[]);
+    let x = read_values(sketch, &map);
+    let (_, jac) = eval_all(&eqs, &x, map.n);
+    let is_proposed =
+        |owner: &Option<ConstraintId>| owner.is_some_and(|cid| proposed.contains(&cid));
+    let retained = eqs
+        .iter()
+        .zip(&jac)
+        .filter(|((owner, _), _)| !is_proposed(owner))
+        .map(|(_, row)| row.clone())
+        .collect::<Vec<_>>();
+    let reduced_rank = rank_of(&retained, map.n).0;
+    if rank_of(&jac, map.n).0 > reduced_rank {
+        return false;
+    }
+    if reduced_rank == map.n
+        || eqs
+            .iter()
+            .all(|(_, eq)| matches!(eq, Eq::Lin { .. } | Eq::Radius { .. }))
+    {
+        return true;
+    }
+
+    // A rank tie in a nonlinear system needs a finite-motion check. Perturb
+    // only variables of the proposed relation, then solve a PRIVATE copy
+    // with that relation removed. Do not use off-manifold rank sampling:
+    // even a genuine parallel/perpendicular circuit can gain rank off its
+    // solution manifold. Only an actual, converged counterexample counts.
+    let variables = eqs
+        .iter()
+        .zip(&jac)
+        .filter(|((owner, _), _)| is_proposed(owner))
+        .flat_map(|(_, row)| row.iter().map(|(variable, _)| *variable))
+        .collect::<BTreeSet<_>>();
+    let fixed_variables = eqs
+        .iter()
+        .filter(|(owner, _)| !is_proposed(owner))
+        .filter_map(|(_, eq)| match eq {
+            Eq::Lin { terms, .. } if terms.len() == 1 && terms[0].1 != 0.0 => Some(terms[0].0),
+            Eq::Radius { r, .. } => Some(*r),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let angular_variables = map
+        .arcs
+        .values()
+        .flat_map(|(_, _, a0, a1)| [*a0, *a1])
+        .collect::<BTreeSet<_>>();
+    let step = independence_probe_step(sketch, proposed);
+    let mut reduced = sketch.clone();
+    for cid in proposed {
+        reduced.remove_constraint(*cid);
+    }
+    for variable in variables.difference(&fixed_variables) {
+        let delta = if angular_variables.contains(variable) {
+            0.01
+        } else {
+            step
+        };
+        for sign in [-1.0, 1.0] {
+            let mut trial = reduced.clone();
+            let mut seed = x.clone();
+            seed[*variable] += sign * delta;
+            write_values(&mut trial, &map, &seed);
+            let analysis = solve(&mut trial, &[]);
+            if !analysis.converged || analysis.residual > TOL * 10.0 {
+                continue;
+            }
+            let witness = read_values(&trial, &map);
+            let (residuals, _) = eval_all(&eqs, &witness, map.n);
+            // Also check the original equations, including their chosen
+            // tangency/support branches. A branch switch in the trial must
+            // not masquerade as a permitted motion of the retained sketch.
+            let retained_satisfied = eqs.iter().zip(&residuals).all(|((owner, _), residual)| {
+                is_proposed(owner) || (residual.is_finite() && residual.abs() <= TOL * 10.0)
+            });
+            let proposal_violated = eqs.iter().zip(&residuals).any(|((owner, _), residual)| {
+                is_proposed(owner) && residual.is_finite() && residual.abs() > 1e-6
+            });
+            if retained_satisfied && proposal_violated {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Use local feature size rather than absolute coordinates, so translating
+/// a sketch does not change the admission test. Keep probes small and bound
+/// them in millimetres; arc angle variables use radians separately.
+fn independence_probe_step(sketch: &Sketch, proposed: &[ConstraintId]) -> f64 {
+    let entities = sketch
+        .constraints()
+        .filter(|(cid, _)| proposed.contains(cid))
+        .flat_map(|(_, constraint)| constraint.referenced_entities())
+        .collect::<BTreeSet<_>>();
+    let mut positions = Vec::new();
+    let mut scale: f64 = 0.0;
+    for entity in entities {
+        match sketch.entity(entity) {
+            Some(Entity::Point { position }) => positions.push(*position),
+            Some(Entity::Line { .. }) => {
+                if let Some((a, b)) = sketch.resolved_line(entity) {
+                    positions.extend([a, b]);
+                }
+            }
+            Some(Entity::Circle { center, radius } | Entity::Arc { center, radius, .. }) => {
+                positions.push(*center);
+                scale = scale.max(radius.abs());
+            }
+            Some(Entity::Spline { points }) => positions.extend(points),
+            None => {}
+        }
+    }
+    if let Some(first) = positions.first().copied() {
+        let mut min = first;
+        let mut max = first;
+        for point in positions {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        scale = scale.max(max.x - min.x).max(max.y - min.y);
+    }
+    (scale * 0.01).clamp(1e-4, 1.0)
 }
 
 fn finish_analysis(

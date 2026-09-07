@@ -328,13 +328,7 @@ impl SketchSession {
                 return Err(error);
             }
         };
-        let rank_with = self
-            .analysis
-            .as_ref()
-            .map(|analysis| analysis.rank)
-            .unwrap_or_else(|| crate::solver::analyze(&self.sketch).rank);
-        let redundant =
-            rank_with <= crate::solver::rank_excluding_constraints(&self.sketch, &[cid]);
+        let redundant = crate::solver::constraints_are_redundant(&self.sketch, &[cid]);
         if redundant {
             if request.value_text.is_some() {
                 self.sketch.restore(before);
@@ -540,8 +534,7 @@ impl SketchSession {
                 let residual = crate::solver::constraint_residual(&self.sketch, cid);
                 let redundant = analysis.converged
                     && residual <= 1e-6
-                    && analysis.rank
-                        <= crate::solver::rank_excluding_constraints(&self.sketch, &[cid]);
+                    && crate::solver::constraints_are_redundant(&self.sketch, &[cid]);
                 if !analysis.converged || residual > 1e-6 || redundant {
                     if redundant {
                         self.sketch.restore(before);

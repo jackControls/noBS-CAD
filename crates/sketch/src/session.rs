@@ -1709,7 +1709,7 @@ impl SketchSession {
         let residual = solver::constraint_residual(&self.sketch, id);
         if !analysis.converged
             || residual > INCONSISTENT_EPS
-            || analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[id])
+            || solver::constraints_are_redundant(&self.sketch, &[id])
         {
             self.sketch.restore(before);
             return None;
@@ -3228,7 +3228,7 @@ impl SketchSession {
             self.recompute();
             return Err(error);
         }
-        if analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[cid]) {
+        if solver::constraints_are_redundant(&self.sketch, &[cid]) {
             let error = self.classify_redundant_constraint(cid, constraint);
             self.sketch.restore(before);
             self.recompute();
@@ -3296,21 +3296,29 @@ impl SketchSession {
             self.recompute();
             return Err(error);
         }
-        if let Some((cid, constraint)) = added
-            .iter()
-            .rev()
-            .find(|(cid, _)| {
-                analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[*cid])
-            })
-            .copied()
-        {
-            let error = self.classify_redundant_constraint(cid, constraint);
-            self.sketch.restore(before);
-            self.recompute();
-            return Err(error);
+        // Panel actions may request the same effective relation on several
+        // selected objects (e.g. Horizontal on two already-parallel lines).
+        // Keep an independent subset, preferring the earlier selections.
+        // Check after EACH removal: removing every initially dependent row
+        // at once would also remove useful equations from a dependency loop.
+        let mut kept = added.len();
+        for &(cid, constraint) in added.iter().rev() {
+            if !solver::constraints_are_redundant(&self.sketch, &[cid]) {
+                continue;
+            }
+            // An entirely implied command is still an error, as is an
+            // explicit dimensional driver: never silently discard its value.
+            if kept == 1 || constraint.kind() == crate::constraint::ConstraintKind::Dimensional {
+                let error = self.classify_redundant_constraint(cid, constraint);
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
+            }
+            self.sketch.remove_constraint(cid);
+            kept -= 1;
         }
 
-        self.analysis = Some(analysis);
+        self.analysis = Some(solver::analyze(&self.sketch));
         self.push_command(before);
         let entities = added
             .iter()
@@ -3390,9 +3398,11 @@ impl SketchSession {
         }
         let before = self.sketch.snapshot();
         let mut added = Vec::new();
+        let mut removed = false;
         for entity in &entities {
             if let Some(cid) = self.sketch.fix_constraint_on(*entity) {
                 self.sketch.remove_constraint(cid);
+                removed = true;
             } else {
                 let cid = self
                     .sketch
@@ -3410,14 +3420,17 @@ impl SketchSession {
                 "Fix/Unfix conflicts with existing constraints".to_string(),
             ));
         }
-        if let Some((cid, constraint)) = added
-            .iter()
-            .rev()
-            .find(|(cid, _)| {
-                analysis.rank <= solver::rank_excluding_constraints(&self.sketch, &[*cid])
-            })
-            .copied()
+        // Fix is a per-entity toggle. Retain each selected entity's anchor
+        // even when anchors overlap at shared endpoints, so toggling the
+        // same selection again removes ALL of them. Admission measures the
+        // new anchors as a group, not against their newly added peers.
+        // A mixed Fix/Unfix operation must also be allowed to release anchors.
+        let added_ids = added.iter().map(|(cid, _)| *cid).collect::<Vec<_>>();
+        if !removed
+            && !added_ids.is_empty()
+            && solver::constraints_are_redundant(&self.sketch, &added_ids)
         {
+            let (cid, constraint) = added[0];
             let error = self.classify_redundant_constraint(cid, constraint);
             self.sketch.restore(before);
             self.recompute();

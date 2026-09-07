@@ -180,8 +180,10 @@ small:
 Each inferred persistent relation is rendered using the same selectable and
 removable indication as a manually applied relation. An inferred relation is
 committed only when the solver converges to the exact relation, its residual is
-within tolerance, and it increases the constraint-system rank. A failed or
-redundant inference leaves the authored geometry intact.
+within tolerance, and the shared admission check finds independent information:
+normally a rank increase, or a finite-motion witness at a singular pose (see the
+hardening document above). A failed or redundant inference leaves the authored
+geometry intact.
 
 Holding Control on Windows/Linux or Command on macOS suppresses relation
 inference for the current gesture. Grid quantization remains a separate user
