@@ -67,8 +67,8 @@ DLL names maintained by hand.
 ## Local Windows build
 
 Install the Visual Studio C++ Build Tools (including the architecture you are
-building), a current Windows SDK, Node.js and npm, Rust, `wasm-pack` 0.13.1,
-and vcpkg at the commit pinned by `vcpkg.json`.
+building), a current Windows SDK, Node.js and npm, Rust, and vcpkg at the commit
+pinned by `vcpkg.json`.
 
 From PowerShell, select the matching Rust target and vcpkg triplet:
 
@@ -78,8 +78,6 @@ $target = "x86_64-pc-windows-msvc"
 $triplet = "x64-windows"
 
 rustup target add $target
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --version 0.13.1 --locked
 npm ci
 
 .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
@@ -92,9 +90,8 @@ $env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
 npm run bundle:windows:portable -- -Target $target
 ```
 
-The command rebuilds the Rust WebAssembly frontend package, compiles the
-release Tauri executable without creating an installer, gathers the native
-runtime DLLs and license notices, and writes:
+The command compiles the release Tauri executable without creating an
+installer, gathers the native runtime DLLs and license notices, and writes:
 
 ```text
 src-tauri/target/<rust-target>/release/bundle/portable/
@@ -121,11 +118,6 @@ requests to `main`, version tags, and manual dispatches. Both jobs:
 5. launches the packaged executable long enough to catch missing DLL or
    WebView startup failures;
 6. uploads the ZIP and SHA-256 file for seven days.
-
-`wasm-pack` 0.13.1 does not provide a prebuilt `wasm-opt` executable for a
-Windows ARM64 host. The ARM64 CI row therefore passes `--no-opt` only for its
-WebAssembly packaging step; the Rust WebAssembly module still uses Cargo's
-release profile. x64 continues to run the configured Binaryen optimization.
 
 The binary-cache key includes the pinned dependency manifest and the installed
 MSVC toolset version. The first run for a new combination compiles OCCT and

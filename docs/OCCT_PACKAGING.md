@@ -82,19 +82,25 @@ npm run bundle:macos
 
 The command:
 
-1. rebuilds the generated Rust WebAssembly frontend package;
-2. runs `scripts/stage-occt-macos.mjs`;
-3. discovers the recursive OCCT/TBB dylib closure with `otool -L`;
-4. copies the closure to generated `src-tauri/occt-libs`;
-5. changes dylib IDs and non-system dependencies to `@rpath`;
-6. stages the project license, third-party notices, OCCT license and exception,
+1. runs `scripts/stage-occt-macos.mjs`;
+2. discovers the recursive OCCT/TBB dylib closure with `otool -L`;
+3. copies the closure to generated `src-tauri/occt-libs`;
+4. changes dylib IDs and non-system dependencies to `@rpath`;
+5. stages the project license, third-party notices, OCCT license and exception,
    and the OpenCascade.js license;
-7. generates `src-tauri/tauri.occt.conf.json` for Tauri's frameworks and
+6. generates `src-tauri/tauri.occt.conf.json` for Tauri's frameworks and
    resources;
-8. links the Rust executable against those staged libraries and adds
+7. links the Rust executable against those staged libraries and adds
    `@executable_path/../Frameworks` to `LC_RPATH`;
-9. creates the `.app` and `.dmg`, seals local builds ad hoc when no signing
+8. creates the `.app` and `.dmg`, seals local builds ad hoc when no signing
    identity is supplied, and verifies both the code signature and disk image.
+
+Desktop packaging does not build the browser Rust WASM module. Tauri's
+`build:desktop` mode selects the native engine at build time, Rollup removes the
+browser engine graph, and `scripts/verify-desktop-assets.mjs` rejects any
+accidental `.wasm` output. The checked-in generated declaration at
+`src/engine-wasm/pkg/nbcad_wasm.d.ts` preserves TypeScript checking in a clean
+desktop checkout without requiring `wasm-pack`.
 
 The generated staging directory and config overlay are intentionally ignored.
 The results are:

@@ -15,10 +15,6 @@ if (process.platform !== 'darwin') {
 const projectRoot = realpathSync(join(import.meta.dirname, '..'));
 const signingIdentity = process.env.APPLE_SIGNING_IDENTITY?.trim() || '-';
 const usesAdHocSigning = signingIdentity === '-';
-execFileSync('npm', ['run', 'build:wasm'], {
-  cwd: projectRoot,
-  stdio: 'inherit',
-});
 execFileSync(process.execPath, [join(projectRoot, 'scripts/stage-occt-macos.mjs')], {
   cwd: projectRoot,
   stdio: 'inherit',
