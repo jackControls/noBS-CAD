@@ -760,6 +760,33 @@ pub fn read_heartbeat_generation(session_id: &str) -> Result<u64, String> {
         })
 }
 
+/// Generation fence for the model.json snapshot being (or about to be) loaded.
+///
+/// Prefer `model_generation`, then `published_generation`, from one heartbeat
+/// parse. Fall back to live `generation` only when no publication fields exist
+/// (legacy/minimal heartbeats). Returns `None` when heartbeat is missing or
+/// has no usable generation — callers must not treat that as fresh.
+pub fn read_model_publication_generation(session_id: &str) -> Option<u64> {
+    let body = read_session_file(session_id, "heartbeat.json").ok()?;
+    let parsed: Value = serde_json::from_str(&body).ok()?;
+    model_publication_generation_from_heartbeat(&parsed)
+}
+
+fn model_publication_generation_from_heartbeat(parsed: &Value) -> Option<u64> {
+    read_optional_u64(parsed, "model_generation")
+        .or_else(|| read_optional_u64(parsed, "published_generation"))
+        .or_else(|| {
+            // Legacy heartbeats only carried `generation` as the publish fence.
+            if parsed.get("model_generation").is_none()
+                && parsed.get("published_generation").is_none()
+            {
+                read_optional_u64(parsed, "generation")
+            } else {
+                None
+            }
+        })
+}
+
 /// Structured writer-lock error. MCP never writes model.json (`writeback: false`).
 pub fn generation_conflict_error(
     session_id: &str,
@@ -1378,28 +1405,6 @@ pub fn not_attached_status_json() -> Value {
     })
 }
 
-fn read_heartbeat_publish_fields(session_id: &str) -> (Value, Value, Value, Value) {
-    let Ok(body) = read_session_file(session_id, "heartbeat.json") else {
-        return (Value::Null, Value::Null, Value::Null, Value::Null);
-    };
-    let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
-    (
-        parsed.get("kind").cloned().unwrap_or(Value::Null),
-        parsed
-            .get("published_generation")
-            .cloned()
-            .unwrap_or(Value::Null),
-        parsed
-            .get("model_generation")
-            .cloned()
-            .unwrap_or(Value::Null),
-        parsed
-            .get("active_sketch_generation")
-            .cloned()
-            .unwrap_or(Value::Null),
-    )
-}
-
 /// Highest applied/failed inbox receipt for a session, if any.
 pub fn last_apply_receipt(session_id: &str) -> Result<Option<Value>, String> {
     require_valid_session_id(session_id)?;
@@ -1443,29 +1448,103 @@ pub fn last_apply_receipt(session_id: &str) -> Result<Option<Value>, String> {
 /// Structured status for an attached session: attach generation vs live
 /// heartbeat/engine generation, age/stale, pending inbox, last receipt.
 /// Surfaces only fields the publisher / inbox protocol already writes.
+///
+/// All heartbeat-derived fields come from **one** `heartbeat.json` parse so a
+/// publisher rewrite between reads cannot yield impossible combinations.
 pub fn session_status_json(
     session_id: &str,
     attached_generation: Option<u64>,
 ) -> Result<Value, String> {
     require_valid_session_id(session_id)?;
-    let identity = session_identity(session_id);
-    let heartbeat = heartbeat_meta(session_id);
-    let live_generation = heartbeat.get("generation").and_then(Value::as_u64);
-    let heartbeat_stale = heartbeat
-        .get("stale")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let heartbeat_age_ms = heartbeat.get("age_ms").cloned().unwrap_or(Value::Null);
-    let (heartbeat_kind, published_generation, model_generation, active_sketch_generation) =
-        read_heartbeat_publish_fields(session_id);
+    let heartbeat_body = read_session_file(session_id, "heartbeat.json").ok();
+    let parsed: Value = heartbeat_body
+        .as_deref()
+        .and_then(|body| serde_json::from_str(body).ok())
+        .unwrap_or(json!({}));
+
+    let mut window_id = optional_id(&parsed, "window_id");
+    let mut document_id = optional_id(&parsed, "document_id")
+        .or_else(|| optional_id(&parsed, "project_session_id"));
+    if window_id.is_none() || document_id.is_none() {
+        if let Ok(focus_body) = read_session_file(session_id, "focus.json") {
+            let focus: Value = serde_json::from_str(&focus_body).unwrap_or(json!({}));
+            if window_id.is_none() {
+                window_id = optional_id(&focus, "window_id");
+            }
+            if document_id.is_none() {
+                document_id = optional_id(&focus, "document_id")
+                    .or_else(|| optional_id(&focus, "project_session_id"));
+            }
+        }
+    }
+
+    let live_generation = read_optional_u64(&parsed, "generation");
+    let published_generation = parsed
+        .get("published_generation")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let model_generation = parsed
+        .get("model_generation")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let active_sketch_generation = parsed
+        .get("active_sketch_generation")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let heartbeat_kind = parsed.get("kind").cloned().unwrap_or(Value::Null);
+
+    let (heartbeat, heartbeat_stale, heartbeat_age_ms) = if heartbeat_body.is_some() {
+        let updated_ms = read_optional_u64(&parsed, "updated_ms").unwrap_or(0);
+        let age_ms = now_ms().saturating_sub(updated_ms);
+        let stale = age_ms > HEARTBEAT_STALE_MS;
+        (
+            json!({
+                "updated_ms": updated_ms,
+                "age_ms": age_ms,
+                "stale": stale,
+                "generation": parsed.get("generation").cloned().unwrap_or(Value::Null),
+                "window_id": parsed.get("window_id").cloned().unwrap_or(Value::Null),
+                "document_id": parsed
+                    .get("document_id")
+                    .or_else(|| parsed.get("project_session_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "project_session_id": parsed
+                    .get("project_session_id")
+                    .or_else(|| parsed.get("document_id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }),
+            stale,
+            Value::from(age_ms),
+        )
+    } else {
+        (
+            json!({
+                "updated_ms": null,
+                "age_ms": null,
+                "stale": true,
+                "generation": null,
+                "window_id": null,
+                "document_id": null,
+                "project_session_id": null,
+            }),
+            true,
+            Value::Null,
+        )
+    };
+
+    // Unknown attachment fence is not fresh (recovery attach without heartbeat).
     let stale = match (attached_generation, live_generation) {
         (Some(attached), Some(live)) => attached != live,
         (Some(_), None) => true,
-        (None, _) => false,
+        (None, _) => true,
     };
     let pending = pending_inbox_seqs(session_id)?;
     let last_receipt = last_apply_receipt(session_id)?;
-    let hint = if stale {
+    let hint = if attached_generation.is_none() {
+        "Attached without a usable publication fence; treat snapshot freshness as unknown — cad_refresh after UI publishes heartbeat generations"
+    } else if stale {
         "UI generation advanced since attach/refresh; cad_refresh (or cad_await_apply after submit) to catch up"
     } else {
         "Attached snapshot matches live heartbeat generation"
@@ -1474,11 +1553,8 @@ pub fn session_status_json(
         "attached": true,
         "code": "attached",
         "session_id": session_id,
-        "window_id": identity.window_id,
-        "document_id": identity
-            .document_id
-            .clone()
-            .unwrap_or_else(|| session_id.to_string()),
+        "window_id": window_id,
+        "document_id": document_id.unwrap_or_else(|| session_id.to_string()),
         "attached_generation": attached_generation,
         "generation": live_generation,
         "published_generation": published_generation,
@@ -3104,6 +3180,81 @@ mod tests {
         assert_eq!(detached["attached"], false);
         assert_eq!(detached["code"], "not_attached");
         assert_eq!(detached["writeback"], false);
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_status_derives_all_fields_from_one_heartbeat_snapshot() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-status-one-hb-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{unique}","window_id":"main","document_id":"tab-a","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let status = session_status_json(&unique, Some(1)).unwrap();
+        assert_eq!(status["generation"], 2);
+        assert_eq!(status["published_generation"], 1);
+        assert_eq!(status["model_generation"], 1);
+        assert_eq!(status["heartbeat_kind"], "engine_revision");
+        assert_eq!(status["window_id"], "main");
+        assert_eq!(status["document_id"], "tab-a");
+        assert_eq!(status["heartbeat"]["generation"], 2);
+        assert_eq!(status["stale"], true);
+        assert_eq!(
+            read_model_publication_generation(&unique),
+            Some(1),
+            "publication fence prefers model_generation over live generation"
+        );
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_status_unknown_attached_generation_is_stale_not_fresh() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-status-unknown-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(&unique, "model.json", r#"{"version":1}"#).unwrap();
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":1,"published_generation":1,"model_generation":1,"session_id":"{unique}","kind":"snapshot"}}"#,
+                now_ms()
+            ),
+        )
+        .unwrap();
+
+        let status = session_status_json(&unique, None).unwrap();
+        assert_eq!(status["stale"], true);
+        assert!(status["attached_generation"].is_null());
+        assert_eq!(status["generation"], 1);
+        let hint = status["hint"].as_str().unwrap_or("");
+        assert!(
+            hint.contains("publication fence") || hint.contains("unknown"),
+            "hint must not claim a fresh match when fence is unknown: {hint}"
+        );
+        assert!(!hint.contains("matches live"));
+
+        // Recovery attach with no heartbeat at all.
+        let orphan = test_session_uuid();
+        write_session(&orphan, "model.json", r#"{"version":1}"#).unwrap();
+        let orphan_status = session_status_json(&orphan, None).unwrap();
+        assert_eq!(orphan_status["stale"], true);
+        assert!(orphan_status["generation"].is_null());
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);

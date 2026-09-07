@@ -126,8 +126,9 @@ struct CadServer {
     /// Session id last successfully loaded via read-only `cad_attach` / `cad_refresh`.
     /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
-    /// Heartbeat `generation` captured at the last successful attach/refresh.
-    /// Compared by `cad_session_status` against the live publisher generation.
+    /// Model publication generation captured at the last successful attach/refresh
+    /// (`model_generation` / `published_generation` fence, not live engine
+    /// `generation`). Compared by `cad_session_status` against live generation.
     attached_generation: Option<u64>,
     pending_recompute_transaction: Option<u64>,
     /// Forward record of successful mutating `tools/call` entries for `cad_script`.
@@ -391,10 +392,13 @@ impl CadServer {
         }
         let identity = session::resolve_attach_target(session_arg, window_arg, document_arg)?;
         let session_id = identity.session_id.as_str();
+        // Capture publication fence before model load so a concurrent publish
+        // cannot pair a new live generation with an older model.json.
+        let publication_generation = session::read_model_publication_generation(session_id);
         self.load_snapshot_model(session_id)?;
         self.apply_snapshot_focus(session_id);
         self.attached_document_id = Some(session_id.to_string());
-        self.attached_generation = session::read_heartbeat_generation(session_id).ok();
+        self.attached_generation = publication_generation;
         Ok(json!({
             "attached": true,
             "session_id": session_id,
@@ -413,9 +417,10 @@ impl CadServer {
         let Some(session_id) = self.attached_document_id.clone() else {
             return Err("no session attached; call cad_attach first".to_string());
         };
+        let publication_generation = session::read_model_publication_generation(&session_id);
         self.load_snapshot_model(&session_id)?;
         self.apply_snapshot_focus(&session_id);
-        self.attached_generation = session::read_heartbeat_generation(&session_id).ok();
+        self.attached_generation = publication_generation;
         Ok(json!({
             "refreshed": true,
             "session_id": session_id,
@@ -520,9 +525,10 @@ impl CadServer {
             .unwrap_or(false);
         let status = result.get("status").and_then(Value::as_str).unwrap_or("");
         if refresh && status == "applied" && published && model_published {
+            let publication_generation = session::read_model_publication_generation(&session_id);
             self.load_snapshot_model(&session_id)?;
             self.apply_snapshot_focus(&session_id);
-            self.attached_generation = session::read_heartbeat_generation(&session_id).ok();
+            self.attached_generation = publication_generation;
             if let Some(object) = result.as_object_mut() {
                 object.insert("refreshed".to_string(), Value::Bool(true));
                 object.insert(
@@ -4755,6 +4761,55 @@ mod tests {
         let headless = server.call_tool("cad_session_status", json!({})).unwrap();
         assert_eq!(headless["attached"], false);
         assert_eq!(headless["code"], "not_attached");
+
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cad_session_status_engine_revision_attach_reports_model_fence_stale() {
+        // Jack #84: generation=2, published_generation=1, model_generation=1 —
+        // cad_attach loads model gen 1; status must not claim stale:false.
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-status-engine-rev-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (_update, _) = write_box_session(&unique);
+        session::write_session(
+            &unique,
+            "heartbeat.json",
+            &format!(
+                r#"{{"updated_ms":{},"generation":2,"published_generation":1,"model_generation":1,"active_sketch_generation":null,"session_id":"{unique}","kind":"engine_revision","session_mode":"ui_owned_apply"}}"#,
+                session::now_ms()
+            ),
+        )
+        .unwrap();
+
+        let mut server = CadServer::new().unwrap();
+        let attached = server
+            .call_tool("cad_attach", json!({"session_id": unique}))
+            .unwrap();
+        assert_eq!(
+            attached["attached_generation"], 1,
+            "attach must record model publication generation, not live engine generation"
+        );
+        assert_eq!(server.attached_generation, Some(1));
+
+        let status = server.call_tool("cad_session_status", json!({})).unwrap();
+        assert_eq!(status["attached_generation"], 1);
+        assert_eq!(status["generation"], 2);
+        assert_eq!(status["published_generation"], 1);
+        assert_eq!(status["model_generation"], 1);
+        assert_eq!(status["heartbeat_kind"], "engine_revision");
+        assert_eq!(
+            status["stale"], true,
+            "loaded model gen 1 must be stale vs live engine generation 2"
+        );
+        let hint = status["hint"].as_str().unwrap_or("");
+        assert!(
+            !hint.contains("matches live"),
+            "must not claim fresh match: {hint}"
+        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
