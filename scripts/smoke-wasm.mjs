@@ -7,13 +7,13 @@
  * finish. Run after `npm run build:wasm`.
  */
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgDir = path.join(here, '..', 'src', 'engine-wasm', 'pkg');
 
-const wasm = await import(path.join(pkgDir, 'nbcad_wasm.js'));
+const wasm = await import(pathToFileURL(path.join(pkgDir, 'nbcad_wasm.js')).href);
 // The web target normally fetches the .wasm; in Node we hand it the bytes.
 await wasm.default({ module_or_path: await readFile(path.join(pkgDir, 'nbcad_wasm_bg.wasm')) });
 

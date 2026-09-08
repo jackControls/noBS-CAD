@@ -9,9 +9,10 @@
  */
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const BASE = 'http://localhost:7199';
-const SHOTS = new URL('../docs/qa/m1b/', import.meta.url).pathname;
+const SHOTS = fileURLToPath(new URL('../docs/qa/m1b/', import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
 let failures = 0;
