@@ -1463,8 +1463,8 @@ pub fn session_status_json(
         .unwrap_or(json!({}));
 
     let mut window_id = optional_id(&parsed, "window_id");
-    let mut document_id = optional_id(&parsed, "document_id")
-        .or_else(|| optional_id(&parsed, "project_session_id"));
+    let mut document_id =
+        optional_id(&parsed, "document_id").or_else(|| optional_id(&parsed, "project_session_id"));
     if window_id.is_none() || document_id.is_none() {
         if let Ok(focus_body) = read_session_file(session_id, "focus.json") {
             let focus: Value = serde_json::from_str(&focus_body).unwrap_or(json!({}));
