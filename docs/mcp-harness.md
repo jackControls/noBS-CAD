@@ -145,6 +145,11 @@ See [proposed-architecture.md](proposed-architecture.md).
 
 ## Tutor quests (CI goldens)
 
+For editable parts designed through ordinary MCP calls, see the
+[part-design examples](../mcp-server/examples/part-design/README.md): mounting
+plate, revolved spacer, and angle bracket. Their stdio integration test checks
+dimensions, volume, replay, model restoration and STEP round trips.
+
 Three headless MCP quests score the first education path from
 [#16](https://github.com/jackControls/noBS-CAD/issues/16).
 They wrap the built-in print-in-place parts (`demo_export_pip_3mf`) —

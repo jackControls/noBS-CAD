@@ -1,0 +1,164 @@
+{
+  "id": "mounting-plate",
+  "title": "Four-hole mounting plate",
+  "intent": "Make a 60 × 40 × 5 mm plate with four 5 mm through holes, 10 mm from each edge.",
+  "calls": [
+    {
+      "name": "sketch_begin",
+      "arguments": {
+        "plane": {
+          "type": "origin_plane",
+          "plane": "xy"
+        }
+      }
+    },
+    {
+      "name": "sketch_add_rectangle_locked",
+      "arguments": {
+        "mode": "two_point",
+        "anchor": {
+          "x": -30,
+          "y": -20
+        },
+        "corner_hint": {
+          "x": 30,
+          "y": 20
+        },
+        "width_mm": 60,
+        "height_mm": 40,
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_finish",
+      "arguments": {}
+    },
+    {
+      "name": "solid_extrude",
+      "arguments": {
+        "sketch_name": "Sketch1",
+        "profile_indices": [
+          0
+        ],
+        "operation": "new_body",
+        "extent": {
+          "type": "distance",
+          "distance": 5
+        },
+        "taper_angle_deg": 0,
+        "flip": false,
+        "target_body_ids": []
+      }
+    },
+    {
+      "name": "solid_hole",
+      "arguments": {
+        "body_id": "$body_id",
+        "face_id": "$top_face_id",
+        "position": {
+          "$top_uv": [
+            -20,
+            -10,
+            5
+          ]
+        },
+        "diameter": 5,
+        "extent": {
+          "type": "through_all"
+        },
+        "style": "simple",
+        "counterbore_diameter": 0,
+        "counterbore_depth": 0,
+        "countersink_diameter": 0,
+        "countersink_angle_deg": 90,
+        "flip": false
+      }
+    },
+    {
+      "name": "solid_hole",
+      "arguments": {
+        "body_id": "$body_id",
+        "face_id": "$top_face_id",
+        "position": {
+          "$top_uv": [
+            20,
+            -10,
+            5
+          ]
+        },
+        "diameter": 5,
+        "extent": {
+          "type": "through_all"
+        },
+        "style": "simple",
+        "counterbore_diameter": 0,
+        "counterbore_depth": 0,
+        "countersink_diameter": 0,
+        "countersink_angle_deg": 90,
+        "flip": false
+      }
+    },
+    {
+      "name": "solid_hole",
+      "arguments": {
+        "body_id": "$body_id",
+        "face_id": "$top_face_id",
+        "position": {
+          "$top_uv": [
+            20,
+            10,
+            5
+          ]
+        },
+        "diameter": 5,
+        "extent": {
+          "type": "through_all"
+        },
+        "style": "simple",
+        "counterbore_diameter": 0,
+        "counterbore_depth": 0,
+        "countersink_diameter": 0,
+        "countersink_angle_deg": 90,
+        "flip": false
+      }
+    },
+    {
+      "name": "solid_hole",
+      "arguments": {
+        "body_id": "$body_id",
+        "face_id": "$top_face_id",
+        "position": {
+          "$top_uv": [
+            -20,
+            10,
+            5
+          ]
+        },
+        "diameter": 5,
+        "extent": {
+          "type": "through_all"
+        },
+        "style": "simple",
+        "counterbore_diameter": 0,
+        "counterbore_depth": 0,
+        "countersink_diameter": 0,
+        "countersink_angle_deg": 90,
+        "flip": false
+      }
+    }
+  ],
+  "expected": {
+    "min": [
+      -30,
+      -20,
+      0
+    ],
+    "max": [
+      30,
+      20,
+      5
+    ],
+    "volume": 11607.300918301276,
+    "volume_relative_tolerance": 0.001
+  }
+}

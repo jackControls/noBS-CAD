@@ -1,0 +1,135 @@
+{
+  "id": "angle-bracket",
+  "title": "Extruded angle bracket",
+  "intent": "Make a 40 × 30 mm L section with 5 mm walls, extruded 20 mm wide.",
+  "calls": [
+    {
+      "name": "sketch_begin",
+      "arguments": {
+        "plane": {
+          "type": "origin_plane",
+          "plane": "xy"
+        }
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 0,
+          "y": 0
+        },
+        "to_raw": {
+          "x": 40,
+          "y": 0
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 40,
+          "y": 0
+        },
+        "to_raw": {
+          "x": 40,
+          "y": 5
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 40,
+          "y": 5
+        },
+        "to_raw": {
+          "x": 5,
+          "y": 5
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 5,
+          "y": 5
+        },
+        "to_raw": {
+          "x": 5,
+          "y": 30
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 5,
+          "y": 30
+        },
+        "to_raw": {
+          "x": 0,
+          "y": 30
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_add_line",
+      "arguments": {
+        "from": {
+          "x": 0,
+          "y": 30
+        },
+        "to_raw": {
+          "x": 0,
+          "y": 0
+        },
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_finish",
+      "arguments": {}
+    },
+    {
+      "name": "solid_extrude",
+      "arguments": {
+        "sketch_name": "Sketch1",
+        "profile_indices": [
+          0
+        ],
+        "operation": "new_body",
+        "extent": {
+          "type": "distance",
+          "distance": 20
+        },
+        "taper_angle_deg": 0,
+        "flip": false,
+        "target_body_ids": []
+      }
+    }
+  ],
+  "expected": {
+    "min": [
+      0,
+      0,
+      0
+    ],
+    "max": [
+      40,
+      30,
+      20
+    ],
+    "volume": 6500,
+    "volume_relative_tolerance": 0.001
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "id": "spacer",
+  "title": "Revolved spacer",
+  "intent": "Revolve an annular spacer, 20 mm outer diameter, 10 mm bore, and 12 mm long. Axis is global Y.",
+  "calls": [
+    {
+      "name": "sketch_begin",
+      "arguments": {
+        "plane": {
+          "type": "origin_plane",
+          "plane": "xy"
+        }
+      }
+    },
+    {
+      "name": "sketch_add_rectangle_locked",
+      "arguments": {
+        "mode": "two_point",
+        "anchor": {
+          "x": 5,
+          "y": 0
+        },
+        "corner_hint": {
+          "x": 10,
+          "y": 12
+        },
+        "width_mm": 5,
+        "height_mm": 12,
+        "ctrl_held": true
+      }
+    },
+    {
+      "name": "sketch_finish",
+      "arguments": {}
+    },
+    {
+      "name": "solid_revolve",
+      "arguments": {
+        "sketch_name": "Sketch1",
+        "profile_indices": [
+          0
+        ],
+        "axis_origin": {
+          "x": 0,
+          "y": 0
+        },
+        "axis_direction": {
+          "x": 0,
+          "y": 1
+        },
+        "axis_line_entity_id": null,
+        "angle_deg": 360,
+        "flip": false,
+        "operation": "new_body",
+        "target_body_ids": []
+      }
+    }
+  ],
+  "expected": {
+    "min": [
+      -10,
+      0,
+      -10
+    ],
+    "max": [
+      10,
+      12,
+      10
+    ],
+    "volume": 2827.4333882308138,
+    "volume_relative_tolerance": 0.01
+  }
+}
