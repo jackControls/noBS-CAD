@@ -4115,10 +4115,7 @@ mod tests {
             .call_tool("cad_attach", json!({"session_id": "My Document"}))
             .is_err());
         // Missing model must refuse attach (and leave nothing attached).
-        let missing = format!(
-            "00000000-0000-4000-8000-{:012x}",
-            session::now_ms().wrapping_add(1) & 0xffffffffffff
-        );
+        let missing = session::test_session_uuid();
         std::fs::create_dir_all(dir.join(&missing)).unwrap();
         assert!(server
             .call_tool("cad_attach", json!({"session_id": missing}))
