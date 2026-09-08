@@ -12,7 +12,7 @@ const binary = option('--server') ?? process.env.NBCAD_MCP_BIN;
 assert(binary, 'Use --server /path/to/nbcad-mcp or set NBCAD_MCP_BIN');
 const output = option('--out');
 
-class Client {
+export class Client {
   constructor() {
     this.next = 0;
     this.pending = new Map();
@@ -90,7 +90,7 @@ function geometry(scene, expected) {
   return { min, max, volume_mm3: volume, triangles: indices.length / 3 };
 }
 
-function resolveArguments(value, scene) {
+export function resolveArguments(value, scene) {
   const body = scene?.bodies[0];
   const top = () => {
     assert(body, 'body required for face selection');
@@ -165,4 +165,6 @@ async function run(file) {
   } finally { client.close(); replay?.close(); restored?.close(); imported?.close(); }
 }
 
-for (const file of ['mounting-plate.json', 'spacer.json', 'angle-bracket.json']) await run(file);
+if (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  for (const file of ['mounting-plate.json', 'spacer.json', 'angle-bracket.json']) await run(file);
+}

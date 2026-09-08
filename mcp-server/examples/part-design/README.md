@@ -34,6 +34,9 @@ the server's recorded `script.json`, `checks.json`, and STEP, STL and 3MF files.
 Load `model.json` through `cad_load_project_model` to keep feature history.
 STEP import preserves solid geometry but does not reconstruct that history.
 
+For components, repeated instances, mating joints, and an edit/reopen check with
+retained feature history, run the [parametric assembly golden](ASSEMBLY.md).
+
 To package the saved models for File → Open in the app (after `npm ci`):
 
 ```sh
