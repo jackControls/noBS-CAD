@@ -42,15 +42,17 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
-  VCPKG_INSTALL_ROOT: ${{ github.workspace }}/vcpkg_installed
-  VCPKG_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
 
 jobs:
   mcp-tests:
     runs-on: windows-2025
     timeout-minutes: 180
+    # Cache versions include path strings: match desktop Windows paths exactly.
+    env:
+      VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
+      VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+      VCPKG_INSTALL_ROOT: ${{ github.workspace }}\vcpkg_installed
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
     steps:
       - uses: actions/checkout@v4
 
