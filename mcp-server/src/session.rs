@@ -1598,10 +1598,19 @@ pub fn publish_applied_snapshot(session_id: &str, model_json: &str) -> Result<u6
     Ok(next)
 }
 
-/// Deterministic-looking UUID v4 for tests (unique via `now_ms` nibble).
+/// Test UUIDs remain distinct even when sessions are created in one clock tick.
 #[cfg(test)]
 pub fn test_session_uuid() -> String {
-    format!("00000000-0000-4000-8000-{:012x}", now_ms() & 0xffffffffffff)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "{:08x}-{:04x}-4{:03x}-8000-{:012x}",
+        now_ms() as u32,
+        std::process::id() & 0xffff,
+        (std::process::id() >> 16) & 0xfff,
+        serial
+    )
 }
 
 /// Serialize tests that mutate `NBCAD_SESSION_DIR`.
@@ -1611,6 +1620,19 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_session_ids_are_unique_in_a_burst() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..4096 {
+            let id = test_session_uuid();
+            assert!(is_valid_session_id(&id));
+            assert!(
+                seen.insert(id),
+                "test sessions must never share a directory"
+            );
+        }
+    }
 
     fn write_process_lease(root: &Path, process_id: &str, updated_ms: u64, windows: Value) {
         let processes = root.join("_ui").join("processes");
