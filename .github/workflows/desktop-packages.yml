@@ -47,6 +47,9 @@ jobs:
       - name: Test constraint glyph anchors and camera-scale layout
         run: npm run test:constraint-glyphs
 
+      - name: Test live MCP snapshot revision boundaries
+        run: npx tsx scripts/sessionSnapshot.test.ts
+
       - name: Verify desktop frontend builds without browser WASM
         run: npm run build:desktop
 

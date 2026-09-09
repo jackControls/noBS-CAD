@@ -9,6 +9,7 @@
  * active tool).
  */
 import { create } from 'zustand';
+import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
@@ -3080,6 +3081,10 @@ export async function exportProjectModelWithVisibility(
   providedEngine?: Engine,
 ): Promise<string> {
   const engine = providedEngine ?? await getEngine();
-  await engine.setProjectVisibility(useAppStore.getState().projectVisibility);
+  await synchronizeSnapshotVisibility(
+    useAppStore.getState().projectVisibility,
+    () => engine.projectVisibility(),
+    visibility => engine.setProjectVisibility(visibility),
+  );
   return engine.exportProjectModel();
 }
