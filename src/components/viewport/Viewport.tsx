@@ -11795,7 +11795,30 @@ export function Viewport() {
     };
 
     const api: ViewportCameraApi = {
+      bounds: () => {
+        const rect = surface.domElement.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      },
+      pointer: (action, point, shift = false) => {
+        const rect = surface.domElement.getBoundingClientRect();
+        if (!point.every(Number.isFinite) || point[0] < rect.left || point[0] > rect.right || point[1] < rect.top || point[1] > rect.bottom) throw new Error('Point is outside the viewport');
+        const init = { clientX: point[0], clientY: point[1], pointerId: 1, pointerType: 'mouse', button: 0,
+          shiftKey: shift, bubbles: true, cancelable: true, isPrimary: true };
+        surface.domElement.dispatchEvent(new PointerEvent('pointermove', init));
+        if (action !== 'move') {
+          surface.domElement.dispatchEvent(new PointerEvent('pointerdown', { ...init, buttons: 1 }));
+          surface.domElement.dispatchEvent(new PointerEvent('pointerup', init));
+          surface.domElement.dispatchEvent(new MouseEvent('click', { ...init, detail: 1 }));
+          if (action === 'double_click') surface.domElement.dispatchEvent(new MouseEvent('dblclick', { ...init, detail: 2 }));
+        }
+      },
       isAnimating: () => camAnim !== null,
+      advanceAnimation: () => {
+        if (camAnim) {
+          stepCameraAnimation(performance.now());
+          syncNativeViewportCamera(camera, controls.target);
+        }
+      },
       getSnapshot: () => ({
         position: camera.position.toArray() as [number, number, number],
         target: controls.target.toArray() as [number, number, number],

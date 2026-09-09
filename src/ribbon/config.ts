@@ -564,7 +564,7 @@ export const SOLID_TAB: RibbonTab = {
     {
       id: 'selection',
       labelKey: 'ribbon.panels.selection',
-      buttons: [{ id: 'select', labelKey: 'ribbon.solid.select', icon: 'select', enabled: true }],
+      buttons: [{ id: 'select', labelKey: 'ribbon.solid.select', icon: 'select', enabled: true, action: 'selectTool' }],
     },
   ],
 };

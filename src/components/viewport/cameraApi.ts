@@ -25,10 +25,14 @@ export interface SixDofMotion {
 }
 
 export interface ViewportCameraApi {
+  pointer(action: 'move' | 'click' | 'double_click', point: [number, number], shift?: boolean): void;
+  bounds(): { x: number; y: number; width: number; height: number };
   /** Current camera pose (copies; safe to mutate). */
   getSnapshot(): CameraSnapshot;
   /** True until the renderer has completed the current camera animation. */
   isAnimating(): boolean;
+  /** Native wake events advance navigation even while WebView RAF is suspended. */
+  advanceAnimation(): void;
   /** Animated snap to look at the target from a world direction. */
   snapToDirection(direction: [number, number, number]): void;
   /** Animated return to the default axonometric home view. */

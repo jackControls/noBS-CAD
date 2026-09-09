@@ -50,6 +50,12 @@ jobs:
       - name: Verify desktop frontend builds without browser WASM
         run: npm run build:desktop
 
+      - name: Install Chromium for UI contract checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Test live UI control contracts and product command coverage
+        run: node scripts/mcp-ui-contract.mjs
+
   classify_changes:
     name: Classify desktop build inputs
     runs-on: ubuntu-latest

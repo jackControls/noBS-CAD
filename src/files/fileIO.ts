@@ -138,10 +138,10 @@ export async function writeSaveTarget(target: SaveTarget, bytes: Uint8Array): Pr
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
-export async function chooseOpenFile(type: SaveType): Promise<OpenedFile | null> {
+export async function chooseOpenFile(type: SaveType, pathOverride?: string): Promise<OpenedFile | null> {
   if (isTauriRuntime()) {
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const selected = await withNativeViewportSuspended(() => open({
+    const selected = pathOverride ?? await withNativeViewportSuspended(() => open({
         multiple: false,
         directory: false,
         filters: [

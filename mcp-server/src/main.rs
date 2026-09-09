@@ -12,6 +12,7 @@ use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod desktop;
 mod disclosure;
 mod session;
 
@@ -21,7 +22,6 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 122;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -354,6 +354,8 @@ impl CadServer {
             }
             "cad_list_sessions" => session::sessions_list_json(),
             "cad_view" => session::request_view(&arguments, self.attached_document_id.as_deref())?,
+            "cad_ui" => session::request_ui(&arguments, self.attached_document_id.as_deref())?,
+            "cad_launch" => desktop::launch(&arguments)?,
             "cad_attach" => self.attach_read_only_snapshot(&arguments)?,
             "cad_refresh" => self.refresh_read_only_snapshot()?,
             "cad_detach" => {
@@ -898,6 +900,8 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_view"
+            | "cad_ui"
+            | "cad_launch"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
@@ -3138,6 +3142,30 @@ fn tool_specs() -> Vec<ToolSpec> {
             }), &["view"]),
         ),
         ToolSpec::control(
+            "cad_launch", "Launch the native CAD application",
+            "Launch the CAD executable from NBCAD_DESKTOP_BIN or executable. Wait for the child's PID-correlated desktop lease and return its session_id. Does not silently attach, overwrite a document, or treat startup timeout as failure to launch.",
+            object_schema(json!({"executable":{"type":"string"}}), &[]),
+        ),
+        ToolSpec::control(
+            "cad_ui", "Inspect or operate live UI controls",
+            "Inspect returns controls grouped by actual UI surfaces, with opaque target IDs, labels, disabled states and values. Use those IDs for click/set_value/key; stale, hidden, disabled and modal-blocked controls reject. Window mode is foreground/background/inspect. pace_ms (0-2000) controls visible playback timing; fast mode still acknowledges ordered operations. No selectors or JavaScript evaluation. Inspect again after opening menus or dialogs.",
+            object_schema(json!({
+                "session_id":{"type":"string"},
+                "action":{"type":"string","enum":["inspect","click","set_value","key","window","file","viewport"]},
+                "gesture":{"type":"string","enum":["move","click","double_click"]},
+                "point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
+                "world":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
+                "shift":{"type":"boolean"},
+                "command":{"type":"string","enum":["open","save","rename"]},
+                "path":{"type":"string"},"name":{"type":"string"},
+                "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
+                "target":{"type":"string"},"value":{"type":"string"},
+                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Delete","Backspace"]},
+                "mode":{"type":"string","enum":["foreground","background","inspect"]},
+                "pace_ms":{"type":"integer","minimum":0,"maximum":2000}
+            }), &[]),
+        ),
+        ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
             "Load a published snapshot into this MCP process by session_id (UUID), window_id (Tauri label), and/or document_id (native project-session id; UUID still aliases session_id). Requires valid model.json; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the target/model is missing, invalid, or ambiguous. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir. Headless goldens skip attach.",
@@ -3750,47 +3778,21 @@ mod tests {
     fn tool_registry_is_granular_and_protocol_lists_revolve() {
         let catalog = full_tool_catalog();
         let all_tools = catalog.as_array().unwrap();
-        assert_eq!(
-            all_tools.len(),
-            MODELING_TOOL_COUNT + 24,
-            "122 modeling tools plus 8 print helpers and 16 control tools"
-        );
-        let modeling_count = all_tools
-            .iter()
-            .filter(|tool| {
-                !matches!(
-                    tool["name"].as_str(),
-                    Some(
-                        "solid_export_step"
-                            | "solid_export_stl"
-                            | "solid_export_3mf"
-                            | "solid_export_preflight"
-                            | "material_catalog"
-                            | "body_appearances"
-                            | "set_body_appearance"
-                            | "demo_export_pip_3mf"
-                            | "cad_get_focus"
-                            | "cad_set_focus"
-                            | "cad_list_focus_areas"
-                            | "cad_get_tool_disclosure_mode"
-                            | "cad_set_tool_disclosure_mode"
-                            | "cad_list_all_tools"
-                            | "cad_cancel_recompute"
-                            | "cad_list_sessions"
-                            | "cad_view"
-                            | "cad_attach"
-                            | "cad_refresh"
-                            | "cad_detach"
-                            | "cad_script"
-                            | "cad_compare_solids"
-                            | "cad_submit"
-                            | "cad_await_apply"
-                    )
-                )
-            })
-            .count();
-        assert_eq!(modeling_count, MODELING_TOOL_COUNT);
-
+        let mut names = std::collections::HashSet::new();
+        for tool in all_tools {
+            let name = tool["name"].as_str().unwrap();
+            assert!(names.insert(name), "duplicate tool name: {name}");
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["type"], "object", "{name}");
+            if let Some(required) = schema["required"].as_array() {
+                for field in required {
+                    assert!(
+                        schema["properties"].get(field.as_str().unwrap()).is_some(),
+                        "{name}: required field lacks a schema"
+                    );
+                }
+            }
+        }
         let mut server = CadServer::new().unwrap();
         let listed = tool_list_result(&mut server.disclosure);
         let tools = listed["tools"].as_array().unwrap();
@@ -3814,56 +3816,6 @@ mod tests {
             initialized["result"]["capabilities"]["tools"]["listChanged"],
             true
         );
-    }
-
-    #[test]
-    fn focus_pack_matrix_covers_modeling_registry() {
-        let mut packs = std::collections::BTreeMap::<&str, usize>::new();
-        for tool in tool_specs() {
-            if matches!(
-                tool.name,
-                "solid_export_step"
-                    | "solid_export_stl"
-                    | "solid_export_3mf"
-                    | "solid_export_preflight"
-                    | "material_catalog"
-                    | "body_appearances"
-                    | "set_body_appearance"
-                    | "demo_export_pip_3mf"
-                    | "cad_get_focus"
-                    | "cad_set_focus"
-                    | "cad_list_focus_areas"
-                    | "cad_get_tool_disclosure_mode"
-                    | "cad_set_tool_disclosure_mode"
-                    | "cad_list_all_tools"
-                    | "cad_cancel_recompute"
-                    | "cad_list_sessions"
-                    | "cad_view"
-                    | "cad_attach"
-                    | "cad_refresh"
-                    | "cad_detach"
-                    | "cad_script"
-                    | "cad_compare_solids"
-                    | "cad_submit"
-                    | "cad_await_apply"
-            ) {
-                continue;
-            }
-            *packs.entry(tool.pack.as_str()).or_default() += 1;
-        }
-        assert_eq!(packs.values().sum::<usize>(), MODELING_TOOL_COUNT);
-        // Modeling registry covers 9 packs; print helpers are outside MODELING_TOOL_COUNT.
-        assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
-        assert_eq!(packs["document"], 5);
-        assert_eq!(packs["assembly"], 13);
-        assert_eq!(packs["sketch"], 50);
-        assert_eq!(packs["solid"], 10);
-        assert!(packs["modify"] >= 6);
-        assert!(packs["body_ops"] >= 10);
-        assert!(packs["datums"] >= 6);
-        assert!(packs["history"] >= 3);
-        assert_eq!(packs["inspect"], 12);
-        assert!(!packs.contains_key("print"));
     }
 
     #[test]

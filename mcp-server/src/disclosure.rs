@@ -490,6 +490,8 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_view"
+            | "cad_ui"
+            | "cad_launch"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"

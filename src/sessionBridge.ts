@@ -14,8 +14,11 @@
  * are dead-lettered. Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applySessionView } from './sessionView';
+import { SerialPlayback, presentMcpOperation, wakePlayback } from './mcpPlayback';
+import { getSessionCamera } from './components/viewport/cameraApi';
 import type { SolidUpdateDto } from './engine/types';
 import {
   exportProjectModelWithVisibility,
@@ -181,6 +184,7 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
+    if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
       if (result.result?.scene && result.result.document) {
         useAppStore.getState().applySolidUpdate(result.result);
@@ -192,6 +196,7 @@ async function applyInboxNow(): Promise<void> {
       // Native already archived the seq and bumped engine_revision. Publish
       // even if leftover store refresh throws so cad_refresh sees the live
       // engine. Next applyInboxNow is a no-op on the archived seq.
+      await presentMcpOperation(result.name ?? 'Model operation');
       scheduleSessionBridgePublish();
     }
   } catch (error) {
@@ -237,7 +242,7 @@ export function startSessionBridge(): void {
       // reopens the UI→JS race and would double-count after native apply.
       // inboxApplying still guards applyInboxNow re-entry; refreshAfterInboxApply
       // keeps dirty:true (never loadDocument).
-      scheduleSessionBridgePublish();
+      if (!inboxApplying) scheduleSessionBridgePublish();
     }
   });
   scheduleSessionBridgePublish();
@@ -246,9 +251,16 @@ export function startSessionBridge(): void {
     void heartbeatNow();
   }, 10_000);
   if (inboxTimer) clearInterval(inboxTimer);
-  inboxTimer = setInterval(() => {
-    void applyInboxNow();
-    void applySessionView();
-  }, 250);
-  void applyInboxNow();
+  const playback = new SerialPlayback();
+  const tick = () => playback.tick(async () => {
+    await applySessionView();
+    await applyInboxNow();
+  });
+  void listen('mcp-work', () => {
+    getSessionCamera()?.advanceAnimation();
+    wakePlayback();
+    void tick();
+  });
+  inboxTimer = setInterval(() => { void tick(); }, 250);
+  void tick();
 }

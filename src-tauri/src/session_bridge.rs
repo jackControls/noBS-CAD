@@ -946,6 +946,7 @@ impl SessionBridgeState {
         }
         let body = serde_json::to_string_pretty(&json!({
             "process_instance_id": self.process_instance_id,
+            "pid": std::process::id(),
             "updated_ms": now_ms(),
             "windows": windows,
         }))
@@ -1244,7 +1245,88 @@ pub fn mcp_session_bridge_write(
     state.write_for_window(window.label(), parsed)
 }
 
-/// Poll only the active document's expiring camera requests. Geometry is untouched.
+/// Wake the UI from native events, rather than depending on background WebView
+/// timers. The UI remains the owner of live apply and presentation ordering.
+pub fn start_mcp_wake_loop(app: tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    std::thread::spawn(move || {
+        let mut awake_until = HashMap::<String, u64>::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            let windows = app.webview_windows();
+            if windows.is_empty() {
+                break;
+            }
+            let state = app.state::<SessionBridgeState>();
+            let targets = match state.publishers.lock() {
+                Ok(publishers) => publishers
+                    .iter()
+                    .filter_map(|(label, publisher)| {
+                        publisher
+                            .active_project_session_id
+                            .as_ref()
+                            .and_then(|id| publisher.by_project.get(id))
+                            .map(|project| (label.clone(), project.session_id.clone()))
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => break,
+            };
+            for (label, session_id) in targets {
+                let root = session_root().join(session_id);
+                let has_work = [root.join("views"), root.join("inbox")].iter().any(|dir| {
+                    fs::read_dir(dir).ok().is_some_and(|entries| {
+                        entries.filter_map(Result::ok).any(|entry| {
+                            entry.file_type().is_ok_and(|kind| kind.is_file())
+                                && entry.path().extension().is_some_and(|ext| ext == "json")
+                                && !entry
+                                    .file_name()
+                                    .to_string_lossy()
+                                    .ends_with(".result.json")
+                        })
+                    })
+                });
+                if has_work {
+                    awake_until.insert(label.clone(), now_ms() + 3_000);
+                }
+                if awake_until
+                    .get(&label)
+                    .is_some_and(|until| *until > now_ms())
+                {
+                    if let Some(window) = windows.get(&label) {
+                        let _ = window.emit("mcp-work", ());
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Window state is inspected after requesting the transition; focus is subject
+/// to the operating system's foreground policy, never inferred from success.
+#[tauri::command]
+pub fn mcp_path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+#[tauri::command]
+pub fn mcp_window_control(window: tauri::WebviewWindow, mode: String) -> Result<Value, String> {
+    match mode.as_str() {
+        "foreground" => {
+            window.show().map_err(|e| e.to_string())?;
+            window.unminimize().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
+        "background" => window.minimize().map_err(|e| e.to_string())?,
+        "inspect" => (),
+        _ => return Err("mode must be foreground, background, or inspect".into()),
+    }
+    Ok(
+        json!({"visible": window.is_visible().map_err(|e| e.to_string())?,
+        "minimized": window.is_minimized().map_err(|e| e.to_string())?,
+        "focused": window.is_focused().map_err(|e| e.to_string())?}),
+    )
+}
+
 #[tauri::command]
 pub fn mcp_session_bridge_view(
     window: tauri::WebviewWindow,
@@ -1259,12 +1341,25 @@ pub fn mcp_session_bridge_view(
     let Some(publisher) = publishers.get_mut(window.label()) else {
         return Ok(Value::Null);
     };
-    if publisher.active_project_session_id.as_deref()
-        != Some(engine.active_project_session_id().as_str())
-    {
-        return Ok(Value::Null);
-    }
-    let session_id = publisher.active_mut().session_id.clone();
+    let session_id = if let Some(response) = response.as_ref() {
+        let requested = response
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or("missing response session")?;
+        publisher
+            .by_project
+            .values()
+            .find(|project| project.session_id == requested)
+            .map(|project| project.session_id.clone())
+            .ok_or("response belongs to another window")?
+    } else {
+        if publisher.active_project_session_id.as_deref()
+            != Some(engine.active_project_session_id().as_str())
+        {
+            return Ok(Value::Null);
+        }
+        publisher.active_mut().session_id.clone()
+    };
     let dir = session_root().join(&session_id).join("views");
     if let Some(response) = response {
         let id = response

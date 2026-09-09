@@ -933,6 +933,7 @@ pub fn run() {
         .on_menu_event(native_menu::handle_event);
     builder
         .setup(|app| {
+            session_bridge::start_mcp_wake_loop(app.handle().clone());
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
             let (
                 session_id,
@@ -982,6 +983,8 @@ pub fn run() {
             session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
             session_bridge::mcp_session_bridge_view,
+            session_bridge::mcp_window_control,
+            session_bridge::mcp_path_exists,
             session_bridge::mcp_session_bridge_heartbeat,
             session_bridge::mcp_session_bridge_note_mutation,
             session_bridge::mcp_session_bridge_apply_inbox,

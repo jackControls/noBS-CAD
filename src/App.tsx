@@ -394,32 +394,32 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-ink">
       {/* Project tabs are the window-level row: each project owns the
           workspace stage (modeling/drawing) rendered below it. */}
-      <ProjectTabBar />
-      <Ribbon />
+      <div className="contents" data-mcp-surface="file-and-project-tabs"><ProjectTabBar /></div>
+      <div className="contents" data-mcp-surface="ribbon"><Ribbon /></div>
       <div className="flex min-h-0 flex-1">
-        {drawingWorkspace ? (
+        <div className="contents" data-mcp-surface="browser">{drawingWorkspace ? (
           <DrawingBrowser />
         ) : solidSidebarMode === 'assembly' ? (
           <AssemblyBrowser />
         ) : (
           <BrowserTree />
-        )}
+        )}</div>
         <div className="flex min-w-0 flex-1 flex-col">
           <main className="relative min-h-0 min-w-0 flex-1">
             {drawingWorkspace ? (
-              <DrawingWorkspace />
+              <div className="contents" data-mcp-surface="drawing"><DrawingWorkspace /></div>
             ) : (
               <>
                 <Viewport key={resolvedTheme} />
-                <BodyAppearancePanel />
-                {mode === 'sketch' && <SketchPalette />}
-                <CommentsPanel />
+                <div className="contents" data-mcp-surface="appearance"><BodyAppearancePanel /></div>
+                {mode === 'sketch' && <div className="contents" data-mcp-surface="sketch-palette"><SketchPalette /></div>}
+                <div className="contents" data-mcp-surface="comments"><CommentsPanel /></div>
               </>
             )}
           </main>
         </div>
       </div>
-      {!drawingWorkspace && <Timeline />}
+      {!drawingWorkspace && <div className="contents" data-mcp-surface="feature-history"><Timeline /></div>}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

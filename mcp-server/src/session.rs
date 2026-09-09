@@ -44,22 +44,52 @@ pub fn now_ms() -> u64 {
 
 /// A separate expiring UI request; never part of the modeling inbox or script.
 pub fn request_view(arguments: &Value, attached: Option<&str>) -> Result<Value, String> {
+    request_control(arguments, attached, false)
+}
+
+pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, String> {
+    let action = arguments
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("inspect");
+    if !matches!(
+        action,
+        "inspect" | "click" | "set_value" | "key" | "window" | "file" | "viewport"
+    ) {
+        return Err("unknown UI action".into());
+    }
+    if matches!(action, "click" | "set_value" | "key")
+        && arguments.get("target").and_then(Value::as_str).is_none()
+    {
+        return Err("UI action requires a target from cad_ui inspect".into());
+    }
+    if let Some(pace) = arguments.get("pace_ms") {
+        if !pace.as_u64().is_some_and(|ms| ms <= 2000) {
+            return Err("pace_ms must be an integer from 0 to 2000".into());
+        }
+    }
+    request_control(arguments, attached, true)
+}
+
+fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Result<Value, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let session_id = arguments
         .get("session_id")
         .and_then(Value::as_str)
         .or(attached)
-        .ok_or("cad_view needs session_id or an attached desktop session")?;
+        .ok_or("Live control needs session_id or an attached desktop session")?;
     require_valid_session_id(session_id)?;
     let view = arguments
         .get("view")
         .and_then(Value::as_str)
-        .ok_or("view is required")?;
-    if !matches!(
-        view,
-        "current" | "isometric" | "top" | "bottom" | "front" | "back" | "left" | "right"
-    ) {
+        .unwrap_or(if ui { "current" } else { "" });
+    if !ui
+        && !matches!(
+            view,
+            "current" | "isometric" | "top" | "bottom" | "front" | "back" | "left" | "right"
+        )
+    {
         return Err("invalid camera view".into());
     }
     let heartbeat = heartbeat_meta(session_id);
@@ -74,11 +104,17 @@ pub fn request_view(arguments: &Value, attached: Option<&str>) -> Result<Value, 
     );
     let request_name = format!("views/{id}.request.json");
     let result_name = format!("views/{id}.result.json");
-    write_session(session_id, &request_name, &json!({
+    let lifetime = if ui { 30_000 } else { 5_000 };
+    let mut request = json!({
         "id":id, "view":view, "fit":arguments.get("fit").and_then(Value::as_bool).unwrap_or(false),
-        "expires_ms":now_ms()+5000,
-    }).to_string())?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+        "expires_ms":now_ms()+lifetime,
+    });
+    if ui {
+        request["ui"] = arguments.clone();
+        request["ui"]["action"] = arguments.get("action").cloned().unwrap_or(json!("inspect"));
+    }
+    write_session(session_id, &request_name, &request.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(lifetime + 1000);
     while std::time::Instant::now() < deadline {
         if let Ok(body) = read_session_file(session_id, &result_name) {
             let result: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
