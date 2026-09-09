@@ -147,8 +147,9 @@ try {
       assert.equal((await call('cad_document')).name,emptyName);
       const tabs = (await ui({action:'inspect'})).ui.surfaces.find(s=>s.name==='file-and-project-tabs').controls;
       const closes = tabs.filter(c=>c.label==='Close document'&&!c.disabled);
-      assert.equal(closes.length,2,'Disposable fixture must contain only its two tabs');
-      const closed = await ui({action:'click',target:closes.at(-1).id});
+      assert.equal(tabs.filter(c=>c.role==='tab').length,2,'Disposable fixture must contain only its two tabs');
+      assert.equal(closes.length,1,'Only the active tab has the unqualified Close document control');
+      const closed = await ui({action:'click',target:closes[0].id});
       assert.equal(closed.status,'applied','Closing active B must acknowledge through its original request');
       assert.equal(activeSession,partSession,'Closing B must reattach MCP to surviving A');
       assert.equal((await call('solid_scene')).bodies.length,1);
