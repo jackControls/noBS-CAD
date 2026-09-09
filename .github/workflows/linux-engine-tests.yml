@@ -4,19 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'crates/core/**'
-      - 'crates/sketch/**'
-      - 'crates/assembly/**'
-      - 'crates/solid/**'
+      - 'crates/**'
+      - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/linux-engine-tests.yml'
   pull_request:
     paths:
-      - 'crates/core/**'
-      - 'crates/sketch/**'
-      - 'crates/assembly/**'
-      - 'crates/solid/**'
+      - 'crates/**'
+      - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/linux-engine-tests.yml'
@@ -43,5 +39,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test core, sketch, assembly, and solid
-        run: cargo test --locked -p nbcad-core -p nbcad-sketch -p nbcad-assembly -p nbcad-solid
+      - name: Cache Rust workspace
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test complete host-neutral workspace
+        run: cargo test --locked --workspace

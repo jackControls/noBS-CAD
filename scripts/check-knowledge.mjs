@@ -26,6 +26,8 @@ async function markdownFiles(directory) {
 }
 
 function frontmatter(content) {
+  // Git may check Markdown out with CRLF on Windows.
+  content = content.replaceAll('\r\n', '\n');
   if (!content.startsWith('---\n')) return null;
   const end = content.indexOf('\n---\n', 4);
   if (end < 0) return null;

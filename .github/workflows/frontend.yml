@@ -1,0 +1,41 @@
+name: Frontend
+
+on:
+  push:
+    branches: [main]
+  # Desktop packages calls this for PRs, release tags, and manual builds.
+  # Keeping PR execution there avoids duplicate frontend runs.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-tests:
+    name: Frontend regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install pinned frontend dependencies
+        run: npm ci --ignore-scripts
+      - name: Run all frontend regression suites
+        run: npm run test:frontend
+      - name: Verify desktop frontend builds without browser WASM
+        run: npm run build:desktop
+      - name: Test live MCP snapshot revision boundaries
+        run: npx tsx scripts/sessionSnapshot.test.ts
+      - name: Install Chromium for UI contract checks
+        run: npx playwright install --with-deps chromium
+      - name: Install Rust for xtask
+        uses: dtolnay/rust-toolchain@stable
+      - name: Test live UI control contracts and product command coverage
+        run: cargo xtask test-mcp contracts
