@@ -1244,6 +1244,99 @@ pub fn mcp_session_bridge_write(
     state.write_for_window(window.label(), parsed)
 }
 
+/// Poll only the active document's expiring camera requests. Geometry is untouched.
+#[tauri::command]
+pub fn mcp_session_bridge_view(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SessionBridgeState>,
+    engine: tauri::State<'_, AppState>,
+    response: Option<Value>,
+) -> Result<Value, String> {
+    let mut publishers = state
+        .publishers
+        .lock()
+        .map_err(|_| "publisher lock poisoned")?;
+    let Some(publisher) = publishers.get_mut(window.label()) else {
+        return Ok(Value::Null);
+    };
+    if publisher.active_project_session_id.as_deref()
+        != Some(engine.active_project_session_id().as_str())
+    {
+        return Ok(Value::Null);
+    }
+    let session_id = publisher.active_mut().session_id.clone();
+    let dir = session_root().join(&session_id).join("views");
+    if let Some(response) = response {
+        let id = response
+            .get("request_id")
+            .and_then(Value::as_str)
+            .ok_or("missing request id")?;
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+            return Err("invalid request id".into());
+        }
+        if response.get("session_id").and_then(Value::as_str) != Some(session_id.as_str()) {
+            return Err("camera response belongs to an inactive document".into());
+        }
+        let request = dir.join(format!("{id}.request.json"));
+        if !request.is_file() {
+            return Err("camera request expired".into());
+        }
+        atomic_write(
+            &dir.join(format!("{id}.result.json")),
+            &response.to_string(),
+        )?;
+        let _ = fs::remove_file(request);
+        return Ok(Value::Null);
+    }
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(Value::Null);
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let Ok(body) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut request) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        if !request.is_object() {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        let valid_id = request.get("id").and_then(Value::as_str).is_some_and(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == format!("{id}.request.json").as_str())
+        });
+        if !valid_id {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        if request
+            .get("expires_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            < now_ms()
+        {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        request["session_id"] = json!(session_id);
+        return Ok(request);
+    }
+    Ok(Value::Null)
+}
+
 /// Refresh `heartbeat.json` only — no model export / generation bump.
 #[tauri::command]
 pub fn mcp_session_bridge_heartbeat(

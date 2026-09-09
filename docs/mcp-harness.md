@@ -161,3 +161,24 @@ the same steps is still open on that issue.
 
 These are regression tests, not badges or streaks. The demo tool does not
 mutate the headless document.
+
+### Desktop camera and joint controls
+
+`cad_view` targets an explicit `session_id` (or the currently attached session).
+Choose `current`, `isometric`, `top`, `bottom`, `front`, `back`, `left`, or `right`;
+set `fit: true` to frame visible geometry. It returns an acknowledged camera
+pose only after the desktop renderer finishes its animation. It does not modify
+geometry, change the engine generation, or add a modeling script operation.
+A live desktop supporting this tool and an active target tab are required.
+Stale sessions are rejected; missing acknowledgement returns `status: timeout`.
+An applied camera pose verifies navigation state, not pixel-level rendering.
+
+The assembly pack also exposes `assembly_delete_joint`,
+`assembly_set_joint_enabled`, and `assembly_set_joint_motion`. The latter two
+preserve the rest of the joint definition, avoiding replacement of connectors
+or limits merely to suppress a joint or move its primary coordinate. Motion
+uses degrees and millimetres; inspect `assembly_solution` for solver diagnostics.
+As with other live modeling operations, attached sessions use `cad_submit` and
+`cad_await_apply`, then refresh/query the published result. Headless clients can
+call these operations directly. The desktop and MCP binary must both include
+the shared mutation mappings for live use.

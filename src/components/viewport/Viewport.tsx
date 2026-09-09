@@ -1,3 +1,4 @@
+import { registerSessionCamera, unregisterSessionCamera } from './cameraApi';
 /**
  * Native Bevy viewport interaction layer with noBS CAD navigation and the
  * sketch environment.
@@ -11794,6 +11795,7 @@ export function Viewport() {
     };
 
     const api: ViewportCameraApi = {
+      isAnimating: () => camAnim !== null,
       getSnapshot: () => ({
         position: camera.position.toArray() as [number, number, number],
         target: controls.target.toArray() as [number, number, number],
@@ -11939,6 +11941,7 @@ export function Viewport() {
       },
     };
     apiRef.current = api;
+    registerSessionCamera(api);
     // E2E/debug handles: let automation verify camera poses and project
     // sketch mm coordinates to screen pixels for deterministic input.
     (window as unknown as { __cameraApi?: ViewportCameraApi }).__cameraApi = api;
@@ -12818,6 +12821,7 @@ export function Viewport() {
         __nativeViewportTransient?: unknown;
         __nativeViewportPresentation?: unknown;
       };
+      unregisterSessionCamera(api);
       delete w.__cameraApi;
       delete w.__sketchToScreen;
       delete w.__worldToScreen;

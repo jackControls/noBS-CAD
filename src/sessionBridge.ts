@@ -15,6 +15,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
+import { applySessionView } from './sessionView';
 import type { SolidUpdateDto } from './engine/types';
 import {
   exportProjectModelWithVisibility,
@@ -247,6 +248,7 @@ export function startSessionBridge(): void {
   if (inboxTimer) clearInterval(inboxTimer);
   inboxTimer = setInterval(() => {
     void applyInboxNow();
+    void applySessionView();
   }, 250);
   void applyInboxNow();
 }

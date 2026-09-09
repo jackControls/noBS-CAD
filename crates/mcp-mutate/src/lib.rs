@@ -598,6 +598,24 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "assembly_delete_joint",
+        engine_method: "assembly_delete_joint",
+        payload: PayloadKind::Field("joint_id"),
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_enabled",
+        engine_method: "assembly_set_joint_enabled",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_motion",
+        engine_method: "assembly_set_joint_motion",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "set_body_appearance",
         engine_method: "set_body_appearance",
         payload: PayloadKind::Object,

@@ -21,7 +21,7 @@ use disclosure::{
 };
 
 const LATEST_PROTOCOL: &str = "2025-06-18";
-const MODELING_TOOL_COUNT: usize = 119;
+const MODELING_TOOL_COUNT: usize = 122;
 
 #[derive(Clone, Copy)]
 enum Payload {
@@ -353,6 +353,7 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
+            "cad_view" => session::request_view(&arguments, self.attached_document_id.as_deref())?,
             "cad_attach" => self.attach_read_only_snapshot(&arguments)?,
             "cad_refresh" => self.refresh_read_only_snapshot()?,
             "cad_detach" => {
@@ -896,6 +897,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_list_all_tools"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
+            | "cad_view"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
@@ -2891,6 +2893,24 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::direct(
+            "assembly_delete_joint", "Delete assembly joint",
+            "Delete the joint by stable id through the normal engine operation. While attached use cad_submit and await acknowledgement.",
+            "assembly_delete_joint", Payload::Field("joint_id"),
+            object_schema(json!({"joint_id":{"type":"integer","minimum":1}}), &["joint_id"]),
+        ),
+        ToolSpec::direct(
+            "assembly_set_joint_enabled", "Enable or suppress assembly joint",
+            "Change only the joint enabled flag, preserving connectors, limits and occurrence bindings.",
+            "assembly_set_joint_enabled", Payload::Object,
+            object_schema(json!({"joint_id":{"type":"integer","minimum":1},"enabled":{"type":"boolean"}}), &["joint_id","enabled"]),
+        ),
+        ToolSpec::direct(
+            "assembly_set_joint_motion", "Set joint primary motion",
+            "Set the primary angle (degrees) and linear coordinate (millimetres) without replacing the joint definition. Query assembly_solution for limits and diagnostics.",
+            "assembly_set_joint_motion", Payload::Object,
+            object_schema(json!({"joint_id":{"type":"integer","minimum":1},"angle_offset_deg":{"type":"number"},"linear_offset_mm":{"type":"number"}}), &["joint_id","angle_offset_deg","linear_offset_mm"]),
+        ),
+        ToolSpec::direct(
             "solid_export_step",
             "Export STEP",
             "Export selected or all active bodies as AP242 STEP bytes encoded in base64. Prefer solid_export_3mf for slicers.",
@@ -3106,6 +3126,16 @@ fn tool_specs() -> Vec<ToolSpec> {
             "List read-only session snapshots",
             "List UUID v4 session directories under NBCAD_SESSION_DIR (skips _* control dirs and non-UUID names). Includes stable window_id / document_id when the UI publisher wrote them, heartbeat age/stale metadata, expiring desktop process leases, and a windows[] projection with authoritative active documents. Use with cad_attach. Snapshot bridge — not a live UI co-link. Stdio headless sessions without UI identity still list.",
             empty_schema(),
+        ),
+        ToolSpec::control(
+            "cad_view",
+            "Inspect or change the live desktop view",
+            "UI-only camera control. Use a session_id from cad_list_sessions or the attached session. No model snapshot is required. Returns the camera after UI acknowledgement; never changes geometry or history. A timeout is not confirmation that the view changed.",
+            object_schema(json!({
+                "session_id": {"type":"string"},
+                "view": {"type":"string","enum":["current","isometric","top","bottom","front","back","left","right"]},
+                "fit": {"type":"boolean"}
+            }), &["view"]),
         ),
         ToolSpec::control(
             "cad_attach",
@@ -3722,8 +3752,8 @@ mod tests {
         let all_tools = catalog.as_array().unwrap();
         assert_eq!(
             all_tools.len(),
-            MODELING_TOOL_COUNT + 23,
-            "119 modeling tools plus 8 print helpers and 15 control tools"
+            MODELING_TOOL_COUNT + 24,
+            "122 modeling tools plus 8 print helpers and 16 control tools"
         );
         let modeling_count = all_tools
             .iter()
@@ -3747,6 +3777,7 @@ mod tests {
                             | "cad_list_all_tools"
                             | "cad_cancel_recompute"
                             | "cad_list_sessions"
+                            | "cad_view"
                             | "cad_attach"
                             | "cad_refresh"
                             | "cad_detach"
@@ -3807,6 +3838,7 @@ mod tests {
                     | "cad_list_all_tools"
                     | "cad_cancel_recompute"
                     | "cad_list_sessions"
+                    | "cad_view"
                     | "cad_attach"
                     | "cad_refresh"
                     | "cad_detach"
@@ -3823,7 +3855,7 @@ mod tests {
         // Modeling registry covers 9 packs; print helpers are outside MODELING_TOOL_COUNT.
         assert_eq!(packs.len(), FocusPack::ALL.len() - 1);
         assert_eq!(packs["document"], 5);
-        assert_eq!(packs["assembly"], 10);
+        assert_eq!(packs["assembly"], 13);
         assert_eq!(packs["sketch"], 50);
         assert_eq!(packs["solid"], 10);
         assert!(packs["modify"] >= 6);
@@ -6927,6 +6959,57 @@ mod tests {
     }
 
     #[test]
+    fn joint_control_tools_preserve_definition_and_delete_by_id() {
+        let mut server = CadServer::new().unwrap();
+        extrude_offset_box(&mut server, "Sketch1", -12.0, -2.0);
+        let second = extrude_offset_box(&mut server, "Sketch2", 2.0, 12.0);
+        let bodies = second["scene"]["bodies"].as_array().unwrap();
+        let joint = server
+            .call_tool(
+                "assembly_create_joint",
+                json!({
+                    "name":"Hinge", "kind":"revolute", "grounded_body_id":bodies[0]["id"],
+                    "connector_a":planar_connector_from_body(&bodies[0]),
+                    "connector_b":planar_connector_from_body(&bodies[1]),
+                    "limits":{"min":-90,"max":90}
+                }),
+            )
+            .unwrap();
+        let id = joint["id"].clone();
+        server
+            .call_tool(
+                "assembly_set_joint_enabled",
+                json!({"joint_id":id,"enabled":false}),
+            )
+            .unwrap();
+        let disabled = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_eq!(disabled["joints"][0]["enabled"], false);
+        assert_eq!(disabled["joints"][0]["connector_a"], joint["connector_a"]);
+        server
+            .call_tool(
+                "assembly_set_joint_enabled",
+                json!({"joint_id":id,"enabled":true}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "assembly_set_joint_motion",
+                json!({"joint_id":id,"angle_offset_deg":30,"linear_offset_mm":0}),
+            )
+            .unwrap();
+        let moved = server.call_tool("assembly_document", json!({})).unwrap();
+        assert_eq!(moved["joints"][0]["angle_offset_deg"], 30.0);
+        assert_eq!(moved["joints"][0]["limits"], joint["limits"]);
+        server
+            .call_tool("assembly_delete_joint", json!({"joint_id":id}))
+            .unwrap();
+        assert_eq!(
+            server.call_tool("assembly_document", json!({})).unwrap()["joints"],
+            json!([])
+        );
+    }
+
+    #[test]
     fn assembly_joint_create_update_query_roundtrip() {
         // Headless: two boxes → create revolute joint → query → update name/limits.
         // No cad_attach. Uses landed host CreateJointRequestDto / UpdateJointRequestDto.
@@ -8953,26 +9036,16 @@ mod tests {
     }
 
     #[test]
-    fn assembly_delete_joint_is_not_a_tool() {
-        // Host AssemblyDocumentDto::delete exists for body-delete cleanup.
-        // MCP must not advertise a delete-joint mutate or inspect tool.
-        assert!(
-            tool_specs()
-                .iter()
-                .all(|spec| spec.name != "assembly_delete_joint"),
-            "do not invent assembly_delete_joint"
-        );
-        assert!(
-            nbcad_mcp_mutate::lookup_mutate("assembly_delete_joint").is_none(),
-            "assembly_delete_joint must stay out of the shared cad_submit map"
-        );
-        let disclosure = include_str!("disclosure.rs");
-        assert!(
-            !disclosure.contains("assembly_delete_joint"),
-            "disclosure must not claim a joint delete tool"
+    fn assembly_delete_joint_is_available_through_shared_inbox_mapping() {
+        assert!(tool_specs()
+            .iter()
+            .any(|spec| spec.name == "assembly_delete_joint"));
+        assert!(nbcad_mcp_mutate::lookup_mutate("assembly_delete_joint").is_some());
+        assert_eq!(
+            tags_for_tool("assembly_delete_joint").0,
+            FocusPack::Assembly
         );
     }
-
     #[test]
     fn attach_cad_submit_body_delete_of_jointed_feature_removes_joint() {
         // Applied joint, then inbox solid_delete_feature of a connector
@@ -9599,7 +9672,7 @@ mod tests {
 
     #[test]
     fn inbox_json_wrong_tool_name_is_dead_lettered() {
-        // Valid JSON whose name is a known inspect tool or the host-only
+        // Valid JSON whose name is a known inspect tool or the unknown
         // body-delete cleanup is not an inbox mutate. cad_submit rejects
         // those at submit; a raw inbox file must dead-letter on apply.
         let _guard = session::ENV_LOCK.lock().unwrap();
@@ -9630,20 +9703,24 @@ mod tests {
             .call_tool(
                 "cad_submit",
                 json!({
-                    "name": "assembly_delete_joint",
+                    "name": "assembly_nonexistent_operation",
                     "arguments": {"id": 1},
                     "base_generation": 1
                 }),
             )
-            .expect_err("host delete-joint must not queue via cad_submit");
+            .expect_err("unknown operation must not queue via cad_submit");
         assert!(
             submit_delete.contains("unknown tool") || submit_delete.contains("unsupported"),
-            "cad_submit of assembly_delete_joint must stay unknown/unsupported: {submit_delete}"
+            "cad_submit of assembly_nonexistent_operation must stay unknown/unsupported: {submit_delete}"
         );
 
         session::write_inbox_op(
             &unique,
-            &session::InboxOp::unstamped("assembly_delete_joint".to_string(), json!({"id": 1}), 1),
+            &session::InboxOp::unstamped(
+                "assembly_nonexistent_operation".to_string(),
+                json!({"id": 1}),
+                1,
+            ),
         )
         .unwrap();
         server
@@ -9663,7 +9740,8 @@ mod tests {
         })
         .expect_err("wrong tool name must fail apply");
         assert!(
-            err.contains("unsupported inbox mutate") && err.contains("assembly_delete_joint"),
+            err.contains("unsupported inbox mutate")
+                && err.contains("assembly_nonexistent_operation"),
             "expected unsupported-mutate class, got {err}"
         );
         assert_eq!(
