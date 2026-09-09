@@ -1251,11 +1251,18 @@ pub fn start_mcp_wake_loop(app: tauri::AppHandle) {
     use tauri::{Emitter, Manager};
     std::thread::spawn(move || {
         let mut awake_until = HashMap::<String, u64>::new();
+        let mut last_keepalive = now_ms();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(25));
             let windows = app.webview_windows();
             if windows.is_empty() {
                 break;
+            }
+            if now_ms().saturating_sub(last_keepalive) >= 10_000 {
+                last_keepalive = now_ms();
+                for window in windows.values() {
+                    let _ = window.emit("mcp-keepalive", ());
+                }
             }
             let state = app.state::<SessionBridgeState>();
             let targets = match state.publishers.lock() {
@@ -1361,11 +1368,12 @@ pub fn mcp_session_bridge_view(
         publisher.active_mut().session_id.clone()
     };
     let dir = session_root().join(&session_id).join("views");
-    if let Some(response) = response {
+    if let Some(mut response) = response {
         let id = response
             .get("request_id")
             .and_then(Value::as_str)
-            .ok_or("missing request id")?;
+            .ok_or("missing request id")?
+            .to_owned();
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
             return Err("invalid request id".into());
         }
@@ -1376,6 +1384,12 @@ pub fn mcp_session_bridge_view(
         if !request.is_file() {
             return Err("camera request expired".into());
         }
+        response["active_session_id"] = publisher
+            .active_project_session_id
+            .as_ref()
+            .and_then(|id| publisher.by_project.get(id))
+            .map(|project| json!(project.session_id))
+            .unwrap_or(Value::Null);
         atomic_write(
             &dir.join(format!("{id}.result.json")),
             &response.to_string(),

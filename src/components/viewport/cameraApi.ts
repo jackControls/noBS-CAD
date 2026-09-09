@@ -25,7 +25,7 @@ export interface SixDofMotion {
 }
 
 export interface ViewportCameraApi {
-  pointer(action: 'move' | 'click' | 'double_click', point: [number, number], shift?: boolean): void;
+  pointer(action: import('../../uiPointer').UiGesture, point: [number, number], shift?: boolean, to?: [number, number]): Promise<void>;
   bounds(): { x: number; y: number; width: number; height: number };
   /** Current camera pose (copies; safe to mutate). */
   getSnapshot(): CameraSnapshot;

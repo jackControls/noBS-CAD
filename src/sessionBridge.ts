@@ -122,9 +122,9 @@ interface PublishWriteResult {
   engine_revision?: number;
 }
 
-async function publishNow(): Promise<void> {
+async function publishNow(): Promise<boolean> {
   const state = useAppStore.getState();
-  if (state.engineKind !== 'tauri') return;
+  if (state.engineKind !== 'tauri') return false;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   try {
     // Reserve captures engine_revision and project/session identity before
@@ -162,11 +162,12 @@ async function publishNow(): Promise<void> {
       ) {
         continue;
       }
-      break;
+      return !written?.skipped;
     }
   } catch (error) {
     console.debug('[sessionBridge] publish failed', error);
   }
+  return false;
 }
 
 /** Apply one MCP inbox op on the live engine, then let the publisher run. */
@@ -186,7 +187,7 @@ async function applyInboxNow(): Promise<void> {
     if (!result?.applied) return;
     if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
-      if (result.result?.scene && result.result.document) {
+      if (result.result?.scene && result.result.document && !result.name?.startsWith('sketch_')) {
         useAppStore.getState().applySolidUpdate(result.result);
       } else {
         // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
@@ -253,7 +254,10 @@ export function startSessionBridge(): void {
   if (inboxTimer) clearInterval(inboxTimer);
   const playback = new SerialPlayback();
   const tick = () => playback.tick(async () => {
-    await applySessionView();
+    await applySessionView(async () => {
+      if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
+      if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
+    });
     await applyInboxNow();
   });
   void listen('mcp-work', () => {
@@ -261,6 +265,7 @@ export function startSessionBridge(): void {
     wakePlayback();
     void tick();
   });
+  void listen('mcp-keepalive', () => { void heartbeatNow(); });
   inboxTimer = setInterval(() => { void tick(); }, 250);
   void tick();
 }

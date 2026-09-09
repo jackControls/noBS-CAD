@@ -54,12 +54,22 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
         .unwrap_or("inspect");
     if !matches!(
         action,
-        "inspect" | "click" | "set_value" | "key" | "window" | "file" | "viewport"
+        "inspect"
+            | "click"
+            | "double_click"
+            | "context_menu"
+            | "set_value"
+            | "key"
+            | "window"
+            | "file"
+            | "viewport"
     ) {
         return Err("unknown UI action".into());
     }
-    if matches!(action, "click" | "set_value" | "key")
-        && arguments.get("target").and_then(Value::as_str).is_none()
+    if matches!(
+        action,
+        "click" | "double_click" | "context_menu" | "set_value" | "key"
+    ) && arguments.get("target").and_then(Value::as_str).is_none()
     {
         return Err("UI action requires a target from cad_ui inspect".into());
     }
@@ -1478,6 +1488,29 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_requests_reject_invalid_actions_targets_and_pacing_before_io() {
+        for action in ["click", "double_click", "context_menu", "set_value", "key"] {
+            assert!(request_ui(&json!({"action":action}), None)
+                .unwrap_err()
+                .contains("target"));
+        }
+        assert!(request_ui(&json!({"action":"eval"}), None)
+            .unwrap_err()
+            .contains("unknown"));
+        for pace in [
+            json!(-1),
+            json!(2001),
+            json!(0.5),
+            json!("fast"),
+            Value::Null,
+        ] {
+            assert!(request_ui(&json!({"pace_ms":pace}), None)
+                .unwrap_err()
+                .contains("pace_ms"));
+        }
+    }
 
     #[test]
     fn view_request_needs_live_ui_ack_but_no_model() {

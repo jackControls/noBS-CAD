@@ -10,12 +10,12 @@ export interface UiControl {
   options?: Array<{ value: string; label: string; disabled: boolean }>;
 }
 
-const selector = 'button,input:not([type="hidden"]),select,textarea,a[href],[role="button"],[role="tab"],[role="menuitem"],[role="checkbox"],[contenteditable="true"]';
+const selector = 'button,input:not([type="hidden"]),select,textarea,a[href],[role="button"],[role="tab"],[role="treeitem"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="checkbox"],[role="radio"],[contenteditable="true"]';
 let snapshot = 0;
 let inspectedContext: unknown;
 let current = new Map<string, { element: HTMLElement; label: string; surface: string }>();
 
-function visible(element: HTMLElement): boolean {
+export function visible(element: HTMLElement): boolean {
   const style = getComputedStyle(element);
   return element.isConnected && !element.closest('[hidden],[inert],[aria-hidden="true"]')
     && style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
@@ -35,6 +35,8 @@ function label(element: HTMLElement): string {
 }
 
 function surface(element: HTMLElement): string {
+  const menu = element.closest('[role="menu"]');
+  if (menu) return `menus/${menu.getAttribute('data-testid') || menu.getAttribute('aria-label') || 'context-menu'}`;
   const dialog = element.closest('[role="dialog"],.feature-dialog');
   if (dialog) return `dialogs/${dialog.getAttribute('data-testid') || dialog.getAttribute('aria-label') || dialog.querySelector('header')?.textContent?.trim() || 'dialog'}`;
   return element.closest('[data-mcp-surface]')?.getAttribute('data-mcp-surface') || 'application';
@@ -59,6 +61,10 @@ export function inspectUi(context?: unknown) {
     controls.push(control);
   }
   return {
+    canvases: [...document.querySelectorAll<HTMLElement>('[data-mcp-canvas]')].filter(visible).map(element => {
+      const {x,y,width,height} = element.getBoundingClientRect();
+      return {name:element.getAttribute('data-mcp-canvas'),x,y,width,height};
+    }),
     surfaces: [...new Set(controls.map(c => c.surface))].map(name => ({ name, controls: controls.filter(c => c.surface === name) })),
     unlabeled_controls: controls.filter(c => !c.label).map(c => ({ id: c.id, surface: c.surface, role: c.role })),
     document_visible: document.visibilityState === 'visible',
@@ -66,7 +72,7 @@ export function inspectUi(context?: unknown) {
   };
 }
 
-export interface UiAction { action: 'inspect' | 'click' | 'set_value' | 'key'; target?: string; value?: string; key?: string }
+export interface UiAction { action: 'inspect' | 'click' | 'double_click' | 'context_menu' | 'set_value' | 'key'; target?: string; value?: string; key?: string }
 
 export function operateUi(request: UiAction, context?: unknown): HTMLElement | null {
   if (request.action === 'inspect') return null;
@@ -80,8 +86,18 @@ export function operateUi(request: UiAction, context?: unknown): HTMLElement | n
   const modal = modals[modals.length - 1];
   if (modal && !modal.contains(element)) throw new Error('A modal dialog blocks this control');
   element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // HTMLElement.click() does not perform the browser's normal focus default.
+  // Focus first so fields with onBlur commits behave like an actual UI click.
+  element.focus({preventScroll:true});
   if (request.action === 'click') {
     element.click();
+  } else if (request.action === 'double_click' || request.action === 'context_menu') {
+    const rect = element.getBoundingClientRect();
+    if (request.action === 'double_click') element.click();
+    element.dispatchEvent(new MouseEvent(request.action === 'double_click' ? 'dblclick' : 'contextmenu', {
+      bubbles: true, cancelable: true, button: request.action === 'context_menu' ? 2 : 0,
+      detail: request.action === 'double_click' ? 2 : 1, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
+    }));
   } else if (request.action === 'set_value') {
     if (typeof request.value !== 'string') throw new Error('set_value requires a string value');
     if (element instanceof HTMLInputElement && ['file','password','checkbox','radio','button','submit'].includes(element.type)) throw new Error('This control does not accept text; use its appropriate UI action');

@@ -410,7 +410,7 @@ export default function App() {
               <div className="contents" data-mcp-surface="drawing"><DrawingWorkspace /></div>
             ) : (
               <>
-                <Viewport key={resolvedTheme} />
+                <div className="contents" data-mcp-surface="viewport"><Viewport key={resolvedTheme} /></div>
                 <div className="contents" data-mcp-surface="appearance"><BodyAppearancePanel /></div>
                 {mode === 'sketch' && <div className="contents" data-mcp-surface="sketch-palette"><SketchPalette /></div>}
                 <div className="contents" data-mcp-surface="comments"><CommentsPanel /></div>

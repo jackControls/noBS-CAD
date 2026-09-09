@@ -3151,8 +3151,10 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Inspect returns controls grouped by actual UI surfaces, with opaque target IDs, labels, disabled states and values. Use those IDs for click/set_value/key; stale, hidden, disabled and modal-blocked controls reject. Window mode is foreground/background/inspect. pace_ms (0-2000) controls visible playback timing; fast mode still acknowledges ordered operations. No selectors or JavaScript evaluation. Inspect again after opening menus or dialogs.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["inspect","click","set_value","key","window","file","viewport"]},
-                "gesture":{"type":"string","enum":["move","click","double_click"]},
+                "action":{"type":"string","enum":["inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "gesture":{"type":"string","enum":["move","click","double_click","drag"]},
+                "canvas":{"type":"string","enum":["viewport","drawing"]},
+                "to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
                 "point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},
                 "world":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
                 "shift":{"type":"boolean"},

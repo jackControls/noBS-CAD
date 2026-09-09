@@ -1,23 +1,26 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from './store/appStore';
 import { getSessionCamera } from './components/viewport/cameraApi';
-import { inspectUi, operateUi, type UiAction } from './uiControl';
+import { inspectUi, operateUi, visible, type UiAction } from './uiControl';
 import { presentMcpOperation, setPlaybackPace, waitForPlayback } from './mcpPlayback';
 import { operateUiFile, type UiFileRequest } from './uiFiles';
+import {drivePointer, type UiGesture} from './uiPointer';
+import {pendingEngineOperations} from './engine/activity';
 
 export const viewDirections: Record<string, [number, number, number]> = {
   front: [0, -1, 0], back: [0, 1, 0], left: [-1, 0, 0], right: [1, 0, 0],
   top: [0, 0, 1], bottom: [0, 0, -1],
 };
 let applying = false;
-interface ViewRequest { id: string; session_id: string; view: string; fit: boolean; expires_ms: number; ui?: Omit<UiAction, 'action'> & UiFileRequest & { action: UiAction['action'] | 'window' | 'file' | 'viewport'; pace_ms?: number; mode?: string; gesture?: 'move' | 'click' | 'double_click'; point?: [number, number]; world?: [number, number, number]; shift?: boolean } }
+interface ViewRequest { id: string; session_id: string; view: string; fit: boolean; expires_ms: number; ui?: Omit<UiAction, 'action'> & UiFileRequest & { action: UiAction['action'] | 'window' | 'file' | 'viewport'; pace_ms?: number; mode?: string; canvas?: 'viewport' | 'drawing'; gesture?: UiGesture; point?: [number, number]; to?: [number, number]; world?: [number, number, number]; shift?: boolean } }
 
 /** Called by the existing UI heartbeat loop; never changes the model revision. */
-export async function applySessionView(): Promise<void> {
+export async function applySessionView(publishChangedState: () => Promise<void>): Promise<void> {
   if (applying || useAppStore.getState().engineKind !== 'tauri') return;
   applying = true;
   try {
-    const document = useAppStore.getState().document;
+    const before = useAppStore.getState();
+    const document = before.document;
     const request = await invoke<ViewRequest | null>('mcp_session_bridge_view');
     if (!request) return;
     const response: Record<string, unknown> = { request_id: request.id, session_id: request.session_id };
@@ -31,23 +34,36 @@ export async function applySessionView(): Promise<void> {
           useAppStore.getState().setProjectBusy(true);
           try { response.completed = await operateUiFile(request.ui); }
           finally { useAppStore.getState().setProjectBusy(false); }
+          if (!response.completed) throw new Error('File operation did not complete; inspect the UI for details');
           await presentMcpOperation(`File: ${request.ui.command}`);
         } else if (request.ui.action === 'viewport') {
-          if (window.document.querySelector('[aria-modal="true"]')) throw new Error('A modal dialog blocks the viewport');
+          if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) throw new Error('A modal dialog blocks the viewport');
           const api = getSessionCamera();
-          if (!api) throw new Error('Viewport is unavailable');
-          const projected = request.ui.world ? api.worldToScreen(request.ui.world) : null;
+          const drawing = request.ui.canvas === 'drawing' ? window.document.querySelector('[data-testid="drawing-sheet"]') : null;
+          if (request.ui.canvas === 'drawing' ? !drawing : !api) throw new Error('Requested canvas is unavailable');
+          if (drawing && request.ui.world) throw new Error('Drawing canvas uses window pixel coordinates');
+          const projected = request.ui.world ? api?.worldToScreen(request.ui.world) : null;
           const point = request.ui.point ?? (projected ? [projected.x, projected.y] as [number, number] : null);
           if (!point) throw new Error('Viewport action requires point or world coordinates');
-          api.pointer(request.ui.gesture ?? 'click', point, request.ui.shift);
+          if (drawing) await drivePointer(drawing, request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
+          else await api!.pointer(request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
           await presentMcpOperation(`Viewport: ${request.ui.gesture ?? 'click'}`);
         } else {
           const target = operateUi(request.ui as UiAction, document);
           if (request.ui.action !== 'inspect') await presentMcpOperation(request.ui.action, target);
         }
-        while (useAppStore.getState().solidBusy || useAppStore.getState().projectBusy) {
+        while (pendingEngineOperations() || useAppStore.getState().solidBusy || useAppStore.getState().projectBusy) {
+          if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) {
+            response.awaiting_input = true;
+            break;
+          }
           if (Date.now() >= request.expires_ms) throw new Error('UI operation is still busy; inspect before retrying');
           await waitForPlayback(25);
+        }
+        const after = useAppStore.getState();
+        if (after.document !== before.document || after.activeSketch !== before.activeSketch
+          || after.drawingDocument !== before.drawingDocument || after.assemblyDocument !== before.assemblyDocument) {
+          await publishChangedState();
         }
         response.status = 'applied';
         response.ui = inspectUi(useAppStore.getState().document);
@@ -86,6 +102,7 @@ export async function applySessionView(): Promise<void> {
     } catch (error) {
       response.status = 'failed';
       response.error = String(error);
+      if (request.ui) response.ui = inspectUi(useAppStore.getState().document);
     }
     await invoke('mcp_session_bridge_view', { response });
   } catch (error) {

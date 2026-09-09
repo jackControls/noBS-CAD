@@ -1298,6 +1298,14 @@ export const useAppStore = create<AppState>()((set) => ({
       projectVisibility,
       dirty: true,
     });
+    if (opName?.startsWith('sketch_') || opName === 'cad_load_project_model') {
+      // Inbox commands use the same engine as the interactive controller, but
+      // do not call its mode transitions. Reflect the authoritative sketch
+      // lifecycle before acknowledging/presenting the operation.
+      useAppStore.getState().setMode(activeSketch ? 'sketch' : 'solid');
+      useAppStore.getState().setActiveSketch(activeSketch);
+      if (!activeSketch) useAppStore.getState().setActiveTool(null);
+    }
   },
 
   setDocument: (doc) =>
