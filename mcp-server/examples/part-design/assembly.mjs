@@ -92,8 +92,11 @@ try {
     const dx = origin[0] + (second ? -1 : 1) * (centre?.[0] ?? 0);
     const dy = origin[1] + (second ? -1 : 1) * (centre?.[1] ?? 0);
     await call('assembly_create_joint', { name, kind: isBracket ? 'planar' : 'rigid',
-      connector_a: connector(plate.body, [0, 0, 1], origin),
-      connector_b: connector(part.body, normal, [0, 0, 0]),
+      // Planar motion already supplies the picked offset. Use the canonical
+      // surface anchors so preserving explicit connector frames does not
+      // apply that offset twice (also compatible with pre-anchor-fix builds).
+      connector_a: connector(plate.body, [0, 0, 1], isBracket ? [0, 0, 5] : origin),
+      connector_b: connector(part.body, normal, isBracket ? centre : [0, 0, 0]),
       flipped: !isBracket, grounded_occurrence_id: plate.occurrence.id,
       ...(isBracket ? { angle_offset_deg: angle, angle_limits: { min: angle, max: angle },
         linear_offset_mm: dx, linear_limits: { min: dx, max: dx } } : {}),
