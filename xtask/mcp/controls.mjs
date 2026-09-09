@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
-import {Client} from './mcp-client.mjs';
+import {Client} from './client.mjs';
 
 const args=process.argv.slice(2);
 const option=name=>args.includes(name)?args[args.indexOf(name)+1]:undefined;
@@ -26,7 +26,7 @@ try {
  const beforeGeneration=await generation();
  const directions={top:[0,0,1],bottom:[0,0,-1],front:[0,-1,0],back:[0,1,0],left:[-1,0,0],right:[1,0,0]};
  for (const view of ['current',...Object.keys(directions),'isometric']) {
-  const result=await c.call('cad_view',{view,fit:view!=='current'});
+  const result=await c.call('cad_ui',{action:'view',view,fit:view!=='current'});
   assert.equal(result.status,'applied',JSON.stringify(result));
   assert(result.camera.position.every(Number.isFinite));
   if(directions[view]) {

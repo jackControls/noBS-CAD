@@ -4,7 +4,7 @@ import {chromium} from 'playwright';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 
-const dispatcher=ts.createSourceFile('dispatch.ts',await readFile(new URL('../src/ribbon/dispatch.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
+const dispatcher=ts.createSourceFile('dispatch.ts',await readFile(new URL('../../src/ribbon/dispatch.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 const dispatched=new Set();
 function visit(node){
  if(ts.isSwitchStatement(node)&&node.expression.getText(dispatcher)==='action') {

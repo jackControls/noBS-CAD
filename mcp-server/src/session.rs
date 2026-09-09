@@ -43,15 +43,14 @@ pub fn now_ms() -> u64 {
 }
 
 /// A separate expiring UI request; never part of the modeling inbox or script.
-pub fn request_view(arguments: &Value, attached: Option<&str>) -> Result<Value, String> {
-    request_control(arguments, attached, false)
-}
-
 pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, String> {
     let action = arguments
         .get("action")
         .and_then(Value::as_str)
         .unwrap_or("inspect");
+    if action == "view" {
+        return request_control(arguments, attached, false);
+    }
     if !matches!(
         action,
         "inspect"
@@ -112,8 +111,8 @@ fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Resul
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     );
-    let request_name = format!("views/{id}.request.json");
-    let result_name = format!("views/{id}.result.json");
+    let request_name = format!("controls/{id}.request.json");
+    let result_name = format!("controls/{id}.result.json");
     let lifetime = if ui { 30_000 } else { 5_000 };
     let mut request = json!({
         "id":id, "view":view, "fit":arguments.get("fit").and_then(Value::as_bool).unwrap_or(false),
@@ -137,7 +136,7 @@ fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Resul
     let _ = fs::remove_file(session_path(session_id, &request_name)?);
     Ok(
         json!({"status":"timeout","request_id":id,"session_id":session_id,
-        "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_view."}),
+        "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_ui."}),
     )
 }
 
@@ -1525,7 +1524,7 @@ mod tests {
             &json!({"updated_ms":now_ms(),"generation":1}).to_string(),
         )
         .unwrap();
-        let ui_dir = dir.join(&id).join("views");
+        let ui_dir = dir.join(&id).join("controls");
         let ui = std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while std::time::Instant::now() < deadline {
@@ -1559,14 +1558,22 @@ mod tests {
             }
             panic!("UI did not receive view request");
         });
-        let result = request_view(&json!({"session_id":id,"view":"top","fit":true}), None).unwrap();
+        let result = request_ui(
+            &json!({"action":"view","session_id":id,"view":"top","fit":true}),
+            None,
+        )
+        .unwrap();
         ui.join().unwrap();
         assert_eq!(result["status"], "applied");
         assert!(!dir.join(&id).join("model.json").exists());
-        assert!(request_view(&json!({"view":"top"}), None).is_err());
-        assert!(request_view(&json!({"session_id":id,"view":"invalid"}), None).is_err());
+        assert!(request_ui(&json!({"action":"view","view":"top"}), None).is_err());
+        assert!(request_ui(
+            &json!({"action":"view","session_id":id,"view":"invalid"}),
+            None
+        )
+        .is_err());
         write_session(&id, "heartbeat.json", r#"{"updated_ms":0,"generation":1}"#).unwrap();
-        assert!(request_view(&json!({"session_id":id,"view":"top"}), None).is_err());
+        assert!(request_ui(&json!({"action":"view","session_id":id,"view":"top"}), None).is_err());
         if let Some(value) = previous {
             std::env::set_var("NBCAD_SESSION_DIR", value);
         } else {

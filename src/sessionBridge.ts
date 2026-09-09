@@ -16,7 +16,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
-import { applySessionView } from './sessionView';
+import { applyLiveUiControl } from './liveUiBridge';
 import { SerialPlayback, presentMcpOperation, wakePlayback } from './mcpPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import type { SolidUpdateDto } from './engine/types';
@@ -254,7 +254,7 @@ export function startSessionBridge(): void {
   if (inboxTimer) clearInterval(inboxTimer);
   const playback = new SerialPlayback();
   const tick = () => playback.tick(async () => {
-    await applySessionView(async () => {
+    await applyLiveUiControl(async () => {
       if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
       if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
     });

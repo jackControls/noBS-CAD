@@ -4551,9 +4551,13 @@ fn validate_joint(joint: &JointDefinitionDto) -> Result<(), String> {
     }
     validate_connector(&joint.connector_a)?;
     validate_connector(&joint.connector_b)?;
-    if joint.connector_a.body_id == joint.connector_b.body_id {
+    let distinct_occurrences = matches!(
+        (joint.advanced.connector_a_occurrence_id, joint.advanced.connector_b_occurrence_id),
+        (Some(a), Some(b)) if a != b
+    );
+    if joint.connector_a.body_id == joint.connector_b.body_id && !distinct_occurrences {
         return Err(format!(
-            "joint '{}' must connect two different bodies",
+            "joint '{}' must connect two different body occurrences",
             joint.name
         ));
     }

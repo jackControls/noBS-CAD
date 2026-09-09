@@ -15,13 +15,13 @@ let applying = false;
 interface ViewRequest { id: string; session_id: string; view: string; fit: boolean; expires_ms: number; ui?: Omit<UiAction, 'action'> & UiFileRequest & { action: UiAction['action'] | 'window' | 'file' | 'viewport'; pace_ms?: number; mode?: string; canvas?: 'viewport' | 'drawing'; gesture?: UiGesture; point?: [number, number]; to?: [number, number]; world?: [number, number, number]; shift?: boolean } }
 
 /** Called by the existing UI heartbeat loop; never changes the model revision. */
-export async function applySessionView(publishChangedState: () => Promise<void>): Promise<void> {
+export async function applyLiveUiControl(publishChangedState: () => Promise<void>): Promise<void> {
   if (applying || useAppStore.getState().engineKind !== 'tauri') return;
   applying = true;
   try {
     const before = useAppStore.getState();
     const document = before.document;
-    const request = await invoke<ViewRequest | null>('mcp_session_bridge_view');
+    const request = await invoke<ViewRequest | null>('mcp_session_bridge_control');
     if (!request) return;
     const response: Record<string, unknown> = { request_id: request.id, session_id: request.session_id };
     try {
@@ -72,7 +72,7 @@ export async function applySessionView(publishChangedState: () => Promise<void>)
           selected_face: state.selectedFace, selected_edges: state.selectedEdges, selected_entities: state.selectedEntities,
           viewport: getSessionCamera()?.bounds() ?? null };
         response.presented = window.document.visibilityState === 'visible';
-        await invoke('mcp_session_bridge_view', { response });
+        await invoke('mcp_session_bridge_control', { response });
         return;
       }
       if (document !== useAppStore.getState().document || request.expires_ms < Date.now()) {
@@ -104,7 +104,7 @@ export async function applySessionView(publishChangedState: () => Promise<void>)
       response.error = String(error);
       if (request.ui) response.ui = inspectUi(useAppStore.getState().document);
     }
-    await invoke('mcp_session_bridge_view', { response });
+    await invoke('mcp_session_bridge_control', { response });
   } catch (error) {
     console.debug('[sessionBridge] view request failed', error);
   } finally { applying = false; }

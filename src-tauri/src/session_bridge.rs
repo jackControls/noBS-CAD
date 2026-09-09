@@ -1280,18 +1280,20 @@ pub fn start_mcp_wake_loop(app: tauri::AppHandle) {
             };
             for (label, session_id) in targets {
                 let root = session_root().join(session_id);
-                let has_work = [root.join("views"), root.join("inbox")].iter().any(|dir| {
-                    fs::read_dir(dir).ok().is_some_and(|entries| {
-                        entries.filter_map(Result::ok).any(|entry| {
-                            entry.file_type().is_ok_and(|kind| kind.is_file())
-                                && entry.path().extension().is_some_and(|ext| ext == "json")
-                                && !entry
-                                    .file_name()
-                                    .to_string_lossy()
-                                    .ends_with(".result.json")
+                let has_work = [root.join("controls"), root.join("inbox")]
+                    .iter()
+                    .any(|dir| {
+                        fs::read_dir(dir).ok().is_some_and(|entries| {
+                            entries.filter_map(Result::ok).any(|entry| {
+                                entry.file_type().is_ok_and(|kind| kind.is_file())
+                                    && entry.path().extension().is_some_and(|ext| ext == "json")
+                                    && !entry
+                                        .file_name()
+                                        .to_string_lossy()
+                                        .ends_with(".result.json")
+                            })
                         })
-                    })
-                });
+                    });
                 if has_work {
                     awake_until.insert(label.clone(), now_ms() + 3_000);
                 }
@@ -1335,7 +1337,7 @@ pub fn mcp_window_control(window: tauri::WebviewWindow, mode: String) -> Result<
 }
 
 #[tauri::command]
-pub fn mcp_session_bridge_view(
+pub fn mcp_session_bridge_control(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, SessionBridgeState>,
     engine: tauri::State<'_, AppState>,
@@ -1367,7 +1369,7 @@ pub fn mcp_session_bridge_view(
         }
         publisher.active_mut().session_id.clone()
     };
-    let dir = session_root().join(&session_id).join("views");
+    let dir = session_root().join(&session_id).join("controls");
     if let Some(mut response) = response {
         let id = response
             .get("request_id")

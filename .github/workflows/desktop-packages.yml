@@ -54,7 +54,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Test live UI control contracts and product command coverage
-        run: node scripts/mcp-ui-contract.mjs
+        run: cargo xtask test-mcp contracts
 
   classify_changes:
     name: Classify desktop build inputs

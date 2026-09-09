@@ -353,9 +353,13 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
-            "cad_view" => session::request_view(&arguments, self.attached_document_id.as_deref())?,
-            "cad_ui" => session::request_ui(&arguments, self.attached_document_id.as_deref())?,
-            "cad_launch" => desktop::launch(&arguments)?,
+            "cad_ui" => {
+                if arguments["action"] == "launch" {
+                    desktop::launch(&arguments)?
+                } else {
+                    session::request_ui(&arguments, self.attached_document_id.as_deref())?
+                }
+            }
             "cad_attach" => self.attach_read_only_snapshot(&arguments)?,
             "cad_refresh" => self.refresh_read_only_snapshot()?,
             "cad_detach" => {
@@ -899,9 +903,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_list_all_tools"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
-            | "cad_view"
             | "cad_ui"
-            | "cad_launch"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
@@ -3132,26 +3134,14 @@ fn tool_specs() -> Vec<ToolSpec> {
             empty_schema(),
         ),
         ToolSpec::control(
-            "cad_view",
-            "Inspect or change the live desktop view",
-            "UI-only camera control. Use a session_id from cad_list_sessions or the attached session. No model snapshot is required. Returns the camera after UI acknowledgement; never changes geometry or history. A timeout is not confirmation that the view changed.",
-            object_schema(json!({
-                "session_id": {"type":"string"},
-                "view": {"type":"string","enum":["current","isometric","top","bottom","front","back","left","right"]},
-                "fit": {"type":"boolean"}
-            }), &["view"]),
-        ),
-        ToolSpec::control(
-            "cad_launch", "Launch the native CAD application",
-            "Launch the CAD executable from NBCAD_DESKTOP_BIN or executable. Wait for the child's PID-correlated desktop lease and return its session_id. Does not silently attach, overwrite a document, or treat startup timeout as failure to launch.",
-            object_schema(json!({"executable":{"type":"string"}}), &[]),
-        ),
-        ToolSpec::control(
             "cad_ui", "Inspect or operate live UI controls",
             "Inspect returns controls grouped by actual UI surfaces, with opaque target IDs, labels, disabled states and values. Use those IDs for click/set_value/key; stale, hidden, disabled and modal-blocked controls reject. Window mode is foreground/background/inspect. pace_ms (0-2000) controls visible playback timing; fast mode still acknowledges ordered operations. No selectors or JavaScript evaluation. Inspect again after opening menus or dialogs.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "executable":{"type":"string"},
+                "view":{"type":"string","enum":["current","isometric","top","bottom","front","back","left","right"]},
+                "fit":{"type":"boolean"},
                 "gesture":{"type":"string","enum":["move","click","double_click","drag"]},
                 "canvas":{"type":"string","enum":["viewport","drawing"]},
                 "to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},

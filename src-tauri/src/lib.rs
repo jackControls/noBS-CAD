@@ -982,7 +982,7 @@ pub fn run() {
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
-            session_bridge::mcp_session_bridge_view,
+            session_bridge::mcp_session_bridge_control,
             session_bridge::mcp_window_control,
             session_bridge::mcp_path_exists,
             session_bridge::mcp_session_bridge_heartbeat,

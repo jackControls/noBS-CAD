@@ -6,6 +6,7 @@
 //! ```
 
 mod install_mcp;
+mod test_mcp;
 
 use anyhow::{bail, Result};
 use std::env;
@@ -29,6 +30,7 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "test-mcp" => test_mcp::run(args),
         "install-mcp" => {
             let options = install_mcp::Options::parse(args)?;
             install_mcp::run(options)
@@ -54,6 +56,9 @@ Usage:
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  test-mcp      Run contracts (default), live, controls, or bench. Additional
+                arguments pass directly to the selected MCP test/demo driver.
+                Example: cargo xtask test-mcp live --server PATH --desktop PATH
   install-mcp   Detect installed agent clients and upsert the local nbcad-mcp
                 stdio server into each client's user config (Cursor, VS Code,
                 Claude, OpenCode).

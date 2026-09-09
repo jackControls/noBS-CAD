@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
-import {Client} from './mcp-client.mjs';
+import {Client} from './client.mjs';
 
 const option = name => process.argv[process.argv.indexOf(name) + 1];
 assert(process.argv.includes('--server') && (process.argv.includes('--desktop') || process.argv.includes('--session')),
@@ -16,7 +16,7 @@ async function call(name, args = {}) {
 }
 try {
   await client.start();
-  const launch = process.argv.includes('--session') ? {status:'ready',session_id:option('--session')} : await call('cad_launch', {executable: option('--desktop')});
+  const launch = process.argv.includes('--session') ? {status:'ready',session_id:option('--session')} : await call('cad_ui', {action:'launch',executable: option('--desktop')});
   assert.equal(launch.status, 'ready', JSON.stringify(launch));
   report.session_id = launch.session_id;
   report.pid = launch.pid;
@@ -34,7 +34,7 @@ try {
     if (mode === 'background' && process.argv.includes('--idle')) {
       await new Promise(resolve=>setTimeout(resolve,35000));
     }
-    const view = await call('cad_view', {session_id: launch.session_id, view: 'top'});
+    const view = await call('cad_ui', {action:'view',session_id: launch.session_id, view: 'top'});
     assert.equal(view.status, 'applied', JSON.stringify(view));
     const offset = view.camera.position.map((v, i) => v - view.camera.target[i]);
     assert(offset[2] > 0 && Math.hypot(offset[0], offset[1]) < 1e-5);
