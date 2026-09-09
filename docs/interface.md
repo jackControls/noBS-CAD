@@ -108,6 +108,14 @@ introducing a mirrored list of expected tools or controls.
 cargo xtask test-mcp bench --server <nbcad-mcp.exe> --workshop all --out <report-directory>
 ```
 
+The live file test also creates a second empty document, opens different saved
+models into that same session, and closes its active tab while the first remains.
+Subsequent document/solid reads must follow the acknowledged model and surviving
+tab without an explicit refresh or attach. Same-session controls reconcile changed
+snapshots; identical snapshots avoid geometry replay. Delivered native control
+requests retain their originating window/session ownership until reply or expiry,
+independently of whether the source tab remains resident.
+
 Add `--session <UUID> --pace 500` to drive an empty live document. The
 runner can launch one with `--desktop <nbcad.exe>` and save the resulting
 assembly with `--save <new-absolute-path.nbcad>`. The same

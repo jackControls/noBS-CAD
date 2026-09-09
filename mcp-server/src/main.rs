@@ -128,6 +128,9 @@ struct CadServer {
     /// Session id last successfully loaded via read-only `cad_attach` / `cad_refresh`.
     /// MCP never writes this session's files back (no last-writer-wins vs a UI).
     attached_document_id: Option<String>,
+    /// Last completed snapshot loaded into the read manager. UI-only controls
+    /// can acknowledge without changing it; avoid replaying identical geometry.
+    loaded_snapshot_json: Option<String>,
     pending_recompute_transaction: Option<u64>,
     /// Forward record of successful mutating `tools/call` entries for `cad_script`.
     tool_trace: Vec<Value>,
@@ -140,6 +143,7 @@ impl CadServer {
             kernel: OcctKernel::new().map_err(|error| error.to_string())?,
             disclosure: DisclosureState::new(),
             attached_document_id: None,
+            loaded_snapshot_json: None,
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
         })
@@ -408,6 +412,10 @@ impl CadServer {
                         {
                             if self.attached_document_id.as_deref() != Some(active.as_str()) {
                                 self.attach_read_only_snapshot(&json!({"session_id":active}))?;
+                            } else if self.loaded_snapshot_json.as_deref()
+                                != Some(session::require_model_json(&active)?.as_str())
+                            {
+                                self.refresh_read_only_snapshot()?;
                             }
                             result["attached_session_id"] = json!(active);
                         }
@@ -676,6 +684,7 @@ impl CadServer {
         // cad_script can replay on a fresh CadServer without session UUIDs or files.
         // Refresh re-seeds/replaces the baseline the same way (drops post-attach mutates).
         self.seed_script_baseline_from_model(&model_json);
+        self.loaded_snapshot_json = Some(model_json);
         Ok(())
     }
 
@@ -6815,6 +6824,98 @@ mod tests {
                 .unwrap();
         }
         assert!(replay.manager.active_snapshot().is_some());
+    }
+
+    #[test]
+    fn acknowledged_file_open_replaces_same_session_read_model() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-open-replacement-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&unique);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":unique}))
+            .unwrap();
+        assert_eq!(server.manager.solid_scene().bodies.len(), 1);
+        let mut replacement = CadServer::new().unwrap();
+        replacement
+            .call_tool(
+                "cad_set_document_name",
+                json!({"name":"Opened replacement"}),
+            )
+            .unwrap();
+        let replacement_json = replacement
+            .call_tool("cad_project_model", json!({}))
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let peer = unique.clone();
+        let host = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(entries) =
+                    std::fs::read_dir(session::session_dir().join(&peer).join("controls"))
+                {
+                    for entry in entries.flatten() {
+                        if !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                        {
+                            continue;
+                        }
+                        let request: Value =
+                            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        assert_eq!(request["ui"]["command"], "open");
+                        session::write_session(&peer, "model.json", &replacement_json).unwrap();
+                        session::write_session(
+                            &peer,
+                            "heartbeat.json",
+                            &json!({"updated_ms":session::now_ms(),"generation":2}).to_string(),
+                        )
+                        .unwrap();
+                        session::write_session(
+                            &peer,
+                            &format!("controls/{}.result.json", request["id"].as_str().unwrap()),
+                            &json!({"status":"applied","active_session_id":peer}).to_string(),
+                        )
+                        .unwrap();
+                        return;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let result = server
+            .call_tool(
+                "cad_interface",
+                json!({"action":"file","command":"open","path":"replacement.nbcad"}),
+            )
+            .unwrap();
+        host.join().unwrap();
+        assert_eq!(result["attached_session_id"], unique);
+        assert_eq!(
+            server.call_tool("cad_document", json!({})).unwrap()["name"],
+            "Opened replacement"
+        );
+        assert!(
+            server.call_tool("solid_scene", json!({})).unwrap()["bodies"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            server.call_tool("cad_project_model", json!({})).unwrap(),
+            replacement
+                .call_tool("cad_project_model", json!({}))
+                .unwrap()
+        );
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

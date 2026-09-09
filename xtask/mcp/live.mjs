@@ -126,6 +126,34 @@ try {
       assert.equal(opened.attached_session_id,opened.active_session_id,'File transitions must bind subsequent operations automatically');
       assert.equal((await call('solid_scene')).bodies.length,1,'Operation reads must follow the reopened document without another attach');
       assert.equal((await ui({action:'inspect'})).status,'applied','Continue driving the session after open');
+      const partSession = activeSession;
+      const partName = (await call('cad_document')).name;
+      await control('New design');
+      assert.notEqual(activeSession,partSession,'New design must create another resident tab');
+      const emptySession = activeSession;
+      const emptyPath = `${option('--save')}.empty.nbcad`;
+      assert.equal((await ui({action:'file',command:'save',path:emptyPath})).status,'applied');
+      const emptyName = (await call('cad_document')).name;
+      assert.equal((await call('solid_scene')).bodies.length,0);
+      // Replace B in place with A, then with the saved empty document. Reopening
+      // an identical model cannot detect stale MCP reads after File Open.
+      assert.equal((await ui({action:'file',command:'open',path:option('--save')})).status,'applied');
+      assert.equal(activeSession,emptySession);
+      assert.equal((await call('solid_scene')).bodies.length,1);
+      assert.equal((await call('cad_document')).name,partName);
+      assert.equal((await ui({action:'file',command:'open',path:emptyPath})).status,'applied');
+      assert.equal(activeSession,emptySession);
+      assert.equal((await call('solid_scene')).bodies.length,0);
+      assert.equal((await call('cad_document')).name,emptyName);
+      const tabs = (await ui({action:'inspect'})).ui.surfaces.find(s=>s.name==='file-and-project-tabs').controls;
+      const closes = tabs.filter(c=>c.label==='Close document'&&!c.disabled);
+      assert.equal(closes.length,2,'Disposable fixture must contain only its two tabs');
+      const closed = await ui({action:'click',target:closes.at(-1).id});
+      assert.equal(closed.status,'applied','Closing active B must acknowledge through its original request');
+      assert.equal(activeSession,partSession,'Closing B must reattach MCP to surviving A');
+      assert.equal((await call('solid_scene')).bodies.length,1);
+      assert.equal((await call('cad_document')).name,partName);
+      console.log('PASS different-document open and active-tab close');
     }
   }
   report.status='passed';

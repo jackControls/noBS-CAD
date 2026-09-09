@@ -108,6 +108,9 @@ struct WindowPublisher {
     /// Retained per-tab MCP publishers (inbox + revision). Switching A→B
     /// rebinds the active pointer; A's session stays isolated.
     by_project: HashMap<String, ProjectPublisher>,
+    /// Delivered control request -> (source MCP session, expiry). A tab may
+    /// close before replying; ownership must outlive the resident project.
+    pending_controls: HashMap<String, (String, u64)>,
 }
 
 impl WindowPublisher {
@@ -115,6 +118,7 @@ impl WindowPublisher {
         Self {
             active_project_session_id: None,
             by_project: HashMap::new(),
+            pending_controls: HashMap::new(),
         }
     }
 
@@ -1190,7 +1194,12 @@ fn apply_one_inbox_op(
                 project_session_id.as_deref(),
                 &process_instance_id,
             )?;
-            atomic_write(&inbox_dir(&session_id).join("results").join(format!("{seq}.json")), &result.to_string())?;
+            atomic_write(
+                &inbox_dir(&session_id)
+                    .join("results")
+                    .join(format!("{seq}.json")),
+                &result.to_string(),
+            )?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,
@@ -1347,11 +1356,20 @@ pub fn mcp_session_bridge_control(
     engine: tauri::State<'_, AppState>,
     response: Option<Value>,
 ) -> Result<Value, String> {
+    control_for_window(&state, window.label(), &engine, response)
+}
+
+fn control_for_window(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    response: Option<Value>,
+) -> Result<Value, String> {
     let mut publishers = state
         .publishers
         .lock()
         .map_err(|_| "publisher lock poisoned")?;
-    let Some(publisher) = publishers.get_mut(window.label()) else {
+    let Some(publisher) = publishers.get_mut(window_label) else {
         return Ok(Value::Null);
     };
     let session_id = if let Some(response) = response.as_ref() {
@@ -1360,10 +1378,14 @@ pub fn mcp_session_bridge_control(
             .and_then(Value::as_str)
             .ok_or("missing response session")?;
         publisher
-            .by_project
-            .values()
-            .find(|project| project.session_id == requested)
-            .map(|project| project.session_id.clone())
+            .pending_controls
+            .get(
+                response["request_id"]
+                    .as_str()
+                    .ok_or("missing request id")?,
+            )
+            .filter(|(session, expiry)| session == requested && *expiry >= now_ms())
+            .map(|(session, _)| session.clone())
             .ok_or("response belongs to another window")?
     } else {
         if publisher.active_project_session_id.as_deref()
@@ -1400,6 +1422,7 @@ pub fn mcp_session_bridge_control(
             &dir.join(format!("{id}.result.json")),
             &response.to_string(),
         )?;
+        publisher.pending_controls.remove(&id);
         let _ = fs::remove_file(request);
         return Ok(Value::Null);
     }
@@ -1467,6 +1490,13 @@ pub fn mcp_session_bridge_control(
             let _ = fs::remove_file(path);
             return Ok(Value::Null);
         }
+        publisher
+            .pending_controls
+            .retain(|_, (_, expiry)| *expiry >= now_ms());
+        publisher.pending_controls.insert(
+            request["id"].as_str().unwrap().to_owned(),
+            (session_id.clone(), request["expires_ms"].as_u64().unwrap()),
+        );
         return Ok(request);
     }
     Ok(Value::Null)
@@ -1547,6 +1577,51 @@ mod tests {
             .join("processes")
             .join(format!("{}.json", state.process_instance_id));
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn active_tab_close_retains_control_reply_ownership() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-close-control-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("tab-a")
+            }));
+            let (session_a, _) = reserve(&state, "main");
+            let controls = dir.join(&session_a).join("controls");
+            fs::create_dir_all(&controls).unwrap();
+            atomic_write(&controls.join("123-1.request.json"), &json!({"id":"123-1","expires_ms":now_ms()+30_000,"ui":{"action":"click","target":"close-active-tab"}}).to_string()).unwrap();
+            let request = control_for_window(&state, "main", &engine, None).unwrap();
+            assert_eq!(request["session_id"], session_a);
+            // The normal close sequence activates B before dropping A.
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.create_project_session("tab-b")
+            }));
+            let (session_b, _) = reserve(&state, "main");
+            state.drop_bound_project_session("main", "tab-a");
+            assert!(!state.publishers.lock().unwrap()["main"]
+                .by_project
+                .contains_key("tab-a"));
+            let response = json!({"request_id":"123-1","session_id":session_a,"status":"applied"});
+            // Resident tab B cannot forge a response to A's delivered request.
+            let mut forged = response.clone();
+            forged["session_id"] = json!(session_b);
+            assert!(control_for_window(&state, "main", &engine, Some(forged)).is_err());
+            control_for_window(&state, "main", &engine, Some(response.clone())).unwrap();
+            let reply: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("123-1.result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(reply["active_session_id"], session_b);
+            assert_eq!(reply["status"], "applied");
+            assert!(!controls.join("123-1.request.json").exists());
+            assert!(control_for_window(&state, "main", &engine, Some(response)).is_err());
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
