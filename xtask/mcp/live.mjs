@@ -63,6 +63,21 @@ try {
       const state = await ui({action:'inspect'});
       assert.equal(state.state.mode, step.name === 'sketch_finish' ? 'solid' : 'sketch', 'UI must follow the engine sketch lifecycle');
     }
+    // Finish refreshed a model that already contains the sketch. Its portable
+    // script must not append another finish (or any desktop transport call).
+    await call('cad_detach');
+    const replay = new Client(option('--server'));
+    try {
+      const script = await call('cad_script');
+      assert(!script.calls.some(step=>step.name==='cad_interface'));
+      await replay.start();
+      for (const step of script.calls) await replay.call(step.name,step.arguments);
+      const restored = JSON.parse(await replay.call('cad_project_model'));
+      assert.equal(restored.sketches.length,1,'Live script must replay each edit exactly once');
+    } finally {
+      replay.close();
+      await call('cad_attach',{session_id:activeSession});
+    }
     const current = await ui({action:'inspect'});
     const extrude = current.ui.surfaces.flatMap(s=>s.controls).find(c=>c.label==='Extrude'&&!c.disabled);
     assert(extrude, 'Extrude UI is unavailable after native sketch');

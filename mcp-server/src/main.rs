@@ -145,9 +145,10 @@ impl CadServer {
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let live_mutation = self.attached_document_id.is_some() && is_modeling_mutate(name);
         let trace_args = arguments.clone();
         let result = self.dispatch_tool(name, arguments);
-        if result.is_ok() && records_in_script(name) {
+        if result.is_ok() && records_in_script(name) && !live_mutation {
             self.tool_trace.push(json!({
                 "name": name,
                 "arguments": trace_args,
@@ -444,6 +445,11 @@ impl CadServer {
             // Preserve the receipt and sequence: an uncertain operation must
             // never be silently retried by the interface.
             return Err(applied.to_string());
+        }
+        // A completed-model refresh already seeded a replay baseline containing
+        // this edit. Only active-sketch edits still need an individual entry.
+        if applied["refreshed"] != true {
+            self.tool_trace.push(json!({"name":name,"arguments":payload}));
         }
         let value: Value = serde_json::from_str(&session::read_session_file(
             &session_id,
@@ -3364,6 +3370,7 @@ fn records_in_script(name: &str) -> bool {
     if matches!(
         name,
         "cad_script"
+            | "cad_interface"
             | "cad_compare_solids"
             | "cad_document"
             | "cad_project_model"
@@ -6767,6 +6774,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(actual, expected);
+        // The grouped transport must not add a second copy of the operation,
+        // or leak catalog/renderer controls into a portable modeling script.
+        grouped.call_tool("cad_interface", json!({"action":"catalog"})).unwrap();
+        let script = grouped.call_tool("cad_script", json!({})).unwrap();
+        assert_eq!(script["calls"].as_array().unwrap().len(), 1);
+        let mut replay = CadServer::new().unwrap();
+        for call in script["calls"].as_array().unwrap() {
+            replay.call_tool(call["name"].as_str().unwrap(), call["arguments"].clone()).unwrap();
+        }
+        assert!(replay.manager.active_snapshot().is_some());
     }
 
     #[test]
