@@ -123,13 +123,13 @@ export function beginDrawingSheetSetup(): void {
 
 /** Creates a framed but intentionally empty sheet. */
 export function createDrawingSheet(setup: DrawingSheetSetup): Promise<void> {
-  return enqueueDrawingCommand((drawing) => ({    
-type: 'create_sheet', arguments: {
+  return enqueueDrawingCommand((drawing) => ({
+    type: 'create_sheet', arguments: {
       name: `Sheet ${drawing.sheets.length + 1}`, format: setup.format, orientation: setup.orientation,
       standard: setup.standard, projection_method: setup.projection_method, tolerance_note: setup.tolerance_note,
       title_block: { title: setup.title, drawing_number: setup.drawing_number, revision: setup.revision, author: setup.author },
-    }  
-})).then(() => { clearDrawingSelection(); useAppStore.getState().setDrawingSheetSetupOpen(false); });
+    },
+  })).then(() => { clearDrawingSelection(); useAppStore.getState().setDrawingSheetSetupOpen(false); });
 }
 
 export function setActiveDrawingSheet(sheetId: number): Promise<void> {
@@ -201,10 +201,10 @@ export function addDrawingView(
     const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
     const view = drawingViewPlacementDraft(sheet, state.solidScene, kind, position, requestedParentId, requestedScale, drawing.next_view_id);
     return { type: 'add_view', arguments: { sheet_id: sheet.id, view, rescale_group: requestedScale !== undefined } };
-  }).then(() => {    
-const store = useAppStore.getState(); store.setDrawingTool(null); store.setDrawingPendingViewKind(null);
-    store.setSelectedDrawingAnnotationId(null); store.setSelectedDrawingViewId(store.drawingDocument.next_view_id - 1);  
-});
+  }).then(() => {
+    const store = useAppStore.getState(); store.setDrawingTool(null); store.setDrawingPendingViewKind(null);
+    store.setSelectedDrawingAnnotationId(null); store.setSelectedDrawingViewId(store.drawingDocument.next_view_id - 1);
+  });
 }
 
 export function updateDrawingView(viewId: number, update: Partial<DrawingViewDto>): Promise<void> {
@@ -640,8 +640,8 @@ export function addDrawingChamferNote(
 }
 
 export function addDrawingNote(position: [number, number], text = 'NOTE'): Promise<void> {
-  return enqueueDrawingCommand(drawing => {    
-const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
+  return enqueueDrawingCommand(drawing => {
+    const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
     return { type: 'add_note', arguments: { sheet_id: sheet.id, text, position } };
   }).then(() => selectCreatedAnnotation(useAppStore.getState().drawingDocument.next_annotation_id - 1));
 }
