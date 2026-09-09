@@ -11,9 +11,10 @@
  */
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const BASE = 'http://localhost:7199';
-const SHOTS = new URL('../docs/qa/m1a/', import.meta.url).pathname;
+const SHOTS = fileURLToPath(new URL('../docs/qa/m1a/', import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
 let failures = 0;
@@ -123,7 +124,7 @@ try {
   check('two lines drawn', lines.length === 2, `entities=${sketch.entities.length}`);
   check('three points (shared corner)', sketch.entities.filter((e) => e.kind === 'point').length === 3);
   const ctypes = sketch.constraints.map((c) => c.type).sort();
-  check('H and V constraints created', ctypes.includes('horizontal') && ctypes.includes('vertical'), ctypes.join(','));
+  check('horizontal datum and chained perpendicular constraint created', ctypes.includes('horizontal') && ctypes.includes('perpendicular'), ctypes.join(','));
   await shot('05b-line-chain-glyphs');
 
   // Switching tools must preserve semantic acquisition feedback. The native
@@ -146,15 +147,16 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
 
-  // --- 6. Drag the free endpoint (60,40): solver pins it; V translates ---
+  // --- 6. Drag the free endpoint (60,40): solver preserves the right angle ---
   console.log('6. drag endpoint + undo');
   const before = await sketchToScreen(60, 40);
   await page.mouse.move(before.x, before.y);
   await page.mouse.down();
   await page.waitForTimeout(100);
-  // Stay clear of the exact 70/80 grid midpoint, whose equally valid tie
-  // direction can vary with sub-pixel projection.
-  const dragTo = await sketchToScreen(90, 78);
+  // The grid is adaptive; choose an actual intersection at the current zoom.
+  const gridStep = await page.evaluate(() => window.__sketchGridStep());
+  const target = { x: Math.round(90 / gridStep) * gridStep, y: Math.round(80 / gridStep) * gridStep };
+  const dragTo = await sketchToScreen(target.x, target.y);
   await page.mouse.move(dragTo.x, dragTo.y, { steps: 12 });
   await page.waitForTimeout(250);
   await shot('06a-drag-mid');
@@ -163,11 +165,10 @@ try {
   sketch = (await state()).activeSketch;
   const line2 = sketch.entities.find((e) => e.kind === 'line' && (e.end.y > 40 || e.start.y > 40));
   const draggedEnd = line2.end.y > line2.start.y ? line2.end : line2.start;
-  // Solver drag (M1b): the endpoint is PINNED to the cursor (grid-snapped
-  // to (90,80)) and the Vertical constraint keeps holding — the V line
-  // translates horizontally rather than clamping the pin.
-  check('drag pins endpoint to cursor (grid-snapped)', Math.abs(draggedEnd.x - 90) < 1e-6 && Math.abs(draggedEnd.y - 80) < 1e-6, `(${draggedEnd.x},${draggedEnd.y})`);
-  check('V constraint holds after drag', Math.abs(line2.end.x - line2.start.x) < 1e-6, `x1=${line2.start.x} x2=${line2.end.x}`);
+  // Keep sub-micrometer tolerance for solver/projection roundoff while still
+  // requiring the selected grid intersection, not an arbitrary nearby point.
+  check('drag pins endpoint to the current grid intersection', Math.abs(draggedEnd.x - target.x) < 1e-4 && Math.abs(draggedEnd.y - target.y) < 1e-4, `(${draggedEnd.x},${draggedEnd.y}), target=(${target.x},${target.y})`);
+  check('chained line remains perpendicular after drag', Math.abs(line2.end.x - line2.start.x) < 1e-6, `x1=${line2.start.x} x2=${line2.end.x}`);
   await shot('06b-drag-result');
 
   await page.keyboard.press('Meta+z'); // undo the drag
