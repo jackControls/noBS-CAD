@@ -159,6 +159,7 @@ try {
   if (option('--desktop')) {
     const launched = await client.call('cad_interface', {action: 'launch', executable: option('--desktop')});
     assert.equal(launched.status, 'ready'); session = launched.session_id;
+    report.session_id = session; report.pid = launched.pid;
   }
   await call('cad_set_document_name', {name: 'Crown garden bench — editable native assembly'});
   root = await part('Seat slat — 1200 × 85, R3, drilled', 1200, 85, 35, {holes: true});
@@ -204,9 +205,27 @@ try {
     report.checks.push('fresh process restore and subsequent feature edit');
   } finally { restored.close(); }
   if (session) {
-    await client.call('cad_interface', {action: 'view', view: 'isometric', fit: true});
-    if (option('--save')) await client.call('cad_interface', {action: 'file', command: 'save', path: resolve(option('--save'))});
-    await client.call('cad_interface', {action: 'window', mode: 'foreground'});
+    if (option('--save')) {
+      const path = resolve(option('--save'));
+      assert.equal((await client.call('cad_interface', {action: 'file', command: 'save', path})).status, 'applied');
+      assert.equal((await client.call('cad_interface', {action: 'file', command: 'open', path})).status, 'applied');
+      await validate();
+      // Exercise the file the user will open, not just a model checkpoint.
+      const reopenedVolume = volume(await bodyById(picket.body.id));
+      await call('sketch_edit', {name: picket.relief.sketch});
+      await call('sketch_edit_dimension', {constraint_id: picket.relief.width_constraint, text: '22'});
+      assert.equal((await call('sketch_active')).dof.value, 0);
+      await call('sketch_finish'); await call('solid_recompute');
+      await validate();
+      nearVolume(reopenedVolume - volume(await bodyById(picket.body.id)), (2 * 100 + Math.PI * (11 ** 2 - 10 ** 2)) * picket.depth, 'Reopened native file remains editable');
+      await call('sketch_edit', {name: picket.relief.sketch});
+      await call('sketch_edit_dimension', {constraint_id: picket.relief.width_constraint, text: '20'});
+      await call('sketch_finish'); await call('solid_recompute'); await validate();
+      assert.equal((await client.call('cad_interface', {action: 'file', command: 'save', path, overwrite: true})).status, 'applied');
+      report.checks.push('native .nbcad save/open, width edit 20 → 22 → 20, save');
+    }
+    assert.equal((await client.call('cad_interface', {action: 'view', view: 'isometric', fit: true})).status, 'applied');
+    assert.equal((await client.call('cad_interface', {action: 'window', mode: 'foreground'})).status, 'applied');
   }
   if (option('--out')) {
     await mkdir(resolve(option('--out')), {recursive: true});
