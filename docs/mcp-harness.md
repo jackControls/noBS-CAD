@@ -182,3 +182,15 @@ As with other live modeling operations, attached sessions use `cad_submit` and
 `cad_await_apply`, then refresh/query the published result. Headless clients can
 call these operations directly. The desktop and MCP binary must both include
 the shared mutation mappings for live use.
+
+Run the native control regression against a disposable active assembly document:
+
+```sh
+node scripts/mcp-desktop-controls.mjs --server /path/to/nbcad-mcp --session UUID --out controls.json
+```
+
+The test changes the camera, checks that neither the model nor engine generation
+changes, suppresses a joint, temporarily makes it revolute to exercise motion,
+deletes it, and restores the starting model in a `finally` block. An optional
+`--model model.json` loads a fixture into the target document first. It requires
+a working live snapshot publisher (see the snapshot-publication fix in #90).
