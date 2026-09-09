@@ -12,14 +12,9 @@ const report={name:'Garden workshop bench',calls:[],parts:[],checks:[]};
 let tools;
 async function call(name,args={}) {
   const start=performance.now();let result;
-  const mutate=tools?.find(t=>t.name===name);
-  if(session&&mutate?.mutates) {
-    const sessions=await client.call('cad_list_sessions');
-    const generation=sessions.session_details.find(s=>s.session_id===session).heartbeat.generation;
-    const submitted=await client.call('cad_submit',{name,arguments:args,base_generation:generation});
-    const applied=await client.call('cad_await_apply',{seq:submitted.seq,timeout_ms:20000});
-    assert.equal(applied.status,'applied',JSON.stringify(applied));
-    result=applied;
+  const operation=tools?.find(t=>t.name===name);
+  if(operation&&name!=='cad_interface') {
+    result=await client.call('cad_interface',{action:'execute',group:operation.group,operation:name,arguments:args});
   } else result=await client.call(name,args);
   report.calls.push({name,arguments:args,elapsed_ms:Math.round(performance.now()-start)});
   return result;
@@ -52,12 +47,12 @@ try {
   await client.start();tools=await client.call('cad_list_all_tools');
   if(option('--desktop')) {
     assert(!session,'Choose --desktop or --session');
-    const launched=await call('cad_ui',{action:'launch',executable:option('--desktop')});
+    const launched=await call('cad_interface',{action:'launch',executable:option('--desktop')});
     assert.equal(launched.status,'ready',JSON.stringify(launched));
     session=launched.session_id;report.session_id=session;report.pid=launched.pid;
     console.log('Live bench session',session);
   }
-  if(session){await client.call('cad_attach',{session_id:session});await call('cad_ui',{action:'inspect',session_id:session,pace_ms:Number(option('--pace')??0)});}
+  if(session){await client.call('cad_attach',{session_id:session});await call('cad_interface',{action:'inspect',session_id:session,pace_ms:Number(option('--pace')??0)});}
   assert.equal((await model()).document.history.features.length,0,'Use a new empty document for the bench');
   if(option('--workshop')==='all') await workshop(call,JSON.stringify(await model()),report);
   const slat=await board('Seat slat',1200,85,35);
@@ -132,14 +127,15 @@ try {
   report.checks.push('native sketch/extrude provenance','repeated component occurrences','rigid joint solution','history replay');
   if(option('--workshop')==='all') {
     const called=new Set(report.calls.map(c=>c.name));
-    const required=tools.filter(t=>['sketch','solid','modify','body_ops'].includes(t.pack));
+    const required=tools.filter(t=>t.group.startsWith('sketch/') ||
+      (t.mutates&&['solid/build','solid/refine','solid/repeat','solid/body'].includes(t.group)));
     const missing=required.filter(t=>!called.has(t.name)).map(t=>t.name);
     report.coverage={required:required.length,executed:required.length-missing.length,missing};
     assert.deepEqual(missing,[],'Every sketch, solid, modify and body tool needs a successful workshop example');
   }
   if(session) {
-    assert.equal((await call('cad_ui',{action:'view',session_id:session,view:'isometric',fit:true})).status,'applied');
-    if(option('--save')) assert.equal((await call('cad_ui',{action:'file',session_id:session,command:'save',path:resolve(option('--save'))})).status,'applied');
+    assert.equal((await call('cad_interface',{action:'view',session_id:session,view:'isometric',fit:true})).status,'applied');
+    if(option('--save')) assert.equal((await call('cad_interface',{action:'file',session_id:session,command:'save',path:resolve(option('--save'))})).status,'applied');
   }
   if(option('--out')) {
     const out=resolve(option('--out'));await mkdir(out,{recursive:true});

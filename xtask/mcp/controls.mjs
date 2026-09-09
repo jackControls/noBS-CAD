@@ -26,7 +26,7 @@ try {
  const beforeGeneration=await generation();
  const directions={top:[0,0,1],bottom:[0,0,-1],front:[0,-1,0],back:[0,1,0],left:[-1,0,0],right:[1,0,0]};
  for (const view of ['current',...Object.keys(directions),'isometric']) {
-  const result=await c.call('cad_ui',{action:'view',view,fit:view!=='current'});
+  const result=await c.call('cad_interface',{action:'view',view,fit:view!=='current'});
   assert.equal(result.status,'applied',JSON.stringify(result));
   assert(result.camera.position.every(Number.isFinite));
   if(directions[view]) {

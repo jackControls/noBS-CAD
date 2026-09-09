@@ -96,7 +96,7 @@ jobs:
 
             const commonBuildInputs = [
               {
-                pattern: /^(src|src-tauri|crates|public)\//,
+                pattern: /^(src|src-tauri|crates|public|interface)\//,
                 reason: "application or native source",
               },
               {

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from './store/appStore';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { inspectUi, operateUi, visible, type UiAction } from './uiControl';
-import { presentMcpOperation, setPlaybackPace, waitForPlayback } from './mcpPlayback';
+import { presentOperation, setPlaybackPace, waitForPlayback } from './operationPlayback';
 import { operateUiFile, type UiFileRequest } from './uiFiles';
 import {drivePointer, type UiGesture} from './uiPointer';
 import {pendingEngineOperations} from './engine/activity';
@@ -35,7 +35,7 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
           try { response.completed = await operateUiFile(request.ui); }
           finally { useAppStore.getState().setProjectBusy(false); }
           if (!response.completed) throw new Error('File operation did not complete; inspect the UI for details');
-          await presentMcpOperation(`File: ${request.ui.command}`);
+          await presentOperation(`File: ${request.ui.command}`);
         } else if (request.ui.action === 'viewport') {
           if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) throw new Error('A modal dialog blocks the viewport');
           const api = getSessionCamera();
@@ -47,10 +47,10 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
           if (!point) throw new Error('Viewport action requires point or world coordinates');
           if (drawing) await drivePointer(drawing, request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
           else await api!.pointer(request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
-          await presentMcpOperation(`Viewport: ${request.ui.gesture ?? 'click'}`);
+          await presentOperation(`Viewport: ${request.ui.gesture ?? 'click'}`);
         } else {
           const target = operateUi(request.ui as UiAction, document);
-          if (request.ui.action !== 'inspect') await presentMcpOperation(request.ui.action, target);
+          if (request.ui.action !== 'inspect') await presentOperation(request.ui.action, target);
         }
         while (pendingEngineOperations() || useAppStore.getState().solidBusy || useAppStore.getState().projectBusy) {
           if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) {

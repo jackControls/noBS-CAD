@@ -1,12 +1,28 @@
-# Live UI automation and executable demos
+# Product interface and executable examples
 
-`cad_ui` is the single live UI tool. `action: launch` starts an explicitly
+`interface/catalog.json` owns the workspace and command grouping used by the
+ribbon and MCP/API. There is no separate ribbon configuration or API grouping
+list. Each operation belongs to exactly one product group; tests reject missing,
+duplicate, and stale entries. MCP disclosure packs are internal advertisement
+policy, not a second public command taxonomy.
+
+Use `cad_interface` with `action: catalog` to discover groups and typed operations.
+Use `action: execute`, `group`, `operation`, and `arguments` to drive them. The
+same call returns the engine result headlessly or in an attached desktop;
+generation checks, submission, publication, and acknowledgement are internal.
+Named MCP operation tools use that same route when attached, so existing
+clients also make one call per operation. A successful launch binds that new
+desktop automatically; attach explicitly only when choosing an existing document.
+An outdated desktop is rejected before submission. No uncertain mutation is
+automatically retried.
+
+`action: launch` starts an explicitly
 supplied desktop executable (or
 `NBCAD_DESKTOP_BIN`). It reports `ready` only after the new process publishes a
 fresh session and that session acknowledges a UI inspection. `starting` is not
 permission to launch a duplicate: inspect the existing process/session first.
 
-`cad_ui` inspects the running application's actual controls. Results are grouped
+`cad_interface` inspects the running application's actual controls. Results are grouped
 by ribbon workspace/panel, project tabs, browser, viewport, sketch palette,
 appearance, comments, timeline, drawing inspector, dialogs, and portal menus.
 Only currently rendered controls appear; disabled controls remain explicitly
@@ -40,17 +56,18 @@ other external dialogs are not DOM controls.
 
 ## Ordered plans
 
-Use one client to execute a plan sequentially. For each engine edit, await
-`cad_submit` then `cad_await_apply`. Await each `cad_ui` response before
+Use one client to execute a plan sequentially. Await each `cad_interface` response before
 the next operation. The UI has one presentation lane and acknowledges changed
 model state after publication. Failed operations stop the supplied golden;
 never replay an uncertain mutation automatically. Independently submitting
 commands from competing clients is not a transactional plan.
 
-Set `pace_ms` with `cad_ui` (0–2000). The same calls support fast checks and
-visible demonstrations: zero minimizes the presentation interval, while 500
-ms makes each operation legible. Camera changes animate; UI actions highlight
-their target and model edits show their command in order. Reduced-motion
+Set `pace_ms` with `cad_interface` (0–2000). The same calls support fast checks and
+visible demonstrations: zero is the default and adds no presentation delay,
+while 500 ms deliberately paces a lesson. When visible, button touches and
+operation groups animate, with viewport feedback for sketch and solid changes.
+Feedback cleanup runs independently of execution. Camera changes animate.
+Reduced-motion
 preferences suppress the highlight animation.
 
 ## Checks that grow with the product
@@ -99,8 +116,8 @@ engine through the existing control channel. They do not read the completed
 model snapshot, which intentionally excludes a sketch still being edited.
 Drivers live only in `xtask/mcp`; there are no legacy script entry points.
 
-The workshop exercises every tool in the runtime sketch, solid, modify, and
-body-operations packs. Adding a tool automatically fails coverage until an
+The workshop exercises sketch operations and mutations in the product's solid
+build, refine, repeat, and body groups. Adding an operation fails coverage until an
 example successfully calls it. Geometry checks cover feature edits, body
 counts, meshes, sketch dimensions, and replay errors. Successful invocation
 coverage does not mean every parameter combination or UI dialog is tested.

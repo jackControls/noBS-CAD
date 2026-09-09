@@ -17,7 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
-import { SerialPlayback, presentMcpOperation, wakePlayback } from './mcpPlayback';
+import { SerialPlayback, presentOperation, wakePlayback } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
@@ -195,7 +195,7 @@ async function applyInboxNow(): Promise<void> {
       // Native already archived the seq and bumped engine_revision. Publish
       // even if leftover store refresh throws so cad_refresh sees the live
       // engine. Next applyInboxNow is a no-op on the archived seq.
-      await presentMcpOperation(result.name ?? 'Model operation');
+      await presentOperation(result.name ?? 'Model operation');
       scheduleSessionBridgePublish();
     }
   } catch (error) {

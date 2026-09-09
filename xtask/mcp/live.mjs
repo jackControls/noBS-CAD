@@ -16,13 +16,14 @@ async function call(name, args = {}) {
 }
 try {
   await client.start();
-  const launch = process.argv.includes('--session') ? {status:'ready',session_id:option('--session')} : await call('cad_ui', {action:'launch',executable: option('--desktop')});
+  const launch = process.argv.includes('--session') ? {status:'ready',session_id:option('--session')} : await call('cad_interface', {action:'launch',executable: option('--desktop')});
   assert.equal(launch.status, 'ready', JSON.stringify(launch));
+  if(process.argv.includes('--desktop')) assert.equal(launch.attached,true,'Launch must bind the new desktop without another routing step');
   report.session_id = launch.session_id;
   report.pid = launch.pid;
   let activeSession = launch.session_id;
   const ui = async args => {
-    const result = await call('cad_ui', {session_id: activeSession, ...args});
+    const result = await call('cad_interface', {session_id: activeSession, ...args});
     activeSession = result.active_session_id ?? activeSession;
     return result;
   };
@@ -34,7 +35,7 @@ try {
     if (mode === 'background' && process.argv.includes('--idle')) {
       await new Promise(resolve=>setTimeout(resolve,35000));
     }
-    const view = await call('cad_ui', {action:'view',session_id: launch.session_id, view: 'top'});
+    const view = await call('cad_interface', {action:'view',session_id: launch.session_id, view: 'top'});
     assert.equal(view.status, 'applied', JSON.stringify(view));
     const offset = view.camera.position.map((v, i) => v - view.camera.target[i]);
     assert(offset[2] > 0 && Math.hypot(offset[0], offset[1]) < 1e-5);
@@ -58,11 +59,7 @@ try {
       {name:'sketch_finish',arguments:{}},
     ];
     for (const step of plan) {
-      const sessions = await call('cad_list_sessions');
-      const generation = sessions.session_details.find(s => s.session_id === launch.session_id).heartbeat.generation;
-      const submitted = await call('cad_submit', {...step, base_generation: generation});
-      const applied = await call('cad_await_apply', {seq: submitted.seq, timeout_ms: 10000});
-      assert.equal(applied.status, 'applied', JSON.stringify(applied));
+      await call(step.name, step.arguments);
       const state = await ui({action:'inspect'});
       assert.equal(state.state.mode, step.name === 'sketch_finish' ? 'solid' : 'sketch', 'UI must follow the engine sketch lifecycle');
     }

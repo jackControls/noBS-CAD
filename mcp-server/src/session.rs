@@ -70,7 +70,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
         "click" | "double_click" | "context_menu" | "set_value" | "key"
     ) && arguments.get("target").and_then(Value::as_str).is_none()
     {
-        return Err("UI action requires a target from cad_ui inspect".into());
+        return Err("UI action requires a target from cad_interface inspect".into());
     }
     if let Some(pace) = arguments.get("pace_ms") {
         if !pace.as_u64().is_some_and(|ms| ms <= 2000) {
@@ -145,7 +145,7 @@ fn request_control(
     let _ = fs::remove_file(session_path(session_id, &request_name)?);
     Ok(
         json!({"status":"timeout","request_id":id,"session_id":session_id,
-        "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_ui."}),
+        "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_interface."}),
     )
 }
 
@@ -300,6 +300,7 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
                 "age_ms": age_ms,
                 "stale": age_ms > HEARTBEAT_STALE_MS,
                 "generation": parsed.get("generation").cloned().unwrap_or(Value::Null),
+                "interface_version": parsed.get("interface_version").cloned().unwrap_or(Value::Null),
                 "window_id": parsed.get("window_id").cloned().unwrap_or(Value::Null),
                 "document_id": parsed
                     .get("document_id")

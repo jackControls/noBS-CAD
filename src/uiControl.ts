@@ -39,7 +39,8 @@ function surface(element: HTMLElement): string {
   if (menu) return `menus/${menu.getAttribute('data-testid') || menu.getAttribute('aria-label') || 'context-menu'}`;
   const dialog = element.closest('[role="dialog"],.feature-dialog');
   if (dialog) return `dialogs/${dialog.getAttribute('data-testid') || dialog.getAttribute('aria-label') || dialog.querySelector('header')?.textContent?.trim() || 'dialog'}`;
-  return element.closest('[data-mcp-surface]')?.getAttribute('data-mcp-surface') || 'application';
+  return element.closest('[data-interface-group]')?.getAttribute('data-interface-group')
+    || element.closest('[data-mcp-surface]')?.getAttribute('data-mcp-surface') || 'application';
 }
 
 export function inspectUi(context?: unknown) {

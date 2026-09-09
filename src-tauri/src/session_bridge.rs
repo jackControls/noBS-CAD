@@ -462,6 +462,7 @@ impl SessionBridgeState {
         .map_err(|error| format!("encode focus.json: {error}"))?;
 
         let heartbeat_body = serde_json::to_string_pretty(&json!({
+            "interface_version": 1,
             "updated_ms": now_ms(),
             "generation": published_generation,
             "published_generation": published_generation,
@@ -544,6 +545,7 @@ impl SessionBridgeState {
 
         let _ = clear_closed_tombstone(&project.session_id);
         let heartbeat_body = serde_json::to_string_pretty(&json!({
+            "interface_version": 1,
             "updated_ms": now_ms(),
             "generation": project.engine_revision,
             "published_generation": project.last_applied_generation,
@@ -649,6 +651,7 @@ fn write_engine_revision_heartbeat(
     fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
     let _ = clear_closed_tombstone(&project.session_id);
     let heartbeat_body = serde_json::to_string_pretty(&json!({
+        "interface_version": 1,
         "updated_ms": now_ms(),
         "generation": project.engine_revision,
         "published_generation": project.last_applied_generation,
@@ -1187,6 +1190,7 @@ fn apply_one_inbox_op(
                 project_session_id.as_deref(),
                 &process_instance_id,
             )?;
+            atomic_write(&inbox_dir(&session_id).join("results").join(format!("{seq}.json")), &result.to_string())?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,

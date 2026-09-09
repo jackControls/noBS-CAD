@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 
 mod desktop;
 mod disclosure;
+mod interface;
 mod session;
 
 use disclosure::{
@@ -167,8 +168,13 @@ impl CadServer {
         let pack = spec.pack;
         let spine = spec.spine;
 
-        // While snapshot-attached, direct mutates are rejected (#55 / Jack #60 §1).
-        // Inspect/export/control (including cad_submit) stay callable.
+        // The operation is identical with or without a renderer. A live
+        // document still owns its engine: hide its inbox protocol from callers.
+        if self.attached_document_id.is_some() && is_modeling_mutate(name) {
+            return self.execute_interface(
+                &json!({"operation":name,"group":interface::group_for(name),"arguments":arguments}),
+            );
+        }
         if self.attached_document_id.is_some() && !is_read_safe_while_attached(name) {
             return Err(session_lock_error(
                 "session_read_only",
@@ -359,9 +365,20 @@ impl CadServer {
                 }
             }
             "cad_list_sessions" => session::sessions_list_json(),
-            "cad_ui" => {
-                if arguments["action"] == "launch" {
-                    desktop::launch(&arguments)?
+            "cad_interface" => {
+                if arguments["action"].is_null() || arguments["action"] == "catalog" {
+                    json!({"groups":interface::groups(),"operations":full_tool_catalog()})
+                } else if arguments["action"] == "execute" {
+                    self.execute_interface(&arguments)?
+                } else if arguments["action"] == "launch" {
+                    let mut launched = desktop::launch(&arguments)?;
+                    if launched["status"] == "ready" {
+                        self.attach_read_only_snapshot(
+                            &json!({"session_id":launched["session_id"]}),
+                        )?;
+                        launched["attached"] = json!(true);
+                    }
+                    launched
                 } else {
                     session::request_ui(&arguments, self.attached_document_id.as_deref())?
                 }
@@ -383,6 +400,55 @@ impl CadServer {
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
+    }
+
+    fn execute_interface(&mut self, arguments: &Value) -> Result<Value, String> {
+        let name = arguments["operation"]
+            .as_str()
+            .ok_or("execute requires operation")?;
+        let group = arguments["group"]
+            .as_str()
+            .ok_or("execute requires group from the catalog")?;
+        if name == "cad_interface" || interface::group_for(name) != Some(group) {
+            return Err("operation does not belong to the requested interface group".into());
+        }
+        let payload = arguments.get("arguments").cloned().unwrap_or(json!({}));
+        if !is_modeling_mutate(name) || self.attached_document_id.is_none() {
+            return self.call_tool(name, payload);
+        }
+        let session_id = self.attached_document_id.clone().unwrap();
+        if session::heartbeat_meta(&session_id)["interface_version"] != 1 {
+            return Err(json!({"code":"session_read_only","session_mode":"read_only_snapshot","session_id":session_id,"hint":"desktop does not support the grouped interface; rebuild/restart before executing (nothing submitted)","writeback":false}).to_string());
+        }
+        let generation = session::read_heartbeat_generation(&session_id)?;
+        let submitted = self.submit_inbox_op(
+            &json!({"name":name,"arguments":payload,"base_generation":generation}),
+        )?;
+        let seq = submitted["seq"]
+            .as_u64()
+            .ok_or("submission omitted sequence")?;
+        let applied = self.await_inbox_apply(&json!({"seq":seq,"timeout_ms":30000}))?;
+        if applied["status"] != "applied" {
+            // Preserve the receipt and sequence: an uncertain operation must
+            // never be silently retried by the interface.
+            return Err(applied.to_string());
+        }
+        let value: Value = serde_json::from_str(&session::read_session_file(
+            &session_id,
+            &format!("inbox/results/{seq}.json"),
+        )?)
+        .map_err(|e| e.to_string())?;
+        if let Some(focus) = auto_focus_for_tool(name) {
+            self.disclosure.auto_hint(focus);
+        }
+        let specs = tool_specs();
+        let spec = specs.iter().find(|t| t.name == name).unwrap();
+        Ok(annotate_disclosure(
+            value,
+            &self.disclosure,
+            spec.pack,
+            spec.spine,
+        ))
     }
 
     /// Load `model.json` (+ optional `focus.json`) into this process.
@@ -407,7 +473,7 @@ impl CadServer {
             "window_id": identity.window_id,
             "document_id": identity.document_id.clone().unwrap_or_else(|| session_id.to_string()),
             "focus": self.disclosure.active().as_str(),
-            "session_mode": "read_only_snapshot",
+            "session_mode": if session::heartbeat_meta(session_id)["interface_version"] == 1 { "live" } else { "read_only_snapshot" },
             "writeback": false,
             "heartbeat": session::heartbeat_meta(session_id),
         }))
@@ -822,7 +888,8 @@ fn tool_entry(tool: &ToolSpec) -> Value {
         "name": tool.name,
         "title": tool.title,
         "description": tool.description,
-        "inputSchema": tool.input_schema
+        "inputSchema": tool.input_schema,
+        "_meta": {"group":interface::group_for(tool.name)}
     })
 }
 
@@ -833,6 +900,7 @@ fn full_tool_catalog() -> Value {
             .map(|tool| {
                 json!({
                     "name": tool.name,
+                    "group": interface::group_for(tool.name),
                     "title": tool.title,
                     "description": tool.description,
                     "inputSchema": tool.input_schema,
@@ -841,7 +909,6 @@ fn full_tool_catalog() -> Value {
                         Execution::SolidReplay => "solid_replay",
                         Execution::Control => "control",
                     },
-                    "pack": tool.pack.as_str(),
                     "mutates": is_modeling_mutate(tool.name),
                     "spine": tool.spine,
                 })
@@ -910,7 +977,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_list_all_tools"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
-            | "cad_ui"
+            | "cad_interface"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
@@ -2907,7 +2974,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::direct(
             "assembly_delete_joint", "Delete assembly joint",
-            "Delete the joint by stable id through the normal engine operation. While attached use cad_submit and await acknowledgement.",
+            "Delete the joint by stable id through the normal engine operation. The same call applies through the live engine when attached.",
             "assembly_delete_joint", Payload::Field("joint_id"),
             object_schema(json!({"joint_id":{"type":"integer","minimum":1}}), &["joint_id"]),
         ),
@@ -3141,11 +3208,12 @@ fn tool_specs() -> Vec<ToolSpec> {
             empty_schema(),
         ),
         ToolSpec::control(
-            "cad_ui", "Inspect or operate live UI controls",
-            "Inspect returns controls grouped by actual UI surfaces, with opaque target IDs, labels, disabled states and values. Use those IDs for click/set_value/key; stale, hidden, disabled and modal-blocked controls reject. Window mode is foreground/background/inspect. pace_ms (0-2000) controls visible playback timing; fast mode still acknowledges ordered operations. No selectors or JavaScript evaluation. Inspect again after opening menus or dialogs.",
+            "cad_interface", "Explore and drive the product interface",
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live; callers do not manage submission. Launch connects the new desktop. Inspect returns rendered controls grouped by product surfaces, with opaque target IDs, labels, disabled states and values. Use those IDs for click/set_value/key; stale, hidden, disabled and modal-blocked controls reject. Window mode is foreground/background/inspect. pace_ms (0-2000) controls visible playback timing; fast mode still acknowledges ordered operations. No selectors or JavaScript evaluation. Inspect again after opening menus or dialogs.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","execute","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
                 "view":{"type":"string","enum":["current","isometric","top","bottom","front","back","left","right"]},
                 "fit":{"type":"boolean"},
@@ -3167,7 +3235,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_attach",
             "Attach read-only session snapshot",
-            "Load a published snapshot into this MCP process by session_id (UUID), window_id (Tauri label), and/or document_id (native project-session id; UUID still aliases session_id). Requires valid model.json; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the target/model is missing, invalid, or ambiguous. writeback must be omitted or false. While attached, direct mutates are rejected (session_read_only); use cad_submit for the UI inbox. Never writes back to the session dir. Headless goldens skip attach.",
+            "Load a published snapshot into this MCP process by session_id (UUID), window_id (Tauri label), and/or document_id (native project-session id; UUID still aliases session_id). Requires valid model.json; optional focus.json. Seeds cad_script baseline with cad_load_project_model (loaded model_json). Fails if the target/model is missing, invalid, or ambiguous. writeback must be omitted or false. While attached to a compatible desktop, the same operation calls submit and await live application internally. Older desktops reject before submission. Never writes back to the session dir. Headless goldens skip attach.",
             object_schema(
                 json!({
                     "session_id": {
@@ -3188,7 +3256,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "writeback": {
                         "type": "boolean",
-                        "description": "Must be omitted or false. true is rejected; mutates go through cad_submit while attached."
+                        "description": "Must be omitted or false. true is rejected; the live engine owns mutations while attached."
                     }
                 }),
                 &[],
@@ -6154,10 +6222,6 @@ mod tests {
         assert_eq!(parsed["code"], "session_read_only");
         assert_eq!(parsed["writeback"], false);
         assert_eq!(parsed["session_mode"], "read_only_snapshot");
-        assert!(
-            parsed["hint"].as_str().unwrap_or("").contains("cad_submit"),
-            "hint should mention cad_submit: {error}"
-        );
     }
 
     #[test]
@@ -6670,16 +6734,85 @@ mod tests {
     }
 
     #[test]
+    fn grouped_interface_uses_engine_results_and_rejects_wrong_groups() {
+        let mut direct = CadServer::new().unwrap();
+        let mut grouped = CadServer::new().unwrap();
+        let arguments = json!({"plane":{"type":"origin_plane","plane":"xy"}});
+        let expected = direct.call_tool("sketch_begin", arguments.clone()).unwrap();
+        assert!(grouped
+            .call_tool(
+                "cad_interface",
+                json!({"action":"execute","group":"solid/build",
+            "operation":"sketch_begin","arguments":arguments})
+            )
+            .is_err());
+        assert!(grouped.manager.active_snapshot().is_none());
+        let actual = grouped
+            .call_tool(
+                "cad_interface",
+                json!({"action":"execute","group":"sketch/draw",
+            "operation":"sketch_begin","arguments":arguments}),
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn grouped_interface_rejects_an_old_desktop_before_submitting() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-old-interface-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&unique);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":unique}))
+            .unwrap();
+        let error = server
+            .call_tool(
+                "cad_interface",
+                json!({"action":"execute","group":"sketch/draw",
+            "operation":"sketch_begin","arguments":{"plane":{"type":"origin_plane","plane":"xy"}}}),
+            )
+            .unwrap_err();
+        assert!(error.contains("nothing submitted"));
+        assert!(session::pending_inbox_seqs(&unique).unwrap().is_empty());
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn live_ui_has_one_catalog_surface_and_shared_mutation_metadata() {
         let catalog = full_tool_catalog();
         let catalog = catalog.as_array().unwrap();
-        assert_eq!(catalog.iter().filter(|t| t["name"] == "cad_ui").count(), 1);
-        for retired in ["cad_view", "cad_launch"] {
+        assert_eq!(
+            catalog
+                .iter()
+                .filter(|t| t["name"] == "cad_interface")
+                .count(),
+            1
+        );
+        for retired in ["cad_view", "cad_launch", "cad_ui"] {
             assert!(!catalog.iter().any(|t| t["name"] == retired));
         }
         for tool in catalog {
             let name = tool["name"].as_str().unwrap();
             assert_eq!(tool["mutates"], is_modeling_mutate(name));
+            assert!(
+                interface::group_for(name).is_some(),
+                "ungrouped operation: {name}"
+            );
+        }
+        let mut seen = std::collections::HashSet::new();
+        for group in interface::groups() {
+            for operation in group["operations"].as_array().unwrap() {
+                let name = operation.as_str().unwrap();
+                assert!(seen.insert(name), "duplicate operation grouping: {name}");
+                assert!(
+                    catalog.iter().any(|tool| tool["name"] == name),
+                    "stale catalog operation: {name}"
+                );
+            }
         }
     }
 

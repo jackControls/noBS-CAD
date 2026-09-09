@@ -26,7 +26,8 @@ try {
  await page.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const result=await page.evaluate(async()=>{
   const {inspectUi,operateUi}=await import('/src/uiControl.ts');
-  const {SerialPlayback}=await import('/src/mcpPlayback.ts');
+  const {SerialPlayback,presentOperation,setPlaybackPace}=await import('/src/operationPlayback.ts');
+  const {interfaceGroups,operationGroup}=await import('/src/interface.ts');
   const {drivePointer}=await import('/src/uiPointer.ts');
   const {trackEngineOperation,pendingEngineOperations}=await import('/src/engine/activity.ts');
   const config=await import('/src/ribbon/config.ts');
@@ -95,6 +96,19 @@ try {
   // Derived from the product configuration: new enabled commands automatically
   // enter this check, rather than requiring a copied inventory or count update.
   let commands=0;const actions=new Set();
+  for(const tab of [config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB]) {
+   for(const panel of tab.panels) {
+    const group=interfaceGroups.find(g=>g.id===`${tab.id}/${panel.id}`);
+    check(group&&JSON.stringify(group.operations)===JSON.stringify(panel.operations),'Renderer and API grouping drifted');
+   }
+  }
+  const feedback=document.createElement('section');feedback.dataset.interfaceGroup=operationGroup('sketch_add_line');
+  feedback.innerHTML='<button>Line</button>';document.body.append(feedback);
+  check(inspectUi(context).surfaces.some(s=>s.name==='sketch/draw'),'Controls must use the product group');
+  setPlaybackPace(0);await presentOperation('sketch_add_line');
+  check(document.querySelector('[data-mcp-presentation]'),'Fast execution removed feedback before it could render');
+  check(feedback.getAnimations().length>0,'The actual command group must animate without blocking execution');
+  feedback.remove();
   for(const tab of [config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB]){
    const walk=(entries)=>{for(const entry of entries){if(entry.type==='separator')continue;
     if(entry.enabled===true&&!entry.children){check(Boolean(entry.action),`Enabled UI command has no dispatch action: ${tab.id}/${entry.id}`);commands++;actions.add(entry.action);}

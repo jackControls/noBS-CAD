@@ -7,6 +7,7 @@
  * deletion, Esc plane-pick cancellation, and engine undo/redo.
  */
 import { useEffect, useRef } from 'react';
+import { installOperationFeedback } from './operationPlayback';
 import { useTranslation } from './i18n';
 import { useAppStore } from './store/appStore';
 import {
@@ -69,6 +70,7 @@ import { requestUnsavedDecision } from './files/unsavedChanges';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
 
 export default function App() {
+  useEffect(installOperationFeedback, []);
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);

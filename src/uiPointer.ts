@@ -1,4 +1,4 @@
-import {waitForPlayback} from './mcpPlayback';
+import {waitForPlayback} from './operationPlayback';
 
 export type UiGesture = 'move' | 'click' | 'double_click' | 'drag';
 /** Atomic gestures cannot leave a synthetic button held between MCP calls. */
