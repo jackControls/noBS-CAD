@@ -56,6 +56,9 @@ jobs:
       - name: Install Chromium for UI contract checks
         run: npx playwright install --with-deps chromium
 
+      - name: Install Rust for xtask
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Test live UI control contracts and product command coverage
         run: cargo xtask test-mcp contracts
 

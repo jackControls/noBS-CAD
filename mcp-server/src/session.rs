@@ -49,7 +49,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
         .and_then(Value::as_str)
         .unwrap_or("inspect");
     if action == "view" {
-        return request_control(arguments, attached, false);
+        return request_control(arguments, attached, false, None);
     }
     if !matches!(
         action,
@@ -77,10 +77,15 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             return Err("pace_ms must be an integer from 0 to 2000".into());
         }
     }
-    request_control(arguments, attached, true)
+    request_control(arguments, attached, true, None)
 }
 
-fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Result<Value, String> {
+fn request_control(
+    arguments: &Value,
+    attached: Option<&str>,
+    ui: bool,
+    query: Option<Value>,
+) -> Result<Value, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let session_id = arguments
@@ -122,6 +127,10 @@ fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Resul
         request["ui"] = arguments.clone();
         request["ui"]["action"] = arguments.get("action").cloned().unwrap_or(json!("inspect"));
     }
+    if let Some(query) = query {
+        request["sketch_query"] = query;
+        request.as_object_mut().unwrap().remove("ui");
+    }
     write_session(session_id, &request_name, &request.to_string())?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(lifetime + 1000);
     while std::time::Instant::now() < deadline {
@@ -138,6 +147,29 @@ fn request_control(arguments: &Value, attached: Option<&str>, ui: bool) -> Resul
         json!({"status":"timeout","request_id":id,"session_id":session_id,
         "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_ui."}),
     )
+}
+
+pub fn request_sketch_query(
+    session_id: &str,
+    method: &str,
+    payload: &str,
+) -> Result<Value, String> {
+    if !nbcad_mcp_mutate::is_live_sketch_query(method) {
+        return Err("unsupported live sketch query".into());
+    }
+    let result = request_control(
+        &json!({}),
+        Some(session_id),
+        true,
+        Some(json!({"method":method,"payload":payload})),
+    )?;
+    if result["status"] != "applied" {
+        return Err(format!("live sketch query failed: {result}"));
+    }
+    result
+        .get("value")
+        .cloned()
+        .ok_or_else(|| "live sketch query omitted its result".into())
 }
 
 /// UUID v4 string form (8-4-4-4-12 hex with version nibble `4` and RFC variant).

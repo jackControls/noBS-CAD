@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
  * Coverage comes from successful MCP calls, never a hand-maintained tool count.
  */
 export async function workshop(call, empty, report) {
+  const catalogue=await call('cad_list_all_tools');
   const reset=()=>call('cad_load_project_model',{model_json:empty});
   const active=()=>call('sketch_active');
   const begin=async()=>{await reset();await call('sketch_begin',{plane:{type:'origin_plane',plane:'xy'}});await call('sketch_set_grid_snap',{enabled:false});};
@@ -76,7 +77,9 @@ export async function workshop(call, empty, report) {
   };
   const feature=async(name,args,expectedBodies)=>{
     await call(name,args);const made=JSON.parse(await call('cad_project_model')).document.history.features;
-    await call(name.replace('solid_','solid_edit_'),{feature_id:made.at(-1).id,request:args});
+    const edit=name.replace('solid_','solid_edit_');
+    const payload=catalogue.find(t=>t.name===edit).inputSchema.required.filter(k=>k!=='feature_id');assert.equal(payload.length,1);
+    await call(edit,{feature_id:made.at(-1).id,[payload[0]]:args});
     const edited=JSON.parse(await call('cad_project_model')).document.history.features;assert.equal(edited.length,made.length,'Editing must not append history');
     const scene=await call('solid_scene');assert.equal(scene.errors.length,0);assert.equal(scene.bodies.length,expectedBodies);
     assert(scene.bodies.every(b=>b.mesh.positions.length>0));
@@ -90,6 +93,43 @@ export async function workshop(call, empty, report) {
   for(const operation of ['join','cut','intersect'])await check(`boolean ${operation} and edit`,async()=>{
     const b=await stock();await call('solid_move_copy',{body_ids:[b.id],translation:{x:10,y:0,z:0},pivot:{x:0,y:0,z:0},copy:true});
     const bodies=(await call('solid_scene')).bodies;await feature('solid_combine',{target_body_id:b.id,tool_body_ids:[bodies.find(p=>p.id!==b.id).id],operation,keep_tools:false},1);
+  });
+  await check('extrude edit changes stock height',async()=>{
+    await stock();await call('solid_edit_extrude',{feature_id:2,extrude:{sketch_name:'Sketch1',profile_indices:[0],operation:'new_body',extent:{type:'distance',distance:25},taper_angle_deg:0,flip:false,target_body_ids:[]}});
+    const z=(await call('solid_scene')).bodies[0].mesh.positions.filter((_,i)=>i%3===2);assert(Math.abs(Math.max(...z)-Math.min(...z)-25)<1e-6);
+  });
+  for(const kind of ['fillet','chamfer'])await check(`${kind} edge treatment and edit`,async()=>{
+    const b=await stock();await feature(`solid_${kind}`,{body_id:b.id,edge_ids:[b.edges[0].id],tangent_chain:false,...(kind==='fillet'?{radius:2}:{distance:2})},1);
+  });
+  await check('fastener hole and edit',async()=>{
+    const b=await stock();const face=b.faces.find(f=>f.plane?.normal[2]>0.99);
+    const delta=[0,0,20].map((n,i)=>n-face.plane.origin[i]);const dot=a=>a.reduce((sum,n,i)=>sum+n*delta[i],0);
+    await feature('solid_hole',{body_id:b.id,face_id:face.id,position:{x:dot(face.plane.u),y:dot(face.plane.v)},diameter:5,extent:{type:'through_all'},bottom_style:'flat',drill_point_angle_deg:118,flip:false},1);
+  });
+  await check('revolved bench hardware and edit',async()=>{
+    await begin();await call('sketch_add_rectangle',{mode:'two_point',p1:{x:10,y:0},p2:{x:20,y:15},ctrl_held:true});await call('sketch_finish');
+    await feature('solid_revolve',{sketch_name:'Sketch1',profile_indices:[0],axis_origin:{x:0,y:0},axis_direction:{x:0,y:1},angle_deg:360,flip:false,operation:'new_body',target_body_ids:[]},1);
+  });
+  await check('curved support rib and edit',async()=>{
+    await begin();await call('sketch_add_arc_center',{center:{x:0,y:0},start:{x:20,y:0},sweep:{x:0,y:20},ctrl_held:true});
+    const arc=(await active()).entities.find(e=>e.kind==='arc').id;await call('sketch_finish');
+    await feature('solid_rib',{sketch_name:'Sketch1',line_entity_ids:[arc],thickness:2,depth:5,extent:{type:'distance',depth:5},symmetric:false,flip:false,operation:'new_body',target_body_ids:[]},1);
+  });
+  await check('swept handrail and edit',async()=>{
+    await begin();await call('sketch_add_rectangle',{mode:'two_point',p1:{x:-2,y:-2},p2:{x:2,y:2},ctrl_held:true});await call('sketch_finish');
+    await call('sketch_begin',{plane:{type:'origin_plane',plane:'yz'}});await call('sketch_add_arc_center',{center:{x:0,y:20},start:{x:0,y:0},sweep:{x:20,y:20},ctrl_held:true});
+    const arc=(await active()).entities.find(e=>e.kind==='arc').id;await call('sketch_finish');
+    await feature('solid_sweep',{profile:{sketch_name:'Sketch1',profile_index:0},path_sketch_name:'Sketch2',path_entity_ids:[arc],operation:'new_body',target_body_ids:[],guide_rail:null,orientation:'corrected_frenet',transition:'round_corner',force_c1:true},1);
+  });
+  await check('lofted foot pad and edit',async()=>{
+    await begin();await call('sketch_add_rectangle',{mode:'two_point',p1:{x:-10,y:-10},p2:{x:10,y:10},ctrl_held:true});await call('sketch_finish');
+    await call('construction_plane_offset',{reference:{type:'origin_plane',plane:'xy'},distance:30});const planes=await call('construction_plane_definitions');
+    await call('sketch_begin',{plane:{type:'datum_plane',datum_id:planes[0].datum_id}});await call('sketch_add_rectangle',{mode:'two_point',p1:{x:-6,y:-6},p2:{x:6,y:6},ctrl_held:true});await call('sketch_finish');
+    await feature('solid_loft',{sections:[{sketch_name:'Sketch1',profile_index:0},{sketch_name:'Sketch2',profile_index:0}],ruled:false,operation:'new_body',target_body_ids:[]},1);
+  });
+  await check('reference STEP import and replacement',async()=>{
+    await stock();const exported=await call('solid_export_step');await reset();
+    await feature('solid_import_step',{file_name:'joinery-reference.step',data_base64:exported.bytes_base64},1);
   });
   await reset();
 }

@@ -1,6 +1,7 @@
 # Live UI automation and executable demos
 
-`cad_launch` starts an explicitly supplied desktop executable (or
+`cad_ui` is the single live UI tool. `action: launch` starts an explicitly
+supplied desktop executable (or
 `NBCAD_DESKTOP_BIN`). It reports `ready` only after the new process publishes a
 fresh session and that session acknowledges a UI inspection. `starting` is not
 permission to launch a duplicate: inspect the existing process/session first.
@@ -40,7 +41,7 @@ other external dialogs are not DOM controls.
 ## Ordered plans
 
 Use one client to execute a plan sequentially. For each engine edit, await
-`cad_submit` then `cad_await_apply`. Await each `cad_ui`/`cad_view` response before
+`cad_submit` then `cad_await_apply`. Await each `cad_ui` response before
 the next operation. The UI has one presentation lane and acknowledges changed
 model state after publication. Failed operations stop the supplied golden;
 never replay an uncertain mutation automatically. Independently submitting
@@ -54,7 +55,7 @@ preferences suppress the highlight animation.
 
 ## Checks that grow with the product
 
-Run `node scripts/mcp-ui-contract.mjs` for browser behavior contracts: actual
+Run `cargo xtask test-mcp contracts` for browser behavior contracts: actual
 DOM discovery, grouping, disabled/hidden/stale/modal guards, field events,
 tree gestures, atomic drags, serialization, and recovery after failure. It
 derives enabled ribbon commands from product configuration and checks that
@@ -64,7 +65,7 @@ frontend CI job runs this test with Playwright Chromium.
 Run the native golden against a newly launched disposable document:
 
 ```powershell
-node scripts/mcp-live-ui.mjs --server <nbcad-mcp.exe> --desktop <nbcad.exe> --part --drawing --idle --pace 0 --save <new-absolute-path.nbcad> --out <report.json>
+cargo xtask test-mcp live --server <nbcad-mcp.exe> --desktop <nbcad.exe> --part --drawing --idle --pace 0 --save <new-absolute-path.nbcad> --out <report.json>
 ```
 
 The executable and native libraries must be available (development builds may
@@ -81,3 +82,42 @@ golden validates the connection between engine state and interactive UI. A
 passing command-dispatch inventory alone is not full feature coverage. Expand
 goldens with real feature workflows when adding capabilities, rather than
 introducing a mirrored list of expected tools or controls.
+
+## Bench and feature workshop
+
+```powershell
+cargo xtask test-mcp bench --server <nbcad-mcp.exe> --workshop all --out <report-directory>
+```
+
+Add `--session <UUID> --pace 500` to drive an empty live document. The
+runner can launch one with `--desktop <nbcad.exe>` and save the resulting
+assembly with `--save <new-absolute-path.nbcad>`. The same
+MCP plan runs headlessly in CI and through the live inbox for demonstrations.
+Mutation routing comes from the server catalog's shared `mutates` metadata.
+Active-sketch inspection, expression evaluation, and previews query the live
+engine through the existing control channel. They do not read the completed
+model snapshot, which intentionally excludes a sketch still being edited.
+Drivers live only in `xtask/mcp`; there are no legacy script entry points.
+
+The workshop exercises every tool in the runtime sketch, solid, modify, and
+body-operations packs. Adding a tool automatically fails coverage until an
+example successfully calls it. Geometry checks cover feature edits, body
+counts, meshes, sketch dimensions, and replay errors. Successful invocation
+coverage does not mean every parameter combination or UI dialog is tested.
+
+After isolated workshop cases, the plan builds a garden bench from seven native
+sketch/extrude parts, reused as seventeen occurrences with sixteen rigid joints.
+It asserts solved occurrence positions, clean diagnostics, and native history.
+Back supports attach through face connectors; rigid joints reject nonzero
+motion coordinates instead of silently ignoring them. Reports include call arguments, timings, coverage,
+and a model checkpoint. Workshop resets are explicit and require an empty
+document at the start. Do not run it over user work.
+
+For complementary mechanism examples, FreeCAD maintains an
+[assembly example](https://github.com/FreeCAD/FreeCAD/blob/main/data/examples/AssemblyExample.FCStd)
+and documents a vise and crank-slider in its
+[Assembly workbench guide](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/Assembly_Workbench.md).
+The vise would exercise sliding and screw motion; the crank-slider would
+exercise coupled joints. Treat these as design references for new native MCP
+plans. An imported shape would not prove native sketch history, and `.FCStd`
+is not a noBS-CAD project format. No external model is vendored here.

@@ -7,14 +7,13 @@ import {workshop} from './workshop.mjs';
 const option=name=>process.argv.includes(name)?process.argv[process.argv.indexOf(name)+1]:undefined;
 assert(option('--server'),'cargo xtask test-mcp bench --server MCP_EXE [--session UUID] [--out DIRECTORY]');
 const client=new Client(option('--server'));
-const session=option('--session');
+let session=option('--session');
 const report={name:'Garden workshop bench',calls:[],parts:[],checks:[]};
 let tools;
 async function call(name,args={}) {
   const start=performance.now();let result;
   const mutate=tools?.find(t=>t.name===name);
-  const readOnly=/^(sketch_(active|finished|profiles|preview_.*|eval_expression)|solid_(scene|.*_definitions|export_.*|tessellate)|assembly_(document|solution))$/;
-  if(session&&mutate&&mutate.execution!=='control'&&!readOnly.test(name)) {
+  if(session&&mutate?.mutates) {
     const sessions=await client.call('cad_list_sessions');
     const generation=sessions.session_details.find(s=>s.session_id===session).heartbeat.generation;
     const submitted=await client.call('cad_submit',{name,arguments:args,base_generation:generation});
@@ -51,13 +50,20 @@ function connector(part,top,origin) {
 }
 try {
   await client.start();tools=await client.call('cad_list_all_tools');
+  if(option('--desktop')) {
+    assert(!session,'Choose --desktop or --session');
+    const launched=await call('cad_ui',{action:'launch',executable:option('--desktop')});
+    assert.equal(launched.status,'ready',JSON.stringify(launched));
+    session=launched.session_id;report.session_id=session;report.pid=launched.pid;
+    console.log('Live bench session',session);
+  }
   if(session){await client.call('cad_attach',{session_id:session});await call('cad_ui',{action:'inspect',session_id:session,pace_ms:Number(option('--pace')??0)});}
   assert.equal((await model()).document.history.features.length,0,'Use a new empty document for the bench');
   if(option('--workshop')==='all') await workshop(call,JSON.stringify(await model()),report);
   const slat=await board('Seat slat',1200,85,35);
   await call('assembly_set_occurrence_pose',{occurrence_id:slat.occurrence.id,local_pose:{translation:[0,0,415],rotation:[0,0,0,1]}});
   await call('assembly_set_occurrence_grounded',{occurrence_id:slat.occurrence.id,grounded:true});
-  let jointCount=0;
+  let jointCount=0;const expectedPoses=[];slat.instances=[slat.occurrence];
   async function place(part,positions,topOfPart,sameFace=false,skipFirst=false){
     for(const [i,[x,y]] of positions.entries()) {
       if(skipFirst&&i===0)continue;
@@ -69,33 +75,84 @@ try {
       }
       await call('assembly_create_joint',{name:`${part.name} mount ${i+1}`,kind:'rigid',
         connector_a:connector(slat,sameFace,[x,y,sameFace?35:0]),connector_b:connector(part,true,[0,0,part.height]),
-        flipped:sameFace,linear_offset_mm:topOfPart-(sameFace?450:415),
+        flipped:sameFace,
         grounded_occurrence_id:slat.occurrence.id,
         advanced:{connector_a_occurrence_id:slat.occurrence.id,connector_b_occurrence_id:occurrence.id}});
       jointCount++;
+      if(part===slat)slat.instances.push(occurrence);
+      expectedPoses.push({occurrence_id:occurrence.id,translation:[x,y,topOfPart-part.height]});
     }
   }
   await place(slat,[[0,0],[0,90],[0,180],[0,270],[0,360]],450,true,true);
   const leg=await board('Leg',60,60,415);await place(leg,[[60,35],[1080,35],[60,340],[1080,340]],415);
   const apron=await board('Long apron',1080,25,90);await place(apron,[[60,50],[60,365]],415);
   const rail=await board('Side rail',25,305,90);await place(rail,[[78,60],[1097,60]],415);
-  const post=await board('Back post',50,40,740);await place(post,[[65,405],[1085,405]],740,true);
-  const back=await board('Back board',1200,25,85);await place(back,[[0,425]],635,true);
-  const upper=await board('Upper back board',1200,25,85);await place(upper,[[0,425]],740,true);
+  // Attach posts to the rear slat and boards to a post using real vertical
+  // faces. Rigid joints have no motion coordinate; linear_offset_mm belongs
+  // to movable joints and cannot serve as an assembly placement shortcut.
+  function side(part,back,origin) {
+    const face=part.body.faces.find(f=>f.plane&&f.plane.normal[1]*(back?1:-1)>0.99);
+    assert(face);
+    return {body_id:part.body.id,face_id:face.id,face_key:face.key,kind:'planar_face',
+      frame:{origin,primary_axis:face.plane.normal,secondary_axis:[1,0,0]},
+      source_surface_frame:{origin:face.plane.origin,primary_axis:face.plane.normal,secondary_axis:face.plane.u}};
+  }
+  async function mount(parent,parentOccurrence,part,occurrence,a,b,flipped,translation) {
+    await call('assembly_create_joint',{name:`${part.name} mount ${occurrence.id}`,kind:'rigid',
+      connector_a:side(parent,true,a),connector_b:side(part,flipped,b),flipped,
+      advanced:{connector_a_occurrence_id:parentOccurrence.id,connector_b_occurrence_id:occurrence.id}});
+    jointCount++;expectedPoses.push({occurrence_id:occurrence.id,translation});
+  }
+  const post=await board('Back post',50,40,740);
+  for(const [i,x] of [65,1085].entries()) {
+    let occurrence=post.occurrence;
+    if(i){
+      await call('assembly_create_occurrence',{component_id:post.component.id,name:'Back post 2'});
+      occurrence=(await call('assembly_document')).component_structure.occurrences.at(-1);
+    }
+    await mount(slat,slat.instances.at(-1),post,occurrence,[x,85,0],[0,40,415],true,[x,405,0]);
+  }
+  for(const [name,z] of [['Back board',550],['Upper back board',655]]) {
+    const part=await board(name,1200,25,85);
+    await mount(post,post.occurrence,part,part.occurrence,[0,40,z],[65,0,0],false,[0,445,z]);
+  }
   const assembly=await call('assembly_document');const solved=await call('assembly_solution');
   assert.equal(solved.solved,true);assert.equal(solved.diagnostics.length,0,JSON.stringify(solved.diagnostics));
   assert.equal(assembly.joints.length,jointCount);
   assert.equal(assembly.component_structure.occurrences.length,jointCount+1);
+  for(const expected of expectedPoses){
+    const pose=solved.instance_body_poses.find(p=>p.occurrence_id===expected.occurrence_id);
+    assert(pose,`Missing instance pose ${expected.occurrence_id}`);
+    assert(pose.translation.every((n,i)=>Math.abs(n-expected.translation[i])<1e-5),`Misplaced bench part: ${JSON.stringify({pose,expected})}`);
+  }
   const original=await model();assert(original.sketches.length===report.parts.length);
   assert(!original.document.history.features.some(f=>f.kind==='import_step'));
   await call('solid_recompute');
   assert.equal((await scene()).errors.length,0);
   report.checks.push('native sketch/extrude provenance','repeated component occurrences','rigid joint solution','history replay');
-  if(session) await call('cad_ui',{action:'view',session_id:session,view:'isometric',fit:true});
+  if(option('--workshop')==='all') {
+    const called=new Set(report.calls.map(c=>c.name));
+    const required=tools.filter(t=>['sketch','solid','modify','body_ops'].includes(t.pack));
+    const missing=required.filter(t=>!called.has(t.name)).map(t=>t.name);
+    report.coverage={required:required.length,executed:required.length-missing.length,missing};
+    assert.deepEqual(missing,[],'Every sketch, solid, modify and body tool needs a successful workshop example');
+  }
+  if(session) {
+    assert.equal((await call('cad_ui',{action:'view',session_id:session,view:'isometric',fit:true})).status,'applied');
+    if(option('--save')) assert.equal((await call('cad_ui',{action:'file',session_id:session,command:'save',path:resolve(option('--save'))})).status,'applied');
+  }
   if(option('--out')) {
     const out=resolve(option('--out'));await mkdir(out,{recursive:true});
     await writeFile(resolve(out,'bench.model.json'),JSON.stringify(await model(),null,2));
-    await writeFile(resolve(out,'bench-report.json'),JSON.stringify(report,null,2));
   }
   console.log(`PASS bench: ${report.parts.length} native parts, ${jointCount+1} occurrences, ${jointCount} rigid joints`);
-} finally {client.close();}
+  report.status='passed';
+} catch(error) {
+  report.status='failed';report.error=String(error);throw error;
+} finally {
+  client.close();
+  if(option('--out')) {
+    const out=resolve(option('--out'));await mkdir(out,{recursive:true});
+    await writeFile(resolve(out,'bench-report.json'),JSON.stringify(report,null,2));
+  }
+}

@@ -4580,6 +4580,18 @@ fn validate_joint(joint: &JointDefinitionDto) -> Result<(), String> {
         ));
     }
     if joint.kind == JointKindDto::Rigid
+        && (joint.angle_offset_deg != 0.0
+            || joint.linear_offset_mm != 0.0
+            || joint.advanced.secondary_angle_offset_deg != 0.0
+            || joint.advanced.tertiary_angle_offset_deg != 0.0
+            || joint.advanced.secondary_linear_offset_mm != 0.0)
+    {
+        return Err(format!(
+            "rigid joint '{}' has no motion coordinates; position its connector frames instead",
+            joint.name
+        ));
+    }
+    if joint.kind == JointKindDto::Rigid
         && (joint.limits.is_some() || joint.angle_limits.is_some() || joint.linear_limits.is_some())
     {
         return Err(format!(
@@ -5051,6 +5063,75 @@ mod tests {
             grounded_body_id: Some(BodyId(1)),
             grounded_occurrence_id: None,
         }
+    }
+
+    #[test]
+    fn rigid_joint_rejects_motion_that_the_solver_would_ignore() {
+        let scene = scene();
+        let mut document = AssemblyDocumentDto::default();
+        let mut joint = request(&scene);
+        joint.kind = JointKindDto::Rigid;
+        joint.limits = None;
+        joint.linear_offset_mm = 10.0;
+        assert!(document
+            .create(joint.clone(), &scene)
+            .unwrap_err()
+            .contains("no motion coordinates"));
+        assert!(document.joints.is_empty());
+        joint.linear_offset_mm = 0.0;
+        joint.angle_offset_deg = 15.0;
+        assert!(document
+            .create(joint, &scene)
+            .unwrap_err()
+            .contains("no motion coordinates"));
+        assert!(document.joints.is_empty());
+    }
+
+    #[test]
+    fn repeated_body_occurrences_can_join_but_an_occurrence_cannot_join_itself() {
+        let mut scene = scene();
+        let mut joint = request(&scene);
+        scene.bodies.truncate(1);
+        let mut document = AssemblyDocumentDto::default();
+        let component = document
+            .create_component(
+                CreateComponentRequestDto {
+                    name: "Slat".into(),
+                    body_ids: vec![BodyId(1)],
+                    local_coordinate_system: AssemblyTransformDto::default(),
+                    absorb_promoted_bodies: true,
+                },
+                &scene,
+            )
+            .unwrap();
+        let first = document
+            .component_structure
+            .occurrences
+            .iter()
+            .find(|o| o.component_id == component.id)
+            .unwrap()
+            .id;
+        let second = document
+            .create_occurrence(CreateOccurrenceRequestDto {
+                component_id: component.id,
+                name: "Slat 2".into(),
+                parent_occurrence_id: None,
+                local_pose: AssemblyTransformDto::default(),
+            })
+            .unwrap()
+            .id;
+        joint.connector_b = joint.connector_a.clone();
+        joint.advanced.connector_a_occurrence_id = Some(first);
+        joint.advanced.connector_b_occurrence_id = Some(first);
+        joint.grounded_body_id = None;
+        joint.grounded_occurrence_id = Some(first);
+        assert!(document.create(joint.clone(), &scene).is_err());
+        assert!(document.joints.is_empty());
+        joint.advanced.connector_b_occurrence_id = Some(second);
+        document.create(joint, &scene).unwrap();
+        let solved = document.solve(&scene);
+        assert!(solved.solved, "{:?}", solved.diagnostics);
+        assert!(solved.diagnostics.is_empty());
     }
 
     #[test]

@@ -240,7 +240,13 @@ impl CadServer {
             }
         };
 
-        let mut value = if execution == Execution::Direct {
+        let mut value = if let Some(session_id) = self
+            .attached_document_id
+            .as_deref()
+            .filter(|_| nbcad_mcp_mutate::is_live_sketch_query(engine_method))
+        {
+            session::request_sketch_query(session_id, engine_method, &payload)?
+        } else if execution == Execution::Direct {
             if name == "solid_export_step" {
                 let request: StepExportRequest = if arguments.is_null() {
                     StepExportRequest::default()
@@ -836,6 +842,7 @@ fn full_tool_catalog() -> Value {
                         Execution::Control => "control",
                     },
                     "pack": tool.pack.as_str(),
+                    "mutates": is_modeling_mutate(tool.name),
                     "spine": tool.spine,
                 })
             })
@@ -6586,6 +6593,94 @@ mod tests {
             joint["name"], "RenamedA",
             "joint must keep its own name, not the occurrence display name"
         );
+    }
+
+    #[test]
+    fn attached_sketch_reads_use_the_live_engine_without_loading_a_stale_model() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let unique = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-live-read-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&unique);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":unique}))
+            .unwrap();
+        assert!(server.manager.active_snapshot().is_none());
+        let peer = unique.clone();
+        let host = std::thread::spawn(move || {
+            let mut manager = SketchManager::new();
+            parse_engine_envelope(host::handle(
+                &mut manager,
+                "begin_sketch",
+                r#"{"plane":{"type":"origin_plane","plane":"xy"}}"#,
+            ))
+            .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(entries) =
+                    std::fs::read_dir(session::session_dir().join(&peer).join("controls"))
+                {
+                    for entry in entries.flatten() {
+                        if !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                        {
+                            continue;
+                        }
+                        let request: Value =
+                            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        let query = &request["sketch_query"];
+                        let method = query["method"].as_str().unwrap();
+                        assert!(nbcad_mcp_mutate::is_live_sketch_query(method));
+                        let value = parse_engine_envelope(host::handle(
+                            &mut manager,
+                            method,
+                            query["payload"].as_str().unwrap(),
+                        ))
+                        .unwrap();
+                        session::write_session(
+                            &peer,
+                            &format!("controls/{}.result.json", request["id"].as_str().unwrap()),
+                            &json!({"status":"applied","value":value}).to_string(),
+                        )
+                        .unwrap();
+                        return value;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let result = server
+            .call_tool("sketch_eval_expression", json!({"text":"1200 / 5"}))
+            .unwrap();
+        assert_eq!(result["value"], host.join().unwrap()["value"]);
+        assert_eq!(result["value"], 240.0);
+        assert!(server.manager.active_snapshot().is_none());
+        for mutate in nbcad_mcp_mutate::mutate_specs() {
+            assert!(!nbcad_mcp_mutate::is_live_sketch_query(
+                mutate.engine_method
+            ));
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn live_ui_has_one_catalog_surface_and_shared_mutation_metadata() {
+        let catalog = full_tool_catalog();
+        let catalog = catalog.as_array().unwrap();
+        assert_eq!(catalog.iter().filter(|t| t["name"] == "cad_ui").count(), 1);
+        for retired in ["cad_view", "cad_launch"] {
+            assert!(!catalog.iter().any(|t| t["name"] == retired));
+        }
+        for tool in catalog {
+            let name = tool["name"].as_str().unwrap();
+            assert_eq!(tool["mutates"], is_modeling_mutate(name));
+        }
     }
 
     #[test]

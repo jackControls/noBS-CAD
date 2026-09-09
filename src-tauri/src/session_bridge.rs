@@ -1443,6 +1443,26 @@ pub fn mcp_session_bridge_control(
             continue;
         }
         request["session_id"] = json!(session_id);
+        if let Some(query) = request.get("sketch_query") {
+            let method = query.get("method").and_then(Value::as_str).unwrap_or("");
+            let payload = query.get("payload").and_then(Value::as_str).unwrap_or("");
+            let result = if nbcad_mcp_mutate::is_live_sketch_query(method) {
+                parse_engine_envelope(engine.engine_call(method, payload))
+            } else {
+                Err("unsupported live sketch query".into())
+            };
+            let response = match result {
+                Ok(value) => json!({"status":"applied","value":value}),
+                Err(error) => json!({"status":"failed","error":error}),
+            };
+            let id = request["id"].as_str().unwrap();
+            atomic_write(
+                &dir.join(format!("{id}.result.json")),
+                &response.to_string(),
+            )?;
+            let _ = fs::remove_file(path);
+            return Ok(Value::Null);
+        }
         return Ok(request);
     }
     Ok(Value::Null)

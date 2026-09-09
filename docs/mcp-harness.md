@@ -164,7 +164,7 @@ mutate the headless document.
 
 ### Desktop camera and joint controls
 
-`cad_view` targets an explicit `session_id` (or the currently attached session).
+`cad_ui` with `action: view` targets an explicit `session_id` (or the currently attached session).
 Choose `current`, `isometric`, `top`, `bottom`, `front`, `back`, `left`, or `right`;
 set `fit: true` to frame visible geometry. It returns an acknowledged camera
 pose only after the desktop renderer finishes its animation. It does not modify
@@ -186,11 +186,12 @@ the shared mutation mappings for live use.
 Run the native control regression against a disposable active assembly document:
 
 ```sh
-node scripts/mcp-desktop-controls.mjs --server /path/to/nbcad-mcp --session UUID --out controls.json
+cargo xtask test-mcp controls --server /path/to/nbcad-mcp --session UUID --out controls.json
 ```
 
 The test changes the camera, checks that neither the model nor engine generation
 changes, suppresses a joint, temporarily makes it revolute to exercise motion,
 deletes it, and restores the starting model in a `finally` block. An optional
 `--model model.json` loads a fixture into the target document first. It requires
-a working live snapshot publisher (see the snapshot-publication fix in #90).
+a working live snapshot publisher. See [the live UI guide](mcp-live-ui.md)
+for the single UI surface, browser contracts, and executable bench workshop.

@@ -6,6 +6,22 @@
 
 use serde_json::{json, Value};
 
+/// Reads that require the desktop's in-progress sketch, which intentionally
+/// is not part of the completed project snapshot. Shared by both endpoints;
+/// this is a narrow read-only allowlist, never arbitrary engine dispatch.
+pub fn is_live_sketch_query(method: &str) -> bool {
+    matches!(
+        method,
+        "active_sketch"
+            | "eval_expression"
+            | "preview_segment"
+            | "preview_segment_locked"
+            | "fillet_preview"
+            | "offset_preview"
+            | "trim_preview"
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadKind {
     Empty,
