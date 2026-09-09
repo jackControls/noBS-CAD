@@ -1,60 +1,89 @@
 # Editable crown garden bench
 
-This is an original native design, not an imported FreeCAD bench. It is a
-parametric modeling and assembly example: 1200 mm seat width, 450 mm seat
-height, rounded timber seat slats, crowned and slotted back pickets, contrasting
-frame members, and bullnose armrests. The earlier `bench` suite remains a small
-rectangular-stock regression fixture.
-
-Run from the repository root with an OCCT-enabled MCP binary:
+This original native design demonstrates editable timber parts and an assembly:
+1200 mm seat width, 450 mm seat height, five seat slats, crowned back pickets and
+supported armrests. It is not an imported FreeCAD model. The smaller `bench` suite
+remains the rectangular-stock regression fixture.
 
 ```sh
 cargo xtask test-mcp garden-bench --server /absolute/path/to/nbcad-mcp --out /absolute/path/to/results
 ```
 
-To build visibly in a new native window and save an editable project:
+Build visibly in a new native window and save an editable project:
 
 ```sh
-cargo xtask test-mcp garden-bench --server /absolute/path/to/nbcad-mcp --desktop /absolute/path/to/nbcad --save /absolute/path/to/crown-garden-bench.nbcad --out /absolute/path/to/results
+cargo xtask test-mcp garden-bench --server /absolute/path/to/nbcad-mcp --desktop /absolute/path/to/nbcad --save /absolute/path/to/buildable-garden-bench.nbcad --out /absolute/path/to/results
 ```
 
-Use binaries from the same source revision. The example requires the slot
-center-constraint and capsule-tangency fixes that accompany it. It launches a
-new document rather than overwriting the user's current work. The recipe uses
-the shared product groups through `cad_interface`; it has no UI selectors or
-model-file surgery. STEP/STL are not intermediate or deliverable substitutes.
+Use matching engine versions with the slot center-constraint and capsule-tangency
+fixes in this PR. This revision changes the recipe, not the desktop binary. It uses
+the shared product groups through `cad_interface`; no UI selectors, model-file
+surgery, STEP or STL are used to construct the model. Existing documents are preserved.
 
-## Design and editing
+## Construction intent
 
-Component definitions own the native bodies; occurrences reuse them. The
-seat's first occurrence is grounded and face-referenced rigid mate frames
-locate the remaining members. Mate offsets are explicit assembly dimensions;
-this example does not claim a global parameter that resizes the entire bench.
-Front legs and continuous rear posts support the seat. Aprons terminate at leg
-faces, lower rails carry the stretcher, and two native clearance pockets keep
-the rear seat from intersecting the rear posts.
+Front legs continue up to support the arms. Rear legs continue into the back posts.
+Square-ended aprons and side rails overlap post faces and have accessible fastening
+from outside the frame. Upper and lower side rails are different definitions because
+their drilling differs. Left and right posts are separate machined parts.
 
-Every stock sketch has driving width/depth dimensions. The back picket adds
-persisted crown and edge fillets plus a face-mounted slot sketch and through
-cut. The slot has driving width and center spacing, vertical orientation, and
-a located center datum. Only that locating point is fixed; the slot remains
-editable. Its explicit center-coincidence constraint is validated by the same
-engine command used by MCP and the application.
+The seat bears on both side rails and a center bearer. Support blocks carry that
+bearer at the aprons. Three fixing positions per slat reduce the unsupported span.
+Seat gaps are 5 mm; square post notches provide 1 mm nominal clearance per side.
+The first two slats clear the taller front posts and the last clears the rear posts.
+These clearances assume accurately machined, conditioned stock and must be reviewed
+for the actual timber and exposure.
 
-`report.json` maps named components to their sketch names, body IDs, extrusion
-feature IDs and slot dimension ID. Sketch coordinates describe the component's
-local definition, while occurrence placement describes the assembled location.
-Use the component and feature map when editing; do not move sketch geometry
-merely to imitate occurrence placement.
+Back pickets sit on the seating side of the two back rails, which are fastened to
+the rear faces of the posts. Picket screws enter from behind the rails. Armrests
+bear on the front post tops and four square bearing cleats; they attach from below
+through the cleats into the arm boards. No shaped upright or unsupported arm-end
+butt joint is required.
 
-The recipe edits the slot width from 18 to 20 mm, proves the cut volume changes,
-then edits picket height from 315 to 340 mm and checks dependent features and
-all assembly poses. A fresh MCP process restores the native history and makes
-another height edit to 350 mm. The displayed/saved design retains 340 mm
-pickets. No-op cuts, recompute errors, unconstrained slot geometry, misplaced
-occurrences, or imported history fail the example. These focused checks do
-not impose an all-tools coverage gate.
+## Machining and assembly order
 
-Material colors are visual designations. Connection hardware
-and fabrication tolerances beyond the demonstrated post clearances are not
-specified by this recipe.
+1. Cut stock to the component envelopes and drill the documented patterns. Machine
+   the square post notches. The back-picket crown and slot are optional decoration
+   for fabrication, but retained here to exercise editable slot/crown features.
+2. Clamp the frame square. Fit the lower side rails and lower stretcher first;
+   upper rails would obstruct driver access. Then fit the lapped aprons, upper
+   side rails, center support blocks and center bearer.
+3. Fit the seat slats with spacers. Seat clearance holes have 10 mm, 90-degree
+   countersinks for flush heads. Install the seat before the armrests.
+4. Fit the back rails to the posts and fasten the pickets from behind.
+5. Fit the arm cleats and secure the arms from underneath. Ease exposed edges,
+   including square notches and posts, without removing joint bearing areas.
+
+`report.json` includes the component/sketch/feature map, quantities, finished
+component envelopes and a fastener schedule with head coordinates, direction,
+length, connected occurrences and installation stage. Native hole features model
+5.5 mm clearance bores and 3.5 mm pilot bores with a 2 mm pilot-depth allowance.
+Nominal screws are 5 mm; lengths vary with joint thickness. The recipe checks
+side-grain entry and retained tip clearance. Fastener solids/threads are not modeled.
+Pilot sizes and head envelopes are example assumptions: select actual exterior
+fasteners and timber, then reconcile the manufacturer's drilling and edge-distance
+requirements. This example has no certified load rating.
+
+## Editable history and evidence
+
+Each stock part begins with a dimensioned native sketch and extrusion. The picket
+adds crown/edge fillets, a fully constrained slot and a native through cut. Machined
+components are assembled with face-referenced rigid mate frames measured from the
+grounded front leg. These are explicit placement dimensions, not a global bench
+resizing parameter or a simulation of screw-joint flexibility.
+
+The recipe checks real material removal for notches, slots and drilling, assembly
+solutions and poses, seat/arm bearing and front-of-rail picket placement from the
+solved mesh envelopes. It rejects crossing screw shafts and checks a conservative
+20 mm square by 120 mm driver envelope at each installation stage. These checks
+are scoped to axis-aligned stock; they are not a general exact interference test.
+
+It changes slot width 18 to 20 mm and picket height 315 to 340 mm, checks dependent
+features and repeated occurrences, restores history in a fresh MCP process and
+edits the height again. The saved native file is reopened and its slot edited
+20 to 22 to 20 mm. The delivered pickets remain 340 mm tall. Recompute errors,
+no-op cuts and broken relationships fail the run. The same example runs in the
+existing MCP CI jobs, without a new all-tools coverage gate.
+
+See [design principles](parametric-design-principles.md) for research sources and
+the modeling practices behind these checks.
