@@ -6,6 +6,8 @@ import react from '@vitejs/plugin-react';
 // and take precedence over the values below.
 export default defineConfig({
   plugins: [react()],
+  // Native SDK/build trees contain HTML fixtures; they are not app entries.
+  optimizeDeps: { entries: ['index.html'] },
   // OpenCascade.js ships its Emscripten module as a JS + 48 MB WASM pair.
   // Treat the WASM import as an asset URL; the kernel is lazy-loaded only
   // when the first solid operation runs.
@@ -14,5 +16,8 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 5173,
+    watch: {
+      ignored: ['**/target/**', '**/.vcpkg/**', '**/vcpkg_installed/**'],
+    },
   },
 });
