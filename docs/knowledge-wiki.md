@@ -5,7 +5,7 @@ The `knowledge/` directory is an
 bundle: Markdown concepts with YAML frontmatter for humans and agents.
 
 - Browse in-repo: start at [`knowledge/index.md`](../knowledge/index.md)
-- Hosted: GitHub Pages workflow `.github/workflows/pages-knowledge.yml` (enable Pages in repo settings after merge)
+- Hosted: [knowledge site](https://jackcontrols.github.io/noBS-CAD/) via `.github/workflows/pages-knowledge.yml`
 - Agents: prefer reading the markdown files over scraping the HTML page
 - Keep concepts **thin**; longer factual and proposed design stays in
   [`mcp-harness.md`](mcp-harness.md) and
