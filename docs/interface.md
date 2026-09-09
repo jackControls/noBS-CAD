@@ -132,6 +132,12 @@ motion coordinates instead of silently ignoring them. Reports include call argum
 and a model checkpoint. Workshop resets are explicit and require an empty
 document at the start. Do not run it over user work.
 
+For a richer editable design, run `cargo xtask test-mcp garden-bench`.
+The [crown garden bench](garden-bench.md) adds crowned/slotted pickets,
+rounded armrests, rear-post clearance pockets, reusable components and
+driving-dimension edits with native history restore checks. The simple `bench`
+fixture above is not a faithful reconstruction of any external reference.
+
 For complementary mechanism examples, FreeCAD maintains an
 [assembly example](https://github.com/FreeCAD/FreeCAD/blob/main/data/examples/AssemblyExample.FCStd)
 and documents a vise and crank-slider in its
