@@ -15,7 +15,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
-import { captureSessionSnapshot } from './sessionSnapshot';
+import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
 import {
   useAppStore,
@@ -130,7 +130,11 @@ async function publishNow(): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const engine = await getEngine();
       const { reservation, activeSketch, modelJson } = await captureSessionSnapshot({
-        synchronizeVisibility: () => engine.setProjectVisibility(useAppStore.getState().projectVisibility),
+        synchronizeVisibility: () => synchronizeSnapshotVisibility(
+          useAppStore.getState().projectVisibility,
+          () => engine.projectVisibility(),
+          visibility => engine.setProjectVisibility(visibility),
+        ),
         reserve: () => invoke<PublishReservation>('mcp_session_bridge_reserve'),
         activeSketch: () => engine.activeSketch(),
         exportModel: () => engine.exportProjectModel(),
