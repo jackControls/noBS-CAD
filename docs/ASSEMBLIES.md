@@ -74,6 +74,12 @@ exact topology connectors to exact occurrence ids, not merely to source body
 ids. This disambiguates two instances of the same source part and prevents an
 edit from silently retargeting a different instance.
 
+For a picked planar attachment point, supply `source_surface_frame` with the
+selected face's `plane.origin`, `plane.normal`, and `plane.u`, and put the
+attachment origin and axes in `frame`. The connector preserves that local
+offset through recomputation and save/load, as cylindrical connectors do.
+Omitting `source_surface_frame` retains the legacy face-centroid behavior.
+
 Renderers retain one tessellation per source body and instance it for every
 visible occurrence. Native and browser picking transform the ray into each
 instance and return the exact occurrence id, so selection and hover do not

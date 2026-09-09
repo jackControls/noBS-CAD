@@ -4728,7 +4728,33 @@ fn canonical_connector_against_scene(
         ));
     }
     match connector.kind {
-        JointConnectorKindDto::PlanarFace => connector_from_planar_face(body.id, face),
+        JointConnectorKindDto::PlanarFace => {
+            let mut canonical = connector_from_planar_face(body.id, face)?;
+            if let Some(source) = connector.source_surface_frame {
+                let plane = face.plane.expect("validated planar face");
+                let live = JointFrameDto {
+                    origin: plane.origin,
+                    primary_axis: plane.normal,
+                    secondary_axis: plane.u,
+                };
+                // Preserve a picked attachment point relative to the exact
+                // surface frame, including after a feature edit. Legacy
+                // connectors without this frame retain centroid semantics.
+                let delta =
+                    RigidPose::from_frame(live).compose(RigidPose::from_frame(source).inverse());
+                canonical.frame = JointFrameDto {
+                    origin: add(
+                        delta.translation,
+                        rotate(delta.rotation, connector.frame.origin),
+                    ),
+                    primary_axis: rotate(delta.rotation, connector.frame.primary_axis),
+                    secondary_axis: rotate(delta.rotation, connector.frame.secondary_axis),
+                };
+                canonical.source_surface_frame = Some(live);
+                validate_connector(&canonical)?;
+            }
+            Ok(canonical)
+        }
         JointConnectorKindDto::CylindricalFace | JointConnectorKindDto::VirtualCircularFace => {
             let cylinder = face
                 .cylinder
@@ -5626,6 +5652,32 @@ mod tests {
             length(sub(actual, expected)) < 1.0e-8,
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn picked_planar_anchor_survives_save_and_surface_motion() {
+        let mut scene = scene();
+        let mut connector =
+            connector_from_planar_face(BodyId(1), &scene.bodies[0].faces[0]).unwrap();
+        connector.source_surface_frame = Some(connector.frame);
+        connector.frame.origin = [3.0, 4.0, 0.0];
+        let captured = canonical_connector_against_scene(&connector, &scene).unwrap();
+        assert_vec3(captured.frame.origin, [3.0, 4.0, 0.0]);
+        let saved = serde_json::to_string(&captured).unwrap();
+        let restored: JointConnectorDto = serde_json::from_str(&saved).unwrap();
+        scene.bodies[0].faces[0].plane = Some(PlaneBasis {
+            origin: [10.0, 20.0, 5.0],
+            normal: [0.0, 0.0, 1.0],
+            u: [0.0, 1.0, 0.0],
+            v: [-1.0, 0.0, 0.0],
+        });
+        let moved = canonical_connector_against_scene(&restored, &scene).unwrap();
+        assert_vec3(moved.frame.origin, [6.0, 22.0, 5.0]);
+        assert_vec3(moved.frame.secondary_axis, [0.0, 1.0, 0.0]);
+        let repeated = canonical_connector_against_scene(&moved, &scene).unwrap();
+        assert_vec3(repeated.frame.origin, moved.frame.origin);
+        scene.bodies[0].faces[0].key = "changed-topology".into();
+        assert!(canonical_connector_against_scene(&moved, &scene).is_err());
     }
 
     #[test]

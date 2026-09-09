@@ -15,9 +15,9 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getEngine } from './engine';
+import { captureSessionSnapshot } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
 import {
-  exportProjectModelWithVisibility,
   useAppStore,
   type AppMode,
   type SketchTool,
@@ -128,19 +128,13 @@ async function publishNow(): Promise<void> {
     // this snapshot into another session. If a UI mutation lands before
     // write, native rejects the stale snapshot and we retry.
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
       const engine = await getEngine();
-      const activeSketch = await engine.activeSketch();
-      let modelJson: string | null = null;
-      try {
-        const model = await exportProjectModelWithVisibility(engine);
-        modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-      } catch (error) {
-        // A half-finished sketch must not enter the persisted project format,
-        // but diagnostics still need the live entity/constraint snapshot. The
-        // native bridge keeps its previous completed model.json beside it.
-        if (activeSketch === null) throw error;
-      }
+      const { reservation, activeSketch, modelJson } = await captureSessionSnapshot({
+        synchronizeVisibility: () => engine.setProjectVisibility(useAppStore.getState().projectVisibility),
+        reserve: () => invoke<PublishReservation>('mcp_session_bridge_reserve'),
+        activeSketch: () => engine.activeSketch(),
+        exportModel: () => engine.exportProjectModel(),
+      });
       const written = await invoke<PublishWriteResult>('mcp_session_bridge_write', {
         payload: JSON.stringify({
           focus,
@@ -229,6 +223,7 @@ export function startSessionBridge(): void {
       state.activeSketch !== prev.activeSketch ||
       state.mode !== prev.mode ||
       state.activeTool !== prev.activeTool ||
+      state.projectVisibility !== prev.projectVisibility ||
       activeSolidDialog(state) !== activeSolidDialog(prev)
     ) {
       // Native engine commands bump engine_revision under the publisher lock
