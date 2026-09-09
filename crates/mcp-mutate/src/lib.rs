@@ -801,10 +801,15 @@ mod tests {
         assert_eq!(update.payload, PayloadKind::Object);
         assert!(lookup_mutate("assembly_document").is_none());
         assert!(lookup_mutate("assembly_solution").is_none());
-        assert!(
-            lookup_mutate("assembly_delete_joint").is_none(),
-            "do not invent assembly_delete_joint; host delete is not an MCP mutate"
+        let delete = lookup_mutate("assembly_delete_joint").expect("present");
+        assert_eq!(delete.engine_method, "assembly_delete_joint");
+        assert_eq!(delete.execution, ExecutionKind::Direct);
+        assert_eq!(delete.payload, PayloadKind::Field("joint_id"));
+        assert_eq!(
+            encode_payload(delete.payload, &json!({"joint_id": 42})).unwrap(),
+            "42"
         );
+        assert!(encode_payload(delete.payload, &json!({"id": 42})).is_err());
     }
 
     #[test]
