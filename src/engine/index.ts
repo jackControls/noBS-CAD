@@ -142,6 +142,7 @@ export interface Engine {
   projectVisibility(): Promise<ProjectVisibilityDto>;
   setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
   drawingDocument(): Promise<DrawingDocumentDto>;
+  drawingApply(command: import('./types').DrawingCommandDto): Promise<DrawingDocumentDto>;
   setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto>;
   assemblyDocument(): Promise<AssemblyDocumentDto>;
   setAssemblyDocument(document: AssemblyDocumentDto): Promise<AssemblyDocumentDto>;

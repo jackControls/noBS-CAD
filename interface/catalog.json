@@ -1386,7 +1386,12 @@
               "action": "drawingAutoLayout"
             }
           ],
-          "operations": []
+          "operations": [
+            "drawing_document",
+            "drawing_create_sheet",
+            "drawing_select_sheet",
+            "drawing_delete_sheet"
+          ]
         },
         {
           "id": "views",
@@ -1527,7 +1532,10 @@
               "payload": "section_view"
             }
           ],
-          "operations": []
+          "operations": [
+            "drawing_add_view",
+            "drawing_projection"
+          ]
         },
         {
           "id": "dimensions",
@@ -1766,7 +1774,9 @@
               "payload": "note"
             }
           ],
-          "operations": []
+          "operations": [
+            "drawing_add_note"
+          ]
         },
         {
           "id": "symbols",

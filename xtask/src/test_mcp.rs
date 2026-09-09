@@ -10,7 +10,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
         "live" => "live.mjs",
         "controls" => "controls.mjs",
         "bench" => "bench.mjs",
-        _ => bail!("Unknown MCP suite '{suite}'; use contracts, live, controls, or bench"),
+        "drawing" => "drawing.mjs",
+        _ => bail!("Unknown MCP suite '{suite}'; use contracts, live, controls, bench, or drawing"),
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let status = Command::new("node")

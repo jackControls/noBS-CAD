@@ -116,7 +116,7 @@ Mutation routing comes from the server catalog's shared `mutates` metadata.
 Active-sketch inspection, expression evaluation, and previews query the live
 engine through the existing control channel. They do not read the completed
 model snapshot, which intentionally excludes a sketch still being edited.
-Drivers live only in `xtask/mcp`; there are no legacy script entry points.
+The product drivers live in `xtask/mcp` and use the shared `mcp-server/client.mjs` transport.
 
 The workshop exercises sketch operations and mutations in the product's solid
 build, refine, repeat, and body groups. Adding an operation fails coverage until an
@@ -140,3 +140,34 @@ The vise would exercise sliding and screw motion; the crank-slider would
 exercise coupled joints. Treat these as design references for new native MCP
 plans. An imported shape would not prove native sketch history, and `.FCStd`
 is not a noBS-CAD project format. No external model is vendored here.
+
+## Direct drawing operations
+
+`drawing_create_sheet`, `drawing_select_sheet`, and `drawing_delete_sheet` belong
+to `drawing/sheet`; `drawing_add_view` and `drawing_projection` belong to
+`drawing/views`; `drawing_add_note` belongs to `drawing/annotate`.
+`drawing_document` reads the persisted drawing. The editor uses the same Rust
+commands for these edits, including validation, ID allocation and returning
+changed released sheets to draft. Live edits select the drawing workspace and
+participate in the drawing editor's undo history.
+
+A view supplies its name, kind, direction/up vectors, paper position and scale.
+The engine assigns IDs; body filters, hidden/tangent edges and parent alignment
+are optional. Projection returns exact OCCT linework, bounds, topology anchors
+and circular references from the current completed model. Headless and attached
+operation calls use the same arguments and results.
+
+```powershell
+cargo xtask test-mcp drawing --server <nbcad-mcp.exe> --out <report.json>
+cargo xtask test-mcp drawing --server <nbcad-mcp.exe> --desktop <nbcad.exe> --save <new-absolute-path.nbcad> --out <live-report.json>
+```
+
+The example builds native stock, three views and a fabrication note, checks exact
+projection dimensions and failed-edit atomicity, then restores the drawing in a
+fresh server. Live mode also verifies the drawing canvas and native save/reopen.
+This is a focused example, not a comprehensive feature-coverage requirement.
+Specialized annotations, derived-view ergonomics, editing/deletion of individual
+views/annotations, and drawing exports remain tracked in #93.
+
+All stdio example/test drivers share `mcp-server/client.mjs`. The part-design
+examples in #89 retain their distinct geometry checks and lessons.

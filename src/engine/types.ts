@@ -2430,3 +2430,10 @@ export interface ConflictReport {
 
 /** Host envelope: `{"ok":true,"value":...}` / `{"ok":false,"error":"..."}`. */
 export type Envelope<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Atomic drawing commands shared by the editor and MCP. */
+export type DrawingCommandDto =
+ | {type:'create_sheet';arguments:Pick<DrawingSheetDto,'name'|'format'|'orientation'|'standard'|'projection_method'|'tolerance_note'> & {title_block:Partial<DrawingTitleBlockDto>}}
+ | {type:'select_sheet'|'delete_sheet';arguments:{sheet_id:number}}
+ | {type:'add_view';arguments:{sheet_id:number;view:DrawingViewDto;rescale_group?:boolean}}
+ | {type:'add_note';arguments:{sheet_id:number;text:string;position:[number,number]}};

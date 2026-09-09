@@ -22,6 +22,7 @@ type WasmEngineMethods = WasmEngineInner & {
   project_visibility(): string;
   project_set_visibility(payload: string): string;
   drawing_document(): string;
+  drawing_apply(payload: string): string;
   drawing_set_document(payload: string): string;
   assembly_document(): string;
   assembly_set_document(payload: string): string;
@@ -257,6 +258,10 @@ export class WasmEngine implements Engine {
 
   async drawingDocument(): Promise<DrawingDocumentDto> {
     return unwrapEnvelope((this.inner as WasmEngineMethods).drawing_document());
+  }
+
+  async drawingApply(command: import('./types').DrawingCommandDto): Promise<DrawingDocumentDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).drawing_apply(JSON.stringify(command)));
   }
 
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {

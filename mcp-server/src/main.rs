@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 
 mod desktop;
 mod disclosure;
+mod drawing_tools;
 mod interface;
 mod session;
 
@@ -254,7 +255,25 @@ impl CadServer {
         {
             session::request_sketch_query(session_id, engine_method, &payload)?
         } else if execution == Execution::Direct {
-            if name == "solid_export_step" {
+            if name == "drawing_projection" {
+                let request: nbcad_occt::DrawingProjectionRequest =
+                    serde_json::from_value(arguments).map_err(|e| e.to_string())?;
+                let scene = self.manager.solid_scene();
+                if !scene.errors.is_empty() {
+                    return Err("Resolve timeline errors before generating a drawing view.".into());
+                }
+                let mut projection = self
+                    .kernel
+                    .drawing_projection(&request)
+                    .map_err(|e| e.to_string())?;
+                projection.anchors =
+                    nbcad_occt::drawing_projection_anchors(&scene, &request, &projection)
+                        .map_err(|e| e.to_string())?;
+                projection.circles =
+                    nbcad_occt::drawing_projection_circles(&scene, &request, &projection)
+                        .map_err(|e| e.to_string())?;
+                serde_json::to_value(projection).map_err(|e| e.to_string())?
+            } else if name == "solid_export_step" {
                 let request: StepExportRequest = if arguments.is_null() {
                     StepExportRequest::default()
                 } else {
@@ -449,7 +468,8 @@ impl CadServer {
         // A completed-model refresh already seeded a replay baseline containing
         // this edit. Only active-sketch edits still need an individual entry.
         if applied["refreshed"] != true {
-            self.tool_trace.push(json!({"name":name,"arguments":payload}));
+            self.tool_trace
+                .push(json!({"name":name,"arguments":payload}));
         }
         let value: Value = serde_json::from_str(&session::read_session_file(
             &session_id,
@@ -985,6 +1005,9 @@ fn entity_ids_schema() -> Value {
 /// Tools allowed to run in-process while snapshot-attached (#55 list).
 /// `cad_submit` is the mutate path: only tools *not* on this list.
 fn is_read_safe_while_attached(name: &str) -> bool {
+    if matches!(name, "drawing_document" | "drawing_projection") {
+        return true;
+    }
     matches!(
         name,
         "cad_get_focus"
@@ -3358,6 +3381,7 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
     ];
+    tools.extend(drawing_tools::specs());
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
         tool.pack = pack;
@@ -3367,6 +3391,9 @@ fn tool_specs() -> Vec<ToolSpec> {
 }
 
 fn records_in_script(name: &str) -> bool {
+    if matches!(name, "drawing_document" | "drawing_projection") {
+        return false;
+    }
     if matches!(
         name,
         "cad_script"
@@ -6776,12 +6803,16 @@ mod tests {
         assert_eq!(actual, expected);
         // The grouped transport must not add a second copy of the operation,
         // or leak catalog/renderer controls into a portable modeling script.
-        grouped.call_tool("cad_interface", json!({"action":"catalog"})).unwrap();
+        grouped
+            .call_tool("cad_interface", json!({"action":"catalog"}))
+            .unwrap();
         let script = grouped.call_tool("cad_script", json!({})).unwrap();
         assert_eq!(script["calls"].as_array().unwrap().len(), 1);
         let mut replay = CadServer::new().unwrap();
         for call in script["calls"].as_array().unwrap() {
-            replay.call_tool(call["name"].as_str().unwrap(), call["arguments"].clone()).unwrap();
+            replay
+                .call_tool(call["name"].as_str().unwrap(), call["arguments"].clone())
+                .unwrap();
         }
         assert!(replay.manager.active_snapshot().is_some());
     }

@@ -190,6 +190,10 @@ export class TauriEngine implements Engine {
     return this.call('engine_drawing_document');
   }
 
+  async drawingApply(command: import('./types').DrawingCommandDto): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_apply',command);
+  }
+
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {
     return this.call('engine_drawing_set_document', document);
   }

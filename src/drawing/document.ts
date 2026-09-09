@@ -123,70 +123,21 @@ export function beginDrawingSheetSetup(): void {
 
 /** Creates a framed but intentionally empty sheet. */
 export function createDrawingSheet(setup: DrawingSheetSetup): Promise<void> {
-  return enqueueDrawingUpdate((drawing) => {
-    const next = cloneDrawing(drawing);
-    const sheet: DrawingSheetDto = {
-      id: next.next_sheet_id,
-      name: `Sheet ${next.sheets.length + 1}`,
-      format: setup.format,
-      orientation: setup.orientation,
-      standard: setup.standard,
-      projection_method: setup.projection_method,
-      tolerance_note: structuredClone(setup.tolerance_note),
-      title_block: {
-        title: setup.title,
-        drawing_number: setup.drawing_number,
-        revision: setup.revision,
-        author: setup.author,
-        checked_by: '',
-        approved_by: '',
-        company: '',
-        material: '',
-        finish: '',
-      },
-      views: [],
-      annotations: [],
-      style: defaultDrawingSheetStyle(),
-      template_name: 'noBS CAD Default',
-      revisions: [],
-      bom: [],
-      release: { status: 'draft', released_revision: '', released_at: '' },
-      revision_table_position: null,
-      bom_table_position: null,
-    };
-    next.sheets.push(sheet);
-    next.active_sheet_id = sheet.id;
-    next.next_sheet_id += 1;
-    return next;
-  }).then(() => {
-    // Close setup only after the validated Rust document has reached the
-    // store. Closing it from inside the mutation races the still-empty sheet
-    // state and can leave the setup surface mounted over the new sheet.
-    clearDrawingSelection();
-    useAppStore.getState().setDrawingSheetSetupOpen(false);
-  });
+  return enqueueDrawingCommand((drawing) => ({    
+type: 'create_sheet', arguments: {
+      name: `Sheet ${drawing.sheets.length + 1}`, format: setup.format, orientation: setup.orientation,
+      standard: setup.standard, projection_method: setup.projection_method, tolerance_note: setup.tolerance_note,
+      title_block: { title: setup.title, drawing_number: setup.drawing_number, revision: setup.revision, author: setup.author },
+    }  
+})).then(() => { clearDrawingSelection(); useAppStore.getState().setDrawingSheetSetupOpen(false); });
 }
 
 export function setActiveDrawingSheet(sheetId: number): Promise<void> {
-  return enqueueDrawingUpdate((drawing) => {
-    if (!drawing.sheets.some((sheet) => sheet.id === sheetId)) return drawing;
-    const next = cloneDrawing(drawing);
-    next.active_sheet_id = sheetId;
-    queueMicrotask(clearDrawingSelection);
-    return next;
-  }, false);
+  return enqueueDrawingCommand(() => ({ type: 'select_sheet', arguments: { sheet_id: sheetId } }), false).then(clearDrawingSelection);
 }
-
 export function deleteDrawingSheet(sheetId: number): Promise<void> {
-  return enqueueDrawingUpdate((drawing) => {
-    const next = cloneDrawing(drawing);
-    next.sheets = next.sheets.filter((sheet) => sheet.id !== sheetId);
-    if (next.active_sheet_id === sheetId) next.active_sheet_id = next.sheets[0]?.id ?? null;
-    queueMicrotask(() => {
-      clearDrawingSelection();
-      if (next.sheets.length === 0) useAppStore.getState().setDrawingSheetSetupOpen(true);
-    });
-    return next;
+  return enqueueDrawingCommand(() => ({ type: 'delete_sheet', arguments: { sheet_id: sheetId } })).then(() => {
+    clearDrawingSelection(); if (!useAppStore.getState().drawingDocument.sheets.length) useAppStore.getState().setDrawingSheetSetupOpen(true);
   });
 }
 
@@ -246,38 +197,14 @@ export function addDrawingView(
   requestedParentId: number | null = null,
   requestedScale?: number,
 ): Promise<void> {
-  return enqueueDrawingUpdate((drawing, state) => {
-    const next = cloneDrawing(drawing);
-    const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
-    const id = next.next_view_id++;
-    const view = drawingViewPlacementDraft(
-      sheet,
-      state.solidScene,
-      kind,
-      position,
-      requestedParentId,
-      requestedScale,
-      id,
-    );
-    const root = drawingViewPlacementRoot(sheet, requestedParentId);
-    if (root && requestedScale !== undefined) {
-      for (const member of sheet.views) {
-        if (drawingViewGroupRoot(sheet, member.id)?.id === root.id) {
-          member.scale = requestedScale;
-        }
-      }
-    }
-    sheet.views.push(view);
-    queueMicrotask(() => {
-      const store = useAppStore.getState();
-      store.setDrawingTool(null);
-      store.setDrawingPendingViewKind(null);
-      store.setSelectedDrawingAnnotationId(null);
-      store.setSelectedDrawingViewId(id);
-    });
-    return next;
-  });
+  return enqueueDrawingCommand((drawing, state) => {
+    const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
+    const view = drawingViewPlacementDraft(sheet, state.solidScene, kind, position, requestedParentId, requestedScale, drawing.next_view_id);
+    return { type: 'add_view', arguments: { sheet_id: sheet.id, view, rescale_group: requestedScale !== undefined } };
+  }).then(() => {    
+const store = useAppStore.getState(); store.setDrawingTool(null); store.setDrawingPendingViewKind(null);
+    store.setSelectedDrawingAnnotationId(null); store.setSelectedDrawingViewId(store.drawingDocument.next_view_id - 1);  
+});
 }
 
 export function updateDrawingView(viewId: number, update: Partial<DrawingViewDto>): Promise<void> {
@@ -713,15 +640,10 @@ export function addDrawingChamferNote(
 }
 
 export function addDrawingNote(position: [number, number], text = 'NOTE'): Promise<void> {
-  return enqueueDrawingUpdate((drawing) => {
-    const next = cloneDrawing(drawing);
-    const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
-    const id = next.next_annotation_id++;
-    sheet.annotations.push({ kind: 'note', id, text, position });
-    queueMicrotask(() => selectCreatedAnnotation(id));
-    return next;
-  });
+  return enqueueDrawingCommand(drawing => {    
+const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
+    return { type: 'add_note', arguments: { sheet_id: sheet.id, text, position } };
+  }).then(() => selectCreatedAnnotation(useAppStore.getState().drawingDocument.next_annotation_id - 1));
 }
 
 export type DrawingAnnotationUpdate = Partial<{
@@ -1032,6 +954,17 @@ function selectCreatedAnnotation(id: number): void {
   store.setSelectedDrawingViewId(null);
   store.setSelectedDrawingAnnotationId(id);
   store.setDrawingTool(null);
+}
+
+function enqueueDrawingCommand(make: (drawing: DrawingDocumentDto, state: ReturnType<typeof useAppStore.getState>) => import('../engine/types').DrawingCommandDto, recordHistory = true): Promise<void> {
+  const operation = writeQueue.then(async () => {
+    const state = useAppStore.getState(); const projectKey = currentHistoryProjectKey(); const engine = await getEngine();
+    const before = await engine.drawingDocument();
+    const next = await engine.drawingApply(make(before, state));
+    useAppStore.setState({ drawingDocument: next, dirty: true });
+    if (recordHistory) recordDrawingHistory(projectKey, before, next);
+  });
+  writeQueue = operation.catch(() => undefined); return operation;
 }
 
 function enqueueDrawingUpdate(

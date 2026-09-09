@@ -50,6 +50,36 @@ pub struct MutateSpec {
 /// Every modeling mutate that `cad_submit` may enqueue and the UI inbox may apply.
 pub static MUTATES: &[MutateSpec] = &[
     MutateSpec {
+        name: "drawing_create_sheet",
+        engine_method: "drawing_create_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_select_sheet",
+        engine_method: "drawing_select_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_delete_sheet",
+        engine_method: "drawing_delete_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_add_view",
+        engine_method: "drawing_add_view",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_add_note",
+        engine_method: "drawing_add_note",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "cad_set_document_name",
         engine_method: "document_set_name",
         payload: PayloadKind::Field("name"),

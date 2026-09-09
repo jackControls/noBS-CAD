@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
-import {Client} from './client.mjs';
+import {Client} from '../../mcp-server/client.mjs';
 import {workshop} from './workshop.mjs';
 
 const option=name=>process.argv.includes(name)?process.argv[process.argv.indexOf(name)+1]:undefined;

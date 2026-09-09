@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
-import {Client} from './client.mjs';
+import {Client} from '../../mcp-server/client.mjs';
 
 const args=process.argv.slice(2);
 const option=name=>args.includes(name)?args[args.indexOf(name)+1]:undefined;

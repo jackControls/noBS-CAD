@@ -14,6 +14,7 @@
  * are dead-lettered. Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
+import {currentHistoryProjectKey,recordDrawingHistory} from './engine/applicationHistory';
 import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
@@ -176,6 +177,8 @@ async function applyInboxNow(): Promise<void> {
   // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
   try {
+    const drawingBefore=useAppStore.getState().drawingDocument;
+    const drawingProject=currentHistoryProjectKey();
     const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
     if (result?.dead_lettered) {
       console.warn('[sessionBridge] inbox op dead-lettered; queue unblocked', result);
@@ -190,6 +193,9 @@ async function applyInboxNow(): Promise<void> {
       } else {
         // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
         await useAppStore.getState().refreshAfterInboxApply(result.name);
+      }
+      if(result.name?.startsWith('drawing_')&&result.name!=='drawing_select_sheet') {
+        recordDrawingHistory(drawingProject,drawingBefore,useAppStore.getState().drawingDocument);
       }
     } finally {
       // Native already archived the seq and bumped engine_revision. Publish

@@ -69,6 +69,22 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "project_set_visibility" => with_payload(payload, |visibility| {
             manager.set_project_visibility(visibility)
         }),
+        "drawing_apply" => with_payload(payload, |command| manager.drawing_command(command)),
+        "drawing_create_sheet" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::CreateSheet(r))
+        }),
+        "drawing_select_sheet" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::SelectSheet(r))
+        }),
+        "drawing_delete_sheet" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::DeleteSheet(r))
+        }),
+        "drawing_add_view" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::AddView(r))
+        }),
+        "drawing_add_note" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::AddNote(r))
+        }),
         "drawing_document" => ok_json(manager.drawing_document()),
         "drawing_set_document" => {
             with_payload(payload, |drawing| manager.set_drawing_document(drawing))

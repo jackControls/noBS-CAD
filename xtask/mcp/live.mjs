@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {writeFile} from 'node:fs/promises';
-import {Client} from './client.mjs';
+import {Client} from '../../mcp-server/client.mjs';
 
 const option = name => process.argv[process.argv.indexOf(name) + 1];
 assert(process.argv.includes('--server') && (process.argv.includes('--desktop') || process.argv.includes('--session')),

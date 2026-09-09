@@ -1244,6 +1244,12 @@ export const useAppStore = create<AppState>()((set) => ({
 
   refreshAfterInboxApply: async (opName) => {
     const engine = await getEngine();
+    if (opName?.startsWith('drawing_')) {
+      const drawingDocument=await engine.drawingDocument();
+      set({drawingDocument,dirty:true,activeTab:'drawing',drawingTool:null,drawingPendingViewKind:null,
+        selectedDrawingViewId:null,selectedDrawingAnnotationId:null,drawingSheetSetupOpen:drawingDocument.sheets.length===0});
+      return;
+    }
     // Assembly-only inbox ops: targeted refresh — keep dirty:true so MCP live
     // edits are treated as unsaved (never loadDocument's dirty:false).
     if (opName?.startsWith('assembly_')) {

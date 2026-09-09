@@ -124,6 +124,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "MCP binary build failed" }
           cargo xtask test-mcp bench --server ./mcp-server/target/debug/nbcad-mcp.exe --workshop all --out ./target/mcp-workshop
           if ($LASTEXITCODE -ne 0) { throw "MCP workshop failed" }
+          cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/drawing-report.json
+          if ($LASTEXITCODE -ne 0) { throw "MCP drawing example failed" }
 
       - name: Export crate tests
         shell: pwsh
@@ -201,6 +203,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path mcp-server/Cargo.toml
           cargo xtask test-mcp bench --server ./mcp-server/target/debug/nbcad-mcp --workshop all --out ./target/mcp-workshop
+          cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/drawing-report.json
 
       - name: Upload MCP workshop evidence
         if: always()

@@ -272,6 +272,7 @@ engine_command!(
     no_payload,
     read
 );
+engine_command!(engine_drawing_apply, "drawing_apply");
 engine_command!(engine_drawing_set_document, "drawing_set_document");
 engine_command!(
     engine_assembly_document,
@@ -1013,6 +1014,7 @@ pub fn run() {
             engine_project_visibility,
             engine_project_set_visibility,
             engine_drawing_document,
+            engine_drawing_apply,
             engine_drawing_set_document,
             engine_assembly_document,
             engine_assembly_set_document,
