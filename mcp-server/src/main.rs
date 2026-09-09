@@ -380,7 +380,19 @@ impl CadServer {
                     }
                     launched
                 } else {
-                    session::request_ui(&arguments, self.attached_document_id.as_deref())?
+                    let mut result =
+                        session::request_ui(&arguments, self.attached_document_id.as_deref())?;
+                    if result["status"] == "applied" {
+                        if let Some(active) =
+                            result["active_session_id"].as_str().map(str::to_owned)
+                        {
+                            if self.attached_document_id.as_deref() != Some(active.as_str()) {
+                                self.attach_read_only_snapshot(&json!({"session_id":active}))?;
+                            }
+                            result["attached_session_id"] = json!(active);
+                        }
+                    }
+                    result
                 }
             }
             "cad_attach" => self.attach_read_only_snapshot(&arguments)?,

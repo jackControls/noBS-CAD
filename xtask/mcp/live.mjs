@@ -108,6 +108,8 @@ try {
       assert.equal(overwrite.status,'failed','Existing file must require explicit overwrite');
       const opened = await ui({action:'file',command:'open',path:option('--save')});
       assert.equal(opened.status,'applied',JSON.stringify(opened));
+      assert.equal(opened.attached_session_id,opened.active_session_id,'File transitions must bind subsequent operations automatically');
+      assert.equal((await call('solid_scene')).bodies.length,1,'Operation reads must follow the reopened document without another attach');
       assert.equal((await ui({action:'inspect'})).status,'applied','Continue driving the session after open');
     }
   }

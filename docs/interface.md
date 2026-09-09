@@ -13,6 +13,8 @@ generation checks, submission, publication, and acknowledgement are internal.
 Named MCP operation tools use that same route when attached, so existing
 clients also make one call per operation. A successful launch binds that new
 desktop automatically; attach explicitly only when choosing an existing document.
+File opens and tab transitions also update that binding, so subsequent operation
+calls follow the active document without a separate attach step.
 An outdated desktop is rejected before submission. No uncertain mutation is
 automatically retried.
 
