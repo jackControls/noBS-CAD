@@ -10,6 +10,7 @@ import {
   chooseSaveTarget,
   writeSaveTarget,
   type SaveType,
+  type SaveTarget,
 } from './fileIO';
 import {
   createNbcadArchive,
@@ -129,7 +130,7 @@ export async function renameProject(requestedName?: string): Promise<boolean> {
   return true;
 }
 
-export async function saveProject(saveAs = false): Promise<boolean> {
+export async function saveProject(saveAs = false, targetOverride?: SaveTarget): Promise<boolean> {
   assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.document === null) {
@@ -140,7 +141,7 @@ export async function saveProject(saveAs = false): Promise<boolean> {
   }
   const existingTarget = !saveAs ? getCurrentProjectTarget() : null;
   const target =
-    existingTarget ??
+    targetOverride ?? existingTarget ??
     (await chooseSaveTarget(currentSuggestedName(), PROJECT_TYPE));
   if (!target) return false;
 
@@ -236,10 +237,11 @@ export async function saveAllUnsavedProjects(): Promise<boolean> {
   return !hasUnsavedProjects();
 }
 
-export async function openProject(): Promise<boolean> {
+export async function openProject(options?: { filePath: string; discardChanges?: boolean }): Promise<boolean> {
   assertNoFeatureEdit();
   const state = useAppStore.getState();
-  if (state.dirty) {
+  if (state.dirty && options && !options.discardChanges) throw new Error('Save the current document or explicitly set discard_changes before replacing it');
+  if (state.dirty && !options) {
     const decision = await requestUnsavedDecision(
       'replace',
       state.document?.name ?? null,
@@ -247,7 +249,7 @@ export async function openProject(): Promise<boolean> {
     if (decision === 'cancel') return false;
     if (decision === 'save' && !(await saveProject(false))) return false;
   }
-  const opened = await chooseOpenFile(PROJECT_TYPE);
+  const opened = await chooseOpenFile(PROJECT_TYPE, options?.filePath);
   if (!opened) return false;
   const { modelJson } = readNbcadArchive(opened.bytes);
   const engine = await getEngine();

@@ -148,7 +148,9 @@ See [proposed-architecture.md](proposed-architecture.md).
 For editable parts designed through ordinary MCP calls, see the
 [part-design examples](../mcp-server/examples/part-design/README.md): mounting
 plate, revolved spacer, and angle bracket. Their stdio integration test checks
-dimensions, volume, replay, model restoration and STEP round trips.
+dimensions, volume, replay, model restoration and STEP round trips. These draft
+fixtures are retained for migration to the shared Rust command-script runner;
+their JavaScript substitutions are not an authoring format for new examples.
 
 Three headless MCP quests score the first education path from
 [#16](https://github.com/jackControls/noBS-CAD/issues/16).
@@ -166,3 +168,37 @@ the same steps is still open on that issue.
 
 These are regression tests, not badges or streaks. The demo tool does not
 mutate the headless document.
+
+### Desktop camera and joint controls
+
+`cad_interface` with `action: view` targets an explicit `session_id` (or the currently attached session).
+Choose `current`, `isometric`, `top`, `bottom`, `front`, `back`, `left`, or `right`;
+set `fit: true` to frame visible geometry. It returns an acknowledged camera
+pose only after the desktop renderer finishes its animation. It does not modify
+geometry, change the engine generation, or add a modeling script operation.
+A live desktop supporting this tool and an active target tab are required.
+Stale sessions are rejected; missing acknowledgement returns `status: timeout`.
+An applied camera pose verifies navigation state, not pixel-level rendering.
+
+The assembly pack also exposes `assembly_delete_joint`,
+`assembly_set_joint_enabled`, and `assembly_set_joint_motion`. The latter two
+preserve the rest of the joint definition, avoiding replacement of connectors
+or limits merely to suppress a joint or move its primary coordinate. Motion
+uses degrees and millimetres; inspect `assembly_solution` for solver diagnostics.
+As with other live modeling operations, attached sessions use `cad_submit` and
+`cad_await_apply`, then refresh/query the published result. Headless clients can
+call these operations directly. The desktop and MCP binary must both include
+the shared mutation mappings for live use.
+
+Run the native control regression against a disposable active assembly document:
+
+```sh
+cargo xtask test-mcp controls --server /path/to/nbcad-mcp --session UUID --out controls.json
+```
+
+The test changes the camera, checks that neither the model nor engine generation
+changes, suppresses a joint, temporarily makes it revolute to exercise motion,
+deletes it, and restores the starting model in a `finally` block. An optional
+`--model model.json` loads a fixture into the target document first. It requires
+a working live snapshot publisher. See [the live UI guide](interface.md)
+for the single UI surface, browser contracts, and executable bench workshop.

@@ -272,6 +272,7 @@ engine_command!(
     no_payload,
     read
 );
+engine_command!(engine_drawing_apply, "drawing_apply");
 engine_command!(engine_drawing_set_document, "drawing_set_document");
 engine_command!(
     engine_assembly_document,
@@ -933,6 +934,7 @@ pub fn run() {
         .on_menu_event(native_menu::handle_event);
     builder
         .setup(|app| {
+            session_bridge::start_mcp_wake_loop(app.handle().clone());
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
             let (
                 session_id,
@@ -981,6 +983,9 @@ pub fn run() {
             write_binary_file_atomic,
             session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
+            session_bridge::mcp_session_bridge_control,
+            session_bridge::mcp_window_control,
+            session_bridge::mcp_path_exists,
             session_bridge::mcp_session_bridge_heartbeat,
             session_bridge::mcp_session_bridge_note_mutation,
             session_bridge::mcp_session_bridge_apply_inbox,
@@ -1009,6 +1014,7 @@ pub fn run() {
             engine_project_visibility,
             engine_project_set_visibility,
             engine_drawing_document,
+            engine_drawing_apply,
             engine_drawing_set_document,
             engine_assembly_document,
             engine_assembly_set_document,

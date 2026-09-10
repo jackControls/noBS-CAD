@@ -125,4 +125,3 @@ try {
   }
   console.log('PASS parametric assembly: 3 native sketches, 3 components, 4 instances, rigid spacer and 2 locked planar joints; bracket edit 20→25 mm and fresh-process restore');
 } finally { client.close(); restored?.close(); }
-

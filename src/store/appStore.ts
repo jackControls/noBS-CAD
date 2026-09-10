@@ -9,6 +9,7 @@
  * active tool).
  */
 import { create } from 'zustand';
+import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
@@ -1243,6 +1244,12 @@ export const useAppStore = create<AppState>()((set) => ({
 
   refreshAfterInboxApply: async (opName) => {
     const engine = await getEngine();
+    if (opName?.startsWith('drawing_')) {
+      const drawingDocument=await engine.drawingDocument();
+      set({drawingDocument,dirty:true,activeTab:'drawing',drawingTool:null,drawingPendingViewKind:null,
+        selectedDrawingViewId:null,selectedDrawingAnnotationId:null,drawingSheetSetupOpen:drawingDocument.sheets.length===0});
+      return;
+    }
     // Assembly-only inbox ops: targeted refresh — keep dirty:true so MCP live
     // edits are treated as unsaved (never loadDocument's dirty:false).
     if (opName?.startsWith('assembly_')) {
@@ -1298,6 +1305,14 @@ export const useAppStore = create<AppState>()((set) => ({
       projectVisibility,
       dirty: true,
     });
+    if (opName?.startsWith('sketch_') || opName === 'cad_load_project_model') {
+      // Inbox commands use the same engine as the interactive controller, but
+      // do not call its mode transitions. Reflect the authoritative sketch
+      // lifecycle before acknowledging/presenting the operation.
+      useAppStore.getState().setMode(activeSketch ? 'sketch' : 'solid');
+      useAppStore.getState().setActiveSketch(activeSketch);
+      if (!activeSketch) useAppStore.getState().setActiveTool(null);
+    }
   },
 
   setDocument: (doc) =>
@@ -3072,6 +3087,10 @@ export async function exportProjectModelWithVisibility(
   providedEngine?: Engine,
 ): Promise<string> {
   const engine = providedEngine ?? await getEngine();
-  await engine.setProjectVisibility(useAppStore.getState().projectVisibility);
+  await synchronizeSnapshotVisibility(
+    useAppStore.getState().projectVisibility,
+    () => engine.projectVisibility(),
+    visibility => engine.setProjectVisibility(visibility),
+  );
   return engine.exportProjectModel();
 }

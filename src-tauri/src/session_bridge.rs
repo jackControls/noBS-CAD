@@ -108,6 +108,9 @@ struct WindowPublisher {
     /// Retained per-tab MCP publishers (inbox + revision). Switching A→B
     /// rebinds the active pointer; A's session stays isolated.
     by_project: HashMap<String, ProjectPublisher>,
+    /// Delivered control request -> (source MCP session, expiry). A tab may
+    /// close before replying; ownership must outlive the resident project.
+    pending_controls: HashMap<String, (String, u64)>,
 }
 
 impl WindowPublisher {
@@ -115,6 +118,7 @@ impl WindowPublisher {
         Self {
             active_project_session_id: None,
             by_project: HashMap::new(),
+            pending_controls: HashMap::new(),
         }
     }
 
@@ -462,6 +466,7 @@ impl SessionBridgeState {
         .map_err(|error| format!("encode focus.json: {error}"))?;
 
         let heartbeat_body = serde_json::to_string_pretty(&json!({
+            "interface_version": 1,
             "updated_ms": now_ms(),
             "generation": published_generation,
             "published_generation": published_generation,
@@ -544,6 +549,7 @@ impl SessionBridgeState {
 
         let _ = clear_closed_tombstone(&project.session_id);
         let heartbeat_body = serde_json::to_string_pretty(&json!({
+            "interface_version": 1,
             "updated_ms": now_ms(),
             "generation": project.engine_revision,
             "published_generation": project.last_applied_generation,
@@ -649,6 +655,7 @@ fn write_engine_revision_heartbeat(
     fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
     let _ = clear_closed_tombstone(&project.session_id);
     let heartbeat_body = serde_json::to_string_pretty(&json!({
+        "interface_version": 1,
         "updated_ms": now_ms(),
         "generation": project.engine_revision,
         "published_generation": project.last_applied_generation,
@@ -946,6 +953,7 @@ impl SessionBridgeState {
         }
         let body = serde_json::to_string_pretty(&json!({
             "process_instance_id": self.process_instance_id,
+            "pid": std::process::id(),
             "updated_ms": now_ms(),
             "windows": windows,
         }))
@@ -1186,6 +1194,12 @@ fn apply_one_inbox_op(
                 project_session_id.as_deref(),
                 &process_instance_id,
             )?;
+            atomic_write(
+                &inbox_dir(&session_id)
+                    .join("results")
+                    .join(format!("{seq}.json")),
+                &result.to_string(),
+            )?;
             archive_inbox_op(&session_id, seq)?;
             Ok(json!({
                 "applied": true,
@@ -1242,6 +1256,250 @@ pub fn mcp_session_bridge_write(
     let parsed: PublishPayload = serde_json::from_str(&payload)
         .map_err(|error| format!("invalid session payload: {error}"))?;
     state.write_for_window(window.label(), parsed)
+}
+
+/// Wake the UI from native events, rather than depending on background WebView
+/// timers. The UI remains the owner of live apply and presentation ordering.
+pub fn start_mcp_wake_loop(app: tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    std::thread::spawn(move || {
+        let mut awake_until = HashMap::<String, u64>::new();
+        let mut last_keepalive = now_ms();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            let windows = app.webview_windows();
+            if windows.is_empty() {
+                break;
+            }
+            if now_ms().saturating_sub(last_keepalive) >= 10_000 {
+                last_keepalive = now_ms();
+                for window in windows.values() {
+                    let _ = window.emit("mcp-keepalive", ());
+                }
+            }
+            let state = app.state::<SessionBridgeState>();
+            let targets = match state.publishers.lock() {
+                Ok(publishers) => publishers
+                    .iter()
+                    .filter_map(|(label, publisher)| {
+                        publisher
+                            .active_project_session_id
+                            .as_ref()
+                            .and_then(|id| publisher.by_project.get(id))
+                            .map(|project| (label.clone(), project.session_id.clone()))
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => break,
+            };
+            for (label, session_id) in targets {
+                let root = session_root().join(session_id);
+                let has_work = [root.join("controls"), root.join("inbox")]
+                    .iter()
+                    .any(|dir| {
+                        fs::read_dir(dir).ok().is_some_and(|entries| {
+                            entries.filter_map(Result::ok).any(|entry| {
+                                entry.file_type().is_ok_and(|kind| kind.is_file())
+                                    && entry.path().extension().is_some_and(|ext| ext == "json")
+                                    && !entry
+                                        .file_name()
+                                        .to_string_lossy()
+                                        .ends_with(".result.json")
+                            })
+                        })
+                    });
+                if has_work {
+                    awake_until.insert(label.clone(), now_ms() + 3_000);
+                }
+                if awake_until
+                    .get(&label)
+                    .is_some_and(|until| *until > now_ms())
+                {
+                    if let Some(window) = windows.get(&label) {
+                        let _ = window.emit("mcp-work", ());
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Window state is inspected after requesting the transition; focus is subject
+/// to the operating system's foreground policy, never inferred from success.
+#[tauri::command]
+pub fn mcp_path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+#[tauri::command]
+pub fn mcp_window_control(window: tauri::WebviewWindow, mode: String) -> Result<Value, String> {
+    match mode.as_str() {
+        "foreground" => {
+            window.show().map_err(|e| e.to_string())?;
+            window.unminimize().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
+        "background" => window.minimize().map_err(|e| e.to_string())?,
+        "inspect" => (),
+        _ => return Err("mode must be foreground, background, or inspect".into()),
+    }
+    Ok(
+        json!({"visible": window.is_visible().map_err(|e| e.to_string())?,
+        "minimized": window.is_minimized().map_err(|e| e.to_string())?,
+        "focused": window.is_focused().map_err(|e| e.to_string())?}),
+    )
+}
+
+#[tauri::command]
+pub fn mcp_session_bridge_control(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, SessionBridgeState>,
+    engine: tauri::State<'_, AppState>,
+    response: Option<Value>,
+) -> Result<Value, String> {
+    control_for_window(&state, window.label(), &engine, response)
+}
+
+fn control_for_window(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    response: Option<Value>,
+) -> Result<Value, String> {
+    let mut publishers = state
+        .publishers
+        .lock()
+        .map_err(|_| "publisher lock poisoned")?;
+    let Some(publisher) = publishers.get_mut(window_label) else {
+        return Ok(Value::Null);
+    };
+    let session_id = if let Some(response) = response.as_ref() {
+        let requested = response
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or("missing response session")?;
+        publisher
+            .pending_controls
+            .get(
+                response["request_id"]
+                    .as_str()
+                    .ok_or("missing request id")?,
+            )
+            .filter(|(session, expiry)| session == requested && *expiry >= now_ms())
+            .map(|(session, _)| session.clone())
+            .ok_or("response belongs to another window")?
+    } else {
+        if publisher.active_project_session_id.as_deref()
+            != Some(engine.active_project_session_id().as_str())
+        {
+            return Ok(Value::Null);
+        }
+        publisher.active_mut().session_id.clone()
+    };
+    let dir = session_root().join(&session_id).join("controls");
+    if let Some(mut response) = response {
+        let id = response
+            .get("request_id")
+            .and_then(Value::as_str)
+            .ok_or("missing request id")?
+            .to_owned();
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+            return Err("invalid request id".into());
+        }
+        if response.get("session_id").and_then(Value::as_str) != Some(session_id.as_str()) {
+            return Err("camera response belongs to an inactive document".into());
+        }
+        let request = dir.join(format!("{id}.request.json"));
+        if !request.is_file() {
+            return Err("camera request expired".into());
+        }
+        response["active_session_id"] = publisher
+            .active_project_session_id
+            .as_ref()
+            .and_then(|id| publisher.by_project.get(id))
+            .map(|project| json!(project.session_id))
+            .unwrap_or(Value::Null);
+        atomic_write(
+            &dir.join(format!("{id}.result.json")),
+            &response.to_string(),
+        )?;
+        publisher.pending_controls.remove(&id);
+        let _ = fs::remove_file(request);
+        return Ok(Value::Null);
+    }
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(Value::Null);
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let Ok(body) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut request) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        if !request.is_object() {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        let valid_id = request.get("id").and_then(Value::as_str).is_some_and(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == format!("{id}.request.json").as_str())
+        });
+        if !valid_id {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        if request
+            .get("expires_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            < now_ms()
+        {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        request["session_id"] = json!(session_id);
+        if let Some(query) = request.get("sketch_query") {
+            let method = query.get("method").and_then(Value::as_str).unwrap_or("");
+            let payload = query.get("payload").and_then(Value::as_str).unwrap_or("");
+            let result = if nbcad_mcp_mutate::is_live_sketch_query(method) {
+                parse_engine_envelope(engine.engine_call(method, payload))
+            } else {
+                Err("unsupported live sketch query".into())
+            };
+            let response = match result {
+                Ok(value) => json!({"status":"applied","value":value}),
+                Err(error) => json!({"status":"failed","error":error}),
+            };
+            let id = request["id"].as_str().unwrap();
+            atomic_write(
+                &dir.join(format!("{id}.result.json")),
+                &response.to_string(),
+            )?;
+            let _ = fs::remove_file(path);
+            return Ok(Value::Null);
+        }
+        publisher
+            .pending_controls
+            .retain(|_, (_, expiry)| *expiry >= now_ms());
+        publisher.pending_controls.insert(
+            request["id"].as_str().unwrap().to_owned(),
+            (session_id.clone(), request["expires_ms"].as_u64().unwrap()),
+        );
+        return Ok(request);
+    }
+    Ok(Value::Null)
 }
 
 /// Refresh `heartbeat.json` only — no model export / generation bump.
@@ -1319,6 +1577,51 @@ mod tests {
             .join("processes")
             .join(format!("{}.json", state.process_instance_id));
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn active_tab_close_retains_control_reply_ownership() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-close-control-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("tab-a")
+            }));
+            let (session_a, _) = reserve(&state, "main");
+            let controls = dir.join(&session_a).join("controls");
+            fs::create_dir_all(&controls).unwrap();
+            atomic_write(&controls.join("123-1.request.json"), &json!({"id":"123-1","expires_ms":now_ms()+30_000,"ui":{"action":"click","target":"close-active-tab"}}).to_string()).unwrap();
+            let request = control_for_window(&state, "main", &engine, None).unwrap();
+            assert_eq!(request["session_id"], session_a);
+            // The normal close sequence activates B before dropping A.
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.create_project_session("tab-b")
+            }));
+            let (session_b, _) = reserve(&state, "main");
+            state.drop_bound_project_session("main", "tab-a");
+            assert!(!state.publishers.lock().unwrap()["main"]
+                .by_project
+                .contains_key("tab-a"));
+            let response = json!({"request_id":"123-1","session_id":session_a,"status":"applied"});
+            // Resident tab B cannot forge a response to A's delivered request.
+            let mut forged = response.clone();
+            forged["session_id"] = json!(session_b);
+            assert!(control_for_window(&state, "main", &engine, Some(forged)).is_err());
+            control_for_window(&state, "main", &engine, Some(response.clone())).unwrap();
+            let reply: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("123-1.result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(reply["active_session_id"], session_b);
+            assert_eq!(reply["status"], "applied");
+            assert!(!controls.join("123-1.request.json").exists());
+            assert!(control_for_window(&state, "main", &engine, Some(response)).is_err());
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

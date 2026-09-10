@@ -4551,9 +4551,13 @@ fn validate_joint(joint: &JointDefinitionDto) -> Result<(), String> {
     }
     validate_connector(&joint.connector_a)?;
     validate_connector(&joint.connector_b)?;
-    if joint.connector_a.body_id == joint.connector_b.body_id {
+    let distinct_occurrences = matches!(
+        (joint.advanced.connector_a_occurrence_id, joint.advanced.connector_b_occurrence_id),
+        (Some(a), Some(b)) if a != b
+    );
+    if joint.connector_a.body_id == joint.connector_b.body_id && !distinct_occurrences {
         return Err(format!(
-            "joint '{}' must connect two different bodies",
+            "joint '{}' must connect two different body occurrences",
             joint.name
         ));
     }
@@ -4572,6 +4576,18 @@ fn validate_joint(joint: &JointDefinitionDto) -> Result<(), String> {
     {
         return Err(format!(
             "joint '{}' requires a positive screw pitch",
+            joint.name
+        ));
+    }
+    if joint.kind == JointKindDto::Rigid
+        && (joint.angle_offset_deg != 0.0
+            || joint.linear_offset_mm != 0.0
+            || joint.advanced.secondary_angle_offset_deg != 0.0
+            || joint.advanced.tertiary_angle_offset_deg != 0.0
+            || joint.advanced.secondary_linear_offset_mm != 0.0)
+    {
+        return Err(format!(
+            "rigid joint '{}' has no motion coordinates; position its connector frames instead",
             joint.name
         ));
     }
@@ -4728,7 +4744,33 @@ fn canonical_connector_against_scene(
         ));
     }
     match connector.kind {
-        JointConnectorKindDto::PlanarFace => connector_from_planar_face(body.id, face),
+        JointConnectorKindDto::PlanarFace => {
+            let mut canonical = connector_from_planar_face(body.id, face)?;
+            if let Some(source) = connector.source_surface_frame {
+                let plane = face.plane.expect("validated planar face");
+                let live = JointFrameDto {
+                    origin: plane.origin,
+                    primary_axis: plane.normal,
+                    secondary_axis: plane.u,
+                };
+                // Preserve a picked attachment point relative to the exact
+                // surface frame, including after a feature edit. Legacy
+                // connectors without this frame retain centroid semantics.
+                let delta =
+                    RigidPose::from_frame(live).compose(RigidPose::from_frame(source).inverse());
+                canonical.frame = JointFrameDto {
+                    origin: add(
+                        delta.translation,
+                        rotate(delta.rotation, connector.frame.origin),
+                    ),
+                    primary_axis: rotate(delta.rotation, connector.frame.primary_axis),
+                    secondary_axis: rotate(delta.rotation, connector.frame.secondary_axis),
+                };
+                canonical.source_surface_frame = Some(live);
+                validate_connector(&canonical)?;
+            }
+            Ok(canonical)
+        }
         JointConnectorKindDto::CylindricalFace | JointConnectorKindDto::VirtualCircularFace => {
             let cylinder = face
                 .cylinder
@@ -5021,6 +5063,75 @@ mod tests {
             grounded_body_id: Some(BodyId(1)),
             grounded_occurrence_id: None,
         }
+    }
+
+    #[test]
+    fn rigid_joint_rejects_motion_that_the_solver_would_ignore() {
+        let scene = scene();
+        let mut document = AssemblyDocumentDto::default();
+        let mut joint = request(&scene);
+        joint.kind = JointKindDto::Rigid;
+        joint.limits = None;
+        joint.linear_offset_mm = 10.0;
+        assert!(document
+            .create(joint.clone(), &scene)
+            .unwrap_err()
+            .contains("no motion coordinates"));
+        assert!(document.joints.is_empty());
+        joint.linear_offset_mm = 0.0;
+        joint.angle_offset_deg = 15.0;
+        assert!(document
+            .create(joint, &scene)
+            .unwrap_err()
+            .contains("no motion coordinates"));
+        assert!(document.joints.is_empty());
+    }
+
+    #[test]
+    fn repeated_body_occurrences_can_join_but_an_occurrence_cannot_join_itself() {
+        let mut scene = scene();
+        let mut joint = request(&scene);
+        scene.bodies.truncate(1);
+        let mut document = AssemblyDocumentDto::default();
+        let component = document
+            .create_component(
+                CreateComponentRequestDto {
+                    name: "Slat".into(),
+                    body_ids: vec![BodyId(1)],
+                    local_coordinate_system: AssemblyTransformDto::default(),
+                    absorb_promoted_bodies: true,
+                },
+                &scene,
+            )
+            .unwrap();
+        let first = document
+            .component_structure
+            .occurrences
+            .iter()
+            .find(|o| o.component_id == component.id)
+            .unwrap()
+            .id;
+        let second = document
+            .create_occurrence(CreateOccurrenceRequestDto {
+                component_id: component.id,
+                name: "Slat 2".into(),
+                parent_occurrence_id: None,
+                local_pose: AssemblyTransformDto::default(),
+            })
+            .unwrap()
+            .id;
+        joint.connector_b = joint.connector_a.clone();
+        joint.advanced.connector_a_occurrence_id = Some(first);
+        joint.advanced.connector_b_occurrence_id = Some(first);
+        joint.grounded_body_id = None;
+        joint.grounded_occurrence_id = Some(first);
+        assert!(document.create(joint.clone(), &scene).is_err());
+        assert!(document.joints.is_empty());
+        joint.advanced.connector_b_occurrence_id = Some(second);
+        document.create(joint, &scene).unwrap();
+        let solved = document.solve(&scene);
+        assert!(solved.solved, "{:?}", solved.diagnostics);
+        assert!(solved.diagnostics.is_empty());
     }
 
     #[test]
@@ -5626,6 +5737,32 @@ mod tests {
             length(sub(actual, expected)) < 1.0e-8,
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn picked_planar_anchor_survives_save_and_surface_motion() {
+        let mut scene = scene();
+        let mut connector =
+            connector_from_planar_face(BodyId(1), &scene.bodies[0].faces[0]).unwrap();
+        connector.source_surface_frame = Some(connector.frame);
+        connector.frame.origin = [3.0, 4.0, 0.0];
+        let captured = canonical_connector_against_scene(&connector, &scene).unwrap();
+        assert_vec3(captured.frame.origin, [3.0, 4.0, 0.0]);
+        let saved = serde_json::to_string(&captured).unwrap();
+        let restored: JointConnectorDto = serde_json::from_str(&saved).unwrap();
+        scene.bodies[0].faces[0].plane = Some(PlaneBasis {
+            origin: [10.0, 20.0, 5.0],
+            normal: [0.0, 0.0, 1.0],
+            u: [0.0, 1.0, 0.0],
+            v: [-1.0, 0.0, 0.0],
+        });
+        let moved = canonical_connector_against_scene(&restored, &scene).unwrap();
+        assert_vec3(moved.frame.origin, [6.0, 22.0, 5.0]);
+        assert_vec3(moved.frame.secondary_axis, [0.0, 1.0, 0.0]);
+        let repeated = canonical_connector_against_scene(&moved, &scene).unwrap();
+        assert_vec3(repeated.frame.origin, moved.frame.origin);
+        scene.bodies[0].faces[0].key = "changed-topology".into();
+        assert!(canonical_connector_against_scene(&moved, &scene).is_err());
     }
 
     #[test]

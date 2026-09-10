@@ -6,6 +6,22 @@
 
 use serde_json::{json, Value};
 
+/// Reads that require the desktop's in-progress sketch, which intentionally
+/// is not part of the completed project snapshot. Shared by both endpoints;
+/// this is a narrow read-only allowlist, never arbitrary engine dispatch.
+pub fn is_live_sketch_query(method: &str) -> bool {
+    matches!(
+        method,
+        "active_sketch"
+            | "eval_expression"
+            | "preview_segment"
+            | "preview_segment_locked"
+            | "fillet_preview"
+            | "offset_preview"
+            | "trim_preview"
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadKind {
     Empty,
@@ -33,6 +49,36 @@ pub struct MutateSpec {
 
 /// Every modeling mutate that `cad_submit` may enqueue and the UI inbox may apply.
 pub static MUTATES: &[MutateSpec] = &[
+    MutateSpec {
+        name: "drawing_create_sheet",
+        engine_method: "drawing_create_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_select_sheet",
+        engine_method: "drawing_select_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_delete_sheet",
+        engine_method: "drawing_delete_sheet",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_add_view",
+        engine_method: "drawing_add_view",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "drawing_add_note",
+        engine_method: "drawing_add_note",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
     MutateSpec {
         name: "cad_set_document_name",
         engine_method: "document_set_name",
@@ -598,6 +644,24 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "assembly_delete_joint",
+        engine_method: "assembly_delete_joint",
+        payload: PayloadKind::Field("joint_id"),
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_enabled",
+        engine_method: "assembly_set_joint_enabled",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_motion",
+        engine_method: "assembly_set_joint_motion",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "set_body_appearance",
         engine_method: "set_body_appearance",
         payload: PayloadKind::Object,
@@ -737,10 +801,15 @@ mod tests {
         assert_eq!(update.payload, PayloadKind::Object);
         assert!(lookup_mutate("assembly_document").is_none());
         assert!(lookup_mutate("assembly_solution").is_none());
-        assert!(
-            lookup_mutate("assembly_delete_joint").is_none(),
-            "do not invent assembly_delete_joint; host delete is not an MCP mutate"
+        let delete = lookup_mutate("assembly_delete_joint").expect("present");
+        assert_eq!(delete.engine_method, "assembly_delete_joint");
+        assert_eq!(delete.execution, ExecutionKind::Direct);
+        assert_eq!(delete.payload, PayloadKind::Field("joint_id"));
+        assert_eq!(
+            encode_payload(delete.payload, &json!({"joint_id": 42})).unwrap(),
+            "42"
         );
+        assert!(encode_payload(delete.payload, &json!({"id": 42})).is_err());
     }
 
     #[test]

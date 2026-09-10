@@ -1,5 +1,11 @@
 # Part design through MCP
 
+These retained draft fixtures are waiting to move to the shared Rust script
+runner in [#99](https://github.com/jackControls/noBS-CAD/pull/99). Preserve the
+small models and their independent geometry checks during that migration. The
+JavaScript substitutions below are an existing test format, not a second
+supported authoring format for new demonstrations.
+
 These examples build editable parts using ordinary modeling tools over the real
 MCP stdio connection. They complement the built-in print-in-place export demos.
 All lengths are millimetres; each example starts a fresh headless document.
@@ -91,6 +97,8 @@ are runner substitutions, not MCP syntax. `calls.json` contains the actual
 resolved arguments sent to MCP. Sketch1/profile 0 is intentional for these fresh,
 single-profile examples; general agents should discover sketches and profiles.
 
-Next coverage: dimension edits, recovery from an invalid operation, and a real
-UI-owned attach → submit → await → refresh → undo loop. Existing headless examples
-do not establish live-document usability.
+The next step for this example set is the Rust script migration, retaining the
+analytic geometry, editable restore, and export checks. The current shared
+interface already provides live operation routing; its desktop lifecycle tests
+are separate from these headless fixtures. These examples do not establish live
+document usability or native viewport rendering by themselves.
