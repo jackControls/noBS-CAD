@@ -73,6 +73,7 @@ import { requestUnsavedDecision } from './files/unsavedChanges';
 import { createExitController } from './files/applicationExit';
 import { waitForExitEdits } from './files/exitSettlement';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
+import { MeshExportDialog } from './components/MeshExportDialog';
 
 export default function App() {
   useEffect(installOperationFeedback, []);
@@ -441,6 +442,7 @@ export default function App() {
       <AppearanceDialog />
       <JointDialog />
       <UnsavedChangesDialog />
+      <MeshExportDialog />
     </div>
   );
 }
