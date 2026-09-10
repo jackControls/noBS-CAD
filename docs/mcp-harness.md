@@ -5,12 +5,12 @@ This page separates **what exists today** from **proposed** architecture.
 Proposals: [proposed-architecture.md](proposed-architecture.md).
 Product directions: [goals.md](goals.md).
 
-**Warning:** an MCP process without a live attach is a **fork of truth**.
-It does **not** share the document the user is looking at. Snapshot attach
-(`cad_list_sessions` / `cad_attach`) loads a **copy**. `cad_submit` queues a
-UI-owned apply (`inbox/<seq>.json`); the desktop/engine is the only writer of
-the live document. This is still **not** in-process shared memory, and MCP
-must **not** write `model.json` back ([#11](https://github.com/jackControls/noBS-CAD/issues/11) remains open).
+An unattached MCP process owns a headless document. To drive the document in
+an open desktop window, use `cad_list_sessions` and `cad_attach`, or launch
+through `cad_interface`. Attached modeling operations automatically route to
+the desktop engine through the shared interface. The desktop owns live edits
+and publishes completed-model snapshots for MCP inspection and export; MCP
+never writes those `model.json` files back.
 
 ## Why MCP
 MCP gives coding agents a tool API without turning noBS CAD into a cloud
@@ -27,7 +27,7 @@ machine (or CI runner).
 | Disclosure | Soft focus-scoped; `tools.listChanged: true`; ~300 ms throttle |
 | Notify worker | Stdin reader thread + timed wake — `list_changed` / soft-TTL flush **without** a later client ping |
 | Document | One persistent feature history **per MCP process** |
-| Sessions | Snapshot attach + **UI-owned apply**: `cad_submit` writes `inbox/<seq>.json`; UI/engine applies via `host::handle`; MCP `cad_await_apply` waits for apply receipt + an explicit publisher generation; `cad_session_status` reports attached vs live generation / stale / pending inbox / heartbeat. Completed models may refresh; active-sketch-only publishes are reported separately. Still **not** in-process shared memory. Live `model.json` writeback remains forbidden |
+| Sessions | Attached modeling operations use the live engine automatically. `cad_session_status` observes the loaded completed-model generation, current publisher generation, heartbeat and inbox receipts. `cad_submit` / `cad_await_apply` expose the same apply protocol for explicit queue control. Active-sketch reads use the live engine; completed-model reads use the last loaded snapshot |
 | Geometry | Same native OCCT replay path as desktop when OCCT is available |
 | Export | STEP + STL + **3MF** (`solid_export_*`, `material_catalog`); 3MF preferred for slicers |
 
@@ -42,7 +42,7 @@ document | sketch | solid | modify | body_ops | datums | history | inspect | pri
 ```
 Tags: `mcp-server/src/disclosure.rs` (`tags_for_tool`).
 
-### Snapshot bridge + UI-owned apply (not in-process co-link)
+### Live operations and completed-model snapshots
 Headless goldens work **without** attach (they still mutate the MCP process directly).
 Desktop UI (Tauri) publishes:
 `<NBCAD_SESSION_DIR>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}`
@@ -58,8 +58,7 @@ session. A stale `base_generation` is `generation_conflict`; a stamped op whose
 `session_identity_mismatch` and is dead-lettered (`writeback: false`,
 `session_mode: ui_owned_apply`) so later seqs stay unwedged. Unstamped ops keep
 compat apply behavior. Attach+submit is isolated per published window/session
-(tested); this is still **not** a live multi-window broker. The desktop polls
-that inbox, applies via the same `host::handle` / solid-replay path as Tauri
+(tested). The desktop polls that inbox, applies via the same `host::handle` / solid-replay path as Tauri
 IPC, then the existing publisher writes a new snapshot. MCP never writes
 `model.json` (Jack removed last-writer-wins; do not bring it back).
 
@@ -69,34 +68,34 @@ read-only entity/constraint snapshot so a desktop failure can still be
 inspected without admitting half-finished history into the project format.
 (atomic writes, generation-guarded). Session ids are **UUID v4**, not document names.
 With attach:
+
 1. `cad_list_sessions` — UUID dirs only (skips `_*-prefixed` control dirs); includes heartbeat `age_ms` / `stale`, plus `window_id` / `document_id` when published. `windows[]` is **one entry per live process/window pair** with `documents[]` plus an authoritative `active_document_id` recorded by the native tab transition (never inferred from heartbeat order). Desktop processes renew independent leases under `_ui/processes/`; a process/window disappears after the lease expires or is removed at shutdown. Inactive tabs stay listed regardless of their own heartbeat age while their owning process lease is fresh; prior-run and closed tabs do not. Multiple concurrently running desktop processes remain independently visible.
 2. `cad_attach` — target by `session_id` and/or `window_id` and/or `document_id` (UUID `document_id` remains a session alias). All provided selectors are **intersected** before ambiguity is reported. Requires valid `model.json`; loads a **copy** into this MCP process; optional `focus.json`. **Never writes `model.json` back.**
-3. `cad_submit` — queues one modeling mutate in `inbox/<seq>.json`. Does not mutate the MCP in-memory document. Direct mutates while attached return structured `session_read_only`; inspect/export/control stay callable. Only names in the shared `nbcad-mcp-mutate` map are accepted.
+3. Call a modeling operation directly, or use `cad_interface` with `action: execute` and its catalog group. On a current attached desktop, both routes submit to the live engine, wait for the receipt and publication, and return the engine result. A desktop without interface version 1 is rejected before submission. For explicit queue control, `cad_submit` queues one operation from the shared `nbcad-mcp-mutate` map without changing the MCP read snapshot.
 4. UI/engine applies the inbox op against an **authoritative backend `engine_revision`** (advanced atomically with live apply / UI mutation notes — not heartbeat-debounce alone), then publishes a new snapshot. Failed applies are dead-lettered to `inbox/failed/` so the queue cannot wedge. Successful applies archive to `inbox/applied/<seq>.json`.
 5. `cad_await_apply` — poll until the submit seq has an applied/failed receipt; for applied, also require an explicit `published_generation` equal to the current engine generation. Keepalives preserve that fence and cannot masquerade as a publish. If `model_generation` matches, optional `refresh` (default true) reloads the completed model. While a sketch transaction is active, the publisher advances `active_sketch_generation` but intentionally retains the previous completed `model.json`; await returns `model_published:false`, `active_sketch_published:true`, and `refreshed:false`. `timeout_ms: 0` is a single status probe. This closes the manual `cad_refresh` race for agents; it is still **not** in-process shared memory.
-6. `cad_session_status` — while attached, report `attached_generation` (captured at attach/refresh) vs live heartbeat `generation` (publisher engine revision), `published_generation` / model / active-sketch fields when present, `stale` when those diverge (UI undo/edit), heartbeat age/kind/stale, pending inbox seqs, and the latest applied/failed receipt if any. Headless returns `attached:false` / `code:not_attached` as a clear status object (not an error). Still snapshot protocol — not in-process co-link.
-7. `cad_refresh` — explicit re-read of the attached session from disk (still available; prefer `cad_await_apply` after submit).
-7. `cad_detach` — clears the attached session id.
-This is **UI-owned apply**, not in-process shared memory. [#11](https://github.com/jackControls/noBS-CAD/issues/11) stays open. Installer / UI launch: [#32](https://github.com/jackControls/noBS-CAD/pull/32).
+6. `cad_session_status` - a read-only diagnostic in `document/session`. Compare `attached_generation` (the completed model actually loaded) with live heartbeat `generation`. `stale` is true when they differ or either is unknown. `model_generation`, `published_generation`, and `active_sketch_generation` distinguish completed models from active sketch edits; an explicit null model fence stays unknown. Heartbeat age/staleness, identity, and generation come from one heartbeat snapshot. Pending inbox sequences and the latest applied/failed receipt are separate observations. Headless returns `attached:false` / `code:not_attached`, without an error. The status call does not refresh the model or add replay operations.
+7. `cad_refresh` - explicitly reload the attached completed model. Attach, refresh, successful completed-model await, and acknowledged document transitions all update the loaded fence only after a successful read/load. UI acknowledgements of identical model text update its publication fence without recomputing the geometry. An active-sketch-only publication retains the older completed-model fence.
+8. `cad_detach` - clear the attachment and its generation; the loaded model remains available for headless work.
+
+The interface grouping comes from `interface/catalog.json`; the diagnostic uses the same `document/session` group as attach, refresh, and other session controls.
+
 Build and tool flow: [mcp-server/README.md](../mcp-server/README.md).
 Day-to-day playbook: [agent-mcp.md](agent-mcp.md).
 
-### Stdio vs broker matrix ([#12](https://github.com/jackControls/noBS-CAD/issues/12) second slice)
-| Mode | Transport | Document scope | How to target |
-|------|-----------|----------------|---------------|
-| **Stdio headless (CI/goldens)** | one `nbcad-mcp` process | one in-memory document | no attach; call modeling tools directly |
-| **Stdio + snapshot attach** | one `nbcad-mcp` process | one attached snapshot at a time | `cad_list_sessions` → `cad_attach` by `session_id` / `window_id` / `document_id`; `cad_submit` stamps identity and cannot clobber another published window's inbox/model |
-| **Broker (not shipped)** | future router over windows | many live windows | Option B product lean; still TBD |
+### Targeting windows and documents
 
-Stdio remains the supported offline path. List/target plus operate-without-clobber
-are tested on the snapshot bridge; this is still **not** a live multi-window
-broker and does not require UI changes beyond the existing identity-bound
-publisher. [#11](https://github.com/jackControls/noBS-CAD/issues/11) in-process
-co-link remains open.
+A stdio server operates on one headless document or one attached session at a
+time. `cad_list_sessions` reports live processes, windows and document tabs.
+`cad_attach` intersects the supplied session/window/document selectors, and
+attached operations retain that identity. Acknowledged file and tab actions
+follow the returned active session so subsequent operations target the newly
+active document. Publication and inbox identities prevent an operation for one
+window from landing in another window's document.
 
 ### Stdio (current supported path)
 Agents and CI spawn `nbcad-mcp` as an MCP stdio server. One process owns one
-document. Prefer `solid_export_3mf` for slicer handoff; STEP for CAD interchange.
+headless document until attached. Prefer `solid_export_3mf` for slicer handoff; STEP for CAD interchange.
 
 ### Disclosure notify behavior
 Focus / mode / soft-TTL changes schedule `notifications/tools/list_changed`.
@@ -119,38 +118,29 @@ history from STEP B-rep. After modeling (or after importing a reference),
 `cad_compare_solids` summarizes `solid_scene` mesh bbox + vertex/triangle
 counts so a rebuilt history can be checked against the imported solid.
 
-## Today vs target
+## Diagnostic boundaries
 
-| Capability | Today | Target | Issue |
-|------------|-------|--------|-------|
-| Agents and UI share one live document | **Not yet.** Submit/apply is UI-owned (`cad_submit` → inbox → engine `host::handle` → publisher). `cad_await_apply` waits for apply receipt + explicit publish fence; `cad_session_status` exposes attached vs live generation / stale / pending inbox so agents can see UI undo/edit. Still a snapshot copy, not in-process shared memory. Live `model.json` writeback remains forbidden | In-process co-link + writer lock | [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
-| Focus-scoped tools + `listChanged` | Soft disclosure + `tools.listChanged: true` (not a jail) | Same, plus contract tests | [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
-| Multi-window agent control | **Partial.** List/attach by `session_id` / `window_id` / `document_id`; attach+submit isolated per published window (identity-stamped inbox; mismatch dead-letters). Stdio still one doc per process; **not** a live broker | Broker / live `window_id` routing | [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
-| In-the-loop browser UI + MCP on the same doc | **No.** Blocked on co-link | Shared document in CI | [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
+`cad_session_status` reports completed-model freshness separately from live
+sketch availability. During an active sketch, `stale:true` can be expected:
+the live engine has newer sketch edits while completed `model.json` remains
+unchanged. Use the sketch operations for current sketch state; finishing the
+sketch and awaiting publication makes a new completed model available.
 
-## Slice note (`cad_session_status`)
-Agents can already `cad_await_apply` after their own submit. `cad_session_status`
-lets them notice **UI-side** undo/edit without inventing in-process co-link:
-compare `attached_generation` to live heartbeat `generation`, inspect pending
-inbox seqs and the latest apply receipt, and read heartbeat age/kind. Headless
-returns a clear `not_attached` status. [#11](https://github.com/jackControls/noBS-CAD/issues/11)
-remains open until true in-process shared memory.
+Heartbeat age indicates publisher liveness, while `stale` compares model
+revisions. A matching revision does not prove a recently responsive desktop;
+check `heartbeat_stale` too. Pending sequences and receipt files are read after
+the heartbeat and can change during the probe. This is a diagnostic observation,
+not a transaction or a lock on the live document.
 
-## Slice note (`cad_await_apply`)
-Agents used to `cad_submit` then race a manual `cad_refresh`. `cad_await_apply`
-polls `inbox/applied/<seq>.json` / `inbox/failed/<seq>.json` and, on success,
-waits until `published_generation` catches the current engine generation.
-Separate `model_generation` and `active_sketch_generation` fields prevent
-keepalives and active-sketch-only snapshots from falsely claiming that a new
-completed `model.json` is ready. Still UI-owned file protocol —
-[#11](https://github.com/jackControls/noBS-CAD/issues/11) remains open until
-true in-process shared memory.
+A failed model refresh retains the prior loaded generation. If attach recovered
+a model without a usable heartbeat fence, freshness remains unknown until a
+later successful refresh. Reading a heartbeat after loading geometry must never
+stamp a newer publication onto an older model.
 
-## Proposed (not shipped here)
-- In-process UI ↔ MCP co-link (same memory). UI-owned inbox apply is a file protocol, not that ([#11](https://github.com/jackControls/noBS-CAD/issues/11) still open)
-- Multi-window broker ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
-- In-the-loop browser+MCP validation ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
-See [proposed-architecture.md](proposed-architecture.md).
+The original session design discussion is in
+[#11](https://github.com/jackControls/noBS-CAD/issues/11), and transport proposals
+are in [proposed-architecture.md](proposed-architecture.md). This diagnostic does
+not claim to complete every item in those broader discussions.
 
 ## Tutor quests (CI goldens)
 
@@ -159,7 +149,7 @@ Three headless MCP quests score the first education path from
 They wrap the built-in print-in-place parts (`demo_export_pip_3mf`) —
 the **cam bolt** and **drawer clip** — not a cube. Tests:
 `tutor_quest_pip_*` in `cargo test --manifest-path mcp-server/Cargo.toml`
-(Windows + Ubuntu CI: `mcp-server.yml`). No `cad_attach`. The UI tutor that narrates
+(Windows CI: `mcp-server.yml`). No `cad_attach`. The UI tutor that narrates
 the same steps is still open on that issue.
 
 | Quest | What you do | How CI scores it |
@@ -170,3 +160,37 @@ the same steps is still open on that issue.
 
 These are regression tests, not badges or streaks. The demo tool does not
 mutate the headless document.
+
+### Desktop camera and joint controls
+
+`cad_interface` with `action: view` targets an explicit `session_id` (or the currently attached session).
+Choose `current`, `isometric`, `top`, `bottom`, `front`, `back`, `left`, or `right`;
+set `fit: true` to frame visible geometry. It returns an acknowledged camera
+pose only after the desktop renderer finishes its animation. It does not modify
+geometry, change the engine generation, or add a modeling script operation.
+A live desktop supporting this tool and an active target tab are required.
+Stale sessions are rejected; missing acknowledgement returns `status: timeout`.
+An applied camera pose verifies navigation state, not pixel-level rendering.
+
+The assembly pack also exposes `assembly_delete_joint`,
+`assembly_set_joint_enabled`, and `assembly_set_joint_motion`. The latter two
+preserve the rest of the joint definition, avoiding replacement of connectors
+or limits merely to suppress a joint or move its primary coordinate. Motion
+uses degrees and millimetres; inspect `assembly_solution` for solver diagnostics.
+Attached clients call these operations through the automatic live route;
+explicit `cad_submit` / `cad_await_apply` remains available. Headless clients
+call the same operations against their local model. The desktop and MCP binary must both include
+the shared mutation mappings for live use.
+
+Run the native control regression against a disposable active assembly document:
+
+```sh
+cargo xtask test-mcp controls --server /path/to/nbcad-mcp --session UUID --out controls.json
+```
+
+The test changes the camera, checks that neither the model nor engine generation
+changes, suppresses a joint, temporarily makes it revolute to exercise motion,
+deletes it, and restores the starting model in a `finally` block. An optional
+`--model model.json` loads a fixture into the target document first. It requires
+a working live snapshot publisher. See [the live UI guide](interface.md)
+for the single UI surface, browser contracts, and executable bench workshop.

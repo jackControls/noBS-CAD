@@ -1,3 +1,5 @@
+import { drivePointer } from '../../uiPointer';
+import { registerSessionCamera, unregisterSessionCamera } from './cameraApi';
 /**
  * Native Bevy viewport interaction layer with noBS CAD navigation and the
  * sketch environment.
@@ -11793,7 +11795,20 @@ export function Viewport() {
       fit: fitVisibleGeometry,
     };
 
+    surface.domElement.setAttribute('data-mcp-canvas', 'viewport');
     const api: ViewportCameraApi = {
+      bounds: () => {
+        const rect = surface.domElement.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      },
+      pointer: (action, point, shift = false, to) => drivePointer(surface.domElement, action, point, shift, to),
+      isAnimating: () => camAnim !== null,
+      advanceAnimation: () => {
+        if (camAnim) {
+          stepCameraAnimation(performance.now());
+          syncNativeViewportCamera(camera, controls.target);
+        }
+      },
       getSnapshot: () => ({
         position: camera.position.toArray() as [number, number, number],
         target: controls.target.toArray() as [number, number, number],
@@ -11939,6 +11954,7 @@ export function Viewport() {
       },
     };
     apiRef.current = api;
+    registerSessionCamera(api);
     // E2E/debug handles: let automation verify camera poses and project
     // sketch mm coordinates to screen pixels for deterministic input.
     (window as unknown as { __cameraApi?: ViewportCameraApi }).__cameraApi = api;
@@ -12818,6 +12834,7 @@ export function Viewport() {
         __nativeViewportTransient?: unknown;
         __nativeViewportPresentation?: unknown;
       };
+      unregisterSessionCamera(api);
       delete w.__cameraApi;
       delete w.__sketchToScreen;
       delete w.__worldToScreen;

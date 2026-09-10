@@ -25,8 +25,14 @@ export interface SixDofMotion {
 }
 
 export interface ViewportCameraApi {
+  pointer(action: import('../../uiPointer').UiGesture, point: [number, number], shift?: boolean, to?: [number, number]): Promise<void>;
+  bounds(): { x: number; y: number; width: number; height: number };
   /** Current camera pose (copies; safe to mutate). */
   getSnapshot(): CameraSnapshot;
+  /** True until the renderer has completed the current camera animation. */
+  isAnimating(): boolean;
+  /** Native wake events advance navigation even while WebView RAF is suspended. */
+  advanceAnimation(): void;
   /** Animated snap to look at the target from a world direction. */
   snapToDirection(direction: [number, number, number]): void;
   /** Animated return to the default axonometric home view. */
@@ -48,6 +54,13 @@ export interface ViewportCameraApi {
   /** Project one Z-up world point into application-window pixels. */
   worldToScreen(point: [number, number, number]): ScreenPoint | null;
 }
+
+let sessionCamera: ViewportCameraApi | null = null;
+export function registerSessionCamera(api: ViewportCameraApi): void { sessionCamera = api; }
+export function unregisterSessionCamera(api: ViewportCameraApi): void {
+  if (sessionCamera === api) sessionCamera = null;
+}
+export function getSessionCamera(): ViewportCameraApi | null { return sessionCamera; }
 
 /** easeInOutCubic — used by all camera animations. */
 export function easeInOutCubic(t: number): number {

@@ -287,6 +287,7 @@ function Panel({
   return (
     <div
       ref={panelRef}
+      data-interface-group={`${useAppStore.getState().mode === 'sketch' ? 'sketch' : useAppStore.getState().activeTab}/${panel.id}`}
       className="relative flex shrink-0 flex-col border-r border-edge px-1.5 max-[1400px]:px-0.5"
     >
       <div className={cx(

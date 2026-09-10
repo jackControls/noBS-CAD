@@ -3071,13 +3071,24 @@ impl SketchSession {
         match *constraint {
             Constraint::ArcEndpointCoincident { .. }
             | Constraint::OriginCoincident { .. }
-            | Constraint::CenterCoincident { .. }
             | Constraint::EqualDistance { .. }
             | Constraint::ReferenceMidpoint { .. }
             | Constraint::SpanMidpoint { .. } => {
                 return Err(invalid(
                     "This relation is internal and is created by its sketch tool",
                 ));
+            }
+            Constraint::CenterCoincident { point, curve } => {
+                if !matches!(entity(point), Some(Entity::Point { .. }))
+                    || !matches!(
+                        entity(curve),
+                        Some(Entity::Circle { .. } | Entity::Arc { .. })
+                    )
+                {
+                    return Err(invalid(
+                        "Center coincidence needs a point and a circle or arc",
+                    ));
+                }
             }
             Constraint::Horizontal { entity: e } | Constraint::Vertical { entity: e } => {
                 if !matches!(entity(e), Some(Entity::Line { .. })) {

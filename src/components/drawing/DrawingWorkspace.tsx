@@ -385,7 +385,7 @@ export function DrawingWorkspace() {
         clientStart: [event.clientX, event.clientY],
         scrollStart: [event.currentTarget.scrollLeft, event.currentTarget.scrollTop],
       };
-      event.currentTarget.setPointerCapture(event.pointerId);
+      if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId);
       setSheetPanning(true);
       return;
     }
@@ -1045,6 +1045,7 @@ export function DrawingWorkspace() {
         >
           <svg
             ref={drawingSheetRef}
+            data-mcp-canvas="drawing"
             className="drawing-sheet mx-auto block overflow-visible bg-white shadow-2xl shadow-black/35"
             data-testid="drawing-sheet"
             width={width * 3 * zoom}
@@ -1414,7 +1415,7 @@ function ProjectedDrawingView({
     event.stopPropagation();
     onSelect();
     drag.current = { pointerId: event.pointerId, start: paperPoint(event), origin: view.position };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<SVGGElement>) => {
     if (!drag.current || drag.current.pointerId !== event.pointerId) return;
@@ -3202,7 +3203,7 @@ function DraggableAnnotationGraphic({
       start: drawingSheetPoint(event, sheetWidth, sheetHeight),
       delta: [0, 0],
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId);
     setDragDelta([0, 0]);
   };
   const onPointerMove = (event: ReactPointerEvent<SVGGElement>) => {
@@ -3287,7 +3288,7 @@ function useAnnotationExtensionAdjustment(
           extension: storedExtension,
         };
         setPreviewExtension(storedExtension);
-        event.currentTarget.setPointerCapture(event.pointerId);
+        if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId);
       },
       onPointerMove: (event) => {
         const active = drag.current;
@@ -3473,7 +3474,7 @@ function DrawingInspector({
   const view = sheet.views.find((candidate) => candidate.id === selectedViewId) ?? null;
   const annotation = sheet.annotations.find((candidate) => candidate.id === selectedAnnotationId) ?? null;
   const run = (action: Promise<void>) => void action.catch(showDrawingError);
-  return <aside className="w-[300px] shrink-0 overflow-y-auto border-l border-edge bg-panel p-3">
+  return <aside data-mcp-surface="drawing/inspector" className="w-[300px] shrink-0 overflow-y-auto border-l border-edge bg-panel p-3">
     <div className="mb-3 text-[10px] font-semibold tracking-[0.16em] text-mute">{placement ? 'PLACING VIEW' : chamfer ? 'CHAMFER NOTE' : annotation ? 'ANNOTATION' : view ? 'DRAWING VIEW' : 'SHEET PROPERTIES'}</div>
     {placement ? <ViewPlacementInspector placement={placement} /> : chamfer ? <ChamferPlacementInspector chamfer={chamfer} /> : annotation ? <AnnotationInspector annotation={annotation} sheet={sheet} run={run} /> : view ? <>
       <Field label="Name"><input className="drawing-input" value={view.name} onChange={(event) => run(updateDrawingView(view.id, { name: event.target.value || 'View' }))} /></Field>
@@ -3954,7 +3955,7 @@ function DraggableSheetTable({ position, size, sheetWidth, sheetHeight, update, 
   const drag = useRef<{ pointerId: number; start: [number, number]; delta: [number, number] } | null>(null);
   const [delta, setDelta] = useState<[number, number]>([0, 0]);
   const current: [number, number] = [position[0] + delta[0], position[1] + delta[1]];
-  return <g transform={`translate(${current[0]} ${current[1]})`} data-testid={testId} className="cursor-move" onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); drag.current = { pointerId: event.pointerId, start: drawingSheetPoint(event, sheetWidth, sheetHeight), delta: [0, 0] }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!drag.current || drag.current.pointerId !== event.pointerId) return; const point = drawingSheetPoint(event, sheetWidth, sheetHeight); const next: [number, number] = [point[0] - drag.current.start[0], point[1] - drag.current.start[1]]; drag.current.delta = next; setDelta(next); }} onPointerUp={(event) => { if (!drag.current || drag.current.pointerId !== event.pointerId) return; const next: [number, number] = [Math.max(5, Math.min(sheetWidth - size[0] - 5, position[0] + drag.current.delta[0])), Math.max(5, Math.min(sheetHeight - size[1] - 5, position[1] + drag.current.delta[1]))]; drag.current = null; setDelta([0, 0]); void updateActiveDrawingSheet(update(next)).catch(showDrawingError); }} onPointerCancel={() => { drag.current = null; setDelta([0, 0]); }}>{children}</g>;
+  return <g transform={`translate(${current[0]} ${current[1]})`} data-testid={testId} className="cursor-move" onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); drag.current = { pointerId: event.pointerId, start: drawingSheetPoint(event, sheetWidth, sheetHeight), delta: [0, 0] }; if (event.isTrusted) event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!drag.current || drag.current.pointerId !== event.pointerId) return; const point = drawingSheetPoint(event, sheetWidth, sheetHeight); const next: [number, number] = [point[0] - drag.current.start[0], point[1] - drag.current.start[1]]; drag.current.delta = next; setDelta(next); }} onPointerUp={(event) => { if (!drag.current || drag.current.pointerId !== event.pointerId) return; const next: [number, number] = [Math.max(5, Math.min(sheetWidth - size[0] - 5, position[0] + drag.current.delta[0])), Math.max(5, Math.min(sheetHeight - size[1] - 5, position[1] + drag.current.delta[1]))]; drag.current = null; setDelta([0, 0]); void updateActiveDrawingSheet(update(next)).catch(showDrawingError); }} onPointerCancel={() => { drag.current = null; setDelta([0, 0]); }}>{children}</g>;
 }
 
 const gdtCharacteristics = [
