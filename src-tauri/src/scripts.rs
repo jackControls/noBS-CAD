@@ -139,9 +139,7 @@ pub fn native_script_preview_release(
 
 #[tauri::command]
 pub fn native_script_examples() -> Value {
-    // The recipe-library layer supplies the shared catalog. The adapter itself
-    // can inspect and run any source loaded by the user without bundled designs.
-    json!([])
+    nbcad_mcp::script_examples()
 }
 
 #[cfg(test)]
