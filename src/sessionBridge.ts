@@ -19,7 +19,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
 import { applicationExitBarrier } from './files/applicationExit';
-import { SerialPlayback, presentOperation, wakePlayback } from './operationPlayback';
+import { SerialPlayback, presentOperation, presentation, wakePlayback } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
@@ -174,6 +174,13 @@ async function publishNow(): Promise<boolean> {
 export async function applyInboxNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri' || inboxApplying) return;
+  if (presentation.snapshot().stopped) {
+    await invoke('mcp_session_bridge_apply_inbox', { rejectReason: 'Playback stopped' });
+    return;
+  }
+  // Control requests stay responsive in their own lane; no paused promise
+  // occupies the serial lane and prevents Resume or Stop from reaching it.
+  if (!presentation.canApply()) return;
   // inboxApplying also suppresses a second engine_revision bump if any store
   // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
@@ -191,6 +198,7 @@ export async function applyInboxNow(): Promise<void> {
     // The native mutation is committed even if its subsequent UI hydration
     // fails. Closing that window must still offer to save or discard it.
     useAppStore.setState({ dirty: true });
+    presentation.modelApplied();
     if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
       if (result.result?.scene && result.result.document && !result.name?.startsWith('sketch_')) {
@@ -202,12 +210,20 @@ export async function applyInboxNow(): Promise<void> {
       if(result.name?.startsWith('drawing_')&&result.name!=='drawing_select_sheet') {
         recordDrawingHistory(drawingProject,drawingBefore,useAppStore.getState().drawingDocument);
       }
+      if (result.name === 'sketch_begin') presentation.emphasize();
+      if (result.name?.startsWith('solid_')) {
+        const beforeIds = new Set(state.solidScene.bodies.map(body => body.id));
+        const created = useAppStore.getState().solidScene.bodies.filter(body => !beforeIds.has(body.id));
+        if (created.length) presentation.emphasize(created.map(body => body.id));
+      }
     } finally {
       // Native already archived the seq and bumped engine_revision. Publish
       // even if leftover store refresh throws so cad_refresh sees the live
       // engine. Next applyInboxNow is a no-op on the archived seq.
       await presentOperation(result.name ?? 'Model operation');
-      scheduleSessionBridgePublish();
+      // Sequential scripts need this result before their next operation.
+      // Publishing now removes the old 300 ms debounce from every command.
+      if (!await publishNow()) scheduleSessionBridgePublish();
     }
   } catch (error) {
     console.debug('[sessionBridge] inbox apply failed', error);
@@ -264,13 +280,21 @@ export function startSessionBridge(): void {
   }, 10_000);
   if (inboxTimer) clearInterval(inboxTimer);
   const playback = new SerialPlayback();
-  const tick = () => playback.tick(async () => {
-    await applyLiveUiControl(async () => {
-      if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
-      if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
+  let tickRequested = false;
+  const tick = () => {
+    tickRequested = true;
+    return playback.tick(async () => {
+      do {
+        tickRequested = false;
+        await applyLiveUiControl(async () => {
+          if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
+          if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
+        });
+        await applyInboxNow();
+      } while (tickRequested);
     });
-    await applyInboxNow();
-  });
+  };
+  presentation.subscribe(() => { void tick(); });
   void listen('mcp-work', () => {
     getSessionCamera()?.advanceAnimation();
     wakePlayback();
