@@ -2436,4 +2436,5 @@ export type DrawingCommandDto =
  | {type:'create_sheet';arguments:Pick<DrawingSheetDto,'name'|'format'|'orientation'|'standard'|'projection_method'|'tolerance_note'> & {title_block:Partial<DrawingTitleBlockDto>}}
  | {type:'select_sheet'|'delete_sheet';arguments:{sheet_id:number}}
  | {type:'add_view';arguments:{sheet_id:number;view:DrawingViewDto;rescale_group?:boolean}}
+ | {type:'add_linear_dimension';arguments:Omit<Extract<DrawingAnnotationDto,{kind:'linear_dimension'}>,'kind'|'id'> & {sheet_id:number}}
  | {type:'add_note';arguments:{sheet_id:number;text:string;position:[number,number]}};

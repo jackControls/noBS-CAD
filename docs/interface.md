@@ -185,3 +185,22 @@ views/annotations, and drawing exports remain tracked in #93.
 
 All stdio example/test drivers share `mcp-server/client.mjs`. The part-design
 examples in #89 retain their distinct geometry checks and lessons.
+
+### Associative linear dimensions
+
+The drawing dimensions group exposes drawing_add_linear_dimension. Choose two
+current anchors returned by drawing_projection, retaining body_id, edge_id,
+edge_key and endpoint and copying model_point into fallback_point. Specify the
+sheet/view IDs, aligned/horizontal/vertical mode and signed paper-mm offset.
+Precision, prefix/suffix and tolerance/basic/reference/fit presentation are
+optional. The stored value comes from model topology, not an entered dimension
+label. A stale/excluded edge, reused numeric ID with another topology key,
+missing view or invalid precision rejects without consuming an annotation ID.
+
+The editor's existing two-point dimension tool uses the same atomic engine
+command. Existing drawing history and release invalidation remain in effect.
+The drawing golden now dimensions a 6 mm extrusion, edits it to 8 mm, verifies
+current topology and tolerance metadata, rejects invalid edits, and restores
+through a fresh process. With --desktop and --save it also checks native file
+save/reopen. This is the linear-dimension slice of #93; specialized annotations,
+complete manufacturing sheets and export operations remain to implement.

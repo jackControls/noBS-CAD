@@ -1660,7 +1660,9 @@
               "payload": "dimension"
             }
           ],
-          "operations": []
+          "operations": [
+            "drawing_add_linear_dimension"
+          ]
         },
         {
           "id": "annotate",
