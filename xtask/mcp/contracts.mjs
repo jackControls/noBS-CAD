@@ -164,6 +164,17 @@ try {
  });
  console.log('PASS production application exit: '+JSON.stringify(exit));
  await exitPage.close();
+ const scriptPage=await browser.newPage();
+ await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const scripts=await scriptPage.evaluate(async()=>{
+  const {checkScriptSourceOwnership}=await import('/src/scripts/workspace.browser.test.ts');
+  let timer;
+  try{return await Promise.race([checkScriptSourceOwnership(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('Script workspace contract timed out')),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production script source lifecycle: '+JSON.stringify(scripts));
+ await scriptPage.close();
 } finally {await browser?.close();await server.close();}
 
 
