@@ -49,6 +49,9 @@
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <Message_ProgressRange.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <Interface_Static.hxx>
 #include <Interface_HArray1OfHAsciiString.hxx>
@@ -2946,6 +2949,21 @@ rust::Vec<std::uint8_t> Kernel::export_step(
   return output;
 }
 
-std::unique_ptr<Kernel> new_kernel() { return std::make_unique<Kernel>(); }
+std::unique_ptr<Kernel> new_kernel() {
+  // OCCT's default console printer uses stdout, which belongs to the MCP
+  // JSON-RPC transport. Keep transfer diagnostics on stderr in all hosts.
+  // Function-local static initialization runs once, even with multiple kernels.
+  static const bool diagnostics_configured = [] {
+    auto messenger = Message::DefaultMessenger();
+    messenger->RemovePrinters(STANDARD_TYPE(Message_PrinterOStream));
+    Handle(Message_PrinterOStream) printer =
+        new Message_PrinterOStream("cerr", Standard_True);
+    printer->SetToColorize(Standard_False);
+    messenger->AddPrinter(printer);
+    return true;
+  }();
+  (void)diagnostics_configured;
+  return std::make_unique<Kernel>();
+}
 
 }  // namespace nbcad_occt

@@ -613,6 +613,73 @@ fn center_acquisition_is_associative_and_never_silently_fixes_a_curve() {
 }
 
 #[test]
+fn explicit_slot_center_datum_keeps_width_editable_and_rejects_invalid_targets() {
+    let mut s = session_off_grid();
+    let slot = s
+        .add_slot(&nbcad_sketch::SlotRequest {
+            mode: nbcad_sketch::SlotMode::CenterToCenter,
+            p1: v(0.0, -50.0),
+            p2: v(0.0, 50.0),
+            cursor: v(9.0, 0.0),
+            width_mm: Some(18.0),
+            width_text: None,
+        })
+        .unwrap();
+    let line = slot.entities[4];
+    let arc = slot.entities[6];
+    let width = slot.sketch.dimensions[0].constraint_id;
+    s.add_dimension(DimensionRequest {
+        entities: vec![line],
+        text_pos: v(-30.0, 0.0),
+        value_text: Some("100".into()),
+    })
+    .unwrap();
+    s.add_constraint(Constraint::Vertical { entity: line })
+        .unwrap();
+    let datum = s.add_point(v(0.0, -50.0)).unwrap().entities[0];
+    s.add_constraint(Constraint::Fix { entity: datum }).unwrap();
+    s.add_constraint(Constraint::CenterCoincident {
+        point: datum,
+        curve: arc,
+    })
+    .unwrap();
+    assert_eq!(s.dto().dof.value, 0);
+    let before = serde_json::to_value(s.dto()).unwrap();
+    assert!(s
+        .add_constraint(Constraint::CenterCoincident {
+            point: datum,
+            curve: line
+        })
+        .is_err());
+    assert!(s
+        .add_constraint(Constraint::CenterCoincident {
+            point: arc,
+            curve: arc
+        })
+        .is_err());
+    assert_eq!(serde_json::to_value(s.dto()).unwrap(), before);
+    let edited = s
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: width,
+            text: "20".into(),
+        })
+        .unwrap()
+        .sketch;
+    assert_eq!(edited.dof.value, 0);
+    for entity in &edited.entities {
+        if let EntityDto::Arc {
+            id, center, radius, ..
+        } = entity
+        {
+            assert!((radius - 10.0).abs() < 1e-6);
+            if *id == arc {
+                assert!(center.distance(v(0.0, -50.0)) < 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
 fn arc_endpoint_tangency_is_selective_associative_and_suppressible() {
     let mut inferred = session_off_grid();
     let carrier = inferred.add_line(v(0.0, 0.0), v(10.0, 0.0), true).unwrap();

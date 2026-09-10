@@ -697,13 +697,26 @@ fn shared_line_arc_endpoint_radial(
     // support-line equation through that topology transition. The endpoint
     // directional form is for the single connected tangent inferred while
     // authoring an ordinary arc.
-    let tangent_count = sketch
+    let tangent_lines: Vec<_> = sketch
         .constraints()
-        .filter(|(_, constraint)| {
-            matches!(constraint, Constraint::Tangent { a, b } if *a == arc || *b == arc)
+        .filter_map(|(_, constraint)| match *constraint {
+            Constraint::Tangent { a, b } if a == arc => Some(b),
+            Constraint::Tangent { a, b } if b == arc => Some(a),
+            _ => None,
         })
-        .count();
-    if tangent_count != 1 {
+        .collect();
+    // A capsule has two explicitly parallel carriers. It has no corner to
+    // consume, and needs endpoint-direction tangency on both arcs: distance
+    // tangency otherwise reports four spurious DOFs at the exact semicircles.
+    // Keep the generic support equations for corner fillets and their reopen
+    // transitions.
+    let capsule = tangent_lines.len() == 2
+        && sketch.constraints().any(|(_, c)| {
+            matches!(*c, Constraint::Parallel { a, b }
+            if (a == tangent_lines[0] && b == tangent_lines[1])
+                || (b == tangent_lines[0] && a == tangent_lines[1]))
+        });
+    if tangent_lines.len() != 1 && !capsule {
         return None;
     }
     let (resolved_start, resolved_end) = sketch.resolved_line(line)?;

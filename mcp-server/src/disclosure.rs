@@ -489,6 +489,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_list_all_tools"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
+            | "cad_interface"
             | "cad_attach"
             | "cad_refresh"
             | "cad_detach"
@@ -520,6 +521,9 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "assembly_set_occurrence_pose"
         | "assembly_set_occurrence_grounded"
         | "assembly_create_joint"
+        | "assembly_delete_joint"
+        | "assembly_set_joint_enabled"
+        | "assembly_set_joint_motion"
         | "assembly_update_joint" => FocusPack::Assembly,
         "sketch_begin"
         | "sketch_finish"

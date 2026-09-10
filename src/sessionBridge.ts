@@ -14,10 +14,15 @@
  * are dead-lettered. Not in-process shared memory. MCP never writebacks model.json.
  */
 import { invoke } from '@tauri-apps/api/core';
+import {currentHistoryProjectKey,recordDrawingHistory} from './engine/applicationHistory';
+import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
+import { applyLiveUiControl } from './liveUiBridge';
+import { SerialPlayback, presentOperation, wakePlayback } from './operationPlayback';
+import { getSessionCamera } from './components/viewport/cameraApi';
+import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
 import {
-  exportProjectModelWithVisibility,
   useAppStore,
   type AppMode,
   type SketchTool,
@@ -118,9 +123,9 @@ interface PublishWriteResult {
   engine_revision?: number;
 }
 
-async function publishNow(): Promise<void> {
+async function publishNow(): Promise<boolean> {
   const state = useAppStore.getState();
-  if (state.engineKind !== 'tauri') return;
+  if (state.engineKind !== 'tauri') return false;
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   try {
     // Reserve captures engine_revision and project/session identity before
@@ -128,19 +133,17 @@ async function publishNow(): Promise<void> {
     // this snapshot into another session. If a UI mutation lands before
     // write, native rejects the stale snapshot and we retry.
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const reservation = await invoke<PublishReservation>('mcp_session_bridge_reserve');
       const engine = await getEngine();
-      const activeSketch = await engine.activeSketch();
-      let modelJson: string | null = null;
-      try {
-        const model = await exportProjectModelWithVisibility(engine);
-        modelJson = typeof model === 'string' ? model : JSON.stringify(model);
-      } catch (error) {
-        // A half-finished sketch must not enter the persisted project format,
-        // but diagnostics still need the live entity/constraint snapshot. The
-        // native bridge keeps its previous completed model.json beside it.
-        if (activeSketch === null) throw error;
-      }
+      const { reservation, activeSketch, modelJson } = await captureSessionSnapshot({
+        synchronizeVisibility: () => synchronizeSnapshotVisibility(
+          useAppStore.getState().projectVisibility,
+          () => engine.projectVisibility(),
+          visibility => engine.setProjectVisibility(visibility),
+        ),
+        reserve: () => invoke<PublishReservation>('mcp_session_bridge_reserve'),
+        activeSketch: () => engine.activeSketch(),
+        exportModel: () => engine.exportProjectModel(),
+      });
       const written = await invoke<PublishWriteResult>('mcp_session_bridge_write', {
         payload: JSON.stringify({
           focus,
@@ -158,11 +161,12 @@ async function publishNow(): Promise<void> {
       ) {
         continue;
       }
-      break;
+      return !written?.skipped;
     }
   } catch (error) {
     console.debug('[sessionBridge] publish failed', error);
   }
+  return false;
 }
 
 /** Apply one MCP inbox op on the live engine, then let the publisher run. */
@@ -173,6 +177,8 @@ async function applyInboxNow(): Promise<void> {
   // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
   try {
+    const drawingBefore=useAppStore.getState().drawingDocument;
+    const drawingProject=currentHistoryProjectKey();
     const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox');
     if (result?.dead_lettered) {
       console.warn('[sessionBridge] inbox op dead-lettered; queue unblocked', result);
@@ -180,17 +186,22 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
+    if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
-      if (result.result?.scene && result.result.document) {
+      if (result.result?.scene && result.result.document && !result.name?.startsWith('sketch_')) {
         useAppStore.getState().applySolidUpdate(result.result);
       } else {
         // Targeted / live refresh with dirty:true — never loadDocument (clears dirty).
         await useAppStore.getState().refreshAfterInboxApply(result.name);
       }
+      if(result.name?.startsWith('drawing_')&&result.name!=='drawing_select_sheet') {
+        recordDrawingHistory(drawingProject,drawingBefore,useAppStore.getState().drawingDocument);
+      }
     } finally {
       // Native already archived the seq and bumped engine_revision. Publish
       // even if leftover store refresh throws so cad_refresh sees the live
       // engine. Next applyInboxNow is a no-op on the archived seq.
+      await presentOperation(result.name ?? 'Model operation');
       scheduleSessionBridgePublish();
     }
   } catch (error) {
@@ -229,6 +240,7 @@ export function startSessionBridge(): void {
       state.activeSketch !== prev.activeSketch ||
       state.mode !== prev.mode ||
       state.activeTool !== prev.activeTool ||
+      state.projectVisibility !== prev.projectVisibility ||
       activeSolidDialog(state) !== activeSolidDialog(prev)
     ) {
       // Native engine commands bump engine_revision under the publisher lock
@@ -236,7 +248,7 @@ export function startSessionBridge(): void {
       // reopens the UI→JS race and would double-count after native apply.
       // inboxApplying still guards applyInboxNow re-entry; refreshAfterInboxApply
       // keeps dirty:true (never loadDocument).
-      scheduleSessionBridgePublish();
+      if (!inboxApplying) scheduleSessionBridgePublish();
     }
   });
   scheduleSessionBridgePublish();
@@ -245,8 +257,20 @@ export function startSessionBridge(): void {
     void heartbeatNow();
   }, 10_000);
   if (inboxTimer) clearInterval(inboxTimer);
-  inboxTimer = setInterval(() => {
-    void applyInboxNow();
-  }, 250);
-  void applyInboxNow();
+  const playback = new SerialPlayback();
+  const tick = () => playback.tick(async () => {
+    await applyLiveUiControl(async () => {
+      if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
+      if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
+    });
+    await applyInboxNow();
+  });
+  void listen('mcp-work', () => {
+    getSessionCamera()?.advanceAnimation();
+    wakePlayback();
+    void tick();
+  });
+  void listen('mcp-keepalive', () => { void heartbeatNow(); });
+  inboxTimer = setInterval(() => { void tick(); }, 250);
+  void tick();
 }

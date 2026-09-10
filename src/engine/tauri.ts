@@ -5,7 +5,11 @@
  * through `nbcad_sketch::host::handle` in Rust. Payloads are JSON
  * strings, exactly like the WASM host.
  */
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import {trackEngineOperation} from './activity';
+function invoke<T>(...args: Parameters<typeof tauriInvoke>): Promise<T> {
+  return trackEngineOperation(tauriInvoke<T>(...args));
+}
 import { EngineError, unwrapEnvelope, type Engine } from './index';
 import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import type {
@@ -184,6 +188,10 @@ export class TauriEngine implements Engine {
 
   async drawingDocument(): Promise<DrawingDocumentDto> {
     return this.call('engine_drawing_document');
+  }
+
+  async drawingApply(command: import('./types').DrawingCommandDto): Promise<DrawingDocumentDto> {
+    return this.call('engine_drawing_apply',command);
   }
 
   async setDrawingDocument(document: DrawingDocumentDto): Promise<DrawingDocumentDto> {

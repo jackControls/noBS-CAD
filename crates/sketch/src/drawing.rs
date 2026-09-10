@@ -329,6 +329,7 @@ pub struct DrawingBomItemDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrawingViewDto {
+    #[serde(default)]
     pub id: u64,
     pub name: String,
     pub kind: DrawingViewKind,

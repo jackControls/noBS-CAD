@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'mcp-server/**'
+      - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
@@ -12,6 +13,7 @@ on:
       - 'crates/export/**'
       - 'crates/assembly/**'
       - 'crates/mcp-mutate/**'
+      - '.cargo/config.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'xtask/**'
@@ -20,6 +22,7 @@ on:
   pull_request:
     paths:
       - 'mcp-server/**'
+      - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
@@ -27,6 +30,7 @@ on:
       - 'crates/export/**'
       - 'crates/assembly/**'
       - 'crates/mcp-mutate/**'
+      - '.cargo/config.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'xtask/**'
@@ -152,6 +156,34 @@ jobs:
           cargo test --locked --manifest-path mcp-server/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
 
+      - name: Install Node for MCP plans
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: MCP bench and complete feature workshop
+        shell: pwsh
+        env:
+          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+        run: |
+          $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
+          cargo build --locked --manifest-path mcp-server/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "MCP binary build failed" }
+          cargo xtask test-mcp bench --server ./mcp-server/target/debug/nbcad-mcp.exe --workshop all --out ./target/mcp-workshop
+          if ($LASTEXITCODE -ne 0) { throw "MCP workshop failed" }
+          cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/drawing-report.json
+          if ($LASTEXITCODE -ne 0) { throw "MCP drawing example failed" }
+          cargo xtask test-mcp garden-bench --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/garden-bench
+          if ($LASTEXITCODE -ne 0) { throw "Parametric garden bench failed" }
+
+      - name: Upload MCP workshop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-workshop-windows
+          path: target/mcp-workshop/
+          if-no-files-found: ignore
+
       # Keep Windows installer coverage; export tests run in the Linux workspace.
       - name: xtask install-mcp tests
         shell: pwsh
@@ -204,3 +236,24 @@ jobs:
         env:
           OCCT_ROOT: /usr
         run: cargo test --locked --manifest-path mcp-server/Cargo.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: MCP bench and complete feature workshop
+        env:
+          OCCT_ROOT: /usr
+        run: |
+          cargo build --locked --manifest-path mcp-server/Cargo.toml
+          cargo xtask test-mcp bench --server ./mcp-server/target/debug/nbcad-mcp --workshop all --out ./target/mcp-workshop
+          cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/drawing-report.json
+          cargo xtask test-mcp garden-bench --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/garden-bench
+
+      - name: Upload MCP workshop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-workshop-linux
+          path: target/mcp-workshop/
+          if-no-files-found: ignore

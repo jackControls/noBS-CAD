@@ -42,6 +42,136 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// A separate expiring UI request; never part of the modeling inbox or script.
+pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, String> {
+    let action = arguments
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("inspect");
+    if action == "view" {
+        return request_control(arguments, attached, false, None);
+    }
+    if !matches!(
+        action,
+        "inspect"
+            | "click"
+            | "double_click"
+            | "context_menu"
+            | "set_value"
+            | "key"
+            | "window"
+            | "file"
+            | "viewport"
+    ) {
+        return Err("unknown UI action".into());
+    }
+    if matches!(
+        action,
+        "click" | "double_click" | "context_menu" | "set_value" | "key"
+    ) && arguments.get("target").and_then(Value::as_str).is_none()
+    {
+        return Err("UI action requires a target from cad_interface inspect".into());
+    }
+    if let Some(pace) = arguments.get("pace_ms") {
+        if !pace.as_u64().is_some_and(|ms| ms <= 2000) {
+            return Err("pace_ms must be an integer from 0 to 2000".into());
+        }
+    }
+    request_control(arguments, attached, true, None)
+}
+
+fn request_control(
+    arguments: &Value,
+    attached: Option<&str>,
+    ui: bool,
+    query: Option<Value>,
+) -> Result<Value, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let session_id = arguments
+        .get("session_id")
+        .and_then(Value::as_str)
+        .or(attached)
+        .ok_or("Live control needs session_id or an attached desktop session")?;
+    require_valid_session_id(session_id)?;
+    let view = arguments
+        .get("view")
+        .and_then(Value::as_str)
+        .unwrap_or(if ui { "current" } else { "" });
+    if !ui
+        && !matches!(
+            view,
+            "current" | "isometric" | "top" | "bottom" | "front" | "back" | "left" | "right"
+        )
+    {
+        return Err("invalid camera view".into());
+    }
+    let heartbeat = heartbeat_meta(session_id);
+    if heartbeat.get("stale").and_then(Value::as_bool) != Some(false) {
+        return Err("desktop heartbeat is stale; refresh cad_list_sessions".into());
+    }
+    let id = format!(
+        "{}-{}-{}",
+        now_ms(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let request_name = format!("controls/{id}.request.json");
+    let result_name = format!("controls/{id}.result.json");
+    let lifetime = if ui { 30_000 } else { 5_000 };
+    let mut request = json!({
+        "id":id, "view":view, "fit":arguments.get("fit").and_then(Value::as_bool).unwrap_or(false),
+        "expires_ms":now_ms()+lifetime,
+    });
+    if ui {
+        request["ui"] = arguments.clone();
+        request["ui"]["action"] = arguments.get("action").cloned().unwrap_or(json!("inspect"));
+    }
+    if let Some(query) = query {
+        request["sketch_query"] = query;
+        request.as_object_mut().unwrap().remove("ui");
+    }
+    write_session(session_id, &request_name, &request.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(lifetime + 1000);
+    while std::time::Instant::now() < deadline {
+        if let Ok(body) = read_session_file(session_id, &result_name) {
+            let result: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            let _ = fs::remove_file(session_path(session_id, &result_name)?);
+            let _ = fs::remove_file(session_path(session_id, &request_name)?);
+            return Ok(result);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = fs::remove_file(session_path(session_id, &request_name)?);
+    Ok(
+        json!({"status":"timeout","request_id":id,"session_id":session_id,
+        "hint":"No UI acknowledgement. Check that the target tab is active and the desktop supports cad_interface."}),
+    )
+}
+
+pub fn request_sketch_query(
+    session_id: &str,
+    method: &str,
+    payload: &str,
+) -> Result<Value, String> {
+    if !nbcad_mcp_mutate::is_live_sketch_query(method) {
+        return Err("unsupported live sketch query".into());
+    }
+    let result = request_control(
+        &json!({}),
+        Some(session_id),
+        true,
+        Some(json!({"method":method,"payload":payload})),
+    )?;
+    if result["status"] != "applied" {
+        return Err(format!("live sketch query failed: {result}"));
+    }
+    result
+        .get("value")
+        .cloned()
+        .ok_or_else(|| "live sketch query omitted its result".into())
+}
+
 /// UUID v4 string form (8-4-4-4-12 hex with version nibble `4` and RFC variant).
 pub fn is_valid_session_id(session_id: &str) -> bool {
     let bytes = session_id.as_bytes();
@@ -170,6 +300,7 @@ pub fn heartbeat_meta(session_id: &str) -> Value {
                 "age_ms": age_ms,
                 "stale": age_ms > HEARTBEAT_STALE_MS,
                 "generation": parsed.get("generation").cloned().unwrap_or(Value::Null),
+                "interface_version": parsed.get("interface_version").cloned().unwrap_or(Value::Null),
                 "window_id": parsed.get("window_id").cloned().unwrap_or(Value::Null),
                 "document_id": parsed
                     .get("document_id")
@@ -1389,6 +1520,100 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_requests_reject_invalid_actions_targets_and_pacing_before_io() {
+        for action in ["click", "double_click", "context_menu", "set_value", "key"] {
+            assert!(request_ui(&json!({"action":action}), None)
+                .unwrap_err()
+                .contains("target"));
+        }
+        assert!(request_ui(&json!({"action":"eval"}), None)
+            .unwrap_err()
+            .contains("unknown"));
+        for pace in [
+            json!(-1),
+            json!(2001),
+            json!(0.5),
+            json!("fast"),
+            Value::Null,
+        ] {
+            assert!(request_ui(&json!({"pace_ms":pace}), None)
+                .unwrap_err()
+                .contains("pace_ms"));
+        }
+    }
+
+    #[test]
+    fn view_request_needs_live_ui_ack_but_no_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let id = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-view-{}-{id}", std::process::id()));
+        let previous = std::env::var_os("NBCAD_SESSION_DIR");
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(
+            &id,
+            "heartbeat.json",
+            &json!({"updated_ms":now_ms(),"generation":1}).to_string(),
+        )
+        .unwrap();
+        let ui_dir = dir.join(&id).join("controls");
+        let ui = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if let Ok(entries) = fs::read_dir(&ui_dir) {
+                    for entry in entries.flatten() {
+                        if !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                        {
+                            continue;
+                        }
+                        let body: Value =
+                            serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        assert_eq!(body["view"], "top");
+                        assert_eq!(body["fit"], true);
+                        let result =
+                            ui_dir.join(format!("{}.result.json", body["id"].as_str().unwrap()));
+                        let temporary = result.with_extension("tmp");
+                        fs::write(
+                            &temporary,
+                            r#"{"status":"applied","camera":{"target":[0,0,0]}}"#,
+                        )
+                        .unwrap();
+                        fs::rename(temporary, result).unwrap();
+                        return;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("UI did not receive view request");
+        });
+        let result = request_ui(
+            &json!({"action":"view","session_id":id,"view":"top","fit":true}),
+            None,
+        )
+        .unwrap();
+        ui.join().unwrap();
+        assert_eq!(result["status"], "applied");
+        assert!(!dir.join(&id).join("model.json").exists());
+        assert!(request_ui(&json!({"action":"view","view":"top"}), None).is_err());
+        assert!(request_ui(
+            &json!({"action":"view","session_id":id,"view":"invalid"}),
+            None
+        )
+        .is_err());
+        write_session(&id, "heartbeat.json", r#"{"updated_ms":0,"generation":1}"#).unwrap();
+        assert!(request_ui(&json!({"action":"view","session_id":id,"view":"top"}), None).is_err());
+        if let Some(value) = previous {
+            std::env::set_var("NBCAD_SESSION_DIR", value);
+        } else {
+            std::env::remove_var("NBCAD_SESSION_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
 
     fn write_process_lease(root: &Path, process_id: &str, updated_ms: u64, windows: Value) {
         let processes = root.join("_ui").join("processes");
