@@ -1087,7 +1087,9 @@ fn turbine_replays_edits_restores_prints_and_drives_native_geometry() {
     // This is a full construction/drafting acceptance run, not a single-call
     // unit test. The deadline remains bounded and failures still stop at once.
     client.timeout = Duration::from_secs(900);
+    eprintln!("turbine acceptance: complete catalog construction and drawing replay");
     let report = client.recipe("vertical-axis-turbine");
+    eprintln!("turbine acceptance: first replay passed; native print plates");
     let exports = &report["exports"];
     assert_eq!(exports["final_solution"]["solved"], true);
     assert_eq!(exports["final_solution"]["diagnostics"], json!([]));
@@ -1186,7 +1188,9 @@ fn turbine_replays_edits_restores_prints_and_drives_native_geometry() {
     }
     validate_turbine_edit_and_motion(&mut client, exports);
     validate_turbine_open_overlap(exports);
+    eprintln!("turbine acceptance: physical assembly, hardware and driver paths");
     turbine::check_assembly(exports);
+    eprintln!("turbine acceptance: mechanics passed; independent compiled-source replay");
     let mut repeat = Client::start();
     repeat.timeout = client.timeout;
     let repeated = repeat.compiled_recipe_source("vertical-axis-turbine");

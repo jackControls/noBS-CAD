@@ -888,6 +888,9 @@ fn check_motion(client: &mut Client, exports: &Value) {
 }
 
 pub(super) fn check_edits_and_motion(client: &mut Client, exports: &Value) {
+    eprintln!("turbine acceptance: rotor edits, drawing reevaluation and cold edited model");
     check_edits(client, exports);
+    eprintln!("turbine acceptance: rotor edits passed; driven motion and clearances");
     check_motion(client, exports);
+    eprintln!("turbine acceptance: driven motion and clearances passed");
 }
