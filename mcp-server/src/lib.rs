@@ -212,7 +212,7 @@ struct CadServer {
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
-    /// Interpreter-owned progress transported with fast replay's existing inbox
+    /// Interpreter-owned progress transported with both modes' existing inbox
     /// operations, never counted independently by the host or UI.
     script_progress: Option<nbcad_script::RunProgress>,
     live_snapshot_dirty: bool,
@@ -633,7 +633,7 @@ impl CadServer {
         let mut result = nbcad_script::run_with_progress(
             &script,
             |name, arguments, progress| {
-                self.script_progress = (mode == "fast").then_some(progress);
+                self.script_progress = Some(progress);
                 let is_note =
                     arguments["action"] == "presentation" && arguments["command"] == "note";
                 let result = self.call_tool(name, arguments)?;
@@ -9928,18 +9928,15 @@ mod tests {
             let (controls, progress, live_model) = host.join().unwrap();
             assert_eq!(
                 progress,
-                if mode == "fast" {
-                    [2, 5]
-                        .map(|steps_completed| {
-                            Some(nbcad_script::RunProgress {
-                                steps_completed,
-                                step_count: 6,
-                            })
+                [2, 5]
+                    .map(|steps_completed| {
+                        Some(nbcad_script::RunProgress {
+                            steps_completed,
+                            step_count: 6,
                         })
-                        .to_vec()
-                } else {
-                    vec![None, None]
-                }
+                    })
+                    .to_vec(),
+                "Both modes report operations between sparse chapter notes"
             );
             assert!(
                 server.script_progress.is_none(),
