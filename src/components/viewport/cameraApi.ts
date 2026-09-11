@@ -15,6 +15,34 @@ export interface ScreenPoint {
   y: number;
 }
 
+export interface CameraAnimationState {
+  readonly id: number;
+  readonly status: 'running' | 'completed' | 'cancelled';
+}
+
+/** Distinguish reaching the requested pose from user interruption/replacement.
+ * Only the currently owned animation may mark itself complete. */
+export class CameraAnimationLifecycle {
+  private current: CameraAnimationState = {id: 0, status: 'completed'};
+  snapshot(): CameraAnimationState { return this.current; }
+  begin(): number {
+    this.current = {id: this.current.id + 1, status: 'running'};
+    return this.current.id;
+  }
+  complete(id: number): boolean {
+    if (this.current.id !== id || this.current.status !== 'running') return false;
+    this.current = {id, status: 'completed'};
+    return true;
+  }
+  cancel(): boolean {
+    if (this.current.status === 'cancelled') return false;
+    // Manual input immediately after interpolation ends must also invalidate
+    // an acknowledgement that is still awaiting its promise continuation.
+    this.current = {id: this.current.id + (this.current.status === 'completed' ? 1 : 0), status: 'cancelled'};
+    return true;
+  }
+}
+
 export interface SixDofMotion {
   /** Normalized cap translation: right, forward, up. */
   translation: [number, number, number];
@@ -35,20 +63,22 @@ export interface ViewportCameraApi {
   bounds(): { x: number; y: number; width: number; height: number };
   /** Current camera pose (copies; safe to mutate). */
   getSnapshot(): CameraSnapshot;
-  /** True until the renderer has completed the current camera animation. */
+  /** True while the shared controller is interpolating the current pose. */
   isAnimating(): boolean;
+  /** Controller completion identity; native frame presentation is asynchronous. */
+  getAnimationState(): CameraAnimationState;
   /** Native wake events advance navigation even while WebView RAF is suspended. */
   advanceAnimation(): void;
   /** Animated snap to look at the target from a world direction. */
-  snapToDirection(direction: [number, number, number], durationMs?: number): void;
+  snapToDirection(direction: [number, number, number], durationMs?: number): number;
   /** Animated return to the default axonometric home view. */
-  home(durationMs?: number): void;
+  home(durationMs?: number): number;
   /** Animated frame of the currently visible model/sketch geometry. */
-  fit(durationMs?: number): void;
+  fit(durationMs?: number): number;
   /** Frame actual visible geometry for a scripted explanation, without editing it. */
-  focus(target: CameraFocus, durationMs?: number, direction?: [number, number, number] | 'isometric'): void;
+  focus(target: CameraFocus, durationMs?: number, direction?: [number, number, number] | 'isometric'): number;
   /** Orbit about the current target/up axis without changing radius or elevation. */
-  orbit(degrees: number, durationMs?: number): void;
+  orbit(degrees: number, durationMs?: number): number;
   /** Immediate free-orbit delta from navigation input, in pixels. */
   orbitBy(dxPx: number, dyPx: number): void;
   /** Immediate six-degree-of-freedom navigation from a 3D mouse. */

@@ -4,6 +4,7 @@ import {
   getSessionCamera, notifySessionCameraChanged, registerSessionCamera, subscribeSessionCamera,
   unregisterSessionCamera, type CameraSnapshot, type ViewportCameraApi,
   orbitCameraSnapshot,
+  CameraAnimationLifecycle,
 } from './components/viewport/cameraApi';
 
 function same(actual: unknown, expected: unknown, message: string) {
@@ -18,7 +19,7 @@ async function rejects(promise: Promise<unknown>, expected: RegExp) {
 }
 function fixture() {
   let time = 100;
-  let animating = false;
+  const animation = new CameraAnimationLifecycle();
   let animate = true;
   const timers = new Map<() => void, number>();
   const listeners = new Set<() => void>();
@@ -28,15 +29,22 @@ function fixture() {
   const owner = {document: state.document, activeProjectTabId: state.activeProjectTabId};
   const calls: unknown[] = [];
   const snapshot: CameraSnapshot = {position: [1, -1, 1], target: [0, 0, 0], up: [0, 0, 1]};
+  const start = (duration?: number) => {
+    const id = animation.begin();
+    if (!animate || duration === 0) animation.complete(id);
+    notifySessionCameraChanged();
+    return id;
+  };
   // Only the camera navigation contract is relevant to this lifecycle test.
   const camera = {
-    focus(target, duration, direction) { calls.push(['focus', target, duration, direction]); animating = animate; },
-    home(duration) { calls.push(['home', duration]); animating = animate; },
-    snapToDirection(direction, duration) { calls.push(['direction', direction, duration]); animating = animate; },
-    orbit(degrees, duration) { calls.push(['orbit', degrees, duration]); animating = animate; },
-    isAnimating() { return animating; },
+    focus(target, duration, direction) { calls.push(['focus', target, duration, direction]); return start(duration); },
+    home(duration) { calls.push(['home', duration]); return start(duration); },
+    snapToDirection(direction, duration) { calls.push(['direction', direction, duration]); return start(duration); },
+    orbit(degrees, duration) { calls.push(['orbit', degrees, duration]); return start(duration); },
+    isAnimating() { return animation.snapshot().status === 'running'; },
+    getAnimationState() { return animation.snapshot(); },
     getSnapshot() { return snapshot; },
-  } satisfies Pick<ViewportCameraApi, 'focus' | 'home' | 'snapToDirection' | 'orbit' | 'isAnimating' | 'getSnapshot'>;
+  } satisfies Pick<ViewportCameraApi, 'focus' | 'home' | 'snapToDirection' | 'orbit' | 'isAnimating' | 'getAnimationState' | 'getSnapshot'>;
   const api = camera as ViewportCameraApi;
   const changed = () => { for (const listener of [...listeners]) listener(); };
   const control: ViewControl = {
@@ -59,7 +67,8 @@ function fixture() {
   return {state, owner, calls, request, api, control, snapshot,
     run: (override: Partial<ViewRequest> = {}) => applyView({...request, ...override}, owner, control),
     mount() { registerSessionCamera(api); },
-    finish() { animating = false; notifySessionCameraChanged(); },
+    finish() { animation.complete(animation.snapshot().id); notifySessionCameraChanged(); },
+    cancel() { animation.cancel(); notifySessionCameraChanged(); },
     instant() { animate = false; },
     change(update: Partial<ViewState>) { Object.assign(state, update); changed(); },
     time(value: number) {
@@ -212,6 +221,42 @@ async function main() {
   orbit.finish();
   same(await orbitResult, orbit.snapshot, 'Orbit returns the completed camera snapshot');
   orbit.clean();
+
+  for (const interruption of ['cancel', 'replacement', 'instant replacement', 'replace after completion', 'input after completion']) {
+    const interruptedOrbit = fixture();
+    interruptedOrbit.state.activeTab = 'solid';
+    interruptedOrbit.mount();
+    const previousFeedback = presentation.snapshot().operation;
+    const pendingOrbit = interruptedOrbit.run({view: 'current', fit: false, orbit_degrees: 120, duration_ms: 3000});
+    await Promise.resolve();
+    if (interruption === 'cancel') interruptedOrbit.cancel();
+    else if (interruption === 'input after completion') {
+      interruptedOrbit.finish();
+      interruptedOrbit.cancel();
+    }
+    else {
+      if (interruption === 'replace after completion') interruptedOrbit.finish();
+      interruptedOrbit.api.home(interruption === 'instant replacement' ? 0 : 650);
+    }
+    await rejects(pendingOrbit, /Camera animation was cancelled|Camera animation was replaced/);
+    same(presentation.snapshot().operation, previousFeedback, 'Interrupted or replaced motion must never publish successful orbit feedback');
+    interruptedOrbit.finish();
+    await interruptedOrbit.run({view: 'current', fit: false});
+    interruptedOrbit.clean();
+  }
+
+  const lifecycle = new CameraAnimationLifecycle();
+  const abandonedId = lifecycle.begin();
+  lifecycle.cancel();
+  same(lifecycle.complete(abandonedId), false, 'Late completion must not turn a cancellation into success');
+  same(lifecycle.snapshot().status, 'cancelled', 'Cancellation remains distinguishable from completion');
+  const supersededId = lifecycle.begin();
+  const replacementId = lifecycle.begin();
+  same(lifecycle.complete(supersededId), false, 'An old animation cannot complete its replacement');
+  same(lifecycle.snapshot(), {id: replacementId, status: 'running'}, 'Replacement retains its own pending completion');
+  same(lifecycle.complete(replacementId), true, 'Only the active animation can finish');
+  lifecycle.cancel();
+  if (lifecycle.snapshot().id === replacementId) throw new Error('Manual input after completion must invalidate its pending receipt');
 
   const orbitWithoutFit = fixture();
   orbitWithoutFit.state.activeTab = 'solid';

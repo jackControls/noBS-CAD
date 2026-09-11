@@ -117,18 +117,29 @@ export async function applyView(
   };
   assertCamera();
   // Frame and orient in one deliberate motion.
+  let animationId: number | undefined;
   if (request.orbit_degrees !== undefined) {
     // Establish the requested framing before rotating at a constant radius.
     if (targets || request.fit) api.focus(request, 0);
-    api.orbit(request.orbit_degrees, duration);
-  } else if (targets || request.fit) api.focus(request, duration, direction);
-  else if (request.view === 'isometric') api.home(duration);
-  else if (direction && direction !== 'isometric') api.snapToDirection(direction, duration);
+    animationId = api.orbit(request.orbit_degrees, duration);
+  } else if (targets || request.fit) animationId = api.focus(request, duration, direction);
+  else if (request.view === 'isometric') animationId = api.home(duration);
+  else if (direction && direction !== 'isometric') animationId = api.snapToDirection(direction, duration);
+  const animationCompleted = () => {
+    // A current-view read requests no motion and can inspect a manually moved
+    // camera even if an earlier, unrelated animation was cancelled.
+    if (animationId === undefined) return true;
+    const current = api.getAnimationState();
+    if (current.id !== animationId) throw new Error('Camera animation was replaced');
+    if (current.status === 'cancelled') throw new Error('Camera animation was cancelled');
+    return current.status === 'completed' ? true : undefined;
+  };
   await waitUntil(() => {
     assertCamera();
-    return api.isAnimating() ? undefined : true;
+    return animationCompleted();
   });
   assertCamera();
+  animationCompleted();
   presentation.applied(request.orbit_degrees === undefined ? `Camera: ${request.view}` : `Camera: orbit ${request.orbit_degrees}°`);
   return api.getSnapshot();
 }
