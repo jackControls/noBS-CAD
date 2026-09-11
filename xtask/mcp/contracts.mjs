@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium} from 'playwright';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
+import {checkPresentationSurfaces} from './presentation.mjs';
 
 const dispatcher=ts.createSourceFile('dispatch.ts',await readFile(new URL('../../src/ribbon/dispatch.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 const dispatched=new Set();
@@ -26,7 +27,7 @@ try {
  await page.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const result=await page.evaluate(async()=>{
   const {inspectUi,operateUi}=await import('/src/uiControl.ts');
-  const {SerialPlayback,presentOperation,setPlaybackPace}=await import('/src/operationPlayback.ts');
+  const {SerialPlayback,presentOperation,setPlaybackPace,presentation}=await import('/src/operationPlayback.ts');
   const {interfaceGroups,operationGroup}=await import('/src/interface.ts');
   const {drivePointer}=await import('/src/uiPointer.ts');
   const {trackEngineOperation,pendingEngineOperations}=await import('/src/engine/activity.ts');
@@ -45,6 +46,16 @@ try {
   operateUi({action:'double_click',target:plane.id},context);
   operateUi({action:'context_menu',target:plane.id},context);
   check(gestures.join(',')==='select,edit,menu','Tree gestures do not reach real handlers');
+  const example=document.createElement('div'); example.tabIndex=0; example.setAttribute('role','img');
+  example.setAttribute('aria-label','Inspectable example'); document.querySelector('main').append(example);
+  const inspectedKeys=[]; example.addEventListener('keydown',event=>inspectedKeys.push(event.key));
+  const modelControl=controls().filter(control=>control.label==='Inspectable example');
+  check(modelControl.length===1&&modelControl[0].role==='img','Focusable inspection surfaces must be discoverable exactly once');
+  operateUi({action:'key',key:'ArrowRight',target:modelControl[0].id},context);
+  operateUi({action:'key',key:'Home',target:modelControl[0].id},context);
+  check(inspectedKeys.join(',')==='ArrowRight,Home'&&document.activeElement===example,'The shared key path must reach orbit and fit controls');
+  example.remove();
+  list=controls();
   const canvas=document.createElement('div'); canvas.style.cssText='position:fixed;left:0;top:250px;width:200px;height:100px'; document.body.append(canvas);
   const pointer=[]; for(const type of ['pointerdown','pointermove','pointerup']) canvas.addEventListener(type,e=>pointer.push([type,e.buttons,e.clientX]));
   await drivePointer(canvas,'drag',[10,260],false,[90,270]);
@@ -55,6 +66,41 @@ try {
   check(list.every(c=>c.surface==='test-surface'),'Controls lost their actual surface grouping');
   check(!list.some(c=>c.label==='Hidden'),'Hidden control advertised');
   check(!inspectUi(context).unlabeled_controls.length,'Labeled controls reported missing labels');
+  const disclosure=document.createElement('details');
+  disclosure.innerHTML='<summary>Load from a file path</summary><label>Script path<input></label><details><summary>Error details</summary><button>Copy error</button></details>';
+  document.querySelector('main').append(disclosure);
+  list=controls();
+  const closedDisclosure=list.find(c=>c.label==='Load from a file path');
+  check(closedDisclosure?.role==='button'&&closedDisclosure.expanded===false,'Native summary must be an inspectable collapsed button');
+  check(!list.some(c=>c.label==='Script path'||c.label==='Error details'||c.label==='Copy error'),'Closed disclosure descendants must not be advertised');
+  operateUi({action:'click',target:closedDisclosure.id},context);
+  list=controls();
+  check(disclosure.open&&list.find(c=>c.label==='Load from a file path').expanded===true,'Summary click must use the native details toggle');
+  const pathControl=list.find(c=>c.label==='Script path');
+  operateUi({action:'set_value',target:pathControl.id,value:'example.nbcad.jsonc'},context);
+  check(disclosure.querySelector('input').value==='example.nbcad.jsonc','Opened disclosure fields must follow the shared edit path');
+  check(!list.some(c=>c.label==='Copy error'),'Nested closed disclosure must remain hidden');
+  operateUi({action:'click',target:list.find(c=>c.label==='Error details').id},context);
+  list=controls();
+  check(list.some(c=>c.label==='Copy error'),'Nested summary click must reveal its actual controls');
+  const nestedControl=list.find(c=>c.label==='Copy error');
+  operateUi({action:'click',target:list.find(c=>c.label==='Load from a file path').id},context);
+  rejects(()=>operateUi({action:'click',target:nestedControl.id},context),/stale or unavailable/);
+  list=controls();
+  check(!list.some(c=>c.label==='Script path'||c.label==='Error details'||c.label==='Copy error'),'Closing a parent must hide all descendants even when a nested details remains open');
+  operateUi({action:'key',key:'Enter',target:list.find(c=>c.label==='Load from a file path').id},context);
+  check(disclosure.open,'Enter on a summary must perform its native activation');
+  disclosure.remove();
+  const tabs=document.createElement('div');
+  tabs.innerHTML='<button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">Source</button>';
+  document.querySelector('main').append(tabs);
+  tabs.lastElementChild.onclick=()=>{tabs.firstElementChild.setAttribute('aria-selected','false');tabs.lastElementChild.setAttribute('aria-selected','true');};
+  list=controls();
+  check(list.find(c=>c.label==='Overview').selected===true&&list.find(c=>c.label==='Source').selected===false,'Tab selection must be available as a boolean');
+  operateUi({action:'click',target:list.find(c=>c.label==='Source').id},context);
+  list=controls();
+  check(list.find(c=>c.label==='Source').selected===true&&list.find(c=>c.label==='Overview').selected===false,'Inspected tab state must follow the actual click handler');
+  tabs.remove();
   list=controls();
   rejects(()=>operateUi({action:'click',target:list.find(c=>c.label==='Disabled').id},context),/disabled/);
   const input=list.find(c=>c.label==='Name');
@@ -73,7 +119,23 @@ try {
   const run=list.find(c=>c.label==='Run');
   document.querySelector('button').textContent='Different action';
   rejects(()=>operateUi({action:'click',target:run.id},context),/Control changed/);
-  const modal=document.createElement('div'); modal.setAttribute('aria-modal','true'); modal.innerHTML='<button>Accept</button>'; document.body.append(modal);
+  const modal=document.createElement('div'); modal.setAttribute('aria-modal','true'); modal.setAttribute('role','dialog');
+  modal.innerHTML='<h2>File operation failed</h2><p>The document changed while preparing export. Start the export again.</p><p hidden>Hidden details</p><p aria-hidden="true">Excluded details</p><input type="password" value="secret"><span contenteditable="true">Editable value</span><details><summary>Details</summary>Closed details</details><button>Accept</button>'; document.body.append(modal);
+  const dialogSurface=inspectUi(context).surfaces.find(surface=>surface.name==='dialogs/dialog');
+  check(dialogSurface?.text.includes('File operation failed')&&dialogSurface.text.includes('The document changed while preparing export. Start the export again.'),'MCP must read the actual visible dialog title and error');
+  check(!/Hidden details|Excluded details|secret|Editable value|Closed details/.test(dialogSurface.text),'Dialog context must omit hidden, closed and field content');
+  check(dialogSurface.controls.some(control=>control.label==='Accept'),'Dialog text must retain the existing controls and grouping');
+  const notice=document.createElement('div');notice.setAttribute('role','alertdialog');notice.dataset.testid='notice';notice.textContent='Working on the file';document.body.append(notice);
+  check(inspectUi(context).surfaces.some(surface=>surface.name==='dialogs/notice'&&surface.text==='Working on the file'&&surface.controls.length===0),'A visible message without controls must remain inspectable');
+  notice.innerHTML='<p>Working on the file</p><button>Dismiss notice</button>';
+  const alertSurface=inspectUi(context).surfaces.find(surface=>surface.name==='dialogs/notice');
+  check(alertSurface.text.includes('Working on the file')&&alertSurface.controls.some(control=>control.label==='Dismiss notice'),'Alert dialog controls and text must share their existing surface');
+  notice.textContent='x'.repeat(5000);
+  const boundedNotice=inspectUi(context).surfaces.find(surface=>surface.name==='dialogs/notice');
+  check(boundedNotice.text.length===4096&&boundedNotice.text_truncated===true,'Long dialog context must be explicitly bounded');
+  notice.hidden=true;
+  check(!inspectUi(context).surfaces.some(surface=>surface.name==='dialogs/notice'),'Hidden dialogs must not be advertised');
+  notice.remove();
   list=controls();
   rejects(()=>operateUi({action:'click',target:list.find(c=>c.label==='Different action').id},context),/modal/);
   let accepted=false; modal.querySelector('button').onclick=()=>{accepted=true;};
@@ -106,8 +168,8 @@ try {
   feedback.innerHTML='<button>Line</button>';document.body.append(feedback);
   check(inspectUi(context).surfaces.some(s=>s.name==='sketch/draw'),'Controls must use the product group');
   setPlaybackPace(0);await presentOperation('sketch_add_line');
-  check(document.querySelector('[data-mcp-presentation]'),'Fast execution removed feedback before it could render');
-  check(feedback.getAnimations().length>0,'The actual command group must animate without blocking execution');
+  check(presentation.snapshot().operation==='add line','Operation feedback must remain readable until the next operation');
+  check(!document.querySelector('[data-mcp-presentation]')&&feedback.getAnimations().length===0,'Feedback must not create flashing overlays or per-operation animations');
   feedback.remove();
   for(const tab of [config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB]){
    const walk=(entries)=>{for(const entry of entries){if(entry.type==='separator')continue;
@@ -116,7 +178,7 @@ try {
    }};
    for(const panel of tab.panels){walk(panel.buttons);walk(panel.menu??[]);}
   }
-  return {commands,actions:[...actions],checks:['grouping','hidden','disabled','field-events','unavailable-option','stale-snapshot','document-change','recycled-control','modal','serial-order','failure-recovery','product-command-coverage']};
+  return {commands,actions:[...actions],checks:['grouping','hidden','native-disclosures','nested-disclosure-visibility','summary-activation','tab-selection','disabled','field-events','unavailable-option','stale-snapshot','document-change','recycled-control','modal','serial-order','failure-recovery','product-command-coverage']};
  });
  assert(result.commands>0);
  for(const action of result.actions) assert(dispatched.has(action), `Enabled ribbon action has no dispatcher case: ${action}`);
@@ -129,6 +191,68 @@ try {
  });
  console.log('PASS production application exit: '+JSON.stringify(exit));
  await exitPage.close();
+ console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
+ const scriptPage=await browser.newPage();
+ await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const scripts=await scriptPage.evaluate(async()=>{
+  const {checkScriptSourceOwnership}=await import('/src/scripts/workspace.browser.test.ts');
+  let timer;
+  try{return await Promise.race([checkScriptSourceOwnership(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('Script workspace contract timed out')),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production script source lifecycle: '+JSON.stringify(scripts));
+ const nativePreview=await scriptPage.evaluate(async()=>{
+  const {checkNativeScriptPreview}=await import('/src/scripts/preview.browser.test.ts');
+  return checkNativeScriptPreview();
+ });
+ console.log('PASS production native script preview: '+JSON.stringify(nativePreview));
+ await scriptPage.close();
+ const navigationPage=await browser.newPage();
+ try {
+  await navigationPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  await navigationPage.evaluate(async()=>{
+   const {mountNativePreviewNavigation}=await import('/src/scripts/preview.browser.test.ts');
+   window.unmountPreviewNavigation=mountNativePreviewNavigation();
+  });
+  await navigationPage.getByRole('button',{name:'Fillet',exact:true}).focus();
+  const card=navigationPage.getByRole('dialog',{name:'Fillet example'});
+  await card.waitFor();
+  await card.getByText('2/2',{exact:true}).waitFor();
+  const model=card.getByRole('img');
+  await model.focus();
+  await navigationPage.keyboard.press('Home');
+  await card.getByRole('button',{name:'Previous preview step'}).click();
+  await card.getByText('1/2',{exact:true}).waitFor();
+  await navigationPage.mouse.move(800,500);
+  await navigationPage.waitForTimeout(200);
+  assert.equal(await card.count(),1,'Reaching the first frame must not blur a disabled Previous button and dismiss its parent');
+  assert.equal(await model.evaluate(element=>document.activeElement===element),true,'Boundary navigation transfers focus into model inspection');
+  await card.getByRole('button',{name:'Next preview step'}).focus();
+  await navigationPage.keyboard.press('Enter');
+  await card.getByText('2/2',{exact:true}).waitFor();
+  await navigationPage.waitForTimeout(200);
+  assert.equal(await card.count(),1,'Keyboard navigation to the last frame must preserve the parent card');
+  assert.equal(await model.evaluate(element=>document.activeElement===element),true);
+  await navigationPage.evaluate(async()=>{
+   const {inspectUi,operateUi}=await import('/src/uiControl.ts');
+   const previous=inspectUi().surfaces.flatMap(surface=>surface.controls).find(control=>control.label==='Previous preview step');
+   if (!previous) throw new Error('MCP must expose the ordinary preview navigation control');
+   operateUi({action:'click',target:previous.id});
+  });
+  await card.getByText('1/2',{exact:true}).waitFor();
+  await navigationPage.waitForTimeout(200);
+  assert.equal(await model.evaluate(element=>document.activeElement===element),true,'MCP navigation shares the focus-safe boundary action');
+  const replay=card.getByRole('button',{name:'Replay feature preview'});
+  await replay.click();
+  await card.getByText('1/2',{exact:true}).waitFor();
+  await card.getByText('2/2',{exact:true}).waitFor();
+  assert.equal(await replay.evaluate(element=>document.activeElement===element),true,'Passive autoplay must preserve the chosen focus');
+  console.log('PASS production preview boundary navigation: pointer Previous, keyboard Next, MCP click, parent dismissal timers, passive focus');
+ } finally {
+  await navigationPage.evaluate(()=>window.unmountPreviewNavigation?.());
+  await navigationPage.close();
+ }
 } finally {await browser?.close();await server.close();}
 
 

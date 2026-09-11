@@ -79,10 +79,20 @@ without physical validation.
 
 ## Smaller capability demonstrations
 
-Existing entry points are cargo xtask test-mcp bench --workshop all, garden-bench,
-drawing, live, controls and contracts. PR #89 also provides mounting-plate,
-revolved-spacer and angle-bracket scenarios plus an assembly. Keep these useful
-small examples alongside the flagships. Inventory each actual capability and add
-a short replayable demonstration where missing, including failure recovery and
-parameter editing when relevant. Comprehensive demonstrations are the target;
-there is no arbitrary all-tools percentage gate or duplicate CI matrix.
+The [native script format](../examples/scripts/README.md) is the authored
+construction format. The recipe-library layer above playback carries the short
+fillet lesson and complete bench sources, plus future small feature lessons. Run a source with
+`cargo xtask run-script FILE --server MCP`; the same Rust interpreter supports
+headless comparison and live presentation. The older `cargo xtask test-mcp`
+workshop, drawing, live, controls and contracts drivers remain focused test entry
+points, not a second recommended authoring format.
+
+Draft PR #89 preserves mounting-plate, revolved-spacer and angle-bracket fixtures
+plus analytic and assembly round-trip checks. Its STEP protocol and shared-client
+fixes already landed through #91; the remaining fixtures need integration with the
+native script path before the draft is ready. Keep those useful checks rather than
+introducing another JavaScript modeling runner. Inventory actual capabilities and
+add short replayable demonstrations where missing, including failure recovery and
+parameter editing. There is no arbitrary all-tools percentage gate or duplicate
+CI matrix. See [the script interface review](script-interface-review.md) for the
+current draft's remaining integration work.

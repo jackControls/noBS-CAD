@@ -8,6 +8,7 @@
 //! All modeling logic lives in the engine crates, never here.
 
 mod native_menu;
+mod scripts;
 pub mod native_viewport;
 mod session_bridge;
 mod six_dof_mouse;
@@ -536,7 +537,9 @@ engine_command!(engine_delete_entities, "delete_entities");
 engine_command!(engine_undo, "undo", no_payload);
 engine_command!(engine_redo, "redo", no_payload);
 engine_command!(engine_set_grid_snap, "set_grid_snap");
-engine_command!(engine_set_grid_step, "set_grid_step");
+// Viewport zoom updates transient snap spacing, not the parametric model. Use
+// the non-revision path so camera animation cannot invalidate a queued edit.
+engine_command!(engine_set_grid_step, "set_grid_step", read);
 
 #[tauri::command]
 fn engine_solid_extrude(
@@ -917,6 +920,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new())
         .manage(NativeQuitState::default())
+        .manage(scripts::NativeScriptState::default())
         .manage(native_menu::NativeEditMenuState::default())
         .manage(native_menu::NativeFileMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
@@ -968,6 +972,14 @@ pub fn run() {
             system_memory_status,
             native_unsaved_set,
             native_force_quit,
+            scripts::native_script_inspect,
+            scripts::native_script_run,
+            scripts::native_script_preview,
+            scripts::native_script_preview_render,
+            scripts::native_script_preview_open,
+            scripts::native_script_preview_close,
+            scripts::native_script_preview_release,
+            scripts::native_script_examples,
             get_document,
             native_viewport_set_layout,
             native_viewport_set_suspended,

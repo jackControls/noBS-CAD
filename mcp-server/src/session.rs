@@ -19,6 +19,114 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PresentationCommand {
+    Configure,
+    Note,
+    Pause,
+    Resume,
+    Step,
+    Stop,
+    Status,
+    Finish,
+    Dismiss,
+    Show,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PresentationMode {
+    Fast,
+    Present,
+}
+
+/// Typed presentation controls share the same endpoint as native playback.
+#[derive(serde::Deserialize)]
+struct PresentationRequest {
+    command: PresentationCommand,
+    mode: Option<PresentationMode>,
+    speed: Option<f64>,
+    duration_ms: Option<u64>,
+    text: Option<String>,
+    chapter: Option<String>,
+    step_index: Option<u64>,
+    step_count: Option<u64>,
+}
+
+fn validate_presentation(arguments: &Value) -> Result<(), String> {
+    let request: PresentationRequest = serde_json::from_value(arguments.clone())
+        .map_err(|error| format!("invalid presentation request: {error}"))?;
+    if request
+        .speed
+        .is_some_and(|speed| !speed.is_finite() || !(0.1..=16.0).contains(&speed))
+    {
+        return Err("presentation speed must be from 0.1 to 16".into());
+    }
+    if request
+        .duration_ms
+        .is_some_and(|duration| duration > 10_000)
+    {
+        return Err("presentation duration_ms must be an integer from 0 to 10000".into());
+    }
+    for (name, value, limit) in [
+        ("text", request.text.as_deref(), 4000),
+        ("chapter", request.chapter.as_deref(), 200),
+    ] {
+        if value.is_some_and(|text| {
+            text.chars().count() > limit
+                || text
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t')
+        }) {
+            return Err(format!(
+                "presentation {name} must contain at most {limit} printable characters"
+            ));
+        }
+    }
+    if matches!((request.step_index, request.step_count), (Some(index), Some(count)) if index > count)
+    {
+        return Err("presentation step_index must not exceed step_count".into());
+    }
+    // Reading both enums here ensures their spelling is validated even when
+    // the command does not need an additional setting.
+    let _ = (request.command, request.mode);
+    Ok(())
+}
+
+fn validate_view(arguments: &Value) -> Result<(), String> {
+    if let Some(duration) = arguments.get("duration_ms") {
+        if !duration.as_u64().is_some_and(|duration| duration <= 10_000) {
+            return Err("view duration_ms must be an integer from 0 to 10000".into());
+        }
+    }
+    if arguments
+        .get("target")
+        .is_some_and(|target| target != "active_sketch")
+    {
+        return Err(
+            "view target must be active_sketch; use body_id or component_id for a part".into(),
+        );
+    }
+    for field in ["body_id", "component_id"] {
+        if arguments
+            .get(field)
+            .is_some_and(|value| value.as_u64().is_none())
+        {
+            return Err(format!("view {field} must be an unsigned integer"));
+        }
+    }
+    if ["target", "body_id", "component_id"]
+        .iter()
+        .filter(|field| arguments.get(**field).is_some())
+        .count()
+        > 1
+    {
+        return Err("view accepts only one focal target".into());
+    }
+    Ok(())
+}
+
 /// Heartbeats older than this are marked `stale` in list metadata (no auto-delete).
 pub const HEARTBEAT_STALE_MS: u64 = 30_000;
 /// A desktop process disappears from `windows[]` after three missed 10 s UI
@@ -49,6 +157,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
         .and_then(Value::as_str)
         .unwrap_or("inspect");
     if action == "view" {
+        validate_view(arguments)?;
         return request_control(arguments, attached, false, None);
     }
     if !matches!(
@@ -62,8 +171,12 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             | "window"
             | "file"
             | "viewport"
+            | "presentation"
     ) {
         return Err("unknown UI action".into());
+    }
+    if action == "presentation" {
+        validate_presentation(arguments)?;
     }
     if matches!(
         action,
@@ -97,7 +210,7 @@ fn request_control(
     let view = arguments
         .get("view")
         .and_then(Value::as_str)
-        .unwrap_or(if ui { "current" } else { "" });
+        .unwrap_or("current");
     if !ui
         && !matches!(
             view,
@@ -118,11 +231,24 @@ fn request_control(
     );
     let request_name = format!("controls/{id}.request.json");
     let result_name = format!("controls/{id}.result.json");
-    let lifetime = if ui { 30_000 } else { 5_000 };
+    // Effective camera motion is capped at ten seconds by the shared
+    // presentation controller, including a slow playback speed.
+    let lifetime = if ui || arguments.get("duration_ms").is_some() {
+        30_000
+    } else {
+        5_000
+    };
     let mut request = json!({
         "id":id, "view":view, "fit":arguments.get("fit").and_then(Value::as_bool).unwrap_or(false),
         "expires_ms":now_ms()+lifetime,
     });
+    if !ui {
+        for field in ["duration_ms", "target", "body_id", "component_id"] {
+            if let Some(value) = arguments.get(field) {
+                request[field] = value.clone();
+            }
+        }
+    }
     if ui {
         request["ui"] = arguments.clone();
         request["ui"]["action"] = arguments.get("action").cloned().unwrap_or(json!("inspect"));
@@ -149,13 +275,13 @@ fn request_control(
     )
 }
 
-pub fn request_sketch_query(
+pub fn request_engine_query(
     session_id: &str,
     method: &str,
     payload: &str,
 ) -> Result<Value, String> {
-    if !nbcad_mcp_mutate::is_live_sketch_query(method) {
-        return Err("unsupported live sketch query".into());
+    if !nbcad_mcp_mutate::is_live_engine_query(method) {
+        return Err("unsupported live engine query".into());
     }
     let result = request_control(
         &json!({}),
@@ -164,12 +290,12 @@ pub fn request_sketch_query(
         Some(json!({"method":method,"payload":payload})),
     )?;
     if result["status"] != "applied" {
-        return Err(format!("live sketch query failed: {result}"));
+        return Err(format!("live engine query failed: {result}"));
     }
     result
         .get("value")
         .cloned()
-        .ok_or_else(|| "live sketch query omitted its result".into())
+        .ok_or_else(|| "live engine query omitted its result".into())
 }
 
 /// UUID v4 string form (8-4-4-4-12 hex with version nibble `4` and RFC variant).
@@ -390,6 +516,7 @@ pub fn is_session_closed(session_id: &str) -> bool {
 }
 
 /// Mark a session directory closed so it leaves the live `windows[]` set.
+#[cfg(test)]
 pub fn write_closed_tombstone(session_id: &str) -> Result<(), String> {
     let body = serde_json::to_string_pretty(&json!({
         "closed_ms": now_ms(),
@@ -400,6 +527,7 @@ pub fn write_closed_tombstone(session_id: &str) -> Result<(), String> {
 }
 
 /// Clear a close marker when the same session UUID is republished.
+#[cfg(test)]
 pub fn clear_closed_tombstone(session_id: &str) -> Result<(), String> {
     let path = session_path(session_id, CLOSED_TOMBSTONE)?;
     if path.exists() {
@@ -860,6 +988,7 @@ impl InboxOp {
         value
     }
 
+    #[cfg(test)]
     pub fn from_json(value: &Value) -> Result<Self, String> {
         let name = value
             .get("name")
@@ -882,6 +1011,7 @@ impl InboxOp {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ApplyResult {
     pub seq: u64,
@@ -946,6 +1076,7 @@ pub fn generation_conflict_error(
 }
 
 /// Structured error when a stamped inbox op targets a different session/window.
+#[cfg(test)]
 pub fn session_identity_mismatch_error(
     destination_session_id: &str,
     destination_window_id: Option<&str>,
@@ -972,6 +1103,7 @@ pub fn session_identity_mismatch_error(
 /// Return a structured identity-mismatch error when a stamped op does not
 /// match the destination session / window this apply is bound to.
 /// Unstamped ops (missing fields) keep current behavior.
+#[cfg(test)]
 pub fn inbox_op_identity_mismatch(
     destination_session_id: &str,
     destination_window_id: Option<&str>,
@@ -1100,6 +1232,7 @@ fn exclusive_create_file(path: &Path, content: &str) -> std::io::Result<()> {
     result
 }
 
+#[cfg(test)]
 pub fn read_inbox_op(session_id: &str, seq: u64) -> Result<InboxOp, String> {
     let body = read_session_file(session_id, &format!("inbox/{seq}.json"))?;
     let parsed: Value = serde_json::from_str(&body)
@@ -1107,6 +1240,7 @@ pub fn read_inbox_op(session_id: &str, seq: u64) -> Result<InboxOp, String> {
     InboxOp::from_json(&parsed)
 }
 
+#[cfg(test)]
 fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     let src = session_path(session_id, &format!("inbox/{seq}.json"))?;
     let dest = session_path(session_id, &format!("inbox/applied/{seq}.json"))?;
@@ -1124,6 +1258,7 @@ fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), String> {
     let src = session_path(session_id, &format!("inbox/{seq}.json"))?;
     if let Some(parent) = session_path(session_id, "inbox/failed")?.parent() {
@@ -1153,12 +1288,12 @@ fn dead_letter_inbox_op(session_id: &str, seq: u64, error: &str) -> Result<(), S
 }
 
 /// Read the lowest pending inbox op, check `base_generation` against heartbeat,
-/// call `host_apply`, then archive the op. Does **not** write model.json —
-/// the caller (UI publisher or test) publishes the new snapshot.
+/// call the test's `host_apply`, then archive the op. Does **not** write model.json;
+/// the test publishes its new snapshot separately.
 ///
-/// `host_apply` must target the **live** engine (desktop) or a **separate**
-/// SketchManager loaded from the published model (tests). Never the attached
-/// MCP in-memory copy.
+/// `host_apply` targets a separate SketchManager loaded from the published model,
+/// never the attached MCP copy. Production inbox apply belongs to the desktop.
+#[cfg(test)]
 pub fn apply_inbox_op<F>(session_id: &str, host_apply: F) -> Result<ApplyResult, String>
 where
     F: FnOnce(&str, Value) -> Result<Value, String>,
@@ -1657,6 +1792,7 @@ pub fn session_status_json(
 /// Test/helper: replace model.json and bump heartbeat generation.
 /// Used after a successful host apply on a **separate** SketchManager.
 /// Not an MCP writeback path — the live UI publisher is the production writer.
+#[cfg(test)]
 pub fn publish_applied_snapshot(session_id: &str, model_json: &str) -> Result<u64, String> {
     let next = read_heartbeat_generation(session_id)
         .unwrap_or(0)
@@ -1738,6 +1874,59 @@ mod tests {
     }
 
     #[test]
+    fn presentation_controls_are_typed_and_bounded_before_live_io() {
+        for command in [
+            "configure",
+            "note",
+            "pause",
+            "resume",
+            "dismiss",
+            "show",
+            "step",
+            "stop",
+            "status",
+            "finish",
+        ] {
+            validate_presentation(&json!({"command":command,"mode":"present","speed":2.5,"duration_ms":800,"text":"A repeatable cut\nfrom the datum","chapter":"Pickets","step_index":2,"step_count":20})).unwrap();
+        }
+        for arguments in [
+            json!({"command":"eval"}),
+            json!({"command":"status","mode":"random"}),
+            json!({"command":"configure","speed":0}),
+            json!({"command":"configure","speed":16.1}),
+            json!({"command":"note","duration_ms":-1}),
+            json!({"command":"note","duration_ms":10001}),
+            json!({"command":"note","duration_ms":0.5}),
+            json!({"command":"note","text":true}),
+            json!({"command":"note","text":"control\u{0001}"}),
+            json!({"command":"note","chapter":"x".repeat(201)}),
+            json!({"command":"note","step_index":3,"step_count":2}),
+        ] {
+            assert!(validate_presentation(&arguments).is_err(), "{arguments}");
+        }
+    }
+
+    #[test]
+    fn view_focus_rejects_ambiguous_targets_and_invalid_duration() {
+        for arguments in [
+            json!({"target":"active_sketch"}),
+            json!({"body_id":5,"duration_ms":0}),
+            json!({"component_id":3,"duration_ms":10000}),
+        ] {
+            validate_view(&arguments).unwrap();
+        }
+        for arguments in [
+            json!({"target":"body"}),
+            json!({"body_id":-1}),
+            json!({"component_id":"3"}),
+            json!({"body_id":1,"component_id":3}),
+            json!({"duration_ms":10001}),
+        ] {
+            assert!(validate_view(&arguments).is_err(), "{arguments}");
+        }
+    }
+
+    #[test]
     fn view_request_needs_live_ui_ack_but_no_model() {
         let _guard = ENV_LOCK.lock().unwrap();
         let id = test_session_uuid();
@@ -1768,6 +1957,8 @@ mod tests {
                                 .unwrap();
                         assert_eq!(body["view"], "top");
                         assert_eq!(body["fit"], true);
+                        assert_eq!(body["body_id"], 7);
+                        assert_eq!(body["duration_ms"], 450);
                         let result =
                             ui_dir.join(format!("{}.result.json", body["id"].as_str().unwrap()));
                         let temporary = result.with_extension("tmp");
@@ -1785,7 +1976,7 @@ mod tests {
             panic!("UI did not receive view request");
         });
         let result = request_ui(
-            &json!({"action":"view","session_id":id,"view":"top","fit":true}),
+            &json!({"action":"view","session_id":id,"view":"top","fit":true,"body_id":7,"duration_ms":450}),
             None,
         )
         .unwrap();

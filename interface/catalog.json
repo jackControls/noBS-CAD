@@ -1976,6 +1976,16 @@
   ],
   "groups": [
     {
+      "id": "document/scripts",
+      "labelKey": "document/scripts",
+      "operations": ["cad_script"]
+    },
+    {
+      "id": "document/presentation",
+      "labelKey": "document/presentation",
+      "operations": []
+    },
+    {
       "id": "assembly/inspect",
       "labelKey": "ribbon.solid.interference",
       "operations": ["assembly_interference_check"]
@@ -1987,8 +1997,7 @@
         "cad_set_document_name",
         "cad_project_model",
         "cad_load_project_model",
-        "cad_new_project",
-        "cad_script"
+        "cad_new_project"
       ]
     },
     {

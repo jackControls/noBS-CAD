@@ -1,10 +1,17 @@
 use anyhow::{bail, Context, Result};
 use std::{path::Path, process::Command};
 
-/// One supported test/demo entry point. The browser and stdio drivers remain
-/// JavaScript because they exercise the product's browser and MCP boundaries.
+/// Browser boundary fixtures retain their existing drivers. Native command
+/// examples use the shared Rust interpreter and commented script files.
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let suite = args.next().unwrap_or_else(|| "contracts".into());
+    if suite == "playback" {
+        return crate::playback_test::run(&args.collect::<Vec<_>>()).map_err(anyhow::Error::msg);
+    }
+    if suite == "scripts-workspace" {
+        return crate::playback_test::run_workspace(&args.collect::<Vec<_>>())
+            .map_err(anyhow::Error::msg);
+    }
     let script = match suite.as_str() {
         "contracts" => "contracts.mjs",
         "live" => "live.mjs",
@@ -13,7 +20,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
         "bench" => "bench.mjs",
         "garden-bench" => "garden-bench.mjs",
         "drawing" => "drawing.mjs",
-        _ => bail!("Unknown MCP suite '{suite}'; use contracts, live, controls, exit, bench, garden-bench, or drawing"),
+        _ => bail!("Unknown MCP suite '{suite}'; use contracts, live, controls, playback, scripts-workspace, exit, bench, garden-bench, or drawing"),
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let status = Command::new("node")
