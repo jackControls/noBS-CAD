@@ -18,6 +18,7 @@ import {currentHistoryProjectKey,recordDrawingHistory} from './engine/applicatio
 import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
+import { applicationExitBarrier } from './files/applicationExit';
 import { SerialPlayback, presentOperation, wakePlayback } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
@@ -170,12 +171,13 @@ async function publishNow(): Promise<boolean> {
 }
 
 /** Apply one MCP inbox op on the live engine, then let the publisher run. */
-async function applyInboxNow(): Promise<void> {
+export async function applyInboxNow(): Promise<void> {
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri' || inboxApplying) return;
   // inboxApplying also suppresses a second engine_revision bump if any store
   // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
+  const releaseExit = applicationExitBarrier.hold();
   try {
     const drawingBefore=useAppStore.getState().drawingDocument;
     const drawingProject=currentHistoryProjectKey();
@@ -186,6 +188,9 @@ async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
+    // The native mutation is committed even if its subsequent UI hydration
+    // fails. Closing that window must still offer to save or discard it.
+    useAppStore.setState({ dirty: true });
     if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
       if (result.result?.scene && result.result.document && !result.name?.startsWith('sketch_')) {
@@ -208,6 +213,7 @@ async function applyInboxNow(): Promise<void> {
     console.debug('[sessionBridge] inbox apply failed', error);
   } finally {
     inboxApplying = false;
+    releaseExit();
   }
 }
 
