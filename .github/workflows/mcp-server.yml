@@ -207,7 +207,9 @@ jobs:
   mcp-tests-linux:
     name: MCP tests (Ubuntu)
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    # Include cold compilation, full vise/turbine acceptance and the workshop.
+    # The turbine gate alone took 46 minutes in the recorded Windows dev build.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
