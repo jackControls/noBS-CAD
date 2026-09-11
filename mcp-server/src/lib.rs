@@ -15,6 +15,7 @@ mod desktop;
 mod disclosure;
 mod drawing_tools;
 mod interface;
+mod knowledge;
 mod session;
 
 use disclosure::{
@@ -4018,18 +4019,53 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                 id.unwrap_or(Value::Null),
                 json!({
                     "protocolVersion": protocol,
-                    "capabilities": { "tools": { "listChanged": true } },
+                    "capabilities": {
+                        "tools": { "listChanged": true },
+                        "resources": { "subscribe": false, "listChanged": false }
+                    },
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable."
+                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md."
                 }),
             )]
         }
         "notifications/initialized" | "notifications/cancelled" => Vec::new(),
         "ping" => id.map(|id| response(id, json!({}))).into_iter().collect(),
+        "resources/list" => {
+            let id = id.unwrap_or(Value::Null);
+            if message
+                .get("params")
+                .is_some_and(|params| !params.is_null() && !params.is_object())
+                || message
+                    .pointer("/params/cursor")
+                    .is_some_and(|cursor| !cursor.is_null())
+            {
+                vec![error_response(
+                    id,
+                    -32602,
+                    "resources/list has no pagination cursor",
+                )]
+            } else {
+                vec![response(id, knowledge::list())]
+            }
+        }
+        "resources/read" => {
+            let id = id.unwrap_or(Value::Null);
+            match message.pointer("/params/uri").and_then(Value::as_str) {
+                None => vec![error_response(
+                    id,
+                    -32602,
+                    "resources/read requires params.uri",
+                )],
+                Some(uri) => match knowledge::read(uri) {
+                    Some(contents) => vec![response(id, contents)],
+                    None => vec![error_response(id, -32002, "knowledge resource not found")],
+                },
+            }
+        }
         "tools/list" => vec![response(
             id.unwrap_or(Value::Null),
             tool_list_result(&mut server.disclosure),
@@ -5152,6 +5188,121 @@ mod tests {
             initialized["result"]["capabilities"]["tools"]["listChanged"],
             true
         );
+    }
+
+    #[test]
+    fn knowledge_resources_are_advertised_readable_and_leave_the_document_unchanged() {
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_circle",
+                json!({
+                    "mode": "center_diameter", "p1": {"x": 0.0, "y": 0.0},
+                    "p2": {"x": 10.0, "y": 0.0}, "ctrl_held": true
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let before = server.manager.export_project_model().unwrap();
+        let initialized = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize"
+            }),
+        );
+        assert_eq!(
+            initialized[0]["result"]["capabilities"]["resources"],
+            json!({"subscribe": false, "listChanged": false})
+        );
+        let listed = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "resources/list"
+            }),
+        );
+        let resources = listed[0]["result"]["resources"].as_array().unwrap();
+        assert!(resources
+            .iter()
+            .any(|resource| resource["uri"] == "nbcad://knowledge/index.md"));
+        for name in ["gears", "additive-workholding"] {
+            let uri = format!("nbcad://knowledge/concepts/{name}.md");
+            let resource = resources
+                .iter()
+                .find(|resource| resource["uri"] == uri)
+                .unwrap();
+            assert!(!resource["description"].as_str().unwrap().is_empty());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for resource in resources {
+            let uri = resource["uri"].as_str().unwrap();
+            assert!(seen.insert(uri), "duplicate resource: {uri}");
+            assert!(!resource["title"].as_str().unwrap().is_empty());
+            assert_eq!(resource["mimeType"], "text/markdown");
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": uri}
+                }),
+            );
+            assert_eq!(reply[0]["id"], 3);
+            let contents = reply[0]["result"]["contents"].as_array().unwrap();
+            assert_eq!(contents.len(), 1);
+            assert_eq!(contents[0]["uri"], uri);
+            assert_eq!(contents[0]["mimeType"], "text/markdown");
+            let text = contents[0]["text"].as_str().unwrap();
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../knowledge")
+                .join(resource["name"].as_str().unwrap());
+            assert_eq!(text, std::fs::read_to_string(path).unwrap());
+            assert_eq!(resource["size"].as_u64(), Some(text.len() as u64));
+        }
+        assert_eq!(server.manager.export_project_model().unwrap(), before);
+    }
+
+    #[test]
+    fn knowledge_resources_reject_invalid_params_and_unlisted_uris() {
+        let mut server = CadServer::new().unwrap();
+        for uri in [
+            "nbcad://knowledge/missing.md",
+            "nbcad://knowledge/../README.md",
+            "nbcad://knowledge/concepts/%2e%2e/index.md",
+            "file:///etc/passwd",
+            "https://example.com/knowledge/index.md",
+            "nbcad://knowledge/INDEX.md",
+        ] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": uri}
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32002, "{uri}");
+            assert!(reply[0].get("result").is_none());
+        }
+        for params in [json!(null), json!({}), json!({"uri": 12}), json!([])] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": params
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32602);
+        }
+        for params in [json!({"cursor": "unknown"}), json!(12)] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 6, "method": "resources/list", "params": params
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32602);
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'mcp-server/**'
+      - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
@@ -25,6 +26,7 @@ on:
   pull_request:
     paths:
       - 'mcp-server/**'
+      - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
