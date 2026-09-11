@@ -55,6 +55,12 @@ Illustrative names:
 Put help tools in a dynamic-disclosure soft pack when they exist. Until then,
 agents should glob `knowledge/machine-design/**/*.md`.
 
+## Distill vs link
+
+See [machine-design-distill-vs-link.md](machine-design-distill-vs-link.md) for the
+locked policy: distill PD / CC BY / Apache / US-gov teaching materials into
+thin OKF pages; link NC courses and proprietary standards without copying.
+
 ## Milestones
 
 1. **A (this branch)** — OKF scaffold, license table, five seed concepts.

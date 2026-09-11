@@ -13,7 +13,9 @@ Bundled prose in this tree is project content under the repository license
 public-domain or clearly reusable CC BY (and similar) teaching materials.
 **Link-only** means cite and send the reader out; do not copy body text.
 
-Never paste ASME Y14.5, ISO 1101, or other standards body text. Prefer
+Never paste ASME Y14.5, ISO 1101, or other standards body text.
+
+Human-readable policy: [distill vs link](../../docs/machine-design-distill-vs-link.md). Prefer
 **CC BY / PD / US gov** over NC or SA when building a product help corpus.
 ShareAlike derivatives need an explicit license plan before ingest.
 
