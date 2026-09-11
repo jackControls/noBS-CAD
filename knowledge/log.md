@@ -4,6 +4,9 @@
 
 - **Update**: Scaffolded `knowledge/machine-design/` — taxonomy, SOURCES,
   and five seed concepts (GD&T, fits, fasteners, materials, DFM).
+- **Update**: Expanded SOURCES with commercial-friendly CC BY / PD spine
+  (NWTC DFM, PALNI DFMA, NIST PMI, Materials Project / OQMD / COD) and
+  explicit NC / proprietary link-only rows.
 - **Docs**: Added `docs/machine-design-kb.md` for human/agent browse paths,
   recipe cross-links, and proposed MCP help tools.
 
