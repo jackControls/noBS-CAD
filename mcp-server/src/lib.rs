@@ -211,6 +211,9 @@ struct CadServer {
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
+    /// Interpreter-owned progress transported with fast replay's existing inbox
+    /// operations, never counted independently by the host or UI.
+    script_progress: Option<nbcad_script::RunProgress>,
     live_snapshot_dirty: bool,
 }
 
@@ -226,6 +229,7 @@ impl CadServer {
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
             script_running: false,
+            script_progress: None,
             live_snapshot_dirty: false,
         })
     }
@@ -625,9 +629,10 @@ impl CadServer {
             }
         }
         self.script_running = true;
-        let mut result = nbcad_script::run(
+        let mut result = nbcad_script::run_with_progress(
             &script,
-            |name, arguments| {
+            |name, arguments, progress| {
+                self.script_progress = (mode == "fast").then_some(progress);
                 let is_note =
                     arguments["action"] == "presentation" && arguments["command"] == "note";
                 let result = self.call_tool(name, arguments)?;
@@ -646,6 +651,7 @@ impl CadServer {
             options,
         );
         self.script_running = false;
+        self.script_progress = None;
         if self.live_snapshot_dirty {
             // Preserve the original step failure if rebuilding the read cache
             // also fails. The live document remains the authoritative result.
@@ -869,7 +875,8 @@ impl CadServer {
         let seq = session::write_inbox_op(
             &session_id,
             &session::InboxOp::unstamped(name.to_string(), op_arguments, base_generation)
-                .with_identity(&identity),
+                .with_identity(&identity)
+                .with_script_progress(self.script_progress),
         )?;
         Ok(json!({
             "submitted": true,
@@ -9390,7 +9397,12 @@ mod tests {
     #[test]
     fn live_script_completion_reports_uncaptained_steps_only_after_checks_pass() {
         let _guard = session::ENV_LOCK.lock().unwrap();
-        for (mode, checks_pass) in [("present", true), ("fast", true), ("present", false)] {
+        for (mode, checks_pass) in [
+            ("present", true),
+            ("fast", true),
+            ("present", false),
+            ("fast", false),
+        ] {
             let target = session::test_session_uuid();
             let dir = std::env::temp_dir().join(format!("nbcad-script-completion-{target}"));
             std::env::set_var("NBCAD_SESSION_DIR", &dir);
@@ -9401,19 +9413,50 @@ mod tests {
                 &target,
                 "heartbeat.json",
                 &json!({
-                    "updated_ms":session::now_ms(),"generation":1,"session_id":target,
+                    "updated_ms":session::now_ms(),"generation":1,"session_id":target,"interface_version":1,
                 })
                 .to_string(),
             )
             .unwrap();
             let peer = target.clone();
-            // Exercise the production runner and real control-file transport;
-            // the desktop peer only acknowledges commands and captures them.
+            // Exercise the production runner and real inbox/control transport;
+            // the desktop peer applies mutates and acknowledges presentation.
             let host = std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + Duration::from_secs(10);
                 let mut seen = std::collections::HashSet::new();
                 let mut controls = Vec::new();
+                let mut progress = Vec::new();
+                let mut owner = CadServer::new().unwrap();
                 loop {
+                    if let Some(seq) = session::pending_inbox_seqs(&peer).unwrap().first().copied()
+                    {
+                        let applied = session::apply_inbox_op(&peer, |name, args| {
+                            let result = owner.call_tool(name, args)?;
+                            session::write_session(
+                                &peer,
+                                &format!("inbox/results/{seq}.json"),
+                                &result.to_string(),
+                            )?;
+                            let model = owner
+                                .manager
+                                .export_project_model()
+                                .map_err(|error| error.to_string())?;
+                            session::publish_applied_snapshot(&peer, &model)?;
+                            let mut heartbeat: Value = serde_json::from_str(
+                                &session::read_session_file(&peer, "heartbeat.json")?,
+                            )
+                            .unwrap();
+                            heartbeat["interface_version"] = json!(1);
+                            session::write_session(
+                                &peer,
+                                "heartbeat.json",
+                                &heartbeat.to_string(),
+                            )?;
+                            Ok(result)
+                        })
+                        .unwrap();
+                        progress.push(applied.op.script_progress);
+                    }
                     if let Ok(entries) =
                         std::fs::read_dir(session::session_dir().join(&peer).join("controls"))
                     {
@@ -9451,7 +9494,11 @@ mod tests {
                             )
                             .unwrap();
                             if done {
-                                return controls;
+                                return (
+                                    controls,
+                                    progress,
+                                    owner.manager.export_project_model().unwrap(),
+                                );
                             }
                         }
                     }
@@ -9465,8 +9512,11 @@ mod tests {
             let source = json!({"version":1,"name":"Sparse captions","steps":[
                 {"note":"The only caption","chapter":"Beginning"},
                 {"let":{"dimension":12}},
+                {"call":{"group":"document/files","operation":"cad_set_document_name","arguments":{"name":"Progress model"}}},
                 {"assert":{"$ref":"dimension"},"equals":12},
-                {"view":"isometric","fit":true}
+                {"view":"isometric","fit":true},
+                {"call":{"group":interface::group_for("drawing_create_sheet").unwrap(),"operation":"drawing_create_sheet",
+                    "arguments":{"name":"Drawing phase","format":"a4","orientation":"landscape"}}}
             ],"checks":[{"assert":{"$ref":"dimension"},"equals":if checks_pass {12} else {13}}]})
             .to_string();
             let result = server.call_tool(
@@ -9475,19 +9525,43 @@ mod tests {
                     "action":"script","source":source,"session_id":target,"mode":mode,
                 }),
             );
-            let controls = host.join().unwrap();
+            let (controls, progress, live_model) = host.join().unwrap();
+            assert_eq!(
+                progress,
+                if mode == "fast" {
+                    [2, 5]
+                        .map(|steps_completed| {
+                            Some(nbcad_script::RunProgress {
+                                steps_completed,
+                                step_count: 6,
+                            })
+                        })
+                        .to_vec()
+                } else {
+                    vec![None, None]
+                }
+            );
+            assert!(
+                server.script_progress.is_none(),
+                "Progress context must end with the runner"
+            );
+            assert_eq!(
+                server.manager.export_project_model().unwrap(),
+                live_model,
+                "Progress transport must preserve the actual completed model and drawing"
+            );
             assert_eq!(controls[0]["ui"]["command"], "configure");
             assert_eq!(controls[0]["ui"]["chapter"], "");
             assert_eq!(controls[0]["ui"]["step_index"], 0);
-            assert_eq!(controls[0]["ui"]["step_count"], 4);
+            assert_eq!(controls[0]["ui"]["step_count"], 6);
             let final_ui = &controls.last().unwrap()["ui"];
             if checks_pass {
                 let report = result.unwrap();
-                assert_eq!(report["steps_completed"], 4);
+                assert_eq!(report["steps_completed"], 6);
                 assert_eq!(report["checks_completed"], 1);
                 assert_eq!(final_ui["command"], "finish");
                 assert_eq!(final_ui["step_index"], report["steps_completed"]);
-                assert_eq!(final_ui["step_count"], 4);
+                assert_eq!(final_ui["step_count"], 6);
             } else {
                 assert!(result.unwrap_err().contains("Assertion failed"));
                 assert_eq!(final_ui["command"], "stop");

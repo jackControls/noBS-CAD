@@ -1459,7 +1459,7 @@ fn apply_or_reject_one_inbox_op(
                 &result.to_string(),
             )?;
             archive_inbox_op(&session_id, seq)?;
-            Ok(json!({
+            let mut response = json!({
                 "applied": true,
                 "seq": seq,
                 "name": name,
@@ -1469,7 +1469,13 @@ fn apply_or_reject_one_inbox_op(
                 "writeback": false,
                 "pending": pending_inbox_seqs(&session_id).len(),
                 "engine_revision": project.engine_revision,
-            }))
+            });
+            // Carry the interpreter's completed count through the same owned
+            // apply response. Neither progress nor UI controls alter model data.
+            if let Some(progress) = parsed.get("script_progress") {
+                response["script_progress"] = progress.clone();
+            }
+            Ok(response)
         }
         Err(error) => {
             dead_letter_inbox_op(&session_id, seq, &error)?;
@@ -2789,6 +2795,85 @@ mod tests {
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fast_script_progress_follows_only_successful_owned_inbox_apply() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-inbox-progress-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("progress-tab")
+        }));
+        let reservation = state
+            .reserve_for_window_on_project("main", Some("progress-tab"))
+            .unwrap();
+        let session = reservation["session_id"].as_str().unwrap();
+        let generation = reservation["generation"].as_u64().unwrap();
+        state
+            .write_for_window(
+                "main",
+                payload_on_project(session, "progress-tab", generation, "base"),
+            )
+            .unwrap();
+        let progress = json!({"steps_completed":611,"step_count":692});
+        for (seq, base, name) in [
+            (1, generation, "Progress model"),
+            (2, generation, "Stale"),
+            (3, generation + 1, ""),
+        ] {
+            write_inbox(
+                session,
+                seq,
+                "cad_set_document_name",
+                base,
+                json!({"name":name}),
+            );
+            let path = inbox_dir(session).join(format!("{seq}.json"));
+            let mut op: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            op["script_progress"] = progress.clone();
+            atomic_write(&path, &op.to_string()).unwrap();
+        }
+        assert!(apply_or_reject_one_inbox_op(
+            &state,
+            "main",
+            &engine,
+            None,
+            Some(("retired-tab", session))
+        )
+        .unwrap()
+        .is_null());
+        assert_eq!(pending_inbox_seqs(session), vec![1, 2, 3]);
+        let applied = apply_or_reject_one_inbox_op(
+            &state,
+            "main",
+            &engine,
+            None,
+            Some(("progress-tab", session)),
+        )
+        .unwrap();
+        assert_eq!(applied["applied"], true);
+        assert_eq!(applied["script_progress"], progress);
+        assert_eq!(engine.document_snapshot().name, "Progress model");
+        let result: Value = serde_json::from_str(
+            &fs::read_to_string(inbox_dir(session).join("results/1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result, applied["result"],
+            "The model result is unchanged by presentation metadata"
+        );
+        assert!(result.get("script_progress").is_none());
+        for _ in 0..2 {
+            let rejected = apply_one_inbox_op(&state, "main", &engine).unwrap();
+            assert_eq!(rejected["applied"], false);
+            assert!(rejected.get("script_progress").is_none());
+        }
+        assert_eq!(engine.document_snapshot().name, "Progress model");
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
