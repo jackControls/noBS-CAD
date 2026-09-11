@@ -3,7 +3,7 @@
   "kind": "manufacturing-candidate-validation-snapshot",
   "status": "validated-development-candidate-physical-qualification-pending",
   "date": "2026-09-11",
-  "decision": "Native geometry, mechanical/edit/replay acceptance, rebuilt-desktop saved-project Open/model comparison and all six current plate toolpath reviews pass. The later drawing-label correction passes focused native/MCP checks, seven-sheet visual review and 14 exact repeated exports without model changes. Physical fit/load/creep/wear remain unqualified. PR #118 remains draft.",
+  "decision": "The accepted six-part geometry retains its prior native mechanical/edit/replay and six-plate toolpath evidence. The current native desktop presentation completes 1834 steps and 127 checks and exactly matches that model, geometry, sketches, assembly solution, all six plate records and all 14 corrected drawing exports. Two independent 118-step / 18-check coupon replays also match the retained coupon model and 3MF. The reviewed 30-second construction overview combines 26 seconds of chronological native highlights and a four-second actual settled-frame hold. Physical printing, fit/load/creep/wear remain unqualified. PR #118 remains draft.",
   "superseded_previous_record": {
     "revision": "f88219998ceff13f8a7dfd5c1771267f0b290046",
     "path": "docs/manufacturing/d-screw-vise.validation.json",
@@ -12,7 +12,7 @@
   "platform": "Windows x64; native OCCT 7.9.3",
   "model_schema": 6,
   "source_hash_encoding": "UTF-8 with LF line endings",
-  "source_revision_note": "Frozen recipe source after gusset inset, keeper roof and through-access corrections; exact file hashes identify the candidate independently of later validation-only commits.",
+  "source_revision_note": "The sources array and final_source_revision below identify the historical mechanical/drawing acceptance baseline. Current presentation recipe/author hashes, replay build and exact equivalence evidence are recorded separately in current_presentation; later presentation changes do not relabel the older physical-design tests as newly run.",
   "sources": [
     {
       "path": "examples/scripts/d-screw-vise.nbcad.jsonc",
@@ -595,5 +595,164 @@
         "bytes": 832
       }
     ]
+  },
+  "sources_scope": "Historical mechanical/drawing acceptance baseline; retained for provenance.",
+  "current_presentation": {
+    "status": "passed; physical qualification not performed",
+    "date": "2026-09-11",
+    "source_revision_at_live_replay": "53fb4ad50d7e7e0502dd2f85d89467a6c26358ec",
+    "source_hash_note": "sha256 identifies exact copied bytes; sha256_utf8_lf normalizes CRLF to LF. The live runner recipe hash uses LF.",
+    "sources": [
+      {
+        "path": "examples/scripts/d-screw-vise.nbcad.jsonc",
+        "bytes": 1095136,
+        "sha256": "6f52a5178d7dbd2d7e3db966e5b1c59ac0dc080c25c648daff9afadcfbee4c9b",
+        "sha256_utf8_lf": "56dac4446e6297687a2f7c1072b3f581bf69cb7205d02717c6f64a3de2fde047"
+      },
+      {
+        "path": "examples/scripts/d-screw-vise-fit.nbcad.jsonc",
+        "bytes": 72465,
+        "sha256": "22a290c83c36d5a95a3f89a8e4c24e4bafc1d37c5effe6e8615a6a3a3bc45715",
+        "sha256_utf8_lf": "49bcaa57ff89119e4004ffd9444b80f8d0e8cd6406c5f6b47e619622b9bcaa79"
+      },
+      {
+        "path": "crates/recipes/examples/author_vise.rs",
+        "bytes": 77239,
+        "sha256": "78425e697534ca12a6c81482eeefdd38cb20f85341f588be34e671d1a5690e03",
+        "sha256_utf8_lf": "a74492bb80802a47e051aea0fd6b74271e4a42eaf509131dbba020ddf51a7299"
+      },
+      {
+        "path": "crates/recipes/examples/vise_drawings/mod.rs",
+        "bytes": 20688,
+        "sha256": "b4c7be9fa6578c6dbcab2f7b40a0fa57bf4f4992b9d24a9cebf647cae3cb2044",
+        "sha256_utf8_lf": "fbc7086302947d9b60345b7b2a6d75289e999da0a6ba4521583c6d46947f10a3"
+      },
+      {
+        "path": "examples/scripts/nbcad-script.schema.json",
+        "bytes": 10329,
+        "sha256": "aadd4bc4346f722bc979201cd3574dfe6d1dd5918546c2d1d40dd5ef4b14d158",
+        "sha256_utf8_lf": "755e1d94f36761d74a48f47d147a9f513931b61b8f39dcffab15ecf262b2fd47"
+      }
+    ],
+    "live_presentation": {
+      "status": "passed",
+      "steps_completed": 1834,
+      "checks_completed": 127,
+      "elapsed_ms": 1328048,
+      "started_utc": "2026-09-11T16:56:39.0689377Z",
+      "finished_utc": "2026-09-11T17:19:02.3253736Z",
+      "comparison": "Exact model, scene, assembly solution and sketches match the earlier accepted replay. Only client disclosure hints and sketch editing transients (can_undo, can_redo, reference_midpoints) are excluded, matching the production replay comparator.",
+      "baseline_steps_completed": 1718,
+      "baseline_report": {
+        "path": "vise-redesign/acceptance-final/replay-report.json",
+        "bytes": 68220408,
+        "sha256": "713c81fac57ec78c0c586a201850c401c10a4e87463ec8f4e0730b401d534c5b"
+      },
+      "current_report": {
+        "path": "vise-recording/share-take/evidence/replay/run-1.json",
+        "bytes": 68221001,
+        "sha256": "3454c171b0ee316d427b3028e1189e58c380b479fd959b16e03e5352898af9b9"
+      },
+      "retained_native_assembly_model_exact": true,
+      "retained_six_native_plate_models_exact": true,
+      "all_six_print_plate_records_exact": true,
+      "retained_six_3mf_files_byte_identical": true,
+      "retained_fourteen_corrected_drawing_files_byte_identical": true,
+      "desktop_sha256": "005cf50be4a94b5f5119ea10d736d317416a0daf16689070650b3ef1fe59e6f1",
+      "native_mcp_sha256": "7e338d5cc7030b5eb0d345d463d1f99e3956f0a466fa8168ec1d55e6e93d0b1d",
+      "media_status": "Passed decoded-frame/duration checks and visual review. The edit contains 26 seconds of chronological actual construction highlights plus a four-second hold of an actual settled screenshot from the same native window after the replay passed.",
+      "media_proof": {
+        "path": "vise-recording/share-take/share/media-proof.json",
+        "bytes": 4112,
+        "sha256": "3b31ce3ac878a3106ae557a9d38ae98811f37af17b816de077622dea12e6b558"
+      },
+      "media": [
+        {
+          "file": "vise-construction-30s.mp4",
+          "bytes": 2067133,
+          "sha256": "0DB544EA7A2CBEB885A156CDE304EA8FF62B9D1CCF1A4682CD6178B40E25A3C7",
+          "probe": {
+            "programs": [],
+            "stream_groups": [],
+            "streams": [
+              {
+                "width": 1280,
+                "height": 800,
+                "avg_frame_rate": "30/1",
+                "nb_read_frames": "900"
+              }
+            ],
+            "format": {
+              "duration": "30.000000"
+            }
+          }
+        },
+        {
+          "file": "vise-construction-30s.gif",
+          "bytes": 5995162,
+          "sha256": "6C87400A4DD44855A679CF897E6AE9C73180ECBD989F712E51207ACC9A9C2933",
+          "probe": {
+            "programs": [],
+            "stream_groups": [],
+            "streams": [
+              {
+                "width": 960,
+                "height": 600,
+                "avg_frame_rate": "50/3",
+                "nb_read_frames": "450"
+              }
+            ],
+            "format": {
+              "duration": "30.000000"
+            }
+          }
+        }
+      ],
+      "final_native_frame_sha256": "9d96f56a52bd9c040e29b433c3238041a72ab8222637ce60351084772d17d17f",
+      "media_scope": "The elapsed construction is condensed from the actual native recording; this is an edited overview, not a real-time build or a physical load/motion test. The MP4 is included; the separately retained GIF is not duplicated in the kit."
+    },
+    "coupon_replay": {
+      "status": "passed",
+      "independent_runs": 2,
+      "steps_each": 118,
+      "checks_each": 18,
+      "elapsed_ms": [
+        12889,
+        13706
+      ],
+      "comparison": "The two independent replays exactly match model, scene, assembly solution and sketches using the same semantic comparison. The retained coupon native model is exactly equal and its combined four-specimen 3MF is byte-identical.",
+      "reports": [
+        {
+          "path": "vise-recording/evidence/coupon-presentation/run-1.json",
+          "bytes": 17906351,
+          "sha256": "0d2909f3b6958a636086e3a5a699a5d6a369ea981f366f1a1ae69292943449c0"
+        },
+        {
+          "path": "vise-recording/evidence/coupon-presentation/run-2.json",
+          "bytes": 17906351,
+          "sha256": "874026f814293b9bb5fa3851ee3cb35b25706c77e8d29bd23438b03a9ae35a0d"
+        }
+      ],
+      "baseline_comparison": {
+        "path": "vise-recording/evidence/coupon-presentation/baseline-comparison.json",
+        "bytes": 387,
+        "sha256": "d20560be62ad008f9e1b56225f16709c025141007678a63c816b5ca9f1e29099"
+      },
+      "retained_native_model_exact": true,
+      "retained_3mf_byte_identical": true
+    },
+    "artifact_directory": "nobs-cad-fixed-demos/demo-presentation-2026-09-11",
+    "local_development_kit": {
+      "name": "printed-vise-development-kit-2026-09-11-present-1834",
+      "path": "vise-redesign/printed-vise-development-kit-2026-09-11-present-1834.zip",
+      "previous_zip": {
+        "path": "vise-redesign/printed-vise-development-kit.zip",
+        "bytes": 2188194,
+        "sha256": "2911d4943fb37667a5fa6b20dc49a10909d07c7db0a23bf54aa0358853a7a426"
+      },
+      "previous_kit_preserved": true,
+      "upload_status": "not uploaded",
+      "contents": "Current official scripts and compact new replay provenance accompany byte-verified baseline editable assembly/parts, coupon, print 3MFs, corrected drawings and their original validation evidence."
+    }
   }
 }
