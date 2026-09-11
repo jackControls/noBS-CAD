@@ -201,6 +201,14 @@ try {
  });
  console.log('PASS production application exit: '+JSON.stringify(exit));
  await exitPage.close();
+ const exitSavePage=await browser.newPage();
+ await exitSavePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const exitSavePolling=await exitSavePage.evaluate(async()=>{
+  const {checkSaveOnExitPolling}=await import('/src/files/saveOnExit.browser.test.ts');
+  return checkSaveOnExitPolling();
+ });
+ console.log('PASS production Save-on-exit polling: '+JSON.stringify(exitSavePolling));
+ await exitSavePage.close();
  console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
  const scriptPage=await browser.newPage();
  await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
