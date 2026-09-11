@@ -39,7 +39,7 @@ export async function checkPresentationSurfaces(browser, url) {
     await page.evaluate(async () => {
       const {inspectUi, operateUi} = await import('/src/uiControl.ts');
       const opener = inspectUi().surfaces.flatMap(surface => surface.controls).find(control => control.label === 'Fillet example');
-      if (!opener || opener.disabled) throw new Error('The disabled modeling feature must expose its available lesson opener through MCP');
+      if (!opener || opener.disabled || opener.surface !== 'solid/modify') throw new Error('The disabled modeling feature must expose its available lesson opener in the same product group through MCP');
       operateUi({action: 'key', key: 'ArrowDown', target: opener.id});
     });
     await page.getByRole('button', {name: 'Open this script →'}).click();
