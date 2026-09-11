@@ -2,9 +2,10 @@
 
 This development pass improves the demonstration parts, their teaching sequence
 and the README. It starts above PR116 at `f882199`; existing review layers stay
-unchanged. The presentation follow-up remains draft. The vise has undergone a
-mechanical redesign and is still in validation, not ready for release or
-fabrication qualification.
+unchanged. The presentation follow-up remains draft. The redesigned vise is now
+a validated development candidate: native mechanical/replay checks, rebuilt
+desktop inspection and current print-toolpath review pass. Physical fabrication
+and load qualification remain open.
 
 ## What we actually have
 
@@ -25,8 +26,9 @@ MCP discovery check also returned all ten IDs. A rebuilt binary is needed to
 include subsequent source changes. Counts retained below describe the recorded
 bench, turbine and short-lesson revisions. Steps include notes, camera
 directions, bindings and assertions as well as modeling commands; they are not
-a count of kernel operations or a runtime estimate. Vise and vise-coupon counts
-are omitted while their author and generated sources are still changing.
+a count of kernel operations or a runtime estimate. The current vise reference
+completed 1,718 steps and 127 final checks; its exact source hashes and the
+separate acceptance-suite results are recorded in the validation manifest.
 
 ## Flagship presentation order
 
@@ -53,7 +55,7 @@ new visual acceptance run of every recipe.
    electrical output remain unmeasured. Give it a concise introduction before
    offering the full construction replay.
 3. **[Captured-slide D-screw vise](../examples/scripts/d-screw-vise.nbcad.jsonc)** —
-   **Mechanical redesign in validation.** The September 11 review found blocked
+   **Validated development candidate.** The September 11 review found blocked
    screw installation, mounting hardware in the jaw path, poor grip clearance
    and unqualified guide capture in the preceding design. The replacement has
    six printed parts, 100 mm gripping faces, 90 mm intended jaw travel, captured
@@ -63,13 +65,14 @@ new visual acceptance run of every recipe.
    native drawing sheets and individual print plates accompany it. See the
    [mechanical design and assembly sequence](d-screw-vise.md).
 
-   The revised assembly, mounting, capture and export checks must pass on the
-   final generated source before the vise returns to the presentation shortlist.
-   A focused native regression for the finite-thread end-cap export has passed;
-   full regenerated-recipe and rebuilt-desktop acceptance remain pending. Show
-   a solved drive-and-return sequence only after validating its physical
-   clearances, and restore the reference state afterward. Fit, clamp force,
-   creep and wear remain physically unqualified.
+   The complete native acceptance run passed assembly and hardware access,
+   guide capture, keeper seating, dimension/thread edits, 90 mm motion and
+   independent exact replay/reopen/export checks. The rebuilt desktop opened
+   the saved project and published an exact match to the reference model. All
+   six current plates have warning-free, zero-support toolpaths. All seven
+   corrected drawing sheets pass visual review, and their 14 exports repeat
+   exactly. A drive-and-return presentation should restore the reference state.
+   Fit, clamp force, creep and wear remain physically unqualified.
 
 Prior full attached runs took approximately 2 minutes 56 seconds for the bench
 and 14 minutes 21 seconds for the turbine. The preceding vise design took about
@@ -78,9 +81,11 @@ These are different unoptimized Windows validation runs, not comparable release
 benchmarks or promised presentation durations. See the
 [bench validation record](presentation-readiness-2026-09-11.md) and the
 [refreshed vise and turbine verification](review-corrections-2026-09-10.md#refreshed-vise-and-turbine-verification).
-The [vise](manufacturing/d-screw-vise.validation.json) and
-[turbine](manufacturing/vertical-axis-turbine.validation.json) manifests also retain
-earlier runs and their separate timings.
+The [current vise record](manufacturing/d-screw-vise.validation.json) reports a
+402.806-second first native replay and a 1,902.17-second complete acceptance run;
+these are different scopes. The
+[turbine manifest](manufacturing/vertical-axis-turbine.validation.json) retains
+its earlier runs and separate timings.
 Those earlier revisions passed independent native replay comparisons and
 recorded live construction checks. They do not establish acceptance of the
 redesigned vise, and none has measured physical performance qualification.
@@ -177,10 +182,11 @@ did not open a CAD window and does not validate the later vise redesign.
 
 The draft now includes the mechanical redesign, custom native thread support,
 editable thread parameters and expanded acceptance checks as well as the README
-work. Focused checks do not replace a complete run of the final source. Record
-the final source and build hashes, independent replay, save/reopen, per-part
-print exports, actual sliced layers and rebuilt-desktop presentation before
-claiming those boundaries pass. The
+work. The complete vise geometry/mechanical acceptance run now passes, with
+independent replay, save/reopen, per-part print exports, actual sliced layers
+and rebuilt-desktop model inspection. A later drawing-label correction has
+separate focused tests, seven-sheet visual review and exact repeated exports.
+The
 [vise validation record](manufacturing/d-screw-vise.validation.json) owns the
 dated results; historical records remain historical.
 

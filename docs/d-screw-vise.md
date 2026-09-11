@@ -12,8 +12,10 @@ The Rust [author](../crates/recipes/examples/author_vise.rs) emits readable JSON
 all geometry is constructed by the native MCP interpreter. Sketches, dimensions,
 datums, features, parts, joints and drawing sheets remain editable.
 
-This is a functional workholding development candidate. **300 N is a design load
-case, not a tested capacity.** It has no physical load, fatigue or creep rating.
+This is a development candidate validated by native geometry, assembly, edit,
+independent replay and export tests, plus a rebuilt-desktop Open and exact model
+comparison. **300 N is a design load case, not a tested capacity.** Physical fit,
+load, fatigue and creep qualification remain open; the presentation PR stays draft.
 
 ## Mechanical design
 
@@ -119,6 +121,13 @@ is the design objective, not a qualification obtained by disabling supports in
 the slicer.** Check undersides, pocket ceilings, first contact and short bridges
 in the actual sliced layers, then print the coupon.
 
+The current recorded X2D/PETG HF slices contain no support paths or slicer
+warnings on any of the six plates. Layer review confirms that the revised jaw
+keeps its rear relief open instead of bridging the former keeper-pocket ceiling.
+The screw pocket roof, thread finish and keeper ear tips still need physical
+print inspection. Exact inputs, settings and coverage are in the
+[validation record](manufacturing/d-screw-vise.validation.json).
+
 PETG is the provisional indoor process. PLA is useful for dimensional prototypes;
 ASA or other materials need their own shrinkage, adhesion, fit and sustained-load
 qualification. Material tags and thicker dimensions alone do not establish
@@ -154,7 +163,10 @@ smooth unloaded CAD motion establish comfortable operation or a permitted load.
 The native acceptance tests exercise real MCP replay, dimension and thread
 edits, guide capture without ideal joints, assembly paths, motion with mounting
 hardware, independent rebuilds, save/reopen, native drawing exports and closed,
-positive print meshes. Results and exact source/artifact hashes belong in the
+positive print meshes. The full candidate test passed in 1,902.17 seconds. A
+subsequent label-placement correction passed focused native/MCP checks and
+visual review of all seven sheets; all 14 corrected SVG/DXF exports repeated
+exactly without changing the saved model. Results and source/artifact hashes are in the
 [validation record](manufacturing/d-screw-vise.validation.json). Retain artifacts
 by setting `NBCAD_RECIPE_ARTIFACT_DIR` before running
 `cargo test --manifest-path mcp-server/Cargo.toml --test recipes d_screw_vise`.
