@@ -82,6 +82,11 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "drawing_add_view" => with_payload(payload, |r| {
             manager.drawing_command(crate::drawing_commands::DrawingCommand::AddView(r))
         }),
+        "drawing_add_linear_dimension" => with_payload(payload, |r| {
+            manager.drawing_command(crate::drawing_commands::DrawingCommand::AddLinearDimension(
+                r,
+            ))
+        }),
         "drawing_add_note" => with_payload(payload, |r| {
             manager.drawing_command(crate::drawing_commands::DrawingCommand::AddNote(r))
         }),

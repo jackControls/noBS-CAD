@@ -39,6 +39,27 @@ pub struct AddNote {
     pub position: [f64; 2],
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddLinearDimension {
+    pub sheet_id: u64,
+    pub view_id: u64,
+    pub first: DrawingTopologyAnchorRefDto,
+    pub second: DrawingTopologyAnchorRefDto,
+    pub mode: DrawingLinearDimensionMode,
+    pub offset: f64,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default = "dimension_precision")]
+    pub precision: u8,
+    #[serde(default)]
+    pub presentation: DrawingDimensionPresentationDto,
+}
+fn dimension_precision() -> u8 {
+    2
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "arguments", rename_all = "snake_case")]
 pub enum DrawingCommand {
     CreateSheet(CreateSheet),
@@ -46,6 +67,7 @@ pub enum DrawingCommand {
     DeleteSheet(SheetTarget),
     AddView(AddView),
     AddNote(AddNote),
+    AddLinearDimension(AddLinearDimension),
 }
 impl SketchManager {
     pub fn drawing_command(
@@ -129,6 +151,69 @@ impl SketchManager {
                     }
                 }
                 target.views.push(r.view);
+            }
+            DrawingCommand::AddLinearDimension(r) => {
+                let target = sheet(&mut next, r.sheet_id)?;
+                let view = target
+                    .views
+                    .iter()
+                    .find(|v| v.id == r.view_id)
+                    .ok_or_else(|| {
+                        SessionError::Solid("Drawing dimension references a missing view.".into())
+                    })?;
+                let scene = self.solid_scene();
+                if !scene.errors.is_empty() {
+                    return Err(SessionError::Solid(
+                        "Resolve timeline errors before dimensioning.".into(),
+                    ));
+                }
+                for anchor in [&r.first, &r.second] {
+                    let edge = scene
+                        .bodies
+                        .iter()
+                        .find(|b| b.id == anchor.body_id)
+                        .and_then(|b| {
+                            b.edges
+                                .iter()
+                                .find(|e| e.id == anchor.edge_id && e.key == anchor.edge_key)
+                        });
+                    if edge.is_none()
+                        || (!view.body_ids.is_empty() && !view.body_ids.contains(&anchor.body_id))
+                        || (anchor.circle_center && edge.unwrap().circle.is_none())
+                    {
+                        return Err(SessionError::Solid(
+                            "Dimension anchor is missing, stale, or excluded from the view.".into(),
+                        ));
+                    }
+                }
+                if r.first.body_id == r.second.body_id
+                    && r.first.edge_id == r.second.edge_id
+                    && r.first.edge_key == r.second.edge_key
+                    && r.first.circle_center == r.second.circle_center
+                    && (r.first.circle_center || r.first.endpoint == r.second.endpoint)
+                {
+                    return Err(SessionError::Solid(
+                        "Dimension needs two distinct topology anchors.".into(),
+                    ));
+                }
+                let id = next.next_annotation_id;
+                next.next_annotation_id = id
+                    .checked_add(1)
+                    .ok_or_else(|| SessionError::Solid("Annotation IDs exhausted".into()))?;
+                sheet(&mut next, r.sheet_id)?.annotations.push(
+                    DrawingAnnotationDto::LinearDimension {
+                        id,
+                        view_id: r.view_id,
+                        first: r.first,
+                        second: r.second,
+                        mode: r.mode,
+                        offset: r.offset,
+                        prefix: r.prefix,
+                        suffix: r.suffix,
+                        precision: r.precision,
+                        presentation: r.presentation,
+                    },
+                );
             }
             DrawingCommand::AddNote(r) => {
                 let id = next.next_annotation_id;

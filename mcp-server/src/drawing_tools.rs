@@ -7,6 +7,16 @@ fn choice(values: &[&str]) -> Value {
 }
 pub fn specs() -> Vec<ToolSpec> {
     let id = json!({"type":"integer","minimum":1});
+    let anchor = object_schema(
+        json!({"body_id":id,"edge_id":id,"edge_key":{"type":"string","minLength":1},"endpoint":choice(&["start","end"]),"fallback_point":vector(3),"circle_center":{"type":"boolean"}}),
+        &[
+            "body_id",
+            "edge_id",
+            "edge_key",
+            "endpoint",
+            "fallback_point",
+        ],
+    );
     let sheet = object_schema(json!({"sheet_id":id}), &["sheet_id"]);
     let view = object_schema(
         json!({
@@ -23,6 +33,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ToolSpec::direct("drawing_select_sheet","Select drawing sheet","Select an existing sheet by ID.","drawing_select_sheet",Payload::Object,sheet.clone()),
         ToolSpec::direct("drawing_delete_sheet","Delete drawing sheet","Delete an existing sheet and its views/annotations. Select another remaining sheet when necessary.","drawing_delete_sheet",Payload::Object,sheet),
         ToolSpec::direct("drawing_add_view","Add drawing view","Add a standard or custom orthographic view. The engine allocates its ID; direction points toward the viewer, up is page-up, position is paper mm and scale is paper/model mm. Returns the updated drawing document.","drawing_add_view",Payload::Object,object_schema(json!({"sheet_id":id,"view":view,"rescale_group":{"type":"boolean"}}),&["sheet_id","view"])),
+        ToolSpec::direct("drawing_add_linear_dimension","Add associative linear dimension","Dimension two current topology anchors from drawing_projection in an existing view. Modes are aligned, horizontal or vertical. Offset is paper millimetres. Stale or excluded references reject atomically; the measured value follows the model, never an entered label.","drawing_add_linear_dimension",Payload::Object,object_schema(json!({"sheet_id":id,"view_id":id,"first":anchor,"second":anchor,"mode":choice(&["aligned","horizontal","vertical"]),"offset":{"type":"number"},"prefix":{"type":"string"},"suffix":{"type":"string"},"precision":{"type":"integer","minimum":0,"maximum":6},"presentation":object_schema(json!({"tolerance":object_schema(json!({"mode":choice(&["none","symmetric","deviation","limits"]),"upper":{"type":"number"},"lower":{"type":"number"}}),&["mode","upper","lower"]),"basic":{"type":"boolean"},"reference":{"type":"boolean"},"fit_class":{"type":"string"}}),&[])}),&["sheet_id","view_id","first","second","mode","offset"])),
         ToolSpec::direct("drawing_add_note","Add drawing note","Add a free-standing note in paper millimetres. Returns the updated drawing document.","drawing_add_note",Payload::Object,object_schema(json!({"sheet_id":id,"text":{"type":"string","maxLength":4096},"position":vector(2)}),&["sheet_id","text","position"])),
         ToolSpec::direct("drawing_projection","Generate exact drawing projection","Generate OCCT visible/hidden linework, bounds, topology anchors and circular references from the current completed solid model. Supports exact section planes. No GUI is required.","drawing_projection",Payload::Object,object_schema(json!({"body_ids":{"type":"array","items":id},"direction":vector(3),"up":vector(3),"include_hidden":{"type":"boolean"},"include_tangent_edges":{"type":"boolean"},"deflection":{"type":"number","exclusiveMinimum":0},"section_plane":object_schema(json!({"point":vector(3),"normal":vector(3),"depth":{"type":"number","exclusiveMinimum":0}}),&["point","normal"])}),&["direction","up"]))
     ]

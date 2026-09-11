@@ -74,6 +74,12 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "drawing_add_linear_dimension",
+        engine_method: "drawing_add_linear_dimension",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "drawing_add_note",
         engine_method: "drawing_add_note",
         payload: PayloadKind::Object,

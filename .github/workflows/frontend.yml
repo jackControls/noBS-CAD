@@ -39,3 +39,5 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Test live UI control contracts and product command coverage
         run: cargo xtask test-mcp contracts
+      - name: Test associative drawing dimension references
+        run: npx tsx scripts/drawingDimensions.test.ts

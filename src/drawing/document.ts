@@ -273,10 +273,16 @@ export function addDrawingLinearDimension(
   mode: DrawingLinearDimensionMode = 'aligned',
   offset = 12,
 ): Promise<void> {
-  return addViewAnnotation(viewId, (id) => ({
-    kind: 'linear_dimension', id, view_id: viewId, first, second, mode, offset,
-    prefix: '', suffix: '', precision: 2, presentation: defaultDrawingDimensionPresentation(),
-  }));
+  let createdId: number;
+  return enqueueDrawingCommand(drawing => {
+    const sheet = drawing.sheets.find(s => s.views.some(v => v.id === viewId));
+    if (!sheet) throw new Error('Drawing dimension references a missing view.');
+    createdId = drawing.next_annotation_id;
+    return { type: 'add_linear_dimension', arguments: {
+      sheet_id: sheet.id, view_id: viewId, first, second, mode, offset,
+      prefix: '', suffix: '', precision: 2, presentation: defaultDrawingDimensionPresentation(),
+    } };
+  }).then(() => selectCreatedAnnotation(createdId));
 }
 
 export function addDrawingLineDimension(

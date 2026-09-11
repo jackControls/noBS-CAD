@@ -209,7 +209,8 @@ export function resolveDrawingAnchor(
 ): ResolvedDrawingAnchor | null {
   if (reference.circle_center) {
     const exact = projection.circles.find((candidate) =>
-      candidate.body_id === reference.body_id && candidate.edge_id === reference.edge_id,
+      candidate.body_id === reference.body_id && candidate.edge_id === reference.edge_id
+        && candidate.edge_key === reference.edge_key,
     );
     const circle = exact ?? projection.circles.find((candidate) =>
       candidate.body_id === reference.body_id && candidate.edge_key === reference.edge_key,
@@ -232,6 +233,7 @@ export function resolveDrawingAnchor(
   const exact = projection.anchors.find((candidate) =>
     candidate.body_id === reference.body_id
       && candidate.edge_id === reference.edge_id
+      && candidate.edge_key === reference.edge_key
       && candidate.endpoint === reference.endpoint,
   );
   const anchor = exact ?? projection.anchors.find((candidate) =>
