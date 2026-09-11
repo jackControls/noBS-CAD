@@ -1382,6 +1382,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_session_status"
             | "cad_document"
             | "cad_project_model"
+            | "project_visibility"
             | "sketch_active"
             | "sketch_finished"
             | "sketch_profiles"
@@ -1670,10 +1671,10 @@ fn tool_specs() -> Vec<ToolSpec> {
     );
     let hole_thread = object_schema(
         json!({
-            "standard": { "type": "string", "enum": ["iso_metric", "unified_inch"] },
+            "standard": { "type": "string", "enum": ["iso_metric", "unified_inch", "custom_trapezoidal"] },
             "series": {
                 "type": "string",
-                "enum": ["metric_coarse", "metric_fine", "unc", "unf"]
+                "enum": ["metric_coarse", "metric_fine", "unc", "unf", "rounded"]
             },
             "designation": { "type": "string", "minLength": 1 },
             "class": { "type": "string", "minLength": 1 },
@@ -1701,7 +1702,16 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "type": "string",
                 "enum": ["modeled", "simplified"]
             },
-            "tap_drill_designation": { "type": ["string", "null"] }
+            "tap_drill_designation": { "type": ["string", "null"] },
+            "rounded_profile": {
+                "description": "Required only for custom_trapezoidal / rounded / custom class. Native single-start 30-degree profile with circular root/crest rounds, NOT an ISO Tr fit. Both mating parts use identical nominal/profile values; radial clearance enlarges only female radii, axial clearance enlarges its groove by the total given amount.",
+                "oneOf": [object_schema(json!({
+                    "radial_depth": {"type":"number", "exclusiveMinimum":0},
+                    "corner_radius": {"type":"number", "exclusiveMinimum":0},
+                    "radial_clearance": {"type":"number", "minimum":0},
+                    "axial_clearance": {"type":"number", "minimum":0}
+                }), &["radial_depth", "corner_radius", "radial_clearance", "axial_clearance"]), {"type":"null"}]
+            }
         }),
         &[
             "standard",
@@ -2692,6 +2702,26 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "sketch_names":{"type":"array","items":{"type":"string","minLength":1}},
                 "datum_plane_ids":{"type":"array","items":{"type":"integer","minimum":1}}
             }), &["visible"]),
+        ),
+        ToolSpec::direct(
+            "project_visibility",
+            "Read saved model visibility",
+            "Return the Browser's saved hidden body IDs, datum plane IDs, and retained sketch names. Geometry and exports are unaffected by visibility.",
+            "project_visibility",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "project_set_visibility",
+            "Set saved model visibility",
+            "Replace the Browser's complete saved visibility snapshot. Read project_visibility first to preserve other choices. All three arrays are required; empty arrays show everything. Like the app, this normalizes duplicates and removes stale references. It does not remove geometry or exclude hidden bodies from exports; use export body selection for that.",
+            "project_set_visibility",
+            Payload::Object,
+            object_schema(json!({
+                "hidden_body_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                "hidden_datum_plane_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                "hidden_sketch_names":{"type":"array","items":{"type":"string","minLength":1}}
+            }), &["hidden_body_ids", "hidden_datum_plane_ids", "hidden_sketch_names"]),
         ),
         ToolSpec::direct(
             "construction_plane_offset",
@@ -3901,6 +3931,7 @@ fn records_in_script(name: &str) -> bool {
             | "solid_export_preflight"
             | "material_catalog"
             | "body_appearances"
+            | "project_visibility"
             | "demo_export_pip_3mf"
     ) {
         return false;
@@ -6991,6 +7022,80 @@ mod tests {
     }
 
     #[test]
+    fn project_visibility_uses_browser_state_without_changing_geometry() {
+        assert!(is_read_safe_while_attached("project_visibility"));
+        assert!(nbcad_mcp_mutate::is_live_engine_query("project_visibility"));
+        fn state(mut value: Value) -> Value {
+            value.as_object_mut().unwrap().remove("_disclosure");
+            value
+        }
+        let (mut server, update) = mcp_box();
+        let body = update["scene"]["bodies"][0]["id"].clone();
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let requested = json!({
+            "hidden_body_ids":[body, body, 999999],
+            "hidden_datum_plane_ids":[],
+            "hidden_sketch_names":["Sketch1"]
+        });
+        let expected = parse_engine_envelope(host::handle(
+            &mut server.manager,
+            "project_set_visibility",
+            &requested.to_string(),
+        ))
+        .unwrap();
+        server
+            .manager
+            .set_project_visibility(Default::default())
+            .unwrap();
+        assert_eq!(
+            interface::group_for("project_visibility"),
+            Some("document/appearance")
+        );
+        let hidden = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"execute", "group":"document/appearance",
+                    "operation":"project_set_visibility", "arguments":requested
+                }),
+            )
+            .unwrap();
+        let hidden = state(hidden);
+        assert_eq!(hidden, expected);
+        assert_eq!(hidden["hidden_body_ids"], json!([body]));
+        let script_before_read = server.call_tool("cad_script", json!({})).unwrap();
+        assert_eq!(
+            state(server.call_tool("project_visibility", json!({})).unwrap()),
+            hidden
+        );
+        assert_eq!(
+            server.call_tool("cad_script", json!({})).unwrap(),
+            script_before_read,
+            "reading Browser visibility must not append a replay operation"
+        );
+        assert_eq!(server.call_tool("solid_scene", json!({})).unwrap(), scene);
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool("cad_load_project_model", json!({"model_json":model}))
+            .unwrap();
+        assert_eq!(
+            state(restored.call_tool("project_visibility", json!({})).unwrap()),
+            hidden
+        );
+        assert_eq!(restored.call_tool("solid_scene", json!({})).unwrap(), scene);
+        let shown = restored
+            .call_tool(
+                "project_set_visibility",
+                json!({
+                    "hidden_body_ids":[], "hidden_datum_plane_ids":[], "hidden_sketch_names":[]
+                }),
+            )
+            .unwrap();
+        assert_eq!(shown["hidden_body_ids"], json!([]));
+        assert_eq!(shown["hidden_sketch_names"], json!([]));
+    }
+    #[test]
     fn construction_visibility_matches_host_and_preserves_native_model() {
         fn visibility(value: Value) -> Value {
             serde_json::to_value(
@@ -8229,9 +8334,9 @@ mod tests {
             .call_tool(
                 "sketch_add_arc_center",
                 json!({
-                    "center": {"x": 10.0, "y": 20.0},
-                    "start": {"x": 10.0, "y": 0.0},
-                    "sweep": {"x": 30.0, "y": 20.0},
+                    "center": {"x": -20.0, "y": 0.0},
+                    "start": {"x": 0.0, "y": 0.0},
+                    "sweep": {"x": -20.0, "y": 20.0},
                     "ctrl_held": false
                 }),
             )
@@ -8253,13 +8358,34 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(arcs.len(), 2);
 
+        // The first arc starts along Y, within the XY profile plane. It used
+        // to report success despite producing an invalid zero-volume BRep.
+        let invalid = server
+            .call_tool(
+                "solid_sweep",
+                json!({
+                    "profile": {"sketch_name":"Sketch1", "profile_index":0},
+                    "path_sketch_name":"Sketch2", "path_entity_ids":[arcs[0].clone()],
+                    "operation":"new_body", "target_body_ids":[], "guide_rail":null,
+                    "orientation":"corrected_frenet", "transition":"round_corner", "force_c1":true
+                }),
+            )
+            .unwrap();
+        let failure = &invalid["scene"]["errors"][0];
+        assert!(failure["message"].as_str().unwrap().contains("Place the profile across the path"));
+        assert!(invalid["scene"]["bodies"].as_array().unwrap().is_empty());
+        server
+            .call_tool("solid_delete_feature", json!({"feature_id":failure["feature_id"]}))
+            .unwrap();
+
+        // The second arc starts along Z, normal to the retained XY profile.
         let update = server
             .call_tool(
                 "solid_sweep",
                 json!({
                     "profile": {"sketch_name": "Sketch1", "profile_index": 0},
                     "path_sketch_name": "Sketch2",
-                    "path_entity_ids": [arcs[0].clone()],
+                    "path_entity_ids": [arcs[1].clone()],
                     "operation": "new_body",
                     "target_body_ids": [],
                     "guide_rail": null,
@@ -8285,6 +8411,10 @@ mod tests {
         assert_eq!(definitions[0]["transition"], "round_corner");
         assert_eq!(definitions[0]["force_c1"], true);
         assert!(definitions[0]["guide_rail"].is_null());
+        let print = server
+            .call_tool("solid_export_3mf", json!({"slicer_target":"standard"}))
+            .expect("curved sweep boundaries must form a closed printable mesh");
+        assert!(print["bytes_base64"].as_str().unwrap().len() > 32);
 
         server
             .call_tool(
@@ -8358,6 +8488,10 @@ mod tests {
             .unwrap();
         assert_eq!(definitions.as_array().unwrap().len(), 2);
         assert!(definitions[1]["guide_rail"].is_object());
+        let print = server
+            .call_tool("solid_export_3mf", json!({"slicer_target":"standard"}))
+            .expect("guided and retained curved sweeps must both remain closed");
+        assert!(print["bytes_base64"].as_str().unwrap().len() > 32);
     }
 
     #[test]

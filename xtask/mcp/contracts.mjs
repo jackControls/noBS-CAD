@@ -271,6 +271,14 @@ try {
   await navigationPage.evaluate(()=>window.unmountPreviewNavigation?.());
   await navigationPage.close();
  }
+ const roundedThreadPage=await browser.newPage();
+ await roundedThreadPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const roundedThreads=await roundedThreadPage.evaluate(async()=>{
+  const {checkRoundedThreadEditors}=await import('/src/engine/roundedThread.browser.test.ts');
+  return checkRoundedThreadEditors();
+ });
+ console.log('PASS production rounded-thread edit preservation: '+JSON.stringify(roundedThreads));
+ await roundedThreadPage.close();
  const recoveryPage=await browser.newPage();
  await recoveryPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const recovery=await recoveryPage.evaluate(async()=>{

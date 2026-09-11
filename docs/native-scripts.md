@@ -35,6 +35,13 @@ geometry unchanged. The active unfinished sketch stays visible, and references
 created later start visible. Construction entities inside a sketch are a separate
 sketch-editing setting.
 
+The Browser's individual visibility choices are available in
+`document/appearance`: `project_visibility` reads the saved snapshot and
+`project_set_visibility` replaces its `hidden_body_ids`, `hidden_datum_plane_ids`
+and `hidden_sketch_names` arrays. Preserve the other arrays when isolating a part,
+and restore the original snapshot after a presentation or print-layout step.
+These are the same project settings the Browser uses. Hiding a body changes its
+display; it does not remove geometry or substitute for explicit export selection.
 The **Scripts** button opens the script workspace beside the current design.
 Load a commented source file to inspect its chapter notes and grouped commands.
 The recipe-library layer adds the bundled collection using this same adapter.

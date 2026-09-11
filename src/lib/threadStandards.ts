@@ -15,10 +15,39 @@ export interface ThreadPreset {
   pitchMm: number;
   threadsPerInch: number | null;
   tapDrillDiameterMm: number;
-  tapDrillDesignation: string;
+  tapDrillDesignation: string | null;
+  roundedProfile?: HoleThreadDto['rounded_profile'];
 }
 
 export type ThreadFit = 'internal' | 'external';
+
+export type RoundedThreadInputs = Record<keyof NonNullable<HoleThreadDto['rounded_profile']>, string>;
+
+export function roundedThreadInputs(profile: NonNullable<HoleThreadDto['rounded_profile']>): RoundedThreadInputs {
+  return {
+    radial_depth: String(profile.radial_depth), corner_radius: String(profile.corner_radius),
+    radial_clearance: String(profile.radial_clearance), axial_clearance: String(profile.axial_clearance),
+  };
+}
+
+export function roundedThreadProfile(inputs: RoundedThreadInputs): NonNullable<HoleThreadDto['rounded_profile']> {
+  const number = (value: string) => value.trim() === '' ? NaN : Number(value);
+  return {
+    radial_depth: number(inputs.radial_depth), corner_radius: number(inputs.corner_radius),
+    radial_clearance: number(inputs.radial_clearance), axial_clearance: number(inputs.axial_clearance),
+  };
+}
+
+/** Editable starting dimensions, not a standard or a fit qualification. */
+export function initialRoundedThreadProfile(pitch: number): NonNullable<HoleThreadDto['rounded_profile']> {
+  const scaled = (ratio: number) => Number((pitch * ratio).toPrecision(12));
+  return {radial_depth: scaled(0.5), corner_radius: scaled(0.075),
+    radial_clearance: scaled(0.0625), axial_clearance: scaled(0.05)};
+}
+
+export function roundedThreadInputsFinite(inputs: RoundedThreadInputs | null): boolean {
+  return inputs !== null && Object.values(roundedThreadProfile(inputs)).every(Number.isFinite);
+}
 
 export interface IsoMetricThreadEnvelope {
   basicMajorDiameter: number;
@@ -356,10 +385,11 @@ export function threadDtoFromPreset(
   fit: ThreadFit = 'internal',
 ): HoleThreadDto {
   const external = fit === 'external';
-  const toleranceClass = external
+  const standardExternal = external && preset.standard !== 'custom_trapezoidal';
+  const toleranceClass = standardExternal
     ? preset.standard === 'iso_metric' ? '6g' : '2A'
     : preset.class;
-  const designation = external
+  const designation = standardExternal
     ? preset.standard === 'iso_metric'
       ? preset.designation.replace(/6H$/, toleranceClass)
       : preset.designation.replace(/2B$/, toleranceClass)
@@ -376,5 +406,6 @@ export function threadDtoFromPreset(
     depth: options.depth,
     representation: options.representation,
     tap_drill_designation: external ? null : preset.tapDrillDesignation,
+    ...(preset.roundedProfile != null ? { rounded_profile: { ...preset.roundedProfile } } : {}),
   };
 }

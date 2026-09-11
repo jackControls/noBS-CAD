@@ -634,6 +634,8 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "material_catalog"
         | "body_appearances"
         | "set_body_appearance"
+        | "project_visibility"
+        | "project_set_visibility"
         | "demo_export_pip_3mf" => FocusPack::Print,
         _ => FocusPack::Document,
     };
@@ -708,6 +710,8 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
             | "material_catalog"
             | "body_appearances"
             | "set_body_appearance"
+            | "project_visibility"
+            | "project_set_visibility"
             | "demo_export_pip_3mf"
     ) {
         return Some(FocusPack::Print);

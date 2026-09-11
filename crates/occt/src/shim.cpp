@@ -22,6 +22,13 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFill.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepMesh_Context.hxx>
+#include <BRepMesh_EdgeDiscret.hxx>
+#include <IMeshData_Model.hxx>
+#include <IMeshData_Face.hxx>
+#include <IMeshData_Wire.hxx>
+#include <IMeshData_Edge.hxx>
+#include <ElCLib.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
@@ -44,6 +51,14 @@
 #include <GeomAbs_SurfaceType.hxx>
 #include <Geom2d_Line.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <GeomConvert.hxx>
+#include <GC_MakeSegment.hxx>
+#include <TColgp_Array2OfPnt.hxx>
+#include <TColStd_Array2OfReal.hxx>
+#include <TColStd_Array1OfInteger.hxx>
 #include <GCPnts_UniformDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
@@ -186,7 +201,8 @@ TopoDS_Edge make_helical_edge(
     double center_end,
     double pitch,
     bool left_hand,
-    const Handle(Geom_CylindricalSurface)& surface) {
+    const Handle(Geom_CylindricalSurface)& surface,
+    double curve_tolerance = 1e-5) {
   const double angle_span = kTau * (center_end - center_start) / pitch;
   const double axial_per_radian = pitch / kTau;
   const double handedness = left_hand ? -1.0 : 1.0;
@@ -200,9 +216,45 @@ TopoDS_Edge make_helical_edge(
     throw std::runtime_error("OCCT could not build the exact helical edge");
   }
   TopoDS_Edge edge = builder.Edge();
-  BRepLib::BuildCurve3d(edge);
+  BRepLib::BuildCurve3d(edge, curve_tolerance);
   BRepLib::SameParameter(edge, 1e-7);
   return edge;
+}
+
+// Sweep a true line/circular-arc section by a screw displacement. The tensor
+// product retains the section's rational circular arcs, unlike a polygonal
+// approximation or a Frenet pipe that tilts the axial thread profile.
+TopoDS_Face make_curved_helical_face(
+    const gp_Ax2& axis,
+    const Handle(Geom_BSplineCurve)& helix,
+    const Handle(Geom_Curve)& section) {
+  const Handle(Geom_BSplineCurve) profile =
+      GeomConvert::CurveToBSplineCurve(section);
+  TColgp_Array2OfPnt poles(1, helix->NbPoles(), 1, profile->NbPoles());
+  TColStd_Array2OfReal weights(1, helix->NbPoles(), 1, profile->NbPoles());
+  for (int u = 1; u <= helix->NbPoles(); ++u) {
+    const gp_Pnt h = helix->Pole(u);
+    for (int v = 1; v <= profile->NbPoles(); ++v) {
+      const gp_Pnt p = profile->Pole(v);
+      poles.SetValue(u, v, axis.Location().Translated(
+          gp_Vec(axis.XDirection()).Multiplied(h.X() * p.X())
+              .Added(gp_Vec(axis.YDirection()).Multiplied(h.Y() * p.X()))
+              .Added(gp_Vec(axis.Direction()).Multiplied(h.Z() + p.Z()))));
+      weights.SetValue(u, v, helix->Weight(u) * profile->Weight(v));
+    }
+  }
+  TColStd_Array1OfReal u_knots(1, helix->NbKnots());
+  TColStd_Array1OfReal v_knots(1, profile->NbKnots());
+  TColStd_Array1OfInteger u_mults(1, helix->NbKnots());
+  TColStd_Array1OfInteger v_mults(1, profile->NbKnots());
+  helix->Knots(u_knots); helix->Multiplicities(u_mults);
+  profile->Knots(v_knots); profile->Multiplicities(v_mults);
+  Handle(Geom_BSplineSurface) surface = new Geom_BSplineSurface(
+      poles, weights, u_knots, v_knots, u_mults, v_mults,
+      helix->Degree(), profile->Degree());
+  BRepBuilderAPI_MakeFace face(surface, 1e-7);
+  if (!face.IsDone()) throw std::runtime_error("could not build rounded helical face");
+  return face.Face();
 }
 
 TopoDS_Shape make_continuous_thread_cutter(
@@ -212,7 +264,8 @@ TopoDS_Shape make_continuous_thread_cutter(
     double pitch,
     double thread_depth,
     bool left_hand,
-    const char* label) {
+    const char* label,
+    const std::vector<Handle(Geom_Curve)>& curved_profile = {}) {
   // Extend by a full pitch at both ends.  The Boolean target trims the sweep
   // to the requested thread depth, avoiding partial open grooves and cutter
   // caps at the model ends.
@@ -252,6 +305,20 @@ TopoDS_Shape make_continuous_thread_cutter(
        ++segment_index) {
     const double segment_start = center_start + segment_index * pitch;
     const double segment_end = std::min(segment_start + pitch, center_end);
+    if (!curved_profile.empty()) {
+      Handle(Geom_CylindricalSurface) unit_surface = new Geom_CylindricalSurface(
+          gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 1.0);
+      const TopoDS_Edge spine = make_helical_edge(
+          segment_start, segment_end, pitch, left_hand, unit_surface, 1e-10);
+      double first, last;
+      Handle(Geom_Curve) curve = BRep_Tool::Curve(spine, first, last);
+      Handle(Geom_BSplineCurve) helix = GeomConvert::CurveToBSplineCurve(
+          new Geom_TrimmedCurve(curve, first, last));
+      for (const auto& section : curved_profile) {
+        sewing.Add(make_curved_helical_face(axis, helix, section));
+      }
+      continue;
+    }
     std::vector<TopoDS_Edge> lower_rails;
     std::vector<TopoDS_Edge> upper_rails;
     lower_rails.reserve(radius_half_widths.size());
@@ -277,6 +344,26 @@ TopoDS_Shape make_continuous_thread_cutter(
   const double handedness = left_hand ? -1.0 : 1.0;
   const double end_angle = handedness * kTau * turns;
   const auto make_cap = [&](double center, double angle) {
+    if (!curved_profile.empty()) {
+      const gp_Vec x = gp_Vec(axis.XDirection()).Multiplied(std::cos(angle))
+          .Added(gp_Vec(axis.YDirection()).Multiplied(std::sin(angle)));
+      const gp_Vec y = gp_Vec(axis.XDirection()).Multiplied(-std::sin(angle))
+          .Added(gp_Vec(axis.YDirection()).Multiplied(std::cos(angle)));
+      const gp_Vec z(axis.Direction());
+      const gp_Pnt origin = axis.Location().Translated(z.Multiplied(center));
+      gp_Trsf placement;
+      placement.SetValues(x.X(), y.X(), z.X(), origin.X(),
+                          x.Y(), y.Y(), z.Y(), origin.Y(),
+                          x.Z(), y.Z(), z.Z(), origin.Z());
+      BRepBuilderAPI_MakeWire wire;
+      for (const auto& section : curved_profile) {
+        Handle(Geom_Curve) placed = Handle(Geom_Curve)::DownCast(section->Transformed(placement));
+        wire.Add(BRepBuilderAPI_MakeEdge(placed).Edge());
+      }
+      BRepBuilderAPI_MakeFace face(wire.Wire(), true);
+      if (!face.IsDone()) throw std::runtime_error("could not cap rounded thread");
+      return face.Face();
+    }
     BRepBuilderAPI_MakePolygon polygon;
     for (const auto& station : radius_half_widths) {
       polygon.Add(helical_point(
@@ -418,6 +505,85 @@ TopoDS_Shape make_continuous_thread_cutter(
         " thread cutter has no volume");
   }
   return cutter;
+}
+
+std::vector<TopoDS_Shape> make_rounded_thread_cutters(
+    const gp_Ax2& axis, double major, double minor, double pitch,
+    double radius, double axial_clearance, double depth, bool left_hand,
+    bool internal) {
+  const double lo = minor * 0.5;
+  const double hi = major * 0.5;
+  const double beta = kPi / 12.0;
+  const double h0 = pitch * 0.25 - (hi - lo) * 0.5 * std::tan(beta);
+  const double h1 = pitch * 0.25 + (hi - lo) * 0.5 * std::tan(beta);
+  const double corner = radius * (1.0 / std::cos(beta) - std::tan(beta));
+  const double z0 = h0 - corner;
+  const double z1 = h1 + corner;
+  const double overlap = std::max(0.005, pitch * 0.02);
+  if (lo <= overlap || radius <= 0 ||
+      2 * radius * (1 - std::sin(beta)) >= hi - lo ||
+      z0 <= axial_clearance * 0.5 || z1 + axial_clearance * 0.5 >= pitch * 0.5) {
+    throw std::runtime_error("rounded trapezoidal thread profile is invalid");
+  }
+  // Start from the external groove. Its reflected complement is the mating
+  // female cavity; radial clearance has already translated its diameter limits.
+  const auto point = [&](double r, double z) {
+    return gp_Pnt(r, 0, internal ? pitch * 0.5 - z + axial_clearance * 0.5 : z);
+  };
+  const auto arc_point = [&](double cr, double cz, double angle) {
+    return point(cr + radius * std::cos(angle), cz + radius * std::sin(angle));
+  };
+  const gp_Pnt root = point(lo, z0);
+  const gp_Pnt root_tangent = arc_point(lo + radius, z0, kPi * 0.5 + beta);
+  const gp_Pnt crest_tangent = arc_point(hi - radius, z1, beta - kPi * 0.5);
+  const gp_Pnt crest = point(hi, z1);
+  std::vector<Handle(Geom_Curve)> upper;
+  if (internal) upper.push_back(GC_MakeSegment(point(lo - overlap, z0), root).Value());
+  upper.push_back(GC_MakeArcOfCircle(root,
+      arc_point(lo + radius, z0, (kPi + kPi * 0.5 + beta) * 0.5), root_tangent).Value());
+  upper.push_back(GC_MakeSegment(root_tangent, crest_tangent).Value());
+  upper.push_back(GC_MakeArcOfCircle(crest_tangent,
+      arc_point(hi - radius, z1, (beta - kPi * 0.5) * 0.5), crest).Value());
+  if (!internal) upper.push_back(GC_MakeSegment(crest, point(hi + overlap, z1)).Value());
+  std::vector<Handle(Geom_Curve)> curves = upper;
+  const auto mirror = [](const gp_Pnt& p) { return gp_Pnt(p.X(), 0, -p.Z()); };
+  const gp_Pnt start = upper.front()->Value(upper.front()->FirstParameter());
+  const gp_Pnt end = upper.back()->Value(upper.back()->LastParameter());
+  curves.push_back(GC_MakeSegment(end, mirror(end)).Value());
+  gp_Trsf reflection;
+  reflection.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)));
+  for (auto it = upper.rbegin(); it != upper.rend(); ++it) {
+    Handle(Geom_Curve) lower = Handle(Geom_Curve)::DownCast((*it)->Transformed(reflection));
+    lower->Reverse();
+    curves.push_back(lower);
+  }
+  curves.push_back(GC_MakeSegment(mirror(start), start).Value());
+  const std::vector<std::pair<double, double>> stations = {
+      {start.X(), start.Z()}, {end.X(), end.Z()}};
+  TopoDS_Shape cutter = make_continuous_thread_cutter(
+      axis, (hi + lo) * 0.5, stations, pitch, depth, left_hand,
+      "custom rounded trapezoidal", curves);
+  return {cutter};
+}
+
+void trim_thread_tools_at_depth(
+    std::vector<TopoDS_Shape>& cutters, const gp_Ax2& axis,
+    double major_radius, double pitch, double depth, bool bound_start = false) {
+  // Blind holes and partial threads need an explicit end plane. An external
+  // cylinder can meet wider stock at either end, so its selected start plane
+  // must also bound the cutter, including for a full-length thread.
+  const double start_offset = bound_start ? 0.0 : -pitch;
+  const gp_Ax2 clip_axis(
+      axis.Location().Translated(gp_Vec(axis.Direction()).Multiplied(start_offset)),
+      axis.Direction(), axis.XDirection());
+  BRepPrimAPI_MakeCylinder clip(clip_axis, major_radius + pitch, depth - start_offset);
+  for (TopoDS_Shape& cutter : cutters) {
+    BRepAlgoAPI_Common trimmed(cutter, clip.Shape(), Message_ProgressRange());
+    if (!trimmed.IsDone() || trimmed.HasErrors() || trimmed.Shape().IsNull()) {
+      throw std::runtime_error("could not trim thread to its requested depth");
+    }
+    cutter = trimmed.Shape();
+  }
 }
 
 std::vector<TopoDS_Shape> make_internal_thread_cutters(
@@ -1069,6 +1235,15 @@ TopoDS_Shape make_tool(const FfiJob& job, std::size_t region_index) {
       }
       if (!pipe.MakeSolid()) {
         throw std::runtime_error("OCCT sweep could not close into a solid");
+      }
+      GProp_GProps sweep_properties;
+      BRepGProp::VolumeProperties(pipe.Shape(), sweep_properties);
+      if (!BRepCheck_Analyzer(pipe.Shape(), true, false).IsValid() ||
+          !std::isfinite(sweep_properties.Mass()) ||
+          std::abs(sweep_properties.Mass()) <= 1e-9) {
+        throw std::runtime_error(
+            "Sweep did not produce a valid solid. Place the profile across "
+            "the path at its start and avoid a self-intersecting sweep.");
       }
       return pipe.Shape();
     };
@@ -1766,10 +1941,18 @@ void Kernel::apply_job(const FfiJob& job) {
       // Use an axis rooted on the support face. The base cutter starts a
       // fraction outside only to keep booleans watertight.
       const gp_Ax2 thread_axis(support, gp_Dir(direction), axis.XDirection());
-      thread_cutters = make_internal_thread_cutters(
+      thread_cutters = job.thread_form == 1 ? make_rounded_thread_cutters(
+          thread_axis, job.thread_major_diameter, job.thread_minor_diameter,
+          job.thread_pitch, job.thread_corner_radius, job.thread_axial_clearance,
+          requested_thread_depth, job.thread_left_hand, true) : make_internal_thread_cutters(
           thread_axis, job.thread_major_diameter,
           job.thread_pitch_diameter, job.thread_minor_diameter,
           job.thread_pitch, requested_thread_depth, job.thread_left_hand);
+      if (!job.through_all ||
+          (!full_thread_depth && requested_thread_depth < available_thread_depth - 1e-7)) {
+        trim_thread_tools_at_depth(thread_cutters, thread_axis,
+            job.thread_major_diameter * 0.5, job.thread_pitch, requested_thread_depth);
+      }
     }
     if (!job.through_all && job.hole_bottom_style == 1) {
       const double half_angle = job.drill_point_angle_deg * kPi / 360.0;
@@ -1798,6 +1981,14 @@ void Kernel::apply_job(const FfiJob& job) {
         throw std::runtime_error("OCCT hole cut failed");
       }
       result = cut.Shape();
+    } else if (job.thread_form == 1) {
+      // The curved cutter has rational trimmed faces. Opening the bore first
+      // avoids retaining its inner overlap boundary during Boolean cleanup.
+      BRepAlgoAPI_Cut bore(found->second, cutter, Message_ProgressRange());
+      if (!bore.IsDone() || bore.HasErrors() || bore.Shape().IsNull()) {
+        throw std::runtime_error("OCCT rounded threaded-hole bore failed");
+      }
+      result = cut_thread_tools(bore.Shape(), thread_cutters);
     } else {
       // Subtract the helical tool before opening the predrill bore. Passing
       // both overlapping tools as a compound can preserve the removed thread
@@ -1952,11 +2143,16 @@ void Kernel::apply_job(const FfiJob& job) {
         }
         result = trim.Shape();
       }
-      const std::vector<TopoDS_Shape> cutters =
-          make_external_thread_cutters(
+      std::vector<TopoDS_Shape> cutters =
+          job.thread_form == 1 ? make_rounded_thread_cutters(
+              thread_axis, job.thread_major_diameter, job.thread_minor_diameter,
+              job.thread_pitch, job.thread_corner_radius, 0.0,
+              requested_depth, job.thread_left_hand, false) : make_external_thread_cutters(
               thread_axis, job.thread_major_diameter,
               job.thread_pitch_diameter, job.thread_minor_diameter,
               job.thread_pitch, requested_depth, job.thread_left_hand);
+      trim_thread_tools_at_depth(cutters, thread_axis,
+          job.thread_major_diameter * 0.5, job.thread_pitch, requested_depth, true);
       GProp_GProps before_thread_properties;
       BRepGProp::VolumeProperties(result, before_thread_properties);
       result = cut_thread_tools(result, cutters);
@@ -2498,6 +2694,115 @@ static std::string topology_signature(const TopoDS_Shape& shape) {
   return std::string("connectivity-v1:") + std::to_string(hash);
 }
 
+// At a tangential join, independently sampled circular and curved boundaries
+// can cross even though their exact curves do not. OCCT's ordinary wire healer
+// does not always refine adjacent edges sharing that vertex. Add the other
+// boundary's angular stations to the circle, then let OCCT rebuild all pcurves
+// of that shared edge. This changes only sampling, never the BRep or deflection.
+class TangentBoundaryMeshContext : public BRepMesh_Context {
+ public:
+  Standard_Boolean HealModel() override {
+    if (!BRepMesh_Context::HealModel()) return false;
+    const auto& model = GetModel();
+    for (int pass = 0; pass <= 4; ++pass) {
+      std::map<IMeshData::IEdgePtr, std::vector<double>> additions;
+      bool crossing = false;
+      for (int fi = 0; fi < model->FacesNb(); ++fi) {
+        const auto& face = model->GetFace(fi);
+        if (face->GetSurface()->GetType() != GeomAbs_Plane) continue;
+        for (int wi = 0; wi < face->WiresNb(); ++wi) {
+          const auto& wire = face->GetWire(wi);
+          for (int ei = 0; ei < wire->EdgesNb(); ++ei) {
+            const int ni = (ei + 1) % wire->EdgesNb();
+            auto a = wire->GetEdge(ei);
+            auto b = wire->GetEdge(ni);
+            if (a == b || !a->GetSameParam() || !b->GetSameParam() ||
+                !a->GetSameRange() || !b->GetSameRange()) continue;
+            BRepAdaptor_Curve ac(a->GetEdge()), bc(b->GetEdge());
+            const bool a_circle = ac.GetType() == GeomAbs_Circle;
+            if (a_circle == (bc.GetType() == GeomAbs_Circle)) continue;
+            const auto& ap = a->GetPCurve(face.get(), wire->GetEdgeOrientation(ei));
+            const auto& bp = b->GetPCurve(face.get(), wire->GetEdgeOrientation(ni));
+            auto cross = [](const gp_Pnt2d& p, const gp_Pnt2d& q, const gp_Pnt2d& r) {
+              return (q.X()-p.X())*(r.Y()-p.Y()) - (q.Y()-p.Y())*(r.X()-p.X());
+            };
+            for (int ai = 1; ai < ap->ParametersNb(); ++ai) {
+              for (int bi = 1; bi < bp->ParametersNb(); ++bi) {
+                const auto& p = ap->GetPoint(ai-1); const auto& q = ap->GetPoint(ai);
+                const auto& r = bp->GetPoint(bi-1); const auto& s = bp->GetPoint(bi);
+                // Adjacent segments meeting at a shared vertex do not have a
+                // proper crossing. Roundoff in the rebuilt pcurves can leave
+                // their endpoint coordinates a few ulps apart.
+                if (std::min({p.SquareDistance(r), p.SquareDistance(s),
+                              q.SquareDistance(r), q.SquareDistance(s)}) <=
+                    Precision::SquareConfusion()) continue;
+                if (cross(p,q,r)*cross(p,q,s) >= -1e-18 ||
+                    cross(r,s,p)*cross(r,s,q) >= -1e-18) continue;
+                crossing = true;
+                auto circular = a_circle ? a : b;
+                auto other = a_circle ? b : a;
+                const int oi = a_circle ? bi : ai;
+                BRepAdaptor_Curve curve(circular->GetEdge());
+                BRepAdaptor_Curve other_curve(other->GetEdge());
+                const auto& other_pcurve = a_circle ? bp : ap;
+                const double first = curve.FirstParameter(), last = curve.LastParameter();
+                for (int pi = oi-1; pi <= oi; ++pi) {
+                  // SameParameter/SameRange gives the exact 3D location even
+                  // when this pcurve's sample order differs from the 3D list.
+                  const gp_Pnt point = other_curve.Value(other_pcurve->GetParameter(pi));
+                  double parameter = ElCLib::Parameter(curve.Circle(), point);
+                  parameter += kTau * std::ceil((first - parameter) / kTau);
+                  if (parameter > first+1e-10 && parameter < last-1e-10)
+                    additions[circular].push_back(parameter);
+                }
+              }
+            }
+          }
+        }
+      }
+      if (!crossing) return true;
+      if (additions.empty() || pass == 4) {
+        throw std::runtime_error("OCCT could not discretize tangential face boundaries without crossing chords");
+      }
+      bool inserted = false;
+      for (auto& entry : additions) {
+        auto edge = entry.first;
+        auto& parameters = entry.second;
+        std::sort(parameters.begin(), parameters.end());
+        BRepAdaptor_Curve curve(edge->GetEdge());
+        const auto& points = edge->GetCurve();
+        const bool ascending = points->GetParameter(0) <
+            points->GetParameter(points->ParametersNb()-1);
+        bool edge_inserted = false;
+        for (double parameter : parameters) {
+          int index = 0;
+          while (index < points->ParametersNb() &&
+                 (ascending ? points->GetParameter(index) < parameter :
+                              points->GetParameter(index) > parameter)) ++index;
+          if ((index < points->ParametersNb() && std::abs(points->GetParameter(index)-parameter) < 1e-10) ||
+              (index > 0 && std::abs(points->GetParameter(index-1)-parameter) < 1e-10)) continue;
+          points->InsertPoint(index, curve.Value(parameter), parameter);
+          inserted = true;
+          edge_inserted = true;
+        }
+        if (!edge_inserted) continue;
+        edge->SetStatus(IMeshData_Outdated);
+        for (int pi = 0; pi < edge->PCurvesNb(); ++pi) {
+          const auto& pcurve = edge->GetPCurve(pi);
+          pcurve->Clear(false);
+          pcurve->GetFace()->SetStatus(IMeshData_Outdated);
+        }
+        BRepMesh_EdgeDiscret::Tessellate2d(edge, true);
+      }
+      if (!inserted) {
+        throw std::runtime_error("OCCT could not refine crossing tangential face boundaries");
+      }
+      if (!BRepMesh_Context::HealModel()) return false;
+    }
+    return true;
+  }
+};
+
 static FfiMesh mesh_shape(std::uint64_t body_id,
                           const TopoDS_Shape& shape,
                           double linear_deflection,
@@ -2540,8 +2845,12 @@ static FfiMesh mesh_shape(std::uint64_t body_id,
       linear_deflection > 0.0 ? linear_deflection : 0.15;
   const double angular =
       angular_deflection > 0.0 ? angular_deflection : 0.35;
-  BRepMesh_IncrementalMesh mesher(shape, linear, false, angular, true);
-  mesher.Perform();
+  BRepMesh_IncrementalMesh mesher;
+  mesher.SetShape(shape);
+  mesher.ChangeParameters().Deflection = linear;
+  mesher.ChangeParameters().Angle = angular;
+  mesher.ChangeParameters().InParallel = true;
+  mesher.Perform(new TangentBoundaryMeshContext());
 
   FfiMesh output;
   output.body_id = body_id;
@@ -2554,6 +2863,24 @@ static FfiMesh mesh_shape(std::uint64_t body_id,
     const Handle(Poly_Triangulation) triangulation =
         BRep_Tool::Triangulation(face, location);
     if (triangulation.IsNull()) {
+      GProp_GProps properties;
+      BRepGProp::SurfaceProperties(face, properties);
+      if (!std::isfinite(properties.Mass()) || std::abs(properties.Mass()) > 1e-14) {
+        std::ostringstream diagnostic;
+        diagnostic.precision(17);
+        diagnostic << properties.Mass();
+        throw std::runtime_error("OCCT did not triangulate body " +
+            std::to_string(body_id) + " face " + std::to_string(face_index - 1) +
+            " (area " + diagnostic.str() +
+            ", mesh status " + std::to_string(mesher.GetStatusFlags()) + ")");
+      }
+      // Even a collapsed face occupies a topology index. Keep the metadata
+      // slot so subsequent face picking still refers to the same BRep face.
+      output.face_first_indices.push_back(static_cast<std::uint32_t>(output.indices.size()));
+      output.face_index_counts.push_back(0);
+      append_plane(output.face_plane_data, face);
+      append_face_signature(output.face_signature_data, face);
+      append_cylinder(output.face_cylinder_data, face);
       continue;
     }
     if (!triangulation->HasNormals()) {

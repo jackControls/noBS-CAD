@@ -2055,7 +2055,9 @@
       "operations": [
         "material_catalog",
         "body_appearances",
-        "set_body_appearance"
+        "set_body_appearance",
+        "project_visibility",
+        "project_set_visibility"
       ]
     },
     {
