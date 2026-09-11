@@ -162,7 +162,7 @@ fn save(client: &mut Client, path: &Path) -> Result<()> {
 // Real geometry checks for authored lessons belong alongside those recipes.
 fn workspace_source(completed_chapter: &str) -> Result<String> {
     let source = json!({"version":1,"name":"Scripts workspace regression","starting_state":"empty","steps":[
-        {"chapter":"Locate the test profile","note":"Load this source without executing it, then run in its own design tab.","duration_ms":0},
+        {"chapter":"Locate the test profile","note":"Load this source without executing it, then run in its own design tab.","duration_ms":10000},
         {"id":"begin","call":{"group":"sketch/draw","operation":"sketch_begin","arguments":{"name":"Workspace stock","plane":{"type":"origin_plane","plane":"xy"}}}},
         {"id":"profile","call":{"group":"sketch/draw","operation":"sketch_add_rectangle_locked","arguments":{"mode":"two_point","anchor":{"x":0,"y":0},"corner_hint":{"x":20,"y":10},"width_mm":20,"height_mm":10,"ctrl_held":true}}},
         {"id":"locate","call":{"group":"sketch/constrain","operation":"sketch_add_constraint","arguments":{"type":"fix","entity":{"$select":{"from":{"$ref":"profile","pointer":"/sketch"},"path":"/entities","where":{"/kind":"point","/position/x":0,"/position/y":0},"take":"one","pointer":"/id"}}}}},
@@ -316,6 +316,32 @@ fn workspace_inner(args: &[String]) -> Result<()> {
             .as_str()
             .context("New design has no session")?
             .to_owned();
+        wait_until("the workspace presentation to start", || {
+            let state = status(&mut client)?;
+            Ok((state["chapter"] == "Locate the test profile").then_some(()))
+        })?;
+        control(&mut client, "Pause", None)?;
+        control(&mut client, "Presentation speed", Some("8"))?;
+        let faster = ui(&mut client, json!({"action":"inspect"}))?;
+        ensure!(
+            controls(&faster).any(|control| control["label"] == "Script speed"
+                && control["value"] == "8"
+                && control["disabled"] == true),
+            "The Scripts dock must display the live playback speed"
+        );
+        control(&mut client, "Presentation speed", Some("fast"))?;
+        let maximum = ui(&mut client, json!({"action":"inspect"}))?;
+        ensure!(
+            controls(&maximum).any(|control| control["label"] == "Script run mode"
+                && control["value"] == "fast"
+                && control["disabled"] == true),
+            "The Scripts dock must display the live maximum-speed mode"
+        );
+        ensure!(
+            status(&mut client)?["paused"] == true,
+            "Changing speed must preserve the paused operation gate"
+        );
+        control(&mut client, "Resume", None)?;
         let completed = wait_until("the native workspace script to complete", || {
             let state = status(&mut client)?;
             let inspected = ui(&mut client, json!({"action":"inspect"}))?;
@@ -373,6 +399,12 @@ fn workspace_inner(args: &[String]) -> Result<()> {
         "The editable extrusion distance changed"
     );
     let completed_ui = ui(&mut client, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&completed_ui).any(|control| control["label"] == "Script speed"
+            && control["value"] == "2"
+            && control["disabled"] == false),
+        "A completed run must restore the unchanged next-run speed preference"
+    );
     let final_tabs = project_tabs(&completed_ui);
     ensure!(
         final_tabs.len() == original_tabs.len() + 1,
@@ -463,6 +495,7 @@ fn workspace_inner(args: &[String]) -> Result<()> {
     save(&mut client, &out.join(format!("workspace-{stamp}.nbcad")))?;
     let report = json!({"passed":true,"original_session_id":original_session,"final_session_id":final_session,
         "cases":["semantic-scripts-button","path-load-with-comments","load-preserves-model-and-tabs","native-run-in-new-design",
+            "live-speed-mode-agreement","paused-speed-change","retained-launch-preferences",
             "editable-sketch-extrude","retained-original-tab","completed-playback-close-show","script-dock-close-show","docks-release-viewport-space"],
         "script_path":source_path,"additional_load_path":options.get("--script"),"source":source,"original_tabs":original_tabs,"final_tabs":final_tabs,"presentation":shown,
         "viewport_sizes":{"docked":docked_size,"playback_closed":playback_closed_size,"scripts_closed":viewport_size(&closed)?},
