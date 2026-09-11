@@ -77,7 +77,15 @@ impl Author {
                 ),
             );
             let id = self.uid("diameter");
-            self.call(&id,"drawing/dimensions","drawing_add_radial_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[0].0),"feature":{"body_id":body_ref(name),"edge_id":at(&circle,"/edge_id"),"edge_key":at(&circle,"/edge_key"),"fallback_center":at(&circle,"/center_model"),"fallback_normal":at(&circle,"/normal_model"),"fallback_radius":at(&circle,"/radius"),"closed":at(&circle,"/closed")},"mode":"diameter","leader_angle_deg":30.+i as f64*80.,"offset":12.+i as f64*3.,"precision":2}));
+            // Keep the label ink clear of the bucket lips, carrier wall and
+            // pinion teeth without changing the associated circular feature.
+            let (leader_angle, offset) = match (name, i) {
+                ("stage", 1) => (180., 22.),
+                ("tower", 1) => (110., 22.),
+                ("pinion", 1) => (110., 26.),
+                _ => (30. + i as f64 * 80., 12. + i as f64 * 3.),
+            };
+            self.call(&id,"drawing/dimensions","drawing_add_radial_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[0].0),"feature":{"body_id":body_ref(name),"edge_id":at(&circle,"/edge_id"),"edge_key":at(&circle,"/edge_key"),"fallback_center":at(&circle,"/center_model"),"fallback_normal":at(&circle,"/normal_model"),"fallback_radius":at(&circle,"/radius"),"closed":at(&circle,"/closed")},"mode":"diameter","leader_angle_deg":leader_angle,"offset":offset,"precision":2}));
         }
         let make_anchor = |z: f64| {
             let source = r(&views[1].1);

@@ -13648,7 +13648,7 @@
           },
           "leader_angle_deg": 110.0,
           "mode": "diameter",
-          "offset": 15.0,
+          "offset": 26.0,
           "precision": 2,
           "sheet_id": {
             "$ref": "pinion_sheet_id"

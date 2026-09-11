@@ -78506,9 +78506,9 @@
               "pointer": "/radius"
             }
           },
-          "leader_angle_deg": 110.0,
+          "leader_angle_deg": 180.0,
           "mode": "diameter",
-          "offset": 15.0,
+          "offset": 22.0,
           "precision": 2,
           "sheet_id": {
             "$ref": "stage_sheet_id"
@@ -80561,7 +80561,7 @@
           },
           "leader_angle_deg": 110.0,
           "mode": "diameter",
-          "offset": 15.0,
+          "offset": 22.0,
           "precision": 2,
           "sheet_id": {
             "$ref": "tower_sheet_id"
@@ -84521,7 +84521,7 @@
           },
           "leader_angle_deg": 110.0,
           "mode": "diameter",
-          "offset": 15.0,
+          "offset": 26.0,
           "precision": 2,
           "sheet_id": {
             "$ref": "pinion_sheet_id"
