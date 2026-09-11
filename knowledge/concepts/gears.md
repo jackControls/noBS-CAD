@@ -68,6 +68,8 @@ both gears and their mounts after an edit, then test motion, interference,
 save/reopen and a small printed fit sample. A solved gear relation constrains
 motion; it does not establish correct tooth contact, efficiency or load capacity.
 See [additive workholding](additive-workholding.md) for mounting and qualification.
+For speed-increasing generator drives, also check [rotor/load matching](small-wind-generators.md)
+and [bearing supports and axial retention](bearing-stacks.md).
 
 ## Learning reference provenance
 

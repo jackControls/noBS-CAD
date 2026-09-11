@@ -20,6 +20,8 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
 - [Additive workholding](concepts/additive-workholding.md) - Captured guides, assembly access, D-flat roots and qualification.
+- [Small wind rotors and low-speed generators](concepts/small-wind-generators.md) - Power, startup, gearing, motor dimensions and measured loads.
+- [Bearing supports and axial retention](concepts/bearing-stacks.md) - Hardware variants, inner-race contact, spacer stacks and low-drag assembly.
 
 ## Read through MCP
 
