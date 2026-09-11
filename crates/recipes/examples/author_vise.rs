@@ -278,6 +278,15 @@ impl Author {
                 "",
             ),
         );
+        // The profile is visible while it is drawn and extruded. Retain its
+        // editable references in the Browser without layering old profiles
+        // over every later feature in the presentation.
+        self.call(
+            &format!("{id}_hide_references"),
+            "solid/reference",
+            "construction_set_visibility",
+            json!({"visible":false}),
+        );
     }
     fn body_id(&self, part: &str) -> Value {
         reference(&format!("{part}_body_id"), "")

@@ -460,6 +460,16 @@
       }
     },
     {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thread coupon / 40 mm male_hide_references"
+    },
+    {
       "let": {
         "coupon_male_face": {
           "$select": {
@@ -631,6 +641,16 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thread coupon / full bridge engagement_hide_references"
     },
     {
       "let": {
@@ -840,6 +860,16 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Guide coupon / supported rail base_hide_references"
     },
     {
       "call": {
@@ -1078,6 +1108,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Guide coupon / production dovetail_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 14.0,
           "name": "xy datum at 14 mm",
           "reference": {
@@ -1252,6 +1292,16 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Guide coupon / production socket stock_hide_references"
     },
     {
       "call": {
@@ -1526,6 +1576,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Guide coupon / production running clearance_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "body_id": {
             "$ref": "nut_body_id",
             "pointer": ""
@@ -1759,6 +1819,16 @@
         "operation": "solid_extrude"
       },
       "id": "Thread coupon / production shallow flat_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thread coupon / production shallow flat_hide_references"
     },
     {
       "let": {

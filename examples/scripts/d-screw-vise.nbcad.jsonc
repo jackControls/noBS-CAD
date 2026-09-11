@@ -2081,6 +2081,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Frame deck / 230 by 160 by 14_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "body_id": {
             "$ref": "frame_body_id",
             "pointer": ""
@@ -2377,6 +2387,16 @@
         "operation": "solid_extrude"
       },
       "id": "Fixed jaw / 100 mm face and 25 mm stock_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Fixed jaw / 100 mm face and 25 mm stock_hide_references"
     },
     {
       "let": {
@@ -2754,6 +2774,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Captured rail left / 45 degree flanks_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Captured rail right / 45 degree flanks",
           "plane": {
             "plane": "yz",
@@ -2988,6 +3018,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Captured rail right / 45 degree flanks_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 8.0,
           "name": "xy datum at 8 mm",
           "reference": {
@@ -3131,6 +3171,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge key socket left / axial load shoulder_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge key socket left / axial load shoulder_hide_references"
     },
     {
       "call": {
@@ -3297,6 +3347,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge bolt left / frame clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt left / frame clearance_hide_references"
     },
     {
       "call": {
@@ -3595,6 +3655,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge nut left / underside captive pocket_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Bridge key socket right / axial load shoulder",
           "plane": {
             "$ref": "datum_1_plane",
@@ -3702,6 +3772,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge key socket right / axial load shoulder_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge key socket right / axial load shoulder_hide_references"
     },
     {
       "call": {
@@ -3832,6 +3912,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge bolt right / frame clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt right / frame clearance_hide_references"
     },
     {
       "call": {
@@ -4130,6 +4220,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge nut right / underside captive pocket_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Mount slot 0-0 / outboard 20 by 7",
           "plane": {
             "$ref": "datum_2_plane",
@@ -4237,6 +4337,16 @@
         "operation": "solid_extrude"
       },
       "id": "Mount slot 0-0 / outboard 20 by 7_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Mount slot 0-0 / outboard 20 by 7_hide_references"
     },
     {
       "call": {
@@ -4352,6 +4462,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Mount slot 0-1 / outboard 20 by 7_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Mount slot 1-0 / outboard 20 by 7",
           "plane": {
             "$ref": "datum_2_plane",
@@ -4463,6 +4583,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Mount slot 1-0 / outboard 20 by 7_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Mount slot 1-1 / outboard 20 by 7",
           "plane": {
             "$ref": "datum_2_plane",
@@ -4570,6 +4700,16 @@
         "operation": "solid_extrude"
       },
       "id": "Mount slot 1-1 / outboard 20 by 7_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Mount slot 1-1 / outboard 20 by 7_hide_references"
     },
     {
       "body_id": {
@@ -4730,6 +4870,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Carriage / 72 mm captured bearing length_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Moving jaw / 100 mm gripping face",
           "plane": {
             "$ref": "datum_0_plane",
@@ -4837,6 +4987,16 @@
         "operation": "solid_extrude"
       },
       "id": "Moving jaw / 100 mm gripping face_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Moving jaw / 100 mm gripping face_hide_references"
     },
     {
       "call": {
@@ -5081,6 +5241,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw gusset left / load into long carriage_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": -33.0,
           "name": "xz datum at -33 mm",
           "reference": {
@@ -5317,6 +5487,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw gusset right / load into long carriage_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw gusset right / load into long carriage_hide_references"
     },
     {
       "let": {
@@ -5660,6 +5840,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw dovetail left / profile clearance_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Jaw dovetail right / profile clearance",
           "plane": {
             "$ref": "datum_5_plane",
@@ -5890,6 +6080,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw dovetail right / profile clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw dovetail right / profile clearance_hide_references"
     },
     {
       "call": {
@@ -6134,6 +6334,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Carriage / fixed-root clearance_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 76.0,
           "name": "yz datum at 76 mm",
           "reference": {
@@ -6300,6 +6510,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / full round thrust chamber_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 33.6,
           "name": "xy datum at 33.6 mm",
           "reference": {
@@ -6447,6 +6667,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / removable keeper slot_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Jaw / open keeper rear relief",
           "plane": {
             "$ref": "datum_8_plane",
@@ -6554,6 +6784,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw / open keeper rear relief_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / open keeper rear relief_hide_references"
     },
     {
       "call": {
@@ -6762,6 +7002,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / 45 degree keeper shoulder left_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Jaw / 45 degree keeper shoulder right",
           "plane": {
             "$ref": "datum_8_plane",
@@ -6966,6 +7216,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / 45 degree keeper shoulder right_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Jaw / keeper pin clearance",
           "plane": {
             "$ref": "datum_6_plane",
@@ -7092,6 +7352,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw / keeper pin clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / keeper pin clearance_hide_references"
     },
     {
       "call": {
@@ -7300,6 +7570,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / keeper pin clearance / print roof_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Jaw / recessed keeper pin head",
           "plane": {
             "$ref": "datum_6_plane",
@@ -7426,6 +7706,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw / recessed keeper pin head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / recessed keeper pin head_hide_references"
     },
     {
       "call": {
@@ -7630,6 +7920,16 @@
         "operation": "solid_extrude"
       },
       "id": "Jaw / recessed keeper pin head / print roof_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / recessed keeper pin head / print roof_hide_references"
     },
     {
       "call": {
@@ -7962,6 +8262,16 @@
       "id": "Jaw / keeper nut pocket_build"
     },
     {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Jaw / keeper nut pocket_hide_references"
+    },
+    {
       "body_id": {
         "$ref": "jaw_body_id",
         "pointer": ""
@@ -8156,6 +8466,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Threaded bridge / central housing_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Threaded bridge / broad load crossbeam",
           "plane": {
             "$ref": "datum_10_plane",
@@ -8263,6 +8583,16 @@
         "operation": "solid_extrude"
       },
       "id": "Threaded bridge / broad load crossbeam_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Threaded bridge / broad load crossbeam_hide_references"
     },
     {
       "call": {
@@ -8507,6 +8837,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge gusset left / thread reaction into keyed feet_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Bridge gusset right / thread reaction into keyed feet",
           "plane": {
             "$ref": "datum_11_plane",
@@ -8711,6 +9051,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge gusset right / thread reaction into keyed feet_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Bridge foot left / deck seat",
           "plane": {
             "$ref": "datum_0_plane",
@@ -8818,6 +9168,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge foot left / deck seat_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge foot left / deck seat_hide_references"
     },
     {
       "call": {
@@ -8965,6 +9325,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge key left / replaceable shear shoulder_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge key left / replaceable shear shoulder_hide_references"
     },
     {
       "call": {
@@ -9131,6 +9501,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge bolt left / self-supporting bore_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt left / self-supporting bore_hide_references"
     },
     {
       "call": {
@@ -9339,6 +9719,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt left / self-supporting bore / print roof_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Bridge foot right / deck seat",
           "plane": {
             "$ref": "datum_0_plane",
@@ -9450,6 +9840,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge foot right / deck seat_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Bridge key right / replaceable shear shoulder",
           "plane": {
             "$ref": "datum_12_plane",
@@ -9557,6 +9957,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge key right / replaceable shear shoulder_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge key right / replaceable shear shoulder_hide_references"
     },
     {
       "call": {
@@ -9687,6 +10097,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge bolt right / self-supporting bore_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt right / self-supporting bore_hide_references"
     },
     {
       "call": {
@@ -9891,6 +10311,16 @@
         "operation": "solid_extrude"
       },
       "id": "Bridge bolt right / self-supporting bore / print roof_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Bridge bolt right / self-supporting bore / print roof_hide_references"
     },
     {
       "let": {
@@ -10206,6 +10636,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / 24 mm rounded-thread blank_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 78.8,
           "name": "yz datum at 78.8 mm",
           "reference": {
@@ -10368,6 +10808,16 @@
         "operation": "solid_extrude"
       },
       "id": "Screw / 18 mm removable-fitting stub_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / 18 mm removable-fitting stub_hide_references"
     },
     {
       "call": {
@@ -10758,6 +11208,16 @@
         "operation": "solid_extrude"
       },
       "id": "Screw grip / thick comfortable T profile_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw grip / thick comfortable T profile_hide_references"
     },
     {
       "let": {
@@ -11513,6 +11973,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / axial M5 clearance_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 80.0,
           "name": "yz datum at 80 mm",
           "reference": {
@@ -11843,6 +12313,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / captive fitting nut_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 42.0,
           "name": "xy datum at 42 mm",
           "reference": {
@@ -11990,6 +12470,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / nut loading throat from print flat_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Screw / sliding nut-support keyway",
           "plane": {
             "$ref": "datum_19_plane",
@@ -12097,6 +12587,16 @@
         "operation": "solid_extrude"
       },
       "id": "Screw / sliding nut-support keyway_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / sliding nut-support keyway_hide_references"
     },
     {
       "let": {
@@ -12367,6 +12867,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / full round neck_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 95.0,
           "name": "yz datum at 95 mm",
           "reference": {
@@ -12533,6 +13043,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / 32 mm load head_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 79.30000000000001,
           "name": "yz datum at 79.30000000000001 mm",
           "reference": {
@@ -12695,6 +13215,16 @@
         "operation": "solid_extrude"
       },
       "id": "Thrust fitting / D socket_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / D socket_hide_references"
     },
     {
       "call": {
@@ -12933,6 +13463,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / D key bearing_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 40.75,
           "name": "xy datum at 40.75 mm",
           "reference": {
@@ -13076,6 +13616,16 @@
         "operation": "solid_extrude"
       },
       "id": "Thrust fitting / captive nut support ledge_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / captive nut support ledge_hide_references"
     },
     {
       "call": {
@@ -13246,6 +13796,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / axial retaining screw_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 100.0,
           "name": "yz datum at 100 mm",
           "reference": {
@@ -13410,6 +13970,16 @@
       "id": "Thrust fitting / recessed M5 socket head_build"
     },
     {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust fitting / recessed M5 socket head_hide_references"
+    },
+    {
       "body_id": {
         "$ref": "thrust_body_id",
         "pointer": ""
@@ -13564,6 +14134,16 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / 11.2 mm cross plate_hide_references"
     },
     {
       "call": {
@@ -13802,6 +14382,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / diagonal opening-load ear left_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Keeper / diagonal opening-load ear right",
           "plane": {
             "$ref": "datum_8_plane",
@@ -14036,6 +14626,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / diagonal opening-load ear right_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 81.8,
           "name": "yz datum at 81.8 mm",
           "reference": {
@@ -14202,6 +14802,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / sleeve running clearance_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 33.0,
           "name": "xy datum at 33 mm",
           "reference": {
@@ -14345,6 +14955,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper / downward installation throat_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / downward installation throat_hide_references"
     },
     {
       "call": {
@@ -14511,6 +15131,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper / cross-pin clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / cross-pin clearance_hide_references"
     },
     {
       "call": {
@@ -14719,6 +15349,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / cross-pin clearance / print roof_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Keeper / cross-pin axial slot front",
           "plane": {
             "$ref": "datum_28_plane",
@@ -14845,6 +15485,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper / cross-pin axial slot front_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / cross-pin axial slot front_hide_references"
     },
     {
       "call": {
@@ -15053,6 +15703,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / cross-pin axial slot front / print roof_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 67.25,
           "name": "xy datum at 67.25 mm",
           "reference": {
@@ -15196,6 +15856,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper / cross-pin slot connecting web_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper / cross-pin slot connecting web_hide_references"
     },
     {
       "let": {
@@ -15480,6 +16150,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_screw_left / M6 x 35 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 39.0,
           "name": "xy datum at 39 mm",
           "reference": {
@@ -15642,6 +16322,16 @@
         "operation": "solid_extrude"
       },
       "id": "bridge_screw_left / socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_screw_left / socket head_hide_references"
     },
     {
       "call": {
@@ -16007,6 +16697,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_nut_left / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 4.9,
           "name": "xy datum at 4.9 mm",
           "reference": {
@@ -16173,6 +16873,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_nut_left / thread envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "bridge_screw_right / M6 x 35 shaft",
           "plane": {
             "$ref": "datum_30_plane",
@@ -16334,6 +17044,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_screw_right / M6 x 35 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "bridge_screw_right / socket head",
           "plane": {
             "$ref": "datum_31_plane",
@@ -16460,6 +17180,16 @@
         "operation": "solid_extrude"
       },
       "id": "bridge_screw_right / socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_screw_right / socket head_hide_references"
     },
     {
       "call": {
@@ -16789,6 +17519,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_nut_right / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "bridge_nut_right / thread envelope",
           "plane": {
             "$ref": "datum_33_plane",
@@ -16915,6 +17655,16 @@
         "operation": "solid_extrude"
       },
       "id": "bridge_nut_right / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "bridge_nut_right / thread envelope_hide_references"
     },
     {
       "call": {
@@ -17116,6 +17866,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper pin / M5 x 90 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 50.0,
           "name": "xz datum at 50 mm",
           "reference": {
@@ -17278,6 +18038,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper pin / recessed socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper pin / recessed socket head_hide_references"
     },
     {
       "call": {
@@ -17607,6 +18377,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper pin / trapped M5 nut_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": -40.2,
           "name": "xz datum at -40.2 mm",
           "reference": {
@@ -17769,6 +18549,16 @@
         "operation": "solid_extrude"
       },
       "id": "Keeper pin nut / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Keeper pin nut / thread envelope_hide_references"
     },
     {
       "call": {
@@ -17970,6 +18760,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust screw / M5 x 25 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "Thrust screw / recessed socket head",
           "plane": {
             "$ref": "datum_25_plane",
@@ -18096,6 +18896,16 @@
         "operation": "solid_extrude"
       },
       "id": "Thrust screw / recessed socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust screw / recessed socket head_hide_references"
     },
     {
       "call": {
@@ -18461,6 +19271,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust screw / captive M5 nut_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 80.2,
           "name": "yz datum at 80.2 mm",
           "reference": {
@@ -18623,6 +19443,16 @@
         "operation": "solid_extrude"
       },
       "id": "Thrust nut / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Thrust nut / thread envelope_hide_references"
     },
     {
       "call": {
@@ -18824,6 +19654,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_bolt / M6 x 45 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": 15.6,
           "name": "xy datum at 15.6 mm",
           "reference": {
@@ -18990,6 +19830,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_bolt / socket head_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_0_top_washer / broad washer",
           "plane": {
             "$ref": "datum_0_plane",
@@ -19147,6 +19997,16 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_top_washer / broad washer_hide_references"
     },
     {
       "call": {
@@ -19313,6 +20173,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_0_top_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_top_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -19514,6 +20384,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_bottom_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": -19.700000000000003,
           "name": "xy datum at -19.700000000000003 mm",
           "reference": {
@@ -19676,6 +20556,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_0_bottom_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_bottom_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -20041,6 +20931,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_nut / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "distance": -24.7,
           "name": "xy datum at -24.7 mm",
           "reference": {
@@ -20207,6 +21107,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_0_nut / thread envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_1_bolt / M6 x 45 shaft",
           "plane": {
             "$ref": "datum_40_plane",
@@ -20368,6 +21278,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_bolt / M6 x 45 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_1_bolt / socket head",
           "plane": {
             "$ref": "datum_41_plane",
@@ -20494,6 +21414,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_1_bolt / socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_bolt / socket head_hide_references"
     },
     {
       "call": {
@@ -20659,6 +21589,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_top_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_1_top_washer / clearance",
           "plane": {
             "$ref": "datum_42_plane",
@@ -20785,6 +21725,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_1_top_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_top_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -20950,6 +21900,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_bottom_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_1_bottom_washer / clearance",
           "plane": {
             "$ref": "datum_44_plane",
@@ -21076,6 +22036,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_1_bottom_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_bottom_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -21405,6 +22375,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_nut / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_0_1_nut / thread envelope",
           "plane": {
             "$ref": "datum_46_plane",
@@ -21531,6 +22511,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_0_1_nut / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_0_1_nut / thread envelope_hide_references"
     },
     {
       "call": {
@@ -21696,6 +22686,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_bolt / M6 x 45 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_0_bolt / socket head",
           "plane": {
             "$ref": "datum_41_plane",
@@ -21822,6 +22822,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_0_bolt / socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_bolt / socket head_hide_references"
     },
     {
       "call": {
@@ -21987,6 +22997,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_top_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_0_top_washer / clearance",
           "plane": {
             "$ref": "datum_42_plane",
@@ -22113,6 +23133,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_0_top_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_top_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -22278,6 +23308,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_bottom_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_0_bottom_washer / clearance",
           "plane": {
             "$ref": "datum_44_plane",
@@ -22404,6 +23444,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_0_bottom_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_bottom_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -22733,6 +23783,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_nut / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_0_nut / thread envelope",
           "plane": {
             "$ref": "datum_46_plane",
@@ -22859,6 +23919,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_0_nut / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_0_nut / thread envelope_hide_references"
     },
     {
       "call": {
@@ -23024,6 +24094,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_bolt / M6 x 45 shaft_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_1_bolt / socket head",
           "plane": {
             "$ref": "datum_41_plane",
@@ -23150,6 +24230,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_1_bolt / socket head_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_bolt / socket head_hide_references"
     },
     {
       "call": {
@@ -23315,6 +24405,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_top_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_1_top_washer / clearance",
           "plane": {
             "$ref": "datum_42_plane",
@@ -23441,6 +24541,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_1_top_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_top_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -23606,6 +24716,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_bottom_washer / broad washer_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_1_bottom_washer / clearance",
           "plane": {
             "$ref": "datum_44_plane",
@@ -23732,6 +24852,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_1_bottom_washer / clearance_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_bottom_washer / clearance_hide_references"
     },
     {
       "call": {
@@ -24061,6 +25191,16 @@
     {
       "call": {
         "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_nut / M6 envelope_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {
           "name": "mount_1_1_nut / thread envelope",
           "plane": {
             "$ref": "datum_46_plane",
@@ -24187,6 +25327,16 @@
         "operation": "solid_extrude"
       },
       "id": "mount_1_1_nut / thread envelope_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "mount_1_1_nut / thread envelope_hide_references"
     },
     {
       "call": {
@@ -24414,6 +25564,16 @@
         "operation": "solid_extrude"
       },
       "id": "Screw / shallow continuous print flat_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "visible": false
+        },
+        "group": "solid/reference",
+        "operation": "construction_set_visibility"
+      },
+      "id": "Screw / shallow continuous print flat_hide_references"
     },
     {
       "body_id": {
