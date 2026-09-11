@@ -48188,9 +48188,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48213,9 +48214,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48257,9 +48259,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48282,9 +48285,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48307,9 +48311,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -48363,9 +48368,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48388,9 +48394,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48432,9 +48439,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48457,9 +48465,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48482,9 +48491,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -48514,9 +48524,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48539,9 +48550,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48583,9 +48595,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48608,9 +48621,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48633,9 +48647,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -48689,9 +48704,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48714,9 +48730,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -48758,9 +48775,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48783,9 +48801,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -48808,9 +48827,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -53641,9 +53661,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -53666,9 +53687,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -53710,9 +53732,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -53735,9 +53758,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -53760,9 +53784,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -54007,9 +54032,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54032,9 +54058,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54076,9 +54103,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54101,9 +54129,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54126,9 +54155,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -54393,9 +54423,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54418,9 +54449,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54462,9 +54494,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54487,9 +54520,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54512,9 +54546,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }
@@ -54779,9 +54814,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/id",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54804,9 +54840,10 @@
                 },
                 "path": "/faces",
                 "pointer": "/key",
-                "take": "first",
+                "take": "one",
                 "where": {
-                  "/plane/normal/2": 1.0
+                  "/plane/normal/2": -1.0,
+                  "/plane/origin/2": 0.0
                 }
               }
             },
@@ -54848,9 +54885,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/origin",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54873,9 +54911,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/normal",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               },
@@ -54898,9 +54937,10 @@
                   },
                   "path": "/faces",
                   "pointer": "/plane/u",
-                  "take": "first",
+                  "take": "one",
                   "where": {
-                    "/plane/normal/2": 1.0
+                    "/plane/normal/2": -1.0,
+                    "/plane/origin/2": 0.0
                   }
                 }
               }

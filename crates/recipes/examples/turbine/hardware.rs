@@ -432,12 +432,21 @@ impl Author {
                 "one",
                 "",
             );
+            // Plate thickness edits move the top face. Both occurrences and
+            // their mounted hardware retain the stage's unchanged underside
+            // as their physical datum while keeping the authored mate frames.
+            let stage = matches!(name, "stage" | "stage_upper");
+            let anchor = if stage {
+                json!({"/plane/normal/2":-1.,"/plane/origin/2":0.})
+            } else {
+                json!({"/plane/normal/2":1.})
+            };
             let field = |pointer: &str| {
                 select(
                     body.clone(),
                     "/faces",
-                    json!({"/plane/normal/2":1.}),
-                    "first",
+                    anchor.clone(),
+                    if stage { "one" } else { "first" },
                     pointer,
                 )
             };
