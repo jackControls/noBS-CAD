@@ -8,8 +8,7 @@
   (NWTC DFM, PALNI DFMA, NIST PMI, Materials Project / OQMD / COD) and
   explicit NC / proprietary link-only rows.
 - **Docs**: Added `docs/machine-design-kb.md` and
-  `docs/machine-design-distill-vs-link.md` (locked distill vs link policy;
-  Zenodo GD&T confirmed CC BY 4.0; NASA fastener manual public use permitted).
+  `docs/machine-design-distill-vs-link.md` (verified distill vs link policy).
 
 ## 2026-07-29
 
