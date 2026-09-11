@@ -3,8 +3,7 @@ use std::sync::Mutex;
 
 use nbcad_core::{BodyAppearance, DocumentDto};
 use nbcad_occt::{
-    drawing_projection_anchors, drawing_projection_circles, exact_interference_report,
-    exact_pair_result, DrawingProjectionRequest, OcctKernel,
+    exact_interference_report, exact_pair_result, DrawingProjectionRequest, OcctKernel,
 };
 use nbcad_sketch::{
     approximate_pair_result, contact_violation_score, err_json, host, ok_json, BodyPoseDto,
@@ -225,6 +224,12 @@ impl AppState {
     }
 
     pub fn engine_call(&self, method: &str, payload: &str) -> String {
+        if method == "drawing_export" {
+            return self.drawing_export(payload);
+        }
+        if method == "drawing_projection" {
+            return self.drawing_projection(payload);
+        }
         let mut workspace = self.inner.lock().expect("engine lock poisoned");
         let inner = workspace.active_mut();
         let result = host::handle(&mut inner.manager, method, payload);
@@ -678,6 +683,35 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
+    pub fn drawing_export(&self, payload: &str) -> String {
+        let request: nbcad_occt::drawing_export::DrawingExportRequest =
+            match serde_json::from_str(payload) {
+                Ok(request) => request,
+                Err(error) => return err_json(format!("bad request payload: {error}")),
+            };
+        let workspace = match self.inner.lock() {
+            Ok(workspace) => workspace,
+            Err(_) => return err_json("engine lock poisoned"),
+        };
+        let inner = workspace.active();
+        let scene = inner.manager.solid_scene();
+        let content = nbcad_occt::drawing_export::export_sheet(
+            &inner.manager.drawing_document(),
+            &scene,
+            &inner.manager.assembly_document(),
+            &request,
+            |r| {
+                        nbcad_occt::project_drawing(&inner.kernel, &scene, &inner.manager.assembly_document(), r).map_err(|e|e.to_string())
+            },
+        );
+        match content {
+            Ok(content) => ok_json(
+                serde_json::json!({"format":request.format,"encoding":"utf8","content":content,"sheet_id":request.sheet_id}),
+            ),
+            Err(error) => err_json(error),
+        }
+    }
+
     pub fn drawing_projection(&self, payload: &str) -> String {
         let request: DrawingProjectionRequest = match serde_json::from_str(payload) {
             Ok(request) => request,
@@ -692,20 +726,13 @@ impl AppState {
         if !scene.errors.is_empty() {
             return err_json("Resolve timeline errors before generating a drawing view.");
         }
-        match inner.kernel.drawing_projection(&request) {
-            Ok(mut projection) => match drawing_projection_anchors(&scene, &request, &projection) {
-                Ok(anchors) => {
-                    projection.anchors = anchors;
-                    match drawing_projection_circles(&scene, &request, &projection) {
-                        Ok(circles) => {
-                            projection.circles = circles;
-                            ok_json(projection)
-                        }
-                        Err(error) => err_json(error.to_string()),
-                    }
-                }
-                Err(error) => err_json(error.to_string()),
-            },
+        match nbcad_occt::project_drawing(
+            &inner.kernel,
+            &scene,
+            &inner.manager.assembly_document(),
+            &request,
+        ) {
+            Ok(projection) => ok_json(projection),
             Err(error) => err_json(error.to_string()),
         }
     }

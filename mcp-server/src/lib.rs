@@ -301,23 +301,40 @@ impl CadServer {
         {
             session::request_engine_query(session_id, engine_method, &payload)?
         } else if execution == Execution::Direct {
-            if name == "drawing_projection" {
+            if name == "drawing_export" {
+                let request: nbcad_occt::drawing_export::DrawingExportRequest =
+                    serde_json::from_value(arguments).map_err(|e| e.to_string())?;
+                let scene = self.manager.solid_scene();
+                let content = nbcad_occt::drawing_export::export_sheet(
+                    &self.manager.drawing_document(),
+                    &scene,
+                    &self.manager.assembly_document(),
+                    &request,
+                    |r| {
+                        nbcad_occt::project_drawing(
+                            &self.kernel,
+                            &scene,
+                            &self.manager.assembly_document(),
+                            r,
+                        )
+                        .map_err(|e| e.to_string())
+                    },
+                )?;
+                json!({"format":request.format,"encoding":"utf8","content":content,"sheet_id":request.sheet_id})
+            } else if name == "drawing_projection" {
                 let request: nbcad_occt::DrawingProjectionRequest =
                     serde_json::from_value(arguments).map_err(|e| e.to_string())?;
                 let scene = self.manager.solid_scene();
                 if !scene.errors.is_empty() {
                     return Err("Resolve timeline errors before generating a drawing view.".into());
                 }
-                let mut projection = self
-                    .kernel
-                    .drawing_projection(&request)
-                    .map_err(|e| e.to_string())?;
-                projection.anchors =
-                    nbcad_occt::drawing_projection_anchors(&scene, &request, &projection)
-                        .map_err(|e| e.to_string())?;
-                projection.circles =
-                    nbcad_occt::drawing_projection_circles(&scene, &request, &projection)
-                        .map_err(|e| e.to_string())?;
+                let projection = nbcad_occt::project_drawing(
+                    &self.kernel,
+                    &scene,
+                    &self.manager.assembly_document(),
+                    &request,
+                )
+                .map_err(|e| e.to_string())?;
                 serde_json::to_value(projection).map_err(|e| e.to_string())?
             } else if name == "solid_export_step" {
                 let request: StepExportRequest = if arguments.is_null() {
@@ -1305,7 +1322,10 @@ fn entity_ids_schema() -> Value {
 /// Tools allowed to run in-process while snapshot-attached (#55 list).
 /// `cad_submit` is the mutate path: only tools *not* on this list.
 fn is_read_safe_while_attached(name: &str) -> bool {
-    if matches!(name, "drawing_document" | "drawing_projection") {
+    if matches!(
+        name,
+        "drawing_document" | "drawing_projection" | "drawing_export"
+    ) {
         return true;
     }
     matches!(
@@ -3750,7 +3770,10 @@ fn tool_specs() -> Vec<ToolSpec> {
 }
 
 fn records_in_script(name: &str) -> bool {
-    if matches!(name, "drawing_document" | "drawing_projection") {
+    if matches!(
+        name,
+        "drawing_document" | "drawing_projection" | "drawing_export"
+    ) {
         return false;
     }
     if matches!(
@@ -4064,6 +4087,133 @@ pub fn run_stdio() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawing_exports_current_associative_geometry_bom_and_rejects_stale_edits() {
+        let mut server = CadServer::new().unwrap();
+        extrude_offset_box(&mut server, "Sketch1", 10.0, 30.0);
+        server
+            .call_tool(
+                "drawing_create_sheet",
+                json!({"name":"Fixture","format":"a4","orientation":"landscape"}),
+            )
+            .unwrap();
+        server.call_tool("drawing_add_view",json!({"sheet_id":1,"view":{"name":"Top","kind":"top","direction":[0.,0.,1.],"up":[0.,1.,0.],"position":[90.,65.],"scale":2.}})).unwrap();
+        let projection = server
+            .call_tool(
+                "drawing_projection",
+                json!({"direction":[0.,0.,1.],"up":[0.,1.,0.]}),
+            )
+            .unwrap();
+        let anchors = projection["anchors"].as_array().unwrap();
+        let first = &anchors[0];
+        let second = anchors
+            .iter()
+            .find(|a| a["point"][0] != first["point"][0] && a["point"][1] != first["point"][1])
+            .unwrap();
+        let as_ref = |a: &Value| json!({"body_id":a["body_id"],"edge_id":a["edge_id"],"edge_key":a["edge_key"],"endpoint":a["endpoint"],"fallback_point":a["model_point"]});
+        let dim = json!({"sheet_id":1,"view_id":1,"first":as_ref(first),"second":as_ref(second),"mode":"horizontal","offset":15.,"presentation":{"tolerance":{"mode":"symmetric","upper":0.2,"lower":-0.2}}});
+        server
+            .call_tool("drawing_add_linear_dimension", dim.clone())
+            .unwrap();
+        let prior = server.call_tool("drawing_document", json!({})).unwrap();
+        let mut stale = dim;
+        stale["first"]["edge_key"] = json!("removed edge");
+        assert!(server
+            .call_tool("drawing_add_linear_dimension", stale)
+            .is_err());
+        assert_eq!(
+            prior,
+            server.call_tool("drawing_document", json!({})).unwrap()
+        );
+        server.call_tool("drawing_set_bom",json!({"sheet_id":1,"items":[{"item_number":"1","body_id":first["body_id"],"part_number":"RAIL","description":"Printed test rail","quantity":1.,"material":"PETG","finish":"Fit coupon required"}],"position":[15.,120.]})).unwrap();
+        let before_bom = server.call_tool("drawing_document", json!({})).unwrap();
+        assert!(server.call_tool("drawing_set_bom",json!({"sheet_id":1,"items":[{"item_number":"1","part_number":"INVALID","description":"Negative quantity","quantity":-1.}]})).is_err());
+        assert_eq!(
+            before_bom,
+            server.call_tool("drawing_document", json!({})).unwrap()
+        );
+        let svg = server
+            .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+            .unwrap();
+        assert!(svg["content"].as_str().unwrap().contains("20.00 ±0.20"));
+        assert!(svg["content"]
+            .as_str()
+            .unwrap()
+            .contains("Printed test rail"));
+        assert_eq!(
+            svg,
+            server
+                .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+                .unwrap()
+        );
+        let dxf = server
+            .call_tool("drawing_export", json!({"sheet_id":1,"format":"dxf"}))
+            .unwrap();
+        assert!(dxf["content"]
+            .as_str()
+            .unwrap()
+            .contains("$INSUNITS\n70\n4"));
+        let x_arm = anchors
+            .iter()
+            .find(|a| a["point"][0] != first["point"][0] && a["point"][1] == first["point"][1])
+            .unwrap();
+        let y_arm = anchors
+            .iter()
+            .find(|a| a["point"][0] == first["point"][0] && a["point"][1] != first["point"][1])
+            .unwrap();
+        server.call_tool("drawing_add_angular_dimension",json!({"sheet_id":1,"view_id":1,"vertex":as_ref(first),"first":as_ref(x_arm),"second":as_ref(y_arm),"radius":8.})).unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane":{"type":"origin_plane","plane":"xy"}}),
+            )
+            .unwrap();
+        server.call_tool("sketch_add_circle",json!({"mode":"center_diameter","p1":{"x":50.,"y":0.},"p2":{"x":60.,"y":0.},"ctrl_held":true})).unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        server.call_tool("solid_extrude",json!({"sketch_name":"Sketch2","profile_indices":[0],"operation":"new_body","extent":{"type":"distance","distance":8.},"taper_angle_deg":0.,"flip":false,"target_body_ids":[]})).unwrap();
+        let projection = server
+            .call_tool(
+                "drawing_projection",
+                json!({"direction":[0.,0.,1.],"up":[0.,1.,0.]}),
+            )
+            .unwrap();
+        let circle = &projection["circles"][0];
+        let radial = json!({"sheet_id":1,"view_id":1,"feature":{"body_id":circle["body_id"],"edge_id":circle["edge_id"],"edge_key":circle["edge_key"],"fallback_center":circle["center_model"],"fallback_normal":circle["normal_model"],"fallback_radius":circle["radius"],"closed":circle["closed"]},"mode":"diameter","leader_angle_deg":45.,"offset":12.});
+        server
+            .call_tool("drawing_add_radial_dimension", radial.clone())
+            .unwrap();
+        let before = server.call_tool("drawing_document", json!({})).unwrap();
+        let mut stale = radial;
+        stale["feature"]["edge_key"] = json!("removed circle");
+        assert!(server
+            .call_tool("drawing_add_radial_dimension", stale)
+            .is_err());
+        assert_eq!(
+            before,
+            server.call_tool("drawing_document", json!({})).unwrap()
+        );
+        let svg = server
+            .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+            .unwrap();
+        assert!(svg["content"].as_str().unwrap().contains("90.00°"));
+        let diameter = circle["radius"].as_f64().unwrap() * 2.;
+        assert!(svg["content"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("Ø{diameter:.2}")));
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool("cad_load_project_model", json!({"model_json":model}))
+            .unwrap();
+        assert_eq!(
+            svg["content"],
+            restored
+                .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+                .unwrap()["content"]
+        );
+    }
 
     #[test]
     fn embedded_preview_enforces_small_script_limits() {
@@ -6048,6 +6198,164 @@ mod tests {
         assert!(server
             .call_tool("solid_export_3mf", json!({"slicer_target":"standard"}))
             .is_err());
+    }
+
+    #[test]
+    fn assembly_drawing_projects_rotated_instances_and_shared_hidden_line_occlusion() {
+        let (mut server, _) = mcp_box();
+        let document = server.call_tool("assembly_document", json!({})).unwrap();
+        let original = document["component_structure"]["occurrences"][0]["id"].clone();
+        let component = document["component_structure"]["occurrences"][0]["component_id"].clone();
+        let added = server
+            .call_tool(
+                "assembly_create_occurrence",
+                json!({"component_id":component,"name":"Rotated copy"}),
+            )
+            .unwrap();
+        let angle = std::f64::consts::FRAC_PI_8;
+        server.call_tool("assembly_set_occurrence_pose",json!({"occurrence_id":added["id"],"local_pose":{"translation":[100.,0.,0.],"rotation":[0.,0.,angle.sin(),angle.cos()]}})).unwrap();
+        let request = json!({"scope":"assembly","direction":[0.,0.,1.],"up":[0.,1.,0.],"include_hidden":true});
+        let before = server.call_tool("cad_project_model", json!({})).unwrap();
+        let projection = server
+            .call_tool("drawing_projection", request.clone())
+            .unwrap();
+        assert!((projection["bounds"][0].as_f64().unwrap() + 10.).abs() < 1e-6);
+        assert!(
+            (projection["bounds"][2].as_f64().unwrap() - (100. + 10. * 2_f64.sqrt())).abs() < 1e-6
+        );
+        let anchors = projection["anchors"].as_array().unwrap();
+        assert!(anchors.iter().any(|a| a["occurrence_id"] == original));
+        let placed = anchors
+            .iter()
+            .find(|a| a["occurrence_id"] == added["id"])
+            .unwrap();
+        let reference:nbcad_sketch::DrawingTopologyAnchorRefDto=serde_json::from_value(json!({"occurrence_id":placed["occurrence_id"],"body_id":placed["body_id"],"edge_id":placed["edge_id"],"edge_key":placed["edge_key"],"endpoint":placed["endpoint"],"fallback_point":[999.,999.,999.]})).unwrap();
+        let resolved = nbcad_occt::resolve_drawing_anchor(
+            &server.manager.solid_scene(),
+            &server.manager.assembly_document(),
+            &reference,
+        )
+        .unwrap();
+        let expected: [f64; 3] = serde_json::from_value(placed["model_point"].clone()).unwrap();
+        for (actual, expected) in resolved.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-8);
+        }
+        assert_eq!(
+            server.call_tool("cad_project_model", json!({})).unwrap(),
+            before
+        );
+        let mut definition = request.clone();
+        definition["scope"] = json!("definition");
+        let definition = server.call_tool("drawing_projection", definition).unwrap();
+        assert!((definition["bounds"][2].as_f64().unwrap() - 10.).abs() < 1e-6);
+        assert!(definition["anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["occurrence_id"].is_null()));
+        let mut selected = request.clone();
+        selected["occurrence_ids"] = json!([added["id"]]);
+        let selected = server.call_tool("drawing_projection", selected).unwrap();
+        assert!(selected["anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["occurrence_id"] == added["id"]));
+        assert!(server.call_tool("drawing_projection",json!({"scope":"assembly","occurrence_ids":[9999],"direction":[0.,0.,1.],"up":[0.,1.,0.]})).is_err());
+        // Place a front box over the right half of the rear box. The rear
+        // right-hand vertical edge must be hidden by the other occurrence.
+        server.call_tool("assembly_set_occurrence_pose",json!({"occurrence_id":added["id"],"local_pose":{"translation":[5.,0.,30.],"rotation":[0.,0.,0.,1.]}})).unwrap();
+        let occluded = server.call_tool("drawing_projection", request).unwrap();
+        let has_mid_edge = |lines: &Value| {
+            lines.as_array().unwrap().iter().any(|line| {
+                line["points"].as_array().unwrap().windows(2).any(|pair| {
+                    let x0 = pair[0][0].as_f64().unwrap();
+                    let x1 = pair[1][0].as_f64().unwrap();
+                    let y0 = pair[0][1].as_f64().unwrap();
+                    let y1 = pair[1][1].as_f64().unwrap();
+                    (x0 - 10.).abs() < 1e-6
+                        && (x1 - 10.).abs() < 1e-6
+                        && y0.min(y1) < -1.
+                        && y0.max(y1) > 1.
+                })
+            })
+        };
+        assert!(!has_mid_edge(&occluded["visible"]));
+        assert!(has_mid_edge(&occluded["hidden"]));
+        // Identical source endpoints on distinct occurrences are distinct
+        // associative anchors. Measure their placed separation, not zero.
+        let anchors = occluded["anchors"].as_array().unwrap();
+        let first = anchors
+            .iter()
+            .find(|a| a["occurrence_id"] == original)
+            .unwrap();
+        let second = anchors
+            .iter()
+            .find(|a| {
+                a["occurrence_id"] == added["id"]
+                    && a["edge_id"] == first["edge_id"]
+                    && a["endpoint"] == first["endpoint"]
+            })
+            .unwrap();
+        let reference = |a: &Value| json!({"occurrence_id":a["occurrence_id"],"body_id":a["body_id"],"edge_id":a["edge_id"],"edge_key":a["edge_key"],"endpoint":a["endpoint"],"fallback_point":a["model_point"]});
+        server
+            .call_tool(
+                "drawing_create_sheet",
+                json!({"name":"Occurrence dimensions","format":"a4","orientation":"landscape"}),
+            )
+            .unwrap();
+        let view = json!({"name":"Assembly top","kind":"top","scope":"assembly","direction":[0.,0.,1.],"up":[0.,1.,0.],"position":[90.,65.],"scale":2.});
+        server
+            .call_tool("drawing_add_view", json!({"sheet_id":1,"view":view}))
+            .unwrap();
+        let dimension = json!({"sheet_id":1,"view_id":1,"first":reference(first),"second":reference(second),"mode":"horizontal","offset":12.});
+        server
+            .call_tool("drawing_add_linear_dimension", dimension.clone())
+            .unwrap();
+        let exported = server
+            .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+            .unwrap();
+        assert!(exported["content"]
+            .as_str()
+            .unwrap()
+            .contains(">5.00</text>"));
+        let mut selected_view = view;
+        selected_view["occurrence_ids"] = json!([original]);
+        server
+            .call_tool(
+                "drawing_add_view",
+                json!({"sheet_id":1,"view":selected_view}),
+            )
+            .unwrap();
+        let saved = server.call_tool("drawing_document", json!({})).unwrap();
+        let mut excluded = dimension.clone();
+        excluded["view_id"] = json!(2);
+        assert!(server
+            .call_tool("drawing_add_linear_dimension", excluded)
+            .is_err());
+        let mut no_instance = dimension;
+        no_instance["first"]["occurrence_id"] = Value::Null;
+        assert!(server
+            .call_tool("drawing_add_linear_dimension", no_instance)
+            .is_err());
+        assert_eq!(
+            saved,
+            server.call_tool("drawing_document", json!({})).unwrap()
+        );
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let before = server
+            .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+            .unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool("cad_load_project_model", json!({"model_json":model}))
+            .unwrap();
+        assert_eq!(
+            before["content"],
+            restored
+                .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+                .unwrap()["content"]
+        );
     }
 
     #[test]
