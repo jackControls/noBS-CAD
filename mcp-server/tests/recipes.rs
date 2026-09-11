@@ -212,8 +212,11 @@ impl Client {
     fn compiled_recipe_source(&mut self, id: &str) -> Value {
         // Compare the binary's catalog replay with an independent replay of
         // this test build's exact source, even when using a copied MCP binary.
-        self.call("cad_interface", json!({"action":"script",
-            "source":nbcad_recipes::find(id).unwrap().source,"mode":"fast","validate":true}))
+        self.call(
+            "cad_interface",
+            json!({"action":"script",
+            "source":nbcad_recipes::find(id).unwrap().source,"mode":"fast","validate":true}),
+        )
     }
     fn restore(model: &Value) -> Self {
         let mut client = Self::start();
@@ -1114,9 +1117,14 @@ fn turbine_replays_edits_restores_prints_and_drives_native_geometry() {
         .filter(|p| p["body_id"] == stage["body_id"])
         .collect::<Vec<_>>();
     assert_eq!(stage_instances.len(), 2);
-    assert!((stage_instances[1]["translation"][2].as_f64().unwrap()
-        - stage_instances[0]["translation"][2].as_f64().unwrap() - 100.).abs() < 1e-8,
-        "the repeated 100 mm stages must meet at their endplates");
+    assert!(
+        (stage_instances[1]["translation"][2].as_f64().unwrap()
+            - stage_instances[0]["translation"][2].as_f64().unwrap()
+            - 100.)
+            .abs()
+            < 1e-8,
+        "the repeated 100 mm stages must meet at their endplates"
+    );
     assert!(
         (stage_instances[1]["rotation"][2].as_f64().unwrap() - std::f64::consts::FRAC_1_SQRT_2)
             .abs()
@@ -1140,7 +1148,8 @@ fn turbine_replays_edits_restores_prints_and_drives_native_geometry() {
             part["id"]
         );
     }
-    let print_directory = std::env::var_os("NBCAD_RECIPE_ARTIFACT_DIR").map(std::path::PathBuf::from);
+    let print_directory =
+        std::env::var_os("NBCAD_RECIPE_ARTIFACT_DIR").map(std::path::PathBuf::from);
     turbine::check_print_plates(exports, print_directory.as_deref());
     let interference = client.call("assembly_interference_check", json!({}));
     if let Some(directory) = std::env::var_os("NBCAD_RECIPE_ARTIFACT_DIR") {
@@ -1181,7 +1190,10 @@ fn turbine_replays_edits_restores_prints_and_drives_native_geometry() {
     let mut repeat = Client::start();
     repeat.timeout = client.timeout;
     let repeated = repeat.compiled_recipe_source("vertical-axis-turbine");
-    assert_eq!(exports, &repeated["exports"], "two independent native construction and drawing replays");
+    assert_eq!(
+        exports, &repeated["exports"],
+        "two independent native construction and drawing replays"
+    );
 }
 
 fn validate_turbine_open_overlap(exports: &Value) {
@@ -1221,8 +1233,15 @@ fn validate_turbine_open_overlap(exports: &Value) {
         .find(|occurrence| occurrence["component_id"] == component["id"])
         .unwrap()["id"];
     let parts = exports["parts"].as_array().unwrap();
-    let stage_pose = exports["final_solution"]["instance_body_poses"].as_array().unwrap().iter()
-        .find(|pose| pose["occurrence_id"] == parts.iter().find(|part| part["id"] == "stage").unwrap()["occurrence_id"]).unwrap();
+    let stage_pose = exports["final_solution"]["instance_body_poses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pose| {
+            pose["occurrence_id"]
+                == parts.iter().find(|part| part["id"] == "stage").unwrap()["occurrence_id"]
+        })
+        .unwrap();
     let corridor_bottom = stage_pose["translation"][2].as_f64().unwrap() + 25.;
     for x in [0., -11.] {
         // The actual lower stage pose locates the independent local Z25..90
@@ -1275,8 +1294,11 @@ fn turbine_fit_coupons_have_driving_fits_and_replay_as_closed_prints() {
     let exports = &report["exports"];
     assert_eq!(exports["final_scene"]["errors"], json!([]));
     assert_eq!(exports["final_solution"]["solved"], true);
-    assert_eq!(exports["final_solution"]["diagnostics"], json!([]),
-        "the supplied coupon layout must be a retained fixed arrangement");
+    assert_eq!(
+        exports["final_solution"]["diagnostics"],
+        json!([]),
+        "the supplied coupon layout must be a retained fixed arrangement"
+    );
     assert_retained_component_bodies(
         &exports["final_scene"],
         &client.call("assembly_document", json!({})),
@@ -1338,8 +1360,12 @@ fn turbine_fit_coupons_have_driving_fits_and_replay_as_closed_prints() {
             "solid_export_3mf",
             json!({"body_ids":[part["body_id"]],"scope":"assembly","slicer_target":"standard"}),
         );
-        let pose = exports["final_solution"]["instance_body_poses"].as_array().unwrap().iter()
-            .find(|pose| pose["occurrence_id"] == part["occurrence_id"]).unwrap();
+        let pose = exports["final_solution"]["instance_body_poses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pose| pose["occurrence_id"] == part["occurrence_id"])
+            .unwrap();
         turbine::check_print_placement(&print, body, pose);
         let bytes = BASE64
             .decode(print["bytes_base64"].as_str().unwrap())
@@ -1350,7 +1376,13 @@ fn turbine_fit_coupons_have_driving_fits_and_replay_as_closed_prints() {
     }
     let arranged_print = turbine::check_coupon_layout(&mut client, exports);
     if let Some(directory) = &artifact_directory {
-        std::fs::write(directory.join("turbine-fit-coupons.3mf"), BASE64.decode(arranged_print["bytes_base64"].as_str().unwrap()).unwrap()).unwrap();
+        std::fs::write(
+            directory.join("turbine-fit-coupons.3mf"),
+            BASE64
+                .decode(arranged_print["bytes_base64"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
         std::fs::write(
             directory.join("run-1.json"),
             serde_json::to_vec_pretty(&report).unwrap(),
@@ -1406,10 +1438,16 @@ fn validate_turbine_edit_and_motion(client: &mut Client, exports: &Value) {
 fn turbine_saved_edit_motion_probe() {
     let path = std::env::var_os("NBCAD_TURBINE_SAVED_REPORT")
         .expect("set NBCAD_TURBINE_SAVED_REPORT to a retained native turbine run report");
-    let report: Value = serde_json::from_reader(std::fs::File::open(&path)
-        .unwrap_or_else(|error| panic!("cannot open turbine report {path:?}: {error}"))).unwrap();
+    let report: Value = serde_json::from_reader(
+        std::fs::File::open(&path)
+            .unwrap_or_else(|error| panic!("cannot open turbine report {path:?}: {error}")),
+    )
+    .unwrap();
     let exports = &report["exports"];
-    assert_eq!(exports["final_model"]["format"], "nbcad-project", "input must contain native recipe exports");
+    assert_eq!(
+        exports["final_model"]["format"], "nbcad-project",
+        "input must contain native recipe exports"
+    );
     let mut client = Client::restore(&exports["final_model"]);
     validate_turbine_edit_and_motion(&mut client, exports);
 }
@@ -1426,14 +1464,31 @@ fn turbine_saved_edit_motion_probe() {
 fn turbine_saved_mechanical_probe() {
     let path = std::env::var_os("NBCAD_TURBINE_SAVED_REPORT")
         .expect("set NBCAD_TURBINE_SAVED_REPORT to a retained native turbine run report");
-    let report: Value = serde_json::from_reader(std::fs::File::open(&path)
-        .unwrap_or_else(|error| panic!("cannot open turbine report {path:?}: {error}"))).unwrap();
+    let report: Value = serde_json::from_reader(
+        std::fs::File::open(&path)
+            .unwrap_or_else(|error| panic!("cannot open turbine report {path:?}: {error}")),
+    )
+    .unwrap();
     let exports = &report["exports"];
     assert_eq!(exports["final_model"]["format"], "nbcad-project");
-    assert!(exports["hardware"].as_array().is_some_and(|rows| !rows.is_empty()), "full hardware metadata is required");
-    assert!(exports["occurrences"]["bearing_inner_upper"].is_number(), "separate bearing ring identities are required");
-    assert!(exports["design"]["axial_stack"]["endplay_mm"].is_number(), "explicit axial stack is required");
-    match std::env::var("NBCAD_TURBINE_MECHANICAL_FOCUS").ok().as_deref() {
+    assert!(
+        exports["hardware"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()),
+        "full hardware metadata is required"
+    );
+    assert!(
+        exports["occurrences"]["bearing_inner_upper"].is_number(),
+        "separate bearing ring identities are required"
+    );
+    assert!(
+        exports["design"]["axial_stack"]["endplay_mm"].is_number(),
+        "explicit axial stack is required"
+    );
+    match std::env::var("NBCAD_TURBINE_MECHANICAL_FOCUS")
+        .ok()
+        .as_deref()
+    {
         None => turbine::check_assembly(exports),
         Some("motor_adjuster_nuts") => turbine::check_adjuster_access(exports),
         Some(other) => panic!("unknown explicit turbine mechanical diagnostic focus {other}"),

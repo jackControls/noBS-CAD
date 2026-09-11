@@ -8372,10 +8372,16 @@ mod tests {
             )
             .unwrap();
         let failure = &invalid["scene"]["errors"][0];
-        assert!(failure["message"].as_str().unwrap().contains("Place the profile across the path"));
+        assert!(failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("Place the profile across the path"));
         assert!(invalid["scene"]["bodies"].as_array().unwrap().is_empty());
         server
-            .call_tool("solid_delete_feature", json!({"feature_id":failure["feature_id"]}))
+            .call_tool(
+                "solid_delete_feature",
+                json!({"feature_id":failure["feature_id"]}),
+            )
             .unwrap();
 
         // The second arc starts along Z, normal to the retained XY profile.
@@ -9605,8 +9611,12 @@ mod tests {
                         // grace. This real wait exercises request retention and the
                         // production request loop, not a duplicate timeout formula.
                         std::thread::sleep(std::time::Duration::from_secs(32));
-                        session::write_session(&target, "model.json", expected_model.as_str().unwrap())
-                            .unwrap();
+                        session::write_session(
+                            &target,
+                            "model.json",
+                            expected_model.as_str().unwrap(),
+                        )
+                        .unwrap();
                         session::write_session(
                             &target,
                             "heartbeat.json",
@@ -9622,7 +9632,10 @@ mod tests {
                         if retained {
                             session::write_session(
                                 &source,
-                                &format!("controls/{}.result.json", request["id"].as_str().unwrap()),
+                                &format!(
+                                    "controls/{}.result.json",
+                                    request["id"].as_str().unwrap()
+                                ),
                                 &json!({"request_id":request["id"],"session_id":source,
                                     "status":"applied","active_session_id":target,"completed":true})
                                 .to_string(),
