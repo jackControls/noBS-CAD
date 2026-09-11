@@ -39,6 +39,14 @@ export class ProjectTransitions {
     return release;
   }
 
+  /** Background polling yields to existing snapshots instead of invalidating
+   * a Save/export just to discover that its native inbox is empty. Explicit
+   * document replacements still use begin() and retain their ownership fence. */
+  tryBegin(): ProjectTransitionRelease | null {
+    if (this.pending.size || this.snapshots.size) return null;
+    return this.begin();
+  }
+
   capture(): number {
     return this.revision;
   }

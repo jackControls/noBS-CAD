@@ -230,11 +230,12 @@ export async function applyInboxNow(): Promise<void> {
   // Control requests stay responsive in their own lane; no paused promise
   // occupies the serial lane and prevents Resume or Stop from reaching it.
   if (!presentation.canApply()) return;
+  const releaseTransition = projectTransitions.tryBegin();
+  if (!releaseTransition) return;
   // inboxApplying also suppresses a second engine_revision bump if any store
   // subscription still notes mutations: native apply already advanced it.
   inboxApplying = true;
   const releaseExit = applicationExitBarrier.hold();
-  const releaseTransition = projectTransitions.begin();
   let changed = true; // An uncertain native failure must invalidate captures.
   let published = false;
   let replacingDocument = false;
