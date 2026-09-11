@@ -211,6 +211,9 @@ struct CadServer {
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
+    /// Interpreter-owned progress transported with fast replay's existing inbox
+    /// operations, never counted independently by the host or UI.
+    script_progress: Option<nbcad_script::RunProgress>,
     live_snapshot_dirty: bool,
 }
 
@@ -226,6 +229,7 @@ impl CadServer {
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
             script_running: false,
+            script_progress: None,
             live_snapshot_dirty: false,
         })
     }
@@ -625,9 +629,10 @@ impl CadServer {
             }
         }
         self.script_running = true;
-        let mut result = nbcad_script::run(
+        let mut result = nbcad_script::run_with_progress(
             &script,
-            |name, arguments| {
+            |name, arguments, progress| {
+                self.script_progress = (mode == "fast").then_some(progress);
                 let is_note =
                     arguments["action"] == "presentation" && arguments["command"] == "note";
                 let result = self.call_tool(name, arguments)?;
@@ -646,6 +651,7 @@ impl CadServer {
             options,
         );
         self.script_running = false;
+        self.script_progress = None;
         if self.live_snapshot_dirty {
             // Preserve the original step failure if rebuilding the read cache
             // also fails. The live document remains the authoritative result.
@@ -740,7 +746,7 @@ impl CadServer {
             .ok_or("submission omitted sequence")?;
         let applied = await_playback_receipt(
             || {
-                self.await_inbox_apply(&json!({"seq":seq,"timeout_ms":30000,"refresh":!self.script_running,"poll_ms":10}))
+                self.await_inbox_apply(&json!({"session_id":session_id,"seq":seq,"timeout_ms":30000,"refresh":!self.script_running,"poll_ms":10}))
             },
             || {
                 session::request_ui(
@@ -869,7 +875,8 @@ impl CadServer {
         let seq = session::write_inbox_op(
             &session_id,
             &session::InboxOp::unstamped(name.to_string(), op_arguments, base_generation)
-                .with_identity(&identity),
+                .with_identity(&identity)
+                .with_script_progress(self.script_progress),
         )?;
         Ok(json!({
             "submitted": true,
@@ -882,7 +889,7 @@ impl CadServer {
             "writeback": false,
             "applied": false,
             "base_generation": base_generation,
-            "hint": "UI/engine applies inbox via host::handle; call cad_await_apply (or cad_refresh after publish)",
+            "hint": "UI/engine applies inbox via host::handle; pass this session_id and seq to cad_await_apply (or cad_refresh after publish)",
         }))
     }
 
@@ -891,9 +898,17 @@ impl CadServer {
     /// model. Active-sketch-only snapshots are reported but not misrepresented
     /// as a model refresh.
     fn await_inbox_apply(&mut self, arguments: &Value) -> Result<Value, String> {
-        let Some(session_id) = self.attached_document_id.clone() else {
+        let Some(attached_session_id) = self.attached_document_id.clone() else {
             return Err(session::not_attached_error());
         };
+        let session_id = match arguments.get("session_id") {
+            Some(value) => value
+                .as_str()
+                .ok_or("session_id must be a string")?
+                .to_string(),
+            None => attached_session_id.clone(),
+        };
+        let owns_attachment = session_id == attached_session_id;
         let seq = arguments
             .get("seq")
             .and_then(Value::as_u64)
@@ -921,9 +936,17 @@ impl CadServer {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let status = result.get("status").and_then(Value::as_str).unwrap_or("");
-        if refresh && status == "applied" && published && model_published {
-            self.load_snapshot_model(&session_id, false)?;
-            self.apply_snapshot_focus(&session_id);
+        if refresh && owns_attachment && status == "applied" && published && model_published {
+            if let Some(replacement) = result["active_session_id"].as_str().map(str::to_owned) {
+                if self.script_running {
+                    return Err("Active document changed during script playback; no later commands were submitted".into());
+                }
+                self.attach_read_only_snapshot(&json!({"session_id": replacement}))?;
+                result["attached_session_id"] = json!(replacement);
+            } else {
+                self.load_snapshot_model(&session_id, false)?;
+                self.apply_snapshot_focus(&session_id);
+            }
             if let Some(object) = result.as_object_mut() {
                 object.insert("refreshed".to_string(), Value::Bool(true));
                 object.insert(
@@ -934,6 +957,12 @@ impl CadServer {
                     ),
                 );
             }
+        }
+        if self.script_running && owns_attachment && result["project_replaced"] == true {
+            return Err(
+                "Active document changed during script playback; no later commands were submitted"
+                    .into(),
+            );
         }
         Ok(result)
     }
@@ -3789,6 +3818,10 @@ fn tool_specs() -> Vec<ToolSpec> {
             "While attached, poll until inbox/applied/<seq>.json or inbox/failed/<seq>.json appears. For applied ops, also wait until an explicit published_generation catches up to the engine. Completed-model publications optionally cad_refresh (refresh default true); active-sketch-only publications return model_published:false, active_sketch_published:true, refreshed:false because model.json intentionally remains the last completed model. timeout_ms 0 is a single status probe. Still snapshot/UI-owned apply — not in-process co-link. Does not write model.json.",
             object_schema(
                 json!({
+                    "session_id": {
+                        "type": "string",
+                        "description": "Receipt owner returned by cad_submit. Pass it with seq across document/attachment changes. Defaults to the current attachment; reading another session's receipt never changes or refreshes this attachment."
+                    },
                     "seq": {
                         "type": "integer",
                         "minimum": 1,
@@ -4579,6 +4612,127 @@ mod tests {
         assert!(error.contains("bad"));
         assert_eq!(server.manager.document_dto().name, "Before failure");
         assert!(!server.script_running);
+    }
+
+    #[test]
+    fn replacement_receipt_follows_only_its_new_publisher_and_stops_scripts() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let original = session::test_session_uuid();
+        let replacement = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-replacement-receipt-{original}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let (_, original_model) = write_box_session(&original);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":original}))
+            .unwrap();
+        let receipt = json!({"seq":1,"name":"cad_load_project_model","base_generation":50,
+            "project_replaced":true,"previous_session_id":original,
+            "active_session_id":replacement,"document_id":"same-native-tab"});
+        session::write_session(&original, "inbox/applied/1.json", &receipt.to_string()).unwrap();
+        session::write_closed_tombstone(&original).unwrap();
+        let waiting = server
+            .await_inbox_apply(&json!({"seq":1,"timeout_ms":0}))
+            .unwrap();
+        assert_eq!(
+            waiting["status"], "timeout",
+            "replacement must await its own first publication"
+        );
+        assert_eq!(waiting["active_session_id"], replacement);
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(original.as_str())
+        );
+        assert_eq!(
+            session::await_inbox_apply(&original, 2, 0, 1).unwrap()["status"],
+            "closed",
+            "another sequence must not borrow the replacement receipt"
+        );
+        let mut new_model: Value = serde_json::from_str(&original_model).unwrap();
+        new_model["document"]["name"] = json!("Replacement only");
+        let publisher = replacement.clone();
+        let delayed = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            session::publish_applied_snapshot(&publisher, &new_model.to_string()).unwrap();
+        });
+        let completed = server
+            .await_inbox_apply(&json!({"seq":1,"timeout_ms":2000,"poll_ms":5}))
+            .unwrap();
+        delayed.join().unwrap();
+        assert_eq!(completed["status"], "applied");
+        assert_eq!(completed["refreshed"], true);
+        assert_eq!(completed["attached_session_id"], replacement);
+        assert_eq!(server.manager.document_dto().name, "Replacement only");
+        assert_eq!(
+            session::require_model_json(&original).unwrap(),
+            original_model
+        );
+        session::write_session(
+            &replacement,
+            "inbox/applied/2.json",
+            &json!({"name":"cad_set_document_name","base_generation":0}).to_string(),
+        )
+        .unwrap();
+        let old_wait = server
+            .await_inbox_apply(&json!({"session_id":original,"seq":2,"timeout_ms":0}))
+            .unwrap();
+        assert_eq!(
+            old_wait["status"], "closed",
+            "receipt IDs are scoped to their original session"
+        );
+        let current_wait = server
+            .await_inbox_apply(&json!({"seq":2,"timeout_ms":0,"refresh":false}))
+            .unwrap();
+        assert_eq!(
+            current_wait["status"], "applied",
+            "omitting session retains current-attachment semantics"
+        );
+        let retained = server
+            .await_inbox_apply(&json!({"session_id":original,"seq":1,"timeout_ms":0}))
+            .unwrap();
+        assert_eq!(retained["status"], "applied");
+        assert_eq!(
+            retained["refreshed"], false,
+            "reading an older receipt cannot change the current snapshot"
+        );
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(replacement.as_str())
+        );
+
+        // An already-running interpreter cannot carry its remaining commands
+        // across a whole-document replacement, even when refresh is disabled.
+        server.attached_document_id = Some(original.clone());
+        server.script_running = true;
+        let error = server
+            .await_inbox_apply(&json!({"seq":1,"timeout_ms":0,"refresh":false}))
+            .unwrap_err();
+        assert!(error.contains("Active document changed"));
+        assert_eq!(
+            server.attached_document_id.as_deref(),
+            Some(original.as_str())
+        );
+        server.script_running = false;
+        session::write_closed_tombstone(&replacement).unwrap();
+        session::write_session(
+            &replacement,
+            "heartbeat.json",
+            &json!({"generation":2}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            session::await_inbox_apply(&original, 1, 0, 1).unwrap()["status"],
+            "closed"
+        );
+
+        let mut wrong = receipt;
+        wrong["previous_session_id"] = json!(replacement);
+        session::write_session(&original, "inbox/applied/1.json", &wrong.to_string()).unwrap();
+        assert!(session::await_inbox_apply(&original, 1, 0, 1)
+            .unwrap_err()
+            .contains("ownership"));
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -9243,7 +9397,12 @@ mod tests {
     #[test]
     fn live_script_completion_reports_uncaptained_steps_only_after_checks_pass() {
         let _guard = session::ENV_LOCK.lock().unwrap();
-        for (mode, checks_pass) in [("present", true), ("fast", true), ("present", false)] {
+        for (mode, checks_pass) in [
+            ("present", true),
+            ("fast", true),
+            ("present", false),
+            ("fast", false),
+        ] {
             let target = session::test_session_uuid();
             let dir = std::env::temp_dir().join(format!("nbcad-script-completion-{target}"));
             std::env::set_var("NBCAD_SESSION_DIR", &dir);
@@ -9254,19 +9413,50 @@ mod tests {
                 &target,
                 "heartbeat.json",
                 &json!({
-                    "updated_ms":session::now_ms(),"generation":1,"session_id":target,
+                    "updated_ms":session::now_ms(),"generation":1,"session_id":target,"interface_version":1,
                 })
                 .to_string(),
             )
             .unwrap();
             let peer = target.clone();
-            // Exercise the production runner and real control-file transport;
-            // the desktop peer only acknowledges commands and captures them.
+            // Exercise the production runner and real inbox/control transport;
+            // the desktop peer applies mutates and acknowledges presentation.
             let host = std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + Duration::from_secs(10);
                 let mut seen = std::collections::HashSet::new();
                 let mut controls = Vec::new();
+                let mut progress = Vec::new();
+                let mut owner = CadServer::new().unwrap();
                 loop {
+                    if let Some(seq) = session::pending_inbox_seqs(&peer).unwrap().first().copied()
+                    {
+                        let applied = session::apply_inbox_op(&peer, |name, args| {
+                            let result = owner.call_tool(name, args)?;
+                            session::write_session(
+                                &peer,
+                                &format!("inbox/results/{seq}.json"),
+                                &result.to_string(),
+                            )?;
+                            let model = owner
+                                .manager
+                                .export_project_model()
+                                .map_err(|error| error.to_string())?;
+                            session::publish_applied_snapshot(&peer, &model)?;
+                            let mut heartbeat: Value = serde_json::from_str(
+                                &session::read_session_file(&peer, "heartbeat.json")?,
+                            )
+                            .unwrap();
+                            heartbeat["interface_version"] = json!(1);
+                            session::write_session(
+                                &peer,
+                                "heartbeat.json",
+                                &heartbeat.to_string(),
+                            )?;
+                            Ok(result)
+                        })
+                        .unwrap();
+                        progress.push(applied.op.script_progress);
+                    }
                     if let Ok(entries) =
                         std::fs::read_dir(session::session_dir().join(&peer).join("controls"))
                     {
@@ -9304,7 +9494,11 @@ mod tests {
                             )
                             .unwrap();
                             if done {
-                                return controls;
+                                return (
+                                    controls,
+                                    progress,
+                                    owner.manager.export_project_model().unwrap(),
+                                );
                             }
                         }
                     }
@@ -9318,8 +9512,11 @@ mod tests {
             let source = json!({"version":1,"name":"Sparse captions","steps":[
                 {"note":"The only caption","chapter":"Beginning"},
                 {"let":{"dimension":12}},
+                {"call":{"group":"document/files","operation":"cad_set_document_name","arguments":{"name":"Progress model"}}},
                 {"assert":{"$ref":"dimension"},"equals":12},
-                {"view":"isometric","fit":true}
+                {"view":"isometric","fit":true},
+                {"call":{"group":interface::group_for("drawing_create_sheet").unwrap(),"operation":"drawing_create_sheet",
+                    "arguments":{"name":"Drawing phase","format":"a4","orientation":"landscape"}}}
             ],"checks":[{"assert":{"$ref":"dimension"},"equals":if checks_pass {12} else {13}}]})
             .to_string();
             let result = server.call_tool(
@@ -9328,19 +9525,43 @@ mod tests {
                     "action":"script","source":source,"session_id":target,"mode":mode,
                 }),
             );
-            let controls = host.join().unwrap();
+            let (controls, progress, live_model) = host.join().unwrap();
+            assert_eq!(
+                progress,
+                if mode == "fast" {
+                    [2, 5]
+                        .map(|steps_completed| {
+                            Some(nbcad_script::RunProgress {
+                                steps_completed,
+                                step_count: 6,
+                            })
+                        })
+                        .to_vec()
+                } else {
+                    vec![None, None]
+                }
+            );
+            assert!(
+                server.script_progress.is_none(),
+                "Progress context must end with the runner"
+            );
+            assert_eq!(
+                server.manager.export_project_model().unwrap(),
+                live_model,
+                "Progress transport must preserve the actual completed model and drawing"
+            );
             assert_eq!(controls[0]["ui"]["command"], "configure");
             assert_eq!(controls[0]["ui"]["chapter"], "");
             assert_eq!(controls[0]["ui"]["step_index"], 0);
-            assert_eq!(controls[0]["ui"]["step_count"], 4);
+            assert_eq!(controls[0]["ui"]["step_count"], 6);
             let final_ui = &controls.last().unwrap()["ui"];
             if checks_pass {
                 let report = result.unwrap();
-                assert_eq!(report["steps_completed"], 4);
+                assert_eq!(report["steps_completed"], 6);
                 assert_eq!(report["checks_completed"], 1);
                 assert_eq!(final_ui["command"], "finish");
                 assert_eq!(final_ui["step_index"], report["steps_completed"]);
-                assert_eq!(final_ui["step_count"], 4);
+                assert_eq!(final_ui["step_count"], 6);
             } else {
                 assert!(result.unwrap_err().contains("Assertion failed"));
                 assert_eq!(final_ui["command"], "stop");
@@ -9529,199 +9750,6 @@ mod tests {
                 spec.name
             );
         }
-    }
-
-    #[test]
-    fn assembly_inbox_refresh_clears_joint_motion_preview() {
-        // Viewport prefers jointPreviewSolution, then mechanismPreview.solution,
-        // then jointMotionPreview.solution, over assemblySolution. Targeted
-        // inbox refresh must clear all three stored previews, not only bump
-        // their generation counters.
-        let source = include_str!("../../src/store/appStore.ts");
-        let start = source
-            .find("refreshAfterInboxApply: async (opName)")
-            .expect("refreshAfterInboxApply");
-        let assembly = source[start..]
-            .find("if (opName?.startsWith('assembly_'))")
-            .expect("assembly inbox branch");
-        let branch = &source[start + assembly..];
-        let end = branch
-            .find("const doc = await engine.getDocument()")
-            .expect("end of targeted assembly refresh");
-        let targeted = &branch[..end];
-        assert!(
-            targeted.contains("jointPreviewSolution: null"),
-            "assembly inbox refresh must clear jointPreviewSolution"
-        );
-        assert!(
-            targeted.contains("jointMotionPreview: null"),
-            "assembly inbox refresh must clear jointMotionPreview so a stale motion pose cannot hide the new assemblySolution"
-        );
-        assert!(
-            targeted.contains("mechanismPreview: null"),
-            "assembly inbox refresh must clear mechanismPreview; viewport prefers it over jointMotionPreview and assemblySolution"
-        );
-        assert!(
-            targeted.contains("dirty: true"),
-            "assembly inbox refresh must keep dirty:true (never loadDocument)"
-        );
-    }
-
-    #[test]
-    fn apply_inbox_now_never_falls_through_to_load_document() {
-        // applyInboxNow: dead-letter / !applied return before any store write.
-        // scene+document -> applySolidUpdate (dirty:true). Else
-        // refreshAfterInboxApply (dirty:true). The old loadDocument() else
-        // branch cleared dirty and left previews in place.
-        let source = include_str!("../../src/sessionBridge.ts");
-        let start = source
-            .find("async function applyInboxNow()")
-            .expect("applyInboxNow");
-        let end = source[start..]
-            .find("async function heartbeatNow()")
-            .expect("end of applyInboxNow");
-        let body = &source[start..start + end];
-        assert!(
-            !body.contains("loadDocument("),
-            "applyInboxNow must not call loadDocument (dirty:false): {body}"
-        );
-        let not_applied = body
-            .find("if (!result?.applied) return;")
-            .expect("early return when not applied");
-        let solid = body.find("applySolidUpdate").expect("solid-update path");
-        let refresh = body
-            .find("refreshAfterInboxApply")
-            .expect("dirty refresh path");
-        assert!(
-            not_applied < solid && not_applied < refresh,
-            "already-applied / empty inbox must no-op before any store mutation"
-        );
-        assert!(
-            body.contains("refreshAfterInboxApply(result.name)"),
-            "non-solid inbox results (joint DTO, assembly document) must take refreshAfterInboxApply"
-        );
-        // applyInboxAll does not exist. A drain-all sibling must not reintroduce
-        // loadDocument / dirty:false or skip the already-applied early return.
-        assert!(
-            !source.contains("applyInboxAll")
-                && !source.contains("apply_inbox_all")
-                && !source.contains("applyAllInbox"),
-            "leftover apply-all must not exist beside applyInboxNow: {source}"
-        );
-        let store = include_str!("../../src/store/appStore.ts");
-        let refresh_defs = store
-            .matches("refreshAfterInboxApply: async (opName)")
-            .count();
-        assert_eq!(
-            refresh_defs, 1,
-            "leftover refreshAfterInboxApply must be the single #63 path, not a leftover copy"
-        );
-        let refresh_start = store
-            .find("refreshAfterInboxApply: async (opName)")
-            .expect("refreshAfterInboxApply");
-        let refresh_end = store[refresh_start..]
-            .find("setDocument:")
-            .expect("end of leftover refreshAfterInboxApply");
-        let leftover = &store[refresh_start..refresh_start + refresh_end];
-        assert!(
-            !leftover.contains("loadDocument("),
-            "leftover refreshAfterInboxApply must stay on the #63 contract (no loadDocument): {leftover}"
-        );
-        assert!(
-            leftover.contains("dirty: true"),
-            "leftover refreshAfterInboxApply must keep dirty:true"
-        );
-        assert!(
-            leftover.contains("jointPreviewSolution: null")
-                && leftover.contains("jointMotionPreview: null")
-                && leftover.contains("mechanismPreview: null"),
-            "leftover assembly refresh must clear all three previews"
-        );
-        // solid_delete_feature returns scene+document, so applyInboxNow takes
-        // applySolidUpdate — not refreshAfterInboxApply. Body-delete cleanup
-        // must still drop stale joint selection and the three previews, then
-        // re-read assemblyDocument so a leftover joint ghost cannot linger.
-        let apply_solid = store
-            .find("applySolidUpdate: (update) => {")
-            .expect("applySolidUpdate");
-        let apply_solid_end = store[apply_solid..]
-            .find("applyDatumPlaneUpdate:")
-            .expect("end applySolidUpdate");
-        let solid_fn = &store[apply_solid..apply_solid + apply_solid_end];
-        assert!(
-            solid_fn.contains("dirty: true"),
-            "applySolidUpdate (body-delete inbox) must keep dirty:true: {solid_fn}"
-        );
-        assert!(
-            solid_fn.contains("jointPreviewSolution: null")
-                && solid_fn.contains("jointMotionPreview: null")
-                && solid_fn.contains("mechanismPreview: null"),
-            "applySolidUpdate must clear all three previews after body-delete: {solid_fn}"
-        );
-        assert!(
-            solid_fn.contains("engine.assemblyDocument()")
-                && solid_fn.contains("engine.assemblySolution()")
-                && solid_fn.contains("jointStillExists")
-                && solid_fn.contains("selectedJointId"),
-            "applySolidUpdate must refresh assembly and drop a deleted joint selection: {solid_fn}"
-        );
-        // Native apply archives + bumps before JS leftover refresh. A throw
-        // after that success must still publish so cad_refresh sees the joint.
-        let publish = body
-            .find("scheduleSessionBridgePublish()")
-            .expect("publish after native apply");
-        assert!(
-            publish > not_applied && publish > solid && publish > refresh,
-            "publish must follow the applied:true leftover refresh, not run on empty/dead-letter"
-        );
-        assert!(
-            body.contains("} finally {")
-                && body[publish..].contains("scheduleSessionBridgePublish()"),
-            "publish must live in a finally so a leftover refresh throw cannot skip it: {body}"
-        );
-        let dead = body
-            .find("if (result?.dead_lettered)")
-            .expect("dead-lettered return");
-        assert!(
-            dead < publish,
-            "dead-letter must return before finally publish so the next applyInboxNow tick can take seq 2"
-        );
-        assert!(
-            body.contains("queue unblocked"),
-            "dead-letter path must leave the poller free to apply the lowest remaining pending seq"
-        );
-        // Pass 7 moved publish into finally. Write must still carry the
-        // reserved session/project identity — never active_mut() / later attach.
-        let publish_now = source
-            .find("async function publishNow()")
-            .expect("publishNow");
-        let publish_now_end = source[publish_now..]
-            .find("async function applyInboxNow()")
-            .expect("end publishNow");
-        let publish_body = &source[publish_now..publish_now + publish_now_end];
-        assert!(
-            publish_body.contains("session_id: reservation.session_id")
-                && publish_body.contains("project_session_id: reservation.project_session_id"),
-            "finally publish must write reserved session_id + project_session_id: {publish_body}"
-        );
-        assert!(
-            !publish_body.contains("active_mut"),
-            "JS publish must not target active_mut(): {publish_body}"
-        );
-        let native = include_str!("../../src-tauri/src/session_bridge.rs");
-        let write_start = native
-            .find("fn write_for_window(")
-            .expect("write_for_window");
-        let write_end = native[write_start..]
-            .find("fn heartbeat_for_window(")
-            .expect("end write_for_window");
-        let write_fn = &native[write_start..write_start + write_end];
-        assert!(
-            write_fn.contains("session write requires reserved session_id")
-                && write_fn.contains("session_identity_mismatch")
-                && !write_fn.contains("active_mut()"),
-            "native write must resolve reserved identity, never active_mut(): {write_fn}"
-        );
     }
 
     #[test]
@@ -10144,15 +10172,14 @@ mod tests {
     /// Joint create/update return a DTO, not a solid update. Old applyInboxNow
     /// fell through to loadDocument() (dirty:false). refreshAfterInboxApply
     /// keeps dirty:true for that path.
-    fn assert_joint_dto_keeps_dirty(host_result: &Value, label: &str) {
-        // applyInboxNow: scene+document -> applySolidUpdate (already dirty:true);
-        // otherwise refreshAfterInboxApply (dirty:true). Joint DTOs take the
-        // second path — the old loadDocument() fallback cleared dirty.
+    fn assert_joint_dto_result(host_result: &Value, label: &str) {
+        // Assert the native wire shape here; actual frontend dirty/preview
+        // behavior is exercised by inboxCompletion.browser.test.ts.
         let is_solid_update =
             host_result.get("scene").is_some() && host_result.get("document").is_some();
         assert!(
             !is_solid_update,
-            "{label}: joint DTO must take refreshAfterInboxApply (dirty:true), not loadDocument: {host_result}"
+            "{label}: expected a joint result, not a solid update: {host_result}"
         );
         assert!(
             host_result.get("id").is_some() && host_result.get("kind").is_some(),
@@ -10243,7 +10270,7 @@ mod tests {
         assert_eq!(created.host_result["name"], "Hinge1");
         assert_eq!(created.host_result["kind"], "revolute");
         let joint_id = created.host_result["id"].as_u64().expect("joint id");
-        assert_joint_dto_keeps_dirty(&created.host_result, "create");
+        assert_joint_dto_result(&created.host_result, "create");
 
         server.call_tool("cad_refresh", json!({})).unwrap();
         let after_create = server
@@ -10275,7 +10302,7 @@ mod tests {
         assert_eq!(updated.op.name, "assembly_update_joint");
         assert_eq!(updated.host_result["name"], "Hinge1Renamed");
         assert_eq!(updated.host_result["id"].as_u64(), Some(joint_id));
-        assert_joint_dto_keeps_dirty(&updated.host_result, "update");
+        assert_joint_dto_result(&updated.host_result, "update");
 
         server.call_tool("cad_refresh", json!({})).unwrap();
         let after_update = server
@@ -10650,7 +10677,7 @@ mod tests {
         assert_eq!(submitted["submitted"], true);
 
         let created = apply_inbox_on_separate_host(&unique);
-        assert_joint_dto_keeps_dirty(&created.host_result, "create");
+        assert_joint_dto_result(&created.host_result, "create");
         server.call_tool("cad_refresh", json!({})).unwrap();
         let after_create = server.call_tool("assembly_document", json!({})).unwrap();
         let joint_id = created.host_result["id"].as_u64().unwrap();
@@ -10715,7 +10742,7 @@ mod tests {
             )
             .expect("submit update with explicit nulls");
         let updated = apply_inbox_on_separate_host(&unique);
-        assert_joint_dto_keeps_dirty(&updated.host_result, "update-nulls");
+        assert_joint_dto_result(&updated.host_result, "update-nulls");
         assert_eq!(updated.host_result["id"].as_u64(), Some(joint_id));
 
         // cad_script is not read-safe while attached. Detach keeps the
@@ -10934,7 +10961,7 @@ mod tests {
             .unwrap();
         let created = apply_inbox_on_separate_host(&unique);
         let joint_id = created.host_result["id"].as_u64().unwrap();
-        assert_joint_dto_keeps_dirty(&created.host_result, "create-parity");
+        assert_joint_dto_result(&created.host_result, "create-parity");
 
         let mut joint = created.host_result.clone();
         if let Some(object) = joint.as_object_mut() {
@@ -10955,7 +10982,7 @@ mod tests {
             .unwrap();
         let updated = apply_inbox_on_separate_host(&unique);
         assert_eq!(updated.host_result["id"].as_u64(), Some(joint_id));
-        assert_joint_dto_keeps_dirty(&updated.host_result, "update-parity");
+        assert_joint_dto_result(&updated.host_result, "update-parity");
 
         let load_while_attached = server
             .call_tool(
@@ -11456,7 +11483,7 @@ mod tests {
             )
             .unwrap();
         let created = apply_inbox_on_separate_host(&unique);
-        assert_joint_dto_keeps_dirty(&created.host_result, "create-before-refresh");
+        assert_joint_dto_result(&created.host_result, "create-before-refresh");
         let joint_id = created.host_result["id"].as_u64().unwrap();
 
         let stale = server.call_tool("assembly_document", json!({})).unwrap();
@@ -11487,29 +11514,12 @@ mod tests {
         let updated = apply_inbox_on_separate_host(&unique);
         assert_eq!(updated.host_result["id"].as_u64(), Some(joint_id));
         assert_eq!(updated.host_result["name"], "HingeFastRenamed");
-        assert_joint_dto_keeps_dirty(&updated.host_result, "update-before-refresh");
+        assert_joint_dto_result(&updated.host_result, "update-before-refresh");
 
         server.call_tool("cad_refresh", json!({})).unwrap();
         let after = server.call_tool("assembly_document", json!({})).unwrap();
         assert_joint_visible(&after, joint_id, "HingeFastRenamed");
         assert_eq!(after["joints"].as_array().map(Vec::len), Some(1));
-
-        let source = include_str!("../../src/store/appStore.ts");
-        let start = source
-            .find("refreshAfterInboxApply: async (opName)")
-            .expect("refreshAfterInboxApply");
-        let assembly = source[start..]
-            .find("if (opName?.startsWith('assembly_'))")
-            .expect("assembly inbox branch");
-        let branch = &source[start + assembly..];
-        let end = branch
-            .find("const doc = await engine.getDocument()")
-            .expect("end of targeted assembly refresh");
-        let targeted = &branch[..end];
-        assert!(
-            targeted.contains("jointMotionPreview: null") && targeted.contains("dirty: true"),
-            "preview still cleared and dirty true after chained apply"
-        );
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = std::fs::remove_dir_all(&dir);
@@ -11568,7 +11578,7 @@ mod tests {
         assert_eq!(created.op.name, "assembly_create_joint");
         assert_eq!(created.host_result["name"], "HingeDetach");
         let joint_id = created.host_result["id"].as_u64().unwrap();
-        assert_joint_dto_keeps_dirty(&created.host_result, "apply-after-detach");
+        assert_joint_dto_result(&created.host_result, "apply-after-detach");
 
         let detached = server.call_tool("assembly_document", json!({})).unwrap();
         assert!(
@@ -11639,7 +11649,7 @@ mod tests {
         assert_eq!(created.op.name, "assembly_create_joint");
         assert_eq!(created.host_result["name"], "HingeReattach");
         let joint_id = created.host_result["id"].as_u64().unwrap();
-        assert_joint_dto_keeps_dirty(&created.host_result, "apply-after-reattach");
+        assert_joint_dto_result(&created.host_result, "apply-after-reattach");
 
         let attached = server.call_tool("assembly_document", json!({})).unwrap();
         assert!(
@@ -12025,7 +12035,7 @@ mod tests {
         let occ_a = created.host_result["advanced"]["connector_a_occurrence_id"]
             .as_u64()
             .expect("occ A");
-        assert_joint_dto_keeps_dirty(&created.host_result, "create-before-body-delete");
+        assert_joint_dto_result(&created.host_result, "create-before-body-delete");
 
         let generation = session::read_heartbeat_generation(&unique).unwrap();
         server

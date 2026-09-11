@@ -10,6 +10,7 @@
  */
 import { create } from 'zustand';
 import { presentation } from '../operationPlayback';
+import { projectTransitions } from '../files/projectTransitions';
 import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
 import type {
   AssemblyDocumentDto,
@@ -782,7 +783,7 @@ export interface AppState {
   setActiveTab: (tab: string) => void;
   loadDocument: () => Promise<void>;
   /** Refresh live engine state after MCP inbox apply without clearing dirty. */
-  refreshAfterInboxApply: (opName?: string) => Promise<void>;
+  refreshAfterInboxApply: (opName?: string, ownerRevision?: number, replacingDocument?: boolean) => Promise<void>;
   setDocument: (doc: DocumentDto) => void;
   setActiveSketch: (sketch: SketchDto | null) => void;
   setFinishedSketches: (sketches: SketchDto[]) => void;
@@ -1258,10 +1259,14 @@ export const useAppStore = create<AppState>()((set) => ({
     presentation.documentChanged();
   },
 
-  refreshAfterInboxApply: async (opName) => {
+  refreshAfterInboxApply: async (opName, ownerRevision = presentation.documentVersion(), replacingDocument = false) => {
+    const ownsDocument = () => ownerRevision === presentation.documentVersion();
+    const visibilityBefore = useAppStore.getState().projectVisibility;
     const engine = await getEngine();
+    if (!ownsDocument()) return;
     if (opName?.startsWith('drawing_')) {
       const drawingDocument=await engine.drawingDocument();
+      if (!ownsDocument()) return;
       set({drawingDocument,dirty:true,activeTab:'drawing',drawingTool:null,drawingPendingViewKind:null,
         selectedDrawingViewId:null,selectedDrawingAnnotationId:null,drawingSheetSetupOpen:drawingDocument.sheets.length===0});
       return;
@@ -1278,6 +1283,7 @@ export const useAppStore = create<AppState>()((set) => ({
         engine.solidScene(),
         engine.getDocument(),
       ]);
+      if (!ownsDocument()) return;
       set((state) => ({
         document: doc,
         solidScene,
@@ -1306,6 +1312,20 @@ export const useAppStore = create<AppState>()((set) => ({
       engine.projectVisibility(),
       engine.activeSketch(),
     ]);
+    if (!ownsDocument()) return;
+    if (replacingDocument) {
+      useAppStore.getState().loadProjectState({document: doc, scene: solidScene}, finishedSketches, datumPlanes,
+        useAppStore.getState().projectFileName, bodyAppearances, drawingDocument, assemblyDocument,
+        projectVisibility, assemblySolution);
+      set({engineKind: engine.kind, dirty: true});
+      return;
+    }
+    // History changes the evaluated scene, not the user's visibility intent.
+    // An eye toggle made during these reads has not reached native publication
+    // yet; preserve it when remapping choices onto recreated Browser nodes.
+    const currentVisibility = useAppStore.getState().projectVisibility;
+    const refreshedVisibility = opName === 'solid_set_rollback' && currentVisibility !== visibilityBefore
+      ? currentVisibility : projectVisibility;
     set({
       document: doc,
       engineKind: engine.kind,
@@ -1317,11 +1337,11 @@ export const useAppStore = create<AppState>()((set) => ({
       assemblyDocument,
       assemblySolution,
       activeSketch,
-      hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
-      projectVisibility,
+      hidden: hiddenFromPersistedVisibility(doc, refreshedVisibility),
+      projectVisibility: refreshedVisibility,
       dirty: true,
     });
-    if (opName?.startsWith('sketch_') || opName === 'cad_load_project_model') {
+    if (opName?.startsWith('sketch_')) {
       // Inbox commands use the same engine as the interactive controller, but
       // do not call its mode transitions. Reflect the authoritative sketch
       // lifecycle before acknowledging/presenting the operation.
@@ -3109,18 +3129,22 @@ export function bodyAppearanceFor(bodyId: number): BodyAppearance {
  */
 export async function exportProjectModelWithVisibility(
   providedEngine?: Engine,
-  assertCurrent?: () => void | Promise<void>,
+  assertOwner?: () => void,
 ): Promise<string> {
-  await assertCurrent?.();
-  const engine = providedEngine ?? await getEngine();
-  await assertCurrent?.();
-  await synchronizeSnapshotVisibility(
-    useAppStore.getState().projectVisibility,
-    async () => { await assertCurrent?.(); return engine.projectVisibility(); },
-    async visibility => { await assertCurrent?.(); return engine.setProjectVisibility(visibility); },
-  );
-  await assertCurrent?.();
-  const model = await engine.exportProjectModel();
-  await assertCurrent?.();
-  return model;
+  const snapshot = projectTransitions.beginSnapshot();
+  const assertCurrent = () => { snapshot.assertCurrent(); assertOwner?.(); };
+  try {
+    assertCurrent();
+    const engine = providedEngine ?? await getEngine();
+    assertCurrent();
+    await synchronizeSnapshotVisibility(
+      useAppStore.getState().projectVisibility,
+      async () => { assertCurrent(); return engine.projectVisibility(); },
+      async visibility => { assertCurrent(); return engine.setProjectVisibility(visibility); },
+    );
+    assertCurrent();
+    const model = await engine.exportProjectModel();
+    assertCurrent();
+    return model;
+  } finally { snapshot.release(); }
 }

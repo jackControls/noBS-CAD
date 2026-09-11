@@ -41,6 +41,8 @@
 //! publisher lock. Per-project MCP sessions are retained, so an inbox op
 //! queued for tab A is never dispatched onto tab B. Apply also rejects a
 //! bound/active mismatch so a bypassed transition cannot retarget the op.
+//! Replacing a whole document within one tab retires its MCP UUID. The tab id
+//! remains stable, while scripts and queued work stay tied to the old document.
 //!
 //! # Publish reservation identity
 //!
@@ -292,12 +294,17 @@ impl SessionBridgeState {
         &self,
         window_label: &str,
         engine: &AppState,
+        expected_document: &str,
+        expected_session: &str,
     ) -> Result<String, String> {
         let publishers = self
             .publishers
             .lock()
             .map_err(|_| "session publisher lock poisoned".to_string())?;
         let document = engine.active_project_session_id();
+        if document != expected_document {
+            return Err("The active design changed before script playback started".into());
+        }
         let publisher = publishers
             .get(window_label)
             .ok_or("Publish the current design before running its script")?;
@@ -308,6 +315,9 @@ impl SessionBridgeState {
             .by_project
             .get(&document)
             .ok_or("The current design has no published script session")?;
+        if project.session_id != expected_session {
+            return Err("The design was replaced before script playback started".into());
+        }
         if project.published_generation != project.engine_revision
             || project.last_model_generation != Some(project.engine_revision)
         {
@@ -316,6 +326,7 @@ impl SessionBridgeState {
         Ok(project.session_id.clone())
     }
 
+    #[cfg(test)]
     fn reserve_for_window(&self, window_label: &str) -> Result<serde_json::Value, String> {
         self.reserve_for_window_on_project(window_label, None)
     }
@@ -645,6 +656,7 @@ fn pending_inbox_seqs(session_id: &str) -> Vec<u64> {
     seqs
 }
 
+#[cfg(test)]
 fn read_session_generation(session_id: &str) -> Option<u64> {
     let body = fs::read_to_string(session_root().join(session_id).join("heartbeat.json")).ok()?;
     let parsed: Value = serde_json::from_str(&body).ok()?;
@@ -769,6 +781,38 @@ fn engine_envelope_ok(raw: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn project_replacement_is_unchanged(raw: &str) -> bool {
+    serde_json::from_str::<Value>(raw).is_ok_and(|envelope| {
+        envelope["ok"] == false && envelope["data"]["project_load_state"] == "unchanged"
+    })
+}
+
+/// Caller holds the publisher lock across native replacement and retirement.
+/// Delivered control replies remain window-owned; pending exports and inbox
+/// work remain attached to the retired UUID rather than the replacement.
+fn retire_project_publisher(
+    publisher: &mut WindowPublisher,
+    window_label: &str,
+    document: &str,
+    process_instance_id: &str,
+    replacement: ProjectPublisher,
+) -> String {
+    let previous = publisher.active_mut().session_id.clone();
+    if let Err(error) = write_closed_tombstone(&previous) {
+        eprintln!("session bridge could not retire replaced document {previous}: {error}");
+    }
+    publisher
+        .by_project
+        .insert(document.to_string(), replacement);
+    let project = publisher.active_mut();
+    if let Err(error) =
+        write_engine_revision_heartbeat(project, window_label, Some(document), process_instance_id)
+    {
+        eprintln!("session bridge could not publish replacement identity: {error}");
+    }
+    project.session_id.clone()
+}
+
 fn bump_engine_revision(
     project: &mut ProjectPublisher,
     window_id: &str,
@@ -857,6 +901,40 @@ impl SessionBridgeState {
         result
     }
 
+    /// Open / whole-document replacement is stronger than an ordinary edit:
+    /// retire the old MCP identity even when the native tab id stays the same.
+    /// The replacement and identity change share the inbox publisher lock.
+    /// Only a verified pre-mutation rejection can retain the previous identity.
+    pub fn run_project_replacement(
+        &self,
+        window_label: &str,
+        engine: &AppState,
+        replace: impl FnOnce() -> String,
+    ) -> String {
+        let Ok(mut publishers) = self.publishers.lock() else {
+            return json!({"ok":false,"error":"Session publisher lock poisoned"}).to_string();
+        };
+        let publisher = publishers
+            .entry(window_label.to_string())
+            .or_insert_with(WindowPublisher::new);
+        let document = engine.active_project_session_id();
+        publisher.rebind_to(&document);
+        let result = replace();
+        if !project_replacement_is_unchanged(&result) {
+            retire_project_publisher(
+                publisher,
+                window_label,
+                &document,
+                &self.process_instance_id,
+                ProjectPublisher::new(),
+            );
+        }
+        drop(publishers);
+        let _ = self.write_process_instance_file();
+        result
+    }
+
+    #[cfg(test)]
     fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
         let mut publishers = self
             .publishers
@@ -1007,12 +1085,113 @@ impl Drop for SessionBridgeState {
 /// Apply one pending inbox op under the publisher lock so revision check,
 /// live engine apply, and revision advance are atomic w.r.t. other applies
 /// and UI mutation notes.
+#[cfg(test)]
 fn apply_one_inbox_op(
     state: &SessionBridgeState,
     window_label: &str,
     engine: &AppState,
 ) -> Result<Value, String> {
-    apply_or_reject_one_inbox_op(state, window_label, engine, None)
+    apply_or_reject_one_inbox_op(state, window_label, engine, None, None)
+}
+
+/// Apply a supported whole-project inbox operation while retaining its own
+/// receipt, but retire all other queued work and export tickets for that UUID.
+/// The caller already holds the publisher lock; calling run_project_replacement
+/// here would recursively acquire it and deadlock.
+fn apply_project_replacement_inbox(
+    publisher: &mut WindowPublisher,
+    window_label: &str,
+    engine: &AppState,
+    process_instance_id: &str,
+    request: &Value,
+    name: &str,
+    seq: u64,
+) -> Result<Value, String> {
+    let session_id = publisher.active_mut().session_id.clone();
+    let document = engine.active_project_session_id();
+    let arguments = request.get("arguments").cloned().unwrap_or(json!({}));
+    let spec = nbcad_mcp_mutate::lookup_mutate(name).expect("validated replacement operation");
+    let (outcome, changed) = match nbcad_mcp_mutate::encode_payload(spec.payload, &arguments) {
+        Ok(payload) => {
+            let raw = if name == "cad_load_project_model" {
+                // Preserve the unchanged marker for malformed/unsupported
+                // project data rejected before native recomputation begins.
+                engine.project_load(&payload)
+            } else {
+                engine.project_new()
+            };
+            let changed = !project_replacement_is_unchanged(&raw);
+            (parse_engine_envelope(raw), changed)
+        }
+        Err(error) => (Err(error), false),
+    };
+    let replacement = changed.then(ProjectPublisher::new);
+    let mut receipt = request.clone();
+    let mut response = json!({
+        "applied": outcome.is_ok(), "seq": seq, "name": name,
+        "session_id": session_id, "session_mode": "ui_owned_apply", "writeback": false,
+    });
+    if let Some(replacement) = &replacement {
+        for (key, value) in [
+            ("project_replaced", json!(true)),
+            ("previous_session_id", json!(session_id)),
+            ("active_session_id", json!(replacement.session_id)),
+            ("document_id", json!(document)),
+        ] {
+            receipt[key] = value.clone();
+            response[key] = value;
+        }
+    }
+    let receipt_directory = match &outcome {
+        Ok(result) => {
+            response["result"] = result.clone();
+            "applied"
+        }
+        Err(error) => {
+            response["dead_lettered"] = json!(true);
+            response["error"] = json!(error);
+            receipt["error"] = json!(error);
+            receipt["failed_ms"] = json!(now_ms());
+            "failed"
+        }
+    };
+    let written = (|| -> Result<(), String> {
+        if let Ok(result) = &outcome {
+            atomic_write(
+                &inbox_dir(&session_id)
+                    .join("results")
+                    .join(format!("{seq}.json")),
+                &result.to_string(),
+            )?;
+        }
+        // The initiating caller must see the explicit replacement handoff
+        // before closed.json. Otherwise it can mistake an in-progress receipt
+        // for unrelated work stranded on a retired session and return early.
+        atomic_write(
+            &inbox_dir(&session_id)
+                .join(receipt_directory)
+                .join(format!("{seq}.json")),
+            &receipt.to_string(),
+        )?;
+        fs::remove_file(inbox_dir(&session_id).join(format!("{seq}.json")))
+            .map_err(|error| error.to_string())
+    })();
+    if let Some(replacement) = replacement {
+        // Retire even when receipt IO fails: the native model has changed and
+        // uncertainty must never authorize an old request against its successor.
+        retire_project_publisher(
+            publisher,
+            window_label,
+            &document,
+            process_instance_id,
+            replacement,
+        );
+    }
+    written?;
+    let project = publisher.active_mut();
+    response["engine_revision"] = json!(project.engine_revision);
+    response["pending"] = json!(pending_inbox_seqs(&project.session_id).len());
+    Ok(response)
 }
 
 fn apply_or_reject_one_inbox_op(
@@ -1020,6 +1199,7 @@ fn apply_or_reject_one_inbox_op(
     window_label: &str,
     engine: &AppState,
     reject_reason: Option<&str>,
+    expected_owner: Option<(&str, &str)>,
 ) -> Result<Value, String> {
     let process_instance_id = state.process_instance_id.clone();
     let _ = state.write_process_instance_file();
@@ -1036,6 +1216,21 @@ fn apply_or_reject_one_inbox_op(
         }));
     };
     let engine_active = engine.active_project_session_id();
+    // Polls are asynchronous too: an A poll (including a delayed rejection)
+    // must never consume B's inbox after same-tab Open or tab activation.
+    // Compare before touching either queue while holding the replacement lock.
+    if let Some((document, session)) = expected_owner {
+        if document != engine_active
+            || publisher.active_project_session_id.as_deref() != Some(document)
+            || publisher
+                .by_project
+                .get(document)
+                .map(|project| project.session_id.as_str())
+                != Some(session)
+        {
+            return Ok(Value::Null);
+        }
+    }
     match publisher.active_project_session_id.as_deref() {
         Some(bound) if bound != engine_active => {
             return Ok(json!({
@@ -1235,6 +1430,20 @@ fn apply_or_reject_one_inbox_op(
             "engine_revision": project.engine_revision,
         }));
     }
+    if matches!(name.as_str(), "cad_new_project" | "cad_load_project_model") {
+        let result = apply_project_replacement_inbox(
+            publisher,
+            window_label,
+            engine,
+            &process_instance_id,
+            &parsed,
+            &name,
+            seq,
+        );
+        drop(publishers);
+        let _ = state.write_process_instance_file();
+        return result;
+    }
     match dispatch_inbox_on_engine(engine, &name, &arguments) {
         Ok(result) => {
             bump_engine_revision(
@@ -1250,7 +1459,7 @@ fn apply_or_reject_one_inbox_op(
                 &result.to_string(),
             )?;
             archive_inbox_op(&session_id, seq)?;
-            Ok(json!({
+            let mut response = json!({
                 "applied": true,
                 "seq": seq,
                 "name": name,
@@ -1260,7 +1469,13 @@ fn apply_or_reject_one_inbox_op(
                 "writeback": false,
                 "pending": pending_inbox_seqs(&session_id).len(),
                 "engine_revision": project.engine_revision,
-            }))
+            });
+            // Carry the interpreter's completed count through the same owned
+            // apply response. Neither progress nor UI controls alter model data.
+            if let Some(progress) = parsed.get("script_progress") {
+                response["script_progress"] = progress.clone();
+            }
+            Ok(response)
         }
         Err(error) => {
             dead_letter_inbox_op(&session_id, seq, &error)?;
@@ -1586,15 +1801,24 @@ pub fn mcp_session_bridge_apply_inbox(
     state: tauri::State<'_, SessionBridgeState>,
     engine: tauri::State<'_, AppState>,
     reject_reason: Option<String>,
+    document_id: Option<String>,
+    session_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if let Some(reason) = reject_reason {
+    let (Some(document), Some(session)) = (document_id, session_id) else {
+        return Ok(Value::Null);
+    };
+    if let Some(reason) = &reject_reason {
         if reason.trim().is_empty() || reason.len() > 1000 {
             return Err("playback rejection needs a nonempty reason of at most 1000 bytes".into());
         }
-        apply_or_reject_one_inbox_op(&state, window.label(), &engine, Some(&reason))
-    } else {
-        apply_one_inbox_op(&state, window.label(), &engine)
     }
+    apply_or_reject_one_inbox_op(
+        &state,
+        window.label(),
+        &engine,
+        reject_reason.as_deref(),
+        Some((&document, &session)),
+    )
 }
 
 #[cfg(test)]
@@ -1888,7 +2112,9 @@ mod tests {
         std::env::set_var("NBCAD_SESSION_DIR", &dir);
         let state = SessionBridgeState::default();
         let engine = AppState::new();
-        assert!(state.active_script_session("main", &engine).is_err());
+        assert!(state
+            .active_script_session("main", &engine, "script-tab", "missing")
+            .is_err());
         envelope_ok(&state.with_project_session_transition("main", &engine, || {
             engine.bind_project_session("script-tab")
         }));
@@ -1897,23 +2123,398 @@ mod tests {
             .write_for_window("main", payload(&session, export, "blank"))
             .unwrap();
         assert_eq!(
-            state.active_script_session("main", &engine).unwrap(),
+            state
+                .active_script_session("main", &engine, "script-tab", &session)
+                .unwrap(),
             session
         );
         envelope_ok(&state.run_ui_mutation("main", || {
             engine.engine_call("document_set_name", r#""Changed""#)
         }));
-        assert!(state.active_script_session("main", &engine).is_err());
+        assert!(state
+            .active_script_session("main", &engine, "script-tab", &session)
+            .is_err());
         let (_, export) = reserve(&state, "main");
         state
             .write_for_window("main", payload(&session, export, "changed"))
             .unwrap();
         assert_eq!(
-            state.active_script_session("main", &engine).unwrap(),
+            state
+                .active_script_session("main", &engine, "script-tab", &session)
+                .unwrap(),
             session
         );
         envelope_ok(&engine.create_project_session("other-tab"));
-        assert!(state.active_script_session("main", &engine).is_err());
+        assert!(state
+            .active_script_session("main", &engine, "script-tab", &session)
+            .is_err());
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inbox_project_replacement_retires_queued_work_and_preserves_its_receipt() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-inbox-replacement-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            for name in ["cad_load_project_model", "cad_new_project"] {
+                let state = SessionBridgeState::default();
+                let engine = AppState::new();
+                envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                    engine.bind_project_session("same-tab")
+                }));
+                envelope_ok(&engine.engine_call("document_set_name", r#""Original""#));
+                let original_model =
+                    parse_engine_envelope(engine.engine_call("project_export_model", "")).unwrap();
+                let (original, ticket) = reserve(&state, "main");
+                let mut initial = payload(&original, ticket, "original");
+                initial.model_json = Some(original_model.as_str().unwrap().to_string());
+                state.write_for_window("main", initial).unwrap();
+                let (_, stale_ticket) = reserve(&state, "main");
+
+                // Encoding and prepare failures must retain the original UUID,
+                // model, export tickets and ability to accept later operations.
+                for (index, arguments) in [
+                    json!({}),
+                    json!({"model_json":17}),
+                    json!({"model_json":"not JSON"}),
+                    json!({"model_json":r#"{"format":"nbcad-project","schema_version":9999}"#}),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let seq = index as u64 + 1;
+                    write_inbox(&original, seq, "cad_load_project_model", 1, arguments);
+                    let rejected = apply_or_reject_one_inbox_op(
+                        &state,
+                        "main",
+                        &engine,
+                        None,
+                        Some(("same-tab", &original)),
+                    )
+                    .unwrap();
+                    assert_eq!(rejected["applied"], false);
+                    assert_eq!(rejected["dead_lettered"], true);
+                    assert!(rejected.get("project_replaced").is_none());
+                    assert_eq!(reserve(&state, "main").0, original);
+                    assert!(!closed_tombstone_path(&original).exists());
+                    assert_eq!(
+                        parse_engine_envelope(engine.engine_call("project_export_model", ""))
+                            .unwrap(),
+                        original_model
+                    );
+                }
+
+                let donor = AppState::new();
+                envelope_ok(&donor.engine_call("document_set_name", r#""Replacement""#));
+                let model =
+                    parse_engine_envelope(donor.engine_call("project_export_model", "")).unwrap();
+                let arguments = if name == "cad_load_project_model" {
+                    json!({"model_json":model})
+                } else {
+                    json!({})
+                };
+                write_inbox(&original, 5, name, 1, arguments);
+                write_inbox(
+                    &original,
+                    6,
+                    "cad_set_document_name",
+                    2,
+                    json!({"name":"Stale queued edit"}),
+                );
+                let applied = apply_or_reject_one_inbox_op(
+                    &state,
+                    "main",
+                    &engine,
+                    None,
+                    Some(("same-tab", &original)),
+                )
+                .unwrap();
+                assert_eq!(applied["applied"], true);
+                assert_eq!(applied["project_replaced"], true);
+                assert_eq!(applied["session_id"], original);
+                assert_eq!(applied["previous_session_id"], original);
+                assert_eq!(applied["document_id"], "same-tab");
+                let current = applied["active_session_id"].as_str().unwrap();
+                assert_ne!(current, original);
+                assert_eq!(applied["engine_revision"], 1);
+                assert_eq!(
+                    engine.document_snapshot().name,
+                    if name == "cad_load_project_model" {
+                        "Replacement"
+                    } else {
+                        "Untitled"
+                    }
+                );
+                assert!(closed_tombstone_path(&original).exists());
+                let receipt: Value = serde_json::from_str(
+                    &fs::read_to_string(inbox_dir(&original).join("applied/5.json")).unwrap(),
+                )
+                .unwrap();
+                for key in [
+                    "project_replaced",
+                    "previous_session_id",
+                    "active_session_id",
+                    "document_id",
+                ] {
+                    assert_eq!(
+                        receipt[key], applied[key],
+                        "the initiating receipt must retain {key}"
+                    );
+                }
+                assert_eq!(receipt["name"], name);
+                assert_eq!(receipt["base_generation"], 1);
+                let result: Value = serde_json::from_str(
+                    &fs::read_to_string(inbox_dir(&original).join("results/5.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(result, applied["result"]);
+                assert_eq!(
+                    fs::read_to_string(dir.join(&original).join("model.json")).unwrap(),
+                    original_model.as_str().unwrap()
+                );
+                assert_eq!(pending_inbox_seqs(&original), vec![6]);
+                assert!(apply_or_reject_one_inbox_op(
+                    &state,
+                    "main",
+                    &engine,
+                    None,
+                    Some(("same-tab", &original))
+                )
+                .unwrap()
+                .is_null());
+                assert_eq!(
+                    apply_one_inbox_op(&state, "main", &engine).unwrap()["applied"],
+                    false
+                );
+                assert_eq!(pending_inbox_seqs(&original), vec![6]);
+                assert_eq!(
+                    state
+                        .write_for_window("main", payload(&original, stale_ticket, "stale"))
+                        .unwrap()["skipped"],
+                    true
+                );
+                assert!(state
+                    .active_script_session("main", &engine, "same-tab", current)
+                    .is_err());
+                let (published, ticket) = reserve(&state, "main");
+                assert_eq!(published, current);
+                let mut publication = payload(current, ticket, "replacement");
+                publication.model_json = Some(
+                    parse_engine_envelope(engine.engine_call("project_export_model", ""))
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                );
+                state.write_for_window("main", publication).unwrap();
+                assert_eq!(
+                    state
+                        .active_script_session("main", &engine, "same-tab", current)
+                        .unwrap(),
+                    current
+                );
+                assert_eq!(
+                    read_process_lease(&state, &dir)["windows"][0]["active_session_id"],
+                    current
+                );
+            }
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn same_tab_document_replacement_retires_script_and_queued_work_ownership() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-replacement-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("same-tab")
+            }));
+            let (original, ticket) = reserve(&state, "main");
+            state
+                .write_for_window("main", payload(&original, ticket, "original"))
+                .unwrap();
+            let original_model = engine.engine_call("project_export_model", "");
+            let rejected = state.run_project_replacement("main", &engine, || {
+                engine.project_load(
+                    &json!(r#"{"format":"nbcad-project","schema_version":9999}"#).to_string(),
+                )
+            });
+            let rejected: Value = serde_json::from_str(&rejected).unwrap();
+            assert_eq!(rejected["ok"], false);
+            assert_eq!(rejected["data"]["project_load_state"], "unchanged");
+            assert_eq!(
+                engine.engine_call("project_export_model", ""),
+                original_model
+            );
+            assert_eq!(
+                state
+                    .active_script_session("main", &engine, "same-tab", &original)
+                    .unwrap(),
+                original
+            );
+            assert!(!closed_tombstone_path(&original).exists());
+
+            // One Open control is already delivered; another control, a model
+            // edit, and an in-flight snapshot still belong to the old document.
+            let controls = dir.join(&original).join("controls");
+            fs::create_dir_all(&controls).unwrap();
+            for id in ["123-1", "123-2"] {
+                atomic_write(&controls.join(format!("{id}.request.json")), &json!({
+                    "id":id,"expires_ms":now_ms()+30_000,"file":{"command":"open","path":"replacement.nbcad"}
+                }).to_string()).unwrap();
+            }
+            assert_eq!(
+                control_for_window(&state, "main", &engine, None).unwrap()["id"],
+                "123-1"
+            );
+            let (_, stale_ticket) = reserve(&state, "main");
+            write_inbox(
+                &original,
+                1,
+                "cad_set_document_name",
+                1,
+                json!({"name":"Stale script"}),
+            );
+
+            let replacement = AppState::new();
+            envelope_ok(&replacement.engine_call("document_set_name", r#""Replacement""#));
+            let model =
+                parse_engine_envelope(replacement.engine_call("project_export_model", "")).unwrap();
+            envelope_ok(&state.run_project_replacement("main", &engine, || {
+                engine.project_load(&model.to_string())
+            }));
+            let (current, fresh_ticket) = reserve(&state, "main");
+            assert_ne!(current, original);
+            assert_eq!(engine.active_project_session_id(), "same-tab");
+            assert_eq!(engine.document_snapshot().name, "Replacement");
+            assert!(closed_tombstone_path(&original).exists());
+            assert!(
+                state
+                    .active_script_session("main", &engine, "same-tab", &current)
+                    .is_err(),
+                "replacement must first publish its own model"
+            );
+            assert_eq!(
+                state
+                    .write_for_window("main", payload(&original, stale_ticket, "stale"))
+                    .unwrap()["skipped"],
+                true
+            );
+            assert!(control_for_window(&state, "main", &engine, None)
+                .unwrap()
+                .is_null());
+            assert_eq!(
+                apply_one_inbox_op(&state, "main", &engine).unwrap()["applied"],
+                false
+            );
+            assert_eq!(engine.document_snapshot().name, "Replacement");
+            assert_eq!(pending_inbox_seqs(&original), vec![1]);
+
+            control_for_window(
+                &state,
+                "main",
+                &engine,
+                Some(json!({
+                    "request_id":"123-1","session_id":original,"status":"applied"
+                })),
+            )
+            .unwrap();
+            let reply: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("123-1.result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(reply["active_session_id"], current);
+            assert!(
+                controls.join("123-2.request.json").exists(),
+                "queued old controls cannot be dispatched to the replacement"
+            );
+            state
+                .write_for_window("main", payload(&current, fresh_ticket, "replacement"))
+                .unwrap();
+            assert!(
+                state
+                    .active_script_session("main", &engine, "same-tab", &original)
+                    .is_err(),
+                "a fresh heartbeat must not retarget a delayed Run from the original document"
+            );
+            assert!(state
+                .active_script_session("main", &engine, "another-tab", &current)
+                .is_err());
+            assert_eq!(
+                state
+                    .active_script_session("main", &engine, "same-tab", &current)
+                    .unwrap(),
+                current
+            );
+
+            write_inbox(
+                &current,
+                1,
+                "cad_set_document_name",
+                1,
+                json!({"name":"Current edit"}),
+            );
+            for reason in [None, Some("Playback stopped in original document")] {
+                assert!(apply_or_reject_one_inbox_op(
+                    &state,
+                    "main",
+                    &engine,
+                    reason,
+                    Some(("same-tab", &original))
+                )
+                .unwrap()
+                .is_null());
+                assert!(apply_or_reject_one_inbox_op(
+                    &state,
+                    "main",
+                    &engine,
+                    reason,
+                    Some(("another-tab", &current))
+                )
+                .unwrap()
+                .is_null());
+                assert_eq!(pending_inbox_seqs(&current), vec![1]);
+                assert_eq!(engine.document_snapshot().name, "Replacement");
+            }
+            assert_eq!(
+                apply_or_reject_one_inbox_op(
+                    &state,
+                    "main",
+                    &engine,
+                    None,
+                    Some(("same-tab", &current))
+                )
+                .unwrap()["applied"],
+                true
+            );
+            assert_eq!(engine.document_snapshot().name, "Current edit");
+
+            // An unverified failure cannot preserve script access. A failure
+            // before mutation is allowed to do so only with the explicit marker.
+            state.run_project_replacement("main", &engine, || {
+                json!({"ok":false,"error":"unknown load failure"}).to_string()
+            });
+            let (unverified, _) = reserve(&state, "main");
+            assert_ne!(unverified, current);
+            assert!(closed_tombstone_path(&current).exists());
+            envelope_ok(&state.run_project_replacement("main", &engine, || engine.project_new()));
+            let (blank, _) = reserve(&state, "main");
+            assert_ne!(
+                blank, unverified,
+                "clearing the last tab is also a document replacement"
+            );
+            assert_eq!(
+                read_process_lease(&state, &dir)["windows"][0]["active_session_id"],
+                blank
+            );
+        }
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2050,7 +2651,7 @@ mod tests {
         );
         let engine = AppState::new();
         let stopped =
-            apply_or_reject_one_inbox_op(&state, "main", &engine, Some("Playback stopped"))
+            apply_or_reject_one_inbox_op(&state, "main", &engine, Some("Playback stopped"), None)
                 .unwrap();
         assert_eq!(stopped["reason"], "playback_stopped");
         assert_eq!(stopped["engine_revision"], generation);
@@ -2194,6 +2795,85 @@ mod tests {
 
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fast_script_progress_follows_only_successful_owned_inbox_apply() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-inbox-progress-{}", now_ms()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("progress-tab")
+        }));
+        let reservation = state
+            .reserve_for_window_on_project("main", Some("progress-tab"))
+            .unwrap();
+        let session = reservation["session_id"].as_str().unwrap();
+        let generation = reservation["generation"].as_u64().unwrap();
+        state
+            .write_for_window(
+                "main",
+                payload_on_project(session, "progress-tab", generation, "base"),
+            )
+            .unwrap();
+        let progress = json!({"steps_completed":611,"step_count":692});
+        for (seq, base, name) in [
+            (1, generation, "Progress model"),
+            (2, generation, "Stale"),
+            (3, generation + 1, ""),
+        ] {
+            write_inbox(
+                session,
+                seq,
+                "cad_set_document_name",
+                base,
+                json!({"name":name}),
+            );
+            let path = inbox_dir(session).join(format!("{seq}.json"));
+            let mut op: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            op["script_progress"] = progress.clone();
+            atomic_write(&path, &op.to_string()).unwrap();
+        }
+        assert!(apply_or_reject_one_inbox_op(
+            &state,
+            "main",
+            &engine,
+            None,
+            Some(("retired-tab", session))
+        )
+        .unwrap()
+        .is_null());
+        assert_eq!(pending_inbox_seqs(session), vec![1, 2, 3]);
+        let applied = apply_or_reject_one_inbox_op(
+            &state,
+            "main",
+            &engine,
+            None,
+            Some(("progress-tab", session)),
+        )
+        .unwrap();
+        assert_eq!(applied["applied"], true);
+        assert_eq!(applied["script_progress"], progress);
+        assert_eq!(engine.document_snapshot().name, "Progress model");
+        let result: Value = serde_json::from_str(
+            &fs::read_to_string(inbox_dir(session).join("results/1.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result, applied["result"],
+            "The model result is unchanged by presentation metadata"
+        );
+        assert!(result.get("script_progress").is_none());
+        for _ in 0..2 {
+            let rejected = apply_one_inbox_op(&state, "main", &engine).unwrap();
+            assert_eq!(rejected["applied"], false);
+            assert!(rejected.get("script_progress").is_none());
+        }
+        assert_eq!(engine.document_snapshot().name, "Progress model");
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

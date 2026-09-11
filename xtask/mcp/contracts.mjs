@@ -201,6 +201,14 @@ try {
  });
  console.log('PASS production application exit: '+JSON.stringify(exit));
  await exitPage.close();
+ const exitSavePage=await browser.newPage();
+ await exitSavePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const exitSavePolling=await exitSavePage.evaluate(async()=>{
+  const {checkSaveOnExitPolling}=await import('/src/files/saveOnExit.browser.test.ts');
+  return checkSaveOnExitPolling();
+ });
+ console.log('PASS production Save-on-exit polling: '+JSON.stringify(exitSavePolling));
+ await exitSavePage.close();
  console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
  const scriptPage=await browser.newPage();
  await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
@@ -311,6 +319,32 @@ try {
  });
  console.log('PASS production history editor callbacks: '+JSON.stringify(historyEditors));
  await historyPage.close();
+ const ownershipPage=await browser.newPage();
+ await ownershipPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const ownership=await ownershipPage.evaluate(async()=>{
+  const {checkScriptDocumentOwnership}=await import('/src/scripts/documentOwnership.browser.test.ts');
+  const {checkInboxDocumentOwnership}=await import('/src/scripts/inboxOwnership.browser.test.ts');
+  const {checkPublicationOwnership}=await import('/src/scripts/publicationOwnership.browser.test.ts');
+  const {checkInboxCompletion}=await import('/src/scripts/inboxCompletion.browser.test.ts');
+  const {checkInboxHistoryMetadata}=await import('/src/scripts/inboxHistory.browser.test.ts');
+  const {checkInboxProgress}=await import('/src/scripts/inboxProgress.browser.test.ts');
+  let timer;
+  try{return await Promise.race([(async()=>({
+   script:await checkScriptDocumentOwnership(),inbox:await checkInboxDocumentOwnership(),publication:await checkPublicationOwnership(),completion:await checkInboxCompletion(),history:await checkInboxHistoryMetadata(),progress:await checkInboxProgress(),
+  }))(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('Script document ownership contract timed out')),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production script document ownership: '+JSON.stringify(ownership));
+ await ownershipPage.close();
+ const controlPage=await browser.newPage();
+ await controlPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const controls=await controlPage.evaluate(async()=>{
+  const {checkControlDocumentOwnership}=await import('/src/scripts/controlOwnership.browser.test.ts');
+  return checkControlDocumentOwnership();
+ });
+ console.log('PASS production control document ownership: '+JSON.stringify(controls));
+ await controlPage.close();
 } finally {await browser?.close();await server.close();}
 
 

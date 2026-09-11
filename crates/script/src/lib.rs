@@ -614,9 +614,30 @@ fn resolve(expression: &Value, bindings: &Bindings) -> Result<Value, String> {
     }
 }
 
+/// Completed authored steps before the current host call. A call is not counted
+/// until its response, expectations and bindings have all succeeded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunProgress {
+    pub steps_completed: usize,
+    pub step_count: usize,
+}
+
 pub fn run<F>(script: &Script, mut host: F, options: RunOptions) -> Result<Value, String>
 where
     F: FnMut(&str, Value) -> Result<Value, String>,
+{
+    run_with_progress(script, |name, args, _| host(name, args), options)
+}
+
+/// Run the same interpreter with progress carried on existing host calls;
+/// observing progress never adds calls or changes authored execution order.
+pub fn run_with_progress<F>(
+    script: &Script,
+    mut host: F,
+    options: RunOptions,
+) -> Result<Value, String>
+where
+    F: FnMut(&str, Value, RunProgress) -> Result<Value, String>,
 {
     script.validate_options(options)?;
     let started = Instant::now();
@@ -634,6 +655,10 @@ where
         }
         for (index, step) in steps.into_iter().flatten().enumerate() {
             let id = step_id(step, checking, index)?;
+            let progress = RunProgress {
+                steps_completed: completed,
+                step_count: script.document["steps"].as_array().unwrap().len(),
+            };
             let result = (|| -> Result<(), String> {
                 if let Some(values) = step.get("let") {
                     for (name, expression) in values.as_object().ok_or("let requires an object")? {
@@ -655,6 +680,7 @@ where
                     let mut result = host(
                         "cad_interface",
                         json!({"action":"execute","group":call["group"],"operation":call["operation"],"arguments":arguments}),
+                        progress,
                     )?;
                     if let Some(text) = result.as_str() {
                         if let Ok(parsed) = serde_json::from_str(text) {
@@ -709,6 +735,7 @@ where
                     let response = host(
                         "cad_interface",
                         resolve(&Value::Object(request), &bindings)?,
+                        progress,
                     )?;
                     if response["status"] == "failed" {
                         return Err(format!("Presentation failed: {response}"));
@@ -758,6 +785,71 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_progress_counts_completed_steps_without_extra_calls_or_early_success() {
+        let script = Script::parse(r#"{"version":1,"name":"Progress","steps":[
+            {"note":"Skipped in fast mode"},{"let":{"size":7}},
+            {"call":{"group":"g","operation":"make","arguments":{"size":{"$ref":"size"}}},"expect":{"/id":7}},
+            {"assert":{"$ref":"size"},"equals":7},{"view":"isometric"},
+            {"call":{"group":"g","operation":"draw","arguments":{}}}
+        ],"checks":[{"call":{"group":"g","operation":"inspect","arguments":{}},"expect":{"/id":7}}]}"#).unwrap();
+        let mut observed = Vec::new();
+        let report = run_with_progress(
+            &script,
+            |name, args, progress| {
+                observed.push((name.to_string(), args, progress));
+                Ok(json!({"id":7}))
+            },
+            RunOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            observed.iter().map(|(_, _, p)| *p).collect::<Vec<_>>(),
+            [2, 5, 6].map(|steps_completed| RunProgress {
+                steps_completed,
+                step_count: 6
+            })
+        );
+        assert_eq!(report["steps_completed"], 6);
+        assert_eq!(report["checks_completed"], 1);
+        let mut plain_calls = Vec::new();
+        let plain = run(
+            &script,
+            |name, args| {
+                plain_calls.push((name.to_string(), args));
+                Ok(json!({"id":7}))
+            },
+            RunOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plain_calls,
+            observed
+                .into_iter()
+                .map(|(name, args, _)| (name, args))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(plain["exports"], report["exports"]);
+        let mut failed_progress = Vec::new();
+        let error = run_with_progress(
+            &script,
+            |_, _, progress| {
+                failed_progress.push(progress);
+                Ok(json!({"id":8}))
+            },
+            RunOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.contains("2 completed") && error.contains("Result did not satisfy"));
+        assert_eq!(
+            failed_progress,
+            [RunProgress {
+                steps_completed: 2,
+                step_count: 6
+            }]
+        );
+    }
+
     #[test]
     fn generated_result_ids_and_duplicate_names_are_checked_before_execution() {
         let script = Script::parse(r#"{"version":1,"name":"implicit references","steps":[

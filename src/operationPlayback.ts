@@ -38,6 +38,12 @@ export interface PresentationSnapshot {
   highlighted_sketch_entity_ids: number[];
 }
 
+/** Interpreter progress carried by an existing successfully applied operation. */
+export interface ScriptProgress {
+  steps_completed: number;
+  step_count: number;
+}
+
 /** A clock-injected gate makes pause/speed/step behavior independent of timers. */
 export class PresentationController {
   private state: PresentationSnapshot = { active: false, visible: false, mode: 'fast', speed: 1,
@@ -147,11 +153,21 @@ export class PresentationController {
     if (this.state.paused) return this.credits > 0;
     return this.state.mode === 'fast' || this.remainingMs <= 0;
   }
-  applied(label: string): void {
+  applied(label: string, progress?: ScriptProgress): void {
     // The completed/stopped walkthrough remains a record of that run, even
     // while the user saves the result or resumes ordinary modeling afterward.
     if (!this.state.active || this.state.finished || this.state.stopped) return;
-    this.emit({ operation: label.replace(/^(sketch|solid|assembly)_/, '').replace(/_/g, ' ') });
+    const patch: Partial<PresentationSnapshot> = {
+      operation: label.replace(/^(sketch|solid|assembly)_/, '').replace(/_/g, ' '),
+    };
+    // Counts come from the runner, including expressions and skipped captions.
+    // Ignore malformed/stale hints without rejecting a successful model edit.
+    if (progress && Number.isSafeInteger(progress.steps_completed)
+      && Number.isSafeInteger(progress.step_count) && progress.step_count === this.state.step_count
+      && progress.steps_completed >= this.state.step_index && progress.steps_completed <= progress.step_count) {
+      patch.step_index = progress.steps_completed;
+    }
+    this.emit(patch);
   }
   modelApplied(): void {
     this.advance();
@@ -199,8 +215,8 @@ export function installOperationFeedback(): () => void {
   return () => document.removeEventListener('pointerdown', touch, true);
 }
 
-export async function presentOperation(label: string, _target?: HTMLElement | null): Promise<void> {
+export async function presentOperation(label: string, _target?: HTMLElement | null, progress?: ScriptProgress): Promise<void> {
   // One persistent card is updated in place. No viewport border flash, pulse,
   // brightness filter, opacity loop, or label racing across the model.
-  presentation.applied(label);
+  presentation.applied(label, progress);
 }
