@@ -232,13 +232,20 @@ fn request_control(
     );
     let request_name = format!("controls/{id}.request.json");
     let result_name = format!("controls/{id}.result.json");
-    // File reconstruction and snapshot publication can exceed an ordinary UI
-    // control's deadline. Keep the same bounded expiry for the caller and the
-    // desktop's delivered reply, including an Open that retires its session.
+    // File reconstruction and precise native drawing projection can exceed an
+    // ordinary control's deadline. The caller and desktop must retain the same
+    // bounded request while that work finishes, including a document replacement.
     // Camera motion remains capped at ten seconds by the presentation controller.
-    let lifetime = if ui
-        && arguments["action"] == "file"
-        && matches!(arguments["command"].as_str(), Some("open" | "save"))
+    let slow_drawing = query.as_ref().is_some_and(|query| {
+        matches!(
+            query["method"].as_str(),
+            Some("drawing_projection" | "drawing_export")
+        )
+    });
+    let lifetime = if slow_drawing
+        || (ui
+            && arguments["action"] == "file"
+            && matches!(arguments["command"].as_str(), Some("open" | "save")))
     {
         300_000
     } else if ui || arguments.get("duration_ms").is_some() {
@@ -2156,6 +2163,82 @@ mod tests {
             std::env::remove_var("NBCAD_SESSION_DIR");
         }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn slow_drawing_queries_retain_the_live_result() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let id = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-slow-drawing-{id}"));
+        let previous = std::env::var_os("NBCAD_SESSION_DIR");
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let mut results = Vec::new();
+        for method in ["drawing_projection", "drawing_export"] {
+            write_session(
+                &id,
+                "heartbeat.json",
+                &json!({"updated_ms":now_ms(),"generation":1}).to_string(),
+            )
+            .unwrap();
+            let controls = dir.join(&id).join("controls");
+            let responder = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                while std::time::Instant::now() < deadline {
+                    if let Ok(entries) = fs::read_dir(&controls) {
+                        for entry in entries.flatten() {
+                            if !entry
+                                .file_name()
+                                .to_string_lossy()
+                                .ends_with(".request.json")
+                            {
+                                continue;
+                            }
+                            let request: Value =
+                                serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
+                                    .unwrap();
+                            assert_eq!(request["sketch_query"]["method"], method);
+                            // Precise helical hidden-line removal can exceed a normal
+                            // control's deadline. Exercise the real transport wait.
+                            std::thread::sleep(std::time::Duration::from_secs(32));
+                            let still_pending = entry.path().is_file()
+                                && request["expires_ms"].as_u64().unwrap() > now_ms();
+                            if still_pending {
+                                let result = controls.join(format!(
+                                    "{}.result.json",
+                                    request["id"].as_str().unwrap()
+                                ));
+                                let temporary = result.with_extension("tmp");
+                                fs::write(&temporary, json!({
+                                    "status":"applied", "value":{"method":method,"content":"finished"}
+                                }).to_string()).unwrap();
+                                fs::rename(temporary, result).unwrap();
+                            }
+                            return still_pending;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                false
+            });
+            let result = request_engine_query(&id, method, "{}");
+            results.push((method, result, responder.join().unwrap()));
+        }
+        if let Some(previous) = previous {
+            std::env::set_var("NBCAD_SESSION_DIR", previous);
+        } else {
+            std::env::remove_var("NBCAD_SESSION_DIR");
+        }
+        let _ = fs::remove_dir_all(&dir);
+        for (method, result, still_pending) in results {
+            assert!(
+                still_pending,
+                "{method} expired while its native query was running"
+            );
+            assert_eq!(
+                result.unwrap(),
+                json!({"method":method,"content":"finished"})
+            );
+        }
     }
 
     fn write_process_lease(root: &Path, process_id: &str, updated_ms: u64, windows: Value) {
