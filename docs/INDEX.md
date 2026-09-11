@@ -7,6 +7,14 @@
 | [goals.md](goals.md) | Everyone | Product direction changes |
 | [proposed-architecture.md](proposed-architecture.md) | Everyone | When proposals ship or change |
 
+## Knowledge / help
+
+| Doc | Audience | When to update |
+|-----|----------|----------------|
+| [knowledge-wiki.md](knowledge-wiki.md) | Humans + agents | OKF bundle conventions |
+| [machine-design-kb.md](machine-design-kb.md) | Humans + agents | Domain KB scope, licenses, MCP help plan |
+| [../knowledge/index.md](../knowledge/index.md) | Everyone | Concept index (product + machine design) |
+
 ## MCP / automation
 
 | Doc | Audience | When to update |

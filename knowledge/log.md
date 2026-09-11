@@ -1,5 +1,12 @@
 # noBS CAD knowledge update log
 
+## 2026-09-11
+
+- **Update**: Scaffolded `knowledge/machine-design/` — taxonomy, SOURCES,
+  and five seed concepts (GD&T, fits, fasteners, materials, DFM).
+- **Docs**: Added `docs/machine-design-kb.md` for human/agent browse paths,
+  recipe cross-links, and proposed MCP help tools.
+
 ## 2026-07-29
 
 - **Update**: Aligned the bundle with OKF v0.2 and current `main`.

@@ -10,6 +10,9 @@ bundle: Markdown concepts with YAML frontmatter for humans and agents.
 - Keep concepts **thin**; longer factual and proposed design stays in
   [`mcp-harness.md`](mcp-harness.md) and
   [`proposed-architecture.md`](proposed-architecture.md)
+- Machine-design domain help (GD&T, materials, DFM, …):
+  [`machine-design-kb.md`](machine-design-kb.md) and
+  [`knowledge/machine-design/`](../knowledge/machine-design/)
 - Tracking epic: [#9](https://github.com/jackControls/noBS-CAD/issues/9)
 
 Validate the bundle locally with:
