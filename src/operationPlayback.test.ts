@@ -62,7 +62,7 @@ check(completedRun.snapshot().operation === 'extrude' && completedRun.snapshot()
 completedRun.control({ command: 'note', step_index: 1 });
 completedRun.control({ command: 'stop' });
 const stoppedSnapshot = completedRun.snapshot();
-completedRun.applied('File: save');
+completedRun.applied('File: save', {steps_completed: 2, step_count: 3});
 check(completedRun.snapshot() === stoppedSnapshot && stoppedSnapshot.step_index === 1 && !stoppedSnapshot.finished,
   'A stopped run retains partial progress and its last operation');
 const stoppedDocumentVersion = completedRun.documentVersion();
@@ -119,6 +119,26 @@ check(visibility.status().visible && !visibility.status().finished, 'A newly sta
 const renderControls = () => renderToStaticMarkup(createElement(PresentationControls));
 const renderReopen = () => renderToStaticMarkup(createElement(PresentationReopen));
 check(renderControls() === '' && renderReopen() === '', 'No playback chrome appears before a run exists');
+presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
+let progressEmissions = 0;
+const unsubscribeProgress = presentation.subscribe(() => { progressEmissions++; });
+presentation.applied('drawing_add_view', {steps_completed: 611, step_count: 692});
+check(renderControls().includes('611 / 692') && renderControls().includes('value="611" max="692"')
+  && progressEmissions === 1 && presentation.canApply(),
+  'Maximum-rate operation feedback renders completed interpreter steps in its existing emission without pacing');
+for (const progress of [{steps_completed: 610, step_count: 692}, {steps_completed: 693, step_count: 692},
+  {steps_completed: 650, step_count: 700}, {steps_completed: NaN, step_count: 692}, {steps_completed: -1, step_count: 692}]) {
+  presentation.applied('drawing_add_view', progress);
+  check(presentation.snapshot().step_index === 611, 'Invalid or regressive progress cannot change the completed count');
+}
+presentation.applied('solid_extrude');
+check(presentation.snapshot().step_index === 611, 'Ordinary edits do not guess script progress');
+presentation.control({command: 'finish', step_index: 692, step_count: 692});
+const finalProgress = presentation.snapshot();
+presentation.applied('drawing_add_view', {steps_completed: 612, step_count: 692});
+check(presentation.snapshot() === finalProgress, 'A late operation cannot regress the final interpreter report');
+unsubscribeProgress();
+presentation.documentChanged();
 presentation.control({ command: 'configure', mode: 'present', speed: 0.1 });
 check(renderControls().includes('aria-label="Close playback controls"'), 'The actual playback surface exposes an accessible close control');
 check(renderControls().includes('value="0.1" selected'), 'A configured non-preset speed remains visible in the actual selector');

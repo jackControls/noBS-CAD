@@ -18,8 +18,7 @@ import {currentHistoryProjectKey,dropApplicationHistory,recordDrawingHistory} fr
 import { listen } from '@tauri-apps/api/event';
 import { getEngine } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
-import { applicationExitBarrier } from './files/applicationExit';
-import { SerialPlayback, presentOperation, presentation, wakePlayback } from './operationPlayback';
+import { SerialPlayback, presentOperation, presentation, wakePlayback, type ScriptProgress } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
@@ -110,6 +109,7 @@ interface InboxApplyResult {
   result?: SolidUpdateDto;
   pending?: number;
   error?: string;
+  script_progress?: ScriptProgress;
 }
 
 interface PublishReservation {
@@ -261,9 +261,6 @@ export async function applyInboxNow(): Promise<void> {
       return;
     }
     if (!result?.applied) return;
-    // The native mutation is committed even if its subsequent UI hydration
-    // fails. Closing that window must still offer to save or discard it.
-    useAppStore.setState({ dirty: true });
     presentation.modelApplied();
     if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
     try {
@@ -293,7 +290,8 @@ export async function applyInboxNow(): Promise<void> {
       // An archived native result still needs a coherent frontend snapshot.
       // Failed hydration must not synchronize old visibility into the new
       // model or bless a mixed document as ready for further commands.
-      if (ownsDocument() && published) await presentOperation(result.name ?? 'Model operation');
+      if (ownsDocument() && published) await presentOperation(result.name ?? 'Model operation', null,
+        result.project_replaced ? undefined : result.script_progress);
       // Sequential scripts need this result before their next operation.
       // Publishing now removes the old 300 ms debounce from every command.
       if (ownsDocument() && published && !await publishCurrentSession(releaseTransition) && ownsDocument()) scheduleSessionBridgePublish();

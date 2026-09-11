@@ -955,6 +955,7 @@ pub struct InboxOp {
     pub session_id: Option<String>,
     pub window_id: Option<String>,
     pub document_id: Option<String>,
+    pub script_progress: Option<nbcad_script::RunProgress>,
 }
 
 impl InboxOp {
@@ -967,6 +968,7 @@ impl InboxOp {
             session_id: None,
             window_id: None,
             document_id: None,
+            script_progress: None,
         }
     }
 
@@ -993,8 +995,22 @@ impl InboxOp {
             if let Some(document_id) = &self.document_id {
                 object.insert("document_id".to_string(), json!(document_id));
             }
+            if let Some(progress) = self.script_progress {
+                object.insert(
+                    "script_progress".to_string(),
+                    json!({
+                        "steps_completed": progress.steps_completed,
+                        "step_count": progress.step_count,
+                    }),
+                );
+            }
         }
         value
+    }
+
+    pub fn with_script_progress(mut self, progress: Option<nbcad_script::RunProgress>) -> Self {
+        self.script_progress = progress;
+        self
     }
 
     #[cfg(test)]
@@ -1016,6 +1032,12 @@ impl InboxOp {
             session_id: optional_id(value, "session_id"),
             window_id: optional_id(value, "window_id"),
             document_id: optional_id(value, "document_id"),
+            script_progress: value.get("script_progress").and_then(|progress| {
+                Some(nbcad_script::RunProgress {
+                    steps_completed: progress["steps_completed"].as_u64()?.try_into().ok()?,
+                    step_count: progress["step_count"].as_u64()?.try_into().ok()?,
+                })
+            }),
         })
     }
 }
