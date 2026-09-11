@@ -7,7 +7,7 @@ Rendering changes the presentation, not the modeling operations or final checks.
 
 ## Review and merge order
 
-The [native GitHub stack shown in PR #111](https://github.com/jackControls/noBS-CAD/pull/111)
+The [native GitHub stack shown in PR #115](https://github.com/jackControls/noBS-CAD/pull/115)
 is the current source of truth for its order, approvals and CI. Its layers are:
 
 1. PR95: associative drawing dimensions.
@@ -23,10 +23,15 @@ is the current source of truth for its order, approvals and CI. Its layers are:
 10. PR105: successful-history reuse, patterned joins and mesh-export isolation.
 11. PR106: exact authored coordinates, external-thread commands and script preflight.
 12. PR107: protected drawing references, exact inspection reuse and source markers.
-13. PR108: printable definition exports with atomic document ownership.
+13. PR108: printable definition exports, rejected-Open recovery and atomic file ownership.
 14. PR109: remove unused component placeholders for consumed construction bodies.
 15. PR110: the D-screw vise, fit coupon, print layout and manufacturing drawings.
 16. PR111: the vertical-axis turbine, four fit coupons and assembly/part drawings.
+17. PR112: shared live material presets, retained replay output and camera completion.
+18. PR113: one grouped control for retained construction-reference visibility.
+19. PR114: truthful final playback counts and stable completed-run feedback.
+20. PR115: script and presentation ownership across whole-document replacement.
+21. PR116: validation evidence and remaining release work.
 
 Each PR's diff is against the layer below it. GitHub applies main's review rules
 to every layer and can merge a reviewed prefix from the bottom. A draft layer
@@ -39,11 +44,29 @@ native-preview decisions documented in `script-interface-review.md`. Its status
 does not erase the independently reviewable geometry and recipe work above it.
 No approvals or repository protection rules are bypassed by using a stack.
 
-PR88 remains an independent diagnostics change against main. When it lands,
-carry its session-generation logic into the extracted MCP library while updating
-this stack; do not restore an older entire entrypoint over those fixes. The old
+On September 10, GitHub rejected the asynchronous PR95–98 prefix merge for a
+qualifying write-access approval even though all four exact-head Jack reviews
+were approved and his admin permission was confirmed. No merge or branch rewrite
+occurred in that attempt; the precise server-side cause is unconfirmed. The
+evidence is recorded with issue #14. The subsequent review correction moves the
+approved rejected-Open fix from PR115 into PR108, so the requested change is fixed
+in its owning layer. PR115 now contains the separately reproduced script/document
+ownership corrections. Review history is retained, and changed heads need fresh
+approval.
+
+PR88 merged into main as `39eb862`. The stack is rebased onto that revision, with
+its session-generation logic retained in the extracted MCP library and its thin
+entrypoint preserved. A native regression combines deferred script snapshots with
+observational session status: reading status cannot advance the loaded fence or
+reconstruct the model; a failed refresh cannot stamp the new fence. The old
 PR89 examples are superseded by the native recipes and Rust regressions in the
 collection, with their old branch/history preserved.
+
+The [September 10 correction evidence](review-corrections-2026-09-10.md)
+records the current rebuild, standalone PR108 checks, full live bench replay,
+and the saved-file regression that exposed lost materials during temporary
+history rollback. Its shared history prerequisites live in PR108; PR115 adds
+the corresponding MCP inbox refresh.
 
 ## Keep developing from the current tip
 
@@ -70,6 +93,14 @@ editing checks, editable drawings and teaching notes belong together. See
 work. All three now have runnable native sources. The two new manufacturing
 candidates include editable drawings and fit coupons; physical qualification
 and the bench's full drawing package remain open.
+
+Both new candidates also completed attached, rendered construction in a rebuilt
+desktop at `6f7e5e6`: the vise passed 692 steps and 55 final checks, and the turbine
+passed 1,622 steps and 11 final checks. Each matched its independent native model,
+scene, sketches and solved assembly exactly before Save As. Separate clean-view
+copies changed only retained-reference visibility and the saved document name.
+The validation manifests retain the original full headless baseline and this
+additional live evidence rather than replacing one with the other.
 
 Single-feature lessons use the same versioned JSONC format and catalog. Prefer a
 small, clear part that demonstrates a modeling decision, a meaningful parameter
