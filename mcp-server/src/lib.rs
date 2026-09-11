@@ -4230,6 +4230,56 @@ mod tests {
             .unwrap()
             .contains(&format!("Ø{diameter:.2}")));
         let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        {
+            let mut legacy: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
+            assert_eq!(legacy["schema_version"], 6);
+            fn remove_guards(value: &mut Value) {
+                match value {
+                    Value::Object(object) => {
+                        object.remove("topology_signature");
+                        for child in object.values_mut() {
+                            remove_guards(child);
+                        }
+                    }
+                    Value::Array(values) => {
+                        for child in values {
+                            remove_guards(child);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            remove_guards(&mut legacy["drawings"]);
+            for version in 1..=5 {
+                legacy["schema_version"] = json!(version);
+                let mut migrated = CadServer::new().unwrap();
+                migrated
+                    .call_tool(
+                        "cad_load_project_model",
+                        json!({"model_json":legacy.to_string()}),
+                    )
+                    .unwrap();
+                let resaved = migrated.call_tool("cad_project_model", json!({})).unwrap();
+                let resaved: Value = serde_json::from_str(resaved.as_str().unwrap()).unwrap();
+                assert_eq!(resaved["schema_version"], 6);
+                assert_eq!(
+                    serde_json::from_value::<nbcad_sketch::DrawingDocumentDto>(
+                        resaved["drawings"].clone()
+                    )
+                    .unwrap(),
+                    serde_json::from_value::<nbcad_sketch::DrawingDocumentDto>(
+                        legacy["drawings"].clone()
+                    )
+                    .unwrap(),
+                    "migration must not certify legacy ordinal references"
+                );
+                assert!(migrated
+                    .call_tool("drawing_export", json!({"sheet_id":1,"format":"svg"}))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unverified"));
+            }
+        }
         let mut restored = CadServer::new().unwrap();
         restored
             .call_tool("cad_load_project_model", json!({"model_json":model}))
@@ -6256,7 +6306,7 @@ mod tests {
             .iter()
             .find(|a| a["occurrence_id"] == added["id"])
             .unwrap();
-        let reference:nbcad_sketch::DrawingTopologyAnchorRefDto=serde_json::from_value(json!({"occurrence_id":placed["occurrence_id"],"body_id":placed["body_id"],"edge_id":placed["edge_id"],"edge_key":placed["edge_key"],"endpoint":placed["endpoint"],"fallback_point":[999.,999.,999.]})).unwrap();
+        let reference:nbcad_sketch::DrawingTopologyAnchorRefDto=serde_json::from_value(json!({"topology_signature":projection["topology_signatures"][placed["body_id"].to_string()],"occurrence_id":placed["occurrence_id"],"body_id":placed["body_id"],"edge_id":placed["edge_id"],"edge_key":placed["edge_key"],"endpoint":placed["endpoint"],"fallback_point":[999.,999.,999.]})).unwrap();
         let resolved = nbcad_occt::resolve_drawing_anchor(
             &server.manager.solid_scene(),
             &server.manager.assembly_document(),

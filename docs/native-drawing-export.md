@@ -19,10 +19,29 @@ the Rust sheet exporter, current exact hidden-line projection and persistent
 drawing document. Exported SVG/DXF are review artifacts; the editable `.nbcad`
 project and Rust replay recipe remain the design sources.
 
+Derived views include their source markers on the parent view. Section and
+removed-section cutting lines extend across the parent bounds with arrowheads
+and labels; detail boundaries, auxiliary arrows and break indicators use the
+same paper conventions as the editor. Short source datum pairs define a plane,
+not the length of its cutting line. Exact arc centers remain usable when viewed
+edge-on and after assembly placement. Both SVG and DXF include these markers;
+missing source topology rejects export instead of substituting fallback points.
+
 View positions specify the center of the projected bounds in paper millimetres,
 matching the interactive editor. Scale converts model millimetres to paper
 millimetres. Dimensions resolve current edge IDs and stable keys. Diagnostic
 fallback points never become an accepted substitute for lost topology.
+
+Native edge keys are OCCT ordinals, so drawing references also capture the
+body's owning feature and exact structural connectivity signature. A normal
+dimensional edit can keep its associations; a changed edge/vertex/wire graph or
+owning feature requires explicit reassociation before export. The signature
+excludes dimensions and mesh quality. This is conservative invalidation, not
+complete OCCT historical naming across arbitrary Boolean edits or graph
+symmetries. Existing captured guards are never refreshed by an unrelated drawing
+edit. Legacy unguarded references must be explicitly recreated against current
+geometry; saved fallback coordinates never establish their identity. Unrelated
+sheets can still export when another sheet needs reassociation.
 
 `drawing_add_radial_dimension` accepts the circular reference from a projection,
 mapped to `fallback_center`, `fallback_normal` and `fallback_radius`. It allocates
@@ -60,3 +79,5 @@ Physical inspection is still needed for print fits, load/creep qualification and
 the purchased generator's measured mounting dimensions. A successful drawing
 export or exact geometric replay does not qualify a printed part's allowable
 load or establish a GD&T tolerance capability for a printer.
+
+Project schema 6 preserves these structural guards. Schema 1–5 files still load, but missing guards stay unverified: loading or resaving cannot establish which historical edge an ordinal meant. Explicitly reassociate those annotations before exporting the affected sheet. Older schema-5 readers reject new files instead of silently deleting the guards.

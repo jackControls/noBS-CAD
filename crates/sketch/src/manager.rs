@@ -59,7 +59,7 @@ use crate::dto::{
 };
 use crate::entity::EntityId;
 use crate::project::{
-    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV5, ProjectPreferencesV2,
+    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV6, ProjectPreferencesV2,
     PROJECT_FORMAT, PROJECT_SCHEMA_VERSION,
 };
 use crate::session::{
@@ -186,7 +186,7 @@ impl SketchManager {
                 "finish the active sketch before saving the project".to_string(),
             ));
         }
-        let model = ProjectModelV5 {
+        let model = ProjectModelV6 {
             format: PROJECT_FORMAT.to_string(),
             schema_version: PROJECT_SCHEMA_VERSION,
             document: ProjectDocumentV2 {
@@ -1277,7 +1277,12 @@ impl SketchManager {
         drawing: DrawingDocumentDto,
     ) -> Result<DrawingDocumentDto, SessionError> {
         drawing.validate().map_err(SessionError::Solid)?;
-        self.drawings = drawing;
+        self.drawings = crate::drawing_topology::capture_drawing_topology(
+            drawing,
+            &self.solid_scene(),
+            Some(&self.drawings),
+        )
+        .map_err(SessionError::Solid)?;
         Ok(self.drawings.clone())
     }
 
@@ -4123,6 +4128,7 @@ mod project_tests {
 
     fn raw_body(body_id: BodyId, basis: nbcad_core::PlaneBasis) -> KernelBodyDto {
         KernelBodyDto {
+            topology_signature: String::new(),
             body_id,
             positions: vec![0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
@@ -4754,6 +4760,7 @@ mod project_tests {
                         id: 12,
                         view_id: 9,
                         first: DrawingTopologyAnchorRefDto {
+                            topology_signature: None,
                             occurrence_id: None,
                             body_id: BodyId(1),
                             edge_id: nbcad_core::EdgeId(101),
@@ -4763,6 +4770,7 @@ mod project_tests {
                             circle_center: false,
                         },
                         second: DrawingTopologyAnchorRefDto {
+                            topology_signature: None,
                             occurrence_id: None,
                             body_id: BodyId(1),
                             edge_id: nbcad_core::EdgeId(102),
@@ -4782,6 +4790,7 @@ mod project_tests {
                         id: 13,
                         view_id: 9,
                         first: DrawingLineRefDto {
+                            topology_signature: None,
                             occurrence_id: None,
                             body_id: BodyId(1),
                             edge_id: nbcad_core::EdgeId(201),
@@ -4790,6 +4799,7 @@ mod project_tests {
                             fallback_end: [20.0, 0.0, 0.0],
                         },
                         second: DrawingLineRefDto {
+                            topology_signature: None,
                             occurrence_id: None,
                             body_id: BodyId(1),
                             edge_id: nbcad_core::EdgeId(202),

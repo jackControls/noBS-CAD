@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 /// Orthographic hidden-line projection request. `direction` points from the
 /// model toward the viewer; `up` is the desired page-up direction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrawingProjectionRequest {
     #[serde(default)]
     pub scope: nbcad_sketch::DrawingViewScope,
@@ -45,7 +45,7 @@ pub struct DrawingProjectionRequest {
     pub section_plane: Option<DrawingSectionPlaneDto>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrawingSectionPlaneDto {
     pub point: [f64; 3],
     pub normal: [f64; 3],
@@ -66,6 +66,8 @@ pub struct DrawingPolylineDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DrawingProjectionDto {
+    #[serde(default)]
+    pub topology_signatures: std::collections::BTreeMap<String, String>,
     pub visible: Vec<DrawingPolylineDto>,
     pub hidden: Vec<DrawingPolylineDto>,
     #[serde(default)]
@@ -491,6 +493,7 @@ mod drawing_anchor_tests {
     fn projects_stable_topology_endpoints_into_hlr_coordinates() {
         let scene = SolidSceneDto {
             bodies: vec![BodyDto {
+                topology_signature: String::new(),
                 id: BodyId(3),
                 name: "Body1".to_string(),
                 feature_id: FeatureId(1),
@@ -534,6 +537,7 @@ mod drawing_anchor_tests {
             section_plane: None,
         };
         let projection = DrawingProjectionDto {
+            topology_signatures: Default::default(),
             visible: vec![DrawingPolylineDto {
                 points: vec![[-10.0, -5.0], [10.0, -5.0]],
             }],
@@ -574,6 +578,7 @@ mod drawing_anchor_tests {
         };
         let scene = SolidSceneDto {
             bodies: vec![BodyDto {
+                topology_signature: String::new(),
                 id: BodyId(3),
                 name: "Body1".to_string(),
                 feature_id: FeatureId(1),
@@ -603,6 +608,7 @@ mod drawing_anchor_tests {
             section_plane: None,
         };
         let projection = DrawingProjectionDto {
+            topology_signatures: Default::default(),
             visible: vec![DrawingPolylineDto {
                 points: vec![[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]],
             }],
@@ -637,6 +643,7 @@ mod drawing_anchor_tests {
         };
         let scene = SolidSceneDto {
             bodies: vec![BodyDto {
+                topology_signature: String::new(),
                 id: BodyId(9),
                 name: "Cylinder".to_string(),
                 feature_id: FeatureId(2),
@@ -680,6 +687,7 @@ mod drawing_anchor_tests {
         // Empty visible HLR simulates the coplanar-boundary ambiguity that the
         // front-rim fallback is designed to resolve.
         let projection = DrawingProjectionDto {
+            topology_signatures: Default::default(),
             visible: vec![],
             hidden: vec![],
             anchors: vec![],

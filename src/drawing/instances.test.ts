@@ -1,5 +1,5 @@
 import type { AssemblySolutionDto, DrawingViewDto, SolidSceneDto } from '../engine/types';
-import { drawingInstanceScene, drawingProjectionRequestForView, projectSceneForDrawing } from './projection';
+import { drawingInstanceScene, drawingProjectionRequestForView, projectSceneForDrawing, drawingSourceAnchorPoint, drawingSectionSourceExtent } from './projection';
 import { drawingAnchorRef, resolveDrawingAnchor } from './annotations';
 import { drawingCenterlineEdgeCandidates } from './centerlines';
 
@@ -47,4 +47,27 @@ const sectionRequest = drawingProjectionRequestForView(section,[view,section],sc
 check(Math.abs(sectionRequest.section_plane!.point[0]-100)<1e-8,'The section cutting plane must follow the placed source edge.');
 check(Math.abs(Math.abs(sectionRequest.direction[0])-1)<1e-8,'The section direction must follow the rotated source edge.');
 check(JSON.stringify(scene)===source,'Drawing presentation must not modify the part definition or mesh.');
+const guardedReference = {...reference,topology_signature:'feature:1:connectivity-v1:original'};
+const guardedProjection = {...projection,topology_signatures:{'1':guardedReference.topology_signature}};
+check(drawingAnchorRef(copy,guardedProjection).topology_signature===guardedReference.topology_signature,'Explicit topology picking must capture the current signature for reassociation.');
+check(resolveDrawingAnchor(guardedReference,view,guardedProjection)?.anchor===copy,'An unchanged structural signature must preserve the reference.');
+check(resolveDrawingAnchor(reference,view,guardedProjection)===null,'Legacy native references without a captured signature remain unverified.');
+check(resolveDrawingAnchor(guardedReference,view,{...guardedProjection,topology_signatures:{'1':'feature:2:connectivity-v1:changed'}})===null,'A reused ordinal after a topology edit must not silently resolve on screen.');
+const nativeScene = {...scene,bodies:scene.bodies.map((body) => ({...body,topology_signature:'connectivity-v1:original'}))};
+let rejectedSection = false;
+try { drawingProjectionRequestForView(section,[view,section],nativeScene,solution); } catch { rejectedSection = true; }
+check(rejectedSection,'A derived native view must not use fallback coordinates for an unverified reference.');
+const arcScene: SolidSceneDto = {...nativeScene,bodies:[{...nativeScene.bodies[0],edges:[{
+  ...scene.bodies[0].edges[0],points:[{x:5,y:9,z:3},{x:5,y:5,z:7}],
+  circle:{center:{x:5,y:5,z:3},normal:{x:1,y:0,z:0},reference:{x:0,y:1,z:0},radius:4,closed:false},
+}]}]};
+const centerReference = {...guardedReference,circle_center:true,fallback_point:[999,999,999] as [number,number,number]};
+const sourceCenter = drawingSourceAnchorPoint(centerReference,view,[view],arcScene,guardedProjection,solution);
+check(sourceCenter && Math.abs(sourceCenter[0]-95)<1e-8 && Math.abs(sourceCenter[1]-55)<1e-8,
+  'An edge-on two-sample arc center must use exact placed topology, even with no projected circle.');
+check(drawingSourceAnchorPoint({...centerReference,topology_signature:null},view,[view],arcScene,guardedProjection,solution)===null,'Source markers must reject unverified references.');
+check(drawingSourceAnchorPoint({...centerReference,occurrence_id:99},view,[view],arcScene,guardedProjection,solution)===null,'Source markers must reject occurrences absent from the parent projection.');
+const extended = drawingSectionSourceExtent([96,55],[100,55],view,projection);
+check(extended && Math.abs(extended[0][0]+4)<1e-8 && Math.abs(extended[1][0]-104)<1e-8,
+  'Short datum pairs must define full-width cutting-plane indicators outside the parent silhouette.');
 console.log('Drawing occurrence placement, topology identity, and derived section checks passed.');

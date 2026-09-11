@@ -122,7 +122,7 @@ import {
   type DrawingChamferCandidate,
 } from '../../drawing/chamfer';
 import { exportManufacturingProfileDxf, printActiveDrawing } from '../../drawing/export';
-import { drawingProjectionRequestForView } from '../../drawing/projection';
+import { drawingProjectionRequestForView, drawingSourceAnchorPoint, drawingSectionSourceExtent } from '../../drawing/projection';
 import {
   defaultDrawingFormat,
   defaultDrawingSheetStyle,
@@ -1357,13 +1357,20 @@ function ProjectedDrawingView({
   const [hoveredCircleKey, setHoveredCircleKey] = useState<string | null>(null);
   const [hoveredCenterlineEdgeKey, setHoveredCenterlineEdgeKey] = useState<string | null>(null);
   const assemblySolution = useAppStore((state) => state.assemblySolution);
-  const projectionRequest = drawingProjectionRequestForView(view, allViews, scene, assemblySolution);
-  const requestKey = JSON.stringify(projectionRequest);
+  let requestError: string | null = null;
+  let projectionRequest: ReturnType<typeof drawingProjectionRequestForView> | null = null;
+  try {
+    projectionRequest = drawingProjectionRequestForView(view, allViews, scene, assemblySolution);
+  } catch (reason) {
+    requestError = reason instanceof Error ? reason.message : String(reason);
+  }
+  const requestKey = JSON.stringify(projectionRequest) + (requestError ?? '');
 
   useEffect(() => {
     let cancelled = false;
     setError(null);
     setProjection(null);
+    if (!projectionRequest) return;
     void getEngine().then((engine) => engine.drawingProjection(projectionRequest))
       .then((result) => { if (!cancelled) setProjection(result); })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); });
@@ -1375,7 +1382,7 @@ function ProjectedDrawingView({
   const hiddenLine = drawingSvgLineAttributes(style, 'hidden');
   const hatchLine = drawingSvgLineAttributes(style, 'hatch');
 
-  if (error) return <text x={view.position[0]} y={view.position[1]} fill={preview ? '#6654c7' : '#b33'} fontSize="3" textAnchor="middle">Projection failed</text>;
+  if (error || requestError) return <text x={view.position[0]} y={view.position[1]} fill={preview ? '#6654c7' : '#b33'} fontSize="3" textAnchor="middle"><title>{requestError ?? error}</title>{requestError ? 'Reassociate view reference' : 'Projection failed'}</text>;
   if (!projection) return <g data-testid={preview ? 'drawing-view-placement-preview' : undefined} data-preview-scale={preview ? view.scale : undefined} data-preview-x={preview ? view.position[0] : undefined} data-preview-y={preview ? view.position[1] : undefined} stroke={preview ? '#6654c7' : '#9aa0a8'} strokeWidth={preview ? 0.45 : visibleLine.strokeWidth} className="pointer-events-none"><path d={`M${view.position[0] - 4} ${view.position[1]}h8M${view.position[0]} ${view.position[1] - 4}v8`} /></g>;
 
   const position = dragPosition ?? view.position;
@@ -1434,23 +1441,23 @@ function ProjectedDrawingView({
   };
   const pickCircle = (circle: DrawingProjectedCircleDto) => {
     if (repairTarget?.kind === 'circle') {
-      if (confirmRepair(repairTarget.label)) completeRepair(repairTarget.update(drawingCircularRef(circle)));
+      if (confirmRepair(repairTarget.label)) completeRepair(repairTarget.update(drawingCircularRef(circle, projection)));
     } else if (drawingTool === 'dimension') {
       // The primary Dimension command is context-aware: a full circular edge
       // is a diameter, while an open arc is a radius. Its center has a separate
       // hit target below so center-to-center dimensions remain equally direct.
       void addDrawingRadialDimension(
         view.id,
-        drawingCircularRef(circle),
+        drawingCircularRef(circle, projection),
         circle.closed ? 'diameter' : 'radius',
       ).catch(showDrawingError);
     } else if (drawingTool === 'diameter' || drawingTool === 'radius') {
-      void addDrawingRadialDimension(view.id, drawingCircularRef(circle), drawingTool).catch(showDrawingError);
+      void addDrawingRadialDimension(view.id, drawingCircularRef(circle, projection), drawingTool).catch(showDrawingError);
     } else if (drawingTool === 'hole_note') {
       const center = drawingProjectedPointToPaper(displayView, projection, circle.center);
       // Keep the default hole-note leader in a different quadrant from the
       // default radial/diameter leader so both remain independently hittable.
-      void addDrawingHoleNote(view.id, drawingCircularRef(circle), [center[0] + 20, center[1] + 15]).catch(showDrawingError);
+      void addDrawingHoleNote(view.id, drawingCircularRef(circle, projection), [center[0] + 20, center[1] + 15]).catch(showDrawingError);
     } else if ([
       'dimension', 'center_mark', 'center_line', 'bolt_circle', 'arc_length',
       'jogged_radius', 'datum', 'gdt', 'surface_texture', 'balloon',
@@ -1612,23 +1619,23 @@ function ProjectedDrawingView({
       )}
       {pickingAnchors && drawingAnchors.map((anchor) => {
         const paper = drawingProjectedPointToPaper(displayView, projection, anchor.point);
-        const reference = drawingAnchorRef(anchor);
+        const reference = drawingAnchorRef(anchor, projection);
         const active = anchorDraft?.viewId === view.id && anchorDraft.anchors.some((candidate) => sameDrawingAnchor(candidate, reference))
           || pointLineDimensionDraft?.viewId === view.id
             && sameDrawingAnchor(pointLineDimensionDraft.point, reference);
-        return <circle key={`${anchor.occurrence_id ?? 'definition'}-${anchor.body_id}-${anchor.edge_id}-${anchor.endpoint}`} data-testid="drawing-annotation-anchor" data-body-id={anchor.body_id} data-edge-id={anchor.edge_id} cx={paper[0]} cy={paper[1]} r={active ? 1.7 : 1.15} fill={active ? '#6654c7' : '#fff'} stroke={active ? '#6654c7' : '#1688c9'} strokeWidth={active ? 0.65 : 0.48} className="cursor-crosshair" onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); if (repairTarget?.kind === 'anchor') { if (confirmRepair(repairTarget.label)) completeRepair(repairTarget.update(drawingAnchorRef(anchor))); } else if (derivedRepairTarget?.kind === 'anchor') { if (confirmRepair(derivedRepairTarget.label)) completeDerivedRepair(derivedRepairTarget.update(drawingAnchorRef(anchor))); } else onPickAnchor(view.id, anchor, paper); }} />;
+        return <circle key={`${anchor.occurrence_id ?? 'definition'}-${anchor.body_id}-${anchor.edge_id}-${anchor.endpoint}`} data-testid="drawing-annotation-anchor" data-body-id={anchor.body_id} data-edge-id={anchor.edge_id} cx={paper[0]} cy={paper[1]} r={active ? 1.7 : 1.15} fill={active ? '#6654c7' : '#fff'} stroke={active ? '#6654c7' : '#1688c9'} strokeWidth={active ? 0.65 : 0.48} className="cursor-crosshair" onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); if (repairTarget?.kind === 'anchor') { if (confirmRepair(repairTarget.label)) completeRepair(repairTarget.update(drawingAnchorRef(anchor, projection))); } else if (derivedRepairTarget?.kind === 'anchor') { if (confirmRepair(derivedRepairTarget.label)) completeDerivedRepair(derivedRepairTarget.update(drawingAnchorRef(anchor, projection))); } else onPickAnchor(view.id, anchor, paper); }} />;
       })}
       {pickingCircles && circleTargets.map((circle) => {
         const center = drawingProjectedPointToPaper(displayView, projection, circle.center);
-        const feature = drawingCircularRef(circle);
+        const feature = drawingCircularRef(circle, projection);
         const key = `${circle.occurrence_id ?? 'definition'}-${circle.body_id}-${circle.edge_id}`;
         const active = centerPicking && (
           circleDraft?.viewId === view.id
             && circleDraft.features.some((candidate) => sameDrawingCircle(candidate, feature))
           || anchorDraft?.viewId === view.id
-            && anchorDraft.anchors.some((candidate) => sameDrawingAnchor(candidate, drawingCircleCenterAnchorRef(circle)))
+            && anchorDraft.anchors.some((candidate) => sameDrawingAnchor(candidate, drawingCircleCenterAnchorRef(circle, projection)))
           || pointLineDimensionDraft?.viewId === view.id
-            && sameDrawingAnchor(pointLineDimensionDraft.point, drawingCircleCenterAnchorRef(circle))
+            && sameDrawingAnchor(pointLineDimensionDraft.point, drawingCircleCenterAnchorRef(circle, projection))
         );
         const hovered = hoveredCircleKey === key;
         const color = active ? '#6654c7' : hovered ? '#d97706' : '#1688c9';
@@ -1863,16 +1870,25 @@ function DerivedViewSourceGraphic({ child, parentView, projection }: {
   parentView: DrawingViewDto;
   projection: DrawingProjectionDto;
 }) {
+  const scene = useAppStore((state) => state.solidScene);
+  const solution = useAppStore((state) => state.assemblySolution);
+  const drawings = useAppStore((state) => state.drawingDocument);
   const cuttingLine = useDrawingLine('cutting_plane');
   const phantomLine = useDrawingLine('phantom');
   const breakLine = useDrawingLine('break_line');
   const derivation = child.derivation;
   if (!derivation) return null;
   const color = '#5d50c8';
+  const views = drawings.sheets.flatMap((sheet) => sheet.views);
+  const source = (reference: DrawingTopologyAnchorRefDto) => drawingSourceAnchorPoint(reference, parentView, views, scene, projection, solution);
   if (derivation.type === 'section' || derivation.type === 'removed_section') {
-    const first = resolveDrawingAnchor(derivation.first, parentView, projection);
-    const second = resolveDrawingAnchor(derivation.second, parentView, projection);
-    if (!first || !second) return null;
+    const firstPoint = source(derivation.first);
+    const secondPoint = source(derivation.second);
+    if (!firstPoint || !secondPoint) return null;
+    const ends = drawingSectionSourceExtent(firstPoint, secondPoint, parentView, projection);
+    if (!ends) return null;
+    const first = { paper: ends[0] };
+    const second = { paper: ends[1] };
     const direction = normalize2([second.paper[0] - first.paper[0], second.paper[1] - first.paper[1]]);
     const normal: [number, number] = [-direction[1], direction[0]];
     const arrowEnd: [number, number] = [first.paper[0] + normal[0] * 5, first.paper[1] + normal[1] * 5];
@@ -1886,7 +1902,7 @@ function DerivedViewSourceGraphic({ child, parentView, projection }: {
     </g>;
   }
   if (derivation.type === 'detail') {
-    const center = resolveDrawingAnchor(derivation.center, parentView, projection)?.paper;
+    const center = source(derivation.center);
     if (!center) return null;
     const radius = derivation.radius * parentView.scale;
     return <g data-testid="drawing-detail-boundary" className="pointer-events-none" fill="none" stroke={color}>
