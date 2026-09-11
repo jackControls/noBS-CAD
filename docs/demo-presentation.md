@@ -1,11 +1,12 @@
 # Demo presentation review
 
 This development pass improves the demonstration parts, their teaching sequence
-and the README. It starts above PR116 at `f882199`; existing review layers stay
-unchanged. The presentation follow-up remains draft. The redesigned vise is now
-a validated development candidate: native mechanical/replay checks, rebuilt
-desktop inspection and current print-toolpath review pass. Physical fabrication
-and load qualification remain open.
+and the README. The earlier stack has merged; this presentation follow-up now
+targets `main` directly and remains draft. The redesigned vise and turbine have
+native mechanical checks, rebuilt-desktop inspection and current print-toolpath
+evidence. Their validation manifests distinguish complete mechanical acceptance
+from later presentation or drawing-only changes and their separate replay checks.
+Physical fabrication and load qualification remain open.
 
 ## What we actually have
 
@@ -23,12 +24,13 @@ captioned scene frames. The other nine can run as complete designs.
 
 The recipe inventory comes from the shared catalog; the earlier September 11
 MCP discovery check also returned all ten IDs. A rebuilt binary is needed to
-include subsequent source changes. Counts retained below describe the recorded
-bench, turbine and short-lesson revisions. Steps include notes, camera
+include subsequent source changes. Counts below describe the current committed
+recipes. Steps include notes, camera
 directions, bindings and assertions as well as modeling commands; they are not
-a count of kernel operations or a runtime estimate. The current vise reference
-completed 1,718 steps and 127 final checks; its exact source hashes and the
-separate acceptance-suite results are recorded in the validation manifest.
+a count of kernel operations or a runtime estimate. The current vise presentation
+completed 1,834 steps and 127 final checks, matching the mechanically accepted
+reference exactly. Its source hashes and the separate acceptance-suite results
+are recorded in the validation manifest.
 
 ## Flagship presentation order
 
@@ -46,9 +48,10 @@ new visual acceptance run of every recipe.
    structural performance need qualification. Preserve its accepted design
    milestone while improving camera framing and the explanation of its joinery.
 2. **[Vertical-axis turbine](../examples/scripts/vertical-axis-turbine.nbcad.jsonc)** —
-   1,622 steps, 11 final checks. The strongest technical finale: staggered
-   reused rotor stages, bearings, a generator cartridge, involute gears, a 4:1
-   relation and twelve drawing sheets. It has the highest construction and
+   3,179 steps, 11 final checks. The strongest technical finale: staggered
+   reused rotor stages, an explicit shaft/bearing stack, an adjustable generator
+   cradle, involute gears, a 4:1 relation and fourteen drawing sheets. Eleven
+   native print layouts supply twelve printed pieces. It has the highest construction and
    explanation cost. The script never commands driven motion, and the guard
    hides the gear mesh. Reveal the drive temporarily, demonstrate solved motion,
    then restore the guard and home state. Generator fit, startup and loaded
@@ -74,21 +77,23 @@ new visual acceptance run of every recipe.
    exactly. A drive-and-return presentation should restore the reference state.
    Fit, clamp force, creep and wear remain physically unqualified.
 
-Prior full attached runs took approximately 2 minutes 56 seconds for the bench
-and 14 minutes 21 seconds for the turbine. The preceding vise design took about
-4 minutes 15 seconds; that result does not describe the redesigned recipe.
-These are different unoptimized Windows validation runs, not comparable release
-benchmarks or promised presentation durations. See the
-[bench validation record](presentation-readiness-2026-09-11.md) and the
-[refreshed vise and turbine verification](review-corrections-2026-09-10.md#refreshed-vise-and-turbine-verification).
-The [current vise record](manufacturing/d-screw-vise.validation.json) reports a
-402.806-second first native replay and a 1,902.17-second complete acceptance run;
-these are different scopes. The
-[turbine manifest](manufacturing/vertical-axis-turbine.validation.json) retains
-its earlier runs and separate timings.
-Those earlier revisions passed independent native replay comparisons and
-recorded live construction checks. They do not establish acceptance of the
-redesigned vise, and none has measured physical performance qualification.
+The vise's latest attached construction completed in 1,328.048 seconds and
+matched the accepted model, sketches, assembly and geometry. Its locally retained
+MP4 and GIF each show a 26-second chronological construction edit followed by a
+four-second settled isometric hold. The edit omits repetition and export waits;
+it is not an uncut replay or a jaw-travel demonstration. Nothing has been uploaded.
+The [vise record](manufacturing/d-screw-vise.validation.json) separates that live
+run from the earlier 1,902.17-second full mechanical acceptance.
+
+The turbine's stable-underside source completed the full native mechanical and
+independent-replay acceptance in 2,787.54 seconds. Four subsequent radial-label
+placements have separate native visual and complete-source replay checks;
+the [turbine manifest](manufacturing/vertical-axis-turbine.validation.json)
+identifies each source and its evidence. These different scopes and unoptimized
+Windows runs are not release benchmarks or promised presentation durations.
+Historical [bench](presentation-readiness-2026-09-11.md) and
+[earlier example results](review-corrections-2026-09-10.md#refreshed-vise-and-turbine-verification)
+remain dated records. No example has measured physical performance qualification.
 
 ## Short lessons, ranked for a first learning session
 
@@ -127,7 +132,7 @@ redesigned vise, and none has measured physical performance qualification.
    qualification of the six full-size parts. Helical construction remains more
    expensive than the small part count suggests.
 2. **[Turbine fit coupons](../examples/scripts/turbine-fit-coupons.nbcad.jsonc)** —
-   494 steps, 7 checks; four specimens. Useful manufacturing material for shaft,
+   647 steps, 8 checks; four specimens. Useful manufacturing material for shaft,
    bearing, motor-case and pinion fits. It is a substantial construction
    sequence, not a quick first demo. Show each fit and the measurement it needs.
 
@@ -160,7 +165,9 @@ redesigned vise, and none has measured physical performance qualification.
    groups; no parallel demo runtime or all-features coverage quota.
 4. Capture fresh flagship images and calm, concise rendered clips for the
    README. The repository currently has two older sample screenshots and no
-   tracked flagship images or GIF/MP4 clips. Historical external captures can
+   tracked flagship images or GIF/MP4 clips. The new vise MP4/GIF and turbine
+   assembly/transmission images are retained locally for review; publishing
+   those media remains a separate decision. Historical external captures can
    show obsolete progress counters; they are not current interface evidence.
    Lead with the bench image, offer the vise teaching sequence and use the
    turbine as the mechanism finale. Keep full construction replay available.
@@ -180,16 +187,20 @@ headless processes: each passed 17 steps and 10 final checks, with identical
 exported model, sketches, assembly solution and geometry. That baseline check
 did not open a CAD window and does not validate the later vise redesign.
 
-The draft now includes the mechanical redesign, custom native thread support,
+The draft now includes both mechanical redesigns, custom native thread support,
 editable thread parameters and expanded acceptance checks as well as the README
-work. The complete vise geometry/mechanical acceptance run now passes, with
+work. The complete vise geometry/mechanical acceptance run passes, with
 independent replay, save/reopen, per-part print exports, actual sliced layers
 and rebuilt-desktop model inspection. A later drawing-label correction has
 separate focused tests, seven-sheet visual review and exact repeated exports.
 The
 [vise validation record](manufacturing/d-screw-vise.validation.json) owns the
-dated results; historical records remain historical.
+dated results. The turbine adds complete shaft/bearing contacts, real fastener
+installation and tool paths, driven gear checks, stable stage-thickness edits,
+editable print occurrences, and actual sliced toolpaths. Its
+[validation record](manufacturing/vertical-axis-turbine.validation.json) owns
+the source-specific evidence; historical records remain historical.
 
-Mechanism presentation, coupon labels and fresh media remain follow-up work.
+Mechanism presentation, coupon category labels and publishing selected media remain follow-up work.
 The README must distinguish implemented development capabilities from pending
 acceptance and physical qualification.
