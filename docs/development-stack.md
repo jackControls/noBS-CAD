@@ -8,9 +8,10 @@ Rendering changes the presentation, not the modeling operations or final checks.
 ## Review and merge order
 
 The [native GitHub stack shown in PR #115](https://github.com/jackControls/noBS-CAD/pull/115)
-is the current source of truth for its order, approvals and CI. Its layers are:
+is the current source of truth for its order, approvals and CI. PR95 merged on
+September 11; the twenty remaining layers now start at PR96. The full sequence is:
 
-1. PR95: associative drawing dimensions.
+1. PR95 (merged): associative drawing dimensions.
 2. PR96: solved assembly export and isometric fit.
 3. PR97: guarded application exit.
 4. PR98: bench joinery, persistent references and interference inspection.
@@ -54,7 +55,14 @@ in its owning layer. PR115 now contains the separately reproduced script/documen
 ownership corrections. Review history is retained, and changed heads need fresh
 approval.
 
-PR88 merged into main as `39eb862`. The stack is rebased onto that revision, with
+On September 11, native stack merging accepted PR95 after approval on its exact
+head and all nine current checks passed. Main advanced to `768eddf`; GitHub
+automatically rebased the twenty remaining layers. Two independent audits found
+identical head and base trees, unchanged layer commit counts, correct ancestry
+and no unexpected merge commits. The new heads require current checks and
+approval before the next prefix can merge.
+
+PR88 previously merged into main as `39eb862`, with
 its session-generation logic retained in the extracted MCP library and its thin
 entrypoint preserved. A native regression combines deferred script snapshots with
 observational session status: reading status cannot advance the loaded fence or
@@ -115,5 +123,6 @@ operations when a capability is missing; keep one execution path.
 Use focused geometry and edit/replay/restore checks alongside recipes. Add them
 to the existing cargo/CI entry points, without a parallel runner or percentage
 coverage gate. Recipe-only changes are desktop build inputs because the app
-embeds their sources. Interface layout and native preview work remain draft
-until reviewed; geometry checks alone do not validate the teaching experience.
+embeds their sources. Interface layout and native preview work require actual
+interaction validation before review; PR99 has passed those checks and is ready
+for review. Geometry checks alone do not validate the teaching experience.

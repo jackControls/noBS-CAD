@@ -101,12 +101,23 @@ The earlier full live vise/turbine and saved-file tests remain recorded in the
 
 ## Remaining gates
 
+PR95 merged through the native stack API on September 11 at 06:42 UTC after
+approval on its exact head and all nine current checks passed. Main is `768eddf`.
+GitHub rebased the twenty remaining layers automatically; independent comparisons
+confirmed every head/base tree and per-layer commit count were preserved, with
+correct ancestry and no unexpected merges. PR96 is the next open layer.
+
 GitHub checks and approvals must be read from each current head before merging.
 A local Windows result does not certify Linux/macOS packages. The earlier PR100
 macOS run compiled and signed the app, then failed inside `bundle_dmg.sh` without
 subprocess detail. PR117 enables the existing Tauri CLI verbosity for that bundle
 step; it is diagnostic, not a claimed packaging fix. Preserve the actual output
 and resolve the demonstrated failure before treating that package as ready.
+
+The one scoped retry of the earlier PR100 macOS job was cancelled by the server
+rebase. This is superseded work, not a new failure or evidence of a fix. Follow
+the fresh checks on the rebased head; do not rerun the old job. PR117's macOS and
+Ubuntu packages passed at this checkpoint; its Windows checks remained pending.
 
 Issues #9, #12, #14, #16, #93 and #94 retain distinct acceptance. Multi-document
 broker routing, required-check policy, comprehensive lessons, specialized drawing
