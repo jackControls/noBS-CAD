@@ -218,8 +218,8 @@ export interface Engine {
   setRollback(rollbackIndex: number): Promise<SolidUpdateDto>;
   deleteFeature(featureId: number): Promise<SolidUpdateDto>;
   reorderFeature(featureId: number, targetIndex: number): Promise<SolidUpdateDto>;
-  setDocumentName(name: string): Promise<DocumentDto>;
-  exportProjectModel(): Promise<string>;
+  setDocumentName(name: string, expectedModelJson?: string): Promise<DocumentDto>;
+  exportProjectModel(options?: { expected_model_json: string; save_name?: string }): Promise<string>;
   /** Bind the bootstrap engine context to the first frontend tab. */
   bindProjectSession(sessionId: string): Promise<void>;
   /** Create and activate a blank retained modeling context for a new tab. */
@@ -289,6 +289,19 @@ export class EngineError extends Error {
     readonly data?: unknown,
   ) {
     super(message);
+  }
+}
+
+/** A rejected Open is harmless only when the engine proves rejection happened
+ * before replacing either the document or its native geometry. */
+export class ProjectLoadError extends EngineError {
+  constructor(
+    readonly engineState: 'unchanged' | 'unverified',
+    readonly cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause),
+      cause instanceof EngineError ? cause.data : undefined);
+    this.name = 'ProjectLoadError';
   }
 }
 

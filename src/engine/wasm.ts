@@ -10,7 +10,7 @@
  * so no Vite plugin is required.
  */
 import init, { WasmEngine as WasmEngineInner } from '../engine-wasm/pkg/nbcad_wasm';
-import { unwrapEnvelope, type Engine } from './index';
+import { EngineError, ProjectLoadError, unwrapEnvelope, type Engine } from './index';
 import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import { BrowserOcctKernel } from './occtBrowser';
 import { drawingInstanceScene, projectSceneForDrawing } from '../drawing/projection';
@@ -739,12 +739,12 @@ export class WasmEngine implements Engine {
     return this.executeSolidPlan(plan);
   }
 
-  async setDocumentName(name: string): Promise<DocumentDto> {
-    return unwrapEnvelope(this.inner.document_set_name(JSON.stringify(name)));
+  async setDocumentName(name: string, expectedModelJson?: string): Promise<DocumentDto> {
+    return unwrapEnvelope(this.inner.document_set_name(JSON.stringify(expectedModelJson === undefined ? name : { name, expected_model_json: expectedModelJson })));
   }
 
-  async exportProjectModel(): Promise<string> {
-    return unwrapEnvelope(this.inner.project_export_model());
+  async exportProjectModel(options?: { expected_model_json: string; save_name?: string }): Promise<string> {
+    return unwrapEnvelope(this.inner.project_export_model(options === undefined ? undefined : JSON.stringify(options)));
   }
 
   async bindProjectSession(sessionId: string): Promise<void> {
@@ -812,15 +812,34 @@ export class WasmEngine implements Engine {
   }
 
   async loadProjectModel(modelJson: string): Promise<SolidUpdateDto> {
-    const plan = unwrapEnvelope<RecomputePlanDto>(
-      this.inner.project_prepare_load(JSON.stringify(modelJson)),
-    );
-    const update = await this.executeSolidPlan(plan);
-    return restoreLoadedDatumHistoryFrames(this, update);
+    let plan: RecomputePlanDto;
+    try {
+      plan = unwrapEnvelope<RecomputePlanDto>(
+        this.inner.project_prepare_load(JSON.stringify(modelJson)),
+      );
+    } catch (error) {
+      // A Rust prepare-error envelope precedes all kernel work. A JS/WASM
+      // trap or unreadable response has no such guarantee.
+      throw new ProjectLoadError(error instanceof EngineError ? 'unchanged' : 'unverified', error);
+    }
+    try {
+      const update = await this.executeSolidPlan(plan);
+      return await restoreLoadedDatumHistoryFrames(this, update);
+    } catch (error) {
+      throw new ProjectLoadError('unverified', error);
+    }
   }
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {
-    return (await this.browserKernel()).exportStep(request);
+    const owner = this.activeContext;
+    const kernel = await this.browserKernel();
+    // Lazy OCCT initialization yields to tab changes and model edits. After
+    // checking ownership, no await may separate the snapshot check and export.
+    if (this.activeContext !== owner || (request.expected_model_json !== undefined
+      && unwrapEnvelope<string>(owner.inner.project_export_model()) !== request.expected_model_json)) {
+      throw new Error('The document changed while preparing export. Start the export again.');
+    }
+    return kernel.exportStep(request);
   }
 
   async exportStl(request: MeshExportRequest): Promise<Uint8Array> {

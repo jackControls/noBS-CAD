@@ -15,7 +15,17 @@ function visit(node){
 }
 visit(dispatcher);
 
-const server=await createServer({configFile:false,optimizeDeps:{noDiscovery:true,entries:[],include:['react','react-dom','react-dom/client','react/jsx-runtime','react/jsx-dev-runtime']},server:{host:'127.0.0.1',port:0},logLevel:'error',plugins:[{name:'mcp-contract',configureServer(server){server.middlewares.use('/mcp-contract',(_req,res)=>{
+const wasmBindingContract={name:'wasm-binding-contract',resolveId(id){if(id.endsWith('/engine-wasm/pkg/nbcad_wasm'))return '\0wasm-binding-contract';},load(id){
+ if(id!=='\0wasm-binding-contract')return;
+ // Only the generated binding is replaced; adapter methods and context switching are real.
+ return `const ok=value=>JSON.stringify({ok:true,value}); export default async function init(){}
+ export class WasmEngine { model='original model';
+ project_export_model(){return ok(this.model)}
+ document_set_name(payload){this.model=JSON.parse(payload);return this.document()}
+ document(){return ok({name:this.model,features:[],rollback_index:0,browser:[],settings:{units:'mm'}})}
+ solid_scene(){return ok({bodies:[],errors:[]})} free(){} }`;
+}};
+const server=await createServer({configFile:false,optimizeDeps:{noDiscovery:true,entries:[],include:['react','react-dom','react-dom/client','react/jsx-runtime','react/jsx-dev-runtime']},server:{host:'127.0.0.1',port:0,watch:null},logLevel:'error',plugins:[wasmBindingContract,{name:'mcp-contract',configureServer(server){server.middlewares.use('/mcp-contract',(_req,res)=>{
  res.setHeader('Content-Type','text/html');
  res.end('<!doctype html><html><body><main data-mcp-surface="test-surface"><button>Run</button><button disabled>Disabled</button><label>Name<input value="old"></label><label>Choice<select><option value="a">A</option><option disabled value="b">B</option></select></label><button id="hidden" hidden>Hidden</button></main></body></html>');
 });}}]});
@@ -253,6 +263,54 @@ try {
   await navigationPage.evaluate(()=>window.unmountPreviewNavigation?.());
   await navigationPage.close();
  }
+ const recoveryPage=await browser.newPage();
+ await recoveryPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const recovery=await recoveryPage.evaluate(async()=>{
+  const {checkProjectLoadRecovery}=await import('/src/files/projectFiles.browser.test.ts');
+  let timer;
+  try{return await Promise.race([checkProjectLoadRecovery(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('Project recovery timed out: '+document.body.innerHTML)),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production project-open/export recovery: '+JSON.stringify(recovery));
+ await recoveryPage.close();
+ const stepPage=await browser.newPage();
+ await stepPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const step=await stepPage.evaluate(async()=>{
+  const {checkStepExportOwnership}=await import('/src/files/projectFiles.browser.test.ts');
+  return checkStepExportOwnership();
+ });
+ console.log('PASS production STEP export ownership: '+JSON.stringify(step));
+ const browserStep=await stepPage.evaluate(async()=>{
+  const {checkBrowserStepExportOwnership}=await import('/src/engine/stepExport.browser.test.ts');
+  return checkBrowserStepExportOwnership();
+ });
+ console.log('PASS browser STEP adapter ownership: '+JSON.stringify(browserStep));
+ await stepPage.close();
+ const savePage=await browser.newPage();
+ await savePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const saveOwnership=await savePage.evaluate(async()=>{
+  const {checkProjectSaveOwnership}=await import('/src/files/projectSave.browser.test.ts');
+  return await checkProjectSaveOwnership();
+ });
+ console.log('PASS production project Save ownership: '+JSON.stringify(saveOwnership));
+ await savePage.close();
+ const historyPage=await browser.newPage();
+ await historyPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const historyMetadata=await historyPage.evaluate(async()=>{
+  const {checkHistoryMetadata}=await import('/src/engine/historyMetadata.browser.test.ts');
+  let timer;
+  try{return await Promise.race([checkHistoryMetadata(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('History metadata contract timed out')),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production history metadata: '+JSON.stringify(historyMetadata));
+ const historyEditors=await historyPage.evaluate(async()=>{
+  const {checkHistoryEditorCallbacks}=await import('/src/engine/historyEditor.browser.test.ts');
+  return checkHistoryEditorCallbacks();
+ });
+ console.log('PASS production history editor callbacks: '+JSON.stringify(historyEditors));
+ await historyPage.close();
 } finally {await browser?.close();await server.close();}
 
 

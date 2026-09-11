@@ -9,6 +9,7 @@
  * active tool).
  */
 import { create } from 'zustand';
+import { presentation } from '../operationPlayback';
 import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
 import type {
   AssemblyDocumentDto,
@@ -89,21 +90,25 @@ function emptyProjectVisibility(): ProjectVisibilityDto {
 function persistedVisibilityFromHidden(
   document: DocumentDto | null,
   hidden: Record<NodeId, boolean>,
+  retained: ProjectVisibilityDto,
 ): ProjectVisibilityDto {
-  if (!document) return emptyProjectVisibility();
-  const hiddenBodyIds = new Set<number>();
-  const hiddenDatumPlaneIds = new Set<number>();
-  const hiddenSketchNames = new Set<string>();
+  if (!document) return retained;
+  // Browser nodes describe the evaluated stage. Preserve stable choices for
+  // retained objects outside it, and update only identities represented here.
+  const hiddenBodyIds = new Set(retained.hidden_body_ids);
+  const hiddenDatumPlaneIds = new Set(retained.hidden_datum_plane_ids);
+  const hiddenSketchNames = new Set(retained.hidden_sketch_names);
   const visit = (nodes: BrowserNode[]) => {
     for (const node of nodes) {
-      if (hidden[node.id]) {
-        if (node.kind === 'body' && node.reference_id !== null) {
-          hiddenBodyIds.add(node.reference_id);
-        } else if (node.kind === 'construction_plane' && node.reference_id !== null) {
-          hiddenDatumPlaneIds.add(node.reference_id);
-        } else if (node.kind === 'sketch' && node.name) {
-          hiddenSketchNames.add(node.name);
-        }
+      if (node.kind === 'body' && node.reference_id !== null) {
+        if (hidden[node.id]) hiddenBodyIds.add(node.reference_id);
+        else hiddenBodyIds.delete(node.reference_id);
+      } else if (node.kind === 'construction_plane' && node.reference_id !== null) {
+        if (hidden[node.id]) hiddenDatumPlaneIds.add(node.reference_id);
+        else hiddenDatumPlaneIds.delete(node.reference_id);
+      } else if (node.kind === 'sketch' && node.name) {
+        if (hidden[node.id]) hiddenSketchNames.add(node.name);
+        else hiddenSketchNames.delete(node.name);
       }
       visit(node.children);
     }
@@ -887,6 +892,7 @@ export interface AppState {
   requestLookAt: () => void;
   toggleExpanded: (id: NodeId) => void;
   toggleHidden: (id: NodeId) => void;
+  applyProjectVisibility: (visibility: ProjectVisibilityDto) => void;
   selectNode: (id: NodeId | null) => void;
   setSelectedBody: (id: number | null) => void;
   /** Replace an ordered body selection; index 0 is the primary/target role. */
@@ -1240,6 +1246,7 @@ export const useAppStore = create<AppState>()((set) => ({
       projectVisibility,
       dirty: false,
     });
+    presentation.documentChanged();
   },
 
   refreshAfterInboxApply: async (opName) => {
@@ -2113,7 +2120,7 @@ export const useAppStore = create<AppState>()((set) => ({
     assemblyDocument = emptyAssemblyDocument(),
     projectVisibility = emptyProjectVisibility(),
     assemblySolution = emptyAssemblySolution(),
-  ) =>
+  ) => {
     set({
       ...resetDocumentUiState(),
       document: update.document,
@@ -2128,7 +2135,9 @@ export const useAppStore = create<AppState>()((set) => ({
       projectVisibility,
       dirty: false,
       projectFileName: fileName,
-    }),
+    });
+    presentation.documentChanged();
+  },
 
   markClean: (fileName) =>
     set((state) => ({
@@ -2311,10 +2320,16 @@ export const useAppStore = create<AppState>()((set) => ({
       if (!hidden[id]) delete hidden[id];
       return {
         hidden,
-        projectVisibility: persistedVisibilityFromHidden(state.document, hidden),
+        projectVisibility: persistedVisibilityFromHidden(state.document, hidden, state.projectVisibility),
         dirty: true,
       };
     }),
+
+  applyProjectVisibility: (projectVisibility) => set((state) => ({
+    projectVisibility,
+    hidden: state.document ? hiddenFromPersistedVisibility(state.document, projectVisibility) : {},
+    dirty: true,
+  })),
 
   selectNode: (id) => set({ selectedNode: id }),
 
@@ -3085,12 +3100,18 @@ export function bodyAppearanceFor(bodyId: number): BodyAppearance {
  */
 export async function exportProjectModelWithVisibility(
   providedEngine?: Engine,
+  assertCurrent?: () => void | Promise<void>,
 ): Promise<string> {
+  await assertCurrent?.();
   const engine = providedEngine ?? await getEngine();
+  await assertCurrent?.();
   await synchronizeSnapshotVisibility(
     useAppStore.getState().projectVisibility,
-    () => engine.projectVisibility(),
-    visibility => engine.setProjectVisibility(visibility),
+    async () => { await assertCurrent?.(); return engine.projectVisibility(); },
+    async visibility => { await assertCurrent?.(); return engine.setProjectVisibility(visibility); },
   );
-  return engine.exportProjectModel();
+  await assertCurrent?.();
+  const model = await engine.exportProjectModel();
+  await assertCurrent?.();
+  return model;
 }

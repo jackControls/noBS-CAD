@@ -1,4 +1,4 @@
-import { getEngine } from '../engine';
+import { getEngine, ProjectLoadError } from '../engine';
 import type { BodyAppearance } from '../engine/types';
 import { translate } from '../i18n';
 import {
@@ -32,6 +32,11 @@ import {
   type RecoverableProjectTab,
 } from './projectTabs';
 import { requestUnsavedDecision } from './unsavedChanges';
+import { requestMeshExportScope } from '../components/MeshExportDialog';
+import { runExport } from './exportFlow';
+import { projectTransitions } from './projectTransitions';
+import type { EngineOperationOwner } from '../engine/activity';
+import { captureProjectOwner } from './projectOwnership';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -112,9 +117,13 @@ function assertNoFeatureEdit(): void {
  * filename as the project name. */
 export async function renameProject(requestedName?: string): Promise<boolean> {
   assertNoFeatureEdit();
-  const state = useAppStore.getState();
+  const owner = captureProjectOwner();
+  const { state } = owner;
   if (state.document === null) {
     throw new Error(translate('file.noOpenProject'));
+  }
+  if (state.activeSketch) {
+    throw new Error(translate('file.finishBeforeSave'));
   }
   const input =
     requestedName ??
@@ -124,7 +133,11 @@ export async function renameProject(requestedName?: string): Promise<boolean> {
   if (!name) throw new Error(translate('file.renameEmpty'));
   if (name === state.document.name) return true;
 
-  const document = await (await getEngine()).setDocumentName(name);
+  await owner.assertCurrent();
+  const engine = await getEngine();
+  const expectedModelJson = await exportProjectModelWithVisibility(engine, owner.assertCurrent);
+  const document = await engine.setDocumentName(name, expectedModelJson);
+  await owner.assertCurrent();
   useAppStore.setState({ document, dirty: true });
   recordActiveProjectMetadata();
   return true;
@@ -132,52 +145,54 @@ export async function renameProject(requestedName?: string): Promise<boolean> {
 
 export async function saveProject(saveAs = false, targetOverride?: SaveTarget): Promise<boolean> {
   assertNoFeatureEdit();
-  const state = useAppStore.getState();
+  const owner = captureProjectOwner();
+  const { state } = owner;
   if (state.document === null) {
     throw new Error(translate('file.noOpenProject'));
   }
   if (state.activeSketch) {
     throw new Error(translate('file.finishBeforeSave'));
   }
+  await owner.assertCurrent();
+  const engine = await getEngine();
+  const expectedModelJson = await exportProjectModelWithVisibility(engine, owner.assertCurrent);
   const existingTarget = !saveAs ? getCurrentProjectTarget() : null;
   const target =
     targetOverride ?? existingTarget ??
     (await chooseSaveTarget(currentSuggestedName(), PROJECT_TYPE));
   if (!target) return false;
 
-  const engine = await getEngine();
+  await owner.assertCurrent();
   // An explicit Rename Project changes model identity without moving the
   // file. Only a new destination (first Save or Save As) derives the model
   // name from the filename selected by the user.
   const designName = existingTarget
     ? state.document.name
     : withoutExtension(target.name);
-  const originalName = state.document?.name ?? 'Untitled';
-  const document = await engine.setDocumentName(designName);
-  let modelJson: string;
-  try {
-    modelJson = await exportProjectModelWithVisibility(engine);
-    await writeSaveTarget(target, createNbcadArchive(modelJson));
-  } catch (error) {
-    if (designName !== originalName) {
-      await engine.setDocumentName(originalName).catch(() => undefined);
-    }
-    throw error;
-  }
+  const modelJson = await engine.exportProjectModel({expected_model_json: expectedModelJson, save_name: designName});
+  await owner.assertCurrent();
+  // Rename a serialized copy under the engine lock. A failed write never
+  // renames the live model, and captured bytes cannot turn into another tab.
+  await writeSaveTarget(target, createNbcadArchive(modelJson));
+  await owner.assertCurrent();
+  const document = await engine.setDocumentName(designName, expectedModelJson);
+  await owner.assertCurrent();
   const reusableTarget = target.kind === 'download' ? null : target;
+  await recordActiveProjectSave(modelJson, reusableTarget, owner.assertSettled);
+  owner.assertSettled();
   useAppStore.setState({
     document,
     dirty: false,
     projectFileName: target.name,
   });
-  await recordActiveProjectSave(modelJson, reusableTarget);
+  recordActiveProjectMetadata();
   if (!hasUnsavedProjects()) clearProjectRecovery();
   return true;
 }
 
 /** Open a fresh untitled design in a new window-level document tab. */
-export function newProject(): Promise<boolean> {
-  return createProjectTab();
+export function newProject(operationOwner?: EngineOperationOwner): Promise<boolean> {
+  return createProjectTab(operationOwner);
 }
 
 /** Close one document tab; the last tab is replaced with a fresh Untitled. */
@@ -252,41 +267,59 @@ export async function openProject(options?: { filePath: string; discardChanges?:
   const opened = await chooseOpenFile(PROJECT_TYPE, options?.filePath);
   if (!opened) return false;
   const { modelJson } = readNbcadArchive(opened.bytes);
-  const engine = await getEngine();
-  const update = await engine.loadProjectModel(modelJson);
-  const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
-    engine.finishedSketches(),
-    engine.datumPlaneDefinitions(),
-    engine.bodyAppearances(),
-    engine.drawingDocument(),
-    engine.assemblyDocument(),
-    engine.assemblySolution(),
-    engine.projectVisibility(),
-  ]);
-  // A legacy project is readable, but the next Save must choose a new
-  // `.nbcad` destination instead of silently overwriting the old container.
-  const reusableTarget = opened.name.toLowerCase().endsWith(NBCAD_EXTENSION)
-    ? opened.writableTarget
-    : null;
-  useAppStore
-    .getState()
-    .loadProjectState(
-      update,
-      finishedSketches,
-      datumPlanes,
-      opened.name,
-      bodyAppearances,
-      drawingDocument,
-      assemblyDocument,
-      projectVisibility,
-      assemblySolution,
-    );
-  await recordActiveProjectOpen(modelJson, reusableTarget);
-  if (!hasUnsavedProjects()) clearProjectRecovery();
-  return true;
+  // Native replacement precedes the store update below. Keep ownership held
+  // throughout both so another export cannot capture B with A's UI selection.
+  const releaseTransition = projectTransitions.begin();
+  let changed = false;
+  let published = false;
+  try {
+    const engine = await getEngine();
+    changed = true;
+    const update = await engine.loadProjectModel(modelJson).catch((error: unknown) => {
+      // Only an explicit pre-mutation rejection proves the prior native model
+      // and geometry are intact. IPC, recompute and post-load repair failures
+      // remain unverified, even when the frontend still shows the old document.
+      changed = !(error instanceof ProjectLoadError && error.engineState === 'unchanged');
+      throw error;
+    });
+    const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
+      engine.finishedSketches(),
+      engine.datumPlaneDefinitions(),
+      engine.bodyAppearances(),
+      engine.drawingDocument(),
+      engine.assemblyDocument(),
+      engine.assemblySolution(),
+      engine.projectVisibility(),
+    ]);
+    // A legacy project is readable, but the next Save must choose a new
+    // `.nbcad` destination instead of silently overwriting the old container.
+    const reusableTarget = opened.name.toLowerCase().endsWith(NBCAD_EXTENSION)
+      ? opened.writableTarget
+      : null;
+    useAppStore
+      .getState()
+      .loadProjectState(
+        update,
+        finishedSketches,
+        datumPlanes,
+        opened.name,
+        bodyAppearances,
+        drawingDocument,
+        assemblyDocument,
+        projectVisibility,
+        assemblySolution,
+      );
+    published = true;
+    await recordActiveProjectOpen(modelJson, reusableTarget);
+    if (!hasUnsavedProjects()) clearProjectRecovery();
+    return true;
+  } finally {
+    releaseTransition(changed, published);
+  }
 }
 
 export async function exportStep(selectedOnly: boolean): Promise<boolean> {
+  const transition = projectTransitions.capture();
   assertNoFeatureEdit();
   const state = useAppStore.getState();
   if (state.activeSketch) {
@@ -307,82 +340,86 @@ export async function exportStep(selectedOnly: boolean): Promise<boolean> {
   }
   const documentName = withoutExtension(state.document?.name ?? state.projectFileName ?? 'Untitled');
   const suffix = selectedOnly && state.selectedBody !== null ? `-Body${state.selectedBody}` : '';
-  const target = await chooseSaveTarget(`${documentName}${suffix}.step`, STEP_TYPE);
-  if (!target) return false;
   const engine = await getEngine();
-  const activeFeatureIds = new Set(
-    (state.document?.features ?? [])
-      .slice(0, state.document?.rollback_index ?? 0)
-      .filter((feature) => !feature.suppressed)
-      .map((feature) => feature.id),
-  );
-  const [holeDefinitions, bodyFeatureDefinitions] = await Promise.all([
-    engine.holeDefinitions(),
-    engine.bodyFeatureDefinitions(),
-  ]);
-  const internalThreadMetadata = holeDefinitions.flatMap((definition) => {
-    if (
-      !definition.thread
-      || !bodyIds.includes(definition.body_id)
-      || !activeFeatureIds.has(definition.feature_id)
-    ) {
-      return [];
-    }
-    return [{
-      body_id: definition.body_id,
-      feature_id: definition.feature_id,
-      feature_name: definition.name,
-      position_count: Math.max(1, definition.positions.length),
-      external: false,
-      predrill_diameter: definition.diameter,
-      thread: definition.thread,
-    }];
+  return runExport({
+    assertSelectionOwner: exportSelectionOwner(transition, state),
+    captureModel: () => engine.exportProjectModel(),
+    chooseOptions: async () => {
+      const activeFeatureIds = new Set(
+        (state.document?.features ?? [])
+          .slice(0, state.document?.rollback_index ?? 0)
+          .filter((feature) => !feature.suppressed)
+          .map((feature) => feature.id),
+      );
+      const [holeDefinitions, bodyFeatureDefinitions] = await Promise.all([
+        engine.holeDefinitions(),
+        engine.bodyFeatureDefinitions(),
+      ]);
+      const internalThreadMetadata = holeDefinitions.flatMap((definition) => {
+        if (
+          !definition.thread
+          || !bodyIds.includes(definition.body_id)
+          || !activeFeatureIds.has(definition.feature_id)
+        ) {
+          return [];
+        }
+        return [{
+          body_id: definition.body_id,
+          feature_id: definition.feature_id,
+          feature_name: definition.name,
+          position_count: Math.max(1, definition.positions.length),
+          external: false,
+          predrill_diameter: definition.diameter,
+          thread: definition.thread,
+        }];
+      });
+      const externalThreadMetadata = bodyFeatureDefinitions.flatMap((definition) => {
+        if (
+          definition.type !== 'external_thread'
+          || !bodyIds.includes(definition.body_id)
+          || !activeFeatureIds.has(definition.feature_id)
+        ) {
+          return [];
+        }
+        return [{
+          body_id: definition.body_id,
+          feature_id: definition.feature_id,
+          feature_name: definition.name,
+          position_count: 1,
+          external: true,
+          predrill_diameter: definition.cylinder.radius * 2,
+          thread: definition.thread,
+        }];
+      });
+      return {
+        thread_metadata: [...internalThreadMetadata, ...externalThreadMetadata],
+        occurrences: state.assemblySolution.instance_body_poses
+          .filter((pose) => pose.visible)
+          .filter((pose) => bodyIds.includes(pose.body_id))
+          .filter((pose) => (
+            !selectedOnly
+            || state.selectedOccurrenceId === null
+            || pose.occurrence_id === state.selectedOccurrenceId
+          ))
+          .map((pose) => {
+            const occurrence = state.assemblyDocument.component_structure.occurrences.find(
+              (candidate) => candidate.id === pose.occurrence_id,
+            );
+            return {
+              occurrence_id: pose.occurrence_id,
+              component_id: pose.component_id,
+              body_id: pose.body_id,
+              name: occurrence?.name ?? `Occurrence ${pose.occurrence_id}`,
+              translation: pose.translation,
+              rotation: pose.rotation,
+            };
+          }),
+      };
+    },
+    render: (options, expected_model_json) => engine.exportStep({body_ids: bodyIds, ...options, expected_model_json}),
+    chooseTarget: () => chooseSaveTarget(`${documentName}${suffix}.step`, STEP_TYPE),
+    write: writeSaveTarget,
   });
-  const externalThreadMetadata = bodyFeatureDefinitions.flatMap((definition) => {
-    if (
-      definition.type !== 'external_thread'
-      || !bodyIds.includes(definition.body_id)
-      || !activeFeatureIds.has(definition.feature_id)
-    ) {
-      return [];
-    }
-    return [{
-      body_id: definition.body_id,
-      feature_id: definition.feature_id,
-      feature_name: definition.name,
-      position_count: 1,
-      external: true,
-      predrill_diameter: definition.cylinder.radius * 2,
-      thread: definition.thread,
-    }];
-  });
-  const bytes = await engine.exportStep({
-    body_ids: bodyIds,
-    thread_metadata: [...internalThreadMetadata, ...externalThreadMetadata],
-    occurrences: state.assemblySolution.instance_body_poses
-      .filter((pose) => pose.visible)
-      .filter((pose) => bodyIds.includes(pose.body_id))
-      .filter((pose) => (
-        !selectedOnly
-        || state.selectedOccurrenceId === null
-        || pose.occurrence_id === state.selectedOccurrenceId
-      ))
-      .map((pose) => {
-        const occurrence = state.assemblyDocument.component_structure.occurrences.find(
-          (candidate) => candidate.id === pose.occurrence_id,
-        );
-        return {
-          occurrence_id: pose.occurrence_id,
-          component_id: pose.component_id,
-          body_id: pose.body_id,
-          name: occurrence?.name ?? `Occurrence ${pose.occurrence_id}`,
-          translation: pose.translation,
-          rotation: pose.rotation,
-        };
-      }),
-  });
-  await writeSaveTarget(target, bytes);
-  return true;
 }
 
 function meshExportBodyIds(selectedOnly: boolean): number[] {
@@ -407,44 +444,52 @@ function meshExportBodyIds(selectedOnly: boolean): number[] {
   return bodyIds;
 }
 
-export async function exportStl(selectedOnly: boolean): Promise<boolean> {
-  const state = useAppStore.getState();
-  const bodyIds = meshExportBodyIds(selectedOnly);
-  if (state.bodyAppearances.some((entry) => bodyIds.includes(entry.body_id))) {
-    window.alert(translate('file.stlDropsAppearance'));
-  }
-  const documentName = withoutExtension(state.document?.name ?? state.projectFileName ?? 'Untitled');
-  const suffix = selectedOnly && state.selectedBody !== null ? `-Body${state.selectedBody}` : '';
-  const target = await chooseSaveTarget(`${documentName}${suffix}.stl`, STL_TYPE);
-  if (!target) return false;
-  const engine = await getEngine();
-  const bytes = await engine.exportStl({
-    body_ids: bodyIds,
-    linear_deflection: 0.15,
-    angular_deflection: 0.35,
-    include_appearance: false,
-  });
-  await writeSaveTarget(target, bytes);
-  return true;
+export function exportStl(selectedOnly: boolean): Promise<boolean> {
+  return exportMesh('stl', selectedOnly);
 }
 
-export async function export3mf(selectedOnly: boolean): Promise<boolean> {
+export function export3mf(selectedOnly: boolean): Promise<boolean> {
+  return exportMesh('3mf', selectedOnly);
+}
+
+async function exportMesh(format: 'stl' | '3mf', selectedOnly: boolean): Promise<boolean> {
+  const transition = projectTransitions.capture();
   const state = useAppStore.getState();
   const bodyIds = meshExportBodyIds(selectedOnly);
   const documentName = withoutExtension(state.document?.name ?? state.projectFileName ?? 'Untitled');
   const suffix = selectedOnly && state.selectedBody !== null ? `-Body${state.selectedBody}` : '';
-  const target = await chooseSaveTarget(`${documentName}${suffix}.3mf`, THREEMF_TYPE);
-  if (!target) return false;
   const engine = await getEngine();
-  const bytes = await engine.export3mf({
-    body_ids: bodyIds,
-    linear_deflection: 0.15,
-    angular_deflection: 0.35,
-    include_appearance: true,
-    slicer_target: (await import('../materials')).readSlicerTarget(),
+  return runExport({
+    assertSelectionOwner: exportSelectionOwner(transition, state),
+    captureModel: () => engine.exportProjectModel(),
+    chooseOptions: requestMeshExportScope,
+    render: async (scope, expected_model_json) => {
+      const request = {body_ids: bodyIds, scope, expected_model_json,
+        linear_deflection: 0.15, angular_deflection: 0.35, include_appearance: format === '3mf'};
+      if (format === 'stl') return engine.exportStl(request);
+      return engine.export3mf({...request, slicer_target: (await import('../materials')).readSlicerTarget()});
+    },
+    chooseTarget: async () => {
+      if (format === 'stl' && state.bodyAppearances.some((entry) => bodyIds.includes(entry.body_id))) {
+        window.alert(translate('file.stlDropsAppearance'));
+      }
+      return chooseSaveTarget(`${documentName}${suffix}.${format}`, format === 'stl' ? STL_TYPE : THREEMF_TYPE);
+    },
+    write: writeSaveTarget,
   });
-  await writeSaveTarget(target, bytes);
-  return true;
+}
+
+function exportSelectionOwner(transition: ReturnType<typeof projectTransitions.capture>, state: ReturnType<typeof useAppStore.getState>) {
+  return async () => {
+    await projectTransitions.assertCurrent(transition);
+    const current = useAppStore.getState();
+    if (current.solidBusy || current.activeProjectTabId !== state.activeProjectTabId || current.document !== state.document
+      || current.solidScene !== state.solidScene || current.assemblyDocument !== state.assemblyDocument
+      || current.assemblySolution !== state.assemblySolution || current.activeSketch !== state.activeSketch
+      || current.bodyAppearances !== state.bodyAppearances) {
+      throw new Error('The document changed while preparing export. Start the export again.');
+    }
+  };
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

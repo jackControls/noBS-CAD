@@ -344,6 +344,15 @@ impl CadServer {
                     serde_json::from_value(arguments)
                         .map_err(|error| format!("invalid STEP export request: {error}"))?
                 };
+                if request.expected_model_json.is_some() {
+                    nbcad_solid::check_export_model_snapshot(
+                        request.expected_model_json.as_deref(),
+                        &self
+                            .manager
+                            .export_project_model()
+                            .map_err(|e| e.to_string())?,
+                    )?;
+                }
                 let bytes = self
                     .kernel
                     .export_step(&request)
@@ -1015,6 +1024,16 @@ impl CadServer {
             serde_json::from_value(arguments)
                 .map_err(|error| format!("bad mesh export arguments: {error}"))?
         };
+        if request.expected_model_json.is_some() {
+            request
+                .check_model_snapshot(
+                    &self
+                        .manager
+                        .export_project_model()
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+        }
         let scene = self.manager.solid_scene();
         let appearances = self.manager.body_appearances();
         let mut meshes = self
@@ -1027,7 +1046,7 @@ impl CadServer {
             }
         }
         let solution = self.manager.assembly_solution();
-        if !solution.solved {
+        if request.scope == nbcad_export::MeshExportScope::Assembly && !solution.solved {
             return Err("Resolve assembly errors before mesh export.".into());
         }
         let instances: Vec<_> = solution
@@ -1041,8 +1060,8 @@ impl CadServer {
                 visible: p.visible,
             })
             .collect();
-        let meshes =
-            nbcad_export::place_mesh_instances(&meshes, &instances).map_err(|e| e.to_string())?;
+        let meshes = nbcad_export::prepare_export_meshes(&meshes, &instances, request.scope)
+            .map_err(|e| e.to_string())?;
         let bytes = if name == "solid_export_stl" {
             nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())?
         } else {
@@ -3431,6 +3450,19 @@ fn tool_specs() -> Vec<ToolSpec> {
             Payload::Object,
             object_schema(
                 json!({
+                    "expected_model_json": {"type":"string","description":"Optional exact cad_project_model string. Rejects if the current model differs before exporting geometry."},
+                    "occurrences": {"type":"array","description":"Optional solved occurrence copies; omit for part-local geometry.","items":{
+                        "type":"object","additionalProperties":false,
+                        "required":["occurrence_id","component_id","body_id","translation","rotation"],
+                        "properties":{
+                            "occurrence_id":{"type":"integer","minimum":1},
+                            "component_id":{"type":"integer","minimum":1},
+                            "body_id":{"type":"integer","minimum":1},
+                            "name":{"type":"string"},
+                            "translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
+                            "rotation":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}
+                        }
+                    }},
                     "body_ids": {
                         "type": "array",
                         "items": {"type": "integer", "minimum": 1},
@@ -3457,6 +3489,8 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "items": {"type": "integer", "minimum": 1},
                         "description": "Empty exports every active body."
                     },
+                    "scope": {"type":"string","enum":["assembly","definition"],"default":"assembly","description":"Assembly exports visible solved occurrences. Definition exports each selected body once in its part coordinates."},
+                    "expected_model_json": {"type":"string","description":"Optional exact cad_project_model string captured before an interactive choice. Export rejects if the current model differs; no geometry is written."},
                     "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
                     "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35}
                 }),
@@ -3476,6 +3510,8 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "items": {"type": "integer", "minimum": 1},
                         "description": "Empty exports every active body."
                     },
+                    "scope": {"type":"string","enum":["assembly","definition"],"default":"assembly","description":"Assembly exports visible solved occurrences. Definition exports each selected body once in its part coordinates."},
+                    "expected_model_json": {"type":"string","description":"Optional exact cad_project_model string captured before an interactive choice. Export rejects if the current model differs; no geometry is written."},
                     "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
                     "angular_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.35},
                     "include_appearance": {"type": "boolean", "default": true},
@@ -6196,6 +6232,135 @@ mod tests {
             positions,
             indices,
         }
+    }
+
+    #[test]
+    fn definition_mesh_export_selects_one_unplaced_native_part() {
+        let (mut server, initial) = mcp_box();
+        let body = initial["scene"]["bodies"][0]["id"].clone();
+        let document = server.call_tool("assembly_document", json!({})).unwrap();
+        let occurrence = document["component_structure"]["occurrences"][0].clone();
+        server.call_tool("assembly_set_occurrence_pose", json!({"occurrence_id":occurrence["id"],"local_pose":{"translation":[0.,0.,70.],"rotation":[0.,0.,0.,1.]}})).unwrap();
+        server.call_tool("assembly_create_occurrence", json!({"component_id":occurrence["component_id"],"name":"Repeated print","local_pose":{"translation":[0.,0.,170.],"rotation":[0.,0.,0.,1.]}})).unwrap();
+        let before = server.manager.export_project_model().unwrap();
+        let assemble = server
+            .call_tool(
+                "solid_export_3mf",
+                json!({"body_ids":[body],"slicer_target":"standard"}),
+            )
+            .unwrap();
+        let xml = pip_model_xml(
+            &BASE64
+                .decode(assemble["bytes_base64"].as_str().unwrap())
+                .unwrap(),
+        );
+        assert_eq!(xml.matches("<mesh>").count(), 2);
+        let definition = server
+            .call_tool(
+                "solid_export_3mf",
+                json!({"body_ids":[body],"scope":"definition","slicer_target":"standard"}),
+            )
+            .unwrap();
+        let xml = pip_model_xml(
+            &BASE64
+                .decode(definition["bytes_base64"].as_str().unwrap())
+                .unwrap(),
+        );
+        assert_eq!(xml.matches("<mesh>").count(), 1);
+        let mesh = parse_3mf_model_mesh(&xml);
+        nbcad_export::validate_3mf_model_mesh(&mesh).unwrap();
+        assert!(mesh
+            .positions
+            .chunks_exact(3)
+            .all(|point| (0.0..=10.0).contains(&point[2])));
+        let stl = server
+            .call_tool(
+                "solid_export_stl",
+                json!({"body_ids":[body],"scope":"definition"}),
+            )
+            .unwrap();
+        let bytes = BASE64
+            .decode(stl["bytes_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[80..84].try_into().unwrap()), 12);
+        assert_eq!(server.manager.export_project_model().unwrap(), before);
+    }
+
+    #[test]
+    fn mesh_and_step_export_snapshots_reject_mcp_open_and_assembly_edits() {
+        let (mut server, initial) = mcp_box();
+        let body = initial["scene"]["bodies"][0]["id"].clone();
+        let expected = server.manager.export_project_model().unwrap();
+        let request = json!({"body_ids":[body],"expected_model_json":expected,"scope":"definition","slicer_target":"standard"});
+        let original = server
+            .call_tool("solid_export_3mf", request.clone())
+            .unwrap();
+        let step_request = json!({"body_ids":[body],"expected_model_json":expected,
+            "occurrences":[{"occurrence_id":1,"component_id":1,"body_id":body,
+                "translation":[42.,0.,0.],"rotation":[0.,0.,0.,1.],"name":"Selected occurrence"}]});
+        let specs = tool_specs();
+        schema_accepts(
+            &specs
+                .iter()
+                .find(|spec| spec.name == "solid_export_step")
+                .unwrap()
+                .input_schema,
+            &step_request,
+        )
+        .unwrap();
+        let step = server
+            .call_tool("solid_export_step", step_request.clone())
+            .unwrap();
+        let step_bytes = BASE64
+            .decode(step["bytes_base64"].as_str().unwrap())
+            .unwrap();
+        assert!(String::from_utf8(step_bytes)
+            .unwrap()
+            .contains("MANIFOLD_SOLID_BREP"));
+        let (mut replacement, _) = mcp_box();
+        let document = replacement
+            .call_tool("assembly_document", json!({}))
+            .unwrap();
+        let occurrence = &document["component_structure"]["occurrences"][0]["id"];
+        replacement.call_tool("assembly_set_occurrence_pose", json!({"occurrence_id":occurrence,"local_pose":{"translation":[0.,0.,90.],"rotation":[0.,0.,0.,1.]}})).unwrap();
+        let replacement_model = replacement.manager.export_project_model().unwrap();
+        // Same document body IDs and same geometry; a different placement is
+        // still a different manufacturing request. This is the live Open path.
+        server
+            .call_tool(
+                "cad_load_project_model",
+                json!({"model_json":replacement_model}),
+            )
+            .unwrap();
+        for operation in ["solid_export_stl", "solid_export_3mf"] {
+            assert!(server
+                .call_tool(operation, request.clone())
+                .unwrap_err()
+                .contains("document changed"));
+        }
+        assert!(server
+            .call_tool("solid_export_step", step_request.clone())
+            .unwrap_err()
+            .contains("document changed"));
+        assert_eq!(
+            server.manager.export_project_model().unwrap(),
+            replacement_model
+        );
+        // Legacy requests keep their default behavior, without a snapshot tax.
+        assert!(server
+            .call_tool("solid_export_stl", json!({"body_ids":[body]}))
+            .is_ok());
+        assert!(server
+            .call_tool("solid_export_step", json!({"body_ids":[body]}))
+            .is_ok());
+        server
+            .call_tool("cad_load_project_model", json!({"model_json":expected}))
+            .unwrap();
+        assert_eq!(
+            server.call_tool("solid_export_3mf", request).unwrap()["bytes_base64"],
+            original["bytes_base64"]
+        );
+        assert!(server.call_tool("solid_export_step", step_request).is_ok());
     }
 
     #[test]

@@ -10,7 +10,7 @@ import {trackEngineOperation} from './activity';
 function invoke<T>(...args: Parameters<typeof tauriInvoke>): Promise<T> {
   return trackEngineOperation(tauriInvoke<T>(...args));
 }
-import { EngineError, unwrapEnvelope, type Engine } from './index';
+import { EngineError, ProjectLoadError, unwrapEnvelope, type Engine } from './index';
 import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import type {
   AddConstraintResult,
@@ -509,12 +509,12 @@ export class TauriEngine implements Engine {
     });
   }
 
-  async setDocumentName(name: string): Promise<DocumentDto> {
-    return this.call('engine_document_set_name', name);
+  async setDocumentName(name: string, expectedModelJson?: string): Promise<DocumentDto> {
+    return this.call('engine_document_set_name', expectedModelJson === undefined ? name : { name, expected_model_json: expectedModelJson });
   }
 
-  async exportProjectModel(): Promise<string> {
-    return this.call('engine_project_export_model');
+  async exportProjectModel(options?: { expected_model_json: string; save_name?: string }): Promise<string> {
+    return this.call('engine_project_export_model', options);
   }
 
   private async projectSessionCall<T>(
@@ -546,8 +546,22 @@ export class TauriEngine implements Engine {
   }
 
   async loadProjectModel(modelJson: string): Promise<SolidUpdateDto> {
-    const update = await this.call<SolidUpdateDto>('engine_project_load', modelJson);
-    return restoreLoadedDatumHistoryFrames(this, update);
+    let update: SolidUpdateDto;
+    try {
+      update = await this.call<SolidUpdateDto>('engine_project_load', modelJson);
+    } catch (error) {
+      const data = error instanceof EngineError ? error.data : null;
+      const unchanged = data !== null && typeof data === 'object'
+        && 'project_load_state' in data && data.project_load_state === 'unchanged';
+      throw new ProjectLoadError(unchanged ? 'unchanged' : 'unverified', error);
+    }
+    try {
+      return await restoreLoadedDatumHistoryFrames(this, update);
+    } catch (error) {
+      // The new document is already committed. Repair may itself have changed
+      // the rollback stage; never classify this as an atomic load rejection.
+      throw new ProjectLoadError('unverified', error);
+    }
   }
 
   async exportStep(request: StepExportRequest): Promise<Uint8Array> {

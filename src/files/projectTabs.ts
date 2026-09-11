@@ -26,6 +26,9 @@ import {
   type ProjectTabSummary,
 } from '../store/appStore';
 import type { SaveTarget } from './fileIO';
+import { projectTransitions } from './projectTransitions';
+import type { EngineOperationOwner } from '../engine/activity';
+import { captureProjectOwner } from './projectOwnership';
 
 interface ProjectTabRuntime {
   modelJson: string;
@@ -210,8 +213,11 @@ async function ensureActiveProjectTab(
   return id;
 }
 
-async function snapshotActiveProjectTab(): Promise<string> {
-  const state = useAppStore.getState();
+async function snapshotActiveProjectTab(operationOwner?: EngineOperationOwner): Promise<string> {
+  // The tab wrapper itself owns solidBusy, before replacing the active model.
+  const owner = captureProjectOwner(true, operationOwner);
+  const { state } = owner;
+  await owner.assertCurrent();
   if (state.historyEdit) {
     throw new Error(translate('file.finishBeforeFeatureEdit'));
   }
@@ -224,8 +230,12 @@ async function snapshotActiveProjectTab(): Promise<string> {
   const viewState = activeViewState();
   const modelJson = sameViewState(existingRuntime?.viewState ?? null, viewState)
     ? existingRuntime!.modelJson
-    : await exportProjectModelWithVisibility();
+    : await exportProjectModelWithVisibility(undefined, owner.assertCurrent);
+  await owner.assertCurrent();
   const id = await ensureActiveProjectTab(modelJson);
+  // Registration may assign the first tab ID; every existing tab still has
+  // to be the owner captured above before its recovery snapshot is replaced.
+  if (state.activeProjectTabId) owner.assertSettled();
   const runtime = runtimes.get(id);
   runtimes.set(id, {
     modelJson,
@@ -358,15 +368,27 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
 }
 
 async function withProjectTransition(
-  operation: () => Promise<boolean>,
+  operation: (replacingActiveModel: () => void) => Promise<boolean>,
 ): Promise<boolean> {
   const state = useAppStore.getState();
   if (state.solidBusy || state.historyEdit) return false;
+  let releaseTransition: ((changed?: boolean, published?: boolean) => void) | undefined;
+  let changed = false;
+  let published = false;
   state.setSolidBusy(true);
   try {
-    return await operation();
+    const result = await operation(() => {
+      releaseTransition ??= projectTransitions.begin();
+      changed = true;
+    });
+    // Closing an inactive tab or selecting the active tab can succeed without
+    // publishing the active native model. Those operations must not clear an
+    // earlier unverified load, nor invalidate an otherwise valid export.
+    published = changed && result;
+    return result;
   } finally {
     useAppStore.getState().setSolidBusy(false);
+    releaseTransition?.(changed, published);
   }
 }
 
@@ -381,11 +403,12 @@ export async function initializeProjectTabs(): Promise<void> {
 }
 
 /** Add a fresh document while preserving the current one as an inactive tab. */
-export function createProjectTab(): Promise<boolean> {
-  return withProjectTransition(async () => {
-    await snapshotActiveProjectTab();
+export function createProjectTab(operationOwner?: EngineOperationOwner): Promise<boolean> {
+  return withProjectTransition(async (replacingActiveModel) => {
+    await snapshotActiveProjectTab(operationOwner);
     const engine = await getEngine();
     const id = createTabId();
+    replacingActiveModel();
     const update = await engine.createProjectSession(id);
     const modelJson = await engine.exportProjectModel();
     currentProjectTarget = null;
@@ -419,11 +442,12 @@ export function createProjectTab(): Promise<boolean> {
 
 /** Hydrate an existing tab into the one native modeling/rendering engine. */
 export function switchProjectTab(tabId: string): Promise<boolean> {
-  return withProjectTransition(async () => {
+  return withProjectTransition(async (replacingActiveModel) => {
     const state = useAppStore.getState();
     if (tabId === state.activeProjectTabId) return true;
     if (!state.projectTabs.some((tab) => tab.id === tabId)) return false;
     await snapshotActiveProjectTab();
+    replacingActiveModel();
     await hydrateProjectTab(tabId);
     return true;
   });
@@ -435,7 +459,7 @@ export function closeProjectTab(
   tabId?: string,
   discardUnsaved = false,
 ): Promise<boolean> {
-  return withProjectTransition(async () => {
+  return withProjectTransition(async (replacingActiveModel) => {
     const state = useAppStore.getState();
     const id = tabId ?? state.activeProjectTabId;
     if (!id) return false;
@@ -461,6 +485,7 @@ export function closeProjectTab(
     if (state.projectTabs.length > 1) {
       const adjacent =
         state.projectTabs[index + 1] ?? state.projectTabs[index - 1];
+      replacingActiveModel();
       await hydrateProjectTab(adjacent.id);
       const runtime = runtimes.get(id);
       if (runtime?.resident) {
@@ -477,6 +502,7 @@ export function closeProjectTab(
     }
 
     const engine = await getEngine();
+    replacingActiveModel();
     const update = await engine.newProject();
     const modelJson = await engine.exportProjectModel();
     dropApplicationHistory(id);
@@ -515,8 +541,10 @@ export function getCurrentProjectTarget(): SaveTarget | null {
 export async function recordActiveProjectSave(
   modelJson: string,
   saveTarget: SaveTarget | null,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const id = await ensureActiveProjectTab(modelJson);
+  assertCurrent?.();
   currentProjectTarget = saveTarget;
   const runtime = runtimes.get(id);
   runtimes.set(id, {
@@ -569,11 +597,14 @@ export async function collectRecoverableProjectTabs(): Promise<{
   activeTabId: string | null;
   tabs: RecoverableProjectTab[];
 }> {
-  const state = useAppStore.getState();
+  const owner = captureProjectOwner();
+  const { state } = owner;
+  const capturedRuntimes = new Map(runtimes);
   let activeModelJson: string | null = null;
   if (state.dirty && !state.activeSketch && !state.historyEdit) {
     try {
-      activeModelJson = await exportProjectModelWithVisibility();
+      activeModelJson = await exportProjectModelWithVisibility(undefined, owner.assertCurrent);
+      owner.assertSettled();
       if (state.activeProjectTabId) {
         runtimes.set(state.activeProjectTabId, {
           modelJson: activeModelJson,
@@ -596,8 +627,8 @@ export async function collectRecoverableProjectTabs(): Promise<{
     if (!dirty) return [];
     const modelJson =
       tab.id === state.activeProjectTabId
-        ? activeModelJson ?? runtimes.get(tab.id)?.modelJson
-        : runtimes.get(tab.id)?.modelJson;
+        ? activeModelJson ?? capturedRuntimes.get(tab.id)?.modelJson
+        : capturedRuntimes.get(tab.id)?.modelJson;
     if (!modelJson) return [];
     return [{
       id: tab.id,

@@ -18,7 +18,7 @@ use nbcad_solid::KernelBodyDto;
 use serde::{Deserialize, Serialize};
 
 pub use facade::ExportFacade;
-pub use instances::{place_mesh_instances, MeshInstance};
+pub use instances::{prepare_export_meshes, MeshInstance};
 pub use materials::{
     brands, catalog_json, find_preset, material_catalog, presets_for_brand, MaterialPreset,
 };
@@ -38,10 +38,26 @@ pub const DEFAULT_LINEAR_DEFLECTION: f64 = 0.15;
 pub const DEFAULT_ANGULAR_DEFLECTION: f64 = 0.35;
 
 /// Mesh export selection. An empty body list means every tessellated body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshExportScope {
+    /// Visible solved occurrences, preserving repeats and assembly placement.
+    #[default]
+    Assembly,
+    /// Each selected retained body once, in its original part coordinates.
+    Definition,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeshExportRequest {
+    /// Optional optimistic precondition captured before interactive choices.
+    /// Hosts compare it while holding the same ownership lock as mesh export.
+    #[serde(default)]
+    pub expected_model_json: Option<String>,
     #[serde(default)]
     pub body_ids: Vec<BodyId>,
+    #[serde(default)]
+    pub scope: MeshExportScope,
     #[serde(default = "default_linear")]
     pub linear_deflection: f64,
     #[serde(default = "default_angular")]
@@ -73,12 +89,21 @@ fn default_slicer_target() -> SlicerTarget {
 impl Default for MeshExportRequest {
     fn default() -> Self {
         Self {
+            expected_model_json: None,
             body_ids: Vec::new(),
+            scope: MeshExportScope::Assembly,
             linear_deflection: DEFAULT_LINEAR_DEFLECTION,
             angular_deflection: DEFAULT_ANGULAR_DEFLECTION,
             include_appearance: true,
             slicer_target: SlicerTarget::BambuStudio,
         }
+    }
+}
+
+impl MeshExportRequest {
+    pub fn check_model_snapshot(&self, current: &str) -> Result<(), ExportError> {
+        nbcad_solid::check_export_model_snapshot(self.expected_model_json.as_deref(), current)
+            .map_err(|message| ExportError(message.into()))
     }
 }
 
