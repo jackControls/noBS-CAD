@@ -13,6 +13,7 @@ export interface UiControl {
 }
 
 const selector = 'button,details > summary,input:not([type="hidden"]),select,textarea,a[href],[role="button"],[role="tab"],[role="treeitem"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="checkbox"],[role="radio"],[contenteditable="true"],[tabindex="0"]';
+const dialogSelector = '[role="dialog"],[role="alertdialog"],.feature-dialog';
 let snapshot = 0;
 let inspectedContext: unknown;
 let current = new Map<string, { element: HTMLElement; label: string; surface: string }>();
@@ -53,10 +54,27 @@ function label(element: HTMLElement): string {
 function surface(element: HTMLElement): string {
   const menu = element.closest('[role="menu"]');
   if (menu) return `menus/${menu.getAttribute('data-testid') || menu.getAttribute('aria-label') || 'context-menu'}`;
-  const dialog = element.closest('[role="dialog"],.feature-dialog');
+  const dialog = element.closest(dialogSelector);
   if (dialog) return `dialogs/${dialog.getAttribute('data-testid') || dialog.getAttribute('aria-label') || dialog.querySelector('header')?.textContent?.trim() || 'dialog'}`;
   return element.closest('[data-interface-group]')?.getAttribute('data-interface-group')
     || element.closest('[data-mcp-surface]')?.getAttribute('data-mcp-surface') || 'application';
+}
+
+function dialogText(element: HTMLElement): { text: string; text_truncated?: true } {
+  const limit = 4096;
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let text = '';
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (!parent || !visible(parent) || (parent instanceof HTMLDetailsElement && !parent.open)
+      || parent.closest('input,textarea,select,script,style,[contenteditable]:not([contenteditable="false"]),[data-mcp-presentation]')) continue;
+    const part = (node.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (!part) continue;
+    const remaining = limit - text.length - (text ? 1 : 0);
+    if (part.length > remaining) return {text: (text + (text ? ' ' : '') + part.slice(0, Math.max(0, remaining))).slice(0, limit), text_truncated: true};
+    text += (text ? ' ' : '') + part;
+  }
+  return {text};
 }
 
 export function inspectUi(context?: unknown) {
@@ -82,12 +100,19 @@ export function inspectUi(context?: unknown) {
     if (element instanceof HTMLSelectElement) control.options = Array.from(element.options).map(o => ({ value: o.value, label: o.text, disabled: o.disabled }));
     controls.push(control);
   }
+  const dialogs = [...document.querySelectorAll<HTMLElement>(dialogSelector)]
+    .filter(element => visible(element) && !element.closest('[data-mcp-presentation]'));
   return {
     canvases: [...document.querySelectorAll<HTMLElement>('[data-mcp-canvas]')].filter(visible).map(element => {
       const {x,y,width,height} = element.getBoundingClientRect();
       return {name:element.getAttribute('data-mcp-canvas'),x,y,width,height};
     }),
-    surfaces: [...new Set(controls.map(c => c.surface))].map(name => ({ name, controls: controls.filter(c => c.surface === name) })),
+    surfaces: [...new Set([...controls.map(c => c.surface), ...dialogs.map(surface)])].map(name => {
+      const messages = dialogs.filter(element => surface(element) === name).map(dialogText);
+      const text = messages.map(message => message.text).filter(Boolean).join('\n\n');
+      return {name, controls: controls.filter(c => c.surface === name),
+        ...(messages.length ? {text: text.slice(0, 4096), ...(text.length > 4096 || messages.some(message => message.text_truncated) ? {text_truncated: true} : {})} : {})};
+    }),
     unlabeled_controls: controls.filter(c => !c.label).map(c => ({ id: c.id, surface: c.surface, role: c.role })),
     document_visible: document.visibilityState === 'visible',
     focused_control: [...current].find(([, value]) => value.element === document.activeElement)?.[0] ?? null,
