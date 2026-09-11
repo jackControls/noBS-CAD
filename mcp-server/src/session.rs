@@ -232,9 +232,16 @@ fn request_control(
     );
     let request_name = format!("controls/{id}.request.json");
     let result_name = format!("controls/{id}.result.json");
-    // Effective camera motion is capped at ten seconds by the shared
-    // presentation controller, including a slow playback speed.
-    let lifetime = if ui || arguments.get("duration_ms").is_some() {
+    // File reconstruction and snapshot publication can exceed an ordinary UI
+    // control's deadline. Keep the same bounded expiry for the caller and the
+    // desktop's delivered reply, including an Open that retires its session.
+    // Camera motion remains capped at ten seconds by the presentation controller.
+    let lifetime = if ui
+        && arguments["action"] == "file"
+        && matches!(arguments["command"].as_str(), Some("open" | "save"))
+    {
+        300_000
+    } else if ui || arguments.get("duration_ms").is_some() {
         30_000
     } else {
         5_000

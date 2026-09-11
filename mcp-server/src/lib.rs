@@ -9558,6 +9558,121 @@ mod tests {
     }
 
     #[test]
+    fn slow_file_open_acknowledges_and_attaches_replacement_session() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let original = session::test_session_uuid();
+        let replacement = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-slow-open-{original}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&original);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":original}))
+            .unwrap();
+        let mut opened = CadServer::new().unwrap();
+        opened
+            .call_tool(
+                "cad_set_document_name",
+                json!({"name":"Slow opened replacement"}),
+            )
+            .unwrap();
+        let model = opened.call_tool("cad_project_model", json!({})).unwrap();
+        let source = original.clone();
+        let target = replacement.clone();
+        let expected_model = model.clone();
+        let host = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(entries) =
+                    std::fs::read_dir(session::session_dir().join(&source).join("controls"))
+                {
+                    for entry in entries.flatten() {
+                        if !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                        {
+                            continue;
+                        }
+                        let request: Value =
+                            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        assert_eq!(request["ui"]["command"], "open");
+                        // The native Open retires A before hydration and publication
+                        // finish. Its own delivered receipt must survive that change.
+                        session::write_closed_tombstone(&source).unwrap();
+                        // Intentionally exceed the old 30s expiry AND its 1s MCP
+                        // grace. This real wait exercises request retention and the
+                        // production request loop, not a duplicate timeout formula.
+                        std::thread::sleep(std::time::Duration::from_secs(32));
+                        session::write_session(&target, "model.json", expected_model.as_str().unwrap())
+                            .unwrap();
+                        session::write_session(
+                            &target,
+                            "heartbeat.json",
+                            &json!({
+                                "updated_ms":session::now_ms(),"generation":1,
+                                "session_id":target,"session_mode":"read_only_snapshot"
+                            })
+                            .to_string(),
+                        )
+                        .unwrap();
+                        let retained = entry.path().is_file()
+                            && request["expires_ms"].as_u64().unwrap() >= session::now_ms();
+                        if retained {
+                            session::write_session(
+                                &source,
+                                &format!("controls/{}.result.json", request["id"].as_str().unwrap()),
+                                &json!({"request_id":request["id"],"session_id":source,
+                                    "status":"applied","active_session_id":target,"completed":true})
+                                .to_string(),
+                            )
+                            .unwrap();
+                        }
+                        return retained;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let reply = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"file","command":"open","path":"C:/fixtures/slow-replacement.nbcad"
+                }),
+            )
+            .unwrap();
+        let retained = host.join().unwrap();
+        // Clean up before assertions so a red run leaves no stale test session.
+        let controls_empty = std::fs::read_dir(dir.join(&original).join("controls"))
+            .unwrap()
+            .next()
+            .is_none();
+        let loaded_model = server.manager.export_project_model().unwrap();
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            reply["status"], "applied",
+            "Completed slow Open lost its acknowledgement: {reply}"
+        );
+        assert!(
+            retained,
+            "The native reply must remain eligible after slow reconstruction"
+        );
+        assert_eq!(reply["session_id"], original);
+        assert_eq!(reply["active_session_id"], replacement);
+        assert_eq!(reply["attached_session_id"], replacement);
+        assert_eq!(loaded_model, model.as_str().unwrap());
+        assert!(server.manager.solid_scene().bodies.is_empty());
+        assert!(
+            controls_empty,
+            "Completed request and result files must be removed"
+        );
+    }
+
+    #[test]
     fn acknowledged_document_transitions_track_completed_model_fences() {
         let _guard = session::ENV_LOCK.lock().unwrap();
         let first = session::test_session_uuid();
