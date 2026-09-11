@@ -25,6 +25,20 @@ impl Author {
         self.begin("lower_collar_key_access", "xz", 0.);
         self.circle([0., D.lower_collar() + D.collar_width / 2.], 6.);
         self.extrude("lower_collar_key_access", 70., "cut", Some("base"));
+        // Preserve the complete circular driver envelope while relieving its
+        // unsupported crown. The 45-degree tangent sides meet a 1 mm ceiling,
+        // leaving 1.457 mm of base stock above a short transverse closure.
+        let key_center = D.lower_collar() + D.collar_width / 2.;
+        let tangent = 3. * std::f64::consts::FRAC_1_SQRT_2;
+        let ceiling = key_center + 3. * std::f64::consts::SQRT_2 - 0.5;
+        self.begin("lower_collar_key_roof", "xz", 0.);
+        self.polygon(&[
+            [-tangent, key_center + tangent],
+            [tangent, key_center + tangent],
+            [0.5, ceiling],
+            [-0.5, ceiling],
+        ]);
+        self.extrude("lower_collar_key_roof", 70., "cut", Some("base"));
         let g = D.guard_bolt_radius * std::f64::consts::FRAC_1_SQRT_2;
         for (x, y) in [
             (-22., 0.),
