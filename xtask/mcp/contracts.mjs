@@ -305,6 +305,11 @@ try {
   })]);}finally{clearTimeout(timer);}
  });
  console.log('PASS production history metadata: '+JSON.stringify(historyMetadata));
+ const historyEditors=await historyPage.evaluate(async()=>{
+  const {checkHistoryEditorCallbacks}=await import('/src/engine/historyEditor.browser.test.ts');
+  return checkHistoryEditorCallbacks();
+ });
+ console.log('PASS production history editor callbacks: '+JSON.stringify(historyEditors));
  await historyPage.close();
 } finally {await browser?.close();await server.close();}
 
