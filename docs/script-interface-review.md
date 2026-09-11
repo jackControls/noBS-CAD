@@ -1,11 +1,11 @@
 # Script interface: validation and remaining work
 
-PR [#99](https://github.com/jackControls/noBS-CAD/pull/99) is a saved, tested draft.
-The construction engine is usable; its product and learning interface still needs
-work. The Rust interpreter is a separate lower layer; bundled recipe sources,
-their catalog and the example-dependent acceptance checks are a separate upper
-layer. These are implementation gaps and release decisions, not failures hidden
-by the example's passing geometry checks.
+PR [#99](https://github.com/jackControls/noBS-CAD/pull/99) contains the native
+Scripts workspace, MCP adapter and presentation controls. The Rust interpreter
+is a separate lower layer; bundled recipe sources, their catalog and
+example-dependent acceptance checks are a separate upper layer. Review readiness
+of these capabilities does not qualify the flagship designs for manufacture or
+complete the broader learning product in issue #16.
 
 ## Validated implementation
 
@@ -46,25 +46,40 @@ after uncertain native replacement. The original PR115 recovery fix is now in
 that owning layer. PR115 addresses document/session ownership during script
 startup, inbox work, publication and delayed presentation controls.
 
-## Before promoting the draft
+## Presentation corrections
 
-- **Use the native renderer for feature previews.** The small preview currently
-  projects immutable Rust-generated geometry with `src/scripts/previewGeometry.ts`
-  and Canvas2D in `ScriptPreview.tsx`. That is a second renderer and remains a
-  prototype. Reuse a bounded Rust/Bevy viewport without attaching to or changing
-  the user's document. Retain one-shot playback, reduced-motion behavior, close,
-  fit and inspect controls. Track teaching in #16 and native chrome in #29;
-  full shell retirement remains #38.
-- **Settle the run/inspect interaction.** File → Open Script, the Scripts dock,
-  ribbon hover previews and the playback bar are implemented. Review them as
-  one workflow: loading must not execute, the target design must be explicit,
-  status and speed must agree, and controls must reclaim viewport space when
-  closed. Keep keyboard dismissal and inspection available without hover timing
-  traps or a popup that obstructs ordinary modeling. Passing control contracts
-  alone does not approve this layout. During the latest attached fast-mode vise
-  run, status still reported 0/692 while drawing operations were being applied;
-  the final script report correctly completed all 692 steps. Expose inexpensive
-  in-flight progress without adding a publication roundtrip for each step.
+Feature previews now render immutable Rust-generated snapshots in a separate,
+windowless Bevy world using the production scene systems. The Canvas2D projection
+and its geometry helper have been removed. Preview state has no access to the
+active document, session, selection or main camera. Native view/document caches,
+image dimensions and geometry are bounded; requests coalesce, time out and retire
+on close. Rendering waits for actual shader pipeline readiness. GPU resources are
+released when the final preview closes. The frontend displays native pixels and
+provides one-shot playback, reduced motion, orbit, Home/Fit, Previous/Next and
+Replay controls.
+
+Loading a source does not run it. Run in new design preserves existing tabs.
+During a run the Scripts dock reflects the owned live mode and speed; afterward
+it restores the launch preferences for the next run. Fast-mode progress travels
+with existing successful mutation receipts, without an extra status roundtrip
+per step. The final count is published after the final checks.
+
+Keyboard handling is shared with ordinary modeling controls. A focused companion
+handles its own keys before the viewport's capture listener. Escape dismisses the
+focused companion and restores focus; opening a source from a feature preview
+transfers focus immediately into Scripts. Cold catalog loading retains the
+opener's intent, while departure and Escape cancel it. Interactive preview
+controls use the existing semantic interface registry and product grouping.
+
+See the [presentation validation](presentation-readiness-2026-09-11.md) for the
+rebuilt binary, focused regressions, live checks and remaining platform gates.
+
+## Remaining learning and release work
+
+- **Review the teaching layout.** File → Open Script, the dock, ribbon previews
+  and playback bar now have live interaction checks. Presentation and design
+  review should still assess readability, chapter pacing and how clearly the
+  current part is explained. Functional validation does not settle aesthetics.
 - **Stage construction for teaching.** The grouped closing-view operation now
   exists. During long builds, retained sketches/datums and overlapping part
   definitions can still obscure the current sketch before assembly placement.
@@ -87,6 +102,7 @@ startup, inbox work, publication and delayed presentation controls.
   [flagship-examples.md](flagship-examples.md), not released models.
 
 Use focused regressions and live demonstrations to validate these changes.
-Do not add a new CI matrix or tool-coverage percentage gate. Resolve the concrete
-gaps before claiming the draft is ready; keep already reviewed export, drawing,
-exit and bench fixes in their existing PRs.
+Do not add a new CI matrix or tool-coverage percentage gate. Keep already reviewed
+export, drawing, exit and bench fixes in their existing PRs. Native chrome remains
+#29 and full web-shell retirement remains #38; an isolated native preview does
+not close either issue.

@@ -30,7 +30,7 @@ is the current source of truth for its order, approvals and CI. Its layers are:
 17. PR112: shared live material presets, retained replay output and camera completion.
 18. PR113: one grouped control for retained construction-reference visibility.
 19. PR114: truthful final playback counts and stable completed-run feedback.
-20. PR115: script and presentation ownership across whole-document replacement.
+20. PR115: script ownership across document replacement and inexpensive live progress.
 21. PR116: validation evidence and remaining release work.
 
 Each PR's diff is against the layer below it. GitHub applies main's review rules
@@ -39,9 +39,9 @@ does not prevent a ready prefix below it from landing. Use the native stack
 merge control; an ordinary feature-branch merge is not the release workflow.
 
 The recipe layers can be reviewed in parallel against their immediate parents;
-merge the approved prefix in order. PR99 remains draft for the interface and
-native-preview decisions documented in `script-interface-review.md`. Its status
-does not erase the independently reviewable geometry and recipe work above it.
+merge the approved prefix in order. PR99's native-preview and interaction
+corrections are documented in `script-interface-review.md`; broader learning and
+manufacturing acceptance remains distinct from implementation review.
 No approvals or repository protection rules are bypassed by using a stack.
 
 On September 10, GitHub rejected the asynchronous PR95–98 prefix merge for a
@@ -63,10 +63,15 @@ PR89 examples are superseded by the native recipes and Rust regressions in the
 collection, with their old branch/history preserved.
 
 The [September 10 correction evidence](review-corrections-2026-09-10.md)
-records the current rebuild, standalone PR108 checks, full live bench replay,
+records that correction's rebuild, standalone PR108 checks, full live bench replay,
 and the saved-file regression that exposed lost materials during temporary
 history rollback. Its shared history prerequisites live in PR108; PR115 adds
 the corresponding MCP inbox refresh.
+
+The [September 11 presentation validation](presentation-readiness-2026-09-11.md)
+adds isolated native Bevy previews, keyboard and focus regressions, live playback
+checks and fresh deterministic flagship comparisons. Formatting-only native
+changes are included in the code layer; PR116 contains documentation only.
 
 ## Keep developing from the current tip
 
