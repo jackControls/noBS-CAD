@@ -15,7 +15,7 @@ pub const RECIPES: &[Recipe] = &[
     Recipe {
         id: "d-screw-vise",
         source: include_str!("../../../examples/scripts/d-screw-vise.nbcad.jsonc"),
-        summary: "Build five printed vise parts with a real interrupted helical screw, circular wear nut, guided jaw and purchased M3 keeper retention. Includes assembly and part drawings; physical qualification remains required.",
+        summary: "Build a captured-slide vise with 100 mm jaws, 90 mm travel and a custom rounded 24 x 4 screw with a shallow print flat. Six printed parts and M5/M6 hardware envelopes make 30 bodies including optional mounts, with seven drawing sheets and per-part print layouts. Physical qualification remains required.",
         kind: "flagship-candidate",
         focus_operations: &["solid_external_thread", "assembly_create_joint"],
         preview: false,
@@ -23,7 +23,7 @@ pub const RECIPES: &[Recipe] = &[
     Recipe {
         id: "d-screw-vise-fit",
         source: include_str!("../../../examples/scripts/d-screw-vise-fit.nbcad.jsonc"),
-        summary: "Print a true half-section M20 screw and explicitly relieved custom female thread in their intended FDM orientations.",
+        summary: "Build four fit specimens: a shallow-flat custom rounded 24 x 4 screw, matching relieved female thread, and male/female captured guides. Qualify the actual print process before making the full vise.",
         kind: "manufacturing-coupon",
         focus_operations: &["solid_external_thread", "solid_hole"],
         preview: false,

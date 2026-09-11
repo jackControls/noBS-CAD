@@ -32,15 +32,19 @@ and how to keep working from the current capability tip.
   critical part dimensions and the hardware BOM. Actual motor fit, startup and
   loaded output remain physical tests.
 - **Functional screw vise:** an executable [D-screw design](d-screw-vise.md) with
-  five printed parts, purchased keeper retention and a coupled screw/slider loop.
-  It includes six native drawing sheets, a print layout and paired thread coupon.
-  The tests exercise 48 mm travel, insertion paths, dimensional edits and drawing
-  reassociation behavior. Printed fit, force, creep and wear remain unqualified.
+  six printed parts, 100 mm jaws and a captured 90 mm screw/slider stroke. The
+  custom rounded Ø24 × 4 mm screw has a shallow print flat and detachable thrust
+  fitting. M5/M6 hardware envelopes bring the assembly to 30 bodies including
+  optional mounts. Seven native drawing sheets, per-part print layouts and a
+  four-part thread/guide coupon accompany it. Checks target full travel,
+  assembly access, retained guides, feature edits and drawing reassociation;
+  results must identify the current source revision. Printed fit, force, creep
+  and wear remain unqualified.
 
 The two new recipes use constrained sketches, named datums, native features,
 reusable definitions and persistent joints. Materials, fit allowances, assembly
 order and calculations are retained with their sources. Blank replay comparisons
-are exact on the tested build. A dimension edit/restore may retriangulate the
+require exact agreement on the tested build. A dimension edit/restore may retriangulate the
 same surface: the vise test independently checks oriented surface boundaries,
 volume, bounds and topology rather than confusing buffer order with geometry.
 Existing issues #93 and #94 retain the unresolved drawing and occurrence-editing

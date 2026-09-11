@@ -1,220 +1,204 @@
 {
   "schema_version": 1,
   "kind": "manufacturing-candidate-validation-snapshot",
-  "date": "2026-09-10",
+  "status": "current-development-validation-in-progress",
+  "date": "2026-09-11",
+  "decision": "The redesigned vise is not release-ready. Native OCCT and MCP library suites plus focused construction/drawing edits pass; final full recipe acceptance, changed jaw/keeper slicing and rebuilt desktop verification remain pending. No physical qualification has been performed.",
+  "superseded_previous_record": {
+    "revision": "f88219998ceff13f8a7dfd5c1771267f0b290046",
+    "path": "docs/manufacturing/d-screw-vise.validation.json",
+    "reason": "Historical 60 mm / 48 mm-travel / five-printed-part replay evidence predates the mechanical redesign. It does not qualify the current six-part design."
+  },
   "platform": "Windows x64; native OCCT 7.9.3",
-  "engine_revision": "0cf567c0afcf9b1a00c030035ed90d63ed0e9178",
   "model_schema": 6,
   "source_hash_encoding": "UTF-8 with LF line endings",
+  "source_revision_note": "Frozen recipe source after gusset inset, keeper roof and through-access corrections; exact file hashes identify the candidate independently of later validation-only commits.",
   "sources": [
     {
       "path": "examples/scripts/d-screw-vise.nbcad.jsonc",
-      "sha256_utf8_lf": "fde8514488e0567bc5640f0db88464cc99f248f9c276d323326feb008d34a996"
+      "sha256_utf8_lf": "ba58ccab36d20bde481cea50c9f045dbced743a023175290107e3e052be7e713"
     },
     {
       "path": "examples/scripts/d-screw-vise-fit.nbcad.jsonc",
-      "sha256_utf8_lf": "0bc5385a248b7757581b0676d9ab45266a87da7796b3afc6dafc5039e71ceda1"
+      "sha256_utf8_lf": "431624c3f109e8d5ee3fc16111f3dbf153a20d8917c8bdbe6489155b31c47ef8"
     },
     {
       "path": "crates/recipes/examples/author_vise.rs",
-      "sha256_utf8_lf": "698d828f2c932a3d4654fcc8505fd41a442d291abd0587296e15f057cb825997"
+      "sha256_utf8_lf": "266c5bd7030679e5b685a5ed21e9d7ab64f09dd7b5eb8e71d2bd02dccd5abcd6"
     },
     {
       "path": "crates/recipes/examples/vise_drawings/mod.rs",
-      "sha256_utf8_lf": "083b2bb45a5f40ae88591a87aaa71cde38457ff9488637d9d4833cee8654cdf8"
+      "sha256_utf8_lf": "fbc7086302947d9b60345b7b2a6d75289e999da0a6ba4521583c6d46947f10a3"
     },
     {
-      "path": "mcp-server/tests/recipes.rs",
-      "sha256_utf8_lf": "10621969dcddcbc462a94b3776a8859f550b18eb95a556463fe810675bc68ebc"
+      "path": "mcp-server/tests/recipes/vise.rs",
+      "sha256_utf8_lf": "42dcae5bbb27ded0c7a9475677ab1c2a417f9f9545fd14bf039d97df1e75db58"
+    },
+    {
+      "path": "mcp-server/tests/recipes/vise_assembly.rs",
+      "sha256_utf8_lf": "6b949da7a46d69fd7e41af7af87ef7101559f139b43fa1095f9a4e07cb5af3db"
     }
   ],
-  "artifact_directory": "nobs-cad-fixed-demos/flagships-final-2026-09-10/d_screw_vise",
-  "validation": {
-    "command": "cargo test --locked --manifest-path mcp-server/Cargo.toml --test recipes d_screw_vise -- --nocapture --test-threads=1",
-    "artifact_option": "Set NBCAD_RECIPE_ARTIFACT_DIR to a separate output directory to retain native projects, meshes and drawings.",
-    "tests_passed": 2,
-    "elapsed_seconds": 320.23,
-    "first_replay_elapsed_ms": 70242,
-    "steps_completed": 692,
-    "final_checks_completed": 55,
-    "native_bodies": 9,
-    "printed_definitions": 5,
-    "component_definitions": 9,
-    "component_occurrences": 9,
-    "solved_occurrences": 9,
-    "fully_constrained_sketches": 43,
-    "datum_planes": 24,
-    "persistent_history_features": 112,
-    "drawing_sheets": 6,
-    "svg_and_dxf_exports": 12,
-    "independent_blank_replay": "Exact native model, scene, sketches, assembly, solved placement and drawing export values on this build.",
-    "native_reload": "Retained native geometry, sketches, assembly, drawings and solved placement verified in a fresh native process.",
-    "checks": [
-      "Actual jaw width 60→64→60 and guide width 4.8→5.2→4.8 edits; geometric volume and drawing changes verified.",
-      "After dimensional restore: equal oriented coplanar surface patches, welded vertex positions within 1e-6mm, equal bounds and volume. A triangulation diagonal can flip without moving the surface. Largest native metadata residual 3.410605131648481e-13.",
-      "Real M20x2.5 external helix, through-axis D flat and custom 20.5x2.5 relieved female thread; topology-changing thread edit rejects affected drawing references and exact restoration recovers exports.",
-      "Single driven Screw–Revolute–Slider loop, 48mm travel, forward/reverse/multiple turns and atomic travel-limit rejection.",
-      "Native sampled interference, late-travel paddle sweep, jaw lower-and-slide installation, intended Z8 support contact, keeper hardware insertion and positive cartridge cross-bolt capture.",
-      "Cartridge free gap at 0.38mm, blocked at 0.42mm, housing contact within ±1degree rocking; these are rigid geometric checks, not fastener or printed-part strength predictions.",
-      "Five closed positive-volume print meshes, separate print poses and XY spacing, approximately 203.6x166x52mm plate; two real paired thread coupons with exact replay/reload."
+  "artifact_directory": "nobs-cad-fixed-demos/demo-presentation-2026-09-11/vise-redesign",
+  "design": {
+    "printed_parts": 6,
+    "bodies_including_optional_hardware": 30,
+    "jaw_width_mm": 100,
+    "intended_travel_mm": 90,
+    "base_mm": [
+      230,
+      160,
+      14
+    ],
+    "thread": {
+      "form": "custom rounded 30-degree trapezoidal",
+      "nominal_diameter_mm": 24,
+      "single_start_lead_mm": 4,
+      "radial_depth_mm": 2,
+      "corner_radius_mm": 0.3,
+      "female_radial_relief_mm": 0.25,
+      "female_total_axial_relief_mm": 0.2,
+      "standard_tolerance_class": null
+    },
+    "keeper": {
+      "bearing_ear_angle_deg": 45,
+      "central_rear_opening_half_width_mm": 22,
+      "nominal_axial_seating_mm": 0.4,
+      "pin_slot_added_axial_travel_mm": 1,
+      "nominal_total_reversal_take_up_mm": 1.4,
+      "note": "Matching printed shoulders receive opening load after seating; the M5 pin retains vertical installation. Rigid nominal clearances are not a physical load-sharing or backlash measurement."
+    },
+    "hardware": "M5/M6 envelopes; four optional outboard mounting bolts included",
+    "native_drawing_sheets": 7,
+    "separate_print_plates": 6,
+    "fit_coupon_specimens": 4,
+    "design_load_case_N": 300,
+    "physical_load_rating": null
+  },
+  "focused_native_construction": {
+    "status": "passed",
+    "scope": "Native construction prefix with the revised six printed bodies and a focused jaw drawing; two read calls and two final assertions. A separate cold-restored edit probe changes and restores jaw width and guide-mouth width and verifies native exported dimension text and retained topology. This is not the full acceptance suite.",
+    "steps_completed": 751,
+    "final_checks_completed": 4,
+    "elapsed_ms": 23608,
+    "assertions": [
+      "Native scene errors are empty.",
+      "Exactly six constructed bodies are present."
+    ],
+    "edits": [
+      {
+        "sketch": "Moving jaw / 100 mm gripping face",
+        "values_mm": [
+          100,
+          104,
+          100
+        ]
+      },
+      {
+        "sketch": "Jaw dovetail left / profile clearance",
+        "values_mm": [
+          12.8,
+          13.2,
+          12.8
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path": "gusset-drawing-proof/diagnostic.nbcad.jsonc",
+        "sha256": "8ff8bc69ad8fdd355a4395b75e0683a150652268f0e5fe82ed39c139ceeff130",
+        "bytes": 373036
+      },
+      {
+        "path": "gusset-drawing-proof/run-1.json",
+        "sha256": "d77e5c506b2200cbfc00bb3f7f3b4c327e147997d5de12c8a4e9202b733c2992",
+        "bytes": 3883591
+      },
+      {
+        "path": "gusset-drawing-proof/model-1.json",
+        "sha256": "c90d28d5da85833543299b3d4db9f085bd9f9bd1422f440602ef3866a5a094ab",
+        "bytes": 396949
+      },
+      {
+        "path": "gusset-drawing-proof/edit-proof.json",
+        "sha256": "7f8813a57f2e5fb70bbd9b83803b3cbc769d423882d749db7e372553f3e3c99a",
+        "bytes": 1300
+      }
     ]
   },
-  "live_boundary": "The original headless lifecycle snapshot remains identified above. The attached replay below qualifies the integrated material, output, camera and visibility fixes; later presentation/error-recovery changes have separate focused regressions.",
+  "slicer_validation": {
+    "status": "changed-jaw-and-keeper-revalidation-pending",
+    "application": "Bambu Studio 02.08.02.61 standard CLI",
+    "machine": "Bambu Lab X2D 0.4 nozzle",
+    "process": "0.20mm Standard; two walls; 15% infill",
+    "filament": "Bambu PETG HF",
+    "bed": "Textured PEI Plate",
+    "support_enabled": false,
+    "scope_note": "Isolated settings/data/output; authored orientations retained. No printer or existing GUI document operated. These process settings are toolpath probes, not a structural print recommendation.",
+    "prior_revision_finding": {
+      "status": "rejected",
+      "region": "Jaw keeper-pocket rear wall at print Z32.4 mm",
+      "actual_bridge_move_mm": 62.244,
+      "warning": "Floating cantilever",
+      "evidence": {
+        "path": "bambu-cli/parts/jaw/layer-review.json",
+        "sha256": "7305451219e4d3683058ea9d8e4e45e2c4bb01da3ed241d6d7fdf30cb83c56d6",
+        "bytes": 6712
+      },
+      "notes": "bambu-cli/parts/validation-notes.md",
+      "correction": "Central rear opening and 45-degree side shoulders; mating keeper ears with axial seating slot. The new geometry still requires actual slicing."
+    },
+    "bed_check_required": "First layer must be nonempty and all model/brim extrusion envelopes must fit the selected extruder printable polygon and exclusion areas; bounding-box dimensions alone are insufficient.",
+    "artifacts": []
+  },
+  "full_native_acceptance": {
+    "status": "pending",
+    "command": "cargo test --locked --manifest-path mcp-server/Cargo.toml --test recipes d_screw_vise -- --nocapture --test-threads=1",
+    "artifact_option": "Set NBCAD_RECIPE_ARTIFACT_DIR to retain native projects, meshes and drawings."
+  },
+  "rebuilt_desktop_validation": {
+    "status": "pending",
+    "required": "Final source build, attached native replay, model/assembly comparison, saved project and native print/drawing outputs."
+  },
   "physical_qualification": {
     "status": "not performed",
     "load_rating": null,
     "remaining": [
-      "Print the paired coupon in the intended orientation and actual material/profile.",
-      "Verify purchased hardware dimensions and accessible assembly.",
-      "Measure fit, backlash, turning effort, clamp force, sustained-load creep and repeated-use wear.",
-      "Requalify material and manufacturing-process variants separately."
+      "Print the thread and guide coupon with the intended material and process.",
+      "Verify supplier hardware dimensions and actual assembly/maintenance access.",
+      "Measure total reversal travel, turning effort, guide rocking, off-centre jaw motion and retention.",
+      "Measure clamp force, sustained-load deformation/creep and repeated-use wear.",
+      "Qualify each material/manufacturing variant separately."
     ]
   },
-  "artifacts": [
+  "engine_revisions": {
+    "native_geometry": "e9efe0970f9a48dfc2fa0a198a9a50ef699e636e",
+    "mcp_file_completion": "76b93a63d21b8b3615010ee65d1cdf8b2aa29185"
+  },
+  "engine_regression_suites": [
     {
-      "file": "d-screw-vise-fit.3mf",
-      "bytes": 34302,
-      "sha256": "d873e2287e1a42416be483536a937e036acbe97aa4b5cdb4ef854f54e24b0f38"
-    },
-    {
-      "file": "d-screw-vise-fit.nbcad",
-      "bytes": 3146,
-      "sha256": "3f5c026d95c5ee11a04b06b51ad5b62d82db7264b6f80e223536bfab495849cf"
-    },
-    {
-      "file": "d-screw-vise-print.3mf",
-      "bytes": 103960,
-      "sha256": "ba0606d6cebd05a69be1f046ad833d10a32a8ec7186aa4368f2e51556b647bb0"
-    },
-    {
-      "file": "d-screw-vise-print.nbcad",
-      "bytes": 13600,
-      "sha256": "d1485c6926939c8df3f7d7413f074d283de6f3072fd80d3228175bca2d60a85b"
-    },
-    {
-      "file": "d-screw-vise.nbcad",
-      "bytes": 20440,
-      "sha256": "a3a63d14a048ba8a96b8317b2bc743888fca58d7b267c1fc07fb4d3c9fb82114"
-    },
-    {
-      "file": "vise_assembly_dxf.dxf",
-      "bytes": 277931,
-      "sha256": "1b5b75c69a58d963465a4a582f45718f2026568af989b851a86c5e2948fa704c"
-    },
-    {
-      "file": "vise_assembly_svg.png",
-      "bytes": 1124867,
-      "sha256": "c7785f913c34de85975cbda2e66e948cff9365bb8ac7ca59d47ff8c54d203b70"
-    },
-    {
-      "file": "vise_assembly_svg.svg",
-      "bytes": 371211,
-      "sha256": "0c9f8eff3b5e4a9f5b206a3a76c2641e92c8f8349b23a8465849ff41e0dccc65"
-    },
-    {
-      "file": "vise_frame_dxf.dxf",
-      "bytes": 64116,
-      "sha256": "4180c893ba86f72e110e10222ed1262453ed9c8dfaf0a00bdcd06a43a48bf6fe"
-    },
-    {
-      "file": "vise_frame_svg.png",
-      "bytes": 450697,
-      "sha256": "dbe659f5a768379e791c1061ae495167468b376dcafb646ce05d62d853087e25"
-    },
-    {
-      "file": "vise_frame_svg.svg",
-      "bytes": 48689,
-      "sha256": "93d829ae0f10b2c0fcf7455f73ee0d0cdbf0948e2aff2dcd04d4519b70f304a0"
-    },
-    {
-      "file": "vise_jaw_dxf.dxf",
-      "bytes": 67193,
-      "sha256": "936f7808f29b16bbbe5bbee0ca995e83a71e09bb746b185ca055866fcb619acf"
-    },
-    {
-      "file": "vise_jaw_svg.png",
-      "bytes": 433870,
-      "sha256": "e39924267ff3eaf5ec86e99d86c855cf948cd6c8d9d5a81d5b55c110bb0efda7"
-    },
-    {
-      "file": "vise_jaw_svg.svg",
-      "bytes": 40506,
-      "sha256": "db6c3de68346a3bf86638ae1a9e35d7b3f9b2a64dd0673839785ea551ed45828"
-    },
-    {
-      "file": "vise_keeper_dxf.dxf",
-      "bytes": 35490,
-      "sha256": "23a0f084d498ce9417ee4acb641826c8e571eef007000991e7866cb17a034649"
-    },
-    {
-      "file": "vise_keeper_svg.png",
-      "bytes": 398066,
-      "sha256": "ddb091d42945904ed5f09ee758c68e418bec2d310eaae82a25ee5203b754a6d1"
-    },
-    {
-      "file": "vise_keeper_svg.svg",
-      "bytes": 22381,
-      "sha256": "cbcad014973a7c6470143813b8882211d687529a964b3f9841b3e1daba65b376"
-    },
-    {
-      "file": "vise_nut_dxf.dxf",
-      "bytes": 77826,
-      "sha256": "e7c55f4b4d578e73efb6708210ebefd6e9559c7ba212a557560f4ef9e4fce2d8"
-    },
-    {
-      "file": "vise_nut_svg.png",
-      "bytes": 559229,
-      "sha256": "0d831b4ccb0ea9bf5ccb732469b1f8568f80d4de6fef360144f71942c388b197"
-    },
-    {
-      "file": "vise_nut_svg.svg",
-      "bytes": 63177,
-      "sha256": "e654ed8772f99beaf72988dffe87f772934d84f2d852c9d1de11e4e2d5c4f53d"
-    },
-    {
-      "file": "vise_screw_dxf.dxf",
-      "bytes": 337686,
-      "sha256": "67bf178f3bf236008f5e684ab991ffad140c0f3c69f0461038f39a490388c97e"
-    },
-    {
-      "file": "vise_screw_svg.png",
-      "bytes": 636065,
-      "sha256": "b90ab3a757d4344e4227f36a2b6f7381e897bcb15b1daaa40939c4e77509a696"
-    },
-    {
-      "file": "vise_screw_svg.svg",
-      "bytes": 357032,
-      "sha256": "ec1aa283348e638d451795b4200585b908b02d4e8d0e21dbafbe6154a0e6a109"
-    }
-  ],
-  "live_validation": {
-    "engine_revision": "6f7e5e6bcd0c55257407c753ddc64c9a59e7dcc6",
-    "recipe": "d-screw-vise",
-    "steps_completed": 692,
-    "final_checks_completed": 55,
-    "elapsed_ms": 237208,
-    "exact_comparison": "PASS: native model, scene, sketches and solved assembly matched the independent headless reference before Save As.",
-    "camera_completion": "The final authored isometric request returned after leaving Drawings, mounting the actual viewport and completing its animation.",
-    "save": "The Rust runner prepared output directories, retained the report and model, and saved the editable native project.",
-    "construction_visibility": {
-      "hidden_sketches": 43,
-      "hidden_datums": 24,
-      "verification": "Saved clean copy differs only in reference visibility and the intentional Save As document name; body visibility and every other model field are unchanged."
-    },
-    "artifacts": [
-      {
-        "path": "live-final/vise/run-1.json",
-        "sha256": "2fb640c80786b178fa508fa1980cb219db3324ba74dc7dc6733483763865ecc5"
-      },
-      {
-        "path": "live-final/vise/d-screw-vise-live.nbcad",
-        "sha256": "f712d5f3af6191bc517d7d84d984fbea8375fee8b7144540c7630f4c79f15485"
-      },
-      {
-        "path": "live-final/vise/d-screw-vise-clean.nbcad",
-        "sha256": "13dfe4d599dd0210aa704ee9e739bb865b7e9652d332fbab76b22132b9108c5e"
+      "suite": "Native OCCT regressions",
+      "status": "passed",
+      "tests_passed": 39,
+      "tests_failed": 0,
+      "elapsed_seconds": 176.48,
+      "artifact": {
+        "path": "native-39-final.log",
+        "sha256": "002a1b1b1d05496293f0241973b29a482c838301f9b93c9e17b0383506189727",
+        "bytes": 11145
       }
-    ],
-    "physical_qualification": "Not performed; manufacturing notes retain print/fit, material-specific load/wear and generator-output requirements."
-  }
+    },
+    {
+      "suite": "MCP server library regressions",
+      "status": "passed",
+      "tests_passed": 167,
+      "tests_failed": 0,
+      "elapsed_seconds": 123.01,
+      "artifact": {
+        "path": "mcp-complete-final.log",
+        "sha256": "6e3c26c69ca5b1d84156b058ad27d24af81133c4ffbce09ce73b2f01df1d48b7",
+        "bytes": 14766
+      }
+    }
+  ]
 }

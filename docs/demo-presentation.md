@@ -1,45 +1,41 @@
 # Demo presentation review
 
-The next development pass focuses on the demonstration parts, their teaching
-sequence and the README. Work starts above PR116 at `f882199`; existing review
-layers stay unchanged. The presentation follow-up remains draft while we improve
-and validate its recipes and media.
+This development pass improves the demonstration parts, their teaching sequence
+and the README. It starts above PR116 at `f882199`; existing review layers stay
+unchanged. The presentation follow-up remains draft. The vise has undergone a
+mechanical redesign and is still in validation, not ready for release or
+fabrication qualification.
 
 ## What we actually have
 
 The shared [Rust catalog](../crates/recipes/src/lib.rs) contains **10 runnable
 JSONC recipes**: three flagship candidates, four feature lessons, one assembly
 lesson and two fit-coupon suites. That is **eight design demonstrations plus two
-coupon recipes**. The coupon recipes construct six specimens in total.
+coupon recipes**. The coupon recipes construct **eight specimens in total**:
+four vise thread/guide specimens and four turbine fit specimens.
 
 The app's Scripts list and MCP recipe discovery use this same collection. All
-ten are committed construction sources, not design briefs. The
+ten have tracked construction sources, not just design briefs. The
 [recipe library](../examples/scripts/README.md) links every source. Only
 `fillet-basics` currently provides an isolated miniature preview, with two
 captioned scene frames. The other nine can run as complete designs.
 
-This September 11 inventory was checked against the selected native MCP
-binary's `cad_interface {"action":"recipes"}` response as well as source.
-Counts below are authored script steps and final checks. Steps include notes,
-camera directions, bindings and assertions as well as modeling commands;
-they are not a count of kernel operations or a runtime estimate.
+The recipe inventory comes from the shared catalog; the earlier September 11
+MCP discovery check also returned all ten IDs. A rebuilt binary is needed to
+include subsequent source changes. Counts retained below describe the recorded
+bench, turbine and short-lesson revisions. Steps include notes, camera
+directions, bindings and assertions as well as modeling commands; they are not
+a count of kernel operations or a runtime estimate. Vise and vise-coupon counts
+are omitted while their author and generated sources are still changing.
 
-## Flagships, ranked for a full teaching demonstration
+## Flagship presentation order
 
 This is an editorial ranking of clarity, useful design decisions, visible
 payoff and audience attention cost. It is not a fabrication or safety rating.
 The review uses current sources and recorded validation; it does not claim a
 new visual acceptance run of every recipe.
 
-1. **[D-screw vise](../examples/scripts/d-screw-vise.nbcad.jsonc)** —
-   692 steps, 55 final checks. The strongest complete teaching story: five
-   printed parts, a real interrupted helical screw, a guided jaw, a replaceable
-   nut, retention, print layout and six drawing sheets. It has native evidence
-   for 48 mm of coupled jaw travel. The presentation currently commands only
-   the home position; it does not show that travel. First improve part contrast
-   and show a close, solved drive-and-return sequence through the existing
-   joints. Fit, clamp force, creep and wear remain physically unqualified.
-2. **[Crown garden bench](../examples/scripts/garden-bench.nbcad.jsonc)** —
+1. **[Crown garden bench](../examples/scripts/garden-bench.nbcad.jsonc)** —
    595 steps, 47 final checks. The best current README hero: a recognizable,
    attractive object with contrasting timber and frame, crowned pickets,
    rounded arms, referenced joinery and repeated components. Its script already
@@ -47,7 +43,7 @@ new visual acceptance run of every recipe.
    component-context editing remain incomplete; timber, fasteners, comfort and
    structural performance need qualification. Preserve its accepted design
    milestone while improving camera framing and the explanation of its joinery.
-3. **[Vertical-axis turbine](../examples/scripts/vertical-axis-turbine.nbcad.jsonc)** —
+2. **[Vertical-axis turbine](../examples/scripts/vertical-axis-turbine.nbcad.jsonc)** —
    1,622 steps, 11 final checks. The strongest technical finale: staggered
    reused rotor stages, bearings, a generator cartridge, involute gears, a 4:1
    relation and twelve drawing sheets. It has the highest construction and
@@ -56,9 +52,28 @@ new visual acceptance run of every recipe.
    then restore the guard and home state. Generator fit, startup and loaded
    electrical output remain unmeasured. Give it a concise introduction before
    offering the full construction replay.
+3. **[Captured-slide D-screw vise](../examples/scripts/d-screw-vise.nbcad.jsonc)** —
+   **Mechanical redesign in validation.** The September 11 review found blocked
+   screw installation, mounting hardware in the jaw path, poor grip clearance
+   and unqualified guide capture in the preceding design. The replacement has
+   six printed parts, 100 mm gripping faces, 90 mm intended jaw travel, captured
+   dovetail guides and a custom rounded Ø24 × 4 mm screw with a shallow print
+   flat. A detachable thrust fitting provides assembly access. Simplified M5/M6
+   hardware envelopes bring it to 30 bodies including optional mounts; seven
+   native drawing sheets and individual print plates accompany it. See the
+   [mechanical design and assembly sequence](d-screw-vise.md).
 
-Prior full attached runs took approximately 4 minutes 15 seconds for the vise,
-2 minutes 56 seconds for the bench and 14 minutes 21 seconds for the turbine.
+   The revised assembly, mounting, capture and export checks must pass on the
+   final generated source before the vise returns to the presentation shortlist.
+   A focused native regression for the finite-thread end-cap export has passed;
+   full regenerated-recipe and rebuilt-desktop acceptance remain pending. Show
+   a solved drive-and-return sequence only after validating its physical
+   clearances, and restore the reference state afterward. Fit, clamp force,
+   creep and wear remain physically unqualified.
+
+Prior full attached runs took approximately 2 minutes 56 seconds for the bench
+and 14 minutes 21 seconds for the turbine. The preceding vise design took about
+4 minutes 15 seconds; that result does not describe the redesigned recipe.
 These are different unoptimized Windows validation runs, not comparable release
 benchmarks or promised presentation durations. See the
 [bench validation record](presentation-readiness-2026-09-11.md) and the
@@ -66,8 +81,9 @@ benchmarks or promised presentation durations. See the
 The [vise](manufacturing/d-screw-vise.validation.json) and
 [turbine](manufacturing/vertical-axis-turbine.validation.json) manifests also retain
 earlier runs and their separate timings.
-All three passed independent native replay comparisons and recorded live
-construction checks; none has measured physical performance qualification.
+Those earlier revisions passed independent native replay comparisons and
+recorded live construction checks. They do not establish acceptance of the
+redesigned vise, and none has measured physical performance qualification.
 
 ## Short lessons, ranked for a first learning session
 
@@ -97,9 +113,14 @@ construction checks; none has measured physical performance qualification.
 ## Fit-coupon demonstrations
 
 1. **[D-screw fit coupon](../examples/scripts/d-screw-vise-fit.nbcad.jsonc)** —
-   39 steps, 7 checks; two specimens. Useful beside the vise to explain why a
-   printable thread needs an actual fit trial. Helical construction can be
-   expensive despite the small step count.
+   Four specimens: a 40 mm shallow-flat male screw, matching female thread with
+   the full 28 mm engagement, and male/female captured guides. They retain the
+   redesigned vise's actual custom rounded thread and guide profiles. Print in
+   their authored poses with the intended process, then measure turning effort,
+   sliding fit and play before making the full vise. A zero-support toolpath
+   check for the coupon is separate from a successful physical print and from
+   qualification of the six full-size parts. Helical construction remains more
+   expensive than the small part count suggests.
 2. **[Turbine fit coupons](../examples/scripts/turbine-fit-coupons.nbcad.jsonc)** —
    494 steps, 7 checks; four specimens. Useful manufacturing material for shaft,
    bearing, motor-case and pinion fits. It is a substantial construction
@@ -146,15 +167,23 @@ caption or visibility change must not silently redefine the deterministic
 reference. Intentional modeling changes need corresponding reviewed evidence.
 Keep physical fabrication and electrical claims separate from software checks.
 
-## Ready to continue
+## Current validation boundary
 
-The new worktree starts from the latest validated integration, with the selected
-desktop's production sources matching that baseline. The selected Rust MCP
-server returned all ten recipes. As a fresh readiness check, the Rust xtask
-runner rebuilt the fillet lesson in two independent headless processes: each
-passed 17 steps and 10 final checks, with identical exported model, sketches,
-assembly solution and geometry. No CAD window was opened for this review.
+At the start of this follow-up, the selected Rust MCP server returned all ten
+recipes. The Rust xtask runner also rebuilt the fillet lesson in two independent
+headless processes: each passed 17 steps and 10 final checks, with identical
+exported model, sketches, assembly solution and geometry. That baseline check
+did not open a CAD window and does not validate the later vise redesign.
 
-This first follow-up changes documentation only. Model improvements, motion
-sequences, catalog presentation and new captured media remain work in the
-draft; the README should not imply those improvements are already delivered.
+The draft now includes the mechanical redesign, custom native thread support,
+editable thread parameters and expanded acceptance checks as well as the README
+work. Focused checks do not replace a complete run of the final source. Record
+the final source and build hashes, independent replay, save/reopen, per-part
+print exports, actual sliced layers and rebuilt-desktop presentation before
+claiming those boundaries pass. The
+[vise validation record](manufacturing/d-screw-vise.validation.json) owns the
+dated results; historical records remain historical.
+
+Mechanism presentation, coupon labels and fresh media remain follow-up work.
+The README must distinguish implemented development capabilities from pending
+acceptance and physical qualification.

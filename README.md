@@ -55,10 +55,13 @@ Three larger designs are also runnable from **Scripts**:
 - **[Vertical-axis turbine](examples/scripts/vertical-axis-turbine.nbcad.jsonc):**
   build two Savonius rotor stages, a constrained 4:1 generator drive, and native
   part and assembly drawings.
-- **[D-screw vise](examples/scripts/d-screw-vise.nbcad.jsonc):** build five printed
-  parts, a screw-driven jaw, six drawing sheets, and a separate print layout.
+- **[Captured-slide D-screw vise](examples/scripts/d-screw-vise.nbcad.jsonc):**
+  build six printed parts with 100 mm gripping faces, 90 mm jaw travel and a
+  custom rounded Ø24 × 4 mm screw. Includes seven drawing sheets, a print layout
+  for each part and simplified M5/M6 hardware; 30 bodies with optional mounts.
 
-These are development candidates with automated geometry and replay checks.
+These development candidates include automated geometry and replay checks;
+validation evidence must match the current source revision.
 Physical fit, load, wear, and durability qualification remain open; generator
 output still needs measurement. None has a working-load rating, and the bench's
 full drawing package is unfinished. See [flagship status](docs/flagship-examples.md)
@@ -107,7 +110,8 @@ The current application includes:
   construction geometry, patterns, trim/extend, and fillet/chamfer tools;
 - extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
   split-body, mirror, pattern, and construction-plane features;
-- modeled hole threads for common ISO metric and Unified standards;
+- modeled internal and external threads for common ISO metric and Unified
+  standards, plus editable custom rounded trapezoidal profiles in the native app;
 - live feature previews, direct viewport manipulators, body/component
   Move/Copy, stable topology references, and an editable design history;
 - ISO and ANSI/ASME drawing sheets with aligned projected and derived views,

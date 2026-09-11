@@ -1,9 +1,132 @@
 //! Author the readable native command source; this does not create geometry.
 //! Run from the repository root: cargo run -p nbcad-recipes --example author_vise
 //! Geometry is produced only when the ordinary Rust MCP interpreter replays it.
+#![recursion_limit = "256"]
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 mod vise_drawings;
+
+// All manufacturing mates derive from this one authored parameter set.
+const D: Design = Design {
+    deck: 14.,
+    frame_length: 230.,
+    frame_width: 160.,
+    jaw_width: 100.,
+    carriage_width: 110.,
+    jaw_top: 80.,
+    opening: 90.,
+    fixed_face: 205.,
+    carriage_length: 72.,
+    jaw_web: 38.,
+    axis: 50.,
+    thread_diameter: 24.,
+    lead: 4.,
+    thread_depth: 2.,
+    thread_corner: 0.3,
+    radial_relief: 0.25,
+    axial_relief: 0.2,
+    flat_below_axis: 7.,
+    guide_center: 34.,
+    guide_base: 12.,
+    guide_head: 28.,
+    guide_height: 8.,
+    guide_clearance: 0.4,
+    bridge_start: 10.,
+    bridge_end: 38.,
+    bridge_key_depth: 6.,
+    bridge_foot_inner: 50.,
+    bridge_foot_outer: 78.,
+    bridge_bolt_y: 70.,
+    fit_clearance: 0.4,
+    root_radius: 8.,
+    keeper_seat_gap: 0.4,
+    keeper_ear_inner: 22.,
+    keeper_pin_extension: 1.,
+    design_force: 300.,
+};
+
+#[derive(Clone, Copy)]
+struct Design {
+    deck: f64,
+    frame_length: f64,
+    frame_width: f64,
+    jaw_width: f64,
+    carriage_width: f64,
+    jaw_top: f64,
+    opening: f64,
+    fixed_face: f64,
+    carriage_length: f64,
+    jaw_web: f64,
+    axis: f64,
+    thread_diameter: f64,
+    lead: f64,
+    thread_depth: f64,
+    thread_corner: f64,
+    radial_relief: f64,
+    axial_relief: f64,
+    flat_below_axis: f64,
+    guide_center: f64,
+    guide_base: f64,
+    guide_head: f64,
+    guide_height: f64,
+    guide_clearance: f64,
+    bridge_start: f64,
+    bridge_end: f64,
+    bridge_key_depth: f64,
+    bridge_foot_inner: f64,
+    bridge_foot_outer: f64,
+    bridge_bolt_y: f64,
+    fit_clearance: f64,
+    root_radius: f64,
+    keeper_seat_gap: f64,
+    keeper_ear_inner: f64,
+    keeper_pin_extension: f64,
+    design_force: f64,
+}
+impl Design {
+    fn home(self) -> f64 {
+        self.fixed_face - self.opening
+    }
+    fn rear(self) -> f64 {
+        self.home() - self.carriage_length
+    }
+    fn wall(self) -> f64 {
+        self.home() - self.jaw_web
+    }
+    fn flat(self) -> f64 {
+        self.axis - self.flat_below_axis
+    }
+    fn stub_start(self) -> f64 {
+        self.home() - 36.
+    }
+    fn stub_end(self) -> f64 {
+        self.home() - 18.
+    }
+    fn head_front(self) -> f64 {
+        self.home() - 10.
+    }
+    fn keeper_back(self) -> f64 {
+        self.home() - 32.2
+    }
+    fn keeper_front(self) -> f64 {
+        self.home() - 20.2
+    }
+    fn pin_x(self) -> f64 {
+        (self.keeper_back() + self.keeper_front()) / 2.
+    }
+    fn jaw_keeper_seat_x(self, abs_y: f64) -> f64 {
+        self.keeper_back() - (30. + self.fit_clearance - abs_y)
+    }
+    fn keeper_ear_back(self, abs_y: f64) -> f64 {
+        self.jaw_keeper_seat_x(abs_y) + self.keeper_seat_gap
+    }
+    fn bridge_top(self) -> f64 {
+        self.deck + 25.
+    }
+    fn nut_support_top(self) -> f64 {
+        self.axis - 8. / 3_f64.sqrt() - 0.1
+    }
+}
 
 fn reference(name: &str, pointer: &str) -> Value {
     json!({"$ref":name,"pointer":pointer})
@@ -174,7 +297,7 @@ impl Author {
         part: &str,
     ) {
         self.begin(id, "yz", start);
-        self.circle(id, [0., 28.], 2. * radius);
+        self.circle(id, [0., D.axis], 2. * radius);
         self.extrude(id, end - start, operation, part);
     }
     fn cylinder_z(
@@ -191,59 +314,6 @@ impl Author {
         self.circle(id, center, 2. * radius);
         self.extrude(id, end - start, operation, part);
     }
-    fn cartridge_circle(
-        &mut self,
-        id: &str,
-        start: f64,
-        end: f64,
-        radius: f64,
-        operation: &str,
-        part: &str,
-    ) {
-        self.begin(id, "yz", start);
-        self.circle(id, [12., 42.], 2. * radius);
-        self.extrude(id, end - start, operation, part);
-    }
-    fn cartridge_hexagon(
-        &mut self,
-        id: &str,
-        start: f64,
-        end: f64,
-        across_flats: f64,
-        operation: &str,
-        part: &str,
-    ) {
-        self.begin(id, "yz", start);
-        let radius = across_flats / 3_f64.sqrt();
-        let vertices: Vec<_> = (0..6)
-            .map(|i| {
-                let angle = (i as f64 * 60.).to_radians();
-                [12. + radius * angle.cos(), 42. + radius * angle.sin()]
-            })
-            .collect();
-        self.equal_edge_profile(id, &vertices, radius);
-        self.extrude(id, end - start, operation, part);
-    }
-    fn hexagon_z(
-        &mut self,
-        id: &str,
-        start: f64,
-        end: f64,
-        across_flats: f64,
-        operation: &str,
-        part: &str,
-    ) {
-        self.begin(id, "xy", start);
-        let radius = across_flats / 3_f64.sqrt();
-        let vertices: Vec<_> = (0..6)
-            .map(|i| {
-                let angle = (i as f64 * 60.).to_radians();
-                [69. + radius * angle.cos(), 12. + radius * angle.sin()]
-            })
-            .collect();
-        self.equal_edge_profile(id, &vertices, radius);
-        self.extrude(id, end - start, operation, part);
-    }
     // Locate the first vertex, drive the chain edges from d1, and close the
     // final edge by coincidence. Chain from the returned endpoint rather than
     // repeating rounded coordinates, and suppress extra inferred relations.
@@ -257,10 +327,12 @@ impl Author {
                 arguments["from"] = json!({"$select":{"from":reference(&format!("{id}_edge_{}",i-1),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":"/end"}});
             }
             if i < count - 1 {
-                arguments["angle_deg"] =
-                    json!((to[1] - from[1]).atan2(to[0] - from[0]).to_degrees());
+                arguments["angle_text"] = json!(format!(
+                    "{:.15}",
+                    (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
+                ));
                 if i == 0 {
-                    arguments["length_mm"] = json!(side_length);
+                    arguments["length_text"] = json!(format!("{side_length:.15}"));
                 } else {
                     arguments["length_text"] = json!("d1");
                 }
@@ -271,16 +343,12 @@ impl Author {
                 "sketch_add_line_locked",
                 arguments,
             );
+            if i == 0 {
+                self.call(&format!("{id}_locate"),"sketch/constrain","sketch_add_constraint",json!({"type":"fix","entity":json!({"$select":{"from":reference(&format!("{id}_edge_0"),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":"/start_id"}})}));
+            }
         }
-        self.call(
-            &format!("{id}_snapshot"),
-            "sketch/draw",
-            "sketch_active",
-            json!({}),
-        );
         let point_on_edge = |edge: usize, endpoint: &str| json!({"$select":{"from":reference(&format!("{id}_edge_{edge}"),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":endpoint}});
         self.call(&format!("{id}_close"),"sketch/constrain","sketch_add_constraint",json!({"type":"coincident","a":point_on_edge(count-1,"/end_id"),"b":point_on_edge(0,"/start_id")}));
-        self.call(&format!("{id}_locate"),"sketch/constrain","sketch_add_constraint",json!({"type":"fix","entity":json!({"$select":{"from":reference(&format!("{id}_snapshot"),""),"path":"/entities","where":{"/kind":"point"},"take":"first","pointer":"/id"}})}));
     }
     fn show(&mut self, part: &str) {
         self.steps.push(
@@ -320,10 +388,11 @@ impl Author {
     fn joint(&mut self, id: &str, kind: &str, a: &str, b: &str, origin: [f64; 3], limits: Value) {
         let ca = self.connector(a, origin);
         let cb = self.connector(b, origin);
-        // Male cylinder: start x=61.8, axis -X, radial basis +Y. Female:
-        // start x=12-0.0001, axis +X, radial basis +Z. Register a male crest
-        // with a female groove, including the cutter's axial start allowance.
-        let phase = (90. + 180. + (61.8_f64 - 11.9999) / 2.5 * 360.).rem_euclid(360.);
+        // The male side starts at the stub, axis -X, radial basis +Y;
+        // the female starts at the bridge rear, axis +X, radial basis +Z.
+        // Register crest/groove phase including the cutter start allowance.
+        let phase =
+            (270. + (D.stub_start() - (D.bridge_start - 0.0001)) / D.lead * 360.).rem_euclid(360.);
         let home_twist = match id {
             "screw_drive" => phase,
             "thrust_retention" => -phase,
@@ -332,571 +401,248 @@ impl Author {
         self.call(id,"assembly/joints","assembly_create_joint",json!({
             "name":id,"kind":kind,"connector_a":ca,"connector_b":cb,"flipped":true,
             "angle_offset_deg":0,"linear_offset_mm":0,"linear_limits":limits,
-            "advanced":{"screw_pitch_mm_per_revolution":2.5,
+            "advanced":{"screw_pitch_mm_per_revolution":D.lead,
                 "connector_a_twist_deg":home_twist,
                 "connector_a_occurrence_id":reference(&format!("{a}_occurrence"),""),"connector_b_occurrence_id":reference(&format!("{b}_occurrence"),"")}
         }));
     }
 }
-fn main() {
-    let mut a = Author {
-        steps: Vec::new(),
-        planes: BTreeMap::new(),
-        bodies: BTreeMap::new(),
-        sketches: 0,
-    };
-    a.note("A small functional vise", "Five printable parts: frame, guided jaw, round threaded wear nut, one-piece D screw and sliding keeper. PETG is the provisional indoor material. Geometry checks do not establish a physical clamping-force rating.");
-    a.call(
-        "name",
-        "document/files",
-        "cad_set_document_name",
-        json!({"name":"D-screw vise / PETG design candidate"}),
-    );
-    a.note("Frame: base and load path", "The 150 × 70 × 8 base connects a broad fixed jaw to a captive nut housing. Four rectangular slots allow fixture screws to be positioned without making the example dependent on a particular bench.");
-    a.box_shape(
-        "Frame base / 150 by 70",
-        [0., -35., 0.],
-        [150., 35., 8.],
-        "new_body",
-        "frame",
-    );
-    for (i, x) in [42., 104.].into_iter().enumerate() {
-        for (j, y) in [-30., 24.].into_iter().enumerate() {
-            a.box_shape(
-                &format!("Mount slot {i}-{j} / 18 by 6"),
-                [x, y, 0.],
-                [x + 18., y + 6., 8.],
-                "cut",
-                "frame",
+
+impl Author {
+    fn fresh() -> Self {
+        Self {
+            steps: Vec::new(),
+            planes: BTreeMap::new(),
+            bodies: BTreeMap::new(),
+            sketches: 0,
+        }
+    }
+    fn refresh_body(&mut self, id: &str, part: &str) {
+        self.bodies.insert(
+            part.into(),
+            select(
+                reference(id, ""),
+                "/scene/bodies",
+                json!({"/id":self.body_id(part)}),
+                "",
+            ),
+        );
+    }
+    fn polygon(&mut self, id: &str, vertices: &[[f64; 2]]) {
+        for i in 0..vertices.len() {
+            let from = vertices[i];
+            let to = vertices[(i + 1) % vertices.len()];
+            let mut args = json!({"from":{"x":from[0],"y":from[1]},"to_hint":{"x":to[0],"y":to[1]},"ctrl_held":true});
+            if i > 0 {
+                args["from"] = json!({"$select":{"from":reference(&format!("{id}_edge_{}",i-1),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":"/end"}});
+            }
+            if i + 1 < vertices.len() {
+                // The numeric UI lock is display-rounded. Expression text keeps
+                // the authored precision while retaining editable dimensions.
+                args["angle_text"] = json!(format!(
+                    "{:.15}",
+                    (to[1] - from[1]).atan2(to[0] - from[0]).to_degrees()
+                ));
+                args["length_text"] =
+                    json!(format!("{:.15}", (to[0] - from[0]).hypot(to[1] - from[1])));
+            }
+            self.call(
+                &format!("{id}_edge_{i}"),
+                "sketch/draw",
+                "sketch_add_line_locked",
+                args,
             );
+            if i == 0 {
+                self.call(&format!("{id}_locate"),"sketch/constrain","sketch_add_constraint",json!({"type":"fix","entity":json!({"$select":{"from":reference(&format!("{id}_edge_0"),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":"/start_id"}})}));
+            }
         }
+        let endpoint = |edge: usize, p: &str| json!({"$select":{"from":reference(&format!("{id}_edge_{edge}"),"/sketch"),"path":"/entities","where":{"/kind":"line"},"take":"last","pointer":p}});
+        self.call(&format!("{id}_close"),"sketch/constrain","sketch_add_constraint",json!({"type":"coincident","a":endpoint(vertices.len()-1,"/end_id"),"b":endpoint(0,"/start_id")}));
     }
-    a.box_shape(
-        "Fixed jaw / broad 60 mm face",
-        [130., -30., 8.],
-        [150., 30., 52.],
-        "join",
-        "frame",
-    );
-    a.box_shape(
-        "Nut housing / axial shoulders",
-        [8., -26., 8.],
-        [32., 26., 52.],
-        "join",
-        "frame",
-    );
-    a.box_shape(
-        "Nut cartridge pocket / 0.4 side clearance",
-        [11.6, -18.4, 9.6],
-        [28.4, 18.4, 53.],
-        "cut",
-        "frame",
-    );
-    a.cylinder_x(
-        "Housing / circular screw envelope",
-        7.,
-        33.,
-        10.6,
-        "cut",
-        "frame",
-    );
-    a.note("Support-free housing roof", "Retain the full circular screw envelope and relieve only its top with two 45-degree roof faces. The teardrop apex is 42.99 mm above the base datum, leaving 9 mm of roof stock; no 21 mm horizontal bore bridge is required.");
-    let roof = "Housing /45-degree teardrop roof";
-    let tangent = 10.6 * std::f64::consts::FRAC_1_SQRT_2;
-    a.begin(roof, "yz", 7.);
-    a.equal_edge_profile(
-        roof,
-        &[
-            [-tangent, 28. + tangent],
-            [0., 28. + 2. * tangent],
-            [tangent, 28. + tangent],
-        ],
-        10.6,
-    );
-    a.extrude(roof, 26., "cut", "frame");
-    a.cartridge_circle(
-        "Housing / cartridge cross-bolt clearance",
-        7.,
-        33.,
-        1.7,
-        "cut",
-        "frame",
-    );
-    a.cartridge_hexagon(
-        "Housing / rear-loaded cartridge M3 nut",
-        8.,
-        10.8,
-        5.9,
-        "cut",
-        "frame",
-    );
-    // Low rails locate both edges of the moving jaw. They do not intersect mounting slots.
-    for (id, y) in [("left", -23.), ("right", 19.)] {
-        a.box_shape(
-            &format!("Guide rail {id} / 4 high"),
-            [34., y, 8.],
-            [130., y + 4., 12.],
-            "join",
-            "frame",
-        );
+    fn prism_x(
+        &mut self,
+        id: &str,
+        start: f64,
+        end: f64,
+        vertices: &[[f64; 2]],
+        operation: &str,
+        part: &str,
+    ) {
+        self.begin(id, "yz", start);
+        self.polygon(id, vertices);
+        self.extrude(id, end - start, operation, part);
     }
-    a.show("frame");
-
-    a.note("Jaw: support and retention", "The jaw's Z8 bottom seats directly on the flat base between two rails. Keep side and roof running clearances in the guide channels without suspending the jaw on its screw. A round chamber accepts the rotating screw head. A separate U keeper drops into a transverse slot behind the head; the main forward thrust is carried by the broad front shoulder.");
-    a.box_shape(
-        "Moving jaw / 60 mm gripping face",
-        [60., -30., 8.],
-        [82., 30., 52.],
-        "new_body",
-        "jaw",
-    );
-    for (id, y) in [("left", -23.4), ("right", 18.6)] {
-        a.box_shape(
-            &format!("Jaw guide {id} / running clearance"),
-            [59., y, 7.9],
-            [83., y + 4.8, 12.4],
-            "cut",
-            "jaw",
-        );
+    fn prism_y(
+        &mut self,
+        id: &str,
+        start: f64,
+        end: f64,
+        vertices: &[[f64; 2]],
+        operation: &str,
+        part: &str,
+    ) {
+        self.begin(id, "xz", -start);
+        self.polygon(id, vertices);
+        self.extrude(id, start - end, operation, part);
     }
-    a.cylinder_x(
-        "Jaw / circular thrust chamber",
-        59.,
-        76.4,
-        14.4,
-        "cut",
-        "jaw",
-    );
-    a.box_shape(
-        "Jaw / transverse keeper slot",
-        [66.2, -20.4, 13.6],
-        [71.8, 20.4, 53.],
-        "cut",
-        "jaw",
-    );
-    a.hexagon_z(
-        "Jaw / bottom-loaded M3 nut pocket",
-        8.,
-        11.8,
-        5.9,
-        "cut",
-        "jaw",
-    );
-    a.cylinder_z(
-        "Jaw / retainer screw clearance",
-        9.,
-        53.,
-        [69., 12.],
-        1.7,
-        "cut",
-        "jaw",
-    );
-    a.cylinder_z(
-        "Jaw / retainer head access",
-        49.,
-        53.,
-        [69., 12.],
-        3.1,
-        "cut",
-        "jaw",
-    );
-    a.show("jaw");
-
-    a.note("Replaceable nut cartridge", "The housing prevents nut rotation. The circular female thread uses the ISO 60-degree profile with a special 20.5 mm nominal diameter and 2.5 mm pitch: 0.25 mm radial process relief relative to M20. This custom FDM nut is not an M20 6H standard fit. Qualify its fit with the paired coupon.");
-    a.box_shape(
-        "Nut cartridge / removable wear part",
-        [12., -18., 10.],
-        [28., 18., 46.],
-        "new_body",
-        "nut",
-    );
-    a.cartridge_circle(
-        "Nut cartridge / positive capture cross-hole",
-        11.,
-        29.,
-        1.7,
-        "cut",
-        "nut",
-    );
-    let nut_face = select(
-        a.bodies["nut"].clone(),
-        "/faces",
-        json!({"/plane/normal/0":-1}),
-        "",
-    );
-    a.bind("nut_start_face", nut_face);
-    a.call("nut_thread","solid/refine","solid_hole",json!({
-        "body_id":a.body_id("nut"),"face_id":reference("nut_start_face","/id"),
-        "position":{"$project":{"point":[12,0,28],"basis":reference("nut_start_face","/plane")}},
-        "diameter":17.5,"extent":{"type":"through_all"},"style":"simple","flip":false,
-        "thread":{"standard":"iso_metric","series":"metric_fine","designation":"CUSTOM FDM 20.5 x 2.5 / ISO 60-degree form / 6H envelope; not standard M20","class":"6H","nominal_diameter":20.5,"pitch":2.5,"threads_per_inch":null,"hand":"right","depth":null,"representation":"modeled"}
-    }));
-    let nut_thread_step = a.steps.pop().unwrap();
-    a.bodies.insert(
-        "nut".into(),
-        select(
-            reference("nut_thread", ""),
-            "/scene/bodies",
-            json!({"/id":a.body_id("nut")}),
-            "",
-        ),
-    );
-    a.show("nut");
-
-    a.note("Screw: integral handle and thrust features", "Join the hand paddle, rear shoulder, retention neck and front thrust head to the exact cylinder. The expensive helix is a final refinement, so unrelated stock operations do not repeatedly rebuild it.");
-    a.cylinder_x(
-        "Screw / nominal 20 mm cylinder",
-        -50.,
-        62.,
-        10.,
-        "new_body",
-        "screw",
-    );
-    a.box_shape(
-        "Screw handle / integral flat paddle",
-        [-74., -20., 28.],
-        [-49., 20., 36.],
-        "join",
-        "screw",
-    );
-    a.cylinder_x(
-        "Screw / rear thrust collar",
-        61.8,
-        66.,
-        14.,
-        "join",
-        "screw",
-    );
-    a.cylinder_x("Screw / retention neck", 65.8, 72.2, 6., "join", "screw");
-    a.cylinder_x(
-        "Screw / captured thrust head",
-        72.,
-        76.,
-        14.,
-        "join",
-        "screw",
-    );
-    a.show("screw");
-
-    a.note("Slide-in keeper with positive retention", "The inverted U throat opens downward so the keeper drops over the neck from above. An accessible M3 x 40 socket screw secures it to a bottom-loaded trapped M3 nut in the jaw. The small fastener prevents lifting during handling; main forward thrust bypasses the keeper.");
-    a.box_shape(
-        "Keeper / transverse plate",
-        [66.6, -20., 13.6],
-        [71.4, 20., 52.],
-        "new_body",
-        "keeper",
-    );
-    a.cylinder_x(
-        "Keeper / circular neck clearance",
-        66.,
-        72.,
-        6.4,
-        "cut",
-        "keeper",
-    );
-    a.box_shape(
-        "Keeper / downward installation throat",
-        [66., -6.4, 13.],
-        [72., 6.4, 28.],
-        "cut",
-        "keeper",
-    );
-    a.cylinder_z(
-        "Keeper / M3 retainer clearance",
-        13.,
-        53.,
-        [69., 12.],
-        1.7,
-        "cut",
-        "keeper",
-    );
-    a.cylinder_z(
-        "Keeper / recessed socket-head seat",
-        49.,
-        53.,
-        [69., 12.],
-        3.1,
-        "cut",
-        "keeper",
-    );
-    a.show("keeper");
-
-    a.note("Purchased retention hardware", "M3 x 40 socket screw: 3 mm shaft, 5.5 by 3 mm head. M3 nut: 5.5 mm across flats and 2.4 mm thick. These are simplified clearance envelopes, not printed substitutes or strength-rated fastener threads. Confirm the supplier's drawing. Load the nut before sliding the jaw onto the base, then insert the keeper and fit the screw from above.");
-    a.cylinder_z(
-        "Retainer screw / purchased M3 x 40 envelope",
-        9.,
-        49.,
-        [69., 12.],
-        1.5,
-        "new_body",
-        "retainer_screw",
-    );
-    a.cylinder_z(
-        "Retainer screw / socket head envelope",
-        49.,
-        52.,
-        [69., 12.],
-        2.75,
-        "join",
-        "retainer_screw",
-    );
-    a.hexagon_z(
-        "Retainer nut / purchased M3 envelope",
-        9.4,
-        11.8,
-        5.5,
-        "new_body",
-        "retainer_nut",
-    );
-    a.cylinder_z(
-        "Retainer nut / simplified thread envelope",
-        9.3,
-        11.9,
-        [69., 12.],
-        1.5,
-        "cut",
-        "retainer_nut",
-    );
-    a.note("Capture the wear nut independently of thread phase", "A purchased M3 x 25 cross-bolt passes through the housing and wear cartridge at Y12/Z42, clear of the drive thread. Its trapped rear M3 nut and accessible front socket head prevent cartridge lift without relying on gravity or the interrupted thread. The two 3.4 mm clearance holes bound unloaded radial float to 0.4 mm; the housing shoulders still carry axial clamping load.");
-    a.cartridge_circle(
-        "Cartridge bolt / purchased M3 x 25 envelope",
-        7.,
-        32.,
-        1.5,
-        "new_body",
-        "cartridge_screw",
-    );
-    a.cartridge_circle(
-        "Cartridge bolt / socket head envelope",
-        32.,
-        35.,
-        2.75,
-        "join",
-        "cartridge_screw",
-    );
-    a.cartridge_hexagon(
-        "Cartridge nut / purchased M3 envelope",
-        8.4,
-        10.8,
-        5.5,
-        "new_body",
-        "cartridge_nut",
-    );
-    a.cartridge_circle(
-        "Cartridge nut / simplified thread envelope",
-        8.3,
-        10.9,
-        1.5,
-        "cut",
-        "cartridge_nut",
-    );
-
-    a.note("Real helical engagement and the printable D flat", "Thread the round nut and the finished cylindrical screw blank, then cut the screw flat through its axis. The remaining half thread retains a true 2.5 mm lead. Its rotating envelope is circular; the asymmetric contact needs physical fit and wear qualification.");
-    a.steps.push(nut_thread_step);
-    a.bind(
-        "screw_thread_face",
-        select(
-            a.bodies["screw"].clone(),
-            "/faces",
-            json!({"/cylinder/radius":10}),
-            "",
-        ),
-    );
-    a.bind("male_thread_request",json!({
-        "body_id":a.body_id("screw"),"face_id":reference("screw_thread_face","/id"),"flip":false,
-        "thread":{"standard":"iso_metric","series":"metric_coarse","designation":"M20 x 2.5 - 6g","class":"6g","nominal_diameter":20,"pitch":2.5,"threads_per_inch":null,"hand":"right","depth":104,"representation":"modeled"}
-    }));
-    a.call(
-        "male_thread",
-        "solid/refine",
-        "solid_external_thread",
-        reference("male_thread_request", ""),
-    );
-    a.bind("male_thread_feature_id",json!({"$select":{"from":reference("male_thread",""),"path":"/document/features","take":"last","pointer":"/id"}}));
-    a.bodies.insert(
-        "screw".into(),
-        select(
-            reference("male_thread", ""),
-            "/scene/bodies",
-            json!({"/id":a.body_id("screw")}),
-            "",
-        ),
-    );
-    a.box_shape(
-        "Screw / D flat through axis",
-        [-75., -21., 7.],
-        [77., 21., 28.],
-        "cut",
-        "screw",
-    );
-    a.show("screw");
-
-    a.note("Assembly: one controlled motion", "Ground the frame, locate the nut and keeper, and close the screw–revolute–slider loop. The lead is 2.5 mm per turn. Command the screw angle; the jaw position and retention rotation must be solved, not independently animated.");
-    for (part, title) in [
-        ("frame", "Frame / fixed jaw"),
-        ("jaw", "Guided moving jaw"),
-        ("nut", "Custom 20.5 x 2.5 FDM wear nut"),
-        ("screw", "D screw and integral paddle"),
-        ("keeper", "Removable jaw keeper"),
-        ("retainer_screw", "Purchased M3 x 40 socket screw"),
-        ("retainer_nut", "Purchased M3 hex nut"),
-        ("cartridge_screw", "Purchased M3 x 25 cartridge bolt"),
-        ("cartridge_nut", "Purchased M3 cartridge nut"),
-    ] {
-        a.component(part, title);
-        if !part.starts_with("retainer_") && !part.starts_with("cartridge_") {
-            a.call(&format!("{part}_material"),"document/appearance","set_body_appearance",json!({"body_id":a.body_id(part),"preset_id":if part=="frame" || part=="jaw" {"bambu.petg.hf.black"} else {"bambu.petg.hf.white"}}));
-        }
-        let plane_axis = if part.starts_with("cartridge_") {
-            "/plane/normal/0"
-        } else {
-            "/plane/normal/2"
-        };
-        a.bind(&format!("{part}_anchor_face"),json!({"$select":{"from":reference(&format!("{part}_body"),""),"path":"/faces","where":{plane_axis:1},"take":"first"}}));
+    fn prism_z(
+        &mut self,
+        id: &str,
+        start: f64,
+        end: f64,
+        vertices: &[[f64; 2]],
+        operation: &str,
+        part: &str,
+    ) {
+        self.begin(id, "xy", start);
+        self.polygon(id, vertices);
+        self.extrude(id, end - start, operation, part);
     }
-    a.call(
-        "ground_frame",
-        "assembly/joints",
-        "assembly_set_occurrence_grounded",
-        json!({"occurrence_id":reference("frame_occurrence",""),"grounded":true}),
-    );
-    a.joint(
-        "nut_in_housing",
-        "rigid",
-        "frame",
-        "nut",
-        [20., 0., 28.],
-        Value::Null,
-    );
-    a.joint(
-        "keeper_in_jaw",
-        "rigid",
-        "jaw",
-        "keeper",
-        [69., 0., 28.],
-        Value::Null,
-    );
-    for part in ["cartridge_screw", "cartridge_nut"] {
-        a.joint(
-            &format!("{part}_in_housing"),
-            "rigid",
-            "frame",
+    fn bore_x(
+        &mut self,
+        id: &str,
+        start: f64,
+        end: f64,
+        center: [f64; 2],
+        radius: f64,
+        operation: &str,
+        part: &str,
+    ) {
+        self.begin(id, "yz", start);
+        self.circle(id, center, 2. * radius);
+        self.extrude(id, end - start, operation, part);
+    }
+    fn bore_y(
+        &mut self,
+        id: &str,
+        start: f64,
+        end: f64,
+        center: [f64; 2],
+        radius: f64,
+        operation: &str,
+        part: &str,
+    ) {
+        self.begin(id, "xz", -start);
+        self.circle(id, center, 2. * radius);
+        self.extrude(id, start - end, operation, part);
+    }
+    fn hex(
+        &mut self,
+        id: &str,
+        axis: &str,
+        start: f64,
+        end: f64,
+        center: [f64; 2],
+        af: f64,
+        operation: &str,
+        part: &str,
+    ) {
+        let r = af / 3_f64.sqrt();
+        let points: Vec<_> = (0..6)
+            .map(|i| {
+                let angle = ((if axis == "xz" { 0. } else { 90. }) + i as f64 * 60.).to_radians();
+                [center[0] + r * angle.cos(), center[1] + r * angle.sin()]
+            })
+            .collect();
+        self.begin(id, axis, if axis == "xz" { -start } else { start });
+        self.equal_edge_profile(id, &points, r);
+        self.extrude(
+            id,
+            if axis == "xz" {
+                start - end
+            } else {
+                end - start
+            },
+            operation,
             part,
-            [20., 12., 42.],
-            Value::Null,
         );
     }
-    a.joint(
-        "screw_drive",
-        "screw",
-        "frame",
-        "screw",
-        [20., 0., 28.],
-        json!({"min":0,"max":48}),
-    );
-    a.joint(
-        "thrust_retention",
-        "revolute",
-        "screw",
-        "jaw",
-        [69., 0., 28.],
-        Value::Null,
-    );
-    a.joint(
-        "jaw_guide",
-        "slider",
-        "frame",
-        "jaw",
-        [69., 0., 28.],
-        json!({"min":0,"max":48}),
-    );
-    a.joint(
-        "retainer_screw_in_jaw",
-        "rigid",
-        "jaw",
-        "retainer_screw",
-        [69., 12., 49.],
-        Value::Null,
-    );
-    a.joint(
-        "retainer_nut_in_jaw",
-        "rigid",
-        "jaw",
-        "retainer_nut",
-        [69., 12., 10.6],
-        Value::Null,
-    );
-    a.call("home_drive","assembly/joints","assembly_set_joint_motion",json!({"joint_id":reference("screw_drive","/id"),"angle_offset_deg":0,"linear_offset_mm":0}));
-    a.steps
-        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
+    // These sideways bores have a 45-degree roof in the X-end-down print pose.
+    fn teardrop_z(&mut self, id: &str, start: f64, end: f64, c: [f64; 2], r: f64, part: &str) {
+        self.cylinder_z(id, start, end, c, r, "cut", part);
+        let t = r * std::f64::consts::FRAC_1_SQRT_2;
+        let roof = format!("{id} / print roof");
+        self.begin(&roof, "xy", start);
+        self.polygon(
+            &roof,
+            &[
+                [c[0] - t, c[1] - t],
+                [c[0] - r * 2_f64.sqrt(), c[1]],
+                [c[0] - t, c[1] + t],
+            ],
+        );
+        self.extrude(&roof, end - start, "cut", part);
+    }
+    fn teardrop_y(&mut self, id: &str, start: f64, end: f64, c: [f64; 2], r: f64, part: &str) {
+        self.bore_y(id, start, end, c, r, "cut", part);
+        let t = r * std::f64::consts::FRAC_1_SQRT_2;
+        self.prism_y(
+            &format!("{id} / print roof"),
+            start,
+            end,
+            &[
+                [c[0] - t, c[1] - t],
+                [c[0] - r * 2_f64.sqrt(), c[1]],
+                [c[0] - t, c[1] + t],
+            ],
+            "cut",
+            part,
+        );
+    }
+    fn fillet(&mut self, id: &str, part: &str, criteria: Value, radius: f64) {
+        self.bind(&format!("{id}_edges"),json!({"$select":{"from":self.bodies[part],"path":"/edges","where":criteria,"take":"all","pointer":"/id"}}));
+        self.bind(
+            &format!("{id}_first_edge"),
+            json!({"$select":{"from":reference(&format!("{id}_edges"),""),"take":"first"}}),
+        );
+        self.call(id,"solid/refine","solid_fillet",json!({"body_id":self.body_id(part),"edge_ids":reference(&format!("{id}_edges"),""),"radius":radius,"tangent_chain":false}));
+        self.refresh_body(id, part);
+    }
+    fn chamfer(&mut self, id: &str, part: &str, criteria: Value, distance: f64) {
+        self.bind(&format!("{id}_edges"),json!({"$select":{"from":self.bodies[part],"path":"/edges","where":criteria,"take":"all","pointer":"/id"}}));
+        self.bind(
+            &format!("{id}_first_edge"),
+            json!({"$select":{"from":reference(&format!("{id}_edges"),""),"take":"first"}}),
+        );
+        self.call(id,"solid/refine","solid_chamfer",json!({"body_id":self.body_id(part),"edge_ids":reference(&format!("{id}_edges"),""),"distance":distance,"tangent_chain":false}));
+        self.refresh_body(id, part);
+    }
+    fn vertical_corners(&mut self, id: &str, part: &str, corners: &[[f64; 2]], radius: f64) {
+        let edges:Vec<_>=corners.iter().map(|c|select(self.bodies[part].clone(),"/edges",json!({"/refinable":true,"$every":{"path":"/points","where":{"/x":c[0],"/y":c[1]}}}),"/id")).collect();
+        self.call(id,"solid/refine","solid_fillet",json!({"body_id":self.body_id(part),"edge_ids":edges,"radius":radius,"tangent_chain":false}));
+        self.refresh_body(id, part);
+    }
+}
 
-    a.note("Print layout and assembly order", "The screw prints on its through-axis flat. Stand the nut on its end, and put the jaw and keeper on their broad end faces. Five separated parts fit within 204 by 166 mm, including the conservative 235.5 by 256 mm dual-tool bed. Insert and cross-bolt the wear nut, turn in the D screw, slide on the jaw and secure the keeper with its M3 hardware. The frame's 45-degree bore roof preserves the circular rotating envelope without a horizontal bridge; the small 3.4 mm cross-hole needs a qualified short bridge.");
-    for joint in [
-        "nut_in_housing",
-        "keeper_in_jaw",
-        "screw_drive",
-        "thrust_retention",
-        "jaw_guide",
-    ] {
-        a.call(
-            &format!("print_disable_{joint}"),
-            "assembly/joints",
-            "assembly_set_joint_enabled",
-            json!({"joint_id":reference(joint,"/id"),"enabled":false}),
-        );
-    }
-    let quarter_y = json!([
-        0.,
-        std::f64::consts::FRAC_1_SQRT_2,
-        0.,
-        std::f64::consts::FRAC_1_SQRT_2
-    ]);
-    for (part, translation, rotation) in [
-        ("frame", json!([0, 35, 0]), json!([0, 0, 0, 1])),
-        ("screw", json!([74, 105, -28]), json!([0, 0, 0, 1])),
-        ("jaw", json!([151.6, 30, 82]), quarter_y.clone()),
-        ("nut", json!([150, 148, 28]), quarter_y.clone()),
-        ("keeper", json!([146, 95, 71.4]), quarter_y),
-    ] {
-        a.call(&format!("print_pose_{part}"),"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":reference(&format!("{part}_occurrence"),""),"local_pose":{"translation":translation,"rotation":rotation}}));
-    }
-    a.steps
-        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
-    a.call(
-        "print_model",
-        "document/files",
-        "cad_project_model",
-        json!({}),
-    );
-    a.call(
-        "print_solution",
-        "assembly/joints",
-        "assembly_solution",
-        json!({}),
-    );
-    a.call("print_3mf","document/export","solid_export_3mf",json!({"slicer_target":"standard","body_ids":[a.body_id("frame"),a.body_id("jaw"),a.body_id("nut"),a.body_id("screw"),a.body_id("keeper")]}));
-    for part in ["frame", "screw", "jaw", "nut", "keeper"] {
-        a.call(&format!("restore_pose_{part}"),"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":reference(&format!("{part}_occurrence"),""),"local_pose":{"translation":[0,0,0],"rotation":[0,0,0,1]}}));
-    }
-    for joint in [
-        "nut_in_housing",
-        "keeper_in_jaw",
-        "screw_drive",
-        "thrust_retention",
-        "jaw_guide",
-    ] {
-        a.call(
-            &format!("restore_enable_{joint}"),
-            "assembly/joints",
-            "assembly_set_joint_enabled",
-            json!({"joint_id":reference(joint,"/id"),"enabled":true}),
-        );
-    }
-    a.call("restore_home_drive","assembly/joints","assembly_set_joint_motion",json!({"joint_id":reference("screw_drive","/id"),"angle_offset_deg":0,"linear_offset_mm":0}));
-    let drawing_exports = vise_drawings::add(&mut a);
-    a.steps
-        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
-
+fn thread(depth: Option<f64>) -> Value {
+    json!({"standard":"custom_trapezoidal","series":"rounded","designation":"CUSTOM rounded 30-degree 24 x 4 FDM lead screw; not ISO Tr","class":"custom","nominal_diameter":D.thread_diameter,"pitch":D.lead,"threads_per_inch":null,"hand":"right","depth":depth,"representation":"modeled","rounded_profile":{"radial_depth":D.thread_depth,"corner_radius":D.thread_corner,"radial_clearance":D.radial_relief,"axial_clearance":D.axial_relief}})
+}
+fn guide_profile(center: f64, clearance: f64) -> Vec<[f64; 2]> {
+    vec![
+        [center - D.guide_base / 2. - clearance, D.deck],
+        [center + D.guide_base / 2. + clearance, D.deck],
+        [
+            center + D.guide_head / 2. + 2. * clearance,
+            D.deck + D.guide_height + clearance,
+        ],
+        [
+            center - D.guide_head / 2. - 2. * clearance,
+            D.deck + D.guide_height + clearance,
+        ],
+    ]
+}
+fn guide_rail_profile(center: f64) -> Vec<[f64; 2]> {
+    vec![
+        [center - D.guide_base / 2., D.deck],
+        [center + D.guide_base / 2., D.deck],
+        [center + D.guide_head / 2., D.deck + D.guide_height],
+        [center - D.guide_head / 2., D.deck + D.guide_height],
+    ]
+}
+fn set_pose(a: &mut Author, id: &str, part: &str, translation: Value, rotation: Value) {
+    a.call(id,"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":reference(&format!("{part}_occurrence"),""),"local_pose":{"translation":translation,"rotation":rotation}}));
+}
+fn final_checks(a: &Author) -> Vec<Value> {
     let mut checks = Vec::new();
     for (id, group, operation) in [
         ("final_scene", "solid/check", "solid_scene"),
@@ -911,90 +657,1151 @@ fn main() {
     checks.push(
         json!({"assert":{"$count":reference("final_scene","/bodies")},"equals":a.bodies.len()}),
     );
-    checks.push(json!({"assert":{"$count":reference("final_sketches","")},"equals":a.sketches}));
-    for index in 0..a.sketches {
+    for i in 0..a.sketches {
         checks.push(
-            json!({"assert":reference("final_sketches",&format!("/{index}/dof/value")),"equals":0}),
+            json!({"assert":reference("final_sketches",&format!("/{i}/dof/value")),"equals":0}),
         );
     }
     checks.push(json!({"assert":reference("final_solution","/solved"),"equals":true}));
     checks.push(json!({"assert":reference("final_solution","/diagnostics"),"equals":[]}));
     checks.push(json!({"id":"final_interference","call":{"group":"assembly/inspect","operation":"assembly_interference_check","arguments":{"clearance_threshold_mm":0}}}));
     checks.push(json!({"assert":{"$count":{"$select":{"from":reference("final_interference",""),"path":"/pairs","where":{"/interfering":true},"take":"all"}}},"equals":0}));
+    checks
+}
+fn write_script(
+    path: &str,
+    name: &str,
+    a: Author,
+    exports: Map<String, Value>,
+    checks: Vec<Value>,
+) {
+    let doc = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":name,"starting_state":"empty","steps":a.steps,"checks":checks,"exports":exports});
+    let text=format!("// Native editable manufacturing candidate. Millimetres.\n// Authored by crates/recipes/examples/author_vise.rs; geometry is built only by native MCP replay.\n// Print poses and clearances are design intent; physical fit/load/creep and slicer qualification remain required.\n{}\n",serde_json::to_string_pretty(&doc).unwrap());
+    nbcad_script::Script::parse(&text).expect("authored script preflight");
+    std::fs::write(path, text).unwrap();
+}
+
+fn main() {
+    let mut a = Author::fresh();
+    a.note("A larger workholding vise", "100 mm jaws, 90 mm opening, captured printed dovetails and a replaceable rounded-thread bridge. The shaft and comfortable grip remain one piece; the whole thrust fitting detaches so assembly is possible. 300 N is a provisional design load case, not a rated capacity.");
+    a.call(
+        "name",
+        "document/files",
+        "cad_set_document_name",
+        json!({"name":"100 mm captured-slide vise / workholding development"}),
+    );
+    a.note("Frame: stiff deck and useful mounting lands", "A 14 mm deck and 25 mm fixed jaw carry the closing load. The large root blend has a matching clearance in the moving carriage. Outboard mounting lands accept bolts or edge clamps without entering the jaw sweep.");
+    a.box_shape(
+        "Frame deck / 230 by 160 by 14",
+        [0., -D.frame_width / 2., 0.],
+        [D.frame_length, D.frame_width / 2., D.deck],
+        "new_body",
+        "frame",
+    );
+    a.vertical_corners(
+        "Frame / rounded deck corners",
+        "frame",
+        &[[0., -80.], [0., 80.], [230., -80.], [230., 80.]],
+        6.,
+    );
+    a.box_shape(
+        "Fixed jaw / 100 mm face and 25 mm stock",
+        [D.fixed_face, -D.jaw_width / 2., D.deck],
+        [D.frame_length, D.jaw_width / 2., D.jaw_top],
+        "join",
+        "frame",
+    );
+    a.fillet("Fixed jaw / reinforced 8 mm root","frame",json!({"/refinable":true,"$every":{"path":"/points","where":{"/x":D.fixed_face,"/z":D.deck}}}),D.root_radius);
+    a.fillet(
+        "Fixed jaw / rounded touched rim",
+        "frame",
+        json!({"/refinable":true,"$every":{"path":"/points","where":{"/z":D.jaw_top}}}),
+        2.,
+    );
+    for (side, y) in [("left", -D.guide_center), ("right", D.guide_center)] {
+        a.prism_x(
+            &format!("Captured rail {side} / 45 degree flanks"),
+            0.,
+            D.fixed_face - D.root_radius,
+            &guide_rail_profile(y),
+            "join",
+            "frame",
+        );
+    }
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        let (low, high) = if sign < 0. {
+            (-62.4, -49.6)
+        } else {
+            (49.6, 62.4)
+        };
+        a.box_shape(
+            &format!("Bridge key socket {side} / axial load shoulder"),
+            [
+                D.bridge_start - D.fit_clearance,
+                low,
+                D.deck - D.bridge_key_depth,
+            ],
+            [D.bridge_end + D.fit_clearance, high, D.deck + 0.1],
+            "cut",
+            "frame",
+        );
+        a.cylinder_z(
+            &format!("Bridge bolt {side} / frame clearance"),
+            -0.1,
+            D.deck + 0.1,
+            [(D.bridge_start + D.bridge_end) / 2., sign * D.bridge_bolt_y],
+            3.3,
+            "cut",
+            "frame",
+        );
+        a.hex(
+            &format!("Bridge nut {side} / underside captive pocket"),
+            "xy",
+            0.,
+            10.,
+            [(D.bridge_start + D.bridge_end) / 2., sign * D.bridge_bolt_y],
+            10.6,
+            "cut",
+            "frame",
+        );
+    }
+    for (i, x) in [70., 155.].into_iter().enumerate() {
+        for (j, y) in [-68., 68.].into_iter().enumerate() {
+            a.box_shape(
+                &format!("Mount slot {i}-{j} / outboard 20 by 7"),
+                [x - 10., y - 3.5, -0.1],
+                [x + 10., y + 3.5, D.deck + 0.1],
+                "cut",
+                "frame",
+            );
+        }
+    }
+    a.show("frame");
+
+    a.note("Captured carriage", "The 72 mm carriage has two wide dovetail channels, a 100 mm gripping face and a broad support datum. It enters from the open rear before the bridge is installed. The front underside clears the fixed-jaw root at full closure. Print gripping face down, with channels parallel to the print direction.");
+    a.box_shape(
+        "Carriage / 72 mm captured bearing length",
+        [D.rear(), -D.carriage_width / 2., D.deck],
+        [D.home(), D.carriage_width / 2., D.deck + 20.],
+        "new_body",
+        "jaw",
+    );
+    a.box_shape(
+        "Moving jaw / 100 mm gripping face",
+        [D.wall(), -D.jaw_width / 2., D.deck],
+        [D.home(), D.jaw_width / 2., D.jaw_top],
+        "join",
+        "jaw",
+    );
+    // Keep the 15 mm gussets inset from the gripping wall's side planes.
+    // Otherwise widening the wall splits formerly coplanar faces and changes
+    // the topology of every drawing reference on this body.
+    let gusset_outer = D.jaw_width / 2. - 2.;
+    for (side, lo, hi) in [
+        ("left", -gusset_outer, -gusset_outer + 15.),
+        ("right", gusset_outer - 15., gusset_outer),
+    ] {
+        a.prism_y(
+            &format!("Jaw gusset {side} / load into long carriage"),
+            lo,
+            hi,
+            &[
+                [D.rear() + 12., D.deck + 20.],
+                [D.wall(), D.deck + 20.],
+                [D.wall(), D.jaw_top - 10.],
+            ],
+            "join",
+            "jaw",
+        );
+    }
+    a.fillet(
+        "Moving jaw / rounded touched rim",
+        "jaw",
+        json!({"/refinable":true,"$every":{"path":"/points","where":{"/z":D.jaw_top}}}),
+        2.,
+    );
+    for (side, y) in [("left", -D.guide_center), ("right", D.guide_center)] {
+        a.prism_x(
+            &format!("Jaw dovetail {side} / profile clearance"),
+            D.rear() - 1.,
+            D.home() + 1.,
+            &guide_profile(y, D.guide_clearance),
+            "cut",
+            "jaw",
+        );
+    }
+    a.prism_y(
+        "Carriage / fixed-root clearance",
+        -56.,
+        56.,
+        &[
+            [D.home() - D.root_radius - D.fit_clearance, D.deck - 0.1],
+            [D.home() + 0.1, D.deck - 0.1],
+            [D.home() + 0.1, D.deck + D.root_radius + D.fit_clearance],
+        ],
+        "cut",
+        "jaw",
+    );
+    a.cylinder_x(
+        "Jaw / full round thrust chamber",
+        D.wall() - 1.,
+        D.head_front() + D.fit_clearance,
+        16. + D.fit_clearance,
+        "cut",
+        "jaw",
+    );
+    a.box_shape(
+        "Jaw / removable keeper slot",
+        [D.keeper_back(), -30.4, D.axis - 16.4],
+        [D.keeper_front(), 30.4, D.jaw_top + 1.],
+        "cut",
+        "jaw",
+    );
+    // The rear opening remains open instead of closing a 62 mm span while
+    // printing from the gripping face. Its side shoulders grow at 45 degrees.
+    a.box_shape(
+        "Jaw / open keeper rear relief",
+        [D.rear() - 1., -D.keeper_ear_inner, D.axis - 16.4],
+        [D.keeper_back() + 0.1, D.keeper_ear_inner, D.jaw_top + 1.],
+        "cut",
+        "jaw",
+    );
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        a.prism_z(
+            &format!("Jaw / 45 degree keeper shoulder {side}"),
+            D.axis - 16.4,
+            D.jaw_top + 1.,
+            &[
+                [D.keeper_back(), sign * D.keeper_ear_inner],
+                [D.keeper_back(), sign * (30. + D.fit_clearance)],
+                [
+                    D.jaw_keeper_seat_x(D.keeper_ear_inner),
+                    sign * D.keeper_ear_inner,
+                ],
+            ],
+            "cut",
+            "jaw",
+        );
+    }
+    // Extend tool access beyond the full carriage envelope, so an ordinary
+    // gripping-width edit cannot turn these openings into blind cavities.
+    let jaw_access_outer = D.carriage_width / 2. + 1.;
+    a.teardrop_y(
+        "Jaw / keeper pin clearance",
+        -jaw_access_outer,
+        jaw_access_outer,
+        [D.pin_x(), 70.],
+        2.75,
+        "jaw",
+    );
+    a.teardrop_y(
+        "Jaw / recessed keeper pin head",
+        -jaw_access_outer,
+        -45.,
+        [D.pin_x(), 70.],
+        4.6,
+        "jaw",
+    );
+    a.hex(
+        "Jaw / keeper nut pocket",
+        "xz",
+        40.3,
+        jaw_access_outer,
+        [D.pin_x(), 70.],
+        8.5,
+        "cut",
+        "jaw",
+    );
+    a.show("jaw");
+
+    a.note("A replaceable bridge with positive keys", "The bridge itself is the wear nut. Its two feet enter recessed deck sockets; those shoulders carry axial load, while accessible M6 bolts retain the feet. Removing the bridge exposes the carriage entry. Print on the X end so the full 28 mm female thread is vertical; sideways bolt bores have 45 degree print roofs.");
+    a.box_shape(
+        "Threaded bridge / central housing",
+        [D.bridge_start, -20., D.deck + 9.],
+        [D.bridge_end, 20., D.jaw_top],
+        "new_body",
+        "nut",
+    );
+    a.box_shape(
+        "Threaded bridge / broad load crossbeam",
+        [D.bridge_start, -D.bridge_foot_outer, D.deck + 9.],
+        [D.bridge_end, D.bridge_foot_outer, D.bridge_top()],
+        "join",
+        "nut",
+    );
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        a.prism_x(
+            &format!("Bridge gusset {side} / thread reaction into keyed feet"),
+            D.bridge_start,
+            D.bridge_end,
+            &[
+                [sign * 20., D.bridge_top()],
+                [sign * 62., D.bridge_top()],
+                [sign * 20., D.jaw_top - 10.],
+            ],
+            "join",
+            "nut",
+        );
+    }
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        let (low, high) = if sign < 0. {
+            (-D.bridge_foot_outer, -D.bridge_foot_inner)
+        } else {
+            (D.bridge_foot_inner, D.bridge_foot_outer)
+        };
+        a.box_shape(
+            &format!("Bridge foot {side} / deck seat"),
+            [D.bridge_start, low, D.deck],
+            [D.bridge_end, high, D.deck + 11.],
+            "join",
+            "nut",
+        );
+        let (kl, kh) = if sign < 0. { (-62., -50.) } else { (50., 62.) };
+        a.box_shape(
+            &format!("Bridge key {side} / replaceable shear shoulder"),
+            [
+                D.bridge_start,
+                kl,
+                D.deck - D.bridge_key_depth + D.fit_clearance,
+            ],
+            [D.bridge_end, kh, D.deck + 0.2],
+            "join",
+            "nut",
+        );
+        a.teardrop_z(
+            &format!("Bridge bolt {side} / self-supporting bore"),
+            D.deck - 1.,
+            D.bridge_top() + 1.,
+            [(D.bridge_start + D.bridge_end) / 2., sign * D.bridge_bolt_y],
+            3.3,
+            "nut",
+        );
+    }
+    a.fillet(
+        "Bridge / soft top edges",
+        "nut",
+        json!({"/refinable":true,"$every":{"path":"/points","where":{"/z":D.jaw_top}}}),
+        3.,
+    );
+    // Defer the expensive female thread until all simple stock is complete.
+    a.bind(
+        "nut_start_face",
+        select(
+            a.bodies["nut"].clone(),
+            "/faces",
+            json!({"/plane/normal/0":-1}),
+            "",
+        ),
+    );
+    let female = json!({"body_id":a.body_id("nut"),"face_id":reference("nut_start_face","/id"),"position":{"$project":{"point":[D.bridge_start,0.,D.axis],"basis":reference("nut_start_face","/plane")}},"diameter":D.thread_diameter-2.*D.thread_depth,"extent":{"type":"through_all"},"style":"simple","flip":false,"thread":thread(None)});
+    a.show("nut");
+
+    a.note("A compact rounded grip and a shallower flat", "The 24 mm shaft has a 4 mm lead and a flat 7 mm below its axis. With the 20 mm root cylinder this starts near a 45 degree underside. A thick rounded T-grip shares that bed plane and clears a tabletop by more than 25 mm throughout rotation. Fit and turning effort still need a real print coupon.");
+    a.cylinder_x(
+        "Screw / 24 mm rounded-thread blank",
+        -D.opening - 6.,
+        D.stub_start(),
+        D.thread_diameter / 2.,
+        "new_body",
+        "screw",
+    );
+    a.cylinder_x(
+        "Screw / 18 mm removable-fitting stub",
+        D.stub_start() - 0.2,
+        D.stub_end(),
+        9.,
+        "join",
+        "screw",
+    );
+    let grip_start = -D.opening - 25.;
+    let grip_end = -D.opening - 5.;
+    a.prism_x(
+        "Screw grip / thick comfortable T profile",
+        grip_start,
+        grip_end,
+        &[
+            [-17., D.flat()],
+            [17., D.flat()],
+            [22., D.flat() + 5.],
+            [22., D.flat() + 16.],
+            [14., D.flat() + 24.],
+            [-14., D.flat() + 24.],
+            [-22., D.flat() + 16.],
+            [-22., D.flat() + 5.],
+        ],
+        "join",
+        "screw",
+    );
+    for (i, (y, z)) in [
+        (-22., D.flat() + 16.),
+        (-14., D.flat() + 24.),
+        (14., D.flat() + 24.),
+        (22., D.flat() + 16.),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        a.fillet(
+            &format!("Grip / rounded upper transition {i}"),
+            "screw",
+            json!({"/refinable":true,"$every":{"path":"/points","where":{"/y":y,"/z":z}}}),
+            4.,
+        );
+    }
+    // These convex transitions go from a 45-degree underside to a vertical
+    // wall. Their rounds preserve the minimum underside angle and bed flat.
+    for (i, y) in [-22., 22.].into_iter().enumerate() {
+        a.fillet(
+            &format!("Grip / rounded lower wing {i}"),
+            "screw",
+            json!({"/refinable":true,"$every":{"path":"/points","where":{"/y":y,"/z":D.flat()+5.}}}),
+            2.5,
+        );
+    }
+    // Select the exposed grip perimeter, including the rounded corners, before
+    // the helix is built. The front plane also has concave R12 shaft junction
+    // arcs; those are structural roots, not touch rims to chamfer.
+    // Small 45-degree rim breaks retain the central coplanar print surface.
+    for (end, x) in [("rear", grip_start), ("front", grip_end)] {
+        a.chamfer(
+            &format!("Grip / {end} touch rim"),
+            "screw",
+            json!({"/refinable":true,"$every":{"path":"/points","where":{"/x":x}},"$or":[{"/circle":null},{"/circle/radius":2.5},{"/circle/radius":4.}]}),
+            0.6,
+        );
+    }
+    a.note("Rounded contact surfaces, deliberate running fits", "The grip has R4 upper blends, R2.5 lower-wing blends and 0.6 mm end-rim chamfers. Its central print flat stays intact. Frame, jaw and bridge top rims are softened, while the dovetail running faces and assembly datums retain their designed dimensions. Inspect the toolpaths and printed touch edges before use.");
+    a.bore_x(
+        "Screw / axial M5 clearance",
+        D.stub_start() - 7.,
+        D.stub_end() + 1.,
+        [0., D.axis],
+        2.75,
+        "cut",
+        "screw",
+    );
+    a.hex(
+        "Screw / captive fitting nut",
+        "yz",
+        D.stub_start() + 1.,
+        D.stub_start() + 6.3,
+        [0., D.axis],
+        8.5,
+        "cut",
+        "screw",
+    );
+    a.box_shape(
+        "Screw / nut loading throat from print flat",
+        [D.stub_start() + 1., -4.25, D.flat() - 1.],
+        [D.stub_start() + 6.3, 4.25, D.axis],
+        "cut",
+        "screw",
+    );
+    // A matching ledge on the removable fitting slides along this shallow
+    // channel and supports the captive nut without opening its axial stop.
+    a.box_shape(
+        "Screw / sliding nut-support keyway",
+        [D.stub_start() + 0.8, -4.25, D.flat() - 1.],
+        [D.stub_end() + 1., 4.25, D.nut_support_top() + 0.2],
+        "cut",
+        "screw",
+    );
+    a.bind(
+        "screw_thread_face",
+        select(
+            a.bodies["screw"].clone(),
+            "/faces",
+            json!({"/cylinder/radius":D.thread_diameter/2.}),
+            "",
+        ),
+    );
+    a.bind("male_thread_request",json!({"body_id":a.body_id("screw"),"face_id":reference("screw_thread_face","/id"),"flip":false,"thread":thread(Some(D.stub_start()+D.opening-4.))}));
+
+    a.note("A complete removable thrust fitting", "The full round head and sleeve come off together. First turn the bare 18 mm keyed stub through the bridge, then load its M5 nut with the jaw parked forward. The fitting slides over the stub and its internal ledge holds the nut aligned before the axial bolt enters. Closing thrust uses the stub end and blind fitting floor; the bolt and captive nut retain the fitting for opening. No large integral collar blocks installation.");
+    let sleeve_start = D.stub_start() + D.fit_clearance;
+    let head_back = D.head_front() - 10.;
+    a.cylinder_x(
+        "Thrust fitting / full round neck",
+        sleeve_start,
+        head_back + 0.2,
+        11.,
+        "new_body",
+        "thrust",
+    );
+    a.cylinder_x(
+        "Thrust fitting / 32 mm load head",
+        head_back,
+        D.head_front(),
+        16.,
+        "join",
+        "thrust",
+    );
+    // Cut only the D-keyed interior; the outer bearing remains a complete circle.
+    let r = 9. + D.radial_relief;
+    let chord = (r * r - (D.flat_below_axis + D.radial_relief).powi(2)).sqrt();
+    a.begin("Thrust fitting / D socket", "yz", sleeve_start - 0.1);
+    // Circular bore followed by a keyed floor is authored as a separate stock join.
+    a.circle("Thrust fitting / D socket", [0., D.axis], 2. * r);
+    a.extrude(
+        "Thrust fitting / D socket",
+        D.stub_end() + D.fit_clearance - (sleeve_start - 0.1),
+        "cut",
+        "thrust",
+    );
+    // This circular segment restores the socket's flat without extending the exterior.
+    a.prism_x(
+        "Thrust fitting / D key bearing",
+        sleeve_start,
+        D.stub_end() + D.fit_clearance,
+        &[
+            [-chord, D.flat() - D.radial_relief],
+            [chord, D.flat() - D.radial_relief],
+            [chord, D.axis - r],
+            [-chord, D.axis - r],
+        ],
+        "join",
+        "thrust",
+    );
+    a.box_shape(
+        "Thrust fitting / captive nut support ledge",
+        [D.stub_start() + 1., -4., D.axis - r],
+        [D.stub_end() + D.fit_clearance, 4., D.nut_support_top()],
+        "join",
+        "thrust",
+    );
+    a.bore_x(
+        "Thrust fitting / axial retaining screw",
+        D.stub_end(),
+        D.head_front() + 1.,
+        [0., D.axis],
+        2.75,
+        "cut",
+        "thrust",
+    );
+    a.bore_x(
+        "Thrust fitting / recessed M5 socket head",
+        D.head_front() - 5.,
+        D.head_front() + 1.,
+        [0., D.axis],
+        4.6,
+        "cut",
+        "thrust",
+    );
+    a.show("thrust");
+
+    a.note("Accessible keeper with printed bearing shoulders", "A thick U keeper drops over the full round sleeve. Its diagonal rear ears bear on matching jaw shoulders after 0.4 mm axial seating. A recessed M5 x 90 cross-pin keeps it from lifting; its 1 mm elongated keeper bore lets the bearing faces seat first. The open rear relief removes the former broad print bridge.");
+    a.box_shape(
+        "Keeper / 11.2 mm cross plate",
+        [D.keeper_back() + D.fit_clearance, -30., D.axis - 16.4],
+        [D.keeper_front() - D.fit_clearance, 30., D.jaw_top],
+        "new_body",
+        "keeper",
+    );
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        // The ears overlap the plate by 0.4 mm for a robust native union.
+        // Only Y = 24.6..30 mm meets the jaw's retained rear-wall stock.
+        a.prism_z(
+            &format!("Keeper / diagonal opening-load ear {side}"),
+            D.axis - 16.4,
+            D.jaw_top,
+            &[
+                [
+                    D.keeper_ear_back(D.keeper_ear_inner),
+                    sign * D.keeper_ear_inner,
+                ],
+                [D.keeper_ear_back(30.), sign * 30.],
+                [D.keeper_back() + 2. * D.fit_clearance, sign * 30.],
+                [
+                    D.keeper_back() + 2. * D.fit_clearance,
+                    sign * D.keeper_ear_inner,
+                ],
+            ],
+            "join",
+            "keeper",
+        );
+    }
+    a.cylinder_x(
+        "Keeper / sleeve running clearance",
+        D.keeper_back() - 1.,
+        D.keeper_front() + 1.,
+        11. + D.fit_clearance,
+        "cut",
+        "keeper",
+    );
+    a.box_shape(
+        "Keeper / downward installation throat",
+        [D.keeper_back() - 1., -11.4, D.axis - 17.],
+        [D.keeper_front() + 1., 11.4, D.axis],
+        "cut",
+        "keeper",
+    );
+    for (end, offset) in [("rear", -0.5), ("front", 0.5)] {
+        a.teardrop_y(
+            if end == "rear" {
+                "Keeper / cross-pin clearance"
+            } else {
+                "Keeper / cross-pin axial slot front"
+            },
+            -31.,
+            31.,
+            [D.pin_x() + offset * D.keeper_pin_extension, 70.],
+            2.75,
+            "keeper",
+        );
+    }
+    a.box_shape(
+        "Keeper / cross-pin slot connecting web",
+        [D.pin_x() - D.keeper_pin_extension / 2., -31., 70. - 2.75],
+        [D.pin_x() + D.keeper_pin_extension / 2., 31., 70. + 2.75],
+        "cut",
+        "keeper",
+    );
+    a.fillet(
+        "Keeper / rounded top rim",
+        "keeper",
+        json!({"/refinable":true,"$every":{"path":"/points","where":{"/z":D.jaw_top}}}),
+        2.,
+    );
+    a.show("keeper");
+
+    a.note("Real installation hardware envelopes", "Purchased M6 bridge screws, M5 keeper and thrust screws, trapped nuts, and optional M6 tabletop bolts and washers are modeled in their installed positions. Their simplified threads reserve physical envelopes; verify supplier dimensions. Only printed parts enter the print plates.");
+    let mut hardware: Vec<(String, String, String)> = Vec::new();
+    for (side, sign) in [("left", -1.), ("right", 1.)] {
+        let center = [(D.bridge_start + D.bridge_end) / 2., sign * D.bridge_bolt_y];
+        let bolt = format!("bridge_screw_{side}");
+        a.cylinder_z(
+            &format!("{bolt} / M6 x 35 shaft"),
+            D.bridge_top() - 35.,
+            D.bridge_top(),
+            center,
+            3.,
+            "new_body",
+            &bolt,
+        );
+        a.cylinder_z(
+            &format!("{bolt} / socket head"),
+            D.bridge_top(),
+            D.bridge_top() + 6.,
+            center,
+            5.,
+            "join",
+            &bolt,
+        );
+        hardware.push((
+            bolt,
+            format!("M6 x 35 socket screw / rear bridge {side}"),
+            "frame".into(),
+        ));
+        let nut = format!("bridge_nut_{side}");
+        a.hex(
+            &format!("{nut} / M6 envelope"),
+            "xy",
+            5.,
+            10.,
+            center,
+            10.,
+            "new_body",
+            &nut,
+        );
+        a.cylinder_z(
+            &format!("{nut} / thread envelope"),
+            4.9,
+            10.1,
+            center,
+            3.,
+            "cut",
+            &nut,
+        );
+        hardware.push((nut, format!("M6 nut / rear bridge {side}"), "frame".into()));
+    }
+    a.bore_y(
+        "Keeper pin / M5 x 90 shaft",
+        -45.,
+        45.,
+        [D.pin_x(), 70.],
+        2.5,
+        "new_body",
+        "retainer_screw",
+    );
+    a.bore_y(
+        "Keeper pin / recessed socket head",
+        -50.,
+        -45.,
+        [D.pin_x(), 70.],
+        4.25,
+        "join",
+        "retainer_screw",
+    );
+    hardware.push((
+        "retainer_screw".into(),
+        "M5 x 90 socket screw / keeper cross-pin".into(),
+        "jaw".into(),
+    ));
+    a.hex(
+        "Keeper pin / trapped M5 nut",
+        "xz",
+        40.3,
+        45.,
+        [D.pin_x(), 70.],
+        8.,
+        "new_body",
+        "retainer_nut",
+    );
+    a.bore_y(
+        "Keeper pin nut / thread envelope",
+        40.2,
+        45.1,
+        [D.pin_x(), 70.],
+        2.5,
+        "cut",
+        "retainer_nut",
+    );
+    hardware.push((
+        "retainer_nut".into(),
+        "M5 nut / keeper cross-pin".into(),
+        "jaw".into(),
+    ));
+    a.bore_x(
+        "Thrust screw / M5 x 25 shaft",
+        D.head_front() - 30.,
+        D.head_front() - 5.,
+        [0., D.axis],
+        2.5,
+        "new_body",
+        "thrust_screw",
+    );
+    a.bore_x(
+        "Thrust screw / recessed socket head",
+        D.head_front() - 5.,
+        D.head_front(),
+        [0., D.axis],
+        4.25,
+        "join",
+        "thrust_screw",
+    );
+    hardware.push((
+        "thrust_screw".into(),
+        "M5 x 25 socket screw / thrust fitting".into(),
+        "screw".into(),
+    ));
+    a.hex(
+        "Thrust screw / captive M5 nut",
+        "yz",
+        D.stub_start() + 1.3,
+        D.stub_start() + 6.,
+        [0., D.axis],
+        8.,
+        "new_body",
+        "thrust_nut",
+    );
+    a.bore_x(
+        "Thrust nut / thread envelope",
+        D.stub_start() + 1.2,
+        D.stub_start() + 6.1,
+        [0., D.axis],
+        2.5,
+        "cut",
+        "thrust_nut",
+    );
+    hardware.push((
+        "thrust_nut".into(),
+        "M5 captive nut / thrust fitting".into(),
+        "screw".into(),
+    ));
+    for (i, x) in [70., 155.].into_iter().enumerate() {
+        for (j, y) in [-68., 68.].into_iter().enumerate() {
+            let stem = format!("mount_{i}_{j}");
+            let location = format!(
+                "{} {}",
+                if i == 0 { "rear" } else { "front" },
+                if j == 0 { "left" } else { "right" }
+            );
+            let c = [x, y];
+            let bolt = format!("{stem}_bolt");
+            a.cylinder_z(
+                &format!("{bolt} / M6 x 45 shaft"),
+                D.deck + 1.6 - 45.,
+                D.deck + 1.6,
+                c,
+                3.,
+                "new_body",
+                &bolt,
+            );
+            a.cylinder_z(
+                &format!("{bolt} / socket head"),
+                D.deck + 1.6,
+                D.deck + 7.6,
+                c,
+                5.,
+                "join",
+                &bolt,
+            );
+            hardware.push((
+                bolt,
+                format!("M6 x 45 mounting bolt / {location}"),
+                "frame".into(),
+            ));
+            for (label, z) in [("top_washer", D.deck), ("bottom_washer", -19.6)] {
+                let part = format!("{stem}_{label}");
+                a.cylinder_z(
+                    &format!("{part} / broad washer"),
+                    z,
+                    z + 1.6,
+                    c,
+                    9.,
+                    "new_body",
+                    &part,
+                );
+                a.cylinder_z(
+                    &format!("{part} / clearance"),
+                    z - 0.1,
+                    z + 1.7,
+                    c,
+                    3.3,
+                    "cut",
+                    &part,
+                );
+                hardware.push((
+                    part,
+                    format!(
+                        "M6 broad {} washer / {location}",
+                        if label == "top_washer" {
+                            "top"
+                        } else {
+                            "bottom"
+                        }
+                    ),
+                    "frame".into(),
+                ));
+            }
+            let nut = format!("{stem}_nut");
+            a.hex(
+                &format!("{nut} / M6 envelope"),
+                "xy",
+                -24.6,
+                -19.6,
+                c,
+                10.,
+                "new_body",
+                &nut,
+            );
+            a.cylinder_z(
+                &format!("{nut} / thread envelope"),
+                -24.7,
+                -19.5,
+                c,
+                3.,
+                "cut",
+                &nut,
+            );
+            hardware.push((nut, format!("M6 mounting nut / {location}"), "frame".into()));
+        }
+    }
+    // Build dense helical meshes only after the simple hardware stock.
+    a.call("nut_thread", "solid/refine", "solid_hole", female);
+    a.refresh_body("nut_thread", "nut");
+    a.call(
+        "male_thread",
+        "solid/refine",
+        "solid_external_thread",
+        reference("male_thread_request", ""),
+    );
+    a.refresh_body("male_thread", "screw");
+    a.bind("male_thread_feature_id",json!({"$select":{"from":reference("male_thread",""),"path":"/document/features","take":"last","pointer":"/id"}}));
+    a.box_shape(
+        "Screw / shallow continuous print flat",
+        [grip_start - 1., -25., D.axis - 20.],
+        [D.stub_end() + 1., 25., D.flat()],
+        "cut",
+        "screw",
+    );
+    a.show("screw");
+
+    let printed = [
+        ("frame", "Reinforced frame and fixed jaw"),
+        ("jaw", "100 mm moving jaw with captured slide"),
+        ("nut", "24 x 4 threaded bridge with keyed feet"),
+        ("screw", "24 x 4 lead-screw with integral rounded grip"),
+        ("thrust", "Removable complete thrust fitting"),
+        ("keeper", "Removable captured-jaw keeper"),
+    ];
+    let mut parts = Vec::new();
+    for (part, name) in printed
+        .iter()
+        .map(|(p, n)| (p.to_string(), n.to_string()))
+        .chain(hardware.iter().map(|(p, n, _)| (p.clone(), n.clone())))
+    {
+        a.component(&part, &name);
+        let printable = printed.iter().any(|(p, _)| *p == part);
+        if printable {
+            a.call(&format!("{part}_material"),"document/appearance","set_body_appearance",json!({"body_id":a.body_id(&part),"preset_id":if part=="frame"||part=="jaw" {"bambu.petg.hf.black"}else{"bambu.petg.hf.white"}}));
+        }
+        a.bind(&format!("{part}_anchor_face"),json!({"$select":{"from":reference(&format!("{part}_body"),""),"path":"/faces","where":{"$or":[{"/plane/normal/0":1},{"/plane/normal/0":-1},{"/plane/normal/1":1},{"/plane/normal/1":-1},{"/plane/normal/2":1},{"/plane/normal/2":-1}]},"take":"first"}}));
+        parts.push(json!({"id":part,"name":name,"body_id":a.body_id(&part),"occurrence_id":reference(&format!("{part}_occurrence"),""),"printable":printable,"print_plate":if printable{Some(part.clone())}else{None}}));
+    }
+    a.call(
+        "ground_frame",
+        "assembly/joints",
+        "assembly_set_occurrence_grounded",
+        json!({"occurrence_id":reference("frame_occurrence",""),"grounded":true}),
+    );
+    a.joint(
+        "nut_in_housing",
+        "rigid",
+        "frame",
+        "nut",
+        [24., 0., D.axis],
+        Value::Null,
+    );
+    a.joint(
+        "keeper_in_jaw",
+        "rigid",
+        "jaw",
+        "keeper",
+        [D.pin_x(), 0., D.axis],
+        Value::Null,
+    );
+    a.joint(
+        "screw_drive",
+        "screw",
+        "frame",
+        "screw",
+        [24., 0., D.axis],
+        json!({"min":0,"max":D.opening}),
+    );
+    a.joint(
+        "thrust_on_screw",
+        "rigid",
+        "screw",
+        "thrust",
+        [D.stub_end(), 0., D.axis],
+        Value::Null,
+    );
+    a.joint(
+        "thrust_retention",
+        "revolute",
+        "thrust",
+        "jaw",
+        [D.pin_x(), 0., D.axis],
+        Value::Null,
+    );
+    a.joint(
+        "jaw_guide",
+        "slider",
+        "frame",
+        "jaw",
+        [D.pin_x(), 0., D.axis],
+        json!({"min":0,"max":D.opening}),
+    );
+    for (part, _, parent) in &hardware {
+        a.joint(
+            &format!("{part}_installed"),
+            "rigid",
+            parent,
+            part,
+            [D.pin_x(), 0., D.axis],
+            Value::Null,
+        );
+    }
+    a.call("home_drive","assembly/joints","assembly_set_joint_motion",json!({"joint_id":reference("screw_drive","/id"),"angle_offset_deg":0,"linear_offset_mm":0}));
+    a.call(
+        "hide_finished_construction",
+        "solid/reference",
+        "construction_set_visibility",
+        json!({"visible":false}),
+    );
+    a.note("Assembly is a physical sequence", "Load the bridge nuts from below. With the rear bridge removed, feed the captured jaw onto the open rail ends and park it 85 mm forward. Seat and bolt the keyed bridge. Screw the bare shaft through the bridge first, then load its M5 nut into the exposed stub. Slide on the complete thrust fitting from the front so its ledge supports the nut, then secure the axial M5. Slide the jaw rearward over the head, drop in the keeper and fit the transverse M5. The optional tabletop bolts and washers remain outside every moving part; clamp lands offer an alternate mounting route.");
+    a.steps
+        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
+
+    // One deliberately oriented plate per large part. Hardware remains in the
+    // saved assembly for inspection but is excluded from every native export.
+    a.call(
+        "assembled_visibility",
+        "document/appearance",
+        "project_visibility",
+        json!({}),
+    );
+    let joint_names: Vec<_> = vec![
+        "nut_in_housing".to_string(),
+        "keeper_in_jaw".to_string(),
+        "screw_drive".to_string(),
+        "thrust_on_screw".to_string(),
+        "thrust_retention".to_string(),
+        "jaw_guide".to_string(),
+    ]
+    .into_iter()
+    .chain(hardware.iter().map(|(p, _, _)| format!("{p}_installed")))
+    .collect();
+    for name in &joint_names {
+        a.call(
+            &format!("print_disable_{name}"),
+            "assembly/joints",
+            "assembly_set_joint_enabled",
+            json!({"joint_id":reference(name,"/id"),"enabled":false}),
+        );
+    }
+    let q = json!([
+        0.,
+        std::f64::consts::FRAC_1_SQRT_2,
+        0.,
+        std::f64::consts::FRAC_1_SQRT_2
+    ]);
+    let poses = [
+        ("frame", json!([0., 80., 0.]), json!([0, 0, 0, 1])),
+        ("jaw", json!([0., 55., D.home()]), q.clone()),
+        ("nut", json!([0., 78., D.bridge_end]), q.clone()),
+        (
+            "screw",
+            json!([D.opening + 25., 25., -D.flat()]),
+            json!([0, 0, 0, 1]),
+        ),
+        ("thrust", json!([0., 16., D.head_front()]), q.clone()),
+        (
+            "keeper",
+            json!([0., 30., D.keeper_front() - D.fit_clearance]),
+            q,
+        ),
+    ];
+    let mut plates = Vec::new();
+    for (part, translation, rotation) in poses {
+        a.note(&format!("Print orientation: {part}"),"This native plate exports only the named printable part. Use the intended material/profile, inspect the toolpath, and qualify short bridges, flat contact and fitted surfaces before treating the no-support orientation as proven.");
+        set_pose(
+            &mut a,
+            &format!("print_pose_{part}"),
+            part,
+            translation,
+            rotation,
+        );
+        let hidden: Vec<_> = a
+            .bodies
+            .keys()
+            .filter(|id| id.as_str() != part)
+            .map(|id| a.body_id(id))
+            .collect();
+        a.call(&format!("print_{part}_visibility"), "document/appearance", "project_set_visibility", json!({"hidden_body_ids":hidden,"hidden_sketch_names":reference("assembled_visibility","/hidden_sketch_names"),"hidden_datum_plane_ids":reference("assembled_visibility","/hidden_datum_plane_ids")}));
+        a.show(part);
+        a.call(
+            &format!("print_{part}_model"),
+            "document/files",
+            "cad_project_model",
+            json!({}),
+        );
+        a.call(
+            &format!("print_{part}_solution"),
+            "assembly/joints",
+            "assembly_solution",
+            json!({}),
+        );
+        a.call(
+            &format!("print_{part}_3mf"),
+            "document/export",
+            "solid_export_3mf",
+            json!({"slicer_target":"standard","body_ids":[a.body_id(part)]}),
+        );
+        plates.push(json!({"name":part,"body_ids":[a.body_id(part)],"model":reference(&format!("print_{part}_model"),""),"solution":reference(&format!("print_{part}_solution"),""),"export":reference(&format!("print_{part}_3mf"),"")}));
+        set_pose(
+            &mut a,
+            &format!("restore_pose_{part}"),
+            part,
+            json!([0, 0, 0]),
+            json!([0, 0, 0, 1]),
+        );
+        a.call(
+            &format!("restore_{part}_visibility"),
+            "document/appearance",
+            "project_set_visibility",
+            reference("assembled_visibility", ""),
+        );
+    }
+    for name in &joint_names {
+        a.call(
+            &format!("restore_enable_{name}"),
+            "assembly/joints",
+            "assembly_set_joint_enabled",
+            json!({"joint_id":reference(name,"/id"),"enabled":true}),
+        );
+    }
+    a.call("restore_home_drive","assembly/joints","assembly_set_joint_motion",json!({"joint_id":reference("screw_drive","/id"),"angle_offset_deg":0,"linear_offset_mm":0}));
+    let drawing_exports = vise_drawings::add(&mut a, &parts);
+    a.steps
+        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
     let mut exports = Map::new();
     for id in [
+        "final_model",
         "final_scene",
         "final_sketches",
         "final_assembly",
         "final_solution",
-        "final_model",
-    ] {
-        exports.insert(id.into(), reference(id, ""));
-    }
-    for part in [
-        "frame",
-        "jaw",
-        "nut",
-        "screw",
-        "keeper",
-        "retainer_screw",
-        "retainer_nut",
-        "cartridge_screw",
-        "cartridge_nut",
-    ] {
-        exports.insert(format!("{part}_body_id"), a.body_id(part));
-        exports.insert(
-            format!("{part}_occurrence_id"),
-            reference(&format!("{part}_occurrence"), ""),
-        );
-    }
-    exports.insert("screw_joint_id".into(), reference("screw_drive", "/id"));
-    exports.insert("jaw_joint_id".into(), reference("jaw_guide", "/id"));
-    exports.insert(
-        "retention_joint_id".into(),
-        reference("thrust_retention", "/id"),
-    );
-    for id in [
-        "print_model",
-        "print_solution",
-        "print_3mf",
+        "final_interference",
         "male_thread_request",
         "male_thread_feature_id",
     ] {
         exports.insert(id.into(), reference(id, ""));
     }
-    exports.insert(
-        "final_interference".into(),
-        reference("final_interference", ""),
-    );
+    for part in &parts {
+        let id = part["id"].as_str().unwrap();
+        exports.insert(format!("{id}_body_id"), a.body_id(id));
+        exports.insert(
+            format!("{id}_occurrence_id"),
+            reference(&format!("{id}_occurrence"), ""),
+        );
+    }
+    for (alias, id) in [
+        ("screw_joint_id", "screw_drive"),
+        ("jaw_joint_id", "jaw_guide"),
+        ("retention_joint_id", "thrust_retention"),
+    ] {
+        exports.insert(alias.into(), reference(id, "/id"));
+    }
     for id in drawing_exports {
         exports.insert(id.clone(), reference(&id, ""));
     }
-    exports.insert("design_inputs".into(),json!({"jaw_width_mm":60,"initial_opening_mm":48,"allowed_travel_mm":48,"lead_mm":2.5,"nominal_thread_mm":20,"nut_special_nominal_mm":20.5,"radial_process_relief_mm":0.25,"flat_axis_z_mm":28,"thread_engagement_mm":16,"cartridge_cross_bolt":"M3 x25","cartridge_capture_hole_mm":3.4,"cartridge_capture_axis_yz_mm":[12,42],"cartridge_max_rigid_radial_float_mm":0.4,"provisional_material":"Bambu PETG HF","input_torque_Nm":0.25,"assumed_overall_efficiency":0.2,"contact_patch_mm2":600,"physical_load_rating":null}));
-    let document = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"D-shaped printed screw vise","starting_state":"empty","steps":a.steps,"checks":checks,"exports":exports});
-    let text=format!("// Functional FDM design candidate; dimensions in millimetres.\n// Native sketches, features and joints only. No imported mesh or captured entity IDs.\n// Authored with crates/recipes/examples/author_vise.rs; replay with cargo xtask run-script --server PATH_TO_NBCAD_MCP --recipe d-screw-vise.\n{}\n",serde_json::to_string_pretty(&document).unwrap());
-    nbcad_script::Script::parse(&text).expect("authored source must pass preflight");
-    std::fs::write("examples/scripts/d-screw-vise.nbcad.jsonc", text).unwrap();
+    exports.insert("parts".into(), json!(parts));
+    exports.insert("print_plates".into(), json!(plates));
+    exports.insert("nut_support".into(), json!({"ledge_width_mm":8.,"channel_width_mm":8.5,"ledge_top_z_mm":D.nut_support_top(),"channel_roof_z_mm":D.nut_support_top()+0.2,"nominal_nut_sag_mm":0.1,"retains_axial_pocket_wall":true}));
+    exports.insert("design_inputs".into(),json!({"jaw_width_mm":D.jaw_width,"carriage_width_mm":D.carriage_width,"initial_opening_mm":D.opening,"allowed_travel_mm":D.opening,"lead_mm":D.lead,"nominal_thread_mm":D.thread_diameter,"thread_radial_depth_mm":D.thread_depth,"thread_corner_radius_mm":D.thread_corner,"female_radial_relief_mm":D.radial_relief,"female_axial_relief_mm":D.axial_relief,"thread_engagement_mm":D.bridge_end-D.bridge_start,"flat_axis_z_mm":D.flat(),"flat_below_axis_mm":D.flat_below_axis,"screw_axis_z_mm":D.axis,"deck_mm":D.deck,"fixed_face_x_mm":D.fixed_face,"home_face_x_mm":D.home(),"carriage_rear_x_mm":D.rear(),"carriage_length_mm":D.carriage_length,"jaw_top_z_mm":D.jaw_top,"guide_centers_y_mm":[-D.guide_center,D.guide_center],"guide_base_width_mm":D.guide_base,"guide_head_width_mm":D.guide_head,"guide_height_mm":D.guide_height,"guide_clearance_mm":D.guide_clearance,"guide_top_z_mm":D.deck+D.guide_height,"guide_end_x_mm":D.fixed_face-D.root_radius,"bridge_start_x_mm":D.bridge_start,"bridge_end_x_mm":D.bridge_end,"bridge_socket_floor_z_mm":D.deck-D.bridge_key_depth,"bridge_key_bottom_z_mm":D.deck-D.bridge_key_depth+D.fit_clearance,"stub_radius_mm":9.,"stub_start_x_mm":D.stub_start(),"stub_end_x_mm":D.stub_end(),"head_front_x_mm":D.head_front(),"keeper_pin_x_mm":D.pin_x(),"keeper_pin_z_mm":70.,"keeper_back_x_mm":D.keeper_back(),"keeper_front_x_mm":D.keeper_front(),"keeper_axial_seating_mm":D.keeper_seat_gap,"keeper_ear_inner_y_mm":D.keeper_ear_inner,"keeper_pin_slot_extension_mm":D.keeper_pin_extension,"design_load_case_N":D.design_force,"input_torque_Nm":1.,"assumed_overall_efficiency":0.2,"illustrative_axial_force_N":2.*std::f64::consts::PI*0.2/(D.lead/1000.),"contact_patch_mm2":600.,"physical_load_rating":null,"mount_board_thickness_mm":18.,"mount_hardware_optional":true}));
+    exports.insert("assembly_paths".into(),json!({"jaw_rear_entry_translation_x_mm":-D.home()-5.,"jaw_service_translation_x_mm":85.,"bridge_install_axis":[0,0,-1],"thrust_install_axis":[-1,0,0],"thrust_front_approach_mm":35.,"keeper_install_axis":[0,0,-1],"keeper_pin_install_axis":[0,1,0],"shaft_install_axis":[1,0,0],"shaft_install_requires_coupled_thread_rotation":true,"sleeve_requires_axial_bolt_before_jaw_returns":true,"order":["load bridge nuts from underneath","rear-feed jaw with bridge absent","park jaw at plus 85 mm","lower keyed bridge and install two M6 bolts","turn bare shaft through bridge, then load M5 nut into exposed stub","slide complete thrust fitting to trap and support nut, then install axial M5","slide jaw rearward over secured fitting","lower keeper and insert transverse M5","install outboard mounting bolts or use clamp lands"]}));
+    let checks = final_checks(&a);
+    write_script(
+        "examples/scripts/d-screw-vise.nbcad.jsonc",
+        "100 mm captured-slide printed vise",
+        a,
+        exports,
+        checks,
+    );
     author_fit_coupon();
 }
 
 fn author_fit_coupon() {
-    let mut a = Author {
-        steps: Vec::new(),
-        planes: BTreeMap::new(),
-        bodies: BTreeMap::new(),
-        sketches: 0,
-    };
-    a.note("Qualify the actual interrupted thread", "Print the male coupon on its D flat and the female coupon with its thread axis vertical. The female is a custom 20.5 × 2.5 ISO-derived profile, not a standard M20 6H fit. Record material, layer height, extrusion width, fit, required turning torque and wear before committing to a full screw.");
+    let mut a = Author::fresh();
+    a.note("Qualify both printed interfaces", "Four specimens retain the exact 24 x 4 rounded thread, full 28 mm bridge engagement and actual captured-dovetail profile. Print in the supplied orientations. Record sliding force, turning torque, play, material/profile and wear; the designed no-support poses still require toolpath and physical checks.");
+    a.cylinder_x(
+        "Thread coupon / 40 mm male",
+        0.,
+        40.,
+        D.thread_diameter / 2.,
+        "new_body",
+        "screw",
+    );
+    a.bind(
+        "coupon_male_face",
+        select(
+            a.bodies["screw"].clone(),
+            "/faces",
+            json!({"/cylinder/radius":D.thread_diameter/2.}),
+            "",
+        ),
+    );
     a.box_shape(
-        "Coupon nut / 36 by 36 by 10",
-        [45., -18., 0.],
-        [81., 18., 10.],
+        "Thread coupon / full bridge engagement",
+        [60., -20., 0.],
+        [100., 20., D.bridge_end - D.bridge_start],
         "new_body",
         "nut",
     );
     a.bind(
-        "coupon_nut_face",
+        "coupon_female_face",
         select(
             a.bodies["nut"].clone(),
             "/faces",
@@ -1002,84 +1809,173 @@ fn author_fit_coupon() {
             "",
         ),
     );
-    a.cylinder_x(
-        "Coupon screw / ten complete turns",
-        0.,
-        25.,
-        10.,
-        "new_body",
-        "screw",
-    );
-    a.bind(
-        "coupon_screw_face",
-        select(
-            a.bodies["screw"].clone(),
-            "/faces",
-            json!({"/cylinder/radius":10}),
-            "",
-        ),
-    );
-    a.call("coupon_female_thread","solid/refine","solid_hole",json!({
-        "body_id":a.body_id("nut"),"face_id":reference("coupon_nut_face","/id"),
-        "position":{"$project":{"point":[63,0,10],"basis":reference("coupon_nut_face","/plane")}},
-        "diameter":17.5,"extent":{"type":"through_all"},"style":"simple","flip":false,
-        "thread":{"standard":"iso_metric","series":"metric_fine","designation":"CUSTOM FDM 20.5 x 2.5 / ISO 60-degree form / 6H envelope; not standard M20","class":"6H","nominal_diameter":20.5,"pitch":2.5,"threads_per_inch":null,"hand":"right","depth":null,"representation":"modeled"}
-    }));
-    a.call("coupon_male_thread","solid/refine","solid_external_thread",json!({
-        "body_id":a.body_id("screw"),"face_id":reference("coupon_screw_face","/id"),"flip":false,
-        "thread":{"standard":"iso_metric","series":"metric_coarse","designation":"M20 x 2.5 - 6g","class":"6g","nominal_diameter":20,"pitch":2.5,"threads_per_inch":null,"hand":"right","depth":null,"representation":"modeled"}
-    }));
     a.box_shape(
-        "Coupon screw / through-axis D flat",
-        [-1., -11., 17.],
-        [26., 11., 28.],
+        "Guide coupon / supported rail base",
+        [0., -20., D.deck - 4.],
+        [40., 20., D.deck],
+        "new_body",
+        "guide_male",
+    );
+    a.prism_x(
+        "Guide coupon / production dovetail",
+        0.,
+        40.,
+        &guide_rail_profile(0.),
+        "join",
+        "guide_male",
+    );
+    a.box_shape(
+        "Guide coupon / production socket stock",
+        [60., -22., D.deck],
+        [100., 22., D.deck + 20.],
+        "new_body",
+        "guide_female",
+    );
+    a.prism_x(
+        "Guide coupon / production running clearance",
+        59.,
+        101.,
+        &guide_profile(0., D.guide_clearance),
+        "cut",
+        "guide_female",
+    );
+    a.call("coupon_female_thread","solid/refine","solid_hole",json!({"body_id":a.body_id("nut"),"face_id":reference("coupon_female_face","/id"),"position":{"$project":{"point":[80.,0.,D.bridge_end-D.bridge_start],"basis":reference("coupon_female_face","/plane")}},"diameter":D.thread_diameter-2.*D.thread_depth,"extent":{"type":"through_all"},"style":"simple","flip":false,"thread":thread(None)}));
+    a.refresh_body("coupon_female_thread", "nut");
+    a.call("coupon_male_thread","solid/refine","solid_external_thread",json!({"body_id":a.body_id("screw"),"face_id":reference("coupon_male_face","/id"),"flip":false,"thread":thread(None)}));
+    a.refresh_body("coupon_male_thread", "screw");
+    a.box_shape(
+        "Thread coupon / production shallow flat",
+        [-1., -13., D.axis - 13.],
+        [41., 13., D.flat()],
         "cut",
         "screw",
     );
-    a.call(
-        "coupon_screw_on_bed",
-        "solid/body",
-        "solid_move_copy",
-        json!({
-            "body_ids":[a.body_id("screw")],"translation":{"x":0,"y":0,"z":-28},
-            "rotation":[0,0,0,1],"pivot":{"x":0,"y":0,"z":0},"copy":false
-        }),
-    );
-    a.call(
-        "coupon_positive_bed_coordinates",
-        "solid/body",
-        "solid_move_copy",
-        json!({
-            "body_ids":[a.body_id("screw"),a.body_id("nut")],"translation":{"x":0,"y":18,"z":0},
-            "rotation":[0,0,0,1],"pivot":{"x":0,"y":0,"z":0},"copy":false
-        }),
-    );
-    for part in ["screw", "nut"] {
-        a.call(
-            &format!("{part}_material"),
-            "document/appearance",
-            "set_body_appearance",
-            json!({"body_id":a.body_id(part),"preset_id":"bambu.petg.hf.white"}),
-        );
+    let mut parts = Vec::new();
+    for (part, name) in [
+        ("screw", "Production shallow-D thread coupon"),
+        ("nut", "Full-engagement female coupon"),
+        ("guide_male", "Production captured rail coupon"),
+        ("guide_female", "Production captured socket coupon"),
+    ] {
+        a.component(part, name);
+        a.bind(&format!("{part}_anchor_face"),json!({"$select":{"from":reference(&format!("{part}_body"),""),"path":"/faces","where":{"$or":[{"/plane/normal/0":1},{"/plane/normal/0":-1},{"/plane/normal/1":1},{"/plane/normal/1":-1},{"/plane/normal/2":1},{"/plane/normal/2":-1}]},"take":"first"}}));
+        parts.push(json!({"id":part,"name":name,"body_id":a.body_id(part),"occurrence_id":reference(&format!("{part}_occurrence"),""),"printable":true,"print_plate":"fit"}));
     }
+    set_pose(
+        &mut a,
+        "coupon_screw_print",
+        "screw",
+        json!([0., 25., -D.flat()]),
+        json!([0, 0, 0, 1]),
+    );
+    set_pose(
+        &mut a,
+        "coupon_nut_print",
+        "nut",
+        json!([0., 30., 0.]),
+        json!([0, 0, 0, 1]),
+    );
+    set_pose(
+        &mut a,
+        "coupon_rail_print",
+        "guide_male",
+        json!([0., 75., 4. - D.deck]),
+        json!([0, 0, 0, 1]),
+    );
+    set_pose(
+        &mut a,
+        "coupon_socket_print",
+        "guide_female",
+        json!([120., 140., 100.]),
+        json!([
+            0.,
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.,
+            std::f64::consts::FRAC_1_SQRT_2
+        ]),
+    );
+    a.call(
+        "ground_coupon_plate",
+        "assembly/joints",
+        "assembly_set_occurrence_grounded",
+        json!({"occurrence_id":reference("screw_occurrence",""),"grounded":true}),
+    );
+    // There is one grounded occurrence. Rigid connectors express the same
+    // print layout in each part's local frame, so all four poses persist as
+    // a solved assembly instead of leaving three freely drifting components.
+    for (part, origin, primary) in [
+        ("nut", [0., -5., -D.flat()], [1., 0., 0.]),
+        (
+            "guide_male",
+            [0., -50., D.deck - 4. - D.flat()],
+            [1., 0., 0.],
+        ),
+        (
+            "guide_female",
+            [100. + D.flat(), -115., -120.],
+            [0., 0., 1.],
+        ),
+    ] {
+        let mut connector = a.connector(part, origin);
+        connector["frame"]["primary_axis"] = json!(primary);
+        a.call(&format!("coupon_{part}_fixed"), "assembly/joints", "assembly_create_joint", json!({
+            "name":format!("Print layout / {part}"),"kind":"rigid","flipped":true,
+            "connector_a":a.connector("screw", [0.,0.,0.]),"connector_b":connector,
+            "angle_offset_deg":0,"linear_offset_mm":0,
+            "advanced":{"connector_a_occurrence_id":reference("screw_occurrence",""),"connector_b_occurrence_id":reference(&format!("{part}_occurrence"),"")}
+        }));
+    }
+    a.call("print_3mf","document/export","solid_export_3mf",json!({"slicer_target":"standard","body_ids":[a.body_id("screw"),a.body_id("nut"),a.body_id("guide_male"),a.body_id("guide_female")]}));
+    a.call(
+        "hide_coupon_construction",
+        "solid/reference",
+        "construction_set_visibility",
+        json!({"visible":false}),
+    );
     a.steps
-        .push(json!({"view":"isometric","fit":true,"duration_ms":500}));
-    let mut checks = vec![
-        json!({"id":"final_scene","call":{"group":"solid/check","operation":"solid_scene","arguments":{}},"expect":{"/errors":[]}}),
-        json!({"id":"final_model","call":{"group":"document/files","operation":"cad_project_model","arguments":{}}}),
-        json!({"id":"final_sketches","call":{"group":"sketch/draw","operation":"sketch_finished","arguments":{}}}),
-        json!({"assert":{"$count":reference("final_scene","/bodies")},"equals":2}),
-    ];
-    for index in 0..a.sketches {
-        checks.push(
-            json!({"assert":reference("final_sketches",&format!("/{index}/dof/value")),"equals":0}),
+        .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
+    let mut exports = Map::new();
+    for id in [
+        "final_model",
+        "final_scene",
+        "final_sketches",
+        "final_assembly",
+        "final_solution",
+        "final_interference",
+        "print_3mf",
+    ] {
+        exports.insert(id.into(), reference(id, ""));
+    }
+    for p in ["screw", "nut", "guide_male", "guide_female"] {
+        exports.insert(format!("{p}_body_id"), a.body_id(p));
+        exports.insert(
+            format!("{p}_occurrence_id"),
+            reference(&format!("{p}_occurrence"), ""),
         );
     }
-    let document = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"D-screw vise / paired print-fit coupons","starting_state":"empty","steps":a.steps,"checks":checks,"exports":{
-        "final_model":reference("final_model",""),"final_scene":reference("final_scene",""),"final_sketches":reference("final_sketches",""),
-        "screw_body_id":a.body_id("screw"),"nut_body_id":a.body_id("nut"),"coupon_length_mm":25,"nominal_male_mm":20,"nominal_female_mm":20.5,"pitch_mm":2.5
-    }});
-    let text=format!("// Paired physical fit coupon; print the supplied orientations without supports first.\n// It is an experiment, not proof that a chosen printer/profile will achieve the intended clearance.\n{}\n",serde_json::to_string_pretty(&document).unwrap());
-    nbcad_script::Script::parse(&text).unwrap();
-    std::fs::write("examples/scripts/d-screw-vise-fit.nbcad.jsonc", text).unwrap();
+    exports.insert("parts".into(), json!(parts));
+    exports.insert("coupon_length_mm".into(), json!(40.));
+    exports.insert(
+        "female_engagement_mm".into(),
+        json!(D.bridge_end - D.bridge_start),
+    );
+    exports.insert("nominal_male_mm".into(), json!(D.thread_diameter));
+    exports.insert(
+        "nominal_female_mm".into(),
+        json!(D.thread_diameter + 2. * D.radial_relief),
+    );
+    exports.insert("pitch_mm".into(), json!(D.lead));
+    exports.insert(
+        "rounded_profile".into(),
+        thread(None)["rounded_profile"].clone(),
+    );
+    exports.insert("guide_profile".into(),json!({"base_width_mm":D.guide_base,"head_width_mm":D.guide_head,"height_mm":D.guide_height,"clearance_mm":D.guide_clearance,"engagement_mm":40.}));
+    let checks = final_checks(&a);
+    write_script(
+        "examples/scripts/d-screw-vise-fit.nbcad.jsonc",
+        "100 mm vise / thread and captured-slide fit coupons",
+        a,
+        exports,
+        checks,
+    );
 }

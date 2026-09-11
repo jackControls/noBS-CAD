@@ -512,622 +512,8 @@ fn recipe_discovery_is_shared_and_does_not_execute_construction() {
     assert_eq!(client.call("solid_scene", json!({}))["bodies"], json!([]));
 }
 
-#[test]
-fn d_screw_vise_builds_editable_native_geometry() {
-    let mut client = Client::start();
-    let report = client.recipe("d-screw-vise");
-    let exports = &report["exports"];
-    let artifacts = RecipeArtifacts::new();
-    let artifact_directory = &artifacts.path;
-    std::fs::write(
-        artifact_directory.join("replay-report.json"),
-        serde_json::to_vec_pretty(&report).unwrap(),
-    )
-    .unwrap();
-    std::fs::write(
-        artifact_directory.join("model.json"),
-        serde_json::to_vec_pretty(&exports["final_model"]).unwrap(),
-    )
-    .unwrap();
-    write_native_project(
-        &artifact_directory.join("d-screw-vise.nbcad"),
-        &exports["final_model"],
-    );
-    write_native_project(
-        &artifact_directory.join("d-screw-vise-print.nbcad"),
-        &exports["print_model"],
-    );
-    for (name, export) in exports.as_object().unwrap() {
-        if name.ends_with("_svg") || name.ends_with("_dxf") {
-            let format = export["format"].as_str().unwrap();
-            let content = export["content"].as_str().unwrap();
-            assert!(!content.is_empty());
-            std::fs::write(artifact_directory.join(format!("{name}.{format}")), content).unwrap();
-        }
-    }
-    let sheets = exports["final_model"]["drawings"]["sheets"]
-        .as_array()
-        .unwrap();
-    assert_eq!(
-        sheets.len(),
-        6,
-        "assembly and five printed-part sheets persist"
-    );
-    let assembly_sheet = sheets
-        .iter()
-        .find(|sheet| sheet["id"] == exports["vise_assembly_svg"]["sheet_id"])
-        .unwrap();
-    assert_eq!(
-        assembly_sheet["bom"].as_array().unwrap().len(),
-        exports["final_scene"]["bodies"].as_array().unwrap().len()
-    );
-    for sheet in sheets {
-        assert_eq!(sheet["projection_method"], "third_angle");
-    }
-    for (part, measured) in [
-        ("assembly", "48.00 at home"),
-        ("frame", "150.00"),
-        ("jaw", "5.60"),
-        ("nut", "16.00"),
-        ("screw", "R14.00"),
-        ("keeper", "Ø12.80"),
-    ] {
-        assert!(
-            exports[format!("vise_{part}_svg")]["content"]
-                .as_str()
-                .unwrap()
-                .contains(&format!(">{measured}</text>")),
-            "{part}: missing measured dimension {measured}"
-        );
-    }
-    assert_eq!(exports["final_scene"]["errors"], json!([]));
-    let pi = std::f64::consts::PI;
-    let circular_strip = |radius: f64, half_width: f64| {
-        2. * (half_width * (radius * radius - half_width * half_width).sqrt()
-            + radius * radius * (half_width / radius).asin())
-    };
-    let jaw_retainer_relief = 3_f64.sqrt() / 2. * 5.9_f64.powi(2) * 3.8
-        + pi * 1.7_f64.powi(2) * 1.8
-        + 3. * (pi * 3.1_f64.powi(2) - circular_strip(3.1, 2.8));
-    let keeper_retainer_relief = 35.4 * pi * 1.7_f64.powi(2) + 3. * circular_strip(3.1, 2.4);
-    for (part, expected_min, expected_max, analytic, tolerance) in [
-        (
-            "frame",
-            [0., -35., 0.],
-            [150., 35., 52.],
-            150. * 70. * 8. - 4. * 18. * 6. * 8. + 20. * 60. * 44. + 24. * 52. * 44.
-                - 16.8 * 36.8 * 42.4
-                - pi * 10.6_f64.powi(2) * 7.2
-                - 7.2 * 10.6_f64.powi(2) * (1. - pi / 4.)
-                - 2.8 * 3_f64.sqrt() / 2. * 5.9_f64.powi(2)
-                - 4.4 * pi * 1.7_f64.powi(2)
-                + 2. * 96. * 4. * 4.,
-            0.0005,
-        ),
-        (
-            "jaw",
-            [60., -30., 8.],
-            [82., 30., 52.],
-            22. * 60. * 44.
-                - 2. * 22. * 4.8 * 4.4
-                - 5.6 * 40.8 * 38.4
-                - 10.8 * pi * 14.4_f64.powi(2)
-                - jaw_retainer_relief,
-            0.002,
-        ),
-        (
-            "keeper",
-            [66.6, -20., 13.6],
-            [71.4, 20., 52.],
-            4.8 * (40. * 38.4 - 0.5 * pi * 6.4_f64.powi(2) - 12.8 * 14.4) - keeper_retainer_relief,
-            0.001,
-        ),
-    ] {
-        let body = exports["final_scene"]["bodies"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|body| body["id"] == exports[format!("{part}_body_id")])
-            .unwrap();
-        let (min, max, volume) = mesh_measurement(body);
-        for axis in 0..3 {
-            assert!((min[axis] - expected_min[axis]).abs() < 1e-4);
-            assert!((max[axis] - expected_max[axis]).abs() < 1e-4);
-        }
-        assert!(
-            (volume - analytic).abs() / analytic < tolerance,
-            "{part}: measured {volume}, analytic {analytic}"
-        );
-    }
-    let frame = exports["final_scene"]["bodies"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|body| body["id"] == exports["frame_body_id"])
-        .unwrap();
-    let roof_normals: Vec<_> = frame["faces"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|face| face["plane"]["normal"].as_array())
-        .filter(|normal| {
-            normal[0].as_f64().unwrap().abs() < 1e-7
-                && (normal[1].as_f64().unwrap().abs() - std::f64::consts::FRAC_1_SQRT_2).abs()
-                    < 1e-7
-                && (normal[2].as_f64().unwrap().abs() - std::f64::consts::FRAC_1_SQRT_2).abs()
-                    < 1e-7
-        })
-        .collect();
-    assert!(
-        roof_normals.iter().any(|n| n[1].as_f64().unwrap() > 0.)
-            && roof_normals.iter().any(|n| n[1].as_f64().unwrap() < 0.),
-        "both45-degree roof sides exist in native geometry"
-    );
-    assert!(52. - (28. + 10.6 * 2_f64.sqrt()) > 9.);
-    let female =
-        nbcad_solid::iso_metric_grade6_envelope(20.5, 2.5, nbcad_solid::ThreadFit::Internal)
-            .unwrap();
-    let female_mean_radius_squared = internal_thread_mean_radius_squared(&female, 2.5);
-    let nut = exports["final_scene"]["bodies"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|body| body["id"] == exports["nut_body_id"])
-        .unwrap();
-    let nut_analytic =
-        16. * 36. * 36. - 16. * pi * female_mean_radius_squared - 16. * pi * 1.7_f64.powi(2);
-    assert!(
-        (mesh_measurement(nut).2 - nut_analytic).abs() / nut_analytic < 0.01,
-        "threaded cartridge follows its60-degree radial profile integral"
-    );
-    let interference = exports["final_interference"].clone();
-    std::fs::write(
-        artifact_directory.join("interference.json"),
-        serde_json::to_vec_pretty(&interference).unwrap(),
-    )
-    .unwrap();
-    no_overlap(&interference);
-    let support = interference["pairs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|pair| {
-            (pair["body_a"] == exports["frame_body_id"] && pair["body_b"] == exports["jaw_body_id"])
-                || (pair["body_b"] == exports["frame_body_id"]
-                    && pair["body_a"] == exports["jaw_body_id"])
-        })
-        .unwrap();
-    assert!(
-        support["minimum_clearance_mm"].as_f64().unwrap() < 1e-6,
-        "jaw must seat on the base support datum: {support}"
-    );
-    assert!(interference["pairs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|pair| {
-            pair["body_a"] == exports["screw_body_id"]
-                && pair["body_b"] == exports["nut_body_id"]
-                && pair["minimum_clearance_mm"].as_f64().unwrap() > 0.12
-        }));
-    validate_print_3mf(
-        &exports["print_3mf"],
-        5,
-        [235.5, 256., 256.],
-        &artifact_directory.join("d-screw-vise-print.3mf"),
-    );
-    std::fs::write(
-        artifact_directory.join("print-model.json"),
-        serde_json::to_vec_pretty(&exports["print_model"]).unwrap(),
-    )
-    .unwrap();
-
-    // Command only the screw. The other loop coordinates and jaw pose must
-    // follow the physical lead, including full turns and reversing direction.
-    for angle in [90_f64, 360., 1440., 720., 48. / 2.5 * 360., 0.] {
-        client.call("assembly_set_joint_motion",json!({"joint_id":exports["screw_joint_id"],"angle_offset_deg":angle,"linear_offset_mm":0}));
-        let assembly = client.call("assembly_document", json!({}));
-        let solution = client.call("assembly_solution", json!({}));
-        assert_eq!(solution["solved"], true, "{solution}");
-        assert_eq!(solution["diagnostics"], json!([]));
-        let driven = assembly["joints"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|joint| joint["id"] == exports["screw_joint_id"])
-            .unwrap();
-        assert!((driven["angle_offset_deg"].as_f64().unwrap() - angle).abs() < 1e-5);
-        for part in ["jaw", "keeper", "screw"] {
-            let pose = solution["instance_body_poses"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|pose| pose["body_id"] == exports[format!("{part}_body_id")])
-                .unwrap();
-            assert!(
-                (pose["translation"][0].as_f64().unwrap() - angle / 360. * 2.5).abs() < 1e-5,
-                "{part}: {pose}"
-            );
-        }
-        if angle == 90. || angle == 1440. || angle == 48. / 2.5 * 360. {
-            // The end position also checks the fixed jaw contact and handle
-            // clearance, rather than only the thread pair's bounding boxes.
-            let arguments = if angle == 48. / 2.5 * 360. {
-                json!({"clearance_threshold_mm":0.})
-            } else {
-                json!({"occurrence_ids":[exports["screw_occurrence_id"],exports["nut_occurrence_id"]],"clearance_threshold_mm":0.})
-            };
-            no_overlap(&client.call("assembly_interference_check", arguments));
-        }
-    }
-    // Two full turns near the end of travel cover the paddle's entire sweep.
-    // The rearward paddle also has an analytic separating plane: its forward
-    // edge isX-49+travel, strictly before the base'sX0 for every allowed travel.
-    for quarter_turn in 0..=8 {
-        let travel = 43. + quarter_turn as f64 * 2.5 / 4.;
-        assert!(-49. + travel < 0.);
-        client.call("assembly_set_joint_motion",json!({"joint_id":exports["screw_joint_id"],"angle_offset_deg":travel/2.5*360.,"linear_offset_mm":0}));
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["screw_occurrence_id"],exports["frame_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    client.call(
-        "assembly_set_joint_motion",
-        json!({"joint_id":exports["screw_joint_id"],"angle_offset_deg":0,"linear_offset_mm":0}),
-    );
-
-    // Remove the anti-lift screw first; the inverted-U keeper can then descend
-    // over the neck through the actual jaw slot without intersecting either.
-    let joint_id = |name: &str| {
-        exports["final_assembly"]["joints"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|joint| joint["name"] == name)
-            .unwrap()["id"]
-            .clone()
-    };
-    // Lower the jaw to the right of the head, then slide it over the head
-    // through the open rear chamber. Its closed floor cannot drop over it.
-    for name in ["jaw_guide", "thrust_retention"] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":false}),
-        );
-    }
-    for translation in [
-        [30., 0., 50.],
-        [30., 0., 25.],
-        [30., 0., 0.],
-        [20., 0., 0.],
-        [10., 0., 0.],
-        [0., 0., 0.],
-    ] {
-        client.call("assembly_set_occurrence_pose", json!({"occurrence_id":exports["jaw_occurrence_id"],"local_pose":{"translation":translation,"rotation":[0,0,0,1]}}));
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["screw_occurrence_id"],exports["jaw_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    for name in ["jaw_guide", "thrust_retention"] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":true}),
-        );
-    }
-    // The cartridge has positive capture independent of the rotating D-thread.
-    // Check its assembly sequence before the drive/jaw are installed, then its
-    // free clearance and hard stops using only the actual retaining bodies.
-    for name in [
-        "nut_in_housing",
-        "cartridge_screw_in_housing",
-        "cartridge_nut_in_housing",
-    ] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":false}),
-        );
-    }
-    let cartridge_pose = |client: &mut Client, part: &str, translation: Value, rotation: Value| {
-        client.call("assembly_set_occurrence_pose",json!({"occurrence_id":exports[format!("{part}_occurrence_id")],"local_pose":{"translation":translation,"rotation":rotation}}));
-    };
-    cartridge_pose(
-        &mut client,
-        "cartridge_screw",
-        json!([60, 0, 0]),
-        json!([0, 0, 0, 1]),
-    );
-    cartridge_pose(
-        &mut client,
-        "cartridge_nut",
-        json!([-20, 0, 0]),
-        json!([0, 0, 0, 1]),
-    );
-    for lift in [50., 30., 10., 0.] {
-        cartridge_pose(&mut client, "nut", json!([0, 0, lift]), json!([0, 0, 0, 1]));
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["nut_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    for retreat in [-12., -5., 0.] {
-        cartridge_pose(
-            &mut client,
-            "cartridge_nut",
-            json!([retreat, 0, 0]),
-            json!([0, 0, 0, 1]),
-        );
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["nut_occurrence_id"],exports["cartridge_nut_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    for approach in [40., 20., 3., 0.] {
-        cartridge_pose(
-            &mut client,
-            "cartridge_screw",
-            json!([approach, 0, 0]),
-            json!([0, 0, 0, 1]),
-        );
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["nut_occurrence_id"],exports["cartridge_nut_occurrence_id"],exports["cartridge_screw_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    // Two Ø3.4 holes around a Ø3 shaft permit at most0.4mm relative radial
-    // offset in rigid geometry. At0.38mm the bolt can share that offset;
-    // at0.42mm it cannot fit both holes. No friction/gravity assumption enters.
-    cartridge_pose(
-        &mut client,
-        "cartridge_screw",
-        json!([0, 0, 0.19]),
-        json!([0, 0, 0, 1]),
-    );
-    for (lift, blocked) in [(0.38, false), (0.42, true)] {
-        cartridge_pose(&mut client, "nut", json!([0, 0, lift]), json!([0, 0, 0, 1]));
-        let result=client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["nut_occurrence_id"],exports["cartridge_screw_occurrence_id"]],"clearance_threshold_mm":0}));
-        assert_eq!(
-            result["pairs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["interfering"] == true),
-            blocked,
-            "cartridge lift{lift}: {result}"
-        );
-    }
-    cartridge_pose(
-        &mut client,
-        "cartridge_screw",
-        json!([0, 0, 0]),
-        json!([0, 0, 0, 1]),
-    );
-    for angle in [-1_f64, 1.] {
-        let radians = angle.to_radians();
-        let (sin, cos) = radians.sin_cos();
-        cartridge_pose(
-            &mut client,
-            "nut",
-            json!([
-                0.,
-                12. - (12. * cos - 42. * sin),
-                42. - (12. * sin + 42. * cos)
-            ]),
-            json!([(radians / 2.).sin(), 0., 0., (radians / 2.).cos()]),
-        );
-        let result=client.call("assembly_interference_check",json!({"occurrence_ids":[exports["frame_occurrence_id"],exports["nut_occurrence_id"]],"clearance_threshold_mm":0}));
-        assert!(
-            result["pairs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["interfering"] == true),
-            "cartridge rock{angle}degree must meet a housing stop: {result}"
-        );
-    }
-    cartridge_pose(&mut client, "nut", json!([0, 0, 0]), json!([0, 0, 0, 1]));
-    for name in [
-        "nut_in_housing",
-        "cartridge_screw_in_housing",
-        "cartridge_nut_in_housing",
-    ] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":true}),
-        );
-    }
-    for name in ["keeper_in_jaw", "retainer_screw_in_jaw"] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":false}),
-        );
-    }
-    client.call("assembly_set_occurrence_pose",json!({"occurrence_id":exports["retainer_screw_occurrence_id"],"local_pose":{"translation":[0,0,60],"rotation":[0,0,0,1]}}));
-    for lift in [40., 24., 16., 8., 0.] {
-        client.call("assembly_set_occurrence_pose",json!({"occurrence_id":exports["keeper_occurrence_id"],"local_pose":{"translation":[0,0,lift],"rotation":[0,0,0,1]}}));
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["keeper_occurrence_id"],exports["jaw_occurrence_id"],exports["screw_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    // Check shaft/head insertion after seating the keeper. These hardware
-    // envelopes reserve access; simplified thread contact is deliberately zero.
-    for lift in [45., 20., 3., 0.] {
-        client.call("assembly_set_occurrence_pose",json!({"occurrence_id":exports["retainer_screw_occurrence_id"],"local_pose":{"translation":[0,0,lift],"rotation":[0,0,0,1]}}));
-        no_overlap(&client.call("assembly_interference_check",json!({"occurrence_ids":[exports["retainer_screw_occurrence_id"],exports["retainer_nut_occurrence_id"],exports["keeper_occurrence_id"],exports["jaw_occurrence_id"]],"clearance_threshold_mm":0})));
-    }
-    for name in ["keeper_in_jaw", "retainer_screw_in_jaw"] {
-        client.call(
-            "assembly_set_joint_enabled",
-            json!({"joint_id":joint_id(name),"enabled":true}),
-        );
-    }
-    let before_rejection = client.call("cad_project_model", json!({}));
-    let rejected=client.rpc("tools/call",json!({"name":"assembly_set_joint_motion","arguments":{"joint_id":exports["screw_joint_id"],"angle_offset_deg":49./2.5*360.,"linear_offset_mm":0}}));
-    assert_eq!(rejected["isError"], true, "{rejected}");
-    assert_eq!(
-        client.call("cad_project_model", json!({})),
-        before_rejection,
-        "travel rejection is atomic"
-    );
-
-    let original_jaw = exports["final_scene"]["bodies"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|body| body["id"] == exports["jaw_body_id"])
-        .unwrap();
-    let original_jaw_volume = mesh_measurement(original_jaw).2;
-    for (name, original, changed, expected_volume_delta) in [
-        (
-            "Moving jaw / 60 mm gripping face",
-            60_f64,
-            64_f64,
-            4. * 22. * 44.,
-        ),
-        (
-            "Jaw guide left / running clearance",
-            4.8,
-            5.2,
-            -0.4 * 22. * 4.4,
-        ),
-    ] {
-        let sketch = client.call("sketch_edit", json!({"name":name}));
-        let dimension = sketch["dimensions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|dimension| (dimension["value"].as_f64().unwrap() - original).abs() < 1e-8)
-            .unwrap();
-        assert_eq!(dimension["mode"], "driving");
-        let constraint_id = dimension["constraint_id"].clone();
-        client.call(
-            "sketch_edit_dimension",
-            json!({"constraint_id":constraint_id,"text":changed.to_string()}),
-        );
-        assert_eq!(client.call("sketch_active", json!({}))["dof"]["value"], 0);
-        client.call("sketch_finish", json!({}));
-        let modified = client.call("solid_recompute", json!({}));
-        assert_eq!(modified["scene"]["errors"], json!([]));
-        let jaw = modified["scene"]["bodies"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|body| body["id"] == exports["jaw_body_id"])
-            .unwrap();
-        assert!(
-            (mesh_measurement(jaw).2 - original_jaw_volume - expected_volume_delta).abs() < 0.03,
-            "{name}: edit did not change the intended stock/clearance"
-        );
-        assert_eq!(client.call("assembly_solution", json!({}))["solved"], true);
-        let updated_drawing = client.call(
-            "drawing_export",
-            json!({"sheet_id":exports["vise_jaw_svg"]["sheet_id"],"format":"svg"}),
-        );
-        assert!(
-            updated_drawing["content"]
-                .as_str()
-                .unwrap()
-                .contains(&format!(">{changed:.2}</text>")),
-            "{name}: associative drawing did not measure the edited dimension"
-        );
-        client.call("sketch_edit", json!({"name":name}));
-        client.call(
-            "sketch_edit_dimension",
-            json!({"constraint_id":constraint_id,"text":original.to_string()}),
-        );
-        client.call("sketch_finish", json!({}));
-        let restored = client.call("solid_recompute", json!({}));
-        let residual = restored_geometry_residual(
-            &restored["scene"]["bodies"],
-            &exports["final_scene"]["bodies"],
-            String::new(),
-        );
-        eprintln!(
-            "{name}: largest edit/restore floating residual = {} at {}",
-            residual.0, residual.1
-        );
-        assert!(
-            residual.0 < 1e-6,
-            "{name}: restore residual {} at {}",
-            residual.0,
-            residual.1
-        );
-    }
-
-    // Edit the actual persisted thread, replay its downstream D cut and
-    // restore the modeled helix. This is not an annotation-only thread.
-    let mut thread_request = exports["male_thread_request"].clone();
-    thread_request["thread"]["representation"] = json!("simplified");
-    let simplified = client.call(
-        "solid_edit_external_thread",
-        json!({"feature_id":exports["male_thread_feature_id"],"request":thread_request}),
-    );
-    assert_eq!(simplified["scene"]["errors"], json!([]));
-    let screw_volume = |scene: &Value| {
-        mesh_measurement(
-            scene["bodies"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|body| body["id"] == exports["screw_body_id"])
-                .unwrap(),
-        )
-        .2
-    };
-    assert!(screw_volume(&simplified["scene"]) > screw_volume(&exports["final_scene"]) + 100.);
-    let invalidated = client.rpc("tools/call", json!({"name":"drawing_export","arguments":{"sheet_id":exports["vise_screw_svg"]["sheet_id"],"format":"svg"}}));
-    assert_eq!(
-        invalidated["isError"], true,
-        "a topology-changing thread edit must not silently rebind dimensions"
-    );
-    assert!(invalidated["content"]
-        .to_string()
-        .contains("topology changed"));
-    let restored_thread=client.call("solid_edit_external_thread",json!({"feature_id":exports["male_thread_feature_id"],"request":exports["male_thread_request"]}));
-    assert!(
-        restored_geometry_residual(
-            &restored_thread["scene"]["bodies"],
-            &exports["final_scene"]["bodies"],
-            String::new()
-        )
-        .0 < 1e-6
-    );
-    assert_same_json(
-        &client.call(
-            "drawing_export",
-            json!({"sheet_id":exports["vise_screw_svg"]["sheet_id"],"format":"svg"}),
-        )["content"],
-        &exports["vise_screw_svg"]["content"],
-        "restored thread restores verified drawing references",
-    );
-    let mut restored = Client::restore(&exports["final_model"]);
-    assert_same_json(
-        &restored.call("solid_scene", json!({}))["bodies"],
-        &exports["final_scene"]["bodies"],
-        "native save/reload geometry",
-    );
-    assert_eq!(
-        restored.call("assembly_solution", json!({}))["instance_body_poses"],
-        exports["final_solution"]["instance_body_poses"]
-    );
-    let repeated = Client::start().recipe("d-screw-vise");
-    for (key, value) in exports.as_object().unwrap() {
-        if key.ends_with("_svg") || key.ends_with("_dxf") {
-            assert_same_json(
-                value,
-                &repeated["exports"][key],
-                &format!("independent drawing replay: {key}"),
-            );
-            assert_same_json(
-                &restored.call(
-                    "drawing_export",
-                    json!({"sheet_id":value["sheet_id"],"format":value["format"]}),
-                )["content"],
-                &value["content"],
-                &format!("native save/reload drawing: {key}"),
-            );
-        }
-    }
-    for key in [
-        "final_model",
-        "final_scene",
-        "final_sketches",
-        "final_assembly",
-        "final_solution",
-        "print_model",
-        "print_solution",
-    ] {
-        assert_same_json(
-            &exports[key],
-            &repeated["exports"][key],
-            &format!("independent vise replay: {key}"),
-        );
-    }
-}
+#[path = "recipes/vise.rs"]
+mod vise;
 
 fn assert_same_json(actual: &Value, expected: &Value, label: &str) {
     fn difference(actual: &Value, expected: &Value, path: String) -> Option<String> {
@@ -1354,23 +740,6 @@ fn no_overlap(report: &Value) {
     }
 }
 
-fn internal_thread_mean_radius_squared(
-    envelope: &nbcad_solid::IsoMetricThreadEnvelope,
-    pitch: f64,
-) -> f64 {
-    let (minor, major, mid) = (
-        envelope.modeled_minor / 2.,
-        envelope.modeled_major / 2.,
-        envelope.modeled_pitch / 2.,
-    );
-    let inner_half = pitch / 4. + (mid - minor) / 3_f64.sqrt();
-    let outer_half = pitch / 4. - (major - mid) / 3_f64.sqrt();
-    (2. * outer_half * major.powi(2)
-        + 2. * (inner_half - outer_half) * (minor.powi(2) + minor * major + major.powi(2)) / 3.
-        + (pitch - 2. * inner_half) * minor.powi(2))
-        / pitch
-}
-
 fn write_native_project(path: &std::path::Path, model: &Value) {
     assert_eq!(model["format"], "nbcad-project");
     let manifest = json!({"format":"nbcad-project","container_version":1,"model":"model.json","model_schema_version":model["schema_version"],"application":"noBS CAD","application_version":env!("CARGO_PKG_VERSION"),"saved_at":"1970-01-01T00:00:00Z"});
@@ -1486,49 +855,172 @@ fn d_screw_vise_coupon_replays_real_threads_and_exports_printable_meshes() {
     let mut client = Client::start();
     let report = client.recipe("d-screw-vise-fit");
     let exports = &report["exports"];
-    let envelope =
-        nbcad_solid::iso_metric_grade6_envelope(20., 2.5, nbcad_solid::ThreadFit::External)
-            .unwrap();
-    let female =
-        nbcad_solid::iso_metric_grade6_envelope(20.5, 2.5, nbcad_solid::ThreadFit::Internal)
-            .unwrap();
-    let radial_clearance_min = (female.pitch_min - envelope.pitch_max) / 2.;
-    let radial_clearance_max = (female.pitch_max - envelope.pitch_min) / 2.;
-    assert!(radial_clearance_min >= 0.25 && radial_clearance_max < 0.7);
-    let (major, pitch, minor) = (
-        envelope.modeled_major / 2.,
-        envelope.modeled_pitch / 2.,
-        envelope.modeled_minor / 2.,
-    );
-    let slope = 1. / 3_f64.sqrt();
-    let root_half = 2.5 / 4. - (pitch - minor) * slope;
-    let outer_half = 2.5 / 4. + (major - pitch) * slope;
-    let mean_radius_squared = (2. * root_half * minor.powi(2)
-        + 2. * (outer_half - root_half) * (minor.powi(2) + minor * major + major.powi(2)) / 3.
-        + (2.5 - 2. * outer_half) * major.powi(2))
-        / 2.5;
-    let analytic_volume = std::f64::consts::PI * 25. * mean_radius_squared / 2.;
-    let screw = exports["final_scene"]["bodies"]
+    let scene = &exports["final_scene"];
+    assert_eq!(scene["errors"], json!([]));
+    assert_eq!(exports["final_solution"]["solved"], true);
+    assert_eq!(exports["final_solution"]["diagnostics"], json!([]));
+    assert_retained_component_bodies(scene, &exports["final_assembly"]);
+    no_overlap(&exports["final_interference"]);
+    let parts = exports["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 4);
+    assert!(exports["final_sketches"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|body| body["id"] == exports["screw_body_id"])
+        .all(|sketch| sketch["dof"]["value"] == 0));
+
+    // The author emits JSON with a leading comment header. Compare against
+    // its production inputs without replaying the complete vise or mirroring
+    // a thread-profile formula in this transport regression.
+    let production_source = nbcad_recipes::find("d-screw-vise").unwrap().source;
+    let production_json = production_source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let production: Value = serde_json::from_str(&production_json).unwrap();
+    let inputs = &production["exports"]["design_inputs"];
+    for (coupon, production) in [
+        ("nominal_male_mm", "nominal_thread_mm"),
+        ("pitch_mm", "lead_mm"),
+        ("female_engagement_mm", "thread_engagement_mm"),
+    ] {
+        assert_eq!(exports[coupon], inputs[production], "production {coupon}");
+    }
+    for (coupon, production) in [
+        ("radial_depth", "thread_radial_depth_mm"),
+        ("corner_radius", "thread_corner_radius_mm"),
+        ("radial_clearance", "female_radial_relief_mm"),
+        ("axial_clearance", "female_axial_relief_mm"),
+    ] {
+        assert_eq!(
+            exports["rounded_profile"][coupon], inputs[production],
+            "production {coupon}"
+        );
+    }
+    for (coupon, production) in [
+        ("base_width_mm", "guide_base_width_mm"),
+        ("head_width_mm", "guide_head_width_mm"),
+        ("height_mm", "guide_height_mm"),
+        ("clearance_mm", "guide_clearance_mm"),
+    ] {
+        assert_eq!(
+            exports["guide_profile"][coupon], inputs[production],
+            "production {coupon}"
+        );
+    }
+    assert_eq!(exports["coupon_length_mm"], 40.);
+    assert_eq!(exports["guide_profile"]["engagement_mm"], 40.);
+
+    let external = client.call("solid_body_feature_definitions", json!({}));
+    let male = external
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feature| feature["type"] == "external_thread")
         .unwrap();
-    let (min, max, volume) = mesh_measurement(screw);
-    assert!((min[0] - 0.).abs() < 1e-5 && (max[0] - 25.).abs() < 1e-5 && min[2].abs() < 1e-5);
-    assert!(
-        (volume - analytic_volume).abs() / analytic_volume < 0.01,
-        "coupon measured {volume}, axial-profile integral {analytic_volume}"
+    let holes = client.call("solid_hole_definitions", json!({}));
+    let female = holes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feature| feature["body_id"] == exports["nut_body_id"])
+        .unwrap();
+    assert_eq!(
+        male["thread"], female["thread"],
+        "both native features use the same mating profile"
     );
+    assert_eq!(male["thread"]["standard"], "custom_trapezoidal");
+    assert_eq!(male["thread"]["series"], "rounded");
+    assert_eq!(male["thread"]["class"], "custom");
+    assert_eq!(male["thread"]["representation"], "modeled");
+    assert_eq!(
+        male["thread"]["nominal_diameter"],
+        exports["nominal_male_mm"]
+    );
+    assert_eq!(male["thread"]["pitch"], exports["pitch_mm"]);
+    assert_eq!(
+        male["thread"]["rounded_profile"],
+        exports["rounded_profile"]
+    );
+    let thread: nbcad_solid::HoleThreadDto =
+        serde_json::from_value(male["thread"].clone()).unwrap();
+    let female_diameters =
+        nbcad_solid::rounded_thread_diameters(&thread, nbcad_solid::ThreadFit::Internal)
+            .unwrap()
+            .unwrap();
+    assert_eq!(exports["nominal_female_mm"], female_diameters[0]);
+
+    let body = |id: &str| {
+        scene["bodies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|body| body["id"] == exports[format!("{id}_body_id")])
+            .unwrap()
+    };
+    let (min, max, volume) = mesh_measurement(body("screw"));
+    assert!((min[0]).abs() < 1e-5 && (max[0] - 40.).abs() < 1e-5);
+    assert!(
+        (min[2] - inputs["flat_axis_z_mm"].as_f64().unwrap()).abs() < 1e-5,
+        "coupon keeps the production shallow flat"
+    );
+    assert!(volume > 1.);
+    let (_, nut_max, nut_volume) = mesh_measurement(body("nut"));
+    assert!((nut_max[2] - exports["female_engagement_mm"].as_f64().unwrap()).abs() < 1e-5);
+    assert!(nut_volume > 1.);
+    assert!(
+        body("nut")["faces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|face| face["cylinder"]["radius"]
+                .as_f64()
+                .is_some_and(|r| (2. * r - female_diameters[2]).abs() < 1e-6)),
+        "native female minor bore matches the mating profile"
+    );
+    // These vertices are the actual captured cross-sections, including the
+    // enlarged female roof; a rectangular slot cannot satisfy this check.
+    for (part, point) in [
+        ("guide_male", [0., 6., 14.]),
+        ("guide_male", [0., 14., 22.]),
+        ("guide_female", [60., 6.4, 14.]),
+        ("guide_female", [60., 14.8, 22.4]),
+    ] {
+        assert!(
+            body(part)["mesh"]["positions"]
+                .as_array()
+                .unwrap()
+                .chunks_exact(3)
+                .any(|p| (0..3).all(|axis| (p[axis].as_f64().unwrap() - point[axis]).abs() < 1e-5)),
+            "{part} lacks captured profile vertex {point:?}"
+        );
+    }
     let artifacts = RecipeArtifacts::new();
     let directory = &artifacts.path;
     let exported = client.call("solid_export_3mf", json!({"slicer_target":"standard"}));
     validate_print_3mf(
         &exported,
-        2,
+        4,
         [235.5, 256., 256.],
         &directory.join("d-screw-vise-fit.3mf"),
     );
+    for id in ["screw", "nut", "guide_male", "guide_female"] {
+        let part = parts.iter().find(|part| part["id"] == id).unwrap();
+        assert_eq!(part["printable"], true);
+        let print = client.call(
+            "solid_export_3mf",
+            json!({
+                "body_ids":[part["body_id"]], "scope":"assembly", "slicer_target":"standard"
+            }),
+        );
+        validate_print_3mf(
+            &print,
+            1,
+            [235.5, 256., 256.],
+            &directory.join(format!("vise-fit-{id}.3mf")),
+        );
+    }
     std::fs::write(
         directory.join("fit-model.json"),
         serde_json::to_vec_pretty(&exports["final_model"]).unwrap(),
@@ -1539,15 +1031,40 @@ fn d_screw_vise_coupon_replays_real_threads_and_exports_printable_meshes() {
         &exports["final_model"],
     );
     let repeated = Client::start().recipe("d-screw-vise-fit");
-    for key in ["final_scene", "final_model", "final_sketches"] {
-        assert_eq!(
-            exports[key], repeated["exports"][key],
-            "coupon replay {key}"
+    for key in [
+        "final_scene",
+        "final_model",
+        "final_sketches",
+        "final_assembly",
+        "final_solution",
+    ] {
+        assert_same_json(
+            &exports[key],
+            &repeated["exports"][key],
+            &format!("coupon replay {key}"),
         );
     }
+    let mut restored = Client::restore(&exports["final_model"]);
+    assert_same_json(
+        &restored.call("solid_scene", json!({}))["bodies"],
+        &scene["bodies"],
+        "coupon native save/reload geometry",
+    );
+    assert_eq!(restored.call("solid_hole_definitions", json!({})), holes);
     assert_eq!(
-        Client::restore(&exports["final_model"]).call("solid_scene", json!({}))["bodies"],
-        exports["final_scene"]["bodies"]
+        restored.call("solid_body_feature_definitions", json!({})),
+        external
+    );
+    assert_eq!(
+        restored.call("assembly_solution", json!({}))["instance_body_poses"],
+        exports["final_solution"]["instance_body_poses"]
+    );
+    let restored_print = restored.call("solid_export_3mf", json!({"slicer_target":"standard"}));
+    validate_print_3mf(
+        &restored_print,
+        4,
+        [235.5, 256., 256.],
+        &directory.join("vise-fit-restored.3mf"),
     );
 }
 
