@@ -48,11 +48,13 @@ export async function checkDrawingProjectionPublication() {
   const projection = (n: number): DrawingProjectionDto => ({visible: [{points: [[n, 0], [n + 10, 10]]}], hidden: [], anchors: [], circles: [], section: [], bounds: [0, 0, 20, 20]});
   const request = (id: number) => drawingProjectionRequestForView(view(id), drawing.sheets[0].views, scene);
   const completed = (id: number, n: number, extra = {}) => ({session_id: sessionId, document_id: documentId, engine_revision: revision,
-    drawing_projection: {request: request(id), projection: projection(n)}, ...extra});
+    drawing_projections: [{request: request(id), projection: projection(n)}], ...extra});
   const ok = (value: unknown) => JSON.stringify({ok: true, value});
   const calls: string[] = [];
   let control: unknown = null, exportGate: ReturnType<typeof deferred<void>> | null = null;
   let projectionGate: ReturnType<typeof deferred<void>> | null = null;
+  let finishAckGate: ReturnType<typeof deferred<void>> | null = null;
+  let finishAcknowledgments = 0;
   let publications = 0, automatic = 0, exportEntered = false;
   const running = new Set<Promise<unknown>>();
   const releaseControls = new Set<() => void>();
@@ -71,7 +73,15 @@ export async function checkDrawingProjectionPublication() {
     if (command === 'engine_active_sketch') return ok(null);
     if (command === 'engine_project_export_model') { exportEntered = true; await exportGate?.promise; return ok(JSON.stringify({document: doc, drawing})); }
     if (command === 'engine_drawing_projection') { automatic++; await projectionGate?.promise; return ok(projection(91)); }
-    if (command === 'mcp_session_bridge_control') { check(!args.response, 'Completed native query must not receive a second acknowledgment'); const reply = control; control = null; return reply; }
+    if (command === 'mcp_session_bridge_control') {
+      if (args.response) {
+        const response = args.response as {request_id: string; status: string};
+        check(response.request_id === 'finish-control', 'Completed native query must not receive a second acknowledgment');
+        check(response.status === 'applied', 'Finish must acknowledge successfully');
+        finishAcknowledgments++; await finishAckGate?.promise; return null;
+      }
+      const reply = control; control = null; return reply;
+    }
     throw new Error(`Unexpected drawing publication IPC: ${command}`);
   }};
   const container = document.createElement('div'); container.style.cssText = 'width:1000px;height:700px'; document.body.append(container);
@@ -112,24 +122,31 @@ export async function checkDrawingProjectionPublication() {
 
     // A second view must neither replace the first linework nor queue cold HLR
     // behind its next mutation. Pause retains the same script work ownership.
-    drawing = {...drawing, next_view_id: 3, sheets: [{...drawing.sheets[0], views: [view(1), view(2)]}]};
+    drawing = {...drawing, next_view_id: 4, sheets: [{...drawing.sheets[0], views: [view(1), view(2), view(3)]}]};
     await track(applyInboxNow()); await frames();
     presentation.control({command: 'pause'}); await frames();
     check(publications === 3 && automatic === 0 && hasLine(11), 'Second view/pause launched competing HLR or lost completed linework');
     await handoff(completed(2, 22)); await until(() => hasLine(22), 'Second explicit projection was not rendered');
+    // A completed sheet export supplies every projection it already computed,
+    // including views that the script never queried individually.
+    await handoff({...completed(1, 12), drawing_projections: [
+      ...completed(1, 12).drawing_projections, ...completed(3, 23).drawing_projections,
+    ]});
+    await until(() => hasLine(12) && hasLine(22) && hasLine(23), 'Completed export did not paint its batch of native view results');
+    check(automatic === 0, 'Completed export launched a duplicate native projection');
     await handoff(completed(2, 33, {session_id: 'forged-session'})); await frames();
     check(hasLine(22) && !hasLine(33), 'Wrong-session linework was accepted');
     await handoff(completed(2, 34, {engine_revision: revision - 1})); await frames();
     check(!hasLine(34), 'Wrong native generation linework was accepted');
     const wrongRequest = completed(2, 35);
-    wrongRequest.drawing_projection.request.deflection = 0.04;
+    wrongRequest.drawing_projections[0].request.deflection = 0.04;
     await handoff(wrongRequest); await frames();
     check(hasLine(22) && !hasLine(35), 'Different requested projection accuracy reused another view result');
 
     // Same-document geometry/pose refresh invalidates retained linework.
     useAppStore.setState({solidScene: {...scene}, assemblySolution: {...initial.assemblySolution}});
     check(await publishCurrentSession(), 'Publish the changed scene and poses'); await frames();
-    check(!hasLine(11) && !hasLine(22) && automatic === 0, 'Geometry/pose changes reused stale projection');
+    check(!hasLine(12) && !hasLine(22) && !hasLine(23) && automatic === 0, 'Geometry/pose changes reused stale projection');
     await handoff(completed(1, 44)); await until(() => hasLine(44), 'Fresh changed-scene result was not displayed');
 
     // A delayed native poll cannot deliver A into a same-tab replacement B.
@@ -155,16 +172,23 @@ export async function checkDrawingProjectionPublication() {
     await handoff(completed(1, 66)); await until(() => hasLine(66), 'Fresh projection after bounded eviction did not paint');
 
     // Finishing allows remaining cold views through the ordinary native path.
-    projectionGate = deferred(); presentation.control({command: 'finish'});
+    projectionGate = deferred(); finishAckGate = deferred();
+    control = {id: 'finish-control', session_id: sessionId, expires_ms: Date.now() + 10_000,
+      ui: {action: 'presentation', command: 'finish'}};
+    const finishing = track(applyLiveUiControl(async () => { throw new Error('Finish is presentation-only'); }));
+    await until(() => finishAcknowledgments === 1, 'Finish acknowledgment was blocked by newly scheduled automatic HLR');
+    await frames();
+    check(automatic === 0, 'Automatic HLR started before the native finish acknowledgment completed');
+    finishAckGate.resolve(); finishAckGate = null; await finishing;
     await until(() => automatic === 1, 'Finish did not schedule remaining native view');
     check(hasLine(66), 'Existing completed linework vanished during cold projection');
     root.unmount(); mounted = false; projectionGate.resolve(); projectionGate = null;
     await until(() => !running.size, 'Drawing fixture retained work'); await frames();
-    return {publishBeforeHlr: true, secondView: true, incrementalNativeLinework: true, pausedScript: true,
-      nativeSessionRevision: true, exactRequest: true, boundedCache: true, geometryPoseInvalidation: true, replacedDocument: true, firstReplacementFrame: true, finishAndUnmount: true};
+    return {publishBeforeHlr: true, secondView: true, incrementalNativeLinework: true, exportedViewBatch: true, pausedScript: true,
+      nativeSessionRevision: true, exactRequest: true, boundedCache: true, geometryPoseInvalidation: true, replacedDocument: true, firstReplacementFrame: true, finishAcknowledgment: true, finishAndUnmount: true};
   } finally {
     if (mounted) root.unmount();
-    exportGate?.resolve(); projectionGate?.resolve();
+    exportGate?.resolve(); projectionGate?.resolve(); finishAckGate?.resolve();
     for (const release of releaseControls) release();
     await Promise.allSettled(running);
     await until(() => pendingEngineOperations() === 0, 'Projection fixture did not drain native operations');

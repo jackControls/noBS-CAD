@@ -9,11 +9,11 @@ import {pendingEngineOperations} from './engine/activity';
 import { applicationExitBarrier } from './files/applicationExit';
 import { leaveDrawingWorkspace } from './drawing/document';
 import { applyView, type ViewRequest as CameraViewRequest } from './viewControl';
-import {acceptDrawingProjection, captureDrawingProjectionScope, type CompletedDrawingProjection} from './drawing/projectionPresentation';
+import {acceptDrawingProjection, captureDrawingProjectionScope, holdAutomaticDrawingProjections, type CompletedDrawingProjection} from './drawing/projectionPresentation';
 
 let applying = false;
 interface ViewRequest extends CameraViewRequest { id: string; session_id: string;
-  drawing_projection?: CompletedDrawingProjection['drawing_projection'];
+  drawing_projections?: CompletedDrawingProjection['drawing_projections'];
   document_id?: string;
   engine_revision?: number;
   ui?: Omit<UiAction, 'action'> & Omit<UiFileRequest, 'command'> & Omit<PresentationRequest, 'mode' | 'command'> & {
@@ -28,6 +28,7 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
   if (applying || useAppStore.getState().engineKind !== 'tauri') return;
   applying = true;
   const releaseExit = applicationExitBarrier.hold();
+  const releaseProjections = holdAutomaticDrawingProjections();
   try {
     const before = useAppStore.getState();
     const document = before.document;
@@ -36,7 +37,7 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
     const ownsDocument = () => ownerRevision === presentation.documentVersion();
     const request = await invoke<ViewRequest | null>('mcp_session_bridge_control');
     if (!request) return;
-    if (request.drawing_projection) {
+    if (request.drawing_projections) {
       // The native query already wrote its receipt. This is a read-only
       // linework handoff in the same poll, not another control to acknowledge.
       if (ownsDocument()) acceptDrawingProjection(request as CompletedDrawingProjection, projectionScope);
@@ -121,5 +122,5 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
     await invoke('mcp_session_bridge_control', { response });
   } catch (error) {
     console.debug('[sessionBridge] view request failed', error);
-  } finally { applying = false; releaseExit(); }
+  } finally { applying = false; releaseExit(); releaseProjections(); }
 }

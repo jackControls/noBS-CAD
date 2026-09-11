@@ -23,7 +23,22 @@ const cache = new Map<string, {projection: DrawingProjectionDto; bytes: number}>
 const listeners = new Set<() => void>();
 let bytes = 0;
 let automaticRunning = false;
+let automaticHolds = 0;
 const notify = () => { for (const listener of listeners) listener(); };
+
+/** A UI control may finish playback before its native acknowledgment settles.
+ * Keep new background HLR out of that interval without blocking file transitions
+ * or delivery of already completed native projections. */
+export function holdAutomaticDrawingProjections(): () => void {
+  automaticHolds++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    automaticHolds--;
+    notify();
+  };
+}
 
 function refreshScope() {
   const next = captureDrawingProjectionScope();
@@ -64,7 +79,7 @@ export interface CompletedDrawingProjection {
   session_id: string;
   document_id: string;
   engine_revision: number;
-  drawing_projection: {request: DrawingProjectionRequest; projection: DrawingProjectionDto};
+  drawing_projections: {request: DrawingProjectionRequest; projection: DrawingProjectionDto}[];
 }
 
 /** Native stamped this reply under the publisher/engine lock. Recheck the
@@ -74,13 +89,14 @@ export function acceptDrawingProjection(reply: CompletedDrawingProjection, befor
   if (!current(before) || !projectTransitions.isSettled() || !owner
     || owner.documentId !== reply.document_id || scope?.tab !== reply.document_id
     || owner.sessionId !== reply.session_id || owner.revision !== reply.engine_revision) return false;
-  remember(key(reply.drawing_projection.request), reply.drawing_projection.projection);
+  for (const {request, projection} of reply.drawing_projections) remember(key(request), projection);
   return true;
 }
 
 function automaticAllowed() {
   const playback = presentation.snapshot();
-  return projectTransitions.isSettled() && !(playback.active && !playback.finished && !playback.stopped);
+  return automaticHolds === 0 && projectTransitions.isSettled()
+    && !(playback.active && !playback.finished && !playback.stopped);
 }
 
 /** Cancellable observer, with one background native read at a time. Pause

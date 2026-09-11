@@ -696,6 +696,22 @@ fn write_engine_revision_heartbeat(
     project_session_id: Option<&str>,
     process_instance_id: &str,
 ) -> Result<(), String> {
+    write_project_heartbeat(
+        project,
+        window_id,
+        project_session_id,
+        process_instance_id,
+        "engine_revision",
+    )
+}
+
+fn write_project_heartbeat(
+    project: &ProjectPublisher,
+    window_id: &str,
+    project_session_id: Option<&str>,
+    process_instance_id: &str,
+    kind: &str,
+) -> Result<(), String> {
     let dir = session_root().join(&project.session_id);
     fs::create_dir_all(&dir).map_err(|error| format!("create session dir: {error}"))?;
     let _ = clear_closed_tombstone(&project.session_id);
@@ -712,7 +728,7 @@ fn write_engine_revision_heartbeat(
         "document_id": project_session_id,
         "process_instance_id": process_instance_id,
         "session_mode": "ui_owned_apply",
-        "kind": "engine_revision",
+        "kind": kind,
     }))
     .map_err(|error| format!("encode heartbeat.json: {error}"))?;
     atomic_write(&dir.join("heartbeat.json"), &heartbeat_body)
@@ -1023,24 +1039,30 @@ impl SessionBridgeState {
             .process_lease_path
             .lock()
             .map_err(|_| "session process lease lock poisoned".to_string())?;
-        let mut windows = {
-            let publishers = self
-                .publishers
-                .lock()
-                .map_err(|_| "session publisher lock poisoned".to_string())?;
-            publishers
-                .iter()
-                .filter_map(|(window_id, publisher)| {
-                    let document_id = publisher.active_project_session_id.as_ref()?;
-                    let project = publisher.by_project.get(document_id)?;
-                    Some(json!({
-                        "window_id": window_id,
-                        "active_document_id": document_id,
-                        "active_session_id": project.session_id,
-                    }))
-                })
-                .collect::<Vec<_>>()
-        };
+        let publishers = self
+            .publishers
+            .lock()
+            .map_err(|_| "session publisher lock poisoned".to_string())?;
+        self.write_process_instance_file_locked(&publishers, &mut remembered_path)
+    }
+
+    fn write_process_instance_file_locked(
+        &self,
+        publishers: &HashMap<String, WindowPublisher>,
+        remembered_path: &mut Option<PathBuf>,
+    ) -> Result<(), String> {
+        let mut windows = publishers
+            .iter()
+            .filter_map(|(window_id, publisher)| {
+                let document_id = publisher.active_project_session_id.as_ref()?;
+                let project = publisher.by_project.get(document_id)?;
+                Some(json!({
+                    "window_id": window_id,
+                    "active_document_id": document_id,
+                    "active_session_id": project.session_id,
+                }))
+            })
+            .collect::<Vec<_>>();
         windows.sort_by(|a, b| {
             a.get("window_id")
                 .and_then(Value::as_str)
@@ -1635,6 +1657,12 @@ fn control_for_window(
     engine: &AppState,
     response: Option<Value>,
 ) -> Result<Value, String> {
+    // Use the established lease -> publisher order. A completed slow native
+    // query must refresh both liveness files before its client sees the receipt.
+    let mut lease_path = state
+        .process_lease_path
+        .lock()
+        .map_err(|_| "session process lease lock poisoned")?;
     let mut publishers = state
         .publishers
         .lock()
@@ -1743,8 +1771,30 @@ fn control_for_window(
         if let Some(query) = request.get("sketch_query") {
             let method = query.get("method").and_then(Value::as_str).unwrap_or("");
             let payload = query.get("payload").and_then(Value::as_str).unwrap_or("");
-            let result = if nbcad_mcp_mutate::is_live_engine_query(method) {
-                parse_engine_envelope(engine.engine_call(method, payload))
+            let mut projections = std::collections::VecDeque::new();
+            let mut projection_bytes = 0;
+            let mut completed =
+                |request: &nbcad_occt::DrawingProjectionRequest,
+                 projection: &nbcad_occt::DrawingProjectionDto| {
+                    let value = json!({"request": request, "projection": projection});
+                    let bytes = value.to_string().len();
+                    projections.push_back((value, bytes));
+                    projection_bytes += bytes;
+                    // Match the renderer's bounded cache. One oversized native
+                    // result can be delivered transiently without retaining peers.
+                    while projections.len() > 12
+                        || (projection_bytes > 16 * 1024 * 1024 && projections.len() > 1)
+                    {
+                        projection_bytes -= projections.pop_front().unwrap().1;
+                    }
+                };
+            let supported = nbcad_mcp_mutate::is_live_engine_query(method);
+            let result = if supported {
+                if method == "drawing_export" {
+                    parse_engine_envelope(engine.drawing_export_observing(payload, &mut completed))
+                } else {
+                    parse_engine_envelope(engine.engine_call(method, payload))
+                }
             } else {
                 Err("unsupported live engine query".into())
             };
@@ -1752,27 +1802,50 @@ fn control_for_window(
                 Ok(value) => json!({"status":"applied","value":value}),
                 Err(error) => json!({"status":"failed","error":error}),
             };
-            let id = request["id"].as_str().unwrap();
-            atomic_write(
-                &dir.join(format!("{id}.result.json")),
-                &response.to_string(),
-            )?;
-            let _ = fs::remove_file(path);
             // Share completed exact linework through this existing poll. The
             // renderer must not launch competing HLR between inbox apply and
             // snapshot publication. Identity/revision are stamped while the
             // publisher lock still protects this query's native document.
             if method == "drawing_projection" && response["status"] == "applied" {
                 let request: nbcad_occt::DrawingProjectionRequest = serde_json::from_str(payload)
-                    .map_err(|error| format!("invalid completed projection request: {error}"))?;
-                return Ok(json!({
+                    .map_err(|error| {
+                    format!("invalid completed projection request: {error}")
+                })?;
+                projections.push_back((
+                    json!({"request": request, "projection": response["value"]}),
+                    0,
+                ));
+            }
+            let handoff = if response["status"] == "applied" && !projections.is_empty() {
+                json!({
                     "session_id": session_id,
                     "document_id": publisher.active_project_session_id,
                     "engine_revision": publisher.active_mut().engine_revision,
-                    "drawing_projection": {"request": request, "projection": response["value"]},
-                }));
+                    "drawing_projections": projections.into_iter().map(|(value, _)| value).collect::<Vec<_>>(),
+                })
+            } else {
+                Value::Null
+            };
+            // Failure also proves this supported query has finished. Preserve
+            // its failed receipt while permitting the caller's Stop/inspection.
+            if supported {
+                let document_id = publisher.active_project_session_id.clone();
+                write_project_heartbeat(
+                    publisher.active_mut(),
+                    window_label,
+                    document_id.as_deref(),
+                    &state.process_instance_id,
+                    "query_completed",
+                )?;
+                state.write_process_instance_file_locked(&publishers, &mut lease_path)?;
             }
-            return Ok(Value::Null);
+            let id = request["id"].as_str().unwrap();
+            atomic_write(
+                &dir.join(format!("{id}.result.json")),
+                &response.to_string(),
+            )?;
+            let _ = fs::remove_file(path);
+            return Ok(handoff);
         }
         publisher
             .pending_controls
@@ -1933,40 +2006,341 @@ mod tests {
         {
             let state = SessionBridgeState::default();
             let engine = AppState::new();
-            envelope_ok(&state.with_project_session_transition("main", &engine, || engine.bind_project_session("drawing-a")));
-            dispatch_inbox_on_engine(&engine, "sketch_begin", &json!({"name":"Projection fixture","plane":{"type":"origin_plane","plane":"xy"}})).unwrap();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("drawing-a")
+            }));
+            dispatch_inbox_on_engine(
+                &engine,
+                "sketch_begin",
+                &json!({"name":"Projection fixture","plane":{"type":"origin_plane","plane":"xy"}}),
+            )
+            .unwrap();
             dispatch_inbox_on_engine(&engine,"sketch_add_rectangle",&json!({"mode":"two_point","p1":{"x":0.,"y":0.},"p2":{"x":10.,"y":10.},"ctrl_held":false})).unwrap();
             dispatch_inbox_on_engine(&engine, "sketch_finish", &json!({})).unwrap();
             let solid=dispatch_inbox_on_engine(&engine,"solid_extrude",&json!({"sketch_name":"Projection fixture","profile_indices":[0],"operation":"new_body","extent":{"type":"distance","distance":5.},"taper_angle_deg":0.,"flip":false,"target_body_ids":[]})).unwrap();
             let body = solid["scene"]["bodies"][0]["id"].clone();
-            let reserved = state.reserve_for_window_on_project("main", Some("drawing-a")).unwrap();
+            let reserved = state
+                .reserve_for_window_on_project("main", Some("drawing-a"))
+                .unwrap();
             let session = reserved["session_id"].as_str().unwrap();
             let controls = dir.join(session).join("controls");
             fs::create_dir_all(&controls).unwrap();
             let request = json!({"body_ids":[body],"direction":[0.,0.,1.],"up":[0.,1.,0.]});
             let write_query = |id: &str, method: &str, payload: &str| {
-                atomic_write(&controls.join(format!("{id}.request.json")), &json!({"id":id,"expires_ms":now_ms()+30_000,
-                    "session_id":"forged", "sketch_query":{"method":method,"payload":payload}}).to_string()).unwrap();
+                atomic_write(
+                    &controls.join(format!("{id}.request.json")),
+                    &json!({"id":id,"expires_ms":now_ms()+30_000,
+                    "session_id":"forged", "sketch_query":{"method":method,"payload":payload}})
+                    .to_string(),
+                )
+                .unwrap();
             };
             write_query("100-1", "drawing_projection", &request.to_string());
             let handoff = control_for_window(&state, "main", &engine, None).unwrap();
             assert_eq!(handoff["session_id"], session);
             assert_eq!(handoff["document_id"], "drawing-a");
             assert_eq!(handoff["engine_revision"], reserved["engine_revision"]);
-            assert_eq!(handoff["drawing_projection"]["request"]["deflection"], 0.05);
-            assert_eq!(handoff["drawing_projection"]["request"]["include_hidden"], false);
-            assert!(!handoff["drawing_projection"]["projection"]["visible"].as_array().unwrap().is_empty());
-            let receipt: Value = serde_json::from_str(&fs::read_to_string(controls.join("100-1.result.json")).unwrap()).unwrap();
+            assert_eq!(handoff["drawing_projections"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                handoff["drawing_projections"][0]["request"]["deflection"],
+                0.05
+            );
+            assert_eq!(
+                handoff["drawing_projections"][0]["request"]["include_hidden"],
+                false
+            );
+            assert!(!handoff["drawing_projections"][0]["projection"]["visible"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            let receipt: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("100-1.result.json")).unwrap(),
+            )
+            .unwrap();
             assert_eq!(receipt["status"], "applied");
-            assert_eq!(receipt["value"], handoff["drawing_projection"]["projection"]);
+            assert_eq!(
+                receipt["value"],
+                handoff["drawing_projections"][0]["projection"]
+            );
             assert!(!controls.join("100-1.request.json").exists());
-            assert!(control_for_window(&state, "main", &engine, None).unwrap().is_null());
-            assert!(state.publishers.lock().unwrap()["main"].pending_controls.is_empty());
+            assert!(control_for_window(&state, "main", &engine, None)
+                .unwrap()
+                .is_null());
+            assert!(state.publishers.lock().unwrap()["main"]
+                .pending_controls
+                .is_empty());
             write_query("100-2", "drawing_projection", "{}");
-            assert!(control_for_window(&state, "main", &engine, None).unwrap().is_null());
-            let failed: Value = serde_json::from_str(&fs::read_to_string(controls.join("100-2.result.json")).unwrap()).unwrap();
+            assert!(control_for_window(&state, "main", &engine, None)
+                .unwrap()
+                .is_null());
+            let failed: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("100-2.result.json")).unwrap(),
+            )
+            .unwrap();
             assert_eq!(failed["status"], "failed");
-            assert_eq!(state.engine_revision_for_window("main").unwrap(), reserved["engine_revision"].as_u64());
+            // Export the real native box sheet. Both ordinary and derived
+            // projections reach the UI without modifying the SVG/DXF receipt.
+            dispatch_inbox_on_engine(
+                &engine,
+                "drawing_create_sheet",
+                &json!({"name":"Export fixture","format":"a4","orientation":"landscape"}),
+            )
+            .unwrap();
+            dispatch_inbox_on_engine(&engine, "drawing_add_view", &json!({"sheet_id":1,"view":{
+                "name":"Top","kind":"top","body_ids":[body],"direction":[0.,0.,1.],"up":[0.,1.,0.],"position":[90.,65.],"scale":2.
+            }})).unwrap();
+            let shape = &solid["scene"]["bodies"][0];
+            let edge = shape["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|edge| {
+                    let points = edge["points"].as_array().unwrap();
+                    let (a, b) = (points.first().unwrap(), points.last().unwrap());
+                    a["x"] != b["x"] && a["y"] == b["y"] && a["z"] == b["z"]
+                })
+                .unwrap();
+            let anchor = |endpoint| {
+                json!({"body_id":body,"edge_id":edge["id"],"edge_key":edge["key"],
+                "topology_signature":handoff["drawing_projections"][0]["projection"]["topology_signatures"][body.to_string()],"endpoint":endpoint,"fallback_point":[999.,999.,999.]})
+            };
+            dispatch_inbox_on_engine(&engine, "drawing_add_view", &json!({"sheet_id":1,"view":{
+                "name":"Section","kind":"section","body_ids":[body],"direction":[0.,-1.,0.],"up":[0.,0.,1.],"position":[160.,100.],"scale":0.5,
+                "derivation":{"type":"section","parent_view_id":1,"first":anchor("start"),"second":anchor("end"),"label":"A-A","hatch_angle_deg":45.,"hatch_spacing_mm":2.}
+            }})).unwrap();
+            for (id, format) in [("100-3", "svg"), ("100-4", "dxf")] {
+                let payload = json!({"sheet_id":1,"format":format}).to_string();
+                write_query(id, "drawing_export", &payload);
+                let export_handoff = control_for_window(&state, "main", &engine, None).unwrap();
+                assert_eq!(export_handoff["session_id"], session);
+                assert_eq!(export_handoff["document_id"], "drawing-a");
+                assert_eq!(
+                    export_handoff["engine_revision"],
+                    reserved["engine_revision"]
+                );
+                let projected = export_handoff["drawing_projections"].as_array().unwrap();
+                assert_eq!(projected.len(), 2);
+                assert_eq!(projected[0]["request"]["deflection"], 0.04);
+                assert_eq!(projected[1]["request"]["deflection"], 0.16);
+                assert_ne!(
+                    projected[1]["request"]["section_plane"]["point"],
+                    json!([999., 999., 999.])
+                );
+                assert!(projected[1]["request"]["section_plane"].is_object());
+                for view in projected {
+                    assert_eq!(
+                        view["projection"],
+                        parse_engine_envelope(
+                            engine.drawing_projection(&view["request"].to_string())
+                        )
+                        .unwrap()
+                    );
+                }
+                let receipt: Value = serde_json::from_str(
+                    &fs::read_to_string(controls.join(format!("{id}.result.json"))).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(receipt["status"], "applied");
+                assert_eq!(
+                    receipt["value"],
+                    parse_engine_envelope(engine.drawing_export(&payload)).unwrap()
+                );
+                assert!(receipt["value"].get("drawing_projections").is_none());
+                assert!(!controls.join(format!("{id}.request.json")).exists());
+                assert!(control_for_window(&state, "main", &engine, None)
+                    .unwrap()
+                    .is_null());
+                assert!(state.publishers.lock().unwrap()["main"]
+                    .pending_controls
+                    .is_empty());
+            }
+            write_query(
+                "100-5",
+                "drawing_export",
+                "{\"sheet_id\":999,\"format\":\"svg\"}",
+            );
+            assert!(control_for_window(&state, "main", &engine, None)
+                .unwrap()
+                .is_null());
+            let failed: Value = serde_json::from_str(
+                &fs::read_to_string(controls.join("100-5.result.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(failed["status"], "failed");
+            assert_eq!(
+                state.engine_revision_for_window("main").unwrap(),
+                reserved["engine_revision"].as_u64()
+            );
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn completed_native_query_refreshes_liveness_before_next_mcp_call() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-query-completion-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || {
+                engine.bind_project_session("query-a")
+            }));
+            let reservation = state
+                .reserve_for_window_on_project("main", Some("query-a"))
+                .unwrap();
+            let session = reservation["session_id"].as_str().unwrap().to_owned();
+            let mut published = payload_on_project(
+                &session,
+                "query-a",
+                reservation["generation"].as_u64().unwrap(),
+                "unused",
+            );
+            published.model_json = Some(
+                parse_engine_envelope(engine.engine_call("project_export_model", ""))
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+            state.write_for_window("main", published).unwrap();
+            let heartbeat_path = dir.join(&session).join("heartbeat.json");
+            let lease_path = dir
+                .join("_ui/processes")
+                .join(format!("{}.json", state.process_instance_id));
+            let original_model = fs::read(dir.join(&session).join("model.json")).unwrap();
+            let original: Value =
+                serde_json::from_str(&fs::read_to_string(&heartbeat_path).unwrap()).unwrap();
+            for failing_query in [false, true] {
+                let next = if failing_query {
+                    json!({"id":"failed_projection","call":{"group":"drawing/views","operation":"drawing_projection",
+                    "arguments":{"body_ids":[999],"direction":[0.,0.,1.],"up":[0.,1.,0.]}}})
+                } else {
+                    json!({"id":"next","call":{"group":"sketch/draw","operation":"sketch_active","arguments":{}}})
+                };
+                let source = json!({"version":1,"name":"Query completion liveness","steps":[
+                {"id":"first","call":{"group":"sketch/draw","operation":"sketch_active","arguments":{}}},
+                next
+            ]}).to_string();
+                let attached = session.clone();
+                let runner = std::thread::spawn(move || {
+                    nbcad_mcp::run_script(&source, Some(&attached), "fast", 1.)
+                });
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+                let mut completed_queries = 0;
+                let mut commands = Vec::new();
+                while !runner.is_finished() && std::time::Instant::now() < deadline {
+                    let pending = fs::read_dir(dir.join(&session).join("controls"))
+                        .ok()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Result::ok)
+                        .filter(|entry| {
+                            entry
+                                .file_name()
+                                .to_string_lossy()
+                                .ends_with(".request.json")
+                        })
+                        .find_map(|entry| {
+                            serde_json::from_str::<Value>(&fs::read_to_string(entry.path()).ok()?)
+                                .ok()
+                        });
+                    if pending.is_none() {
+                        // Do not race a just-created request into the native poll
+                        // before the fixture applies its elapsed-time witness.
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    let querying = pending
+                        .as_ref()
+                        .is_some_and(|request| request.get("sketch_query").is_some());
+                    if querying {
+                        // Deterministically model time elapsed while the native
+                        // query held the publisher. Do not fake keep-alives during it.
+                        for path in [&heartbeat_path, &lease_path] {
+                            let mut stale: Value =
+                                serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+                            stale["updated_ms"] = json!(now_ms().saturating_sub(120_000));
+                            atomic_write(path, &stale.to_string()).unwrap();
+                        }
+                    }
+                    let started = now_ms();
+                    let request = control_for_window(&state, "main", &engine, None).unwrap();
+                    if querying {
+                        completed_queries += 1;
+                        let heartbeat: Value =
+                            serde_json::from_str(&fs::read_to_string(&heartbeat_path).unwrap())
+                                .unwrap();
+                        assert!(heartbeat["updated_ms"].as_u64().unwrap() >= started);
+                        assert!(
+                            read_process_lease(&state, &dir)["updated_ms"]
+                                .as_u64()
+                                .unwrap()
+                                >= started
+                        );
+                        for field in [
+                            "generation",
+                            "published_generation",
+                            "model_generation",
+                            "active_sketch_generation",
+                            "session_id",
+                            "document_id",
+                        ] {
+                            assert_eq!(
+                                heartbeat[field], original[field],
+                                "query completion preserves {field}"
+                            );
+                        }
+                        assert_eq!(heartbeat["kind"], "query_completed");
+                    }
+                    if !request.is_null() {
+                        assert!(request.get("ui").is_some());
+                        commands.push(request["ui"]["command"].as_str().unwrap().to_owned());
+                        control_for_window(
+                        &state,
+                        "main",
+                        &engine,
+                        Some(
+                            json!({"request_id":request["id"],"session_id":request["session_id"],
+                        "status":"applied","presentation":{"wait_ms":0}}),
+                        ),
+                    )
+                    .unwrap();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                assert!(
+                    runner.is_finished(),
+                    "actual MCP query sequence did not complete within its bounded test deadline"
+                );
+                let result = runner.join().unwrap();
+                if failing_query {
+                    let error = result.unwrap_err();
+                    assert!(
+                        error.contains("failed_projection") && !error.contains("heartbeat"),
+                        "preserve original native failure: {error}"
+                    );
+                    assert_eq!(
+                        commands.last().map(String::as_str),
+                        Some("stop"),
+                        "failed native query must still permit the actual MCP Stop acknowledgment"
+                    );
+                } else {
+                    let report = result.unwrap();
+                    assert_eq!(report["steps_completed"], 2, "{report}");
+                    assert_eq!(report["checks_completed"], 0, "{report}");
+                    assert_eq!(commands.last().map(String::as_str), Some("finish"));
+                }
+                assert!(
+                    completed_queries >= 3,
+                    "blank precondition and both actual script queries ran"
+                );
+                assert_eq!(
+                    fs::read(dir.join(&session).join("model.json")).unwrap(),
+                    original_model
+                );
+            }
         }
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(dir);

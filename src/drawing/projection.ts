@@ -153,7 +153,7 @@ export function drawingProjectionRequestForView(
     scene = drawingInstanceScene(scene, solution, undefined, [], false);
   }
   const basis = currentDrawingViewBasis(view, views, scene, new Set());
-  const derivation = view.derivation;
+  const derivation = inheritedSectionDerivation(view, views, new Set());
   const sectionPlane = derivation?.type === 'section' || derivation?.type === 'removed_section'
     ? {
       point: resolveModelAnchorPoint(derivation.first, scene) ?? derivation.first.fallback_point,
@@ -172,6 +172,21 @@ export function drawingProjectionRequestForView(
     deflection: Math.max(0.01, 0.08 / view.scale),
     section_plane: sectionPlane,
   };
+}
+
+/** Detail/broken crops inherit the parent's cut as well as its basis, matching
+ * native export. Resolve once against the already placed assembly scene. */
+function inheritedSectionDerivation(view: DrawingViewDto, views: DrawingViewDto[], visited: Set<number>):
+  Extract<NonNullable<DrawingViewDto['derivation']>, {type: 'section' | 'removed_section'}> | null {
+  if (visited.has(view.id)) return null;
+  visited.add(view.id);
+  const derivation = view.derivation;
+  if (derivation?.type === 'section' || derivation?.type === 'removed_section') return derivation;
+  if (derivation?.type === 'detail' || derivation?.type === 'broken') {
+    const parent = views.find(candidate => candidate.id === derivation.parent_view_id);
+    if (parent) return inheritedSectionDerivation(parent, views, visited);
+  }
+  return null;
 }
 
 function currentDrawingViewBasis(
