@@ -47,6 +47,8 @@ export interface ViewportCameraApi {
   fit(durationMs?: number): void;
   /** Frame actual visible geometry for a scripted explanation, without editing it. */
   focus(target: CameraFocus, durationMs?: number, direction?: [number, number, number] | 'isometric'): void;
+  /** Orbit about the current target/up axis without changing radius or elevation. */
+  orbit(degrees: number, durationMs?: number): void;
   /** Immediate free-orbit delta from navigation input, in pixels. */
   orbitBy(dxPx: number, dyPx: number): void;
   /** Immediate six-degree-of-freedom navigation from a 3D mouse. */
@@ -88,4 +90,30 @@ export function getSessionCamera(): ViewportCameraApi | null { return sessionCam
 /** easeInOutCubic — used by all camera animations. */
 export function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/** Rodrigues rotation keeps the authored angle, including a complete turn.
+ * Interpolating endpoint positions/quaternions would cut through the model or
+ * collapse 360 degrees to a stationary camera. Progress is already eased by the
+ * shared camera controller; the same poses feed the browser and Bevy viewport. */
+export function orbitCameraSnapshot(from: CameraSnapshot, degrees: number, progress: number): CameraSnapshot {
+  if (!Number.isFinite(degrees) || Math.abs(degrees) > 360
+    || !Number.isFinite(progress) || progress < 0 || progress > 1) throw new Error('Invalid camera orbit');
+  const length = Math.hypot(...from.up);
+  if (!Number.isFinite(length) || length < 1e-12
+    || ![...from.position, ...from.target].every(Number.isFinite)) throw new Error('Invalid camera pose');
+  const [ux, uy, uz] = from.up.map(value => value / length);
+  const [x, y, z] = from.position.map((value, index) => value - from.target[index]);
+  const angle = degrees * progress * Math.PI / 180;
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
+  const projection = (ux * x + uy * y + uz * z) * (1 - cosine);
+  return {
+    position: [
+      from.target[0] + x * cosine + (uy * z - uz * y) * sine + ux * projection,
+      from.target[1] + y * cosine + (uz * x - ux * z) * sine + uy * projection,
+      from.target[2] + z * cosine + (ux * y - uy * x) * sine + uz * projection,
+    ],
+    target: [...from.target],
+    up: [...from.up],
+  };
 }

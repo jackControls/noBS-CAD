@@ -6,6 +6,8 @@ export interface ViewRequest extends CameraFocus {
   fit: boolean;
   expires_ms: number;
   duration_ms?: number;
+  /** Signed rotation about the current target/up axis, after optional framing. */
+  orbit_degrees?: number;
 }
 export interface ViewState {
   document: unknown;
@@ -45,6 +47,10 @@ export async function applyView(
   if (!Number.isSafeInteger(request.expires_ms) || request.expires_ms < 0) throw new Error('Invalid view expiry');
   const duration = request.duration_ms ?? 300;
   if (!Number.isSafeInteger(duration) || duration < 0 || duration > 10_000) throw new Error('Invalid view duration');
+  if (request.orbit_degrees !== undefined && (!Number.isFinite(request.orbit_degrees)
+    || Math.abs(request.orbit_degrees) > 360 || request.view !== 'current')) {
+    throw new Error('Invalid view orbit: use current view and a finite angle from -360 to 360 degrees');
+  }
   if (request.target !== undefined && request.target !== 'active_sketch') throw new Error('Unknown view target');
   for (const id of [request.body_id, request.component_id]) {
     if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) throw new Error('Invalid view geometry ID');
@@ -111,7 +117,11 @@ export async function applyView(
   };
   assertCamera();
   // Frame and orient in one deliberate motion.
-  if (targets || request.fit) api.focus(request, duration, direction);
+  if (request.orbit_degrees !== undefined) {
+    // Establish the requested framing before rotating at a constant radius.
+    if (targets || request.fit) api.focus(request, 0);
+    api.orbit(request.orbit_degrees, duration);
+  } else if (targets || request.fit) api.focus(request, duration, direction);
   else if (request.view === 'isometric') api.home(duration);
   else if (direction && direction !== 'isometric') api.snapToDirection(direction, duration);
   await waitUntil(() => {
@@ -119,6 +129,6 @@ export async function applyView(
     return api.isAnimating() ? undefined : true;
   });
   assertCamera();
-  presentation.applied(`Camera: ${request.view}`);
+  presentation.applied(request.orbit_degrees === undefined ? `Camera: ${request.view}` : `Camera: orbit ${request.orbit_degrees}°`);
   return api.getSnapshot();
 }

@@ -3745,6 +3745,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "fit":{"type":"boolean"},
                 "body_id":{"type":"integer","minimum":0},"component_id":{"type":"integer","minimum":0},
                 "duration_ms":{"type":"integer","minimum":0,"maximum":10000},
+                "orbit_degrees":{"type":"number","minimum":-360,"maximum":360,"description":"For action view with view current: rotate about the current camera target/up axis at fixed radius and elevation. Optional fit/focal target frames first. Positive angles turn counterclockwise viewed along the up axis toward the target."},
                 "source":{"type":"string","description":"Version 1 JSONC command script; mutually exclusive with path"},
                 "validate":{"type":"boolean","default":true},
                 "speed":{"type":"number","minimum":0.1,"maximum":16},

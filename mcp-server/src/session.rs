@@ -95,6 +95,18 @@ fn validate_presentation(arguments: &Value) -> Result<(), String> {
 }
 
 fn validate_view(arguments: &Value) -> Result<(), String> {
+    if let Some(angle) = arguments.get("orbit_degrees") {
+        if !angle
+            .as_f64()
+            .is_some_and(|angle| angle.is_finite() && (-360.0..=360.0).contains(&angle))
+            || arguments.get("view").is_some_and(|view| view != "current")
+        {
+            return Err(
+                "view orbit_degrees requires current view and a finite angle from -360 to 360"
+                    .into(),
+            );
+        }
+    }
     if let Some(duration) = arguments.get("duration_ms") {
         if !duration.as_u64().is_some_and(|duration| duration <= 10_000) {
             return Err("view duration_ms must be an integer from 0 to 10000".into());
@@ -258,7 +270,13 @@ fn request_control(
         "expires_ms":now_ms()+lifetime,
     });
     if !ui {
-        for field in ["duration_ms", "target", "body_id", "component_id"] {
+        for field in [
+            "duration_ms",
+            "target",
+            "body_id",
+            "component_id",
+            "orbit_degrees",
+        ] {
             if let Some(value) = arguments.get(field) {
                 request[field] = value.clone();
             }
@@ -2078,6 +2096,8 @@ mod tests {
             json!({"target":"active_sketch"}),
             json!({"body_id":5,"duration_ms":0}),
             json!({"component_id":3,"duration_ms":10000}),
+            json!({"view":"current","orbit_degrees":360,"duration_ms":3000,"fit":true}),
+            json!({"orbit_degrees":-120.5}),
         ] {
             validate_view(&arguments).unwrap();
         }
@@ -2087,6 +2107,11 @@ mod tests {
             json!({"component_id":"3"}),
             json!({"body_id":1,"component_id":3}),
             json!({"duration_ms":10001}),
+            json!({"orbit_degrees":361}),
+            json!({"orbit_degrees":-361}),
+            json!({"orbit_degrees":"120"}),
+            json!({"orbit_degrees":null}),
+            json!({"view":"isometric","orbit_degrees":120}),
         ] {
             assert!(validate_view(&arguments).is_err(), "{arguments}");
         }
@@ -2121,10 +2146,11 @@ mod tests {
                         let body: Value =
                             serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
                                 .unwrap();
-                        assert_eq!(body["view"], "top");
+                        assert_eq!(body["view"], "current");
                         assert_eq!(body["fit"], true);
                         assert_eq!(body["body_id"], 7);
                         assert_eq!(body["duration_ms"], 450);
+                        assert_eq!(body["orbit_degrees"], 120);
                         let result =
                             ui_dir.join(format!("{}.result.json", body["id"].as_str().unwrap()));
                         let temporary = result.with_extension("tmp");
@@ -2142,7 +2168,7 @@ mod tests {
             panic!("UI did not receive view request");
         });
         let result = request_ui(
-            &json!({"action":"view","session_id":id,"view":"top","fit":true,"body_id":7,"duration_ms":450}),
+            &json!({"action":"view","session_id":id,"view":"current","fit":true,"body_id":7,"duration_ms":450,"orbit_degrees":120}),
             None,
         )
         .unwrap();

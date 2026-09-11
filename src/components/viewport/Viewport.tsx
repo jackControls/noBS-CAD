@@ -109,6 +109,7 @@ import { isStraightSolidEdge } from '../../solidEdgeEligibility';
 import type { BrowserNode } from '../../types/document';
 import {
   easeInOutCubic,
+  orbitCameraSnapshot,
   type CameraSnapshot,
   type ViewportCameraApi,
 } from './cameraApi';
@@ -828,6 +829,7 @@ export function Viewport() {
       toTarget: CAD.Vector3;
       fromUp: CAD.Vector3;
       toUp: CAD.Vector3;
+      orbit?: { from: CameraSnapshot; degrees: number };
     }
     let camAnim: CamAnim | null = null;
 
@@ -873,9 +875,16 @@ export function Viewport() {
     function stepCameraAnimation(now: number) {
       if (!camAnim) return;
       const k = easeInOutCubic(Math.min(1, (now - camAnim.t0) / camAnim.dur));
-      camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, k);
-      controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, k);
-      camera.up.lerpVectors(camAnim.fromUp, camAnim.toUp, k).normalize();
+      if (camAnim.orbit) {
+        const pose = orbitCameraSnapshot(camAnim.orbit.from, camAnim.orbit.degrees, k);
+        camera.position.fromArray(pose.position);
+        controls.target.fromArray(pose.target);
+        camera.up.fromArray(pose.up);
+      } else {
+        camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, k);
+        controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, k);
+        camera.up.lerpVectors(camAnim.fromUp, camAnim.toUp, k).normalize();
+      }
       camera.lookAt(controls.target);
       if (k >= 1) cancelCameraAnimation();
     }
@@ -11875,6 +11884,15 @@ export function Viewport() {
         const up = viewDirection ? (Math.abs(viewDirection.z) > 0.99
           ? new CAD.Vector3(0, viewDirection.z > 0 ? 1 : -1, 0) : WORLD_UP) : undefined;
         fitGeometryBounds(bounds, viewDirection, up, durationMs);
+      },
+      orbit: (degrees, durationMs = 300) => {
+        const from = api.getSnapshot();
+        const final = orbitCameraSnapshot(from, degrees, 1);
+        // Reuse duration/speed, reduced-motion, wakeup and completion handling.
+        // The animation samples the full angle instead of its equal endpoints.
+        animateCamera(new CAD.Vector3(...final.position), new CAD.Vector3(...final.target),
+          new CAD.Vector3(...final.up), durationMs);
+        if (camAnim) camAnim.orbit = { from, degrees };
       },
       orbitBy: (dx, dy) => {
         const bounded = CAD.boundedPointerDelta(

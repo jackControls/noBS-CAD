@@ -198,6 +198,16 @@ A view can use `current`, `isometric`, `front`, `back`, `left`, `right`, `top` o
 `body_id`, `component_id`, or `target: "active_sketch"`. `duration_ms` controls the
 camera transition. Targets use the same named result expressions as modeling calls.
 
+For a continuous turn around the finished part, use
+`{"view":"current","orbit_degrees":120,"duration_ms":3000}`. The signed angle
+can range from -360 to 360 degrees, including a complete revolution. The camera
+keeps its distance, elevation and up direction around its current target. Optional
+`fit` or a focal target establishes framing before the orbit; for a smooth framing
+transition, put a normal view step before it. Orbit requires `view: "current"`.
+The same fields work directly with `cad_interface` action `view` on a loaded
+document; a script still starts from a blank document. Completion acknowledges the
+actual camera animation. Presentation speed and reduced-motion preferences apply.
+
 The shared presentation interface exposes `configure`, `note`, `pause`, `resume`,
 `step`, `status`, `finish`, `stop`, `dismiss` and `show`. Configuration chooses `mode: "fast"` or
 `"present"` and `speed` from 0.1 to 16. The on-screen controls operate the same state.
