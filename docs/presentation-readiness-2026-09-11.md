@@ -41,7 +41,7 @@ The Windows build is an unoptimized validation build, not a release performance
 benchmark. Results apply to this source, platform and OpenCASCADE build; exact
 geometry equality across different kernel versions is not claimed.
 
-The final local executable SHA-256 values are retained for matching a validation
+The original broad-validation executable SHA-256 values are retained for matching a validation
 session to its binaries:
 
 ```text
@@ -99,6 +99,62 @@ validation window exited through MCP and its process termination was confirmed.
 The earlier full live vise/turbine and saved-file tests remain recorded in the
 [September 10 evidence](review-corrections-2026-09-10.md).
 
+## Exit and Save review follow-up
+
+The next review reproduced a native-close race in both standalone PR97 and the
+integrated stack: a saved document could close while a native edit was pending,
+before the edit published its dirty state. PR97 now waits for operation and store
+publication, then rechecks live acknowledgements before deciding whether to save.
+Abort cleanup removes only its own subscriptions and waits. Production browser
+tests cover pending solid/sketch work, rejection, inbox hydration failure,
+Cancel/Save/Discard, late acknowledgements and disposal. Bypassing settlement
+reproduces the original failure. The later owned-inbox fixture belongs to PR115.
+
+The live run then exposed a separate PR115 integration failure: an empty
+background inbox poll could invalidate a snapshot during Save and show a false
+document-changed error. Polls now defer while a snapshot or earlier transition
+owns the document. Explicit Open/New still queue through the original fence;
+ownership checks and native model comparisons remain intact. A production Save
+regression reproduces the original error and verifies visibility, capture, file
+write and name-adoption phases, including resumed polling after the lease ends.
+
+PR99 also exposes bounded visible dialog text in the existing interface surfaces,
+including alert dialogs and messages without buttons. This lets MCP read an error
+instead of seeing only an OK control. Hidden, closed-disclosure, editable-field
+and presentation content is excluded; truncation is explicit. Focused tests fail
+without the change and pass with it, retaining the original control grouping.
+
+The latest embedded Windows desktop was built from `8717e86`, containing these
+production corrections. The final restack changes only their ancestry, regression
+placement and documentation. TypeScript, exit-controller tests and the complete
+production browser contracts pass. Standalone PR96 additionally passed 25 export
+tests and two native MCP assembly-export tests on its current published source.
+
+The rebuilt desktop passed all six Rust `xtask test-mcp exit` cases: MCP close in
+foreground and background, File → Exit, Cancel then Discard, Save followed by a
+fresh-process exact-model reopen, and native Windows close. Every disposable
+process exited. Tests used a separate WebView2 recovery profile and session
+directory; existing work was preserved. Native macOS Quit delivery was not tested
+on this Windows host.
+
+The live driver now waits with a deadline for asynchronous dialog controls and
+records cleanup separately from success. Failed attempts remain in the local
+evidence: a development-URL build lacked embedded assets, an early dialog inspect
+raced prompt creation, and the original Save collision produced an error. The
+validated desktop uses `--features custom-protocol` when built directly with Cargo.
+
+Current selected desktop SHA-256:
+
+```text
+nbcad.exe 563f53f5a8d16ca08d8831aca86f904a9cf082d001d3abdcb5ff177f00254687
+```
+
+The MCP and Rust xtask binaries retain the hashes above. No Rust geometry code or
+flagship recipe changed in this follow-up; the earlier deterministic modeling
+evidence remains applicable. This is an unoptimized Windows validation build,
+not a release-performance measurement.
+
+
 ## Remaining gates
 
 PR95 merged through the native stack API on September 11 at 06:42 UTC after
@@ -106,6 +162,12 @@ approval on its exact head and all nine current checks passed. Main is `768eddf`
 GitHub rebased the twenty remaining layers automatically; independent comparisons
 confirmed every head/base tree and per-layer commit count were preserved, with
 correct ancestry and no unexpected merges. PR96 is the next open layer.
+
+At this checkpoint, GitHub still requires one qualifying independent approval,
+dismisses stale approvals after pushes, and requires resolved review threads.
+Jack's standing permission to merge ready work does not satisfy that review rule.
+No eligible open prefix has a current qualifying approval; PR108 also retains its
+changes-requested decision until re-reviewed.
 
 GitHub checks and approvals must be read from each current head before merging.
 A local Windows result does not certify Linux/macOS packages. The earlier PR100
@@ -116,8 +178,9 @@ and resolve the demonstrated failure before treating that package as ready.
 
 The one scoped retry of the earlier PR100 macOS job was cancelled by the server
 rebase. This is superseded work, not a new failure or evidence of a fix. Follow
-the fresh checks on the rebased head; do not rerun the old job. PR117's macOS and
-Ubuntu packages passed at this checkpoint; its Windows checks remained pending.
+the fresh checks on the rebased head; do not rerun the old job. PR117 at e27da54 passed all six checks, including all four platform packages. Its
+source review confirmed the exact Tauri verbosity setting emits the missing DMG
+subprocess output; it remains a diagnostic change.
 
 Issues #9, #12, #14, #16, #93 and #94 retain distinct acceptance. Multi-document
 broker routing, required-check policy, comprehensive lessons, specialized drawing
