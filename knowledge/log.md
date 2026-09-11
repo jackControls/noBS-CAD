@@ -2,13 +2,12 @@
 
 ## 2026-09-11
 
-- **Update**: Expanded GD&T, fits, and DFM help from NIST (CC BY) and Guns
-  NWTC (CC BY); added DFM process guidelines concept.
-- **Update**: Added `scripts/build-help-index.mjs` and committed
-  `knowledge/machine-design/search-index.json` for searchable help.
-- **Docs**: `docs/machine-design-help-search.md` — MCP + Help UI plan.
-- **Update**: Scaffolded `knowledge/machine-design/` — taxonomy, SOURCES,
-  seed concepts; distill-vs-link policy documented.
+- **Adversarial fixes**: SOURCES stable `id`s; SA rows link-only; preferred-fit
+  designation table removed; Rule #1 ASME/ISO caveat; NIST checklist honesty;
+  DFM pages rewritten with CC BY URLs; taxonomy planned vs seeded; stub labels;
+  search index skips non-articles; `check:help-sources`; help-search demotes
+  Tantivy for v1 BM25.
+- **Update**: Scaffolded and expanded machine-design OKF help + search plan.
 
 ## 2026-07-29
 

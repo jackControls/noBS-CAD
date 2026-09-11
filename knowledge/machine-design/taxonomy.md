@@ -1,82 +1,72 @@
 ---
 type: Concept
 title: Machine-design taxonomy
-description: Topic map for the open machine-design knowledge base (users and agents).
+description: Topic map — seeded pages vs planned gaps for the open machine-design KB.
 status: draft
 updated: 2026-09-11
+searchable: false
 ---
 
 # Machine-design taxonomy
 
 Open help for **design-time** decisions in noBS CAD. Product/architecture
-concepts stay in [the OKF index](../index.md). This map is the domain
-layer: GD&T, machine elements, mechanisms, materials, and DFM.
+concepts stay in [the OKF index](../index.md).
 
-Agents should search these pages (and later MCP help tools) **before** the
-web. Standards text is never copied; see [SOURCES](SOURCES.md).
+**Coverage honesty:** agents should search **seeded** pages first. For
+**planned** rows, prefer linked further-reading / web — do not invent from an
+empty topic.
+
+Provenance: [SOURCES](SOURCES.md).
 
 ## A. Geometric product definition
 
-- Plus/minus vs GD&T intent
-- Datums, datum reference frames, degrees of freedom
-- Form, orientation, location, runout (concept-level)
-- Feature control frames (how to read)
-- MMC / LMC / bonus tolerance (concept)
-- Fits and clearances
-- Drawing vs model-based definition (tie to native drawing sheets)
-
-Seed: [GD&T intro](concepts/gdt-intro.md), [Fits & clearances](concepts/fits-clearances.md).
+| Topic | Status |
+|-------|--------|
+| GD&T intro, datums, FCF, Rule #1 teaching | **seeded** — [gdt-intro](concepts/gdt-intro.md) |
+| Fits & clearances (class-level) | **seeded** — [fits-clearances](concepts/fits-clearances.md) |
+| Drawing vs MBD / PMI walkthrough | **planned** |
+| Inspection / metrology bridge | **planned** |
 
 ## B. Machine elements
 
-- Fasteners and joints
-- Shafts, keys, retaining rings
-- Bearings (selection language and fits, not a catalog dump)
-- Springs, seals, couplings (overview)
-- Power screws / lead screws
-
-Seed: [Fasteners & joints](concepts/fasteners-joints.md).
-Recipes: `d-screw-vise`, `garden-bench`.
+| Topic | Status |
+|-------|--------|
+| Fasteners & joints (stub→deepen) | **seeded (thin)** — [fasteners-joints](concepts/fasteners-joints.md) |
+| Shafts, keys, retaining rings | **planned** |
+| Bearings | **planned** |
+| Springs, seals, couplings | **planned** |
+| Power screws / lead screws | **planned** (vise recipe exists) |
 
 ## C. Mechanisms
 
-- Linkages (four-bar types, Grashof)
-- Gears, cams, belts/chains, screw mechanisms
-- Mobility / DOF counting
-- Product joints: revolute, slider, cylindrical, planar, ball, universal, pin-slot, screw
-
-Recipe: `vertical-axis-turbine` (constrained spur drive).
+| Topic | Status |
+|-------|--------|
+| Linkages, gears, cams, belts, mobility | **planned** — until then link MIT OCW (`mit-272`) |
+| Product joints demo | use recipe `vertical-axis-turbine` |
 
 ## D. Materials
 
-- Property vocabulary (stiffness, strength, fatigue, CTE, corrosion)
-- Classes: steels, aluminum, stainless, plastics, composites
-- Process–material coupling
-- Open data sources and citation rules
-
-Seed: [Materials vocabulary](concepts/materials-vocabulary.md).
+| Topic | Status |
+|-------|--------|
+| Property vocabulary | **seeded (thin)** — [materials-vocabulary](concepts/materials-vocabulary.md) |
+| Selection / allowables tables | **planned** (no MatWeb scrape) |
 
 ## E. Design for manufacturing
 
-- Process families: CNC, sheet, casting, injection mold, additive, welding
-- DFM / DFA heuristics per process
-- Tolerance versus cost
-- DFAM notes for printable flagships
-- Inspection / metrology basics (bridge to GD&T)
-
-Seed: [DFM overview](concepts/dfm-overview.md),
-[DFM process guidelines](concepts/dfm-process-guidelines.md).
-Recipes: `turbine-fit-coupons`, `d-screw-vise-fit`.
+| Topic | Status |
+|-------|--------|
+| DFM overview | **seeded** — [dfm-overview](concepts/dfm-overview.md) |
+| Process guidelines | **seeded** — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
+| DFAM deep dive | **planned** beyond coupon notes |
 
 ## F. Design hygiene
 
-- Requirements → embodiment → detail
-- Purchased versus designed parts
-- BOM and hardware callouts
-- Educational disclaimers (software evidence ≠ physical qualification)
+| Topic | Status |
+|-------|--------|
+| Requirements → embodiment → BOM / purchased parts | **planned** |
 
 ## Live examples
 
-Scripted recipes are the screen source (`note` / `view` in `.nbcad.jsonc`).
-KB articles name recipe ids; they do not invent a second demo runtime.
-See [machine-design KB notes](../../docs/machine-design-kb.md).
+Scripted recipes remain the screen source. See
+[machine-design KB notes](https://github.com/jackControls/noBS-CAD/blob/docs/machine-design-kb/docs/machine-design-kb.md)
+(blob URL for Pages readers).

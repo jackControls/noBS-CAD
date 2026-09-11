@@ -1,16 +1,21 @@
 ---
 type: Concept
 title: Materials vocabulary
-description: Stiffness, strength, fatigue, and process coupling for CAD material choices.
+description: Stub — property vocabulary for CAD; not an allowables database.
 status: draft
 updated: 2026-09-11
 topics: materials
 keywords: modulus, yield, fatigue, CTE, density, alloy, polymer
 related_recipes: []
-sources: kittycad-materials, materials-project
+sources: kittycad-materials
 ---
 
 # Materials vocabulary
+
+> **Stub.** Defines words, not certified allowables. Materials Project is
+> crystalline DFT data — not shop steel charts. Prefer KittyCAD JSON as a
+> *pattern* only (`kittycad-materials`).
+
 
 Pick materials with **properties and process**, not only a viewport color.
 Filament appearance in the manufacturing catalog is not an engineering

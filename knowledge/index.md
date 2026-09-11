@@ -22,8 +22,8 @@ Keep concepts **thin**. Longer material lives in the repository’s
 
 ## Machine design
 
-Open design-time help (GD&T, elements, mechanisms, materials, DFM). Prefer these
-pages before web search. Provenance: [SOURCES](machine-design/SOURCES.md).
+Open design-time help (GD&T, elements, mechanisms, materials, DFM).
+Prefer **seeded** pages before web search; see taxonomy for **planned** gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 
 - [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB.
 - [Sources](machine-design/SOURCES.md) - License and provenance table.

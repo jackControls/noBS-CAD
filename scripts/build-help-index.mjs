@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Build a flat search index over knowledge/machine-design markdown.
+// Build search index over knowledge/machine-design markdown articles.
+// Skips pages with searchable: false (SOURCES, taxonomy).
 // Usage: node scripts/build-help-index.mjs
-// Writes: knowledge/machine-design/search-index.json
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,13 +43,14 @@ function csvList(value) {
   if (!value) return [];
   return value
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/^`|`$/g, ''))
     .filter(Boolean);
 }
 
 function snippet(body, limit = 220) {
   const plain = body
     .replace(/^#.+$/gm, '')
+    .replace(/^>.+$/gm, '')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/[*_`]/g, '')
     .replace(/\s+/g, ' ')
@@ -62,9 +63,14 @@ const entries = [];
 
 for (const abs of files) {
   const rel = path.relative(path.join(root, 'knowledge'), abs).replaceAll('\\', '/');
-  const id = rel.replace(/\.md$/i, '').replaceAll('/', '.');
   const raw = await readFile(abs, 'utf8');
   const { fields, body } = frontmatter(raw);
+  if (fields.get('searchable') === 'false') continue;
+  if (fields.get('type') !== 'Concept') continue;
+  // Prefer concept articles under concepts/
+  if (!rel.includes('/concepts/')) continue;
+
+  const id = rel.replace(/\.md$/i, '').replaceAll('/', '.');
   const title =
     fields.get('title') ||
     (body.match(/^#\s+(.+)$/m) || [, path.basename(abs, '.md')])[1];

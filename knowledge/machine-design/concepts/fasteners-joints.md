@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: Fasteners and joints
-description: Threaded joints, preload language, and purchased-versus-designed hardware.
+description: Stub — threaded joints and purchased hardware; deepen from NASA RP-1228.
 status: draft
 updated: 2026-09-11
 topics: fasteners, joints, machine-elements
@@ -11,6 +11,10 @@ sources: nasa-fastener
 ---
 
 # Fasteners and joints
+
+> **Stub.** High-level only. Full preload/torque/engagement distill from
+> NASA-RP-1228 is still TODO — do not treat this page as sizing guidance.
+
 
 Most assemblies are held by **purchased fasteners**, not by modeled threads
 alone. Call out the real hardware (size, grade/class, length, head, locking)

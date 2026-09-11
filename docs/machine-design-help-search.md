@@ -1,8 +1,13 @@
 # Searchable, usable machine-design help
 
 Goal: **one content corpus**, many surfaces (Help UI, MCP agents, Pages).
-Humans and agents see the same pages; search is a shared Rust library, not a
-second copy of the text.
+Humans and agents see the same pages; **one Rust ranker** is authoritative for
+MCP + desktop. No search server.
+
+**Product assumptions (2026-09-11):** the help corpus **will grow**. Agents and
+humans both need **low-latency** local search. The Help UI must **render**
+pages well (not dump raw markdown). Design the crate for that scale now —
+even while today’s seed is ~6–50 pages.
 
 No PR while this incubates on `docs/machine-design-kb`.
 
@@ -10,117 +15,159 @@ No PR while this incubates on `docs/machine-design-kb`.
 
 | Layer | Role |
 |-------|------|
-| `knowledge/machine-design/**/*.md` | **Only** authored source (OKF concepts + frontmatter) |
-| `scripts/build-help-index.mjs` | Optional Node helper to emit `search-index.json` for CI/Pages |
-| **`nbcad-help` Rust crate** (to add) | Loads/embeds the same markdown; owns `search` + `get` |
-| MCP `cad_help_*` | Thin tools over `nbcad-help` |
-| Tauri Help panel | Same `nbcad-help` via `invoke` — not a parallel TS corpus |
-| GitHub Pages | Renders the same markdown files |
+| `knowledge/machine-design/**/*.md` | **Only** authored source (OKF + frontmatter) |
+| `scripts/build-help-index.mjs` → `search-index.json` | CI freshness + Pages interchange (not the product ranker) |
+| **`nbcad-help` (`crates/help`)** | Catalog + search + get; owns ranking |
+| MCP | Thin `cad_help` over `nbcad-help` |
+| Tauri Help | Same crate via `invoke` + markdown → safe HTML panel |
+| Browser / wasm | **No** heavy index in `nbcad-wasm`; desktop Help or JSON approx |
+| GitHub Pages | Same markdown (+ optional client search over JSON) |
 
-Do **not** maintain separate “agent help” vs “user help” articles. Optional
-`audience` frontmatter may *rank* results, never fork the text.
+Do **not** maintain separate agent vs user articles.
 
-Recipes stay the live viewport demos (`related_recipes` → Scripts/`present`).
+## Search technology — growth-ready decision
 
-## Recommended search technology (Rust)
+### Non-negotiables
 
-### Decision
+- Local-first, in-process, **no** Meilisearch/ES daemon
+- Same API for agents (MCP) and humans (Help): `search` / `get` / `topics`
+- Sub‑tens‑of‑ms search on a warm corpus for typical queries (agent loops
+  amplify every miss / every 200 ms)
+- Ranking lives in Rust once — Pages JSON is best-effort only
+- Pluggable backend so we do not rewrite MCP/UI when the index grows
 
-**Use [Tantivy](https://github.com/quickwit-oss/tantivy) in-process** as the
-full-text engine inside a small `nbcad-help` crate.
+### Architecture
 
-Why Tantivy for noBS CAD:
-
-- **Embedded library**, not a search *server* — fits local-first / offline
-- Pure **Rust**, ships inside `nbcad-mcp` and the Tauri host
-- **BM25**, fielded queries (title / topics / keywords / body), phrase + prefix
-- Tiny corpus (tens→hundreds of pages) → trivial index size and startup
-- No network daemon (reject Meilisearch / Typesense / Elasticsearch as the
-  default path)
-
-### Layered matching (practical)
-
-| Layer | Tech | Use |
-|-------|------|-----|
-| 1. Full-text | **Tantivy** | Body + title + keywords (“clearance fit”, “draft angle”) |
-| 2. Quick jump | **nucleo** (or equivalent fuzzy) | Command-palette / title-as-you-type |
-| 3. Escape | Web search | Only after local miss; still no ASME paste into repo |
-| Later (optional) | Local embeddings | Only if keyword miss-rate hurts; not v1 |
-
-Do **not** start with a vector DB. Help queries are short, technical, and
-well served by BM25 + good frontmatter.
-
-### What we are *not* recommending for v1
-
-| Option | Why not (for this app) |
-|--------|-------------------------|
-| Meilisearch / Typesense / ES | Extra process; fights local-first |
-| SQLite FTS5 | Fine technically, but adds a DB just for help; Tantivy stays in-memory/on-disk without SQL surface |
-| Node-only search in the UI | Diverges from MCP; breaks “same content / same ranker” |
-| Cloud search APIs | Offline + privacy |
-
-SQLite FTS5 remains a **reasonable alternate** if the app later grows a general
-local DB; prefer one store. Until then Tantivy is the clearer CAD-help fit.
-
-## Architecture
-
-```
-knowledge/machine-design/**/*.md
+```text
+cad_help / help_search
         │
-        ▼  build.rs / include_dir / install data dir
-   crates/help  (nbcad-help)
-        │  search(query) -> Hits
-        │  get(id) -> Page
-        ├─► mcp-server   cad_help_search / cad_help_get  (always-on spine)
-        └─► src-tauri    help_search / help_get commands → React Help UI
+        ▼
+   nbcad_help::HelpStore
+        │
+        ├── Catalog (id → Page meta + body)
+        └── dyn SearchIndex  ◄── BM25 (ship)  /  Tantivy (scale)
 ```
 
-Index build options (pick one in implementation):
+`HelpStore` API stays stable. Swap the `SearchIndex` impl without changing
+tool schemas or the Help panel.
 
-1. **Compile-time**: `build.rs` walks `knowledge/machine-design` and embeds a
-   Tantivy index or the raw docs (simplest for releases).
-2. **Load-time**: read markdown from the installed app data / repo checkout
-   (better for docs-only updates without rebuild).
+### Ship now (v1) — tiny BM25 over embedded pages
 
-Start with (1) for the MCP binary and desktop; revisit (2) if help ships as
-loose files next to the app.
+| Layer | Tech | Why |
+|-------|------|-----|
+| Full-text / fielded | Tiny in-process **BM25** (or weighted TF) over embedded `Page`s | Corpus is still recipes-sized; zero mmap/segment complexity |
+| Corpus load | `include_str!` / `include_dir!` like `crates/recipes` | Same rebuild story |
+| Quick jump (UI) | **`nucleo-matcher`** (MPL-2.0 — THIRD_PARTY) | Instant title/id palette; separate from full-text |
+| Escape | Web after local miss | Never paste ASME/ISO body text |
 
-## Ranking fields (Tantivy schema sketch)
+Consume committed `search-index.json` **or** parse markdown in Rust — **one**
+frontmatter contract. Prefer: CI keeps JSON fresh; Rust embeds markdown (or
+JSON + bodies) keyed by `id`.
 
-Boost roughly:
+### Scale path (v1.5) — in-process Tantivy
 
-1. `title` (high)
-2. `keywords` / `topics` (high)
-3. `description` (medium)
-4. `body` (baseline)
-5. Slight boost when `related_recipes` intersects active context
+**Assume growth.** When any of these trip, implement Tantivy behind the same
+`SearchIndex` trait (do not wait for “1k pages” folklore):
 
-Return: `id`, `title`, `path`, `snippet`, `score`, `related_recipes`.
+- page count ≳ **~200–500**, or body text ≳ a few MB uncompressed, **or**
+- golden-query recall/latency misses after BM25 tuning, **or**
+- need phrase / field boosts / incremental rebuild that BM25 cannot keep
 
-## MCP tools (always-on spine)
+Tantivy stays **in-process** (embedded index built at compile time or first
+run from the catalog). Still no daemon. Still **not** in wasm.
 
-| Tool | Behavior |
-|------|----------|
-| `cad_help_search` | Tantivy query → ranked hits |
-| `cad_help_get` | Full markdown + frontmatter |
-| `cad_help_list_topics` | Facets from taxonomy / index |
-| `cad_help_open_example` | Optional → existing recipe `present`/`fast` |
+| Rejected as defaults | Why |
+|----------------------|-----|
+| Meilisearch / Typesense / ES | Extra process; anti local-first |
+| ripgrep shell-out | Bad MCP product path |
+| Embeddings / vector DB | Later only if keyword fails on CAD jargon |
+| Help inside `nbcad-wasm` | Keep wasm lean |
+| Shipping Tantivy on day one for 6 pages | Complexity without payoff — **but** the trait + file layout must make the swap boring |
 
-Help must **not** be focus-gated: valid in any modeling focus.
+SQLite FTS5: fine if the app later gains a general local DB; not required for
+help alone.
 
-Agent policy: local search → cite page id → offer recipe → web only on miss.
+## Help UI rendering (humans)
 
-## Current branch status
+Search is useless if the page looks like a dump. Desktop Help must:
 
-- Markdown corpus + `search-index.json` + Node `build:help-index` (scaffold /
-  Pages / CI convenience).
-- Next Rust slice: add `nbcad-help` with Tantivy; point MCP at it; delete any
-  temptation to reimplement rankers in TypeScript.
+1. **List / palette** — nucleo over titles + ids; full-text results below with
+   title, topics, short snippet, optional recipe chips
+2. **Article view** — GFM markdown → **sanitized HTML** (tables, lists, code,
+   links). No raw HTML from the corpus. CSP-friendly. Theme tokens match the
+   app (light/dark)
+3. **Cross-links** — in-corpus links resolve by page `id`; broken ids fail
+   closed in CI (`check:help`)
+4. **Recipes** — `related_recipes` render as actions that open existing
+   recipe/script paths (no second demo runtime)
+5. **Stub honesty** — frontmatter/`status` (and stub callouts) visible so thin
+   pages are not mistaken for sizing manuals
+6. **License footer** — short “distilled from / see SOURCES” line on each page
+
+Suggested stack (decide in implementation, not here): `pulldown-cmark` or
+`comrak` + HTML sanitizer in Rust, or render in the webview with a locked-down
+markdown pipeline — **same sanitized HTML** whether opened from search or deep
+link.
+
+Agents get **markdown** (or capped plain text) from `get` — they do not need
+the HTML path. One source file; two presentations.
+
+## Workspace placement
+
+Three Cargo workspaces: **root**, **`mcp-server`**, **`src-tauri`**.
+
+1. `crates/help` as a **root** workspace member (`nbcad-help`)
+2. `mcp-server` path-deps it (like `nbcad-recipes`)
+3. `src-tauri` path-deps it for search + render helpers
+4. **Never** add the index crate to `crates/wasm`
+
+## MCP surface
+
+One spine tool: `cad_help` with `action: search | get | topics`
+
+- search: small `limit`, snippet-first (agents hate floods)
+- get: **id-only** allowlist; hard byte cap; optional `truncated`
+- never path-based reads
+- `cad_help_open_example` → existing recipe/`cad_script` paths
+
+## Security
+
+| Risk | Rule |
+|------|------|
+| Path traversal | Id-only catalog lookup |
+| Markdown in UI | Sanitize / no raw HTML; CSP |
+| MCP context flood | Caps + one tool + snippets default |
+| NC / SA ingest | Help tools return **in-repo distill only**; NC URLs are citations, never fetched into the corpus |
+| Future contrib | Untrusted until reviewed |
+
+## Ranking fields
+
+Boost: `title` > `keywords` / `topics` > `description` > `body`.  
+Optional: boost `related_recipes` when the caller passes active recipe context.
+
+## Implementation plan
+
+1. `crates/help` — `Page` catalog, `SearchIndex` trait, BM25 impl, goldens
+   (“clearance fit”, “draft angle”), HTML render helper **or** documented
+   webview pipeline
+2. MCP — `cad_help` + caps + allowlist tests
+3. Tauri — `help_search` / `help_get`; Help panel (palette + article); nucleo
+4. CI — `build:help-index` freshness; `check:help-sources`; exclude
+   SOURCES/taxonomy unless `searchable`
+5. When growth bar trips — Tantivy impl of `SearchIndex`; keep API stable
+6. This file remains the ADR
 
 ## Acceptance sketch
 
-- [ ] One markdown tree is what UI, MCP, and Pages show
-- [ ] MCP and Tauri call the same `nbcad-help::search`
-- [ ] Tantivy answers “clearance fit” / “draft angle” without network
-- [ ] `related_recipes` can launch existing script playback
+- [ ] One markdown tree for UI, MCP, Pages
+- [ ] MCP + Tauri call the same `nbcad_help::search`
+- [ ] Help UI: sanitized article render + recipe chips + stub visibility
+- [ ] Agent `get` returns markdown/plain, not HTML
+- [ ] No index/nucleo in wasm
+- [ ] Id-only get; traversal tests fail closed
+- [ ] Local hit for “clearance fit” / “draft angle” without network
+- [ ] p95 search warm-path target documented in crate (aim ≪ 50 ms on
+      laptop-class hardware at v1 size; re-measure at scale)
+- [ ] `SearchIndex` trait ready for Tantivy without tool schema churn
+- [ ] `related_recipes` ids ⊆ recipe catalog
 - [ ] No standards body text in repo

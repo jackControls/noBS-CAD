@@ -1,13 +1,13 @@
 {
   "version": 1,
   "generated": "2026-09-11",
-  "count": 8,
+  "count": 6,
   "entries": [
     {
       "id": "machine-design.concepts.dfm-overview",
       "path": "knowledge/machine-design/concepts/dfm-overview.md",
       "title": "DFM overview",
-      "description": "Design-for-manufacturing principles and workflow — distilled from CC BY DFM OERs.",
+      "description": "Design-for-manufacturing mindset for CAD-time decisions; process selection before detail.",
       "status": "draft",
       "topics": [
         "dfm",
@@ -18,9 +18,9 @@
         "DFM",
         "DFA",
         "DFMA",
-        "part count",
+        "process selection",
         "tolerance cost",
-        "process selection"
+        "standard parts"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -31,16 +31,15 @@
       ],
       "sources": [
         "nwtc-guns-dfm",
-        "palni-dfma",
-        "doe-3d"
+        "palni-dfma"
       ],
-      "snippet": "Design for manufacturing (DFM) means choosing geometry a real process can make repeatably. DFA is the assembly counterpart (access, fastener count, error-proofing). Decide the process early; it changes minimum radii, wa…"
+      "snippet": "Design for manufacturing (DFM) means committing early to a process that can make the geometry repeatably. DFA asks whether a person or robot can grasp, orient, and join the parts without heroics. Tight tolerances and fa…"
     },
     {
       "id": "machine-design.concepts.dfm-process-guidelines",
       "path": "knowledge/machine-design/concepts/dfm-process-guidelines.md",
       "title": "DFM process guidelines",
-      "description": "Short manufacturability heuristics for molding, casting, sheet, weld, EDM, and CNC.",
+      "description": "Starting manufacturability heuristics by process family; confirm with your shop.",
       "status": "draft",
       "topics": [
         "dfm",
@@ -67,13 +66,13 @@
       "sources": [
         "nwtc-guns-dfm"
       ],
-      "snippet": "Teaching heuristics rewritten from Guns / NWTC LibreTexts Chapter 2 (CC BY 4.0). Numbers are starting guidance, not shop standards — confirm with your process and material. - Keep walls uniform (often ~1–3 mm for many p…"
+      "snippet": "Attribution: heuristics adapted from Guns / NWTC LibreTexts Ch. 2 — DFM Guidelines for Specific Manufacturing Processes, CC BY 4.0. Numbers below are starting guidance, not shop standards — confirm with your process, ma…"
     },
     {
       "id": "machine-design.concepts.fasteners-joints",
       "path": "knowledge/machine-design/concepts/fasteners-joints.md",
       "title": "Fasteners and joints",
-      "description": "Threaded joints, preload language, and purchased-versus-designed hardware.",
+      "description": "Stub — threaded joints and purchased hardware; deepen from NASA RP-1228.",
       "status": "draft",
       "topics": [
         "fasteners",
@@ -101,7 +100,7 @@
       "id": "machine-design.concepts.fits-clearances",
       "path": "knowledge/machine-design/concepts/fits-clearances.md",
       "title": "Fits and clearances",
-      "description": "Clearance, transition, and interference fits; teaching names for preferred fits; recipe coupons.",
+      "description": "Clearance, transition, and interference fits as design intent; link-out for preferred-fit charts.",
       "status": "draft",
       "topics": [
         "fits",
@@ -113,28 +112,27 @@
         "clearance",
         "interference",
         "transition",
-        "H7",
-        "g6",
-        "RC",
-        "FN",
         "allowance",
         "radial",
-        "diametral"
+        "diametral",
+        "coupon"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
         "d-screw-vise-fit"
       ],
       "sources": [
-        "nist-gdt-2"
+        "nist-gdt-2",
+        "iso-286",
+        "asme-b4"
       ],
-      "snippet": "A fit is the designed relationship between two mating features of size (typically hole and shaft). Choose it from function, process capability, and whether the joint should slide, locate, or press. | Class | Intent | |-…"
+      "snippet": "A fit is the designed relationship between two mating features of size (typically hole and shaft). Choose it from function, process capability, and whether the joint should slide, locate, or press. Teaching rewrite info…"
     },
     {
       "id": "machine-design.concepts.gdt-intro",
       "path": "knowledge/machine-design/concepts/gdt-intro.md",
       "title": "GD&T intro",
-      "description": "Tolerance zones, datums, feature control frames, and Rule #1 — distilled from NIST teaching materials.",
+      "description": "Tolerance zones, datums, feature control frames, and ASME Rule #1 teaching ideas from NIST.",
       "status": "draft",
       "topics": [
         "gdt",
@@ -150,13 +148,19 @@
         "MMC",
         "LMC",
         "Rule 1",
+        "envelope",
         "ASME Y14.5",
         "ISO GPS"
       ],
-      "related_recipes": [],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit"
+      ],
       "sources": [
         "nist-gdt-1",
-        "nist-gdt-2"
+        "nist-gdt-2",
+        "asme-y14",
+        "iso-gps"
       ],
       "snippet": "Manufacturing is imprecise. A CAD solid is exact; a machined or printed part is not. Geometric dimensioning and tolerancing (GD&T) states which variation is allowed, relative to datums, so design, make, and inspect shar…"
     },
@@ -164,7 +168,7 @@
       "id": "machine-design.concepts.materials-vocabulary",
       "path": "knowledge/machine-design/concepts/materials-vocabulary.md",
       "title": "Materials vocabulary",
-      "description": "Stiffness, strength, fatigue, and process coupling for CAD material choices.",
+      "description": "Stub — property vocabulary for CAD; not an allowables database.",
       "status": "draft",
       "topics": [
         "materials"
@@ -180,34 +184,9 @@
       ],
       "related_recipes": [],
       "sources": [
-        "kittycad-materials",
-        "materials-project"
+        "kittycad-materials"
       ],
       "snippet": "Pick materials with properties and process, not only a viewport color. Filament appearance in the manufacturing catalog is not an engineering allowables table. Useful symbols (SI primary): - E — elastic modulus (stiffne…"
-    },
-    {
-      "id": "machine-design.SOURCES",
-      "path": "knowledge/machine-design/SOURCES.md",
-      "title": "Machine-design sources",
-      "description": "Provenance and license table for distilled versus link-only machine-design help.",
-      "status": "draft",
-      "topics": [],
-      "keywords": [],
-      "related_recipes": [],
-      "sources": [],
-      "snippet": "Bundled prose in this tree is project content under the repository license (LGPL-2.1-or-later) unless a page says otherwise. Distill only from public-domain or clearly reusable CC BY (and similar) teaching materials. Li…"
-    },
-    {
-      "id": "machine-design.taxonomy",
-      "path": "knowledge/machine-design/taxonomy.md",
-      "title": "Machine-design taxonomy",
-      "description": "Topic map for the open machine-design knowledge base (users and agents).",
-      "status": "draft",
-      "topics": [],
-      "keywords": [],
-      "related_recipes": [],
-      "sources": [],
-      "snippet": "Open help for design-time decisions in noBS CAD. Product/architecture concepts stay in the OKF index. This map is the domain layer: GD&T, machine elements, mechanisms, materials, and DFM. Agents should search these page…"
     }
   ]
 }

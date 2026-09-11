@@ -80,7 +80,8 @@
     "e2e:bevy-kernel": "node scripts/run-e2e.mjs e2e-bevy-interaction-kernel.mjs",
     "e2e:files": "node scripts/run-e2e.mjs e2e-m2.mjs",
     "build:help-index": "node scripts/build-help-index.mjs",
-    "check:help": "npm run check:knowledge && npm run build:help-index"
+    "check:help": "npm run check:knowledge && npm run check:help-sources && npm run build:help-index",
+    "check:help-sources": "node scripts/check-help-sources.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",

@@ -10,7 +10,8 @@ OKF concepts, not inside them.
   site](https://jackcontrols.github.io/noBS-CAD/) once this branch reaches
   `main`.
 - **Agents** — read the Markdown. Do not scrape the HTML page. Search this
-  tree **before** the public web. Web search is the escape hatch.
+  tree **when the taxonomy marks the topic seeded**. For **planned** gaps,
+  use linked further-reading / web. Web search is always the escape hatch.
 
 ## Source of truth
 
@@ -63,7 +64,10 @@ thin OKF pages; link NC courses and proprietary standards without copying.
 
 ## Milestones
 
-1. **A (this branch)** — OKF scaffold, license table, five seed concepts.
+1. **A (this branch)** — OKF scaffold, license table, **six** seed concepts,
+   SOURCES ids, class-only fits (no preferred-fit designation table),
+   search plan (BM25 now, Tantivy behind a `SearchIndex` trait as the
+   corpus grows; Help UI markdown render), adversarial pass.
 2. **B** — Fill taxonomy thin concepts; cross-link remaining recipes.
 3. **C** — Live `kb-*` recipes + help UI mini-viewport.
 4. **D** — MCP search tools and an evaluation set of design-time questions.
@@ -75,3 +79,8 @@ pages, matching flagship example policy.
 
 See [`machine-design-help-search.md`](machine-design-help-search.md) for the
 index, MCP tools, and Help UI plan.
+
+## Adversarial review
+
+See [`machine-design-adversarial-review.md`](machine-design-adversarial-review.md)
+for the 2026-09-11 pass (blockers: SOURCES ids, preferred-fit fence).

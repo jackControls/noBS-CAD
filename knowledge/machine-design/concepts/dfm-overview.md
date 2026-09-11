@@ -1,48 +1,53 @@
 ---
 type: Concept
 title: DFM overview
-description: Design-for-manufacturing principles and workflow — distilled from CC BY DFM OERs.
+description: Design-for-manufacturing mindset for CAD-time decisions; process selection before detail.
 status: draft
 updated: 2026-09-11
 topics: dfm, dfa, manufacturing
-keywords: DFM, DFA, DFMA, part count, tolerance cost, process selection
+keywords: DFM, DFA, DFMA, process selection, tolerance cost, standard parts
 related_recipes: turbine-fit-coupons, d-screw-vise-fit, garden-bench, vertical-axis-turbine, d-screw-vise
-sources: nwtc-guns-dfm, palni-dfma, doe-3d
+sources: nwtc-guns-dfm, palni-dfma
 ---
 
 # DFM overview
 
-**Design for manufacturing (DFM)** means choosing geometry a real process can
-make repeatably. **DFA** is the assembly counterpart (access, fastener count,
-error-proofing). Decide the process early; it changes minimum radii, walls,
-draft, splits, and tolerances.
+**Design for manufacturing (DFM)** means committing early to a process that can
+make the geometry repeatably. **DFA** asks whether a person or robot can
+grasp, orient, and join the parts without heroics. Tight tolerances and fancy
+features that the process cannot hold are not “quality” — they are cost and
+scrap.
 
-Primary distillation: Bryan Guns, NWTC LibreTexts *Design for Various
-Manufacturing Methods* (**CC BY 4.0**); PALNI *Design for Manufacture and
-Assembly* (**CC BY 4.0**). Do not copy Boothroyd proprietary timing tables.
+**Attribution:** ideas adapted from Bryan Guns, NWTC LibreTexts
+*[Design for Various Manufacturing Methods](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods)*
+([Ch. 1](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/01%3A_Design_for_Manufacturing_(DFM))),
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/);
+and Gagnon & Bearman, *[Design for Manufacture and Assembly](https://pressbooks.palni.org/designmanufactureassembly/)* (PALNI),
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Rewritten for noBS CAD help — not a chapter mirror. Do not copy Boothroyd
+proprietary timing tables.
 
-## Core principles
+## CAD-time habits
 
-1. **Minimize part count** — combine features when motion, material, or service
-   access does not require a separate part.
-2. **Standardize** — prefer purchased / catalog hardware and common stock.
-3. **Simplify processes** — fewer setups, special tools, and secondary ops.
-4. **Design for assembly** — grasp, orient, insert; symmetry and self-alignment help.
-5. **Material–process fit** — pick materials the process likes (weldable, moldable, printable).
-6. **Tolerances that earn their keep** — tight only where function needs it; see [GD&T](gdt-intro.md).
-7. **Cut secondary operations** — design so paint, grind, or drill are not mandatory.
+- **Pick the process before the fillets.** Volume, material, and envelope drive
+  CNC vs mold vs print vs sheet vs weld.
+- **Buy before you invent.** Catalog fasteners and stock shapes beat one-off
+  features when function allows ([fasteners](fasteners-joints.md)).
+- **Merge parts only when motion, material, or service access allows.**
+- **Make assembly boring.** Symmetry, chamfers that lead, and access for tools
+  beat clever trapped fasteners.
+- **Spend tolerance where function lives.** Use [GD&T](gdt-intro.md) for
+  relationships that matter; leave the rest loose.
+- **Design out secondary ops** when you can (extra grind, paint-critical seams,
+  must-machine faces that could have been as-cast/as-printed).
 
 ## Workflow
 
-Conceptual design → **process selection** (volume, material, complexity) →
-detailed design under process rules → prototype/validate → feedback → release.
+Concept → **process selection** → detail under that process’s rules →
+coupon/prototype → feedback → release. Talk to manufacturing early; write down
+trade-offs.
 
-Engage manufacturing early. Document trade-offs.
-
-## Process map
-
-See [DFM process guidelines](dfm-process-guidelines.md) for injection molding,
-casting, sheet metal, welding, EDM, and CNC heuristics.
+Process heuristics: [DFM process guidelines](dfm-process-guidelines.md).
 
 ## In noBS CAD
 
@@ -51,8 +56,8 @@ software evidence. Fit coupons bridge to a specific printer and material.
 
 ## Further reading (link only)
 
-- [UArk Jensen — Mechanical Design & Manufacturing](https://uark.pressbooks.pub/mechanicaldesign/) — CC BY-NC survey
-- [MIT OCW 2.008](https://ocw.mit.edu/courses/2-008-design-and-manufacturing-ii-spring-2025/) — CC BY-NC-SA process physics
+- [UArk Jensen](https://uark.pressbooks.pub/mechanicaldesign/) — CC BY-NC
+- [MIT OCW 2.008](https://ocw.mit.edu/courses/2-008-design-and-manufacturing-ii-spring-2025/) — CC BY-NC-SA
 
 Related: [Fits & clearances](fits-clearances.md), [Materials vocabulary](materials-vocabulary.md),
 [SOURCES](../SOURCES.md).
