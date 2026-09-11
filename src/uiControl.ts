@@ -12,7 +12,7 @@ export interface UiControl {
   options?: Array<{ value: string; label: string; disabled: boolean }>;
 }
 
-const selector = 'button,details > summary,input:not([type="hidden"]),select,textarea,a[href],[role="button"],[role="tab"],[role="treeitem"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="checkbox"],[role="radio"],[contenteditable="true"]';
+const selector = 'button,details > summary,input:not([type="hidden"]),select,textarea,a[href],[role="button"],[role="tab"],[role="treeitem"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="checkbox"],[role="radio"],[contenteditable="true"],[tabindex="0"]';
 let snapshot = 0;
 let inspectedContext: unknown;
 let current = new Map<string, { element: HTMLElement; label: string; surface: string }>();
@@ -131,7 +131,7 @@ export function operateUi(request: UiAction, context?: unknown): HTMLElement | n
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   } else if (request.action === 'key') {
-    if (!['Enter','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Delete','Backspace'].includes(request.key ?? '')) throw new Error('Unsupported key');
+    if (!['Enter','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','Delete','Backspace'].includes(request.key ?? '')) throw new Error('Unsupported key');
     element.focus();
     const accepted = element.dispatchEvent(new KeyboardEvent('keydown', { key: request.key, bubbles: true, cancelable: true }));
     // Synthetic key events do not trigger the browser's native form default.

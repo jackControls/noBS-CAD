@@ -46,6 +46,16 @@ try {
   operateUi({action:'double_click',target:plane.id},context);
   operateUi({action:'context_menu',target:plane.id},context);
   check(gestures.join(',')==='select,edit,menu','Tree gestures do not reach real handlers');
+  const example=document.createElement('div'); example.tabIndex=0; example.setAttribute('role','img');
+  example.setAttribute('aria-label','Inspectable example'); document.querySelector('main').append(example);
+  const inspectedKeys=[]; example.addEventListener('keydown',event=>inspectedKeys.push(event.key));
+  const modelControl=controls().filter(control=>control.label==='Inspectable example');
+  check(modelControl.length===1&&modelControl[0].role==='img','Focusable inspection surfaces must be discoverable exactly once');
+  operateUi({action:'key',key:'ArrowRight',target:modelControl[0].id},context);
+  operateUi({action:'key',key:'Home',target:modelControl[0].id},context);
+  check(inspectedKeys.join(',')==='ArrowRight,Home'&&document.activeElement===example,'The shared key path must reach orbit and fit controls');
+  example.remove();
+  list=controls();
   const canvas=document.createElement('div'); canvas.style.cssText='position:fixed;left:0;top:250px;width:200px;height:100px'; document.body.append(canvas);
   const pointer=[]; for(const type of ['pointerdown','pointermove','pointerup']) canvas.addEventListener(type,e=>pointer.push([type,e.buttons,e.clientX]));
   await drivePointer(canvas,'drag',[10,260],false,[90,270]);
