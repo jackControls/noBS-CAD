@@ -3580,7 +3580,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "path":{"type":"string"},"name":{"type":"string"},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
-                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Delete","Backspace"]},
+                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
                 "mode":{"type":"string","enum":["foreground","background","inspect","close","fast","present"]},
                 "pace_ms":{"type":"integer","minimum":0,"maximum":2000}
             }), &[]),

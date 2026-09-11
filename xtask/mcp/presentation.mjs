@@ -36,7 +36,12 @@ export async function checkPresentationSurfaces(browser, url) {
     await page.getByRole('button', {name: 'Close feature preview'}).click();
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Fillet example');
 
-    await page.keyboard.press('ArrowDown');
+    await page.evaluate(async () => {
+      const {inspectUi, operateUi} = await import('/src/uiControl.ts');
+      const opener = inspectUi().surfaces.flatMap(surface => surface.controls).find(control => control.label === 'Fillet example');
+      if (!opener || opener.disabled) throw new Error('The disabled modeling feature must expose its available lesson opener through MCP');
+      operateUi({action: 'key', key: 'ArrowDown', target: opener.id});
+    });
     await page.getByRole('button', {name: 'Open this script →'}).click();
     await page.getByRole('dialog').waitFor({state: 'detached'});
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Close scripts', 'Opening the full script must transfer keyboard focus into its workspace');
