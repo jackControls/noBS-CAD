@@ -68,6 +68,7 @@ import { installNativeFileMenu } from './nativeFileMenu';
 import { isTauriRuntime } from './engine';
 import { requestUnsavedDecision } from './files/unsavedChanges';
 import { createExitController } from './files/applicationExit';
+import { waitForExitEdits } from './files/exitSettlement';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
 
 export default function App() {
@@ -142,6 +143,7 @@ export default function App() {
       if (disposed) return;
       const appWindow = getCurrentWindow();
       exitController = createExitController({
+        settle: waitForExitEdits,
         dirty: hasUnsavedProjects,
         decide: () => requestUnsavedDecision('quit'),
         save: saveAllUnsavedProjects,
