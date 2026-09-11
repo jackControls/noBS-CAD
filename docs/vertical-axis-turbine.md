@@ -156,6 +156,14 @@ own deliberate positioning and validation.
 Reserve the required brim/skirt space in the actual plate layout; geometry
 bounds alone do not establish print adhesion or the usable layout on another printer.
 
+The base's collar-key passage preserves its full 6 mm circular tool envelope.
+A separate editable cut adds 45-degree tangent roof faces and a 1 mm flat
+ceiling at Z=10.5426 mm, leaving 1.4574 mm minimum roof stock. This replaces the
+unsupported last wall of the original circular roof while retaining the tool
+path. Inspect the actual final wall and its preceding layer as well as the
+short ceiling bridge; support-free intent is not established by counting zero
+support paths. See [slicer evidence guidance](../knowledge/concepts/export-print.md).
+
 1. Print short shaft, motor and bearing fit coupons first. The starting
    diametral allowances are 0.3 mm for the 8 mm stage/rotor shaft, 0.3 mm for
    the 22 mm bearing seats, 0.6 mm for the 32 mm motor case and 0.2 mm for the

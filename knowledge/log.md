@@ -2,6 +2,7 @@
 
 ## 2026-09-11
 
+- **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone do not establish printability.
 - **Update**: Added small-generator/rotor/load matching and bearing/axial-retention guidance, with manufacturer and experimental references. Both use the existing automatic MCP resource inventory.
 - **Update**: Added sourced gear-identification/pair-design and additive-workholding guidance.
 - **Integration**: Native MCP resources expose the same Markdown corpus offline; no separate knowledge store or modeling tool.
