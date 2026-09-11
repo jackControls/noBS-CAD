@@ -1,5 +1,5 @@
 import { drivePointer } from '../../uiPointer';
-import { registerSessionCamera, unregisterSessionCamera } from './cameraApi';
+import { registerSessionCamera, unregisterSessionCamera, notifySessionCameraChanged } from './cameraApi';
 import { presentation } from '../../operationPlayback';
 import { listenForModelKeys } from '../../modelKeyboard';
 /**
@@ -866,6 +866,7 @@ export function Viewport() {
       if (camAnim) {
         camAnim = null;
         controls.enabled = true;
+        notifySessionCameraChanged();
       }
     }
 
@@ -11999,7 +12000,6 @@ export function Viewport() {
       },
     };
     apiRef.current = api;
-    registerSessionCamera(api);
     // E2E/debug handles: let automation verify camera poses and project
     // sketch mm coordinates to screen pixels for deterministic input.
     (window as unknown as { __cameraApi?: ViewportCameraApi }).__cameraApi = api;
@@ -12828,6 +12828,8 @@ export function Viewport() {
     };
     wakeControllerFrame();
 
+    // Publish only after the mounted viewport has built its scene and handlers.
+    registerSessionCamera(api);
     return () => {
       preservedCameraSnapshot = api.getSnapshot();
       holeDefinitionsRequest += 1;
