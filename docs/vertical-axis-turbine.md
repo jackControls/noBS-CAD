@@ -332,14 +332,19 @@ It distinguishes the headless lifecycle from live presentation and physical test
 Its results apply only to the listed source hashes; later design edits require
 fresh replay, assembly, export and slicer checks before inheriting those claims.
 
-The Rust MCP acceptance test replays from blank twice, compares complete native
-models/scenes/drawings, checks all sketch constraints and solved placement,
-exports the recipe-owned positive native print plates as selected manifold 3MFs, edits the stage
-plate and verifies save/reload, and drives the native gear relationship over
-multiple turns. Exact quarter- and half-tooth-pitch interference samples test
-the rotating spur pair between home positions. These are discrete checks, not
-a proof of continuous contact or physical durability. Final source checks stop on geometry errors, unsolved joints,
-remaining sketch freedom or volumetric assembly interference.
+The complete Rust MCP mechanical gate passed on the frozen stable-underside
+source. It covers both stage instances under thickness and shaft-bore edits,
+cold reload, associative dimensions, hardware insertion, bearing/wire clearances
+and forward, reverse and multi-turn drive. Native interference samples use
+0.25-degree phases through one tooth period and 15-degree samples through a
+full rotor turn. These are discrete checks, not proof of continuous contact.
+
+The final source moves only four drawing leaders. Two independent blank replays
+of each final recipe and exact non-drawing parity connect the delivered files
+to that mechanical baseline. All 18 sheet pairs match the reviewed native
+exports, and all 11 main plates plus five coupon files match the actual
+reviewed X2D slicer inputs. The snapshot keeps these source scopes separate;
+neither native geometry nor toolpath checks establish physical print quality.
 
 The drawings contain associative projected geometry, critical part dimensions,
 base size and shaft spacing, overall assembly dimensions and a hardware BOM.
