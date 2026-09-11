@@ -112,6 +112,8 @@ export function FeatureScriptPreview({ children, group, operation, label, disabl
     <>
       <span
         ref={anchor}
+        data-interface-group={group}
+        data-interface-operation={operation}
         data-script-preview-trigger
         data-script-preview-pending={pendingOpen || undefined}
         className="inline-flex shrink-0"
