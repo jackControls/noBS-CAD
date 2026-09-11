@@ -10,15 +10,29 @@ assert(process.argv.includes('--server') && process.argv.includes('--desktop'),
   'Use --server PATH --desktop PATH [--out REPORT]; launches disposable windows only');
 const c = new Client(option('--server'));
 const report = [];
+let ownedWindow = null;
+let currentTest;
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-async function exited(pid) {
-  const deadline = Date.now() + 10000;
+async function exited(pid, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
   while (alive(pid) && Date.now() < deadline) await new Promise(r => setTimeout(r, 50));
   assert(!alive(pid), `Disposable CAD process ${pid} did not exit`);
+  if (ownedWindow?.pid === pid) ownedWindow = null;
+}
+async function launchOwnedWindow() {
+  assert.equal(ownedWindow, null, 'Observe the previous disposable window exit before launching another');
+  const launch = await c.call('cad_interface', {action:'launch',executable:option('--desktop')});
+  assert(Number.isInteger(launch.pid) && launch.pid > 0, 'Launch must identify its disposable process');
+  // Record ownership before checking readiness: a starting reply also owns a
+  // newly launched process that must be cleaned up if validation stops here.
+  ownedWindow = {pid:launch.pid, session_id:launch.session_id};
+  assert.equal(launch.status, 'ready', JSON.stringify(launch));
+  return launch;
 }
 async function ui(args) {
   const result = await c.call('cad_interface', args);
   assert.equal(result.status, 'applied', JSON.stringify(result));
+  if (ownedWindow && result.active_session_id) ownedWindow.session_id = result.active_session_id;
   return result;
 }
 async function click(label) {
@@ -34,13 +48,53 @@ async function dirty() {
   await c.call('sketch_finish');
 }
 
+async function cleanupOwnedWindow() {
+  const owned = ownedWindow;
+  if (!owned) return;
+  if (!alive(owned.pid)) { ownedWindow = null; return; }
+  const cleanup = {test:currentTest, pid:owned.pid, cleanup:true, forced:false, passed:false};
+  report.push(cleanup);
+  const previousTimeout = c.timeoutMs;
+  c.timeoutMs = 2000;
+  try {
+    assert(owned.session_id, 'Starting desktop did not publish a session for guarded cleanup');
+    await ui({action:'window',mode:'close',session_id:owned.session_id});
+    const deadline = Date.now() + 2000;
+    let discarded = false;
+    while (alive(owned.pid) && Date.now() < deadline) {
+      // Only this suite's disposable work may be discarded during cleanup.
+      const state = await ui({action:'inspect',session_id:owned.session_id});
+      const controls = state.ui.surfaces.flatMap(surface => surface.controls);
+      const discard = controls.filter(control => control.label === "Don't Save" && !control.disabled);
+      if (!discarded && discard.length === 1) {
+        await ui({action:'click',target:discard[0].id,session_id:owned.session_id});
+        discarded = true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  } catch (error) {
+    cleanup.error = String(error);
+  } finally {
+    c.timeoutMs = previousTimeout;
+  }
+  if (alive(owned.pid)) {
+    cleanup.forced = true;
+    console.error(`FAIL cleanup: guarded close did not finish; forcibly terminating disposable CAD process ${owned.pid}`);
+    // This is failure cleanup, never evidence that the guarded close passed.
+    process.kill(owned.pid, 'SIGKILL');
+    await exited(owned.pid, 2000);
+  } else {
+    ownedWindow = null;
+  }
+}
+
 try {
   await c.start();
   const cases = ['mcp-clean', 'mcp-background', 'menu-clean', 'cancel-discard', 'save-exit'];
   if (process.platform === 'win32') cases.push('native-close');
   for (const test of cases) {
-    const launch = await c.call('cad_interface', {action:'launch',executable:option('--desktop')});
-    assert.equal(launch.status, 'ready');
+    currentTest = test;
+    const launch = await launchOwnedWindow();
     const pid = launch.pid;
     if (test === 'mcp-clean') await ui({action:'window',mode:'close'});
     if (test === 'mcp-background') {
@@ -74,8 +128,7 @@ try {
       await ui({action:'window',mode:'close'});
       await click('Save');
       await exited(pid);
-      const reopened = await c.call('cad_interface', {action:'launch',executable:option('--desktop')});
-      assert.equal(reopened.status, 'ready');
+      const reopened = await launchOwnedWindow();
       await ui({action:'file',command:'open',path});
       assert.deepEqual(JSON.parse(await c.call('cad_project_model')), expected, 'Save on exit must persist the complete native project');
       await ui({action:'window',mode:'close'});
@@ -85,5 +138,17 @@ try {
     report.push({test,pid,passed:true});
     console.log('PASS', test);
   }
-  if (process.argv.includes('--out')) await writeFile(option('--out'), JSON.stringify(report,null,2));
-} finally { c.close(); }
+} catch (error) {
+  report.push({test:currentTest, pid:ownedWindow?.pid, passed:false, error:String(error)});
+  throw error;
+} finally {
+  try {
+    await cleanupOwnedWindow();
+  } catch (error) {
+    report.push({test:currentTest, pid:ownedWindow?.pid, cleanup:true, passed:false, error:String(error)});
+    console.error('FAIL disposable desktop cleanup:', error);
+  } finally {
+    c.close();
+    if (process.argv.includes('--out')) await writeFile(option('--out'), JSON.stringify(report,null,2));
+  }
+}

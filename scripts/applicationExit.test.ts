@@ -110,4 +110,32 @@ assert.equal(errors, 1);
 retry.dispose();
 await retry.request();
 assert.equal(attempts, 2);
+
+const settlementBarrier = new ExitBarrier();
+let finishLateControl!: () => void;
+let enteredSettlement!: () => void;
+const settling = new Promise<void>(resolve => { enteredSettlement = resolve; });
+let settlementCalls = 0, settledExits = 0;
+const settled = createExitController({
+  dirty: () => false, decide: async () => 'cancel', save: async () => false,
+  settle: async () => {
+    if (++settlementCalls === 1) { finishLateControl = settlementBarrier.hold(); enteredSettlement(); }
+  },
+  exit: async () => { settledExits++; }, error: error => { throw error; },
+}, settlementBarrier);
+const settledQuit = settled.request();
+await settling; await Promise.resolve();
+assert.equal(settledExits, 0, 'A control admitted during edit settlement must still acknowledge');
+finishLateControl(); await settledQuit;
+assert.equal(settledExits, 1);
+
+const disposalBarrier = new ExitBarrier();
+const heldForDispose = disposalBarrier.hold();
+const disposable = createExitController({
+  dirty: () => false, decide: async () => 'cancel', save: async () => false,
+  exit: async () => { throw new Error('Disposed exit'); }, error: error => { throw error; },
+}, disposalBarrier);
+const disposedQuit = disposable.request(); disposable.dispose(); await disposedQuit;
+assert(disposalBarrier.isHeld(), 'Disposing a waiter must not release another operation');
+heldForDispose();
 console.log('PASS exit: clean, save, discard, cancel, failed save, duplicate requests, acknowledgement ordering, late edits after Save, error recovery, disposal');

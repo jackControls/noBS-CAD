@@ -10,8 +10,16 @@ export class ExitBarrier {
     return () => { this.pending.delete(promise); release(); };
   }
 
-  async wait(): Promise<void> {
-    while (this.pending.size) await Promise.all(this.pending);
+  isHeld(): boolean { return this.pending.size > 0; }
+
+  async wait(signal?: AbortSignal): Promise<void> {
+    while (this.pending.size && !signal?.aborted) {
+      await new Promise<void>(resolve => {
+        const finish = () => { signal?.removeEventListener('abort', finish); resolve(); };
+        signal?.addEventListener('abort', finish, { once: true });
+        void Promise.all(this.pending).then(finish);
+      });
+    }
   }
 }
 
@@ -23,14 +31,25 @@ interface ExitActions {
   save(): Promise<boolean>;
   exit(): Promise<void>;
   error(error: unknown): void;
+  settle?(signal: AbortSignal): Promise<void>;
 }
 
 /** One guarded route for native close, application Quit, and the interface. */
 export function createExitController(actions: ExitActions, barrier = applicationExitBarrier) {
   let pending = false;
   let disposed = false;
+  const lifetime = new AbortController();
+  const settle = async () => {
+    do {
+      await barrier.wait(lifetime.signal);
+      if (disposed) return;
+      await actions.settle?.(lifetime.signal);
+      // Waiting for ordinary edits can admit a new live control. Its reply
+      // must still be acknowledged before deciding or closing the webview.
+    } while (!disposed && barrier.isHeld());
+  };
   return {
-    dispose() { disposed = true; },
+    dispose() { disposed = true; lifetime.abort(); },
     async request() {
       if (pending || disposed) return;
       pending = true;
@@ -38,7 +57,7 @@ export function createExitController(actions: ExitActions, barrier = application
         while (!disposed) {
           // A control already in progress may create unsaved work. Decide only
           // after it completes, rather than trusting its pre-operation state.
-          await barrier.wait();
+          await settle();
           if (disposed) return;
           let discard = false;
           if (actions.dirty()) {
@@ -47,7 +66,7 @@ export function createExitController(actions: ExitActions, barrier = application
             discard = decision === 'discard';
             if (decision === 'save' && !(await actions.save())) return;
           }
-          await barrier.wait();
+          await settle();
           if (disposed) return;
           // A late control can create more work after Save succeeds. Its
           // acknowledgement releases shutdown, but does not save that work.
@@ -57,7 +76,7 @@ export function createExitController(actions: ExitActions, barrier = application
           return;
         }
       } catch (error) {
-        actions.error(error);
+        if (!disposed) actions.error(error);
       } finally {
         pending = false;
       }
