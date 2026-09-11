@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium} from 'playwright';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
+import {checkPresentationSurfaces} from './presentation.mjs';
 
 const dispatcher=ts.createSourceFile('dispatch.ts',await readFile(new URL('../../src/ribbon/dispatch.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 const dispatched=new Set();
@@ -164,6 +165,7 @@ try {
  });
  console.log('PASS production application exit: '+JSON.stringify(exit));
  await exitPage.close();
+ console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
  const scriptPage=await browser.newPage();
  await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const scripts=await scriptPage.evaluate(async()=>{
