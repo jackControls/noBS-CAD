@@ -36,10 +36,36 @@ async function ui(args) {
   return result;
 }
 async function click(label) {
-  const state = await ui({action:'inspect'});
-  const matches = state.ui.surfaces.flatMap(s => s.controls).filter(c => c.label === label && !c.disabled);
-  assert.equal(matches.length, 1, `Expected one ${label}: ${JSON.stringify(matches)}`);
-  return ui({action:'click', target:matches[0].id});
+  const owned = ownedWindow;
+  const deadline = Date.now() + 10000;
+  const previousTimeout = c.timeoutMs;
+  let surfaces = [];
+  const remaining = () => {
+    const time = deadline - Date.now();
+    assert(time > 0, `Timed out waiting for enabled ${label}; surfaces: ${JSON.stringify(surfaces)}`);
+    return Math.min(previousTimeout, time);
+  };
+  const assertOwned = () => assert(owned && ownedWindow === owned && alive(owned.pid),
+    `Disposable CAD process ${owned?.pid} exited while waiting for ${label}; surfaces: ${JSON.stringify(surfaces)}`);
+  try {
+    for (;;) {
+      assertOwned();
+      c.timeoutMs = remaining();
+      const state = await ui({action:'inspect',session_id:owned.session_id});
+      surfaces = state.ui.surfaces.map(surface => ({name:surface.name,
+        controls:surface.controls.map(({label,disabled}) => ({label,disabled}))}));
+      const matches = state.ui.surfaces.flatMap(surface => surface.controls).filter(control => control.label === label && !control.disabled);
+      assert(matches.length <= 1, `Expected one enabled ${label}, found ${matches.length}; surfaces: ${JSON.stringify(surfaces)}`);
+      if (matches.length === 1) {
+        assertOwned();
+        c.timeoutMs = remaining();
+        return await ui({action:'click',target:matches[0].id,session_id:owned.session_id});
+      }
+      // A close acknowledgement can precede the async unsaved-work prompt.
+      // Retry only a missing enabled control; failed calls and duplicates fail.
+      await new Promise(resolve => setTimeout(resolve, Math.min(50, remaining())));
+    }
+  } finally { c.timeoutMs = previousTimeout; }
 }
 async function menuExit() { await click('File'); return click('Exit'); }
 async function dirty() {
@@ -60,15 +86,17 @@ async function cleanupOwnedWindow() {
     assert(owned.session_id, 'Starting desktop did not publish a session for guarded cleanup');
     await ui({action:'window',mode:'close',session_id:owned.session_id});
     const deadline = Date.now() + 2000;
-    let discarded = false;
     while (alive(owned.pid) && Date.now() < deadline) {
       // Only this suite's disposable work may be discarded during cleanup.
       const state = await ui({action:'inspect',session_id:owned.session_id});
       const controls = state.ui.surfaces.flatMap(surface => surface.controls);
       const discard = controls.filter(control => control.label === "Don't Save" && !control.disabled);
-      if (!discarded && discard.length === 1) {
+      if (discard.length === 1) {
         await ui({action:'click',target:discard[0].id,session_id:owned.session_id});
-        discarded = true;
+        cleanup.discarded = true;
+        // The process is now closing; another inspection can only race exit.
+        await exited(owned.pid, 2000);
+        return;
       }
       await new Promise(resolve => setTimeout(resolve, 50));
     }
