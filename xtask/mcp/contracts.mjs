@@ -345,6 +345,14 @@ try {
  });
  console.log('PASS production script document ownership: '+JSON.stringify(ownership));
  await ownershipPage.close();
+ const drawingPublicationPage=await browser.newPage();
+ await drawingPublicationPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const drawingPublication=await drawingPublicationPage.evaluate(async()=>{
+  const {checkDrawingProjectionPublication}=await import('/src/drawing/projectionPresentation.browser.test.tsx');
+  return checkDrawingProjectionPublication();
+ });
+ console.log('PASS production drawing projection publication: '+JSON.stringify(drawingPublication));
+ await drawingPublicationPage.close();
  const controlPage=await browser.newPage();
  await controlPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const controls=await controlPage.evaluate(async()=>{

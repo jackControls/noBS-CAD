@@ -1758,6 +1758,20 @@ fn control_for_window(
                 &response.to_string(),
             )?;
             let _ = fs::remove_file(path);
+            // Share completed exact linework through this existing poll. The
+            // renderer must not launch competing HLR between inbox apply and
+            // snapshot publication. Identity/revision are stamped while the
+            // publisher lock still protects this query's native document.
+            if method == "drawing_projection" && response["status"] == "applied" {
+                let request: nbcad_occt::DrawingProjectionRequest = serde_json::from_str(payload)
+                    .map_err(|error| format!("invalid completed projection request: {error}"))?;
+                return Ok(json!({
+                    "session_id": session_id,
+                    "document_id": publisher.active_project_session_id,
+                    "engine_revision": publisher.active_mut().engine_revision,
+                    "drawing_projection": {"request": request, "projection": response["value"]},
+                }));
+            }
             return Ok(Value::Null);
         }
         publisher
@@ -1906,6 +1920,53 @@ mod tests {
             assert_eq!(reply["status"], "applied");
             assert!(!controls.join("123-1.request.json").exists());
             assert!(control_for_window(&state, "main", &engine, Some(response)).is_err());
+        }
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn completed_drawing_query_handoff_preserves_receipt_and_native_owner() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-drawing-handoff-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        {
+            let state = SessionBridgeState::default();
+            let engine = AppState::new();
+            envelope_ok(&state.with_project_session_transition("main", &engine, || engine.bind_project_session("drawing-a")));
+            dispatch_inbox_on_engine(&engine, "sketch_begin", &json!({"name":"Projection fixture","plane":{"type":"origin_plane","plane":"xy"}})).unwrap();
+            dispatch_inbox_on_engine(&engine,"sketch_add_rectangle",&json!({"mode":"two_point","p1":{"x":0.,"y":0.},"p2":{"x":10.,"y":10.},"ctrl_held":false})).unwrap();
+            dispatch_inbox_on_engine(&engine, "sketch_finish", &json!({})).unwrap();
+            let solid=dispatch_inbox_on_engine(&engine,"solid_extrude",&json!({"sketch_name":"Projection fixture","profile_indices":[0],"operation":"new_body","extent":{"type":"distance","distance":5.},"taper_angle_deg":0.,"flip":false,"target_body_ids":[]})).unwrap();
+            let body = solid["scene"]["bodies"][0]["id"].clone();
+            let reserved = state.reserve_for_window_on_project("main", Some("drawing-a")).unwrap();
+            let session = reserved["session_id"].as_str().unwrap();
+            let controls = dir.join(session).join("controls");
+            fs::create_dir_all(&controls).unwrap();
+            let request = json!({"body_ids":[body],"direction":[0.,0.,1.],"up":[0.,1.,0.]});
+            let write_query = |id: &str, method: &str, payload: &str| {
+                atomic_write(&controls.join(format!("{id}.request.json")), &json!({"id":id,"expires_ms":now_ms()+30_000,
+                    "session_id":"forged", "sketch_query":{"method":method,"payload":payload}}).to_string()).unwrap();
+            };
+            write_query("100-1", "drawing_projection", &request.to_string());
+            let handoff = control_for_window(&state, "main", &engine, None).unwrap();
+            assert_eq!(handoff["session_id"], session);
+            assert_eq!(handoff["document_id"], "drawing-a");
+            assert_eq!(handoff["engine_revision"], reserved["engine_revision"]);
+            assert_eq!(handoff["drawing_projection"]["request"]["deflection"], 0.05);
+            assert_eq!(handoff["drawing_projection"]["request"]["include_hidden"], false);
+            assert!(!handoff["drawing_projection"]["projection"]["visible"].as_array().unwrap().is_empty());
+            let receipt: Value = serde_json::from_str(&fs::read_to_string(controls.join("100-1.result.json")).unwrap()).unwrap();
+            assert_eq!(receipt["status"], "applied");
+            assert_eq!(receipt["value"], handoff["drawing_projection"]["projection"]);
+            assert!(!controls.join("100-1.request.json").exists());
+            assert!(control_for_window(&state, "main", &engine, None).unwrap().is_null());
+            assert!(state.publishers.lock().unwrap()["main"].pending_controls.is_empty());
+            write_query("100-2", "drawing_projection", "{}");
+            assert!(control_for_window(&state, "main", &engine, None).unwrap().is_null());
+            let failed: Value = serde_json::from_str(&fs::read_to_string(controls.join("100-2.result.json")).unwrap()).unwrap();
+            assert_eq!(failed["status"], "failed");
+            assert_eq!(state.engine_revision_for_window("main").unwrap(), reserved["engine_revision"].as_u64());
         }
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(dir);

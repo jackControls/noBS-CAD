@@ -13,6 +13,17 @@ export class ProjectTransitions {
   private snapshots = new Set<Promise<void>>();
   private revision = 0;
   private published = true;
+  private listeners = new Set<() => void>();
+
+  /** Background reads must yield until native changes and publication finish. */
+  isSettled(): boolean { return this.published && !this.pending.size && !this.snapshots.size; }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private notify(): void { for (const listener of this.listeners) listener(); }
 
   begin(): ProjectTransitionRelease {
     const previous = [...this.pending.values()];
@@ -28,6 +39,7 @@ export class ProjectTransitions {
         this.published = published;
       }
       settled();
+      this.notify();
     }, {waitForSnapshots: async () => {
       // Preserve native/UI hydration order for competing Open/tab/inbox work.
       // Only predecessors are awaited, so queued writers cannot wait on one
@@ -36,6 +48,7 @@ export class ProjectTransitions {
       while (this.snapshots.size) await Promise.all(this.snapshots);
     }});
     this.pending.set(release, pending);
+    this.notify();
     return release;
   }
 
@@ -72,9 +85,11 @@ export class ProjectTransitions {
     let settled!: () => void;
     const snapshot = new Promise<void>(resolve => { settled = resolve; });
     this.snapshots.add(snapshot);
+    this.notify();
     return {assertCurrent, assertOwned: () => this.assertPublished(revision), release: () => {
       this.snapshots.delete(snapshot);
       settled();
+      this.notify();
     }};
   }
 

@@ -24,6 +24,7 @@ import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './session
 import type { SolidUpdateDto } from './engine/types';
 import { projectTransitions, type ProjectTransitionRelease } from './files/projectTransitions';
 import { applicationExitBarrier } from './files/applicationExit';
+import {bindDrawingProjectionOwner} from './drawing/projectionPresentation';
 import {
   useAppStore,
   type AppMode,
@@ -195,6 +196,7 @@ export async function publishCurrentSession(transition?: ProjectTransitionReleas
         sessionId: reservation.session_id, documentId: reservation.project_session_id ?? null,
       };
       inboxOwner = {...owner, documentRevision};
+      bindDrawingProjectionOwner(owner.sessionId, owner.documentId, reservation.engine_revision);
       return owner;
     }
   } catch (error) {
