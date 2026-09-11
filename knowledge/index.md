@@ -32,6 +32,7 @@ pages before web search. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload and purchased hardware.
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
+- [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 
 ## Hosted page
 

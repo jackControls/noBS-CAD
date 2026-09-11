@@ -2,13 +2,13 @@
 
 ## 2026-09-11
 
+- **Update**: Expanded GD&T, fits, and DFM help from NIST (CC BY) and Guns
+  NWTC (CC BY); added DFM process guidelines concept.
+- **Update**: Added `scripts/build-help-index.mjs` and committed
+  `knowledge/machine-design/search-index.json` for searchable help.
+- **Docs**: `docs/machine-design-help-search.md` — MCP + Help UI plan.
 - **Update**: Scaffolded `knowledge/machine-design/` — taxonomy, SOURCES,
-  and five seed concepts (GD&T, fits, fasteners, materials, DFM).
-- **Update**: Expanded SOURCES with commercial-friendly CC BY / PD spine
-  (NWTC DFM, PALNI DFMA, NIST PMI, Materials Project / OQMD / COD) and
-  explicit NC / proprietary link-only rows.
-- **Docs**: Added `docs/machine-design-kb.md` and
-  `docs/machine-design-distill-vs-link.md` (verified distill vs link policy).
+  seed concepts; distill-vs-link policy documented.
 
 ## 2026-07-29
 

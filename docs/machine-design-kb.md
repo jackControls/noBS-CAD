@@ -70,3 +70,8 @@ thin OKF pages; link NC courses and proprietary standards without copying.
 
 Physical load, wear, and print qualification stay out of scope for help
 pages, matching flagship example policy.
+
+## Searchable help
+
+See [`machine-design-help-search.md`](machine-design-help-search.md) for the
+index, MCP tools, and Help UI plan.

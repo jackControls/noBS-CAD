@@ -64,7 +64,8 @@ Seed: [Materials vocabulary](concepts/materials-vocabulary.md).
 - DFAM notes for printable flagships
 - Inspection / metrology basics (bridge to GD&T)
 
-Seed: [DFM overview](concepts/dfm-overview.md).
+Seed: [DFM overview](concepts/dfm-overview.md),
+[DFM process guidelines](concepts/dfm-process-guidelines.md).
 Recipes: `turbine-fit-coupons`, `d-screw-vise-fit`.
 
 ## F. Design hygiene

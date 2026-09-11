@@ -13,6 +13,8 @@
 |-----|----------|----------------|
 | [knowledge-wiki.md](knowledge-wiki.md) | Humans + agents | OKF bundle conventions |
 | [machine-design-kb.md](machine-design-kb.md) | Humans + agents | Domain KB scope, licenses, MCP help plan |
+| [machine-design-help-search.md](machine-design-help-search.md) | Humans + agents | Search index, MCP help tools, Help UI |
+| [machine-design-distill-vs-link.md](machine-design-distill-vs-link.md) | Maintainers | Distill vs link-only sources |
 | [../knowledge/index.md](../knowledge/index.md) | Everyone | Concept index (product + machine design) |
 
 ## MCP / automation

@@ -4,6 +4,10 @@ title: Materials vocabulary
 description: Stiffness, strength, fatigue, and process coupling for CAD material choices.
 status: draft
 updated: 2026-09-11
+topics: materials
+keywords: modulus, yield, fatigue, CTE, density, alloy, polymer
+related_recipes: []
+sources: kittycad-materials, materials-project
 ---
 
 # Materials vocabulary

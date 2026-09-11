@@ -4,6 +4,10 @@ title: Fasteners and joints
 description: Threaded joints, preload language, and purchased-versus-designed hardware.
 status: draft
 updated: 2026-09-11
+topics: fasteners, joints, machine-elements
+keywords: bolt, preload, thread, washer, locking, NASA RP-1228
+related_recipes: d-screw-vise, garden-bench
+sources: nasa-fastener
 ---
 
 # Fasteners and joints
