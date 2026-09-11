@@ -603,6 +603,8 @@ jobs:
         shell: bash
         env:
           APPLE_SIGNING_IDENTITY: "-"
+          # Tauri otherwise hides the DMG subprocess output on failure.
+          TAURI_CLI_VERBOSITY: '1'
         run: npm run bundle:macos
 
       - name: Build Developer ID signed and notarized DMG
