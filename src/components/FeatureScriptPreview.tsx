@@ -70,7 +70,7 @@ export function FeatureScriptPreview({ children, group, operation, label, disabl
     // is actually opened. Unsupported operations keep their ordinary button.
     void ensureScriptExamples().then(examples => {
       if (cancelled) return;
-      const found = examples.find(item => item.preview && item.operations.includes(operation)) ?? null;
+      const found = examples.find(item => item.preview && item.focus_operations.includes(operation)) ?? null;
       available.current = found;
       setExample(found);
       if (found) tryOpen();

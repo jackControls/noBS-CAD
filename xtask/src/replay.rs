@@ -204,6 +204,7 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
             "--save",
             "--out",
             "--compare",
+            "--recipe",
         ],
     )?;
     let live = args.contains_key("--session") || args.contains_key("--desktop");
@@ -225,7 +226,16 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     if !speed.is_finite() || !(0.1..=16.0).contains(&speed) {
         bail!("Speed must be from 0.1 to 16");
     }
-    let path = fs::canonicalize(file.ok_or_else(|| anyhow!("Supply a .nbcad.jsonc script path"))?)?;
+    if file.is_some() && args.contains_key("--recipe") {
+        bail!("Choose a script path or --recipe ID");
+    }
+    let path = if args.contains_key("--recipe") {
+        None
+    } else {
+        Some(fs::canonicalize(file.ok_or_else(|| {
+            anyhow!("Supply a script path or --recipe ID")
+        })?)?)
+    };
     let server = required(&args, "--server")?;
     let repeat = args
         .get("--repeat")
@@ -246,6 +256,19 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         .transpose()?;
     for iteration in 1..=repeat {
         let mut client = Client::start(server)?;
+        // A misspelled recipe must not launch a window or create an empty tab.
+        // Ask the selected binary's catalog, not a second list in this client.
+        if let Some(recipe) = args.get("--recipe") {
+            let catalog = client.call("cad_interface", json!({"action":"recipes"}))?;
+            if !catalog
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|entry| entry["id"] == *recipe)
+            {
+                bail!("Unknown recipe '{recipe}'; inspect the server's recipe catalog");
+            }
+        }
         let mut session = args.get("--session").cloned();
         if let Some(desktop) = args.get("--desktop") {
             if session.is_some() {
@@ -277,8 +300,18 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
             session = reply["active_session_id"].as_str().map(str::to_owned);
             client.call("cad_attach", json!({"session_id":session}))?;
         }
-        eprintln!("Running {} ({iteration}/{repeat})", path.display());
-        let mut report=client.call("cad_interface",json!({"action":"script","path":path,"mode":if args.contains_key("--present"){"present"}else{"fast"},"speed":speed,"validate":true}))?;
+        let label = args
+            .get("--recipe")
+            .cloned()
+            .unwrap_or_else(|| path.as_ref().unwrap().display().to_string());
+        eprintln!("Running {label} ({iteration}/{repeat})");
+        let mut request = json!({"action":"script","mode":if args.contains_key("--present"){"present"}else{"fast"},"speed":speed,"validate":true});
+        if let Some(recipe) = args.get("--recipe") {
+            request["recipe"] = json!(recipe);
+        } else {
+            request["path"] = json!(path);
+        }
+        let mut report = client.call("cad_interface", request)?;
         if let Some(session) = session {
             report["session_id"] = json!(session);
         }
