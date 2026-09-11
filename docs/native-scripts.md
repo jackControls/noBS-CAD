@@ -1,9 +1,9 @@
 # Native command scripts
 
-The interpreter is reviewed separately from the app/preview integration in
-PR #99, which remains draft. Bundled construction recipes and their checks form
-the next layer. See [the interface review](script-interface-review.md) for the
-tested evidence and remaining work before promotion.
+The Rust interpreter, desktop integration and bundled recipes share one
+construction format. See [the demo guide](demo-presentation.md) for the current
+collection and presentation priorities, and [the interface review](script-interface-review.md)
+for integration evidence and remaining product work.
 
 A `.nbcad.jsonc` file is the reproducible construction source for a native design.
 A `.nbcad` file is the editable project produced by those commands. Keep both when
