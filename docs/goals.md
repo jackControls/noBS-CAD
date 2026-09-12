@@ -1,7 +1,9 @@
 # What we are building
 
-Short shared directions for people and contributors. Detail that is still
-**proposed architecture** lives in [proposed-architecture.md](proposed-architecture.md).
+Shared directions for people and contributors. Our priorities, in order, are
+**reliability, performance, and ease of use**. Implementation proposals live in
+[proposed-architecture.md](proposed-architecture.md); current behavior is described
+in the product guides linked below.
 
 noBS CAD is **local** mechanical CAD. Files stay on your machine. There is no
 required cloud account or cloud control plane.
@@ -10,47 +12,59 @@ required cloud account or cloud control plane.
 
 These broaden the original noBS CAD goal; they do not replace it.
 
-| Direction | Meaning |
-|-----------|---------|
-| **Reliable mechanical CAD** | Dependable sketch / feature / history / project workflows, better UX and performance. |
-| **CAM** | Careful path toward functional, modern **3-axis** CAM, with machining feedback. |
-| **Additive manufacturing** | **3MF** (with useful color/material metadata) as a print target; keep **STEP** for CAD interchange. |
-| **Strong local automation** | **MCP** as a serious, fully local control and testing surface. |
-| **Simulation / analysis** | Longer-term module family, **staged** (see below) — not one feature. |
-
-Education-style tutorials ("quests") that reuse golden automation scenarios are
-interesting later. They are **not** a top-level committed product goal today.
+- **Mechanical design:** dependable sketches, features, history, drawings,
+  assemblies and project files, with responsive interaction and clear workflows.
+- **Additive manufacturing:** native **3MF** export with per-body materials and
+  colors, plus **STL** for mesh interchange and **STEP** for exact CAD geometry.
+  Export metadata supports the slicer handoff; it does not qualify a material or
+  replace slicing and physical testing.
+- **Local automation:** MCP uses the same product groups and native operations
+  as the desktop. Agents can build headlessly or drive an explicitly selected
+  live document. Bring an MCP-compatible agent and model; keeping that interface
+  useful as frontier models and clients evolve is an ongoing priority.
+- **Build, teach and demonstrate:** one Rust-interpreted construction source
+  supports maximum-rate execution, step-through inspection and paced presentation.
+  Bundled recipes and offline engineering guidance provide the foundation for
+  more feature lessons and, eventually, conversational design wizards.
+- **CAM:** a careful path toward functional, modern **3-axis** CAM, developed
+  with machining feedback. Toolpath generation is an aspiration, not a current
+  product capability.
+- **Simulation / analysis:** extend the existing fit and motion tools in stages;
+  strength analysis requires a separately validated solver stack.
 
 ## Simulation in stages
 
 Do not treat fit, motion, and strength as one deliverable:
 
-1. **Geometric fit / interference** — approachable on today's solid bodies.
-2. **Motion** — needs assemblies, joints, and kinematics infrastructure.
-3. **Strength / FEA** — needs a separately validated meshing, material, load,
-   and solver stack; much later.
+1. **Geometric fit / interference:** native solid and assembly checks exist;
+   broaden their reliability on real designs.
+2. **Motion:** assemblies, joints and deterministic kinematic previews exist.
+   Continue hardening mechanisms and coupled motion; this is not a dynamics engine.
+3. **Strength / FEA:** future work requiring validated meshing, material, load
+   and solver behavior. A material assignment is not a strength calculation.
 
 ## Near-term engineering priorities
 
-1. Make today's sketching, solid modeling, history, undo, and project-file
-   workflows more dependable.
-2. Harden and expand modeled hole-thread coverage (ISO metric / Unified base
-   capability has landed); edge cases and regression tests.
-3. Keep improving general UX.
-4. Improve preview, selection, and recompute performance.
-5. Turn reported failures into focused regression tests.
-6. Grow MCP as a local automation/testing surface (see
-   [mcp-harness.md](mcp-harness.md)). On branch `feat/3mf-print-export`:
-   soft focus-scoped disclosure with a real `list_changed` wake loop, plus
-   read-only session snapshots (`cad_attach` / `cad_refresh` / `cad_detach`) —
-   not live UI co-link.
-7. Native **3MF** / **STL** export with materials/colors is landing on
-   `feat/3mf-print-export`; treat `main` as STEP-first until that merges.
+1. **Reliability:** make sketching, solid modeling, drawings, assemblies, history,
+   undo, project files and export dependable. Preserve explicit live-document
+   ownership and turn reported failures into focused regression tests.
+2. **Performance:** improve preview, selection, recompute, rendering and MCP
+   execution without weakening validation or introducing a second modeling path.
+3. **Ease of use:** simplify installation, navigation and feature workflows across
+   desktop and automation. Improve authored lessons, captions and camera guidance
+   using the existing Rust script format and shared product interface.
+
+These priorities apply to both interactive work and automation. Examples should
+retain editable parametric history and identify their build and validation
+evidence. Digital replay and geometry checks do not establish physical fit,
+strength, durability or generator output.
 
 ## Related reading
 
 - [README.md](../README.md) — public product overview
-- [mcp-harness.md](mcp-harness.md) — MCP as-built vs design notes
-- [proposed-architecture.md](proposed-architecture.md) — aspirational proposals
-  (focus-scoped tools, UI co-link, multi-window broker, agent-alignment files)
-- [mcp-server/README.md](../mcp-server/README.md) — as-built server
+- [interface.md](interface.md) — shared desktop, MCP and API contract
+- [mcp-harness.md](mcp-harness.md) — current headless and live ownership behavior
+- [native-scripts.md](native-scripts.md) — Rust construction and presentation scripts
+- [flagship-examples.md](flagship-examples.md) — examples and qualification boundaries
+- [proposed-architecture.md](proposed-architecture.md) — architectural proposals
+- [mcp-server/README.md](../mcp-server/README.md) — current server and setup

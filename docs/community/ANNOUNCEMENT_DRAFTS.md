@@ -72,7 +72,7 @@ remains a later, optional upgrade (the code already supports it). Replace
 
 ### r/opensource
 
-> noBS CAD is a fully local, fully open-source mechanical CAD (LGPL-2.0+):
+> noBS CAD is a fully local, fully open-source mechanical CAD (LGPL-2.1-or-later):
 > Rust modeling core + OCCT kernel, React UI, Bevy viewport, Tauri desktop,
 > WASM browser dev build. No account, no cloud, no telemetry — the `.nbcad`
 > project files are plain ZIPs you can inspect.

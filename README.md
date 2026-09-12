@@ -1,453 +1,227 @@
 # noBS CAD
 
-**Mechanical CAD you can build with — and learn from.**
+**Design it. Make it. Show how it works.**
 
-Sketch a part, build an assembly, and make its drawings on your own computer.
-noBS CAD is free, open-source mechanical CAD built around the familiar
-sketch-and-extrude workflow. Replay an authored design to see how it was made,
-pause to inspect a step, and keep the result as an editable project.
+Free, open-source mechanical CAD that runs on your computer. Build parametric
+parts, bring them together in an assembly, create the drawings, and export
+directly to your slicer. Use the interface yourself or let your MCP-compatible
+agent drive the same modeling operations—with an editable design at the end.
 
-**noBS means no cloud, no BS:** no account, subscription, or cloud backend.
-Your designs stay on your computer.
+**Reliability → performance → ease of use.** In that order.
+No required account, subscription, or cloud backend.
 
-[Download desktop snapshots](https://github.com/jackControls/noBS-CAD/releases)
-· [Try a demo](#build-learn-and-demonstrate)
-· [Build locally](#build-locally)
+**[Download the showcase prerelease](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12)**
+· [Watch it build](#made-in-nobs-cad)
+· [Connect your agent](#your-cad-your-agent-your-model)
+· [Contribute](CONTRIBUTING.md)
 
-> **Pre-alpha:** macOS, Windows, and Ubuntu snapshots are for testing and
-> feedback, not production-critical work. The capabilities and demos below
-> describe the **current development branch**; downloadable snapshots may
-> predate them.
+Built on the work of **[Open CASCADE Technology](https://github.com/Open-Cascade-SAS/OCCT)**,
+**[Bevy](https://bevy.org/)**, **[wgpu](https://wgpu.rs/)**,
+**[Rust](https://rust-lang.org/)**, **[Tauri](https://tauri.app/)** and
+**[React](https://react.dev/)**. [Meet the foundations](#built-on-open-source).
 
-![Fillet, chamfer, and a modeled threaded hole in noBS CAD](docs/assets/fillet-chamfer-threaded-hole.png)
+> **Pre-alpha:** this is a development preview, including the showcase work in
+> [PR #118](https://github.com/jackControls/noBS-CAD/pull/118). Expect rough edges
+> and keep backups of projects you care about. The release notes identify the
+> exact source and package verification.
 
-*Fillet, chamfer, and a modeled M12 threaded hole shown together in the
-editable feature history.*
+## Made in noBS CAD
 
-## Build, learn and demonstrate
+These are actual rendered constructions driven by our **Rust MCP recipe runner**.
+The recordings show sketches becoming features, parts becoming assemblies, and
+authored captions and camera moves explaining the process. The videos are edited
+for presentation; the recipes contain the full construction and final checks.
 
-The demos construct real, editable designs using the same native modeling
-operations as the app. Each `.nbcad.jsonc` recipe contains the construction
-sequence, chapter notes, camera cues, and final checks. **Presentation** plays
-the sequence with captions and camera transitions; **Maximum speed** builds it
-without the authored pauses. Both produce the same editable design.
+### A vise you can take apart—and learn from
 
-Start with a short feature lesson in the desktop app:
+[![The captured-slide vise, with rounded printed parts and a compact screw handle](docs/assets/showcase/vise.png)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12/vise-construction-refined.mp4)
 
-1. Open **Scripts** beside the document tabs and choose
-   **Sketch, extrude, ease the edges**.
-2. Set **Mode** to **Presentation**, choose **Speed** **1×**, then click
-   **Run in new design**.
-3. Use **Pause**, **Step**, and **Resume** in the playback bar to inspect the
-   construction. Choose **Maximum** from its **Speed** menu to finish at full
-   rate, then **Resume** if paused.
-4. When playback shows **Complete**, use **File → Save** to keep the result as
-   an editable `.nbcad` project.
+**[Watch the 2:21 build](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12/vise-construction-refined.mp4)**
+· [30-second overview](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12/vise-construction-30s.mp4)
+· [Editable recipe](examples/scripts/d-screw-vise.nbcad.jsonc)
 
-Running creates a new design tab and retains your existing design. Choosing an
-example or opening a source file does not run it in your active design. The **Overview**
-and **Source** tabs let you read the lesson and its commands before running.
+Six printed parts, 100 mm gripping faces, 90 mm travel, a coarse rounded D-screw,
+captured slides and optional mounts. Explore fits, moving joints, individual print
+layouts and seven drawing sheets. The detailed montage ends with a live orbit.
 
-Three larger designs are also runnable from **Scripts**:
+### A garden bench, from a blank document
 
-- **[Crown garden bench](examples/scripts/garden-bench.nbcad.jsonc):** build
-  dimensioned timber parts, repeated components, and a connected assembly.
-- **[Vertical-axis turbine](examples/scripts/vertical-axis-turbine.nbcad.jsonc):**
-  build two Savonius rotor stages, a constrained 4:1 generator drive, and native
-  part and assembly drawings.
-- **[Captured-slide D-screw vise](examples/scripts/d-screw-vise.nbcad.jsonc):**
-  build six printed parts with 100 mm gripping faces, 90 mm jaw travel and a
-  custom rounded Ø24 × 4 mm screw. Includes seven drawing sheets, a print layout
-  for each part and simplified M5/M6 hardware; 30 bodies with optional mounts.
+[![Crown garden bench in the native CAD viewport after a checked replay](docs/assets/showcase/bench.png)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12/bench-construction-30s.mp4)
 
-These development candidates include automated geometry and replay checks;
-validation evidence must match the current source revision.
-Physical fit, load, wear, and durability qualification remain open; generator
-output still needs measurement. None has a working-load rating, and the bench's
-full drawing package is unfinished. See [flagship status](docs/flagship-examples.md)
-for the design-specific limits.
+**[Watch the 30-second build](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12/bench-construction-30s.mp4)**
+· [Editable recipe](examples/scripts/garden-bench.nbcad.jsonc)
 
-The [recipe library](examples/scripts/README.md) also includes a mounting plate,
-revolved spacer, angle bracket, repeated-part assembly, and fit coupons. Follow
-the [demo guide](docs/demo-presentation.md) for suggested viewing and inspection,
-or [the script guide](docs/native-scripts.md) to load and edit your own source.
+Dimensioned timber parts, eased edges, repeated slats and assembly placement.
+Follow the feature history back to the sketches and change the design yourself.
 
-Prefer to open a finished part first? This small example includes an editable
-[`testPiece.nbcad`](examples/testPiece.nbcad) project and a
-[`testPiece.step`](examples/testPiece.step) geometry backup:
+### A vertical-axis turbine with a generator drive
 
-![A small mechanical test piece modeled in noBS CAD](docs/assets/testPiece.png)
+[![Two-stage vertical-axis turbine with its shaft, bearings and generator drive](docs/assets/showcase/turbine.png)](examples/scripts/vertical-axis-turbine.nbcad.jsonc)
 
-## Why this project exists
+**[Explore the editable recipe](examples/scripts/vertical-axis-turbine.nbcad.jsonc)**
+· [Design and validation status](docs/flagship-examples.md)
 
-We are grateful for projects such as [FreeCAD](https://www.freecad.org/) and
-for the community work that proved open-source CAD can be serious and useful.
-At the same time, we would love an option with a gentler learning curve and
-the kind of clear, modern experience people have come to expect from
-commercial and cloud CAD platforms.
+Two staggered Savonius stages, a bearing-supported shaft, a 4:1 geared generator
+drive, fit coupons, print layouts and part/assembly drawings. An additive design
+experiment in clearances, repeated geometry, gearing and constrained motion.
+The image above is the current native model; a turbine video is not included yet.
 
-That is the direction we are exploring with noBS CAD:
+The examples have automated geometry, interference and repeatability checks.
+They are **development designs**, with physical fit, load, wear and generator
+output still to be qualified. The bench's complete drawing package is unfinished.
+[See exactly what is validated](docs/flagship-examples.md).
 
-- project and modeling data stay on your computer;
-- there is no account, subscription, or cloud backend;
-- the complete source is public under an open-source license;
-- the software is free to use;
-- mechanical-part workflows are the priority.
+## Install and make your first part
 
-## What works today
+Download the package for your computer from the
+**[showcase prerelease](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12)**:
 
-noBS CAD now spans part design, technical drawings, and an early assembly
-workflow. It is happiest with small and medium mechanical models; the best way
-to understand the real boundary is still to try building something useful and
-report where it breaks down.
+- **Windows x64 / ARM64:** extract the matching portable ZIP and run
+  `noBS-CAD.exe`. Keep the DLLs beside it. The matching Microsoft Visual C++
+  runtime and WebView2 are required; [setup and prerequisite links](docs/INSTALL.md#windows).
+- **macOS, Apple silicon:** open the DMG and drag **noBS CAD** into
+  **Applications**. [Installation details](docs/INSTALL.md#macos)
+- **Ubuntu 26.04, x64:** install the `.deb` with your package manager, or make
+  the AppImage executable and run it. [Copyable commands](docs/INSTALL.md#ubuntu)
 
-The current application includes:
+No compiler is needed for the desktop app or its bundled recipes.
+Downloads include **SHA-256 checksums**. [Installation and troubleshooting](docs/INSTALL.md)
+· [Build from source](docs/DEVELOPMENT.md)
 
-- a native Bevy/wgpu desktop viewport beneath the React interface, packaged
-  with Tauri for Apple-silicon macOS, x64 and ARM64 Windows, and x64 Ubuntu
-  26.04 LTS;
-- parametric sketches with dimensions, geometric constraints, snapping,
-  construction geometry, patterns, trim/extend, and fillet/chamfer tools;
-- extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
-  split-body, mirror, pattern, and construction-plane features;
-- modeled internal and external threads for common ISO metric and Unified
-  standards, plus editable custom rounded trapezoidal profiles in the native app;
-- live feature previews, direct viewport manipulators, body/component
-  Move/Copy, stable topology references, and an editable design history;
-- ISO and ANSI/ASME drawing sheets with aligned projected and derived views,
-  semantic dimensions, center geometry, manufacturing annotations, title
-  blocks, DXF output, and the platform print/PDF path;
-- reusable components and occurrences, multi-body components, nested
-  subassemblies, grounding, and rigid/revolute/slider/cylindrical/planar/ball/
-  universal/pin-slot/screw joints;
-- multi-joint kinematic previews, direct mechanism dragging, named positions,
-  motion studies, path export, and native static/sampled interference checks;
-- multi-document tabs, undo/redo, project saving and reopening, and unsaved
-  change protection;
-- local `.nbcad` project files (ZIP archives containing editable part,
-  drawing, assembly, and metadata records); and
-- STEP import plus AP242 STEP export, including placed visible assembly
-  occurrences as flattened exact geometry.
+Once the app opens:
 
-Drawing and assembly are newer than the core part-modeling path. Assembly is
-currently deterministic rigid-body kinematics, not a physics or dynamics
-engine, and large/closed-loop mechanisms still need broad real-world testing.
-Exact OCCT projection, interference, and export behavior belongs to the native
-desktop build; the browser build is a development and automated-test surface.
+1. Choose **Scripts → Sketch, extrude, ease the edges**.
+2. Select **Presentation** and click **Run in new design**.
+3. **Pause**, **Step**, change speed, or switch to **Maximum** to finish without
+   presentation waits. The existing design stays in its own tab.
+4. Save the result as an editable **`.nbcad`** project.
 
-Not every tool or combination is reliable yet. We would especially like
-people to try real mechanical parts and whatever else is useful to you. Tell
-us where the workflow becomes confusing, where the geometry fails, and which
-missing capability would help most.
+Open the **Source** tab to read or change a recipe. **File → Open Script…** loads
+your own `.nbcad.jsonc` file without running it. The three flagship designs and
+short feature lessons are in the same library.
+[Browse the recipes](examples/scripts/README.md) · [Playback guide](docs/native-scripts.md)
 
-The `.nbcad` format may still change during pre-alpha, so we recommend
-exporting a STEP copy of any design you care about as a backup. STEP preserves
-the final solid geometry for use in other CAD software, but not the editable
-noBS CAD feature history.
+## From design to manufacture
 
-> **🐞 Edge-case hunters wanted.** Pre-alpha CAD gets reliable by breaking on
-> purpose. Model something real — or work the
-> [challenge list](docs/EDGE_CASE_HUNT.md) of nasty geometry (thin walls,
-> tangent faces, grazing fillets, self-intersecting sweeps). Reproducible reports
-> help us add regression tests and improve the modeling tools. Join the
-> [Edge-case hunt](https://github.com/jackControls/noBS-CAD/issues/45).
+**Parametric parts.** Constrained sketches, dimensions and reference geometry
+drive extrude, revolve, sweep, loft, rib, holes, modeled threads, fillets,
+chamfers, shells, patterns and other editable features. Inspect the history,
+change a dimension and recompute.
 
-## Local automation (MCP)
+**Integrated assemblies.** Reuse components, place occurrences and nest
+subassemblies in the same `.nbcad` project format. Ground components, define
+joints, explore motion and check interference. Rigid, revolute, slider,
+cylindrical, planar, ball, universal, pin-slot and screw joints support mechanical
+relationships. [Assembly guide](docs/ASSEMBLIES.md)
 
-The [MCP server](mcp-server/README.md) uses the same grouped product interface,
-Rust planning model and native OCCT adapter as the desktop app. It can own a
-headless document for local testing or attach to an explicitly selected live
-design. Modeling commands reach that document's owner in order; the desktop
-remains the single writer while MCP waits for execution receipts.
+**Design and drawings together.** Create ISO or ANSI/ASME sheets with projected
+and derived views, dimensions, center geometry, manufacturing annotations and
+title blocks. Export DXF or use the platform print/PDF path.
+[Drawing guide](docs/2D_DRAWINGS.md)
 
-Default **dynamic** disclosure advertises a focus-scoped subset (spine + active
-and soft packs with TTL) — guidance for agents, not a hard jail. Out-of-focus
-tools stay callable. Use `full_static` or `cad_list_all_tools` when a client
-ignores `notifications/tools/list_changed`.
+**Materials and direct 3MF.** Assign per-body materials and colors, preflight the
+geometry and export native 3MF with units and compatible slicer metadata. Send
+the result to your slicer without an intermediate STEP/STL conversion. STEP
+import and AP242 export support CAD interchange; STL is available when needed.
+3MF is a manufacturing handoff, not a pre-sliced project. Keep `.nbcad` for
+editable history.
 
-Export via MCP: **STEP** (CAD interchange), **STL** (geometry-only mesh), and
-**3MF** (preferred for slicers; per-body color/material plus compatible slicer
-Metadata hints — not a full pre-sliced project). Session helpers discover and
-attach to running windows/documents. Snapshot refresh and explicit submission
-remain diagnostic tools; ordinary attached modeling handles that transport.
+Assembly motion is kinematic, not a physics simulation. Material assignments
+describe appearance and manufacturing intent; they are not strength calculations.
 
-Details: [docs/mcp-harness.md](docs/mcp-harness.md).
+## Your CAD, your agent, your model
 
-The same Rust recipe runner supports independent headless checks:
+**MCP is a core interface.** The desktop, local API and MCP share the product's
+operation grouping and Rust modeling path. An agent can discover tools, create
+and edit parts, work with assemblies and drawings, export manufacturing files,
+launch CAD and drive an explicitly selected live document. Headless execution
+and visible presentation use the same modeling operations.
 
-```sh
-cargo xtask run-script --recipe mounting-plate --server MCP_EXECUTABLE --repeat 2
+Bring your preferred **MCP-compatible agent and model**. We aim to keep pace
+with frontier agents while preserving an open interface for other providers and
+local models. There is no required AI subscription built into CAD. Your chosen
+agent determines whether any prompts or model data leave your machine.
+
+The standalone stdio MCP server currently has a separate source-build setup:
+**[MCP installation](docs/INSTALL.md#connect-an-mcp-agent)**. The packaged desktop
+already includes the Rust runner needed for the Scripts library.
+
+For an authored design, the agent can make **one script request**. Rust sequences
+the individual operations, stops on an error and runs the recipe's checks.
+Presentation mode adds captions, camera transitions and playback controls;
+maximum speed removes authored waits. No embedded JavaScript is needed in a recipe.
+
+```json
+{"action":"script","recipe":"mounting-plate"}
 ```
 
-Use `--session SESSION_ID --new --present --speed 2` with a matching desktop/MCP
-build to watch construction in a new design tab while retaining the current one.
-The generated `.nbcad` remains an editable parametric project.
+Pass this to `cad_interface` in a blank headless document. For a live demonstration,
+attach to the intended document and use presentation mode.
+[MCP guide](mcp-server/README.md) · [Live control](docs/mcp-harness.md)
+· [Recipe format](docs/native-scripts.md) · [Offline engineering knowledge](knowledge/index.md)
 
-## 3D mouse compatibility
+## Learn by watching. Build by doing.
 
-noBS CAD is compatible with 3Dconnexion SpaceMouse devices. In the browser
-development build, the optional hosted 3Dconnexion driver bridge is loaded
-only after the user clicks the 3D-mouse control; it is not downloaded during
-ordinary startup.
+Today, replayable lessons, chapter notes, miniature previews and inspectable
+source let a design explain how it was made. Our ambition is to make this the
+foundation for **guided learning and conversational design wizards**: CAD that
+helps you make something, teaches the reasoning and shows each operation.
 
-noBS CAD is an independent project and is not affiliated with, endorsed by, or
-certified by 3Dconnexion. 3Dconnexion and SpaceMouse are trademarks or
-registered trademarks of 3Dconnexion.
+We also want a careful path from mechanical CAD to **CAM**, beginning with
+useful, testable 3-axis machining workflows. CAM, broader learning journeys and
+structural simulation are aspirations, not shipping features.
+[Project direction](docs/goals.md)
 
-3D input device development tools and related technology are provided under
-license from 3Dconnexion. © 3Dconnexion 1992 - 2020. All rights reserved.
+## Built on open source
 
-## We want your feedback
+noBS CAD would not exist without these projects and their contributors:
 
-The most helpful contribution right now is simply trying to make a real part
-and showing us what gets in the way. Not sure what to try? The
-[edge-case hunt guide](docs/EDGE_CASE_HUNT.md) lists the geometry most likely
-to break.
+- **[Open CASCADE Technology](https://github.com/Open-Cascade-SAS/OCCT)** provides
+  the native geometry kernel: exact solids, surface operations and CAD interchange.
+- **[Bevy](https://bevy.org/) and [wgpu](https://wgpu.rs/)** render the native
+  desktop viewport.
+- **[Rust](https://rust-lang.org/)** underpins the parametric model, geometry
+  planning, assembly logic and recipe runner.
+- **[Tauri](https://tauri.app/)** provides the desktop shell;
+  **[React](https://react.dev/)** provides menus, dialogs and the accessible interface.
+- **[OpenCascade.js](https://github.com/donalffons/opencascade.js)** supports our
+  browser development and testing build.
 
-For a bug, it helps to include:
+We also thank **[FreeCAD](https://www.freecad.org/)** and the wider open-source
+CAD community for the work that makes this field possible. FreeCAD is an
+inspiration, not a bundled dependency.
 
-- your operating system and the build you tested;
-- the exact steps from a new project;
-- what you expected and what happened instead;
-- a screenshot or short recording for visual problems;
-- a small `.nbcad` file when it is safe to share.
+### Related projects
 
-Feature requests are welcome too. We want to know what people actually need,
-not just guess from a checklist of CAD commands. Please
-[open an issue](https://github.com/jackControls/noBS-CAD/issues) with what you
-find.
+Dependency licenses and attribution live in [Third-party notices](THIRD_PARTY_NOTICES.md).
+Icon sources are recorded in [Icon provenance](docs/ICON_PROVENANCE.md).
+Peer CAD projects have their own licenses; see [contribution guidance](CONTRIBUTING.md#license--borrow).
 
-Contributors: see [CONTRIBUTING.md](CONTRIBUTING.md) for a short, welcoming
-contribution guide.
+### 3D mouse compatibility
 
-## Where we are going
+noBS CAD supports 3Dconnexion SpaceMouse devices. The optional browser-development
+driver bridge loads only after the user enables it.
+noBS CAD is independent and is not affiliated with, endorsed by or certified by
+3Dconnexion. 3Dconnexion and SpaceMouse are trademarks or registered trademarks
+of 3Dconnexion. 3D input device development tools and related technology are
+provided under license from 3Dconnexion. © 3Dconnexion 1992–2020. All rights reserved.
 
-High-level directions (mechanical CAD first) are in
-[docs/goals.md](docs/goals.md): reliable foundation, careful **CAM**, additive
-**3MF** (with useful color/material metadata) alongside STEP, strong **local
-MCP** automation, and **staged** simulation later. Proposed implementation
-ideas stay in [docs/proposed-architecture.md](docs/proposed-architecture.md)
-until prototyped.
+## Help make it dependable
 
-Near-term engineering priorities:
+**Contributions welcome.** Bring a real part, a confusing workflow, a bug
+reproduction, a lesson or a focused improvement. Reliability comes first, then
+performance and ease of use. Small reproducible examples help us turn failures
+into lasting fixes.
 
-1. Make sketching, solid modeling, drawings, assemblies, history, undo, and
-   project-file workflows more dependable.
-2. Harden closed-loop and large-assembly solving, connector repair, collision
-   workflows, and component editing.
-3. Keep improving selection, manipulators, navigation, responsive desktop UI,
-   and accessibility across macOS, Windows, and Ubuntu.
-4. Improve interactive preview, picking, recompute, and large-model rendering
-   performance.
-5. Turn reported failures into focused cross-platform regression tests.
+[Contributing](CONTRIBUTING.md) · [Report a problem](https://github.com/jackControls/noBS-CAD/issues)
+· [Hunt geometry edge cases](docs/EDGE_CASE_HUNT.md) · [Build and test](docs/DEVELOPMENT.md)
 
-In the longer run, we prefer a true native desktop experience. The browser
-build is valuable for development and automated testing, but it is not the
-intended final product experience.
-
-We would also like to explore a functional, modern CAM workflow for 3-axis
-machines. We know that is ambitious and difficult, so we plan to approach it
-carefully: start with research and testable pieces, listen to machinists, and
-earn trust one operation at a time. We would love to hear from CAM experts!
-
-## Build locally
-
-### Ubuntu 26.04 LTS
-
-Ubuntu 26.04 LTS is the official Linux desktop baseline. The app uses the
-native Bevy/wgpu Vulkan viewport inside the Tauri WebKitGTK window. It runs on
-X11 directly and on Ubuntu's standard Wayland desktop through XWayland. The
-release job produces an Ubuntu `.deb` and a portable AppImage, then
-launch-tests both display routes.
-
-The committed container is the simplest reproducible build environment:
-
-```sh
-docker build -f scripts/docker/ubuntu-26.04.Dockerfile -t nbcad-ubuntu-26.04 .
-docker run --rm -v "$PWD:/workspace" -w /workspace nbcad-ubuntu-26.04 \
-  sh -lc 'npm ci && npm run bundle:linux'
-```
-
-On a native Ubuntu 26.04 development system with the documented GTK, Vulkan,
-and OCCT packages already installed:
-
-```sh
-npm ci
-npm run bundle:linux
-```
-
-See [Ubuntu 26.04 packaging](docs/LINUX_PACKAGING.md) for dependencies,
-artifacts, X11/XWayland verification, and 3D-input permissions.
-
-### Windows x64 and ARM64 portable builds
-
-The Windows release path targets Windows 10 version 1803 or newer and Windows
-11. It produces a portable ZIP rather than an installer, uses the WebView2
-runtime supplied by Windows, and requires Microsoft's centrally installed
-matching Visual C++ v14 Redistributable. The desktop build uses the same native
-Bevy viewport as macOS, backed by wgpu's DX12/Vulkan support; React and CSS
-remain the real menu, tab, dialog, and accessibility interface.
-
-The build itself requires Windows, Visual Studio C++ Build Tools, the Windows
-SDK, Rust, Node.js, and the pinned OCCT 7.9.3 vcpkg dependency.
-After installing the pinned vcpkg manifest:
-
-```powershell
-$target = "x86_64-pc-windows-msvc" # Use aarch64-pc-windows-msvc for ARM64.
-$triplet = "x64-windows" # Use arm64-windows for ARM64.
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
-npm ci
-npm run bundle:windows:portable -- -Target $target
-```
-
-See [Windows portable packaging](docs/WINDOWS_PACKAGING.md) for the complete
-setup, output layout, runtime requirements, and GitHub Actions workflow.
-
-### Native macOS development bundle
-
-The macOS packaging path uses Tauri with OCCT 7.9.x.
-
-```sh
-brew install opencascade
-npm ci
-npm run bundle:macos
-```
-
-The resulting ad-hoc-signed development application and disk image are written
-to:
-
-```text
-src-tauri/target/release/bundle/macos/noBS CAD.app
-src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
-```
-
-Development packages intentionally retain Rust symbols for crash diagnosis.
-The desktop packaging workflow treats a `v*` Git tag as the production
-boundary and sets `CARGO_PROFILE_RELEASE_STRIP=symbols` for macOS, Windows,
-and Linux. To reproduce a stripped production package locally, set that variable
-before running the platform bundle command:
-
-```sh
-CARGO_PROFILE_RELEASE_STRIP=symbols npm run bundle:macos
-```
-
-```powershell
-$env:CARGO_PROFILE_RELEASE_STRIP = "symbols"
-npm run bundle:windows:portable
-```
-
-See [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md) for
-native SDK overrides, the Apple-silicon GitHub Actions build, and packaging
-details.
-
-### Browser development build
-
-The browser build is a development and testing environment. It requires
-Node.js, npm, a current Rust toolchain, the `wasm32-unknown-unknown` target,
-and `wasm-pack`.
-
-```sh
-rustup target add wasm32-unknown-unknown
-npm ci
-npm run build:wasm
-npm run dev
-```
-
-Open the local address printed by Vite. Create a production browser bundle
-with:
-
-```sh
-npm run build
-```
-
-## Project structure
-
-- React, TypeScript, and Vite provide the DOM interface; Bevy renders the
-  native desktop viewport.
-- Host-neutral Rust crates own project data, sketches, feature definitions,
-  history, stable references, drawing intent, assembly structure, kinematics,
-  and recompute planning.
-- Native builds use Open CASCADE Technology through a narrow C++ bridge.
-- The browser development build uses the same Rust model through WebAssembly
-  and OpenCascade.js for solid operations.
-- `.nbcad` files are inspectable ZIP archives containing a manifest and model
-  data.
-
-Public technical references:
-
-- [Download pre-release desktop builds](https://github.com/jackControls/noBS-CAD/releases)
-- [Goals / directions](docs/goals.md)
-- [2D technical drawings](docs/2D_DRAWINGS.md)
-- [Assemblies, components, and joints](docs/ASSEMBLIES.md)
-- [Proposed architecture](docs/proposed-architecture.md)
-- [MCP harness notes](docs/mcp-harness.md)
-- [Open Knowledge Format bundle](knowledge/index.md)
-- [OCCT packaging and browser/WASM strategy](docs/OCCT_PACKAGING.md)
-- [Windows portable packaging](docs/WINDOWS_PACKAGING.md)
-- [MCP server](mcp-server/README.md)
-- [Icon provenance](docs/ICON_PROVENANCE.md)
-- [Generated WASM bundle](src/engine-wasm/README.md)
-
-## Verify changes
-
-Start with:
-
-```sh
-npm run check:knowledge
-cargo test --workspace
-npm run build:wasm
-npm run build
-npm run smoke:wasm
-```
-
-Browser regression suites run through Playwright. For example:
-
-```sh
-npm run e2e:m2
-npm run e2e:hole
-npm run e2e:timeline
-```
-
-Run the complete browser release regression set with:
-
-```sh
-npm run e2e:release
-```
-
-Native OCCT and MCP checks require a compatible local OCCT installation:
-
-```sh
-cargo test -p nbcad-occt --features native-occt
-cargo test --manifest-path mcp-server/Cargo.toml
-```
-
-## Contributing
-
-Bug reproductions, usability feedback, tests, documentation, and focused fixes
-are all valuable. Please keep pull requests reasonably focused, explain the
-user-visible problem or improvement, and add a regression test when the
-behavior can be automated.
-
-For a large feature, starting with a discussion will help us agree on the user
-experience and model behavior before a lot of implementation work begins.
-
-## Related projects
-
-| Project | License | What we borrow |
-|---------|---------|----------------|
-| Open CAD Studio and other peer CAD tools | GPL-3 (typical) | **Ideas only.** Do not copy source, assets, or unique implementations. |
-| Open CASCADE Technology | LGPL-2.1 + exception | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
-| Bevy | MIT / Apache-2.0 | Bundled per [Third-party notices](THIRD_PARTY_NOTICES.md) |
-
-Peer CAD projects: borrow **ideas**, not code, unless counsel says otherwise.
-See [CONTRIBUTING](CONTRIBUTING.md#license--borrow).
+For a bug report, include the build, operating system, steps and a small project
+you can share. Tell us what you expected and what happened. Discuss large changes
+early so we can agree on the design and user experience.
 
 ## License
 
-noBS CAD is free and open-source software licensed under the
-[GNU Lesser General Public License, version 2.1 or any later version](LICENSE)
-(`LGPL-2.1-or-later`).
-
-We moved from Library GPL v2 (`LGPL-2.0-or-later`) so GitHub can detect the
-license (it has no `lgpl-2.0` in its catalog). Third-party components retain
-their own licenses and notices; see [Third-party notices](THIRD_PARTY_NOTICES.md).
+**Free to use, open to inspect and improve, local by default.**
+noBS CAD is licensed under the [GNU LGPL 2.1 or later](LICENSE)
+(`LGPL-2.1-or-later`). Third-party components retain their own licenses and notices.

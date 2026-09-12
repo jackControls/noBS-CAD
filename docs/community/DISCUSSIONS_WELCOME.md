@@ -16,7 +16,7 @@ create a new category called **General** if the default set is missing it).
 
 > Welcome to noBS CAD — local-first, open-source mechanical CAD. No cloud, no
 > account, no subscription, no telemetry: your models never leave your
-> machine. LGPL-2.0-or-later, built on the OCCT kernel with a Rust modeling
+> machine. LGPL-2.1-or-later, built on the OCCT kernel with a Rust modeling
 > core.
 >
 > **This is pre-alpha.** Expect rough edges — that's the point of the project
