@@ -300,6 +300,41 @@
     },
     {
       "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Thread coupon / 40 mm male_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "bodies": []
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Thread coupon / 40 mm male_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Thread coupon / 40 mm male_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / 40 mm male_clear_sketch_view"
+    },
+    {
+      "call": {
         "arguments": {
           "name": "Thread coupon / 40 mm male",
           "plane": {
@@ -424,6 +459,17 @@
       "id": "Thread coupon / 40 mm male_build"
     },
     {
+      "call": {
+        "arguments": {
+          "$ref": "Thread coupon / 40 mm male_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / 40 mm male_restore_model_view"
+    },
+    {
       "let": {
         "screw_feature": {
           "$select": {
@@ -499,6 +545,42 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Thread coupon / full bridge engagement_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Thread coupon / 40 mm male_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Thread coupon / full bridge engagement_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Thread coupon / full bridge engagement_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / full bridge engagement_clear_sketch_view"
     },
     {
       "call": {
@@ -607,6 +689,17 @@
       "id": "Thread coupon / full bridge engagement_build"
     },
     {
+      "call": {
+        "arguments": {
+          "$ref": "Thread coupon / full bridge engagement_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / full bridge engagement_restore_model_view"
+    },
+    {
       "let": {
         "nut_feature": {
           "$select": {
@@ -682,6 +775,42 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Guide coupon / supported rail base_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Thread coupon / full bridge engagement_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Guide coupon / supported rail base_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Guide coupon / supported rail base_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / supported rail base_clear_sketch_view"
     },
     {
       "call": {
@@ -826,6 +955,17 @@
       "id": "Guide coupon / supported rail base_build"
     },
     {
+      "call": {
+        "arguments": {
+          "$ref": "Guide coupon / supported rail base_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / supported rail base_restore_model_view"
+    },
+    {
       "let": {
         "guide_male_feature": {
           "$select": {
@@ -870,6 +1010,42 @@
         "operation": "construction_set_visibility"
       },
       "id": "Guide coupon / supported rail base_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Guide coupon / production dovetail_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Guide coupon / supported rail base_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Guide coupon / production dovetail_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Guide coupon / production dovetail_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production dovetail_clear_sketch_view"
     },
     {
       "call": {
@@ -1108,12 +1284,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "Guide coupon / production dovetail_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production dovetail_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "Guide coupon / production dovetail_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Guide coupon / production socket stock_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Guide coupon / production dovetail_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Guide coupon / production socket stock_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Guide coupon / production socket stock_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production socket stock_clear_sketch_view"
     },
     {
       "call": {
@@ -1258,6 +1481,17 @@
       "id": "Guide coupon / production socket stock_build"
     },
     {
+      "call": {
+        "arguments": {
+          "$ref": "Guide coupon / production socket stock_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production socket stock_restore_model_view"
+    },
+    {
       "let": {
         "guide_female_feature": {
           "$select": {
@@ -1302,6 +1536,42 @@
         "operation": "construction_set_visibility"
       },
       "id": "Guide coupon / production socket stock_hide_references"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Guide coupon / production running clearance_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Guide coupon / production socket stock_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Guide coupon / production running clearance_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Guide coupon / production running clearance_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production running clearance_clear_sketch_view"
     },
     {
       "call": {
@@ -1576,6 +1846,17 @@
     {
       "call": {
         "arguments": {
+          "$ref": "Guide coupon / production running clearance_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Guide coupon / production running clearance_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -1672,6 +1953,42 @@
         "operation": "solid_external_thread"
       },
       "id": "coupon_male_thread"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "Thread coupon / production shallow flat_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "Guide coupon / production running clearance_build",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all"
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "Thread coupon / production shallow flat_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "Thread coupon / production shallow flat_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / production shallow flat_clear_sketch_view"
     },
     {
       "call": {
@@ -1819,6 +2136,17 @@
         "operation": "solid_extrude"
       },
       "id": "Thread coupon / production shallow flat_build"
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "Thread coupon / production shallow flat_before_sketch_visibility",
+          "pointer": ""
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "Thread coupon / production shallow flat_restore_model_view"
     },
     {
       "call": {

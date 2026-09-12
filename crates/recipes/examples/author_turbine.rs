@@ -3,6 +3,8 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
+#[path = "turbine/demo.rs"]
+mod turbine_demo;
 #[path = "turbine/design.rs"]
 mod turbine_design;
 #[path = "turbine/drawings.rs"]
@@ -64,6 +66,8 @@ struct Author {
     hardware: Vec<Value>,
     clamps: Vec<Clamp>,
     joint_names: Vec<String>,
+    sketch_visibility: Option<String>,
+    last_build_scene: Option<Value>,
 }
 #[derive(Clone)]
 struct Clamp {
@@ -86,6 +90,8 @@ impl Author {
             hardware: vec![],
             clamps: vec![],
             joint_names: vec![],
+            sketch_visibility: None,
+            last_build_scene: None,
         }
     }
     fn call(&mut self, id: &str, _group: &str, op: &str, args: Value) {
@@ -128,6 +134,36 @@ impl Author {
         format!("{base}_{}", self.serial)
     }
     fn begin(&mut self, name: &str, plane: &str, z: f64) {
+        assert!(
+            self.sketch_visibility.is_none(),
+            "Previous sketch visibility was not restored"
+        );
+        // Presentation IDs must not consume the geometry-name sequence: doing
+        // so would rename later editable sketches and change saved references.
+        let visibility = format!("{name}_before_sketch_visibility");
+        self.call(
+            &visibility,
+            "document/appearance",
+            "project_visibility",
+            json!({}),
+        );
+        // Extrusions create every body here; reuse the prior response's IDs.
+        let scene = self
+            .last_build_scene
+            .clone()
+            .unwrap_or_else(|| json!({"bodies":[]}));
+        let isolate = format!("{name}_clear_sketch_view");
+        self.call(
+            &isolate,
+            "document/appearance",
+            "project_set_visibility",
+            json!({
+                "hidden_body_ids":select(scene,"/bodies",json!({}),"all","/id"),
+                "hidden_sketch_names":at(&visibility,"/hidden_sketch_names"),
+                "hidden_datum_plane_ids":at(&visibility,"/hidden_datum_plane_ids")
+            }),
+        );
+        self.sketch_visibility = Some(visibility);
         let datum = self.uid("datum");
         self.call(&datum,"construct/planes","construction_plane_offset",json!({"name":format!("{name} / datum"),"reference":{"type":"origin_plane","plane":plane},"distance":z}));
         let id = self.uid("begin");
@@ -219,15 +255,24 @@ impl Author {
         operation: &str,
         target: Option<&str>,
     ) -> String {
-        if operation == "new_body" {
-            self.steps.push(
-                json!({"view":"current","fit":true,"target":"active_sketch","duration_ms":300}),
-            );
-        }
+        self.steps
+            .push(json!({"view":"current","fit":true,"target":"active_sketch","duration_ms":300}));
         let finish = self.uid("finish");
         self.call(&finish, "sketch/draw", "sketch_finish", json!({}));
         let id = self.uid("extrude");
         self.call(&id,"solid/build","solid_extrude",json!({"sketch_name":name,"profile_indices":[0],"operation":operation,"extent":{"type":"distance","distance":height},"taper_angle_deg":0,"flip":false,"target_body_ids":target.map(|n|vec![body_ref(n)]).unwrap_or_default()}));
+        self.last_build_scene = Some(at(&id, "/scene"));
+        let saved_visibility = self
+            .sketch_visibility
+            .take()
+            .expect("Sketch visibility snapshot");
+        let restore = format!("{name}_restore_model_view");
+        self.call(
+            &restore,
+            "document/appearance",
+            "project_set_visibility",
+            r(&saved_visibility),
+        );
         let visibility = self.uid("completed_feature_references");
         self.call(
             &visibility,
@@ -583,7 +628,7 @@ impl Author {
 
 fn main() {
     let mut a = Author::new();
-    a.note("The experiment","Build a two-stage vertical-axis Savonius turbine. PETG baseline; 180 mm bucket diameter and 200 mm combined bucket height. Generator and hardware are native representative parts pending specimen fit and physical testing.");
+    a.note("The experiment","Two 198 mm rotor discs, 200 mm combined bucket height, an 8 x 300 mm shaft and a 4:1 generator drive. The printed design and representative hardware still need physical fit and output testing.");
     a.note("Repeated rotor stage","Concentric driving diameters define a bottom disc, shaft hub and two semicircular bucket walls. The clamp hub ends at 18 mm so only the 8 mm shaft divides the overlap above it. One stage definition appears twice, staggered by 90 degrees. Print each stage upright and the final cap separately.");
     let stage_plate = a.cylinder("stage", [0., 0.], 198., 0., 3., "new_body", None);
     a.bind(
@@ -791,6 +836,7 @@ fn main() {
     a.call("gear_coupling","assembly/joints","assembly_create_gear_relation",json!({"name":"Printed 72:18 spur pair","joint_a":at("rotor_rotation","/id"),"joint_b":at("generator_rotation","/id"),"teeth_a":72,"teeth_b":18,"reverse":true,"phase_deg":10}));
     a.install_clamps();
     a.install_remaining_hardware();
+    turbine_demo::run(&mut a);
     let print_plates = a.print_plates();
     a.note("Read the manufacturing intent","Each native part carries its own editable drawing with actual projected edges, diameter and height dimensions. Fits are provisional. Ages 8–12 with adult guidance; age 5 requires closer hands-on adult guidance. Anchor the base before any fan or wind test. Keep fingers away from the rotor and use only supervised low-energy airflow.");
     for (name,height,diameters,note) in [

@@ -12,8 +12,8 @@
   "steps": [
     {
       "chapter": "Blank document",
-      "note": "Build the complete bench from native sketches, solid features and assembly joints. This file contains commands and readable references, never cached geometry.",
-      "duration_ms": 700
+      "note": "A 1200 mm timber seat at 450 mm height, with repeated crowned pickets. Build, edit and restore the assembly; fabrication qualification is still pending.",
+      "duration_ms": 2200
     },
     {
       "id": "blank_document",
@@ -8221,7 +8221,46 @@
         }
       }
     },
-    {"view": "isometric", "fit": true},
+    {"view": "front", "fit": true, "duration_ms": 450},
+    {"id": "picket_demo_home", "call": {"group": "document/files", "operation": "cad_project_model", "arguments": {}}},
+    {
+      "chapter": "One change updates every picket",
+      "note": "Increase the shared picket extrusion from 340 to 460 mm. Every occurrence grows; the decorative slots stay located from the same bottom datum.",
+      "duration_ms": 2300
+    },
+    {
+      "id": "picket_demo_taller",
+      "call": {
+        "group": "solid/build", "operation": "solid_edit_extrude",
+        "arguments": {
+          "feature_id": {"$ref": "picket_feature"},
+          "extrude": {"sketch_name": "Back picket — editable height / stock from A-B-C", "profile_indices": [0], "operation": "new_body", "extent": {"type": "distance", "distance": 460}, "taper_angle_deg": 0, "flip": false, "target_body_ids": []}
+        }
+      },
+      "expect": {"/scene/errors": []}
+    },
+    {"id": "picket_demo_taller_model", "call": {"group": "document/files", "operation": "cad_project_model", "arguments": {}}},
+    {"assert": {"$select": {"from": {"$ref": "picket_demo_taller_model"}, "path": "/extrudes", "where": {"/feature_id": {"$ref": "picket_feature"}}, "take": "one", "pointer": "/extent/distance"}}, "equals": 460},
+    {"view": "current", "fit": false, "duration_ms": 1800},
+    {
+      "chapter": "Return to the original proportions",
+      "note": "Restore the shared extrusion to 340 mm. The same parts and assembly joints remain; the saved model must match its state before this demonstration.",
+      "duration_ms": 1800
+    },
+    {
+      "id": "picket_demo_restore",
+      "call": {
+        "group": "solid/build", "operation": "solid_edit_extrude",
+        "arguments": {
+          "feature_id": {"$ref": "picket_feature"},
+          "extrude": {"sketch_name": "Back picket — editable height / stock from A-B-C", "profile_indices": [0], "operation": "new_body", "extent": {"type": "distance", "distance": 340}, "taper_angle_deg": 0, "flip": false, "target_body_ids": []}
+        }
+      },
+      "expect": {"/scene/errors": []}
+    },
+    {"id": "picket_demo_restored_model", "call": {"group": "document/files", "operation": "cad_project_model", "arguments": {}}},
+    {"assert": {"$ref": "picket_demo_restored_model"}, "equals": {"$ref": "picket_demo_home"}},
+    {"view": "isometric", "fit": true, "duration_ms": 450},
     {
       "chapter": "Finished bench",
       "note": "The complete native assembly is now ready for the final geometry and manufacturing checks. These checks do not animate temporary test geometry.",

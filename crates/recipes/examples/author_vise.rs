@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
+mod vise_demo;
 mod vise_drawings;
 
 // All manufacturing mates derive from this one authored parameter set.
@@ -139,6 +140,8 @@ struct Author {
     planes: BTreeMap<String, Value>,
     bodies: BTreeMap<String, Value>,
     sketches: usize,
+    sketch_visibility: Option<String>,
+    last_build_scene: Option<Value>,
 }
 impl Author {
     fn call(&mut self, id: &str, group: &str, operation: &str, arguments: Value) {
@@ -178,6 +181,28 @@ impl Author {
         result
     }
     fn begin(&mut self, id: &str, axis: &str, distance: f64) {
+        assert!(
+            self.sketch_visibility.is_none(),
+            "Previous sketch visibility was not restored"
+        );
+        let visibility = format!("{id}_before_sketch_visibility");
+        self.call(
+            &visibility,
+            "document/appearance",
+            "project_visibility",
+            json!({}),
+        );
+        // Every new body here is extruded; reuse the prior response's IDs.
+        let scene = self
+            .last_build_scene
+            .clone()
+            .unwrap_or_else(|| json!({"bodies":[]}));
+        self.call(&format!("{id}_clear_sketch_view"), "document/appearance", "project_set_visibility", json!({
+            "hidden_body_ids":{"$select":{"from":scene,"path":"/bodies","take":"all","pointer":"/id"}},
+            "hidden_sketch_names":reference(&visibility,"/hidden_sketch_names"),
+            "hidden_datum_plane_ids":reference(&visibility,"/hidden_datum_plane_ids")
+        }));
+        self.sketch_visibility = Some(visibility);
         let plane = self.plane(axis, distance);
         self.call(
             &format!("{id}_begin"),
@@ -256,6 +281,17 @@ impl Author {
             "sketch_name":id,"profile_indices":[0],"operation":operation,"extent":{"type":"distance","distance":distance.abs()},
             "taper_angle_deg":0,"flip":distance<0.,"target_body_ids":targets
         }));
+        self.last_build_scene = Some(reference(&format!("{id}_build"), "/scene"));
+        let visibility = self
+            .sketch_visibility
+            .take()
+            .expect("Sketch visibility snapshot");
+        self.call(
+            &format!("{id}_restore_model_view"),
+            "document/appearance",
+            "project_set_visibility",
+            reference(&visibility, ""),
+        );
         if operation == "new_body" {
             let feature = json!({"$select":{"from":reference(&format!("{id}_build"),""),"path":"/document/features","take":"last","pointer":"/id"}});
             self.bind(&format!("{part}_feature"), feature);
@@ -424,6 +460,8 @@ impl Author {
             planes: BTreeMap::new(),
             bodies: BTreeMap::new(),
             sketches: 0,
+            sketch_visibility: None,
+            last_build_scene: None,
         }
     }
     fn refresh_body(&mut self, id: &str, part: &str) {
@@ -692,7 +730,7 @@ fn write_script(
 
 fn main() {
     let mut a = Author::fresh();
-    a.note("A larger workholding vise", "100 mm jaws, 90 mm opening, captured printed dovetails and a replaceable rounded-thread bridge. The shaft and comfortable grip remain one piece; the whole thrust fitting detaches so assembly is possible. 300 N is a provisional design load case, not a rated capacity.");
+    a.note("A larger workholding vise", "100 mm jaws, 90 mm opening and a 230 x 160 mm frame. Six printed parts use a 24 x 4 mm screw and purchased hardware. Physical fit and load qualification remain pending.");
     a.call(
         "name",
         "document/files",
@@ -1622,6 +1660,8 @@ fn main() {
     a.note("Assembly is a physical sequence", "Load the bridge nuts from below. With the rear bridge removed, feed the captured jaw onto the open rail ends and park it 85 mm forward. Seat and bolt the keyed bridge. Screw the bare shaft through the bridge first, then load its M5 nut into the exposed stub. Slide on the complete thrust fitting from the front so its ledge supports the nut, then secure the axial M5. Slide the jaw rearward over the head, drop in the keeper and fit the transverse M5. The optional tabletop bolts and washers remain outside every moving part; clamp lands offer an alternate mounting route.");
     a.steps
         .push(json!({"view":"isometric","fit":true,"duration_ms":650}));
+
+    vise_demo::run(&mut a);
 
     // One deliberately oriented plate per large part. Hardware remains in the
     // saved assembly for inspection but is excluded from every native export.
