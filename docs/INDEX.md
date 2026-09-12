@@ -1,5 +1,8 @@
 # Docs index
 
+Start with [installation](INSTALL.md), [development](DEVELOPMENT.md), or
+[the example library](../examples/scripts/README.md).
+
 ## Product / directions
 
 | Doc | Audience | When to update |
