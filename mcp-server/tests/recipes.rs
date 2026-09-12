@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Retain artifacts only when explicitly requested. Otherwise own a uniquely
 /// created temporary directory, including cleanup during a failing assertion.
@@ -81,6 +81,7 @@ struct Client {
     replies: Receiver<Result<Value, String>>,
     id: u64,
     timeout: Duration,
+    stage: String,
 }
 impl Client {
     fn start() -> Self {
@@ -121,6 +122,7 @@ impl Client {
             // drawing package. Keep the vise's existing bounded allowance
             // when sharing this client with the turbine acceptance tests.
             timeout: Duration::from_secs(600),
+            stage: "initialize MCP".into(),
         };
         client.rpc("initialize", json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"recipe-regression","version":"1"}}));
         writeln!(
@@ -129,10 +131,15 @@ impl Client {
             json!({"jsonrpc":"2.0","method":"notifications/initialized"})
         )
         .unwrap();
+        client.stage = "recipe acceptance".into();
         client
     }
     fn rpc(&mut self, method: &str, params: Value) -> Value {
         self.id += 1;
+        let started = Instant::now();
+        let deadline = started + self.timeout;
+        let request = request_summary(method, &params);
+        self.record_request(&request, "pending", started, None);
         writeln!(
             self.input,
             "{}",
@@ -140,17 +147,68 @@ impl Client {
         )
         .unwrap();
         self.input.flush().unwrap();
-        loop {
-            let reply = self
-                .replies
-                .recv_timeout(self.timeout)
-                .unwrap_or_else(|error| panic!("MCP did not finish {method}: {error}"))
-                .unwrap_or_else(|error| panic!("Invalid MCP response for {method}: {error}"));
-            if reply["id"] != self.id {
-                continue;
+        match receive_request_reply(&self.replies, self.id, deadline) {
+            Ok(reply) => {
+                let error = reply
+                    .get("error")
+                    .map(|error| error.to_string().chars().take(2048).collect::<String>());
+                self.record_request(
+                    &request,
+                    if error.is_some() {
+                        "failed"
+                    } else {
+                        "completed"
+                    },
+                    started,
+                    error.as_deref(),
+                );
+                if started.elapsed() >= Duration::from_secs(1) {
+                    eprintln!(
+                        "MCP [{}] {} completed in {:.2}s",
+                        self.stage,
+                        request,
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                assert!(
+                    reply.get("error").is_none(),
+                    "stage {}: {request}: {reply}",
+                    self.stage
+                );
+                reply["result"].clone()
             }
-            assert!(reply.get("error").is_none(), "{reply}");
-            return reply["result"].clone();
+            Err(error) => {
+                self.record_request(&request, "failed", started, Some(&error));
+                panic!("MCP stage '{}' did not finish request {} (child {}, elapsed {:.2}s, limit {}s): {request}: {error}",
+                    self.stage, self.id, self.child.id(), started.elapsed().as_secs_f64(), self.timeout.as_secs());
+            }
+        }
+    }
+    fn stage(&mut self, stage: impl Into<String>) {
+        self.stage = stage.into();
+        eprintln!("MCP child {}: {}", self.child.id(), self.stage);
+    }
+    fn record_request(&self, request: &str, status: &str, started: Instant, error: Option<&str>) {
+        let Some(directory) =
+            std::env::var_os("NBCAD_RECIPE_ARTIFACT_DIR").filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        let directory = std::path::PathBuf::from(directory);
+        let result = std::fs::create_dir_all(&directory).and_then(|_| {
+            std::fs::write(
+                directory.join(format!("last-request-{}.json", self.child.id())),
+                serde_json::to_vec_pretty(&json!({
+                    "test":std::thread::current().name(), "child_pid":self.child.id(),
+                    "stage":self.stage, "request_id":self.id, "request":request,
+                    "status":status, "elapsed_ms":started.elapsed().as_millis(),
+                    "deadline_seconds":self.timeout.as_secs(), "error":error,
+                }))
+                .unwrap(),
+            )
+        });
+        if let Err(error) = result {
+            eprintln!("Could not retain MCP request diagnostic: {error}");
         }
     }
     fn call(&mut self, operation: &str, arguments: Value) -> Value {
@@ -220,12 +278,140 @@ impl Client {
     }
     fn restore(model: &Value) -> Self {
         let mut client = Self::start();
+        client.stage("restore saved native model");
         client.call(
             "cad_load_project_model",
             json!({"model_json":model.as_str().map(str::to_owned).unwrap_or_else(||serde_json::to_string(model).unwrap())}),
         );
         client
     }
+}
+
+fn receive_request_reply(
+    replies: &Receiver<Result<Value, String>>,
+    id: u64,
+    deadline: Instant,
+) -> Result<Value, String> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("absolute request deadline exceeded".into());
+        }
+        let reply = replies
+            .recv_timeout(remaining)
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => "absolute request deadline exceeded".to_owned(),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    "MCP stdout closed before the response".to_owned()
+                }
+            })??;
+        if reply["id"] == id {
+            return Ok(reply);
+        }
+        // Other replies/notifications cannot reset the request's elapsed budget.
+    }
+}
+
+fn request_summary(method: &str, params: &Value) -> String {
+    let mut details = json!({"method":method});
+    if let Some(name) = params.get("name") {
+        details["operation"] = name.clone();
+    }
+    if let Some(arguments) = params.get("arguments").and_then(Value::as_object) {
+        let mut summary = serde_json::Map::new();
+        for key in [
+            "action",
+            "recipe",
+            "name",
+            "feature_id",
+            "sheet_id",
+            "joint_id",
+            "occurrence_id",
+            "occurrence_ids",
+            "constraint_id",
+            "text",
+            "format",
+            "clearance_threshold_mm",
+            "angle_offset_deg",
+            "linear_offset_mm",
+        ] {
+            if let Some(value) = arguments.get(key) {
+                summary.insert(key.into(), value.clone());
+            }
+        }
+        for key in ["source", "model_json", "data_base64", "bytes_base64"] {
+            if let Some(value) = arguments.get(key).and_then(Value::as_str) {
+                summary.insert(format!("{key}_bytes"), json!(value.len()));
+            }
+        }
+        details["arguments"] = Value::Object(summary);
+    }
+    // Diagnostics are bounded even if a future test uses very long names or ID lists.
+    serde_json::to_string(&details)
+        .unwrap()
+        .chars()
+        .take(2048)
+        .collect()
+}
+
+#[test]
+fn request_deadline_is_not_extended_by_notifications() {
+    let (sender, replies) = mpsc::channel();
+    let deadline = Instant::now() + Duration::from_millis(60);
+    let worker = std::thread::spawn(move || {
+        for _ in 0..100 {
+            if sender
+                .send(Ok(
+                    json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+                ))
+                .is_err()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let error = receive_request_reply(&replies, 1, deadline).unwrap_err();
+    assert!(error.contains("deadline"), "{error}");
+    drop(replies);
+    worker.join().unwrap();
+}
+
+#[test]
+fn request_diagnostics_name_the_operation_without_copying_model_or_source() {
+    let summary = request_summary(
+        "tools/call",
+        &json!({"name":"cad_interface","arguments":{
+        "action":"script", "recipe":"d-screw-vise", "source":"private source".repeat(10000)}}),
+    );
+    assert!(summary.contains("cad_interface") && summary.contains("d-screw-vise"));
+    assert!(summary.contains("source_bytes") && !summary.contains("private source"));
+    assert!(summary.len() < 512);
+}
+
+#[test]
+fn request_reply_distinguishes_completion_eof_and_invalid_output() {
+    let (sender, replies) = mpsc::channel();
+    sender
+        .send(Ok(json!({"id":2,"result":"unrelated"})))
+        .unwrap();
+    sender
+        .send(Ok(json!({"id":1,"result":"expected"})))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        receive_request_reply(&replies, 1, deadline).unwrap()["result"],
+        "expected"
+    );
+    sender.send(Err("invalid JSON on stdout".into())).unwrap();
+    assert_eq!(
+        receive_request_reply(&replies, 1, deadline).unwrap_err(),
+        "invalid JSON on stdout"
+    );
+    drop(sender);
+    assert!(receive_request_reply(&replies, 1, deadline)
+        .unwrap_err()
+        .contains("stdout closed"));
 }
 impl Drop for Client {
     fn drop(&mut self) {
