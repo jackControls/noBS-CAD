@@ -1,61 +1,51 @@
-# Docs index
+# Documentation
 
-Start with [installation](INSTALL.md), [development](DEVELOPMENT.md), or
-[the example library](../examples/scripts/README.md).
+## Start using CAD
 
-## Product / directions
+- [Install and make your first part](INSTALL.md) — download, run the fillet lesson,
+  edit a dimension, then save and reopen the project.
+- [Connect an MCP agent](INSTALL.md#connect-an-mcp-agent) — packaged server setup
+  and a concrete first task.
+- [Recipe library](../examples/scripts/README.md) — short lessons, assemblies and
+  print-fit coupons.
+- [Assemblies](ASSEMBLIES.md) — reusable parts, joints, motion and interference.
+- [Drawings](2D_DRAWINGS.md) — sheets, dimensions and export coverage.
+- [Flagship designs and validation](flagship-examples.md) — bench, vise and turbine.
+- [Engineering knowledge](../knowledge/index.md) — materials, gears, bearings,
+  workholding and printing guidance, also available offline through MCP.
 
-| Doc | Audience | When to update |
-|-----|----------|----------------|
-| [goals.md](goals.md) | Everyone | Product direction changes |
-| [proposed-architecture.md](proposed-architecture.md) | Everyone | When proposals ship or change |
+## Automate and author recipes
 
-## MCP / automation
+- [MCP interface](../mcp-server/README.md) — operations and current boundaries.
+- [Native scripts](native-scripts.md) — construction source and presentation controls.
+- [Live document ownership](mcp-harness.md) — discovery, attachment and ordered edits.
+- [Shared product interface](interface.md) — groups and operation contracts.
+- [Native drawing export](native-drawing-export.md) — SVG/DXF payloads and references.
+- [Manufacturing export](manufacturing/INDEX.md) — STL/3MF implementation and validation.
 
-| Doc | Audience | When to update |
-|-----|----------|----------------|
-| [mcp-harness.md](mcp-harness.md) | Humans + agents | Any MCP behavior change |
-| [../mcp-server/README.md](../mcp-server/README.md) | Integrators | Tool surface / build |
-| [../mcp-server/OKRs.md](../mcp-server/OKRs.md) | Maintainers | MCP milestone changes |
+## Contribute and develop
 
-## Agentic / maintenance (committed project guidance)
+- [Developer setup](DEVELOPMENT.md) — the canonical build, native SDK and test guide.
+- [Contributing](../CONTRIBUTING.md) and [edge-case hunt](EDGE_CASE_HUNT.md) — focused
+  improvements and useful bug reproductions.
+- [Project direction](goals.md) — reliability, performance and ease of use.
+- [Architecture proposals](proposed-architecture.md) — future approaches and rationale.
+- [Agent and maintainer guidance](agentic/INDEX.md) — disclosure, source installation
+  and implementation contracts.
 
-| Doc | Audience | When to update |
-|-----|----------|----------------|
-| [agentic/INDEX.md](agentic/INDEX.md) | Agents + maintainers | Structure changes |
-| [agentic/STEERABLE_MCP.md](agentic/STEERABLE_MCP.md) | Agents | Disclosure invariants |
-| [agentic/MAINTENANCE.md](agentic/MAINTENANCE.md) | Agents + CI | Toolchain / test commands |
-| [agentic/UI_OVERLAYS.md](agentic/UI_OVERLAYS.md) | UI agents + maintainers | Overlay or shell-layout changes |
+<details>
+<summary>Specialist implementation references</summary>
 
-## Manufacturing export
+- [OCCT packaging](OCCT_PACKAGING.md), [Windows packaging](WINDOWS_PACKAGING.md) and
+  [Ubuntu packaging](LINUX_PACKAGING.md).
+- [Windows native viewport debugging](WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md).
+- [Sketch constraint matrix](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md),
+  [modeling selection](MODELING_VIEWPORT_SELECTION.md) and
+  [viewport interaction](VIEWPORT_INTERACTION_THEME.md).
+- [Icon provenance](ICON_PROVENANCE.md), [MCP milestones](../mcp-server/OKRs.md) and
+  [presentation review](demo-presentation.md).
 
-| Doc | Notes |
-|-----|-------|
-| [manufacturing/INDEX.md](manufacturing/INDEX.md) | 3MF/STL export subsystem |
+</details>
 
-## Community / feedback
-
-| Doc | Audience | When to update |
-|-----|----------|----------------|
-| [EDGE_CASE_HUNT.md](EDGE_CASE_HUNT.md) | Users + contributors | Challenge list / process changes |
-
-## Sketch / viewport interaction
-
-| Doc | Notes |
-|-----|-------|
-| [SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md) | Executable 25×25 ordered constraint/dimension matrix and operation-ownership policy |
-| [MODELING_VIEWPORT_SELECTION.md](MODELING_VIEWPORT_SELECTION.md) | Shared picker roles, selection ownership, and command coverage |
-| [VIEWPORT_INTERACTION_THEME.md](VIEWPORT_INTERACTION_THEME.md) | Light/dark interaction states, native rendering rules, and visual validation |
-
-## Packaging / provenance
-
-| Doc | Notes |
-|-----|-------|
-| [OCCT_PACKAGING.md](OCCT_PACKAGING.md) | Native OCCT |
-| [LINUX_PACKAGING.md](LINUX_PACKAGING.md) | Ubuntu 26.04 DEB/AppImage and X11/XWayland verification |
-| [WINDOWS_PACKAGING.md](WINDOWS_PACKAGING.md) | Portable ZIP |
-| [WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md](WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md) | Windows Bevy/WebView2 field-debugging runbook |
-| [ICON_PROVENANCE.md](ICON_PROVENANCE.md) | Icons |
-
-> Editor-specific files (`AGENTS.md`, `.cursor/`) stay **gitignored** per project policy.
-> Use `docs/agentic/` for shared agent guidance that belongs in the repo.
+Shared agent guidance belongs in `docs/agentic/`. Editor-specific `AGENTS.md`
+and `.cursor/` files remain gitignored under the repository's existing policy.

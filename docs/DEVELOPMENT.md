@@ -101,6 +101,14 @@ npm run check:knowledge
 
 For native geometry and MCP changes, with the matching OCCT SDK available:
 
+On Windows, add that SDK's DLL directory to the current shell before running
+native tests (use the matching ARM64 prefix for an ARM64 toolchain):
+
+```powershell
+$env:OCCT_ROOT = "$PWD/vcpkg_installed/x64-windows"
+$env:PATH = "$env:OCCT_ROOT/bin;$env:PATH"
+```
+
 ```sh
 cargo test --locked -p nbcad-occt --features native-occt
 cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
@@ -111,6 +119,38 @@ Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the
 final packages' launch and MCP behavior; a successful compilation alone does
 not establish that a distributable package works.
+
+## Replay a recipe
+
+With this checkout and Rust installed, the replay CLI can use the packaged CAD
+application. This path needs no OCCT SDK. Pass the application's MCP argument
+separately from its absolute executable path:
+
+```sh
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/nbcad --server-arg --mcp --repeat 2 --out replay-proof
+```
+
+On Windows, use the full path to `noBS-CAD.exe`; on macOS use
+`/Applications/noBS CAD.app/Contents/MacOS/nbcad` and quote paths containing spaces.
+The [installation guide](INSTALL.md#choose-the-executable-and-try-it) lists the
+packaged paths. A standalone `nbcad-mcp` server needs no `--server-arg`.
+
+For an AppImage without FUSE, pass each argument explicitly:
+
+```sh
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.1.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --mcp
+```
+
+`--repeat 2` compares independent headless runs. To watch in an existing CAD
+window instead, omit `--repeat` and add `--session UUID --new --present --speed 2`.
+The session must identify the intended live document; `--new` preserves it and
+opens a blank design tab. Add `--save /absolute/path/result.nbcad` to save that
+live result. [Native scripts](native-scripts.md) describes the source and controls.
+
+`--init-timeout-seconds` bounds only the MCP handshake (30 seconds by default,
+configurable from 1 to 600); long modeling and presentation runs keep their own
+normal behavior. Use `cargo xtask run-script --help` or `cargo xtask cad-call --help`
+for the complete command options.
 
 ## Standalone MCP server
 

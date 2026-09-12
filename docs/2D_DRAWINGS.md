@@ -1,11 +1,32 @@
 # 2D technical drawings
 
-The drawing workspace turns the current parametric model into persistent,
-printable vector sheets. It follows the same production boundary used by the
-rest of noBS CAD: Rust owns document meaning, OCCT owns exact geometry, React
-owns document UI, and Bevy remains the native interactive 3D viewport.
+The Drawing workspace creates editable sheets from your parts and assemblies.
+Views, dimensions and annotations are saved with the model in its `.nbcad` file.
+
+Finish any active sketch, switch to **Drawing**, create a sheet, and place a base
+view. Add projected views and dimensions, then save the project. The
+[vise](d-screw-vise.md) and [turbine](vertical-axis-turbine.md) include complete
+example drawing packages to inspect in CAD.
+
+## Export and print
+
+- **Interactive Drawing workspace:** export sheet DXF or use the platform's
+  print/PDF path. A separate 1:1 profile export supplies model-space geometry.
+- **Native MCP/recipe export:** `drawing_export` returns SVG or DXF containing
+  linear, radial and angular dimensions, notes, title information and BOM.
+  Other annotation kinds and dual-unit presentation currently reject export;
+  interactive export supports a wider set of annotations.
+- **Editable source:** save `.nbcad` to retain views, associations and annotations.
+  STEP/STL/3MF geometry exports do not replace that drawing document.
+
+See the [native export contract](native-drawing-export.md) for supported commands
+and reference validation. DWG output and direct headless PDF export are not
+implemented. Review sheet scale, dimensions and manufacturing notes before use.
 
 ## Ownership boundary
+
+Rust owns drawing meaning, OCCT owns exact projected geometry, React owns the
+sheet interface, and Bevy owns the native 3D viewport.
 
 | Layer | Responsibility |
 | --- | --- |

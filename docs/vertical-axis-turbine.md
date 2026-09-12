@@ -6,8 +6,10 @@ drawing package. The same source builds the model in fast mode or teaches the
 construction in presentation mode, with pause, step and speed controls. There is no second animation model or imported
 STL/STEP geometry.
 
-Run `cargo xtask run-script --server <rebuilt-MCP-binary> --recipe vertical-axis-turbine --repeat 2 --out <directory>`.
-The app's Scripts catalog exposes the same source. Through MCP, use
+Choose **Vertical-axis turbine** in **Scripts**, then **Run in new design**.
+For independent headless comparisons, follow the
+[developer replay guide](DEVELOPMENT.md#replay-a-recipe) with recipe ID
+`vertical-axis-turbine` and `--repeat 2`. Through MCP, use
 `cad_interface` with `action: "script"`, `recipe: "vertical-axis-turbine"`,
 `mode: "fast"`, and `validate: true` on a blank document. For an attached desktop,
 use `mode: "present"`; pause, step and playback speed are presentation controls,

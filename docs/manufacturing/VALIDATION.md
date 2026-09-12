@@ -18,13 +18,8 @@ Expect:
 - catalog JSON parse + Bambu/Prusa/Sunlu/eSun/Anycubic presets (≥40 entries)
 - project round-trip scrubbing orphan appearances
 
-With OCCT available in the current checkout:
-
-```powershell
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
-$env:PATH = "$env:OCCT_ROOT\bin;$env:PATH"
-cargo test --manifest-path mcp-server/Cargo.toml
-```
+For native OCCT/MCP coverage, use the runtime setup and sequential native test
+command in [DEVELOPMENT.md](../DEVELOPMENT.md#verify-changes).
 
 ## Manual slicer smoke (KR3.6)
 

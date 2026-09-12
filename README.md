@@ -1,111 +1,136 @@
 # noBS CAD
 
 Free, open-source parametric CAD for mechanical parts, assemblies and drawings.
-Runs locally, with the same modeling tools available to people and MCP agents.
+Design locally, keep editable files, and work by hand or with your own MCP agent.
 
-**[Download](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)**
-· [Install](docs/INSTALL.md)
-· [Connect an agent](docs/INSTALL.md#connect-an-mcp-agent)
-· [Contribute](CONTRIBUTING.md)
+**Pre-alpha · [Showcase preview 2026-09-12.2](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)**
+· [Build and checks](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
+· [Installation help](docs/INSTALL.md)
+
+**Download:** [Windows x64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-x64.zip)
+· [Windows ARM64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-arm64.zip)
+· [macOS Apple silicon](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_aarch64.dmg)
+· [Ubuntu 26.04 DEB](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.deb)
+· [AppImage](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.AppImage)
+
+No CAD account, subscription or cloud service is required. Keep backups of important projects while the application is pre-alpha.
 
 ## Made in noBS CAD
 
-Built from sketches and features through the Rust MCP recipe runner.
-The loops show the construction; the longer recordings show it in detail.
-
-### Vise
-
-[![Vise with a captured sliding jaw and compact D-screw handle](docs/assets/showcase/vise.png)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise-build-full.mp4)
-
-100 mm jaws, 90 mm travel, a coarse D-screw and a six-part assembly.
-
-<a href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise-build-full.mp4"><img src="docs/assets/showcase/vise-loop.gif" width="360" alt="30-second loop of the vise being built in noBS CAD"></a>
-
-[Detailed build · 2:21](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise-build-full.mp4)
-· **[Open recipe in noBS CAD](https://jackcontrols.github.io/noBS-CAD/open.html#d-screw-vise)**
-· [Recipe source](examples/scripts/d-screw-vise.nbcad.jsonc)
-
-<!-- Print photo: add docs/assets/showcase/vise-printed.jpg when supplied. -->
+These designs were built from blank documents through MCP. Their sketches,
+features and assembly relationships remain editable. The small loops are
+accelerated excerpts; the player pages describe the longer recordings.
 
 ### Garden bench
 
-[![Garden bench with crowned back slats and rounded armrests](docs/assets/showcase/bench.png)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench-build-full.mp4)
+[![Garden bench with crowned back slats and rounded armrests](docs/assets/showcase/bench.png)](docs/assets/showcase/bench.png)
 
 A timber frame, repeated slats and shaped arms, assembled from dimensioned parts.
 
-<a href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench-build-full.mp4"><img src="docs/assets/showcase/bench-loop.gif" width="360" alt="30-second loop of the garden bench being built in noBS CAD"></a>
+<a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#garden-bench"><img src="docs/assets/showcase/bench-loop.gif" width="360" alt="Accelerated construction excerpt of the garden bench"></a>
 
-[Full build · 4:04](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench-build-full.mp4)
-· **[Open recipe in noBS CAD](https://jackcontrols.github.io/noBS-CAD/open.html#garden-bench)**
+[Enlarge image](docs/assets/showcase/bench.png)
+· **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#garden-bench)**
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench-build-full.mp4)
+
+[Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#garden-bench)
 · [Recipe source](examples/scripts/garden-bench.nbcad.jsonc)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench.nbcad)
 
 <!-- Print photo: add docs/assets/showcase/bench-printed.jpg when supplied. -->
 
+### Vise
+
+[![Vise with a captured sliding jaw and compact D-screw handle](docs/assets/showcase/vise.png)](docs/assets/showcase/vise.png)
+
+100 mm jaws, 90 mm travel and a coarse D-screw: six printed parts plus standard hardware.
+
+<a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#d-screw-vise"><img src="docs/assets/showcase/vise-loop.gif" width="360" alt="Accelerated construction excerpt of the printed vise"></a>
+
+[Enlarge image](docs/assets/showcase/vise.png)
+· **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#d-screw-vise)**
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise-build-full.mp4)
+
+[Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#d-screw-vise)
+· [Recipe source](examples/scripts/d-screw-vise.nbcad.jsonc)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise.nbcad)
+
+<!-- Print photo: add docs/assets/showcase/vise-printed.jpg when supplied. -->
+
 ### Vertical-axis turbine
 
-[![Two-stage vertical-axis turbine with its bearing-supported shaft and generator drive](docs/assets/showcase/turbine.png)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine-build-full.mp4)
+[![Two-stage vertical-axis turbine with its bearing-supported shaft and generator drive](docs/assets/showcase/turbine.png)](docs/assets/showcase/turbine.png)
 
 Two staggered Savonius stages, a bearing-supported shaft and a 4:1 geared generator drive.
 
-<a href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine-build-full.mp4"><img src="docs/assets/showcase/turbine-loop.gif" width="360" alt="30-second loop of the vertical-axis turbine being built in noBS CAD"></a>
+<a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#vertical-axis-turbine"><img src="docs/assets/showcase/turbine-loop.gif" width="360" alt="Accelerated construction excerpt of the vertical-axis turbine"></a>
 
-[Detailed build · 4:15](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine-build-full.mp4)
-· **[Open recipe in noBS CAD](https://jackcontrols.github.io/noBS-CAD/open.html#vertical-axis-turbine)**
+[Enlarge image](docs/assets/showcase/turbine.png)
+· **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#vertical-axis-turbine)**
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine-build-full.mp4)
+
+[Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#vertical-axis-turbine)
 · [Recipe source](examples/scripts/vertical-axis-turbine.nbcad.jsonc)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine.nbcad)
 
 <!-- Print photo: add docs/assets/showcase/turbine-printed.jpg when supplied. -->
 
-The recipes retain editable feature history, assembly relationships and checks. [Design details and validation](docs/flagship-examples.md)
-· [More examples](examples/scripts/README.md)
+Recipe links load source into **Scripts** for review before running. To inspect
+a completed design immediately, download its `.nbcad` and use **File → Open**.
+These are development examples; physical fit and load qualification remain open.
+[Designs, drawings and validation](docs/flagship-examples.md) · [All recipes](examples/scripts/README.md)
 
-## Install
+## Make your first part
 
-- **Windows:** extract the portable ZIP and open `noBS-CAD.exe`.
-- **macOS:** open the Apple-silicon DMG and drag the app into Applications.
-- **Ubuntu 26.04:** install the DEB and open noBS CAD from the application launcher.
+After [installing CAD](docs/INSTALL.md), open **Scripts**, choose
+**Sketch, extrude, ease the edges**, and select **Run in new design**.
+The lesson builds a 60 × 30 × 12 mm block with rounded top edges.
 
-[Download packages](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
-· [Setup and troubleshooting](docs/INSTALL.md)
-
-This is a pre-alpha release. Keep backups of important projects.
+When it finishes, double-click the extrusion in the feature history and change
+its **Distance** from **12 to 18 mm**. Save the result as `first-part.nbcad`,
+then reopen it to continue editing. [Step-by-step instructions](docs/INSTALL.md#make-your-first-part)
 
 ## Design, assemble, draw
 
 Constrained sketches and reference geometry drive editable solid features.
 Reuse parts in assemblies, define joints and check their motion and interference.
-Keep parts, assemblies and drawings together in an `.nbcad` project.
+Keep the parts, assemblies and drawings together in one `.nbcad` project.
 
-Assign materials and colors, then export directly to **3MF** for your slicer.
-**STEP** and **STL** support interchange; drawings export to **DXF** and print/PDF.
-[Assemblies](docs/ASSEMBLIES.md) · [Drawings](docs/2D_DRAWINGS.md)
+Assign per-body materials and colors, then export **3MF** for your slicer.
+Material labels and color metadata assist the handoff; choose the actual print
+profile in the slicer. **STEP** carries exact geometry and **STL** supplies mesh
+export. Drawing sheets export to **DXF** and print/PDF.
+[Assemblies](docs/ASSEMBLIES.md) · [Drawings and export coverage](docs/2D_DRAWINGS.md)
 
-## MCP and replay
+## Work with an agent
 
-The installed application also runs as a local stdio MCP server with `--mcp`.
-Bring your preferred MCP-compatible agent and model. No CAD account, subscription
-or cloud service is required.
+The installed application includes a local MCP server. Bring your preferred
+MCP-compatible agent and model to build a part, edit an existing feature, inspect
+an assembly or replay a demonstration. CAD keeps the same editable project
+whether you use the tools yourself or ask an agent to use them.
 
-Agents use the same Rust modeling operations as the desktop. A single recipe
-request can build a part or assembly, with captions, camera moves and playback
-controls when you want to watch. Open **Scripts** in CAD to run a bundled example,
-or inspect and edit its source before running it in a new design.
+[Connect your agent](docs/INSTALL.md#connect-an-mcp-agent), then try:
 
-[Agent setup](docs/INSTALL.md#connect-an-mcp-agent)
-· [MCP interface](mcp-server/README.md)
-· [Recipe format and playback](docs/native-scripts.md)
+> Use noBS CAD to run the fillet-basics lesson in a new design in the open CAD
+> window. Preserve my existing documents. After the final checks pass, change
+> the stock extrusion from 12 to 18 mm, inspect the result and keep it open.
+
+An agent is optional. **Scripts** can build a bundled example, explain its
+chapters and show the construction with captions, camera moves and playback
+controls. You can inspect and edit the recipe before running it.
+[MCP interface](mcp-server/README.md) · [Recipes and playback](docs/native-scripts.md)
 · [Engineering knowledge](knowledge/index.md)
 
-## Development
+## Help build it
 
-Contributions are welcome. Our priorities are reliability, performance and ease
-of use, in that order. Bring a part, a reproducible bug or a focused improvement.
+Contributions are welcome. Our priorities are **reliability, performance and
+ease of use**, in that order. Bring a part, a reproducible bug or a focused
+improvement. [Contributing](CONTRIBUTING.md) · [Developer setup](docs/DEVELOPMENT.md)
+· [Documentation](docs/INDEX.md)
 
-`cargo xtask package` builds the desktop package for your computer.
-[Developer setup](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md)
-
-Future work includes CAM and guided design lessons and wizards.
-[Project direction](docs/goals.md)
-· [Moving the interface into Bevy](https://github.com/jackControls/noBS-CAD/issues/38)
+We are working toward guided design lessons and conversational wizards, and
+exploring **3-axis CAM**. Toolpath generation and strength analysis are future
+capabilities. [Project direction](docs/goals.md)
 
 ## Open-source foundations
 
@@ -124,13 +149,9 @@ Thanks also to [FreeCAD](https://www.freecad.org/) and the wider open-source CAD
 <details>
 <summary>Third-party notices and 3D mouse support</summary>
 
-### Related projects
-
 Dependency licenses and attribution live in [Third-party notices](THIRD_PARTY_NOTICES.md).
 Icon sources are recorded in [Icon provenance](docs/ICON_PROVENANCE.md).
 Peer CAD projects have their own licenses; see [contribution guidance](CONTRIBUTING.md#license--borrow).
-
-### 3D mouse compatibility
 
 noBS CAD supports 3Dconnexion SpaceMouse devices. The optional browser-development
 driver bridge loads only after the user enables it.

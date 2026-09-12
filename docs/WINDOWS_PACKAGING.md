@@ -8,12 +8,15 @@ For development, `cargo xtask package` selects the Windows portable builder;
 
 ## Supported baseline
 
-The Windows packages have a defined support target:
+The Windows packages have the following compatibility targets. See the
+[installation guide](INSTALL.md#windows) for the tested package baseline;
+the Windows 10 target is not a verified minimum for this preview.
 
 - Windows 10 version 1803 or newer, or Windows 11;
 - x64 (`x86_64-pc-windows-msvc`) and ARM64 (`aarch64-pc-windows-msvc`);
 - a portable ZIP rather than an installer;
 - the system Microsoft Edge WebView2 Runtime;
+- a graphics adapter and driver supporting Direct3D 12 or Vulkan;
 - the matching centrally installed Microsoft Visual C++ v14 Redistributable.
 
 WebView2 is not copied into the ZIP. Microsoft distributes it with the
