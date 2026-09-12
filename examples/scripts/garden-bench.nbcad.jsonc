@@ -8221,6 +8221,7 @@
         }
       }
     },
+    {"id": "bench_finish_reference_visibility", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {"view": "front", "fit": true, "duration_ms": 450},
     {"id": "picket_demo_home", "call": {"group": "document/files", "operation": "cad_project_model", "arguments": {}}},
     {

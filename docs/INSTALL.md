@@ -73,6 +73,18 @@ sudo apt install ./noBS.CAD_0.1.0_amd64.deb
 Open **noBS CAD** from the application launcher. Vulkan support is required.
 The package is checked on X11 and Ubuntu's Wayland desktop through XWayland.
 
+To update CAD, close it, download the new `.deb`, then run this from the new
+download's folder:
+
+```sh
+sudo apt install --reinstall ./noBS.CAD_0.1.0_amd64.deb
+```
+
+[`--reinstall`](https://manpages.ubuntu.com/manpages/resolute/man8/apt-get.8.html)
+requests replacement even when the preview still uses package version `0.1.0`.
+Reopen CAD and check **File → Settings → About noBS CAD** against the release's
+source revision. Your saved project files can stay where they are.
+
 <details>
 <summary>Ubuntu portable alternative: AppImage</summary>
 
@@ -86,6 +98,13 @@ chmod +x noBS.CAD_0.1.0_amd64.AppImage
 For a FUSE error, launch it with `--appimage-extract-and-run`.
 The AppImage has the same tested Ubuntu baseline; it does not establish support
 for every Linux distribution.
+
+To update, close CAD, download the new AppImage and replace the old file in its
+kept folder. Make it executable with `chmod +x` as above, then launch the new
+file once. That launch refreshes recipe-link registration to its current path,
+including when you move the AppImage. Update your MCP command path if it moved,
+and check the new source revision in **About noBS CAD**. Saved projects can stay
+where they are.
 
 Opening recipes from browser links requires the AppImage to launch normally
 with FUSE. Its registered handler does not retain the extraction flag; use the
