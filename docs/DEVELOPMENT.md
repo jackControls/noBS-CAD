@@ -1,6 +1,21 @@
 # Build and test noBS CAD
 
-### Ubuntu 26.04 LTS
+For a ready-to-run application, use the [installation guide](INSTALL.md).
+The commands below assume a checkout of this repository and run from its root:
+
+```sh
+git clone https://github.com/jackControls/noBS-CAD.git
+cd noBS-CAD
+```
+
+Install Git, [Node.js 22](https://nodejs.org/en/download) and the
+[Rust toolchain](https://rustup.rs/) first. Native builds also need a C++ compiler
+and the platform's OCCT 7.9 SDK: Visual Studio C++ Build Tools on Windows,
+Xcode Command Line Tools on macOS, or the packages/container described for Ubuntu.
+The release source revision is recorded in its notes; check out that tag when
+building an MCP server to pair with a downloaded desktop.
+
+## Ubuntu 26.04 LTS
 
 Ubuntu 26.04 LTS is the official Linux desktop baseline. The app uses the
 native Bevy/wgpu Vulkan viewport inside the Tauri WebKitGTK window. It runs on
@@ -27,7 +42,7 @@ npm run bundle:linux
 See [Ubuntu 26.04 packaging](LINUX_PACKAGING.md) for dependencies,
 artifacts, X11/XWayland verification, and 3D-input permissions.
 
-### Windows x64 and ARM64 portable builds
+## Windows x64 and ARM64 portable builds
 
 The Windows release path targets Windows 10 version 1803 or newer and Windows
 11. It produces a portable ZIP rather than an installer, uses the WebView2
@@ -51,7 +66,7 @@ npm run bundle:windows:portable -- -Target $target
 See [Windows portable packaging](WINDOWS_PACKAGING.md) for the complete
 setup, output layout, runtime requirements, and GitHub Actions workflow.
 
-### Native macOS development bundle
+## Native macOS development bundle
 
 The macOS packaging path uses Tauri with OCCT 7.9.x.
 
@@ -88,11 +103,11 @@ See [OCCT packaging and browser/WASM strategy](OCCT_PACKAGING.md) for
 native SDK overrides, the Apple-silicon GitHub Actions build, and packaging
 details.
 
-### Browser development build
+## Browser development build
 
 The browser build is a development and testing environment. It requires
 Node.js, npm, a current Rust toolchain, the `wasm32-unknown-unknown` target,
-and `wasm-pack`.
+and [`wasm-pack`](https://drager.github.io/wasm-pack/installer/).
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -151,6 +166,7 @@ npm run smoke:wasm
 Browser regression suites run through Playwright. For example:
 
 ```sh
+npx playwright install chromium
 npm run e2e:m2
 npm run e2e:hole
 npm run e2e:timeline

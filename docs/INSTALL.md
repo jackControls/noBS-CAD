@@ -115,6 +115,12 @@ list of clients you want configured. The installer builds/copies the server to a
 stable user directory, backs up existing client configuration and preserves
 unrelated entries. Restart the client or reload MCP afterward.
 
+On Windows the helper also configures the OCCT DLL search path. For manual
+configuration, add the matching `vcpkg_installed/x64-windows/bin` (or
+`arm64-windows/bin`) directory to the server process's `PATH`, preserving the
+existing entries. Setting `OCCT_ROOT` alone does not configure the Windows DLL
+loader. See [the detailed MCP installer guide](agentic/INSTALL_MCP.md).
+
 For other clients, add a **local stdio server** pointing at the built executable
 using that client's configuration format. For clients accepting `mcpServers`:
 
