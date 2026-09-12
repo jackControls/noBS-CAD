@@ -2,9 +2,8 @@
 
 | File | Role |
 |------|------|
-| [INDEX.md](INDEX.md) | This file |
-| [OKRs.md](OKRs.md) | Pointer to manufacturing OKRs |
-| `catalog.json` | **Mirror** of `crates/export/presets/catalog.json` (kept identical by export `build.rs`) |
+| [Manufacturing objectives](../../docs/manufacturing/OKRs.md) | Material assignment contract |
+| `catalog.json` | **Mirror** of `crates/export/presets/catalog.json`; export tests check equality |
 | `index.ts` | Preset helpers + slicer target preference |
 
-See `docs/manufacturing/MAINTENANCE.md`.
+Edit the source catalog and follow the [sync instructions](../../crates/export/presets/INDEX.md).

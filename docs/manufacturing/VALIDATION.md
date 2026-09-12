@@ -18,7 +18,7 @@ Expect:
 - catalog JSON parse + Bambu/Prusa/Sunlu/eSun/Anycubic presets (≥40 entries)
 - project round-trip scrubbing orphan appearances
 
-Work from dedicated worktree `C:\Users\jeffg\dev\noBS-CAD-mfg-export`. With OCCT:
+With OCCT available in the current checkout:
 
 ```powershell
 $env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
@@ -28,7 +28,7 @@ cargo test --manifest-path mcp-server/Cargo.toml
 
 ## Manual slicer smoke (KR3.6)
 
-Regenerate fixtures: `cargo test -p nbcad-export write_manual_smoke_fixtures --lib`
+Regenerate fixtures: `cargo test -p nbcad-export --lib tests::regen_manual_smoke_fixtures -- --ignored --exact`
 
 Then open from `crates/export/fixtures/smoke/`:
 

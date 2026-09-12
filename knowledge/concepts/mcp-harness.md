@@ -40,5 +40,5 @@ baseline). We do **not** reverse-engineer feature history from STEP B-rep.
 `cad_compare_solids` summarizes existing `solid_scene` bbox/mesh counts so a
 rebuilt history can be checked against that imported reference.
 
-See also the [MCP playbook](../../docs/agent-mcp.md) and
+See also the [live-control contract](../../docs/mcp-harness.md) and
 [server documentation](../../mcp-server/README.md).
