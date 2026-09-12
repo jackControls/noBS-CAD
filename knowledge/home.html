@@ -1,57 +1,110 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>noBS CAD knowledge</title>
-    <style>
-      body { font-family: Georgia, serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-      a { color: #0b57d0; }
-      code { font-family: ui-monospace, monospace; font-size: 0.9em; }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta
+      name="description"
+      content="Free, open and local parametric CAD. Build editable parts, assemblies and drawings by hand or with your own agent."
+    >
+    <title>Local, editable mechanical design | noBS CAD</title>
+    <link rel="stylesheet" href="./product.css">
   </head>
   <body>
-    <h1>noBS CAD knowledge</h1>
-    <p>
-      OKF v0.2 Markdown bundle for humans and agents. The
-      <code>knowledge/</code> files in git are the source of truth; this page is
-      a thin hosted entrypoint.
-    </p>
-    <ul>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/index.md">Bundle index</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/concepts/product-stance.md">Product stance</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/concepts/architecture.md">Architecture</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/concepts/mcp-harness.md">MCP harness</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/concepts/process.md">Contribution process</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/concepts/export-print.md">Export &amp; print</a>
-      </li>
-      <li>
-        <a href="./concepts/gears.md">Gear identification and compatible pairs</a>
-      </li>
-      <li>
-        <a href="./concepts/additive-workholding.md">Additive workholding</a>
-      </li>
-      <li>
-        <a href="./concepts/small-wind-generators.md">Small wind rotors and low-speed generators</a>
-      </li>
-      <li>
-        <a href="./concepts/bearing-stacks.md">Bearing supports and axial retention</a>
-      </li>
-      <li>
-        <a href="https://github.com/jackControls/noBS-CAD/blob/main/knowledge/log.md">Update log</a>
-      </li>
-    </ul>
-    <p><a href="./index.md">Open the raw OKF bundle index</a></p>
+    <header>
+      <a class="brand" href="./home.html">noBS CAD</a>
+      <nav aria-label="Main navigation">
+        <a href="./home.html#download">Download</a>
+        <a href="./showcase.html">Made in noBS CAD</a>
+        <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/docs/INDEX.md">Guides</a>
+        <a href="https://github.com/jackControls/noBS-CAD">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <div class="hero">
+        <div>
+          <p class="eyebrow">Mechanical CAD &middot; Pre-alpha</p>
+          <h1>Make parts.<br>Keep the design.</h1>
+          <p class="lead">Sketch, shape and assemble mechanical designs. Keep the dimensions, features and relationships that make them editable. Work by hand or with your own agent, entirely on your computer.</p>
+          <p>No account, subscription or cloud CAD service required.</p>
+          <div class="actions">
+            <a class="button" href="#download">Get the showcase preview</a>
+            <a href="#first-part">Make your first part</a>
+          </div>
+        </div>
+        <figure>
+          <a href="./showcase.html#garden-bench"><img src="https://raw.githubusercontent.com/jackControls/noBS-CAD/preview-2026-09-12.2/docs/assets/showcase/bench.png" width="800" height="520" alt="Garden bench built from dimensioned timber members and repeated crowned back slats"></a>
+          <figcaption>Made in noBS CAD, from a blank document through the same commands available to an agent. <a href="./showcase.html#garden-bench">Watch the build and explore the recipe</a>.</figcaption>
+        </figure>
+      </div>
+      <section id="download">
+        <h2>One desktop app. Your choice of tools.</h2>
+        <p><strong>Showcase preview 2026-09-12.2.</strong> Parametric modeling, related assemblies, associative drawings and local MCP control. This is pre-alpha software; keep backups of important designs.</p>
+        <div class="actions">
+          <a
+            class="button"
+            href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-x64.zip"
+          >Windows x64</a>
+          <a
+            class="button"
+            href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_aarch64.dmg"
+          >macOS Apple silicon</a>
+          <a
+            class="button"
+            href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.deb"
+          >Ubuntu 26.04</a>
+        </div>
+        <p class="muted">Windows portable ZIP &middot; macOS signed and notarized DMG &middot; Ubuntu DEB. <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/docs/INSTALL.md">Requirements, installation and updating</a>.</p>
+        <details>
+          <summary>Other packages and build information</summary>
+          <p><a href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-arm64.zip">Windows ARM64 ZIP</a> &middot; <a href="https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.AppImage">Linux x64 AppImage</a> &middot; <a href="https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2">Release notes, source revision and checksums</a>. Find the installed build in File &rarr; Settings &rarr; About noBS CAD.</p>
+        </details>
+      </section>
+      <section id="first-part" class="card">
+        <p class="eyebrow">Start here</p>
+        <h2>A part you can change.</h2>
+        <p>Open <strong>Scripts</strong>, choose <strong>Sketch, extrude, ease the edges</strong>, then <strong>Run in new design</strong>. Watch a dimensioned block become a solid with a rounded rim.</p>
+        <p>Double-click its extrusion in the feature history. Change <strong>12 to 18 mm</strong>, save <code>first-part.nbcad</code>, and reopen it. The editable feature history stays with the part.</p>
+        <div class="actions">
+          <a class="button" href="./open.html#fillet-basics">Open the lesson in CAD</a>
+          <a
+            href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/docs/INSTALL.md#make-your-first-part"
+          >Follow the first-part guide</a>
+        </div>
+      </section>
+      <section>
+        <h2>Explore complete designs.</h2>
+        <p>Construction, assembly relationships and drawings are part of the editable design. The examples are digitally checked; physical fit and load qualification remain open.</p>
+        <div class="grid">
+          <article class="card">
+            <a href="./showcase.html#d-screw-vise"><img loading="lazy" src="https://raw.githubusercontent.com/jackControls/noBS-CAD/preview-2026-09-12.2/docs/assets/showcase/vise.png" width="800" height="520" alt="Printed vise with captured slide and compact threaded handle"></a>
+            <h3>The printed vise</h3>
+            <p>100 mm jaws, 90 mm travel, six printed parts and standard hardware. Explore a captured slide, a coarse D-screw and manufacturing drawings.</p>
+            <a href="./showcase.html#d-screw-vise">Watch, inspect or rebuild the vise</a>
+          </article>
+          <article class="card">
+            <a href="./showcase.html#vertical-axis-turbine"><img loading="lazy" src="https://raw.githubusercontent.com/jackControls/noBS-CAD/preview-2026-09-12.2/docs/assets/showcase/turbine.png" width="800" height="520" alt="Two-stage vertical-axis turbine with geared generator drive"></a>
+            <h3>The wind turbine</h3>
+            <p>A two-stage Savonius rotor, supported shaft and 4:1 generator drive. Explore printable parts and coupled rotation.</p>
+            <a href="./showcase.html#vertical-axis-turbine">Watch, inspect or rebuild the turbine</a>
+          </article>
+        </div>
+      </section>
+      <section>
+        <h2>Design it yourself. Or bring an agent.</h2>
+        <p>Manual modeling and MCP use the same grouped interface. An agent can inspect, create, edit and present a design in the live application. Recipes replay those operations without a separate modeling language.</p>
+        <div class="actions">
+          <a
+            href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/docs/INSTALL.md#connect-an-mcp-agent"
+          >Connect your agent</a>
+          <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/examples/scripts/README.md">Explore all recipes</a>
+        </div>
+        <p class="muted">CAM and guided learning tools are future directions. <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/docs/INDEX.md">See current modeling, drawing and export capabilities</a>.</p>
+      </section>
+    </main>
+    <footer>
+      <p>Free, open and local. Built on <a href="https://dev.opencascade.org/">Open CASCADE</a>, <a href="https://bevy.org/">Bevy</a>, <a href="https://tauri.app/">Tauri</a> and the work of many open-source contributors. <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/THIRD_PARTY_NOTICES.md">Credits and licenses</a>.</p>
+      <p><a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/knowledge/index.md">Engineering knowledge for people and agents</a> &middot; <a href="https://github.com/jackControls/noBS-CAD/blob/preview-2026-09-12.2/CONTRIBUTING.md">Contribute</a></p>
+    </footer>
   </body>
 </html>

@@ -6,6 +6,7 @@ on:
       - "knowledge/**"
       - "docs/knowledge-wiki.md"
       - "scripts/check-knowledge.mjs"
+      - "scripts/stage-showcase-media*"
       - ".github/workflows/pages-knowledge.yml"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - "knowledge/**"
       - "docs/knowledge-wiki.md"
       - "scripts/check-knowledge.mjs"
+      - "scripts/stage-showcase-media*"
       - ".github/workflows/pages-knowledge.yml"
   workflow_dispatch:
 
@@ -28,6 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test showcase media validation (offline)
+        run: node --test scripts/stage-showcase-media.test.mjs
       - name: Validate OKF bundle
         run: node scripts/check-knowledge.mjs
       - name: Build static knowledge site
@@ -39,6 +46,9 @@ jobs:
           touch _site/.nojekyll
           test -f _site/index.md
           test -f _site/index.html
+      - name: Stage verified public showcase videos
+        if: github.event_name != 'pull_request'
+        run: node scripts/stage-showcase-media.mjs
       - name: Configure GitHub Pages
         if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
