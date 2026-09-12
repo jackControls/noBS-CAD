@@ -408,5 +408,37 @@ try {
  });
  console.log('PASS production control document ownership: '+JSON.stringify(controls));
  await controlPage.close();
+ const palettePage=await browser.newPage();
+ await palettePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ await palettePage.evaluate(async()=>{
+  const {mountSketchPaletteContract}=await import('/src/components/SketchPalette.browser.test.tsx');
+  window.paletteContract=mountSketchPaletteContract();
+ });
+ await palettePage.getByRole('checkbox',{name:'Sketch Grid',exact:true}).waitFor();
+ const palette=await palettePage.evaluate(async()=>{
+  const {inspectUi,operateUi}=await import('/src/uiControl.ts');
+  const snapshot=inspectUi();
+  const controls=snapshot.surfaces.flatMap(surface=>surface.controls);
+  const toggles=controls.filter(control=>control.role==='checkbox');
+  if(snapshot.unlabeled_controls.length||toggles.some(control=>typeof control.value!=='boolean'))
+   throw new Error('Every palette checkbox must expose its label and actual state');
+  const grid=toggles.find(control=>control.label==='Sketch Grid');
+  if(!grid||grid.value!==true)throw new Error('Initial grid state missing');
+  operateUi({action:'click',target:grid.id});
+  const disabled=toggles.find(control=>control.disabled);
+  if(!disabled)throw new Error('Unsupported options must stay disabled');
+  let blocked=false;
+  try{operateUi({action:'click',target:disabled.id});}catch(error){blocked=/disabled/.test(String(error));}
+  if(!blocked)throw new Error('MCP accepted a disabled palette control');
+  return {toggles:toggles.length,grid:window.paletteContract.grid()};
+ });
+ assert.equal(palette.grid,false,'MCP click must update the real grid preference');
+ const gridCheckbox=palettePage.getByRole('checkbox',{name:'Sketch Grid',exact:true});
+ await gridCheckbox.focus();
+ await palettePage.keyboard.press('Space');
+ await palettePage.waitForFunction(()=>window.paletteContract.grid()===true);
+ assert.equal(await gridCheckbox.isChecked(),true,'Keyboard and MCP must share the checked state');
+ await palettePage.evaluate(()=>window.paletteContract.unmount());
+ await palettePage.close();
+ console.log('PASS production sketch palette: '+JSON.stringify(palette));
 } finally {await browser?.close();await server.close();}
-
