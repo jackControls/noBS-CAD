@@ -2804,7 +2804,8 @@
         }
       }
     },
-    {"id": "bench_part_picket_profile_view", "view": "current", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_picket_profile_view", "view": "top", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_picket_profile_hold", "note": "Picket stock: a constrained 85 × 25 mm profile, viewed square-on before extrusion.", "duration_ms": 600},
     {
       "id": "picket_add_constraint",
       "call": {
@@ -3354,7 +3355,8 @@
         }
       }
     },
-    {"id": "bench_part_arm_rail_profile_view", "view": "current", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_rail_profile_view", "view": "top", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_rail_profile_hold", "note": "Arm support rail: a constrained 28 × 415 mm stock profile.", "duration_ms": 600},
     {
       "id": "arm_rail_add_constraint",
       "call": {
@@ -3508,7 +3510,8 @@
         }
       }
     },
-    {"id": "bench_part_arm_left_profile_view", "view": "current", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_left_profile_view", "view": "top", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_left_profile_hold", "note": "Left armrest: a constrained 100 × 402 mm stock profile before the edge treatment.", "duration_ms": 600},
     {
       "id": "arm_left_add_constraint",
       "call": {
@@ -3705,7 +3708,8 @@
         }
       }
     },
-    {"id": "bench_part_arm_right_profile_view", "view": "current", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_right_profile_view", "view": "top", "fit": true, "target": "active_sketch", "duration_ms": 450},
+    {"id": "bench_part_arm_right_profile_hold", "note": "Right armrest: the matching 100 × 402 mm stock profile, with its own editable features.", "duration_ms": 600},
     {
       "id": "arm_right_add_constraint",
       "call": {
