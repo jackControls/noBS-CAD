@@ -41,7 +41,7 @@ export async function checkScriptHandoffOwnership() {
     useAppStore.getState().loadProjectState({document, scene: {bodies: [], errors: []}}, [], [], 'retained.nbcad');
     useAppStore.setState({engineKind: 'tauri', activeProjectTabId: nativeDocumentId,
       projectTabs: [{id: nativeDocumentId, name: document.name, fileName: 'retained.nbcad', dirty: false, workspaceTab: 'solid'}]});
-    useScriptWorkspace.setState({source, info, loading: false, running: false, completed: false});
+    useScriptWorkspace.setState({source, sourceBaseline: source, info, loading: false, running: false, completed: false});
     unrelated = trackEngineOperation(new Promise<void>(resolve => { releaseOther = resolve; }));
     await runLoadedScript();
     check(created === 0 && runs === 0 && /document changed/i.test(useScriptWorkspace.getState().error ?? ''),

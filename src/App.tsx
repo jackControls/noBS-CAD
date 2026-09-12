@@ -11,6 +11,7 @@ import { installOperationFeedback } from './operationPlayback';
 import { PresentationControls } from './components/PresentationControls';
 import { listenForModelKeys } from './modelKeyboard';
 import { ScriptPanel } from './components/ScriptPanel';
+import { installRecipeLinks } from './scripts/recipeLinks';
 import { useTranslation } from './i18n';
 import { useAppStore } from './store/appStore';
 import {
@@ -76,6 +77,7 @@ import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
 import { MeshExportDialog } from './components/MeshExportDialog';
 
 export default function App() {
+  useEffect(installRecipeLinks, []);
   useEffect(installOperationFeedback, []);
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);

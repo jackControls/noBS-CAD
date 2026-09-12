@@ -48,7 +48,7 @@ export function mountScriptSurfaces(disabled = true) {
   useAppStore.getState().loadProjectState({document: model, scene: {bodies: [], errors: []}}, [], [], 'retained.nbcad');
   useAppStore.setState({engineKind: 'tauri', activeProjectTabId: documentId,
     projectTabs: [{id: documentId, name: model.name, fileName: 'retained.nbcad', dirty: false, workspaceTab: 'solid'}]});
-  useScriptWorkspace.setState({source, info, loading: false, running: false, open: false, selectedExample: null});
+  useScriptWorkspace.setState({source, sourceBaseline: source, info, loading: false, running: false, open: false, selectedExample: null});
   let escapedToCad = 0;
   // Use the same routing boundary as the real viewport's capture listener.
   listenForModelKeys(event => {

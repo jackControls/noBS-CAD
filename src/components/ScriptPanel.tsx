@@ -23,12 +23,12 @@ export function ScriptPanel() {
   useEffect(() => {
     let current = true;
     setFrames(null); setPreviewError(null);
-    if (state.open && state.selectedExample?.preview) {
+    if (state.open && state.tab === 'overview' && state.selectedExample?.preview) {
       void previewExample(state.selectedExample).then(result => { if (current) setFrames(result); })
         .catch(error => { if (current) setPreviewError(errorMessage(error)); });
     }
     return () => { current = false; };
-  }, [state.open, state.selectedExample]);
+  }, [state.open, state.tab, state.selectedExample]);
   if (!state.open) return null;
   const busy = state.loading || state.running;
   const live = state.running && ownsScriptPlayback() && playback.active;
