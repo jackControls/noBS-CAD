@@ -27,7 +27,7 @@ export function mountScriptSurfaces(disabled = true) {
     calls.push(command);
     if (command === 'native_script_examples') return catalog;
     if (command === 'native_script_preview') throw new Error('Preview geometry intentionally unavailable in interaction fixture');
-    if (command === 'native_script_inspect') return info;
+    if (command === 'native_script_inspect') return {...info};
     if (command === 'engine_project_session_create') {
       documentId = args.sessionId as string; model = {...model, name: 'Untitled'};
       return ok({document: model, scene: {bodies: [], errors: []}});

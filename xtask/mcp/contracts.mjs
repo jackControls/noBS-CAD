@@ -210,6 +210,37 @@ try {
  console.log('PASS production Save-on-exit polling: '+JSON.stringify(exitSavePolling));
  await exitSavePage.close();
  console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
+ const settingsPage = await browser.newPage();
+ try {
+  await settingsPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  await settingsPage.evaluate(async () => {
+   const {mountSettingsContract} = await import('/src/components/AppearanceDialog.browser.test.tsx');
+   window.settingsContract = mountSettingsContract();
+  });
+  await settingsPage.getByRole('button', {name: 'Settings opener'}).click();
+  const settings = settingsPage.getByTestId('appearance-dialog');
+  await settings.getByText(/0123456789abcdef0123456789abcdef01234567ab.*modified source/).waitFor();
+  await settingsPage.waitForFunction(() => document.activeElement === document.querySelector('[data-settings-dialog] button'));
+  await settingsPage.keyboard.press('Shift+Tab');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement === document.querySelector('[data-settings-dialog] footer button')), true, 'Settings Shift+Tab stays inside the modal');
+  await settingsPage.keyboard.press('Tab');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement === document.querySelector('[data-settings-dialog] button')), true, 'Settings Tab wraps to its first control');
+  await settingsPage.keyboard.press('Escape');
+  await settings.waitFor({state: 'detached'});
+  assert.equal(await settingsPage.evaluate(() => window.settingsContract.modelEscapes()), 0, 'Closing Settings must not cancel CAD through its earlier capture listener');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement?.textContent), 'Settings opener');
+  await settingsPage.getByRole('button', {name: 'Settings opener'}).click();
+  await settings.waitFor();
+  await settingsPage.evaluate(() => {
+   document.querySelector('[data-settings-dialog] button').click();
+   document.querySelector('[aria-label="Newer focus"]').focus();
+  });
+  await settings.waitFor({state: 'detached'});
+  assert.equal(await settingsPage.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Newer focus', 'Settings dismissal preserves newer focus');
+  await settingsPage.keyboard.press('Escape');
+  assert.equal(await settingsPage.evaluate(() => window.settingsContract.modelEscapes()), 1, 'CAD keys resume after Settings closes');
+  console.log('PASS production Settings modal: full build identity, initial focus, Tab/Shift+Tab trap, Escape ownership, focus restoration and newer focus');
+ } finally { await settingsPage.close(); }
  const scriptPage=await browser.newPage();
  await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const scripts=await scriptPage.evaluate(async()=>{

@@ -4075,7 +4075,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
-                        "version": env!("CARGO_PKG_VERSION")
+                        "version": nbcad_core::build_info().display_version(),
+                        "_meta": {"nbcad/build": nbcad_core::build_info()}
                     },
                     "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md."
                 }),

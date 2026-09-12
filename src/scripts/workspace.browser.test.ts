@@ -8,7 +8,7 @@ import {useAppStore} from '../store/appStore';
 import {queueRecipeOpen} from './recipeLinks';
 import {applyLiveUiControl} from '../liveUiBridge';
 import {inspectUi, operateUi} from '../uiControl';
-import {closeScripts, editScriptSource, loadScriptPath, runLoadedScript, showScriptExample,
+import {closeScripts, editScriptSource, loadScriptPath, openScriptFile, runLoadedScript, showScriptExample,
   useScriptWorkspace, validateScriptSource, type ScriptExample, type ScriptInfo} from './workspace';
 import {checkScriptHandoffOwnership} from './handoff.browser.test';
 
@@ -28,6 +28,7 @@ export async function checkScriptSourceOwnership() {
   let immediateInspect = false;
   let saveResult: string | null = null;
   let failWrite = false;
+  const largeSource = ' '.repeat(2 * 1024 * 1024 + 1) + '{"version":1,"name":"Large authored source","steps":[{"note":"Open before running"}]}';
   let liveRequest: Record<string, unknown> | null = null;
   let liveReceipt: Record<string, unknown> | undefined;
   const w = window as typeof window & {__TAURI_INTERNALS__?: {invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>}};
@@ -41,6 +42,8 @@ export async function checkScriptSourceOwnership() {
       if (args?.response) { liveReceipt = args.response as Record<string, unknown>; return Promise.resolve(null); }
       const request = liveRequest; liveRequest = null; return Promise.resolve(request);
     }
+    if (command === 'plugin:dialog|open') return Promise.resolve('C:/test/large.nbcad.jsonc');
+    if (command === 'read_binary_file') return Promise.resolve(Array.from(new TextEncoder().encode(largeSource)));
     if (command === 'plugin:dialog|save') return Promise.resolve(saveResult);
     if (command === 'write_binary_file_atomic') {
       if (failWrite) return Promise.reject(new Error('Disk full'));
@@ -158,9 +161,11 @@ export async function checkScriptSourceOwnership() {
     await openPath;
     check(saved[saved.length - 1] === 'edits saved to A' && useScriptWorkspace.getState().source === 'loaded:C:/test/requested-B.jsonc'
       && useScriptWorkspace.getState().path === 'C:/test/requested-B.jsonc', 'Saving old edits to A must still load the originally requested B');
+    await openScriptFile();
+    check(useScriptWorkspace.getState().source === largeSource && !useScriptWorkspace.getState().error, 'The desktop picker accepts flagship-sized scripts and lets the shared native parser validate them');
     check(useAppStore.getState() === appBefore, 'Recipe links do not mutate, replace or switch the active CAD design');
     check(!calls.includes('native_script_run') && !calls.includes('native_script_preview'), 'Opening the recipe never executes its commands');
-    return {checks: ['busy-source-lock', 'MCP-readonly', 'load-run-exclusion', 'close-during-load', 'inspection-failure-recovery', 'deferred-recipe-link', 'source-dirty-after-validation', 'source-cancel', 'save-picker-cancel', 'save-failure', 'save-exact-source', 'save-before-path-load-identity', 'link-never-runs-or-replaces-design'], calls,
+    return {checks: ['flagship-sized-file-picker', 'busy-source-lock', 'MCP-readonly', 'load-run-exclusion', 'close-during-load', 'inspection-failure-recovery', 'deferred-recipe-link', 'source-dirty-after-validation', 'source-cancel', 'save-picker-cancel', 'save-failure', 'save-exact-source', 'save-before-path-load-identity', 'link-never-runs-or-replaces-design'], calls,
       handoff: await checkScriptHandoffOwnership()};
   } finally {
     resolveUnsavedPrompt('cancel');

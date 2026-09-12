@@ -68,9 +68,13 @@ Commands:
   package       Build the host desktop package using the existing platform bundler.
                 Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,
+                plus --server-arg --mcp for packaged CAD. Repeat --server-arg for literal arguments.
+                --init-timeout-seconds N bounds startup only (default: 30); modeling waits remain unbounded.
                 --session UUID --new --present to replay in an existing window.
                 --repeat 2 verifies independent headless runs are deterministic.
+                Use run-script --help for all options.
   cad-call      Send one MCP command from Rust (--tool NAME --args JSON).
+                Accepts the same server arguments and initialization timeout; use cad-call --help.
   verify-package-mcp
                 Verify a packaged executable over stdio without launching a GUI:
                 --server PATH --server-arg --mcp [--out REPORT.json]

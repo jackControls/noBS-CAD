@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const DEFAULT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub(crate) struct Client {
     child: Child,
     input: Option<ChildStdin>,
@@ -20,12 +22,32 @@ pub(crate) struct Client {
 }
 impl Client {
     pub(crate) fn start(executable: &str) -> Result<Self> {
-        Self::start_command(Command::new(executable), None)
+        Self::start_with_arguments(executable, &[], DEFAULT_INITIALIZATION_TIMEOUT)
     }
-    /// Package checks have deadlines; long authored replays keep their existing
-    /// unbounded waits and progress reports. Both use the same stdio transport.
+    fn start_with_arguments(
+        executable: &str,
+        arguments: &[String],
+        initialization_timeout: Duration,
+    ) -> Result<Self> {
+        let mut command = Command::new(executable);
+        command.args(arguments);
+        Self::start_with_timeouts(command, initialization_timeout, None)
+    }
+    /// Package checks keep their per-request deadline, including initialization.
+    /// Replays bound initialization separately from long modeling operations.
     pub(crate) fn start_command(
+        command: Command,
+        request_timeout: Option<Duration>,
+    ) -> Result<Self> {
+        Self::start_with_timeouts(
+            command,
+            request_timeout.unwrap_or(DEFAULT_INITIALIZATION_TIMEOUT),
+            request_timeout,
+        )
+    }
+    fn start_with_timeouts(
         mut command: Command,
+        initialization_timeout: Duration,
         request_timeout: Option<Duration>,
     ) -> Result<Self> {
         command
@@ -56,10 +78,23 @@ impl Client {
             input: Some(input),
             replies,
             id: 0,
-            request_timeout,
+            request_timeout: Some(initialization_timeout),
             initialization: Value::Null,
         };
-        client.initialization = client.rpc("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nbcad-rust-replay","version":"1"}}))?;
+        client.initialization = client.rpc("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nbcad-rust-replay","version":"1"}}))
+            .with_context(|| format!(
+                "MCP initialization failed (deadline {initialization_timeout:?}). The executable must run a stdio MCP server; for packaged CAD, pass --server-arg --mcp"
+            ))?;
+        if !client.initialization["protocolVersion"].is_string()
+            || !client.initialization["capabilities"].is_object()
+            || !client.initialization["serverInfo"]["name"].is_string()
+            || !client.initialization["serverInfo"]["version"].is_string()
+        {
+            bail!(
+                "Invalid MCP initialization result: {}",
+                client.initialization
+            );
+        }
         let input = client.input.as_mut().unwrap();
         writeln!(
             input,
@@ -67,6 +102,9 @@ impl Client {
             json!({"jsonrpc":"2.0","method":"notifications/initialized"})
         )?;
         input.flush()?;
+        // Slow OCCT work and paused presentations must not inherit the short
+        // startup deadline. Package verification retains its requested bound.
+        client.request_timeout = request_timeout;
         Ok(client)
     }
     pub(crate) fn initialization(&self) -> &Value {
@@ -201,18 +239,50 @@ impl Drop for Client {
     }
 }
 
-fn options(
-    args: impl Iterator<Item = String>,
-) -> Result<(HashMap<String, String>, Option<String>)> {
+#[derive(Debug)]
+struct Options {
+    values: HashMap<String, String>,
+    file: Option<String>,
+    server_arguments: Vec<String>,
+}
+impl Options {
+    fn initialization_timeout(&self) -> Result<Duration> {
+        match self.values.get("--init-timeout-seconds") {
+            Some(value) => {
+                let seconds: u64 = value
+                    .parse()
+                    .context("--init-timeout-seconds must be whole seconds")?;
+                if !(1..=600).contains(&seconds) {
+                    bail!("--init-timeout-seconds must be 1–600 seconds");
+                }
+                Ok(Duration::from_secs(seconds))
+            }
+            None => Ok(DEFAULT_INITIALIZATION_TIMEOUT),
+        }
+    }
+}
+
+fn options(args: impl Iterator<Item = String>) -> Result<Options> {
     let mut args = args.peekable();
     let mut values = HashMap::new();
     let mut file = None;
-    while let Some(arg) = args.next() {
-        if arg.starts_with("--") {
+    let mut server_arguments = Vec::new();
+    while let Some(mut arg) = args.next() {
+        if arg == "-h" {
+            arg = "--help".into();
+        }
+        if arg == "--server-arg" {
+            // Consume exactly one literal argument, including flag-shaped
+            // values such as --mcp and --appimage-extract-and-run.
+            server_arguments.push(
+                args.next()
+                    .ok_or_else(|| anyhow!("Missing value for --server-arg"))?,
+            );
+        } else if arg.starts_with("--") {
             if values.contains_key(&arg) {
                 bail!("Duplicate option {arg}");
             }
-            if matches!(arg.as_str(), "--present" | "--new") {
+            if matches!(arg.as_str(), "--present" | "--new" | "--help") {
                 values.insert(arg, "true".into());
             } else {
                 values.insert(
@@ -226,7 +296,11 @@ fn options(
             bail!("Only one script path is accepted");
         }
     }
-    Ok((values, file))
+    Ok(Options {
+        values,
+        file,
+        server_arguments,
+    })
 }
 fn known_options(args: &HashMap<String, String>, allowed: &[&str]) -> Result<()> {
     for key in args.keys() {
@@ -242,11 +316,18 @@ fn required<'a>(args: &'a HashMap<String, String>, name: &str) -> Result<&'a str
         .ok_or_else(|| anyhow!("Missing {name}"))
 }
 pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
-    let (args, file) = options(args)?;
+    let options = options(args)?;
+    if options.values.contains_key("--help") {
+        print_usage(false);
+        return Ok(());
+    }
+    let initialization_timeout = options.initialization_timeout()?;
+    let args = &options.values;
     known_options(
-        &args,
+        args,
         &[
             "--server",
+            "--init-timeout-seconds",
             "--session",
             "--tool",
             "--args",
@@ -254,17 +335,21 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
             "--out",
         ],
     )?;
-    if file.is_some() || args.contains_key("--args") && args.contains_key("--args-file") {
+    if options.file.is_some() || args.contains_key("--args") && args.contains_key("--args-file") {
         bail!("Supply exactly one --args or --args-file");
     }
-    let mut client = Client::start(required(&args, "--server")?)?;
+    let mut client = Client::start_with_arguments(
+        required(args, "--server")?,
+        &options.server_arguments,
+        initialization_timeout,
+    )?;
     if let Some(session) = args.get("--session") {
         client.call("cad_attach", json!({"session_id":session}))?;
     }
     let arguments = if let Some(path) = args.get("--args-file") {
         fs::read_to_string(path)?
     } else {
-        required(&args, "--args")?.to_owned()
+        required(args, "--args")?.to_owned()
     };
     let result = client.call(
         args.get("--tool")
@@ -464,11 +549,18 @@ fn same_destination(a: &Path, b: &Path) -> bool {
 }
 
 pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
-    let (args, file) = options(args)?;
+    let options = options(args)?;
+    if options.values.contains_key("--help") {
+        print_usage(true);
+        return Ok(());
+    }
+    let initialization_timeout = options.initialization_timeout()?;
+    let args = &options.values;
     known_options(
-        &args,
+        args,
         &[
             "--server",
+            "--init-timeout-seconds",
             "--session",
             "--desktop",
             "--new",
@@ -500,17 +592,17 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     if !speed.is_finite() || !(0.1..=16.0).contains(&speed) {
         bail!("Speed must be from 0.1 to 16");
     }
-    if file.is_some() && args.contains_key("--recipe") {
+    if options.file.is_some() && args.contains_key("--recipe") {
         bail!("Choose a script path or --recipe ID");
     }
     let path = if args.contains_key("--recipe") {
         None
     } else {
-        Some(fs::canonicalize(file.ok_or_else(|| {
-            anyhow!("Supply a script path or --recipe ID")
-        })?)?)
+        Some(fs::canonicalize(options.file.as_ref().ok_or_else(
+            || anyhow!("Supply a script path or --recipe ID"),
+        )?)?)
     };
-    let server = required(&args, "--server")?;
+    let server = required(args, "--server")?;
     let repeat = args
         .get("--repeat")
         .map(|v| v.parse::<usize>())
@@ -534,7 +626,11 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         repeat,
     )?;
     for iteration in 1..=repeat {
-        let mut client = Client::start(server)?;
+        let mut client = Client::start_with_arguments(
+            server,
+            &options.server_arguments,
+            initialization_timeout,
+        )?;
         // A misspelled recipe must not launch a window or create an empty tab.
         // Ask the selected binary's catalog, not a second list in this client.
         if let Some(recipe) = args.get("--recipe") {
@@ -623,6 +719,31 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         println!("PASS: replay matches the comparison model, sketches, assembly and geometry.");
     }
     Ok(())
+}
+
+fn print_usage(script: bool) {
+    if script {
+        println!("Usage: cargo xtask run-script [FILE.nbcad.jsonc | --recipe ID] --server PATH [OPTIONS]\n\
+  --session UUID --new --present  Replay visibly in a new design of an existing window.\n\
+  --desktop PATH                 Launch a desktop instead of attaching to --session.\n\
+  --speed N                      Presentation speed, 0.1–16 (default: 1).\n\
+  --repeat N                     Compare independent headless runs (default: 1).\n\
+  --compare REPORT.json          Compare the final model with a previous replay.\n\
+  --out DIRECTORY                Retain replay reports and model snapshots.\n\
+  --save FILE.nbcad               Save the live design after replay.");
+    } else {
+        println!("Usage: cargo xtask cad-call --server PATH [--tool NAME] [--args JSON | --args-file FILE] [OPTIONS]\n\
+  --tool NAME                    MCP tool name (default: cad_interface).\n\
+  --session UUID                 Attach to an explicitly selected live design.\n\
+  --out FILE.json                Write the tool result instead of stdout.");
+    }
+    println!("\nServer options:\n\
+  --server-arg ARG                Pass one literal argument to the server; repeat to preserve order.\n\
+  --init-timeout-seconds N        Bound MCP initialization only (1–600, default: 30).\n\
+                                 Modeling and presentation waits remain unbounded.\n\
+\nPackaged CAD: --server PATH --server-arg --mcp\n\
+AppImage without FUSE: --server PATH --server-arg --appimage-extract-and-run --server-arg --mcp\n\
+Standalone nbcad-mcp: --server PATH (no server argument required)");
 }
 
 fn semantic_result(report: &Value) -> Result<Value> {
@@ -1015,6 +1136,68 @@ mod tests {
         assert!(known_options(&args, &["--server"]).is_err());
         assert!(options(
             ["--server", "a", "--server", "b"]
+                .into_iter()
+                .map(str::to_owned)
+        )
+        .is_err());
+    }
+    #[test]
+    fn server_arguments_are_literal_ordered_and_repeatable() {
+        let options = options(
+            [
+                "--server",
+                "CAD folder/noBS-CAD.exe",
+                "--server-arg",
+                "--mcp",
+                "--server-arg",
+                "--appimage-extract-and-run",
+                "--server-arg",
+                "a b",
+                "--server-arg",
+                "",
+                "--recipe",
+                "fillet-basics",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            options.server_arguments,
+            ["--mcp", "--appimage-extract-and-run", "a b", ""]
+        );
+        assert_eq!(options.values["--recipe"], "fillet-basics");
+        assert_eq!(
+            options.initialization_timeout().unwrap(),
+            Duration::from_secs(30)
+        );
+        assert!(options.file.is_none());
+        assert!(super::options(["--server-arg".into()].into_iter()).is_err());
+    }
+
+    #[test]
+    fn initialization_timeout_rejects_ambiguous_or_unbounded_values() {
+        for value in ["0", "601", "-1", "1.5", "NaN"] {
+            let options = options(
+                ["--init-timeout-seconds", value]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            assert!(options.initialization_timeout().is_err(), "{value}");
+        }
+        let options = options(
+            ["--init-timeout-seconds", "600"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            options.initialization_timeout().unwrap(),
+            Duration::from_secs(600)
+        );
+        assert!(super::options(
+            ["--init-timeout-seconds", "1", "--init-timeout-seconds", "2"]
                 .into_iter()
                 .map(str::to_owned)
         )

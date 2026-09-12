@@ -18,6 +18,9 @@ on:
     tags:
       - "v*"
 
+env:
+  NBCAD_BUILD_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'preview' }}
+
 permissions:
   contents: read
   pull-requests: read

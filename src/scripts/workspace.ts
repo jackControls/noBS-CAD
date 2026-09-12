@@ -13,7 +13,7 @@ export interface ScriptExample {
   id: string;
   name: string;
   summary: string;
-  kind: 'lesson' | 'assembly' | 'flagship-candidate';
+  kind: 'lesson' | 'assembly' | 'flagship-candidate' | 'manufacturing-coupon' | 'calibration';
   focus_operations: string[];
   operations: string[];
   preview: boolean;
@@ -25,7 +25,7 @@ export interface ScriptInfo {
   check_count: number;
   source: string;
   path?: string;
-  chapters?: Array<{ chapter?: string; text: string }>;
+  chapters?: Array<{ chapter?: string; text: string; step_index?: number }>;
 }
 export interface ScriptPreviewFrame { caption: string; previewId: string; frameIndex: number }
 interface ScriptWorkspace {
@@ -130,7 +130,7 @@ export async function openScriptFile(): Promise<void> {
     const file = await chooseOpenFile({ description: 'noBS CAD command script', extension: '.jsonc',
       alternateExtensions: ['.json'], mime: 'application/json' });
     if (!file) return;
-    if (file.bytes.length > 2 * 1024 * 1024) throw new Error('Script files must be smaller than 2 MB.');
+    // The shared Rust parser enforces the same 16 MiB limit as path/MCP loading.
     const source = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes);
     const path = file.writableTarget?.kind === 'native' ? file.writableTarget.path : file.name;
     acceptScript(await inspect(source), null, path);

@@ -36,6 +36,11 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+#[tauri::command]
+fn native_build_info() -> nbcad_core::BuildInfo {
+    nbcad_core::build_info()
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SystemMemoryStatus {
@@ -993,6 +998,7 @@ pub fn run() {
             scripts::native_script_preview_close,
             scripts::native_script_preview_release,
             scripts::native_script_examples,
+            native_build_info,
             recipe_links::native_recipe_open_pending,
             recipe_links::native_recipe_open_ack,
             get_document,
