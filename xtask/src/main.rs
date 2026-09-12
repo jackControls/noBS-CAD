@@ -6,6 +6,7 @@
 //! ```
 
 mod install_mcp;
+mod package;
 mod package_mcp;
 mod playback_test;
 mod replay;
@@ -33,6 +34,7 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "package" => package::run(args),
         "run-script" => replay::run(args),
         "cad-call" => replay::call(args),
         "verify-package-mcp" => package_mcp::run(args),
@@ -58,10 +60,13 @@ fn print_usage() {
 noBS CAD xtask
 
 Usage:
+  cargo xtask package
   cargo run -p xtask -- install-mcp --dry-run
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  package       Build the host desktop package using the existing platform bundler.
+                Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,
                 --session UUID --new --present to replay in an existing window.
                 --repeat 2 verifies independent headless runs are deterministic.

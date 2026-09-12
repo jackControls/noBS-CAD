@@ -5,6 +5,10 @@ application keeps the same production boundary used on macOS and Windows:
 React/CSS owns menus, dialogs, tabs, input and accessibility; Bevy/wgpu owns
 the embedded CAD viewport; native OCCT owns exact geometry.
 
+To use the application, follow [Install noBS CAD](INSTALL.md#ubuntu).
+For development, `cargo xtask package` selects the Linux builder;
+[the developer guide](DEVELOPMENT.md) is the shared build entry point.
+
 ## Supported desktop paths
 
 - X11 through a child GTK `DrawingArea` and native Xlib window/display
@@ -34,7 +38,7 @@ docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
   nbcad-ubuntu-26.04 \
-  sh -lc 'npm ci && npm run bundle:linux'
+  sh -lc 'npm ci && cargo xtask package'
 ```
 
 The container deliberately extracts only the Ubuntu STEP development headers
@@ -58,7 +62,7 @@ After installing those dependencies:
 
 ```sh
 npm ci
-npm run bundle:linux
+cargo xtask package
 ```
 
 Artifacts are written under:
@@ -71,6 +75,15 @@ src-tauri/target/release/bundle/appimage/*.AppImage
 Each artifact has a neighboring `.sha256` file. The bundler fails if the
 project, third-party, OpenCascade.js, OCCT copyright, or LGPL notices are
 missing from either package.
+
+<details>
+<summary>Underlying builder for packaging maintenance</summary>
+
+The Rust entry point delegates to `scripts/bundle-linux.mjs`. The existing
+`npm run bundle:linux` alias invokes that same builder; it remains available
+to CI and packaging diagnostics.
+
+</details>
 
 ## Native viewport verification
 

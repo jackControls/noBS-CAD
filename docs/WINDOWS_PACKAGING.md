@@ -2,9 +2,13 @@
 
 Status: experimental x64 and ARM64 portable release paths.
 
+To use the application, follow [Install noBS CAD](INSTALL.md#windows).
+For development, `cargo xtask package` selects the Windows portable builder;
+[the developer guide](DEVELOPMENT.md) is the shared build entry point.
+
 ## Supported baseline
 
-The first Windows build intentionally has a narrow support target:
+The Windows packages have a defined support target:
 
 - Windows 10 version 1803 or newer, or Windows 11;
 - x64 (`x86_64-pc-windows-msvc`) and ARM64 (`aarch64-pc-windows-msvc`);
@@ -66,9 +70,18 @@ DLL names maintained by hand.
 
 ## Local Windows build
 
-Install the Visual Studio C++ Build Tools (including the architecture you are
-building), a current Windows SDK, Node.js and npm, Rust, and vcpkg at the commit
-pinned by `vcpkg.json`.
+Install PowerShell 7, the Visual Studio C++ Build Tools (including the architecture
+you are building), a current Windows SDK, Node.js and npm, and Rust. Clone vcpkg
+into `.vcpkg` and select the commit pinned by `vcpkg.json`:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg.git .vcpkg
+$sdkBaseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+git -C .vcpkg checkout $sdkBaseline
+```
+
+If `.vcpkg` already exists, use that checkout and select the pinned commit instead
+of cloning it again.
 
 From PowerShell, select the matching Rust target and vcpkg triplet:
 
@@ -87,7 +100,7 @@ npm ci
   --x-install-root="$PWD\vcpkg_installed"
 
 $env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
-npm run bundle:windows:portable -- -Target $target
+cargo xtask package --target $target
 ```
 
 The command compiles the release Tauri executable without creating an
@@ -103,6 +116,19 @@ src-tauri/target/<rust-target>/release/bundle/portable/
 The directory contains `noBS-CAD.exe`, the OCCT dependency DLLs, a runtime
 requirements README, and license notices. It does not contain WebView2 or the
 Microsoft Visual C++ runtime.
+
+Once the native SDK is configured, `cargo xtask package` alone selects the
+running Rust toolchain's architecture. An explicit `--target` is useful for
+building the other Windows architecture; `OCCT_ROOT` must match that target.
+
+<details>
+<summary>Underlying builder for packaging maintenance</summary>
+
+The Rust entry point delegates to `scripts/bundle-windows-portable.ps1` with the
+selected target. The existing `npm run bundle:windows:portable` alias invokes
+that same builder; it remains available to CI and packaging diagnostics.
+
+</details>
 
 ## GitHub Actions
 
