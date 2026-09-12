@@ -94287,6 +94287,11 @@
       "id": "pinion_dxf"
     },
     {
+      "chapter": "Read the generator pinion",
+      "duration_ms": 4500,
+      "note": "Two projected views locate the 2.2 mm shaft bore and 12 mm hub. Read the tooth dimensions and captive M2 nut notes; the printed fit still needs measurement."
+    },
+    {
       "call": {
         "arguments": {
           "format": "a3",

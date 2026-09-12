@@ -36,3 +36,8 @@ future printed prototypes. Add real photographs when supplied.
 Recipe sources are in [`examples/scripts`](../../../examples/scripts/README.md).
 Digital checks do not replace physical prototype qualification; see
 [`docs/flagship-examples.md`](../../flagship-examples.md).
+
+`first-part.png` is an actual Windows desktop capture at `7e298ab`: the 27-step
+fillet lesson completed through Scripts with its three editable features. The
+12 → 18 mm feature-dialog edit was then saved, closed and reopened successfully;
+the reopened dialog retained 18 mm and the 2 mm fillet remained in the model.

@@ -852,7 +852,16 @@ fn main() {
         ("rotor_gear",12.,vec![8.3,24.],"PRINT 1 / teeth down. Module1 /72 teeth /20 degree pressure angle /3 mm face /0.10 mm thinning. Captive M3 nut. Narrow shim bears only on the upper inner ring. Native geometry and coupons do not qualify strength or wear."),
         ("pinion",6.,vec![2.2,12.],"PRINT 1 / teeth down. Module1 /18 teeth /20 degree pressure angle /3 mm face. Preload captive M2 nut before meshing; nominal 2 mm motor shaft. Check measured shaft engagement, clamp slip and backlash before applying electrical load."),
         ("shaft",D.shaft_length,vec![8.],"PURCHASE / straight 8 x300 mm shaft, uncut. Deburr without shortening the bearing seats. Purchased 8 x16 x8 collars use M4x4 set screws. Verify shaft and bearing fits and inspect the exposed top before use."),
-    ] { a.part_drawing(name,height,&diameters,note); }
+    ] {
+        a.part_drawing(name,height,&diameters,note);
+        if name == "pinion" {
+            a.steps.push(json!({
+                "chapter":"Read the generator pinion",
+                "note":"Two projected views locate the 2.2 mm shaft bore and 12 mm hub. Read the tooth dimensions and captive M2 nut notes; the printed fit still needs measurement.",
+                "duration_ms":4500
+            }));
+        }
+    }
     a.assembly_drawing();
     a.steps
         .push(json!({"view":"isometric","fit":true,"duration_ms":600}));

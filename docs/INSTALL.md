@@ -113,9 +113,6 @@ on the README are accelerated.
    Close that design tab, then use **File → Open** to reopen the saved file.
    Double-click the extrusion again and confirm that its distance is **18 mm**.
 
-<!-- Expected-result image: assets/showcase/first-part.png, from the verified
-     live 18 mm edit and reopened first-part.nbcad. Add the image when captured. -->
-
 **Save script as…** saves the construction recipe (`.nbcad.jsonc`). **File → Save**
 saves the editable CAD project (`.nbcad`). Keep the project when you want to continue
 modeling; keep the recipe when you want to replay its construction.
@@ -125,6 +122,8 @@ from the [showcase preview](https://github.com/jackControls/noBS-CAD/releases/ta
 and use **File → Open**. Browser **Open recipe** links load source into Scripts;
 review it before choosing **Run in new design**. Launch the installed app once
 before using those browser links, so it can register its `nbcad` handler.
+
+![The completed 12 mm lesson and its editable feature history](assets/showcase/first-part.png)
 
 ## Connect an MCP agent
 
