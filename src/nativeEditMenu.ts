@@ -9,6 +9,7 @@ import {
   undoApplicationHistory,
 } from './engine/controller';
 import { useAppStore } from './store/appStore';
+import { isTextEditingTarget } from './modelKeyboard';
 
 type NativeEditCommand = 'undo' | 'redo';
 
@@ -22,10 +23,7 @@ export function nativeMacMenuOwnsUndoRedo(): boolean {
 
 function activeTextEditor(): HTMLElement | null {
   const active = document.activeElement;
-  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-    return active;
-  }
-  return active instanceof HTMLElement && active.isContentEditable ? active : null;
+  return isTextEditingTarget(active) ? active : null;
 }
 
 function availability(): { canUndo: boolean; canRedo: boolean } {
@@ -40,7 +38,7 @@ function availability(): { canUndo: boolean; canRedo: boolean } {
   };
 }
 
-async function run(command: NativeEditCommand): Promise<void> {
+export async function runNativeEditCommand(command: NativeEditCommand): Promise<void> {
   if (activeTextEditor()) {
     document.execCommand(command);
     return;
@@ -79,7 +77,7 @@ export function installNativeEditMenu(): () => void {
   window.addEventListener('focusout', syncAfterFocusChange);
   void listen<NativeEditCommand>('native-edit-command', (event) => {
     if (event.payload === 'undo' || event.payload === 'redo') {
-      void run(event.payload);
+      void runNativeEditCommand(event.payload);
     }
   }).then((stop) => {
     if (disposed) stop();

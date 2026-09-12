@@ -1,3 +1,23 @@
+/** Preserve editing in fields, without mistaking focused toggle/buttons for text. */
+export function isTextEditingTarget(target: EventTarget | null): target is HTMLElement {
+  if (target instanceof HTMLInputElement) {
+    return !['checkbox', 'radio', 'button', 'submit', 'reset', 'image'].includes(target.type);
+  }
+  return target instanceof HTMLTextAreaElement
+    || (target instanceof HTMLElement && target.isContentEditable);
+}
+
+/** Resolve File shortcuts while preserving focused field editing. */
+export function applicationFileShortcut(event: KeyboardEvent): 'save' | 'open' | 'new' | null {
+  if (isTextEditingTarget(event.target) || !(event.metaKey || event.ctrlKey)) return null;
+  switch (event.key.toLowerCase()) {
+    case 's': return 'save';
+    case 'o': return 'open';
+    case 'n': return 'new';
+    default: return null;
+  }
+}
+
 /** Model shortcuts must not consume keys in a focused script companion.
  * Apply this before capture-phase sketch input and Escape cancellation. */
 export function listenForModelKeys(listener: (event: KeyboardEvent) => void, capture = false): () => void {

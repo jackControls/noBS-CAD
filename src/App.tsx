@@ -9,7 +9,7 @@
 import { useEffect, useRef } from 'react';
 import { installOperationFeedback } from './operationPlayback';
 import { PresentationControls } from './components/PresentationControls';
-import { listenForModelKeys } from './modelKeyboard';
+import { applicationFileShortcut, isTextEditingTarget, listenForModelKeys } from './modelKeyboard';
 import { ScriptPanel } from './components/ScriptPanel';
 import { installRecipeLinks } from './scripts/recipeLinks';
 import { useTranslation } from './i18n';
@@ -212,7 +212,7 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // Never steal keys from text inputs.
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (isTextEditingTarget(e.target)) {
         // The custom native menu delegates text Undo/Redo back to WebKit. If
         // WKWebView also exposes the key event, suppress its second edit.
         if (
@@ -238,18 +238,19 @@ export default function App() {
           .finally(() => useAppStore.getState().setProjectBusy(false));
       };
 
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+      const fileShortcut = applicationFileShortcut(e);
+      if (fileShortcut === 'save') {
         e.preventDefault();
         if (s.document === null) return;
         runProjectAction(() => saveProject(e.shiftKey));
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+      if (fileShortcut === 'open') {
         e.preventDefault();
         runProjectAction(openProject);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+      if (fileShortcut === 'new') {
         e.preventDefault();
         runProjectAction(newProject);
         return;

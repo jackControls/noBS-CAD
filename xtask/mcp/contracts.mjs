@@ -438,7 +438,14 @@ try {
  await palettePage.keyboard.press('Space');
  await palettePage.waitForFunction(()=>window.paletteContract.grid()===true);
  assert.equal(await gridCheckbox.isChecked(),true,'Keyboard and MCP must share the checked state');
+ await palettePage.keyboard.press('Control+s');
+ await palettePage.keyboard.press('Control+o');
+ await palettePage.keyboard.press('Control+n');
+ assert.deepEqual(await palettePage.evaluate(()=>window.paletteContract.fileCommands()),['save','open','new'],
+  'Focused native palette checkbox must retain application File shortcut routing');
+ const paletteHistory=await palettePage.evaluate(()=>window.paletteContract.checkNativeHistory());
  await palettePage.evaluate(()=>window.paletteContract.unmount());
  await palettePage.close();
  console.log('PASS production sketch palette: '+JSON.stringify(palette));
+ console.log('PASS focused palette keyboard and native history routing: '+JSON.stringify(paletteHistory));
 } finally {await browser?.close();await server.close();}
