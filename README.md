@@ -25,7 +25,8 @@ accelerated excerpts; the player pages describe the longer recordings.
 
 [![Garden bench with crowned back slats and rounded armrests](docs/assets/showcase/bench.png)](docs/assets/showcase/bench.png)
 
-A timber frame, repeated slats and shaped arms, assembled from dimensioned parts.
+Change one picket dimension and the repeated back updates. The timber frame,
+shaped arms and assembly joints stay editable.
 
 <a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#garden-bench"><img src="docs/assets/showcase/bench-loop.gif" width="360" alt="Accelerated construction excerpt of the garden bench"></a>
 
@@ -43,7 +44,8 @@ A timber frame, repeated slats and shaped arms, assembled from dimensioned parts
 
 [![Vise with a captured sliding jaw and compact D-screw handle](docs/assets/showcase/vise.png)](docs/assets/showcase/vise.png)
 
-100 mm jaws, 90 mm travel and a coarse D-screw: six printed parts plus standard hardware.
+Turn the screw and watch the jaw follow, then inspect the captured guides and
+carriage drawing. 100 mm jaws, 90 mm travel; six printed parts plus standard hardware.
 
 <a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#d-screw-vise"><img src="docs/assets/showcase/vise-loop.gif" width="360" alt="Accelerated construction excerpt of the printed vise"></a>
 
@@ -61,7 +63,8 @@ A timber frame, repeated slats and shaped arms, assembled from dimensioned parts
 
 [![Two-stage vertical-axis turbine with its bearing-supported shaft and generator drive](docs/assets/showcase/turbine.png)](docs/assets/showcase/turbine.png)
 
-Two staggered Savonius stages, a bearing-supported shaft and a 4:1 geared generator drive.
+Expose the 4:1 generator drive, turn the coupled shafts, then restore the guard.
+Two staggered Savonius stages sit on a bearing-supported shaft.
 
 <a href="https://jackcontrols.github.io/noBS-CAD/showcase.html#vertical-axis-turbine"><img src="docs/assets/showcase/turbine-loop.gif" width="360" alt="Accelerated construction excerpt of the vertical-axis turbine"></a>
 
