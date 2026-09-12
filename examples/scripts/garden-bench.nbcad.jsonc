@@ -2,6 +2,8 @@
 // Dimensions are millimetres. Identifiers come from named command results, not recorded IDs.
 // Comments explain intent; note/chapter and view steps direct the optional presentation.
 // The construction sequence is the same at maximum speed and during visible playback.
+// Hide finished references after each feature; active sketches stay visible while editing.
+// Scoped body restores retain reference hiding for sketches and datums created inside that scope.
 // This is a furniture design candidate; timber, fasteners, comfort and load approval remain separate.
 
 {
@@ -98,6 +100,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_front_leg_left_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "front_leg_left_feature": {"$select": {"from": {"$ref": "front_leg_left_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -234,6 +237,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_front_leg_right_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "front_leg_right_feature": {"$select": {"from": {"$ref": "front_leg_right_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -361,6 +365,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_rear_leg_left_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "rear_leg_left_feature": {"$select": {"from": {"$ref": "rear_leg_left_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -488,6 +493,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_rear_leg_right_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "rear_leg_right_feature": {"$select": {"from": {"$ref": "rear_leg_right_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -621,6 +627,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_apron_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "apron_feature": {"$select": {"from": {"$ref": "apron_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -762,6 +769,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_upper_side_rail_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "upper_side_rail_feature": {"$select": {"from": {"$ref": "upper_side_rail_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -909,6 +917,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_lower_side_rail_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "lower_side_rail_feature": {"$select": {"from": {"$ref": "lower_side_rail_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -1062,6 +1071,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_center_bearer_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "center_bearer_feature": {"$select": {"from": {"$ref": "center_bearer_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -1189,6 +1199,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_bearer_block_front_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "bearer_block_front_feature": {
@@ -1322,6 +1333,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_bearer_block_rear_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "bearer_block_rear_feature": {"$select": {"from": {"$ref": "bearer_block_rear_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -1453,6 +1465,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_stretcher_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "stretcher_feature": {"$select": {"from": {"$ref": "stretcher_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -1613,6 +1626,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_front_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_front_feature": {"$select": {"from": {"$ref": "seat_front_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -1718,6 +1732,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_front_extrude_2", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_front_notch_face_160": {
@@ -1805,6 +1820,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_front_extrude_3", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "id": "seat_front_set_body_appearance",
       "call": {
@@ -1911,6 +1927,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_second_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_second_feature": {"$select": {"from": {"$ref": "seat_second_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -2015,6 +2032,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_second_extrude_2", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_second_notch_face_192": {
@@ -2101,6 +2119,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_second_extrude_3", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "id": "seat_second_set_body_appearance",
       "call": {
@@ -2207,6 +2226,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_middle_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_middle_feature": {"$select": {"from": {"$ref": "seat_middle_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -2387,6 +2407,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_rear_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_rear_feature": {"$select": {"from": {"$ref": "seat_rear_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -2491,6 +2512,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_rear_extrude_2", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "seat_rear_notch_face_240": {
@@ -2577,6 +2599,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_seat_rear_extrude_3", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "id": "seat_rear_set_body_appearance",
       "call": {
@@ -2690,6 +2713,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_back_rail_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "back_rail_feature": {"$select": {"from": {"$ref": "back_rail_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -2842,6 +2866,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_picket_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "picket_feature": {"$select": {"from": {"$ref": "picket_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -3136,6 +3161,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_picket_extrude_2", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {"view": "front", "fit": true, "body_id": {"$ref": "picket_body"}, "duration_ms": 300},
     {
       "id": "picket_set_body_appearance",
@@ -3175,7 +3201,7 @@
         }
       }
     },
-    {"id": "bench_part_picket_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"$ref": "bench_part_picket_visibility"}}},
+    {"id": "bench_part_picket_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"hidden_body_ids": {"$ref": "bench_part_picket_visibility", "pointer": "/hidden_body_ids"}, "hidden_sketch_names": {"$ref": "bench_hide_finished_after_picket_extrude_2", "pointer": "/hidden_sketch_names"}, "hidden_datum_plane_ids": {"$ref": "bench_hide_finished_after_picket_extrude_2", "pointer": "/hidden_datum_plane_ids"}}}},
     {"id": "bench_part_picket_assembly_view", "view": "isometric", "fit": true, "duration_ms": 450},
     {
       "id": "picket_set_occurrence_pose",
@@ -3393,6 +3419,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_arm_rail_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "arm_rail_feature": {"$select": {"from": {"$ref": "arm_rail_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -3450,7 +3477,7 @@
         }
       }
     },
-    {"id": "bench_part_arm_rail_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"$ref": "bench_part_arm_rail_visibility"}}},
+    {"id": "bench_part_arm_rail_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"hidden_body_ids": {"$ref": "bench_part_arm_rail_visibility", "pointer": "/hidden_body_ids"}, "hidden_sketch_names": {"$ref": "bench_hide_finished_after_arm_rail_extrude", "pointer": "/hidden_sketch_names"}, "hidden_datum_plane_ids": {"$ref": "bench_hide_finished_after_arm_rail_extrude", "pointer": "/hidden_datum_plane_ids"}}}},
     {"id": "bench_part_arm_rail_assembly_view", "view": "isometric", "fit": true, "duration_ms": 450},
     {
       "id": "arm_rail_set_occurrence_pose",
@@ -3548,6 +3575,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_arm_left_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "arm_left_feature": {"$select": {"from": {"$ref": "arm_left_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -3671,7 +3699,7 @@
         }
       }
     },
-    {"id": "bench_part_arm_left_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"$ref": "bench_part_arm_left_visibility"}}},
+    {"id": "bench_part_arm_left_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"hidden_body_ids": {"$ref": "bench_part_arm_left_visibility", "pointer": "/hidden_body_ids"}, "hidden_sketch_names": {"$ref": "bench_hide_finished_after_arm_left_extrude", "pointer": "/hidden_sketch_names"}, "hidden_datum_plane_ids": {"$ref": "bench_hide_finished_after_arm_left_extrude", "pointer": "/hidden_datum_plane_ids"}}}},
     {"id": "bench_part_arm_left_assembly_view", "view": "isometric", "fit": true, "duration_ms": 450},
     {
       "id": "arm_left_set_occurrence_pose",
@@ -3746,6 +3774,7 @@
         }
       }
     },
+    {"id": "bench_hide_finished_after_arm_right_extrude", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {
       "let": {
         "arm_right_feature": {"$select": {"from": {"$ref": "arm_right_extrude"}, "path": "/document/features", "take": "last", "pointer": "/id"}}
@@ -3868,7 +3897,7 @@
         }
       }
     },
-    {"id": "bench_part_arm_right_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"$ref": "bench_part_arm_right_visibility"}}},
+    {"id": "bench_part_arm_right_restore", "call": {"group": "document/appearance", "operation": "project_set_visibility", "arguments": {"hidden_body_ids": {"$ref": "bench_part_arm_right_visibility", "pointer": "/hidden_body_ids"}, "hidden_sketch_names": {"$ref": "bench_hide_finished_after_arm_right_extrude", "pointer": "/hidden_sketch_names"}, "hidden_datum_plane_ids": {"$ref": "bench_hide_finished_after_arm_right_extrude", "pointer": "/hidden_datum_plane_ids"}}}},
     {"id": "bench_part_arm_right_assembly_view", "view": "isometric", "fit": true, "duration_ms": 450},
     {
       "id": "arm_right_set_occurrence_pose",
@@ -8233,6 +8262,7 @@
       }
     },
     {"id": "picket_finish_refinement", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    {"id": "bench_hide_finished_after_picket_finish_refinement", "call": {"group": "solid/reference", "operation": "construction_set_visibility", "arguments": {"visible": false}}},
     {"id": "picket_recompute_refinement", "call": {"group": "solid/check", "operation": "solid_recompute", "arguments": {}}},
     {
       "id": "picket_refine_height",
