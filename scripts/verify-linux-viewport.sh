@@ -21,6 +21,9 @@ fi
 mkdir -p "$diagnostics"
 work="$(mktemp -d)"
 runtime="$work/runtime"
+uri_data="$work/uri-data"
+uri_config="$work/uri-config"
+mkdir -p "$uri_data" "$uri_config"
 probe="$diagnostics/native-viewport-$backend.json"
 app_log="$diagnostics/application-$backend.log"
 weston_log="$diagnostics/weston-$backend.log"
@@ -48,6 +51,8 @@ case "$artifact" in
       "$artifact" --appimage-extract >/dev/null
     )
     app="$work/squashfs-root/AppRun"
+    desktop_directory="$work/squashfs-root"
+    uri_executable="$artifact"
     if [[ ! -x "$app" ]]; then
       echo "AppImage did not contain an executable AppRun" >&2
       exit 1
@@ -57,6 +62,8 @@ case "$artifact" in
     package_root="$work/deb-root"
     dpkg-deb --extract "$artifact" "$package_root"
     app="$package_root/usr/bin/nbcad"
+    desktop_directory="$package_root/usr/share/applications"
+    uri_executable="$app"
     if [[ ! -x "$app" ]]; then
       echo "Debian package did not contain usr/bin/nbcad" >&2
       exit 1
@@ -68,6 +75,26 @@ case "$artifact" in
     ;;
 esac
 
+for helper in xdg-mime update-desktop-database desktop-file-validate; do
+  command -v "$helper" >/dev/null || {
+    echo "$helper is required; install xdg-utils and desktop-file-utils" >&2
+    exit 1
+  }
+done
+desktop_entry="$(find "$desktop_directory" -maxdepth 1 -name '*.desktop' -print -quit)"
+if [[ -z "$desktop_entry" ]]; then
+  echo "Package is missing its desktop entry" >&2
+  exit 1
+fi
+desktop-file-validate "$desktop_entry"
+if ! grep -Eq '^MimeType=([^[:space:]]*;)?x-scheme-handler/nbcad(;|$)' "$desktop_entry" ||
+   ! grep -Eq '^Exec="?(/usr/bin/)?(nbcad|AppRun)"? %[uU]$' "$desktop_entry"; then
+  cat "$desktop_entry" >&2
+  echo "Package must associate nbcad URLs and pass the URL as its only argument" >&2
+  exit 1
+fi
+cp "$desktop_entry" "$diagnostics/packaged-$backend.desktop"
+
 vulkan_icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
 if [[ -z "$vulkan_icd" ]]; then
   echo "Mesa lavapipe Vulkan ICD was not found" >&2
@@ -75,12 +102,19 @@ if [[ -z "$vulkan_icd" ]]; then
 fi
 
 common_env=(
+  "XDG_DATA_HOME=$uri_data"
+  "XDG_CONFIG_HOME=$uri_config"
   "NBCAD_VIEWPORT_PROBE_FILE=$probe"
   "WGPU_BACKEND=vulkan"
   "VK_ICD_FILENAMES=$vulkan_icd"
   "LIBGL_ALWAYS_SOFTWARE=1"
   "WEBKIT_DISABLE_DMABUF_RENDERER=1"
 )
+# Extraction avoids CI's FUSE requirement while preserving the outer AppImage
+# path that its normal runtime supplies for portable URI registration.
+if [[ "$artifact" == *.AppImage ]]; then
+  common_env+=("APPIMAGE=$artifact" "APPDIR=$work/squashfs-root")
+fi
 
 if [[ "$backend" == "x11" ]]; then
   xvfb-run -a -s "-screen 0 1440x900x24" \
@@ -175,6 +209,22 @@ if grep -Eiq 'panicked at|thread .* panicked|Encountered a panic in system' "$ap
   echo "Native viewport reported ready but the renderer subsequently panicked" >&2
   exit 1
 fi
+
+# Inspect the registration written by this real packaged launch in an isolated
+# user-data/config directory. Never leave a temporary handler in the user's home.
+handler_name="$(env "XDG_DATA_HOME=$uri_data" "XDG_CONFIG_HOME=$uri_config" \
+  xdg-mime query default x-scheme-handler/nbcad)"
+if [[ -z "$handler_name" || "$handler_name" != "$(basename "$handler_name")" ]]; then
+  echo "Packaged application did not register its recipe URI handler" >&2
+  exit 1
+fi
+handler="$uri_data/applications/$handler_name"
+if [[ ! -f "$handler" ]] || ! grep -Fxq "Exec=\"$uri_executable\" %u" "$handler"; then
+  [[ ! -f "$handler" ]] || cat "$handler" >&2
+  echo "Recipe URI handler does not point to the launched package with one URL argument" >&2
+  exit 1
+fi
+cp "$handler" "$diagnostics/registered-$backend.desktop"
 
 cat "$probe"
 node - "$probe" x11 <<'NODE'

@@ -317,23 +317,36 @@ jobs:
           Expand-Archive -LiteralPath $archive.FullName -DestinationPath $verifyRoot
           $executable = Get-ChildItem -LiteralPath $verifyRoot -Filter "noBS-CAD.exe" -File -Recurse
           if (@($executable).Count -ne 1) { throw "Expected one packaged executable" }
+          $uriKey = 'HKEY_CURRENT_USER\Software\Classes\nbcad\shell\open\command'
+          $uriBefore = [Microsoft.Win32.Registry]::GetValue($uriKey, '', $null)
           cargo xtask verify-package-mcp --server $executable.FullName --server-arg --mcp --out "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\mcp.json"
           if ($LASTEXITCODE -ne 0) { throw "Packaged MCP verification failed" }
+          if ([Microsoft.Win32.Registry]::GetValue($uriKey, '', $null) -cne $uriBefore) {
+            throw "Headless MCP changed the desktop URI handler"
+          }
 
       - name: Verify packaged native viewport
         shell: pwsh
         run: |
-          $package = Get-ChildItem `
-            "src-tauri\target\${{ matrix.rust_target }}\release\bundle\portable" `
-            -Directory |
-            Where-Object { $_.Name -like "*-windows-${{ matrix.architecture }}" } |
-            Select-Object -First 1
-          if (-not $package) {
-            throw "Portable package directory was not created"
-          }
+          $verifyRoot = Join-Path $env:RUNNER_TEMP "nbcad-mcp-package-${{ matrix.architecture }}"
+          $executable = Get-ChildItem -LiteralPath $verifyRoot -Filter 'noBS-CAD.exe' -File -Recurse
+          if (@($executable).Count -ne 1) { throw "Expected one extracted packaged executable" }
           & .\scripts\verify-windows-viewport.ps1 `
-            -PackageDirectory $package.FullName `
+            -PackageDirectory $executable.DirectoryName `
             -DiagnosticsDirectory "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}"
+          # This normal launch runs on an ephemeral GitHub runner account.
+          # The quoted URL placeholder supplies one argument to the strict parser.
+          $uriBase = 'HKEY_CURRENT_USER\Software\Classes\nbcad'
+          $handler = [Microsoft.Win32.Registry]::GetValue("$uriBase\shell\open\command", '', $null)
+          $expected = '"' + $executable.FullName + '" "%1"'
+          if (-not [string]::Equals($handler, $expected, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Recipe URI handler does not point to the extracted package: $handler"
+          }
+          if ($null -eq [Microsoft.Win32.Registry]::GetValue($uriBase, 'URL Protocol', $null)) {
+            throw "Recipe URI protocol marker is missing"
+          }
+          @{scheme='nbcad';command=$handler;status='registered'} | ConvertTo-Json |
+            Set-Content "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\recipe-uri.json"
 
       - name: Upload Windows viewport diagnostics
         if: always()
@@ -392,6 +405,7 @@ jobs:
             clang \
             cmake \
             dbus-x11 \
+            desktop-file-utils \
             file \
             libayatana-appindicator3-dev \
             libfuse2t64 \
@@ -415,6 +429,7 @@ jobs:
             vulkan-tools \
             weston \
             xauth \
+            xdg-utils \
             xwayland \
             xvfb
 
@@ -729,6 +744,19 @@ jobs:
           }
           trap cleanup_mcp_package EXIT
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount"
+          # Audit the actual DMG's LaunchServices metadata, not generated config.
+          python3 - "$mount/noBS CAD.app/Contents/Info.plist" "$RUNNER_TEMP/nbcad-macos-uri.json" <<'PY'
+          import json, plistlib, sys
+          with open(sys.argv[1], 'rb') as file:
+              info = plistlib.load(file)
+          schemes = [scheme for entry in info.get('CFBundleURLTypes', [])
+                     for scheme in entry.get('CFBundleURLSchemes', [])]
+          if 'nbcad' not in schemes or info.get('CFBundleExecutable') != 'nbcad':
+              raise SystemExit('Packaged app is missing its nbcad recipe URI association')
+          with open(sys.argv[2], 'w') as file:
+              json.dump({'scheme': 'nbcad', 'executable': info['CFBundleExecutable'],
+                         'status': 'declared-in-dmg'}, file, indent=2)
+          PY
           # The executable has a build-time rpath as well as its portable one.
           # Hide that generated staging directory to require the DMG's libraries.
           mv "$stage" "$hidden_stage"
@@ -742,7 +770,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: noBS-CAD-macos-mcp-diagnostics
-          path: ${{ runner.temp }}/nbcad-mcp-macos.json
+          path: |
+            ${{ runner.temp }}/nbcad-mcp-macos.json
+            ${{ runner.temp }}/nbcad-macos-uri.json
           if-no-files-found: warn
           retention-days: 7
 

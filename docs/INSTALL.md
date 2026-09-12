@@ -67,6 +67,11 @@ For a FUSE error, launch it with `--appimage-extract-and-run`.
 The AppImage has the same tested Ubuntu baseline; it does not establish support
 for every Linux distribution.
 
+Opening recipes from browser links requires the AppImage to launch normally
+with FUSE. Its registered handler does not retain the extraction flag; use the
+recommended DEB on a machine without FUSE. AppImage registration also requires
+`xdg-utils` and `desktop-file-utils`, normally supplied by the Ubuntu desktop.
+
 See [Linux dependencies and troubleshooting](LINUX_PACKAGING.md).
 
 </details>
