@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "generated": "2026-09-12",
+  "count": 6,
+  "entries": [
+    {
+      "id": "machine-design.concepts.dfm-overview",
+      "path": "knowledge/machine-design/concepts/dfm-overview.md",
+      "title": "DFM overview",
+      "description": "Design-for-manufacturing mindset for CAD-time decisions; process selection before detail.",
+      "status": "draft",
+      "topics": [
+        "dfm",
+        "dfa",
+        "manufacturing"
+      ],
+      "keywords": [
+        "DFM",
+        "DFA",
+        "DFMA",
+        "process selection",
+        "tolerance cost",
+        "standard parts"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit",
+        "garden-bench",
+        "vertical-axis-turbine",
+        "d-screw-vise"
+      ],
+      "sources": [
+        "nwtc-guns-dfm",
+        "palni-dfma"
+      ],
+      "snippet": "Design for manufacturing (DFM) means committing early to a process that can make the geometry repeatably. DFA asks whether a person or robot can grasp, orient, and join the parts without heroics. Tight tolerances and fa…"
+    },
+    {
+      "id": "machine-design.concepts.dfm-process-guidelines",
+      "path": "knowledge/machine-design/concepts/dfm-process-guidelines.md",
+      "title": "DFM process guidelines",
+      "description": "Starting manufacturability heuristics by process family; confirm with your shop.",
+      "status": "draft",
+      "topics": [
+        "dfm",
+        "cnc",
+        "sheet-metal",
+        "casting",
+        "injection-molding",
+        "welding",
+        "edm"
+      ],
+      "keywords": [
+        "draft",
+        "wall thickness",
+        "bend radius",
+        "tool access",
+        "fillet",
+        "pocket depth"
+      ],
+      "related_recipes": [
+        "mounting-plate",
+        "angle-bracket",
+        "fillet-basics"
+      ],
+      "sources": [
+        "nwtc-guns-dfm"
+      ],
+      "snippet": "Attribution: heuristics adapted from Guns / NWTC LibreTexts Ch. 2 — DFM Guidelines for Specific Manufacturing Processes, CC BY 4.0. Numbers below are starting guidance, not shop standards — confirm with your process, ma…"
+    },
+    {
+      "id": "machine-design.concepts.fasteners-joints",
+      "path": "knowledge/machine-design/concepts/fasteners-joints.md",
+      "title": "Fasteners and joints",
+      "description": "Stub — threaded joints and purchased hardware; deepen from NASA RP-1228.",
+      "status": "draft",
+      "topics": [
+        "fasteners",
+        "joints",
+        "machine-elements"
+      ],
+      "keywords": [
+        "bolt",
+        "preload",
+        "thread",
+        "washer",
+        "locking",
+        "NASA RP-1228"
+      ],
+      "related_recipes": [
+        "d-screw-vise",
+        "garden-bench"
+      ],
+      "sources": [
+        "nasa-fastener"
+      ],
+      "snippet": "Most assemblies are held by purchased fasteners, not by modeled threads alone. Call out the real hardware (size, grade/class, length, head, locking) on the drawing or BOM, and keep CAD threads as modeled geometry plus a…"
+    },
+    {
+      "id": "machine-design.concepts.fits-clearances",
+      "path": "knowledge/machine-design/concepts/fits-clearances.md",
+      "title": "Fits and clearances",
+      "description": "Clearance, transition, and interference fits as design intent; link-out for preferred-fit charts.",
+      "status": "draft",
+      "topics": [
+        "fits",
+        "gdt",
+        "manufacturing"
+      ],
+      "keywords": [
+        "fit",
+        "clearance",
+        "interference",
+        "transition",
+        "allowance",
+        "radial",
+        "diametral",
+        "coupon"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit"
+      ],
+      "sources": [
+        "nist-gdt-2",
+        "iso-286",
+        "asme-b4"
+      ],
+      "snippet": "A fit is the designed relationship between two mating features of size (typically hole and shaft). Choose it from function, process capability, and whether the joint should slide, locate, or press. Teaching rewrite info…"
+    },
+    {
+      "id": "machine-design.concepts.gdt-intro",
+      "path": "knowledge/machine-design/concepts/gdt-intro.md",
+      "title": "GD&T intro",
+      "description": "Tolerance zones, datums, feature control frames, and ASME Rule #1 teaching ideas from NIST.",
+      "status": "draft",
+      "topics": [
+        "gdt",
+        "datums",
+        "drawings",
+        "inspection"
+      ],
+      "keywords": [
+        "GD&T",
+        "datum",
+        "DRF",
+        "feature control frame",
+        "MMC",
+        "LMC",
+        "Rule 1",
+        "envelope",
+        "ASME Y14.5",
+        "ISO GPS"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit"
+      ],
+      "sources": [
+        "nist-gdt-1",
+        "nist-gdt-2",
+        "asme-y14",
+        "iso-gps"
+      ],
+      "snippet": "Manufacturing is imprecise. A CAD solid is exact; a machined or printed part is not. Geometric dimensioning and tolerancing (GD&T) states which variation is allowed, relative to datums, so design, make, and inspect shar…"
+    },
+    {
+      "id": "machine-design.concepts.materials-vocabulary",
+      "path": "knowledge/machine-design/concepts/materials-vocabulary.md",
+      "title": "Materials vocabulary",
+      "description": "Stub — property vocabulary for CAD; not an allowables database.",
+      "status": "draft",
+      "topics": [
+        "materials"
+      ],
+      "keywords": [
+        "modulus",
+        "yield",
+        "fatigue",
+        "CTE",
+        "density",
+        "alloy",
+        "polymer"
+      ],
+      "related_recipes": [],
+      "sources": [
+        "kittycad-materials"
+      ],
+      "snippet": "Pick materials with properties and process, not only a viewport color. Filament appearance in the manufacturing catalog is not an engineering allowables table. Useful symbols (SI primary): - E — elastic modulus (stiffne…"
+    }
+  ]
+}

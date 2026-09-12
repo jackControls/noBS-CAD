@@ -48,6 +48,16 @@
 | [MODELING_VIEWPORT_SELECTION.md](MODELING_VIEWPORT_SELECTION.md) | Shared picker roles, selection ownership, and command coverage |
 | [VIEWPORT_INTERACTION_THEME.md](VIEWPORT_INTERACTION_THEME.md) | Light/dark interaction states, native rendering rules, and visual validation |
 
+
+## Machine design / help KB
+
+| Doc | Notes |
+|-----|-------|
+| [machine-design-kb.md](machine-design-kb.md) | Domain help overview + milestones |
+| [machine-design-distill-vs-link.md](machine-design-distill-vs-link.md) | License / distill policy |
+| [machine-design-help-search.md](machine-design-help-search.md) | ADR: Rust Tantivy help search + UI render |
+| [machine-design-adversarial-review.md](machine-design-adversarial-review.md) | 2026-09-11 adversarial pass |
+
 ## Packaging / provenance
 
 | Doc | Notes |
