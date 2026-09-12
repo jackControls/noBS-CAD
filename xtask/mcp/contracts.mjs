@@ -400,6 +400,15 @@ try {
  });
  console.log('PASS production drawing projection publication: '+JSON.stringify(drawingPublication));
  await drawingPublicationPage.close();
+ const drawingFitPage=await browser.newPage({viewport:{width:1280,height:720}});
+ try {
+  await drawingFitPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  const drawingFit=await drawingFitPage.evaluate(async()=>{
+   const {checkDrawingSheetFit}=await import('/src/drawing/sheetFit.browser.test.tsx');
+   return checkDrawingSheetFit();
+  });
+  console.log('PASS production drawing sheet fit: '+JSON.stringify(drawingFit));
+ } finally { await drawingFitPage.close(); }
  const controlPage=await browser.newPage();
  await controlPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const controls=await controlPage.evaluate(async()=>{

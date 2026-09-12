@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useContext,
   useRef,
   useState,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { Eye, EyeOff, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, Maximize, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
 import { getEngine } from '../../engine';
 import type {
   DrawingAnnotationDto,
@@ -196,7 +197,7 @@ function useDrawingStyle(): DrawingSheetStyleDto {
 }
 
 const drawingScales = [10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01] as const;
-const MIN_DRAWING_ZOOM = 0.25;
+const MIN_DRAWING_ZOOM = 0.01;
 const MAX_DRAWING_ZOOM = 5;
 const MACOS_DRAWING_INPUT = typeof navigator !== 'undefined'
   && /Macintosh|Mac OS X/.test(navigator.userAgent);
@@ -223,6 +224,7 @@ type SheetPanDrag = {
 
 export function DrawingWorkspace() {
   const drawing = useAppStore((state) => state.drawingDocument);
+  const projectTabId = useAppStore((state) => state.activeProjectTabId);
   const scene = useAppStore((state) => state.solidScene);
   const selectedViewId = useAppStore((state) => state.selectedDrawingViewId);
   const selectedAnnotationId = useAppStore((state) => state.selectedDrawingAnnotationId);
@@ -236,7 +238,10 @@ export function DrawingWorkspace() {
   const setDrawingTool = useAppStore((state) => state.setDrawingTool);
   const setPendingViewKind = useAppStore((state) => state.setDrawingPendingViewKind);
   const sheet = drawing.sheets.find((candidate) => candidate.id === drawing.active_sheet_id) ?? null;
+  const [width, height] = sheet ? drawingSheetSize(sheet.format, sheet.orientation) : [0, 0];
   const [zoom, setZoom] = useState(1);
+  const [sheetFitted, setSheetFitted] = useState(true);
+  const sheetFittedRef = useRef(true);
   const [anchorDraft, setAnchorDraft] = useState<AnchorDraft>(null);
   const [circleDraft, setCircleDraft] = useState<CircleDraft>(null);
   const [centerlineEdgeDraft, setCenterlineEdgeDraft] = useState<CenterlineEdgeDraft>(null);
@@ -262,7 +267,50 @@ export function DrawingWorkspace() {
     selectAnnotation(null);
   };
 
+  const leaveSheetFit = () => {
+    sheetFittedRef.current = false;
+    setSheetFitted(false);
+  };
+
+  const fitSheet = useCallback(() => {
+    const scroll = drawingScrollRef.current;
+    if (!scroll || width <= 0 || height <= 0) return;
+    const padding = getComputedStyle(scroll);
+    const availableWidth = scroll.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
+    const availableHeight = scroll.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom);
+    if (availableWidth <= 0 || availableHeight <= 0) return;
+    // Measure the paper pane itself: its siblings already reserve the ribbon,
+    // inspector and playback controls. Sheet dimensions use three pixels/mm
+    // at 100%; zoom changes only the view, never the drawing's paper scale.
+    const nextZoom = Math.min(MAX_DRAWING_ZOOM, availableWidth / (width * 3), availableHeight / (height * 3));
+    sheetFittedRef.current = true;
+    setSheetFitted(true);
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    if (zoomFrameRef.current !== 0) cancelAnimationFrame(zoomFrameRef.current);
+    scroll.scrollLeft = 0;
+    scroll.scrollTop = 0;
+    zoomFrameRef.current = requestAnimationFrame(() => {
+      zoomFrameRef.current = 0;
+      scroll.scrollLeft = 0;
+      scroll.scrollTop = 0;
+    });
+  }, [width, height]);
+
+  useLayoutEffect(() => {
+    const scroll = drawingScrollRef.current;
+    if (!scroll || !sheet || sheetSetupOpen) return;
+    fitSheet();
+    const resize = new ResizeObserver(() => {
+      if (sheetFittedRef.current) fitSheet();
+    });
+    resize.observe(scroll);
+    return () => resize.disconnect();
+  }, [projectTabId, sheet?.id, sheetSetupOpen, fitSheet]);
+
   const zoomAtPoint = useCallback((requestedZoom: number, clientPoint?: [number, number]) => {
+    sheetFittedRef.current = false;
+    setSheetFitted(false);
     const nextZoom = Math.max(MIN_DRAWING_ZOOM, Math.min(MAX_DRAWING_ZOOM, requestedZoom));
     const scroll = drawingScrollRef.current;
     const svg = drawingSheetRef.current;
@@ -366,6 +414,7 @@ export function DrawingWorkspace() {
         ? event.deltaMode === WheelEvent.DOM_DELTA_PIXEL
         : classifyDrawingWheel(event) === 'pan');
     if (shouldPan) {
+      leaveSheetFit();
       event.currentTarget.scrollLeft += deltaX;
       event.currentTarget.scrollTop += deltaY;
       return;
@@ -380,6 +429,7 @@ export function DrawingWorkspace() {
 
   const startSheetPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button === 1) {
+      leaveSheetFit();
       event.preventDefault();
       event.stopPropagation();
       sheetPanDragRef.current = {
@@ -495,7 +545,6 @@ export function DrawingWorkspace() {
     {profileExportOpen && <ManufacturingProfileExportDialog onClose={() => setProfileExportOpen(false)} />}
   </>;
 
-  const [width, height] = drawingSheetSize(sheet.format, sheet.orientation);
   const placementActive = drawingTool === 'place_view' && pendingViewKind !== null;
   const placementRoot = placementActive
     ? drawingViewPlacementRoot(sheet, selectedViewId)
@@ -1001,8 +1050,8 @@ export function DrawingWorkspace() {
     <div className="flex h-full min-h-0 bg-viewport" data-testid="drawing-workspace">
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center justify-between border-b border-edge bg-header px-3">
-          <div className="flex min-w-0 items-center gap-2 text-[11px] text-mute">
-            <span className="font-semibold text-ink">{sheet.name}</span>
+          <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[11px] text-mute">
+            <span className="truncate font-semibold text-ink" title={sheet.name}>{sheet.name}</span>
             <span>·</span>
             <span>{drawingFormatShortLabel(sheet.format)} {sheet.orientation}</span>
             <span>·</span>
@@ -1026,11 +1075,12 @@ export function DrawingWorkspace() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1" data-interface-group="drawing/sheet">
+            <button className="drawing-mini-button" type="button" onClick={fitSheet} title="Fit sheet" aria-pressed={sheetFitted}><Maximize size={14} /></button>
             <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current - 0.1)} title="Zoom out"><Minus size={14} /></button>
             <span className="w-12 text-center font-mono text-[10px] text-mute">{Math.round(zoom * 100)}%</span>
             <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current + 0.1)} title="Zoom in"><Plus size={14} /></button>
-            <button className="drawing-mini-button ml-2" type="button" onClick={printActiveDrawing} title="Print / Save as PDF"><Printer size={14} /></button>
+            <button className="drawing-mini-button ml-2" type="button" data-interface-group="drawing/output" onClick={printActiveDrawing} title="Print / Save as PDF"><Printer size={14} /></button>
           </div>
         </div>
         <div

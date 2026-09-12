@@ -86,7 +86,10 @@ projected views. From there the user may:
   modeless cursor-following placement previews.
 - Drawing-specific undo/redo. A compound command such as Auto Layout or a
   completed drag is one history operation rather than several internal edits.
-- Cursor-anchored pinch/wheel zoom from 25% through 500%. Unmodified macOS
+- Sheets initially fit the available drawing pane. **Fit sheet** restores that
+  view and follows window resizing; manual zoom or pan keeps your chosen view.
+  The same labelled control is available through MCP inspection and activation.
+- Cursor-anchored pinch/wheel zoom from 1% through 500%. Unmodified macOS
   two-finger movement pans in both axes; middle-button drag pans with a mouse
   on macOS and Windows.
 
