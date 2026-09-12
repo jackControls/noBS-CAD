@@ -4,6 +4,12 @@
 It covers most sketch and solid-modeling tools with **soft focus-scoped
 disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 
+**No source build needed for a release install:** the desktop application starts
+this same server when launched with `--mcp`, without opening a window. See
+[packaged MCP setup](../docs/INSTALL.md#connect-an-mcp-agent) for Windows, macOS
+and Ubuntu commands. The standalone binary and developer setup below remain
+available for source builds.
+
 > Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).
 > Further architecture options (multi-document broker, …):
 > [docs/proposed-architecture.md](../docs/proposed-architecture.md).

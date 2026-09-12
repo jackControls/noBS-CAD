@@ -142,9 +142,10 @@ with frontier agents while preserving an open interface for other providers and
 local models. There is no required AI subscription built into CAD. Your chosen
 agent determines whether any prompts or model data leave your machine.
 
-The standalone stdio MCP server currently has a separate source-build setup:
-**[MCP installation](docs/INSTALL.md#connect-an-mcp-agent)**. The packaged desktop
-already includes the Rust runner needed for the Scripts library.
+The downloaded application is also your **local stdio MCP server**: configure
+your agent to launch its executable with `--mcp`. This starts the same server
+without opening a CAD window. **[Copy the setup](docs/INSTALL.md#connect-an-mcp-agent)**;
+no separate server build is needed. Launch normally when you want to watch.
 
 For an authored design, the agent can make **one script request**. Rust sequences
 the individual operations, stops on an error and runs the recipe's checks.

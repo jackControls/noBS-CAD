@@ -68,8 +68,8 @@ jobs:
                 reason: "application or native source",
               },
               {
-                pattern: /^(mcp-server|knowledge|interface|examples\/scripts)\//,
-                reason: "embedded MCP library or knowledge, interface catalog, or native script",
+                pattern: /^(mcp-server|knowledge|interface|examples\/scripts|xtask)\//,
+                reason: "embedded MCP library or knowledge, interface catalog, native script, or package verifier",
               },
               {
                 pattern: /^\.github\/actions\//,
@@ -308,6 +308,18 @@ jobs:
             throw "npm.cmd exited with code $LASTEXITCODE"
           }
 
+      - name: Verify packaged MCP without an OCCT SDK
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem "src-tauri\target\${{ matrix.rust_target }}\release\bundle\portable" -Filter "*.zip" -File
+          if (@($archive).Count -ne 1) { throw "Expected one portable ZIP" }
+          $verifyRoot = Join-Path $env:RUNNER_TEMP "nbcad-mcp-package-${{ matrix.architecture }}"
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $verifyRoot
+          $executable = Get-ChildItem -LiteralPath $verifyRoot -Filter "noBS-CAD.exe" -File -Recurse
+          if (@($executable).Count -ne 1) { throw "Expected one packaged executable" }
+          cargo xtask verify-package-mcp --server $executable.FullName --server-arg --mcp --out "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\mcp.json"
+          if ($LASTEXITCODE -ne 0) { throw "Packaged MCP verification failed" }
+
       - name: Verify packaged native viewport
         shell: pwsh
         run: |
@@ -431,7 +443,35 @@ jobs:
         run: npm ci
 
       - name: Build and audit Linux packages
-        run: npm run bundle:linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Rust cache restores include old bundle outputs. Preserve compiled
+          # dependencies, but never smoke-test or upload a previous package.
+          bundle_root="$(realpath -m src-tauri/target/release/bundle)"
+          test "$bundle_root" = "$GITHUB_WORKSPACE/src-tauri/target/release/bundle"
+          rm -rf -- "$bundle_root/deb" "$bundle_root/appimage"
+          npm run bundle:linux
+          test "$(find "$bundle_root/deb" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$bundle_root/appimage" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
+
+      - name: Verify DEB and AppImage MCP without a display
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          deb="$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$appimage" && test -n "$deb"
+          mcp_root="$RUNNER_TEMP/nbcad-mcp-deb"
+          mkdir -p "$mcp_root"
+          dpkg-deb -x "$deb" "$mcp_root"
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo xtask verify-package-mcp \
+            --server "$mcp_root/usr/bin/nbcad" --server-arg --mcp \
+            --out "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/mcp-deb.json"
+          chmod +x "$appimage"
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo xtask verify-package-mcp \
+            --server "$appimage" --server-arg --appimage-extract-and-run --server-arg --mcp \
+            --out "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/mcp-appimage.json"
 
       - name: Verify packaged native viewport on X11 and XWayland
         shell: bash
@@ -670,6 +710,41 @@ jobs:
           kill "$pid"
           wait "$pid" || true
           cat "$log"
+
+      - name: Verify packaged MCP without GUI initialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          mount="$RUNNER_TEMP/nbcad-mcp-dmg"
+          stage="$GITHUB_WORKSPACE/src-tauri/occt-libs"
+          hidden_stage="$GITHUB_WORKSPACE/src-tauri/occt-libs.mcp-verification"
+          test ! -e "$hidden_stage"
+          mkdir -p "$mount"
+          stage_moved=false
+          cleanup_mcp_package() {
+            if [[ "$stage_moved" == true ]]; then mv "$hidden_stage" "$stage"; fi
+            hdiutil detach "$mount" || true
+          }
+          trap cleanup_mcp_package EXIT
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount"
+          # The executable has a build-time rpath as well as its portable one.
+          # Hide that generated staging directory to require the DMG's libraries.
+          mv "$stage" "$hidden_stage"
+          stage_moved=true
+          cargo xtask verify-package-mcp \
+            --server "$mount/noBS CAD.app/Contents/MacOS/nbcad" \
+            --server-arg --mcp --out "$RUNNER_TEMP/nbcad-mcp-macos.json"
+
+      - name: Upload macOS MCP verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-macos-mcp-diagnostics
+          path: ${{ runner.temp }}/nbcad-mcp-macos.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Create checksum
         shell: bash

@@ -5,8 +5,8 @@
  * those @rpath-normalized copies before Tauri copies/signs them.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, realpathSync, renameSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 if (process.platform !== 'darwin') {
   throw new Error('The macOS app bundle must be built on macOS');
@@ -95,5 +95,9 @@ if (!dmgBundle) {
   throw new Error(`Tauri did not create a DMG under ${dmgDirectory}`);
 }
 execFileSync('hdiutil', ['verify', dmgBundle], { stdio: 'inherit' });
+// GitHub normalizes spaces in uploaded asset names. Do this before the release
+// workflow writes the checksum so `shasum -c` works on the downloaded files.
+const publishedDmg = join(dirname(dmgBundle), basename(dmgBundle).replaceAll(' ', '.'));
+if (publishedDmg !== dmgBundle) renameSync(dmgBundle, publishedDmg);
 console.log(`Verified portable app bundle: ${appBundle}`);
-console.log(`Verified disk image: ${dmgBundle}`);
+console.log(`Verified disk image: ${publishedDmg}`);

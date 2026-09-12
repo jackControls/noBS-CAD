@@ -2,8 +2,8 @@
 
 Start with the **[showcase prerelease](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12)**.
 Download an application asset, rather than GitHub's automatically generated
-**Source code** archives. The app and built-in Scripts library do not require
-Rust, Node.js or an agent. Standalone MCP setup is described below.
+**Source code** archives. The app, built-in Scripts library and packaged MCP mode
+do not require Rust or Node.js. Connecting an agent is optional.
 
 This is pre-alpha software. Keep the original copy of an important `.nbcad`
 project when trying a new build. The release notes identify the source revision
@@ -86,9 +86,52 @@ Run the command in the folder containing the package.
 
 ## Connect an MCP agent
 
-The desktop app includes the recipe runner. **The standalone `nbcad-mcp` stdio
-server is currently a separate source build**, not an executable in the desktop
-download. Use matching desktop/server source revisions for live control.
+**The application download includes MCP.** Configure a local stdio server in your
+agent with the application executable as its command and `--mcp` as an argument.
+It runs the same Rust server without opening a desktop window or initializing the
+viewport. Use a normal launch, without that argument, to open CAD for live work.
+
+For clients accepting the `mcpServers` configuration shape, Windows looks like:
+
+```json
+{
+  "mcpServers": {
+    "nobs-cad": {
+      "command": "C:/YOUR/EXTRACTED/FOLDER/noBS-CAD.exe",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+Replace the placeholder with the absolute path to your extracted executable.
+Keep its DLLs beside it; there is no OCCT SDK or developer `PATH` setup for the
+portable package. Use forward slashes in JSON or escape Windows backslashes.
+
+Use the same `args` on other platforms, changing `command` to:
+
+- **macOS:** `/Applications/noBS CAD.app/Contents/MacOS/nbcad` (the executable
+  inside the installed app, not `open -a`). Keep the complete `.app` together.
+- **Ubuntu DEB:** `/usr/bin/nbcad` after installing the package.
+- **Ubuntu AppImage:** the absolute path to your executable AppImage. If FUSE is
+  unavailable, use `"args": ["--appimage-extract-and-run", "--mcp"]` so the
+  AppImage runtime sets up its libraries before starting the server.
+
+Other clients use different configuration containers; add an equivalent **stdio**
+entry with the same command and arguments. Restart the client or reload its MCP
+servers. Confirm `nobs-cad` appears and ask it to discover the product interface
+or run a short recipe in a blank headless document.
+
+Stdout carries MCP JSON-RPC; diagnostics go to stderr. The server needs no cloud
+account. Your agent/model provider has its own setup and data-handling choices.
+For live editing, launch CAD normally and discover/attach to the intended design.
+Keep the desktop and MCP modes on the same release when updating.
+See the [server guide](../mcp-server/README.md) and [live-control contract](mcp-harness.md).
+
+### Build the standalone server from source
+
+Developers can still build `nbcad-mcp` separately. Use matching desktop/server
+source revisions for live control.
 
 Install the platform's Rust and OCCT build dependencies using the
 [developer guide](DEVELOPMENT.md), then check out the release source:
@@ -121,8 +164,8 @@ configuration, add the matching `vcpkg_installed/x64-windows/bin` (or
 existing entries. Setting `OCCT_ROOT` alone does not configure the Windows DLL
 loader. See [the detailed MCP installer guide](agentic/INSTALL_MCP.md).
 
-For other clients, add a **local stdio server** pointing at the built executable
-using that client's configuration format. For clients accepting `mcpServers`:
+For manual source-build configuration, point the stdio command at this executable
+without `--mcp` (the standalone binary already starts in server mode):
 
 ```json
 {
@@ -134,11 +177,6 @@ using that client's configuration format. For clients accepting `mcpServers`:
 }
 ```
 
-On Windows use an absolute path ending in `nbcad-mcp.exe` and escape backslashes
-in JSON (or use forward slashes). Stdout carries MCP JSON-RPC; logs go to stderr.
-The server needs no cloud account. Your agent/model provider has its own setup
-and data-handling choices.
-
-Use session discovery and attachment to select the intended live design before
-editing. See the [server guide](../mcp-server/README.md) and
-[live-control contract](mcp-harness.md).
+On Windows use an absolute path ending in `nbcad-mcp.exe`. The source installer
+does not configure the packaged application; use the packaged instructions above
+when your command is the desktop executable.

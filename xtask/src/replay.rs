@@ -7,18 +7,27 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) struct Client {
     child: Child,
-    input: ChildStdin,
+    input: Option<ChildStdin>,
     replies: Receiver<Result<Value, String>>,
     id: u64,
+    request_timeout: Option<Duration>,
+    initialization: Value,
 }
 impl Client {
     pub(crate) fn start(executable: &str) -> Result<Self> {
-        let mut command = Command::new(executable);
+        Self::start_command(Command::new(executable), None)
+    }
+    /// Package checks have deadlines; long authored replays keep their existing
+    /// unbounded waits and progress reports. Both use the same stdio transport.
+    pub(crate) fn start_command(
+        mut command: Command,
+        request_timeout: Option<Duration>,
+    ) -> Result<Self> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -36,7 +45,7 @@ impl Client {
             for line in BufReader::new(output).lines() {
                 let result = line
                     .map_err(|e| e.to_string())
-                    .and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| e.to_string()));
+                    .and_then(|s| parse_reply_line(&s));
                 if sender.send(result).is_err() {
                     break;
                 }
@@ -44,29 +53,46 @@ impl Client {
         });
         let mut client = Self {
             child,
-            input,
+            input: Some(input),
             replies,
             id: 0,
+            request_timeout,
+            initialization: Value::Null,
         };
-        client.rpc("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nbcad-rust-replay","version":"1"}}))?;
+        client.initialization = client.rpc("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nbcad-rust-replay","version":"1"}}))?;
+        let input = client.input.as_mut().unwrap();
         writeln!(
-            client.input,
+            input,
             "{}",
             json!({"jsonrpc":"2.0","method":"notifications/initialized"})
         )?;
+        input.flush()?;
         Ok(client)
     }
-    fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub(crate) fn initialization(&self) -> &Value {
+        &self.initialization
+    }
+    pub(crate) fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
+        let deadline = self.request_timeout.map(|timeout| Instant::now() + timeout);
         self.id += 1;
         let id = self.id;
+        let input = self.input.as_mut().context("MCP input is closed")?;
         writeln!(
-            self.input,
+            input,
             "{}",
             json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
         )?;
-        self.input.flush()?;
+        input.flush()?;
+        let response = self.receive_reply(id, deadline, method);
+        if response.is_err() && self.request_timeout.is_some() {
+            self.terminate();
+        }
+        response
+    }
+    fn receive_reply(&mut self, id: u64, deadline: Option<Instant>, method: &str) -> Result<Value> {
         loop {
-            match self.replies.recv_timeout(Duration::from_secs(30)) {
+            let wait = reply_wait(deadline, method)?;
+            match self.replies.recv_timeout(wait) {
                 Ok(Ok(reply)) => {
                     if reply["id"] != id {
                         continue;
@@ -78,6 +104,7 @@ impl Client {
                 }
                 Ok(Err(error)) => bail!("Invalid MCP reply: {error}"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
+                    reply_wait(deadline, method)?;
                     if let Some(status) = self.child.try_wait()? {
                         bail!("MCP exited: {status}");
                     }
@@ -86,6 +113,47 @@ impl Client {
                 Err(error) => bail!("MCP connection closed: {error}"),
             }
         }
+    }
+    /// Closing the agent's input must let the stdio server exit normally. Drop
+    /// still kills/reaps this owned child on any failure, including a deadline.
+    pub(crate) fn finish(mut self, timeout: Duration) -> Result<()> {
+        drop(self.input.take());
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                if !status.success() {
+                    bail!("MCP exited unsuccessfully after EOF: {status}");
+                }
+                // The pipe reader can still be processing the final stdout
+                // bytes. Drain until EOF so late logs cannot pass as valid MCP.
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        bail!("MCP stdout did not close after process exit");
+                    }
+                    match self.replies.recv_timeout(remaining) {
+                        Ok(Ok(reply)) if reply.get("method").is_some() => {}
+                        Ok(Ok(reply)) => {
+                            bail!("Unexpected MCP response after final request: {reply}")
+                        }
+                        Ok(Err(error)) => bail!("Invalid MCP output before EOF: {error}"),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            bail!("MCP stdout did not close after process exit")
+                        }
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                bail!("MCP did not exit within {timeout:?} after EOF");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn terminate(&mut self) {
+        drop(self.input.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
     pub(crate) fn call(&mut self, name: &str, args: Value) -> Result<Value> {
         let result = self.rpc("tools/call", json!({"name":name,"arguments":args}))?;
@@ -104,10 +172,32 @@ impl Client {
         Ok(result)
     }
 }
+fn parse_reply_line(line: &str) -> Result<Value, String> {
+    let reply: Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
+    if reply["jsonrpc"] != "2.0"
+        || !(reply["method"].is_string()
+            || reply.get("id").is_some()
+                && (reply.get("result").is_some() || reply.get("error").is_some()))
+    {
+        return Err("stdout must contain JSON-RPC responses or notifications only".into());
+    }
+    Ok(reply)
+}
+fn reply_wait(deadline: Option<Instant>, method: &str) -> Result<Duration> {
+    match deadline {
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!("MCP request {method} exceeded its deadline");
+            }
+            Ok(remaining.min(Duration::from_secs(30)))
+        }
+        None => Ok(Duration::from_secs(30)),
+    }
+}
 impl Drop for Client {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.terminate();
     }
 }
 
@@ -610,6 +700,107 @@ fn first_difference(a: &Value, b: &Value, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Reuse the Rust test executable as an owned child which consumes input but
+    // never replies. No shell, platform scripting runtime, or CAD window needed.
+    #[test]
+    #[ignore = "child-process fixture invoked only by transport tests"]
+    fn transport_child_waits_for_eof() {
+        if std::env::var_os("NBCAD_TRANSPORT_TEST_CHILD").is_some() {
+            for line in std::io::stdin().lock().lines() {
+                if line.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn transport_client(
+        timeout: Option<Duration>,
+    ) -> (Client, mpsc::Sender<Result<Value, String>>) {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "replay::tests::transport_child_waits_for_eof",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("NBCAD_TRANSPORT_TEST_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command.spawn().unwrap();
+        let input = child.stdin.take();
+        let (sender, replies) = mpsc::channel();
+        (
+            Client {
+                child,
+                input,
+                replies,
+                id: 0,
+                request_timeout: timeout,
+                initialization: Value::Null,
+            },
+            sender,
+        )
+    }
+
+    #[test]
+    fn deadline_ignores_notification_traffic_and_reaps_owned_process() {
+        let (mut client, sender) = transport_client(Some(Duration::from_millis(50)));
+        let traffic = std::thread::spawn(move || {
+            while sender
+                .send(Ok(
+                    json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+                ))
+                .is_ok()
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let error = client.rpc("ping", json!({})).unwrap_err();
+        assert!(error.to_string().contains("deadline"), "{error:#}");
+        assert!(
+            client.child.try_wait().unwrap().is_some(),
+            "Timed-out child was not reaped"
+        );
+        drop(client);
+        traffic.join().unwrap();
+    }
+
+    #[test]
+    fn ordinary_replay_keeps_waiting_and_eof_exits_cleanly() {
+        let (mut client, sender) = transport_client(None);
+        let reply = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            sender
+                .send(Ok(json!({"jsonrpc":"2.0","id":1,"result":{"pong":true}})))
+                .unwrap();
+        });
+        assert_eq!(client.rpc("ping", json!({})).unwrap(), json!({"pong":true}));
+        reply.join().unwrap();
+        client.finish(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn eof_rejects_trailing_non_protocol_stdout() {
+        let (client, sender) = transport_client(None);
+        sender
+            .send(parse_reply_line("{\"log\":\"unexpected shutdown log\"}"))
+            .unwrap();
+        drop(sender);
+        let error = client.finish(Duration::from_secs(5)).unwrap_err();
+        assert!(
+            error.to_string().contains("Invalid MCP output before EOF"),
+            "{error:#}"
+        );
+    }
 
     struct TestDirectory(PathBuf);
     impl TestDirectory {

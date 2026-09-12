@@ -6,6 +6,7 @@
 //! ```
 
 mod install_mcp;
+mod package_mcp;
 mod playback_test;
 mod replay;
 mod test_mcp;
@@ -34,6 +35,7 @@ fn run() -> Result<()> {
     match command.as_str() {
         "run-script" => replay::run(args),
         "cad-call" => replay::call(args),
+        "verify-package-mcp" => package_mcp::run(args),
         "test-mcp" => test_mcp::run(args),
         "install-mcp" => {
             let options = install_mcp::Options::parse(args)?;
@@ -64,6 +66,11 @@ Commands:
                 --session UUID --new --present to replay in an existing window.
                 --repeat 2 verifies independent headless runs are deterministic.
   cad-call      Send one MCP command from Rust (--tool NAME --args JSON).
+  verify-package-mcp
+                Verify a packaged executable over stdio without launching a GUI:
+                --server PATH --server-arg --mcp [--out REPORT.json]
+                Repeat --server-arg for additional executable arguments.
+                --timeout-seconds N bounds each request (default: 120).
   test-mcp      Run contracts (default), live, controls, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
                 arguments pass directly to the selected MCP test/demo driver.
                 Example: cargo xtask test-mcp live --server PATH --desktop PATH

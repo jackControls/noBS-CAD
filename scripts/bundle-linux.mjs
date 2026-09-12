@@ -15,13 +15,14 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 if (process.platform !== 'linux') {
   throw new Error('The Linux desktop packages must be built on Linux');
@@ -75,7 +76,11 @@ function latestArtifact(directory, suffix) {
     .sort((left, right) => statSync(left).mtimeMs - statSync(right).mtimeMs);
   const artifact = artifacts.at(-1);
   if (!artifact) throw new Error(`No ${suffix} artifact was created under ${directory}`);
-  return artifact;
+  // GitHub replaces spaces in release-asset names. Normalize before hashing so
+  // downloaded filenames and their `sha256sum -c` sidecars continue to match.
+  const publishedPath = join(dirname(artifact), basename(artifact).replaceAll(' ', '.'));
+  if (publishedPath !== artifact) renameSync(artifact, publishedPath);
+  return publishedPath;
 }
 
 const targetRoot = process.env.CARGO_TARGET_DIR
