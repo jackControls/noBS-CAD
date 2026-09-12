@@ -9,6 +9,11 @@ export interface UiControl {
   expanded?: boolean;
   selected?: boolean;
   value?: string | boolean;
+  /** Long text is an excerpt around the caret; offsets use UTF-16 code units. */
+  value_truncated?: true;
+  value_length?: number;
+  value_start?: number;
+  selection?: { start: number; end: number };
   options?: Array<{ value: string; label: string; disabled: boolean }>;
 }
 
@@ -97,6 +102,24 @@ export function inspectUi(context?: unknown) {
     if (element instanceof HTMLInputElement && element.type !== 'password' && element.type !== 'file') {
       control.value = ['checkbox', 'radio'].includes(element.type) ? element.checked : element.value;
     } else if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) control.value = element.value;
+    if (element instanceof HTMLTextAreaElement) {
+      control.selection = {start: element.selectionStart, end: element.selectionEnd};
+    }
+    // Inspecting a long recipe must not copy megabytes into every UI reply.
+    // Keep the actual field intact and expose the selected chapter's vicinity.
+    if (typeof control.value === 'string' && control.value.length > 4096) {
+      const value = control.value;
+      let start = Math.max(0, Math.min((control.selection?.start ?? 0) - 512, value.length - 4096));
+      // Skip a bisected pair at the start rather than shifting left: a caret
+      // at EOF must still see the final character of its document.
+      if (start > 0 && /[\uDC00-\uDFFF]/.test(value[start])) start++;
+      let end = Math.min(value.length, start + 4096);
+      if (/[\uD800-\uDBFF]/.test(value[end - 1])) end--;
+      control.value = value.slice(start, end);
+      control.value_truncated = true;
+      control.value_length = value.length;
+      control.value_start = start;
+    }
     if (element instanceof HTMLSelectElement) control.options = Array.from(element.options).map(o => ({ value: o.value, label: o.text, disabled: o.disabled }));
     controls.push(control);
   }

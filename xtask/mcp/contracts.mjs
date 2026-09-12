@@ -146,6 +146,22 @@ try {
   notice.hidden=true;
   check(!inspectUi(context).surfaces.some(surface=>surface.name==='dialogs/notice'),'Hidden dialogs must not be advertised');
   notice.remove();
+  const longSource=document.createElement('textarea'); longSource.setAttribute('aria-label','Long editable recipe');
+  const chapter='A useful chapter near the end';
+  const originalSource='// earlier geometry\n'.repeat(120000)+chapter+'\n// retained tail';
+  longSource.value=originalSource; document.body.append(longSource);
+  const chapterStart=originalSource.indexOf(chapter);
+  longSource.setSelectionRange(chapterStart,chapterStart+chapter.length);
+  const sourceExcerpt=controls().find(c=>c.label==='Long editable recipe');
+  check(sourceExcerpt.value.length<=4096&&sourceExcerpt.value_truncated===true&&sourceExcerpt.value_length===originalSource.length,'Large source inspection must be bounded and explicitly identified as an excerpt');
+  check(sourceExcerpt.value===originalSource.slice(sourceExcerpt.value_start,sourceExcerpt.value_start+sourceExcerpt.value.length)&&sourceExcerpt.value.includes(chapter),'The excerpt must describe the selected chapter using correct original offsets');
+  check(sourceExcerpt.selection.start===chapterStart&&sourceExcerpt.selection.end===chapterStart+chapter.length&&longSource.value===originalSource,'Inspection must preserve source and its selection');
+  longSource.value='x'.repeat(903)+'😀'+'z'.repeat(4094)+'!';
+  longSource.setSelectionRange(longSource.value.length,longSource.value.length);
+  const endingExcerpt=controls().find(c=>c.label==='Long editable recipe');
+  check(endingExcerpt.value.length<=4096&&endingExcerpt.value.endsWith('!')&&!/^[\uDC00-\uDFFF]/.test(endingExcerpt.value),'A Unicode boundary near EOF must preserve the caret vicinity without splitting a surrogate pair');
+  check(endingExcerpt.value===longSource.value.slice(endingExcerpt.value_start),'End-of-document excerpt offsets must identify the complete retained suffix');
+  longSource.remove();
   list=controls();
   rejects(()=>operateUi({action:'click',target:list.find(c=>c.label==='Different action').id},context),/modal/);
   let accepted=false; modal.querySelector('button').onclick=()=>{accepted=true;};
@@ -393,5 +409,4 @@ try {
  console.log('PASS production control document ownership: '+JSON.stringify(controls));
  await controlPage.close();
 } finally {await browser?.close();await server.close();}
-
 

@@ -86,6 +86,12 @@ former `cad_ui`, `cad_view` and `cad_launch` aliases are retired. Native control
 can be inspected and operated by fresh opaque IDs. Hidden, disabled, stale and
 modal-blocked controls reject.
 
+Long field values in `inspect` are bounded to 4,096 UTF-16 code units. A truncated
+value includes `value_truncated`, `value_length` and `value_start`; textareas also
+report their original `selection` offsets. The excerpt follows the caret so
+chapter navigation stays useful without returning the entire multi-megabyte
+recipe on every click. Inspection never shortens or edits the actual source.
+
 Disclosure remains a discovery aid. Focus packs, soft TTL and LRU limits do not
 prevent calls to undisclosed tools. Results can contain `_disclosure` hints;
 `full_static` and `cad_list_all_tools` remain available. A timed worker sends
