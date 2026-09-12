@@ -40,6 +40,9 @@ fn interference(client: &mut Client, exports: &Value, parts: &[&str]) -> Value {
 fn check_stationary_parts(client: &mut Client, exports: &Value, installed: &[&str]) {
     // An empty occurrence filter means the entire assembly, not zero pairs.
     if installed.len() > 1 {
+        client.stage(format!(
+            "vise / stationary assembly clearance: {installed:?}"
+        ));
         no_overlap(&interference(client, exports, installed));
     }
 }
@@ -53,6 +56,7 @@ fn check_moving_part(
 ) {
     assert!(!installed.contains(&moving));
     for fixed in installed {
+        client.stage(format!("vise / {moving} against {fixed} at {sample}"));
         let report = interference(client, exports, &[moving, fixed]);
         assert!(
             !has_overlap(&report),
@@ -104,6 +108,7 @@ fn check_edits(client: &mut Client, exports: &Value) {
         ("Moving jaw / 100 mm gripping face", 100., 104., true),
         ("Jaw dovetail left / profile clearance", 12.8, 13.2, false),
     ] {
+        client.stage(format!("vise / driving dimension: {name}"));
         let sketch = client.call("sketch_edit", json!({"name":name}));
         let dimension = sketch["dimensions"]
             .as_array()
@@ -160,6 +165,7 @@ fn check_edits(client: &mut Client, exports: &Value) {
     // Verify that editing a persisted thread changes the actual solid and
     // that restoring it reconstructs the native rounded profile downstream.
     let mut request = exports["male_thread_request"].clone();
+    client.stage("vise / simplify and restore the modeled screw thread");
     request["thread"]["representation"] = json!("simplified");
     let simplified = client.call(
         "solid_edit_external_thread",
@@ -186,7 +192,9 @@ fn check_edits(client: &mut Client, exports: &Value) {
 }
 
 fn check_capture_and_entry(exports: &Value) {
+    eprintln!("vise / restore for physical capture and assembly entry");
     let mut client = Client::restore(&exports["final_model"]);
+    client.stage("vise / physical guide capture and carriage entry");
     release_joints(&mut client, exports);
 
     // An ideal slider joint must not be the source of hold-down. Test the
@@ -197,6 +205,7 @@ fn check_capture_and_entry(exports: &Value) {
         ([0., 1.5, 0.], true),
         ([0., -1.5, 0.], true),
     ] {
+        client.stage(format!("vise / physical guide capture at {offset:?} mm"));
         displaced(&mut client, exports, "jaw", offset);
         assert_eq!(
             has_overlap(&interference(&mut client, exports, &["frame", "jaw"])),
@@ -212,11 +221,13 @@ fn check_capture_and_entry(exports: &Value) {
     let start = frame_min - jaw_max - 5.;
     for step in 0..=12 {
         let x = start * (1. - step as f64 / 12.);
+        client.stage(format!("vise / carriage entry at {x:.2} mm"));
         displaced(&mut client, exports, "jaw", [x, 0., 0.]);
         no_overlap(&interference(&mut client, exports, &["frame", "jaw"]));
     }
     check_stationary_parts(&mut client, exports, &["frame", "jaw"]);
     for lift in [70., 40., 20., 8., 2., 0.] {
+        client.stage(format!("vise / bridge entry at {lift} mm"));
         displaced(&mut client, exports, "nut", [0., 0., lift]);
         check_moving_part(
             &mut client,
@@ -229,6 +240,7 @@ fn check_capture_and_entry(exports: &Value) {
     // The bridge's axial restraint must be geometric, rather than supplied by
     // a fixed mate or bolt friction. Its seated keys must encounter a shoulder.
     for x in [-1.5, 1.5] {
+        client.stage(format!("vise / bridge axial restraint at {x} mm"));
         displaced(&mut client, exports, "nut", [x, 0., 0.]);
         assert!(has_overlap(&interference(
             &mut client,
@@ -260,6 +272,7 @@ fn check_capture_and_entry(exports: &Value) {
     let axis_z = 50.;
     check_stationary_parts(&mut client, exports, &["frame", "nut", "jaw"]);
     for advance in [-120., -95., -90., -85., -60., -30., -5., 0.] {
+        client.stage(format!("vise / coupled screw insertion at {advance} mm"));
         let angle = phase + advance / 4. * std::f64::consts::TAU;
         client.call("assembly_set_occurrence_pose",json!({
             "occurrence_id":part(exports,"screw")["occurrence_id"],
@@ -275,6 +288,7 @@ fn check_capture_and_entry(exports: &Value) {
     }
     check_stationary_parts(&mut client, exports, &["frame", "nut", "jaw", "screw"]);
     for approach in [35., 25., 15., 5., 0.] {
+        client.stage(format!("vise / thrust fitting entry at {approach} mm"));
         displaced(&mut client, exports, "thrust", [approach, 0., 0.]);
         check_moving_part(
             &mut client,
@@ -286,6 +300,7 @@ fn check_capture_and_entry(exports: &Value) {
     }
     check_stationary_parts(&mut client, exports, &["frame", "nut", "screw", "thrust"]);
     for advance in [85., 60., 40., 20., 5., 0.] {
+        client.stage(format!("vise / jaw assembly entry at {advance} mm"));
         displaced(&mut client, exports, "jaw", [advance, 0., 0.]);
         check_moving_part(
             &mut client,
@@ -297,6 +312,7 @@ fn check_capture_and_entry(exports: &Value) {
     }
     check_stationary_parts(&mut client, exports, &["jaw", "screw", "thrust"]);
     for lift in [70., 40., 20., 8., 2., 0.] {
+        client.stage(format!("vise / keeper entry at {lift} mm"));
         displaced(&mut client, exports, "keeper", [0., 0., lift]);
         check_moving_part(
             &mut client,
@@ -312,6 +328,7 @@ fn check_capture_and_entry(exports: &Value) {
     let seating = exports["design_inputs"]["keeper_axial_seating_mm"]
         .as_f64()
         .unwrap();
+    client.stage("vise / keeper shoulder seating and pin clearance");
     assert!((seating - 0.4).abs() < 1e-9);
     displaced(&mut client, exports, "keeper", [-seating, 0., 0.]);
     let seated = interference(&mut client, exports, &["jaw", "keeper"]);
@@ -341,6 +358,7 @@ fn check_capture_and_entry(exports: &Value) {
 #[test]
 fn d_screw_vise_builds_editable_native_geometry() {
     let mut client = Client::start();
+    client.stage("vise / initial construction and drawings");
     let report = client.recipe("d-screw-vise");
     let exports = &report["exports"];
     let artifacts = RecipeArtifacts::new();
@@ -507,6 +525,9 @@ fn d_screw_vise_builds_editable_native_geometry() {
     );
     no_overlap(&exports["final_interference"]);
     for advance in [0., 10., 45., 85., 89., travel, 0.] {
+        client.stage(format!(
+            "vise / full assembly stroke interference at {advance} mm"
+        ));
         client.call("assembly_set_joint_motion",json!({"joint_id":exports["screw_joint_id"],"angle_offset_deg":advance/lead*360.,"linear_offset_mm":0}));
         let solution = client.call("assembly_solution", json!({}));
         assert_eq!(solution["solved"], true, "{solution}");
@@ -538,9 +559,11 @@ fn d_screw_vise_builds_editable_native_geometry() {
     );
 
     check_capture_and_entry(exports);
+    eprintln!("vise / restore and check purchased hardware assembly paths");
     assembly_paths::check_hardware_paths(exports);
     check_edits(&mut client, exports);
 
+    eprintln!("vise / restore saved model and compare geometry");
     let mut restored = Client::restore(&exports["final_model"]);
     assert_same_json(
         &restored.call("solid_scene", json!({}))["bodies"],
@@ -551,7 +574,9 @@ fn d_screw_vise_builds_editable_native_geometry() {
         restored.call("assembly_solution", json!({}))["instance_body_poses"],
         exports["final_solution"]["instance_body_poses"]
     );
-    let repeated = Client::start().recipe("d-screw-vise");
+    let mut repeat = Client::start();
+    repeat.stage("vise / independent deterministic construction and drawings");
+    let repeated = repeat.recipe("d-screw-vise");
     for key in [
         "final_model",
         "final_scene",
@@ -568,6 +593,7 @@ fn d_screw_vise_builds_editable_native_geometry() {
     }
     for (name, export) in exports.as_object().unwrap() {
         if name.ends_with("_svg") || name.ends_with("_dxf") {
+            restored.stage(format!("vise / restored drawing export: {name}"));
             assert_same_json(
                 export,
                 &repeated["exports"][name],
