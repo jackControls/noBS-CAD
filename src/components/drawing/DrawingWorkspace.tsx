@@ -123,6 +123,7 @@ import {
   type DrawingChamferCandidate,
 } from '../../drawing/chamfer';
 import { exportManufacturingProfileDxf, printActiveDrawing } from '../../drawing/export';
+import {drawingTitleBlock} from '../../drawing/titleBlock';
 import { drawingProjectionRequestForView, drawingSourceAnchorPoint, drawingSectionSourceExtent } from '../../drawing/projection';
 import {captureDrawingProjectionScope, isDrawingProjectionScopeCurrent, observeDrawingProjection} from '../../drawing/projectionPresentation';
 import {presentation} from '../../operationPlayback';
@@ -133,7 +134,6 @@ import {
   drawingFormatsForStandard,
   drawingFormatShortLabel,
   drawingSheetSize,
-  drawingToleranceNoteText,
   drawingViewPaperBounds,
   drawingViewTransform,
 } from '../../drawing/sheet';
@@ -276,8 +276,14 @@ export function DrawingWorkspace() {
     const scroll = drawingScrollRef.current;
     if (!scroll || width <= 0 || height <= 0) return;
     const padding = getComputedStyle(scroll);
-    const availableWidth = scroll.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
-    const availableHeight = scroll.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom);
+    const bounds = scroll.getBoundingClientRect();
+    // The fitted page needs no scrollbars. Using the currently zoomed pane's
+    // client size includes its old scrollbar deduction and causes a second
+    // visible fit when the scrollbar disappears on the next layout frame.
+    const availableWidth = bounds.width - parseFloat(padding.borderLeftWidth) - parseFloat(padding.borderRightWidth)
+      - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
+    const availableHeight = bounds.height - parseFloat(padding.borderTopWidth) - parseFloat(padding.borderBottomWidth)
+      - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom);
     if (availableWidth <= 0 || availableHeight <= 0) return;
     // Measure the paper pane itself: its siblings already reserve the ribbon,
     // inspector and playback controls. Sheet dimensions use three pixels/mm
@@ -3959,29 +3965,22 @@ function SheetFrame({ sheet, width, height }: { sheet: DrawingSheetDto; width: n
   const style = useDrawingStyle();
   const visibleLine = useDrawingLine('visible');
   const tableLine = useDrawingLine('dimension');
-  const blockWidth = Math.min(180, width - 10);
-  const blockHeight = 44;
-  const x = width - blockWidth - 5;
-  const y = height - blockHeight - 5;
-  const tolerance = drawingToleranceNoteText(sheet.tolerance_note);
+  const layout = drawingTitleBlock(sheet, width, height);
   return <>
     <g fill="none" stroke="#4a5058" className="pointer-events-none">
       <rect x="5" y="5" width={width - 10} height={height - 10} {...visibleLine} />
-      <rect x={x} y={y} width={blockWidth} height={blockHeight} {...tableLine} />
-      <path d={`M${x} ${y + 15}H${x + blockWidth} M${x} ${y + 23}H${x + blockWidth} M${x} ${y + 31}H${x + blockWidth} M${x} ${y + 38}H${x + blockWidth} M${x + blockWidth * 0.62} ${y}V${y + 23} M${x + blockWidth * 0.78} ${y + 23}V${y + blockHeight} M${x + blockWidth * 0.9} ${y + 31}V${y + blockHeight}`} {...tableLine} />
+      <rect x={layout.x} y={layout.y} width={layout.width} height={layout.height} {...tableLine} />
+      <path d={layout.segments.map(([a, b]) => `M${a[0]} ${a[1]}L${b[0]} ${b[1]}`).join(' ')} {...tableLine} />
       <g fill="#30343a" stroke="none" fontFamily={style.font_family}>
-        <text x={x + 3} y={y + 6.2} fontSize={style.text_height_mm + 0.8} fontWeight="650">{sheet.title_block.title || sheet.name}</text>
-        <text x={x + 3} y={y + 12.2} fontSize={style.small_text_height_mm}>DRAWING: {sheet.title_block.drawing_number || '—'}</text>
-        <text x={x + blockWidth * 0.64} y={y + 6.2} fontSize={style.small_text_height_mm}>SHEET: {sheet.name}</text>
-        <text x={x + blockWidth * 0.64} y={y + 12.2} fontSize={style.small_text_height_mm}>{drawingFormatShortLabel(sheet.format)} · {sheet.projection_method === 'first_angle' ? '1ST ANGLE' : '3RD ANGLE'}</text>
-        <text x={x + 3} y={y + 20.4} fontSize={style.small_text_height_mm}>{tolerance || 'TOLERANCES: AS SPECIFIED'}</text>
-        <text x={x + 3} y={y + 28.2} fontSize={style.small_text_height_mm}>COMPANY: {sheet.title_block.company || '—'}</text>
-        <text x={x + blockWidth * 0.8} y={y + 28.2} fontSize={style.small_text_height_mm}>REV {sheet.title_block.revision || '—'}</text>
-        <text x={x + 3} y={y + 35.6} fontSize={style.small_text_height_mm}>MATERIAL: {sheet.title_block.material || '—'}</text>
-        <text x={x + blockWidth * 0.8} y={y + 35.6} fontSize={style.small_text_height_mm}>FINISH: {sheet.title_block.finish || '—'}</text>
-        <text x={x + 3} y={y + 42.2} fontSize={style.small_text_height_mm}>DRAWN: {sheet.title_block.author || '—'}</text>
-        <text x={x + blockWidth * 0.4} y={y + 42.2} fontSize={style.small_text_height_mm}>CHECKED: {sheet.title_block.checked_by || '—'}</text>
-        <text x={x + blockWidth * 0.79} y={y + 42.2} fontSize={style.small_text_height_mm}>APPROVED: {sheet.title_block.approved_by || '—'}</text>
+        {layout.cells.map(cell => <g key={cell.id} data-title-block-cell={cell.id}
+          data-cell-bounds={[cell.x, cell.y, cell.width, cell.height].join(',')}
+          data-overflow={cell.overflow || undefined} className="pointer-events-auto">
+          <title>{cell.overflow ? `${cell.label} is too long. Shorten this field or move detailed instructions into drawing notes.\n` : ''}{cell.text}</title>
+          {cell.lines.map((line, index) => <text key={index} x={line.x} y={line.y}
+            style={{fontSize: cell.fontSize}} fontWeight={cell.id === 'title' ? 650 : undefined}
+            fill={cell.overflow ? '#b54432' : undefined}
+            textLength={line.width || undefined} lengthAdjust="spacingAndGlyphs">{line.text}</text>)}
+        </g>)}
       </g>
     </g>
     {sheet.revision_table_position && <RevisionTableGraphic sheet={sheet} position={sheet.revision_table_position} sheetWidth={width} sheetHeight={height} />}

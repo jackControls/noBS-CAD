@@ -11,9 +11,7 @@ import { chooseSaveTarget, writeSaveTarget, type SaveType } from '../files/fileI
 import { useAppStore } from '../store/appStore';
 import type { UnitSystem } from '../types/document';
 import {
-  drawingFormatShortLabel,
   drawingSheetSize,
-  drawingToleranceNoteText,
   drawingViewPaperBounds,
   drawingViewTransform,
 } from './sheet';
@@ -46,6 +44,7 @@ import {
 import { buildDrawingSheetDxf, buildManufacturingProfileDxf } from './dxf';
 import { drawingProjectionRequestForView } from './projection';
 import { drawingLineStyle, type DrawingLineRole } from './styles';
+import {assertTitleBlockFits, drawingTitleBlock} from './titleBlock';
 
 const DXF_TYPE: SaveType = {
   description: 'AutoCAD Drawing Interchange',
@@ -113,6 +112,15 @@ export async function exportActiveDrawingSvg(): Promise<boolean> {
 }
 
 export function printActiveDrawing(): void {
+  const state = useAppStore.getState();
+  const sheet = state.drawingDocument.sheets.find(item => item.id === state.drawingDocument.active_sheet_id);
+  if (sheet) {
+    try { assertTitleBlockFits(drawingTitleBlock(sheet, ...drawingSheetSize(sheet.format, sheet.orientation))); }
+    catch (error) {
+      state.setConstraintDialog({titleKey: 'file.errorTitle', message: String(error instanceof Error ? error.message : error)});
+      return;
+    }
+  }
   window.print();
 }
 
@@ -531,26 +539,15 @@ function borderAndTitleBlock(
   width: number,
   height: number,
 ): string {
-  const blockWidth = Math.min(180, width - 10);
-  const blockHeight = 44;
-  const x = width - 5 - blockWidth;
-  const y = height - 5 - blockHeight;
-  const title = sheet.title_block;
-  const tolerance = drawingToleranceNoteText(sheet.tolerance_note);
+  const layout = drawingTitleBlock(sheet, width, height);
+  assertTitleBlockFits(layout);
   return `<g fill="none" stroke="#30343a">
     <rect class="nbs-visible" x="5" y="5" width="${width - 10}" height="${height - 10}"/>
-    <rect class="nbs-dimension" x="${x}" y="${y}" width="${blockWidth}" height="${blockHeight}"/>
-    <path class="nbs-dimension" d="M${x} ${y + 15}H${x + blockWidth} M${x} ${y + 23}H${x + blockWidth} M${x} ${y + 31}H${x + blockWidth} M${x} ${y + 38}H${x + blockWidth} M${x + blockWidth * 0.62} ${y}V${y + 23} M${x + blockWidth * 0.78} ${y + 23}V${y + blockHeight} M${x + blockWidth * 0.9} ${y + 31}V${y + blockHeight}"/>
+    <rect class="nbs-dimension" x="${layout.x}" y="${layout.y}" width="${layout.width}" height="${layout.height}"/>
+    <path class="nbs-dimension" d="${layout.segments.map(([a,b]) => `M${a[0]} ${a[1]}L${b[0]} ${b[1]}`).join(' ')}"/>
   </g>
-  <g fill="#30343a" font-family="${escapeXml(sheet.style.font_family)}" font-size="${round(sheet.style.small_text_height_mm)}">
-    <text x="${x + 3}" y="${y + 6.2}" font-size="${round(sheet.style.text_height_mm + 0.8)}" font-weight="650">${escapeXml(title.title || sheet.name)}</text>
-    <text x="${x + 3}" y="${y + 12.2}">DRAWING: ${escapeXml(title.drawing_number || '—')}</text>
-    <text x="${x + blockWidth * 0.64}" y="${y + 6.2}">SHEET: ${escapeXml(sheet.name)}</text>
-    <text x="${x + blockWidth * 0.64}" y="${y + 12.2}">${drawingFormatShortLabel(sheet.format)} · ${sheet.projection_method === 'first_angle' ? '1ST ANGLE' : '3RD ANGLE'}</text>
-    <text x="${x + 3}" y="${y + 20.4}">${escapeXml(tolerance || 'TOLERANCES: AS SPECIFIED')}</text>
-    <text x="${x + 3}" y="${y + 28.2}">COMPANY: ${escapeXml(title.company || '—')}</text><text x="${x + blockWidth * 0.8}" y="${y + 28.2}">REV ${escapeXml(title.revision || '—')}</text>
-    <text x="${x + 3}" y="${y + 35.6}">MATERIAL: ${escapeXml(title.material || '—')}</text><text x="${x + blockWidth * 0.8}" y="${y + 35.6}">FINISH: ${escapeXml(title.finish || '—')}</text>
-    <text x="${x + 3}" y="${y + 42.2}">DRAWN: ${escapeXml(title.author || '—')}</text><text x="${x + blockWidth * 0.4}" y="${y + 42.2}">CHECKED: ${escapeXml(title.checked_by || '—')}</text><text x="${x + blockWidth * 0.79}" y="${y + 42.2}">APPROVED: ${escapeXml(title.approved_by || '—')}</text>
+  <g fill="#30343a" font-family="${escapeXml(sheet.style.font_family)}">
+    ${layout.cells.map(cell => `<g data-title-block-cell="${cell.id}" data-cell-bounds="${[cell.x,cell.y,cell.width,cell.height].join(',')}"><title>${escapeXml(cell.text)}</title>${cell.lines.map(line => `<text x="${line.x}" y="${line.y}" style="font-size:${cell.fontSize}px"${cell.id === 'title' ? ' font-weight="650"' : ''}${line.width ? ` textLength="${line.width}" lengthAdjust="spacingAndGlyphs"` : ''}>${escapeXml(line.text)}</text>`).join('')}</g>`).join('')}
   </g>${revisionTableSvg(sheet)}${bomTableSvg(sheet)}`;
 }
 

@@ -409,6 +409,21 @@ try {
   });
   console.log('PASS production drawing sheet fit: '+JSON.stringify(drawingFit));
  } finally { await drawingFitPage.close(); }
+ const titleInputs=[];
+ for(const recipe of ['garden-bench','d-screw-vise','vertical-axis-turbine','turbine-fit-coupons']) {
+  const source=await readFile(new URL(`../../examples/scripts/${recipe}.nbcad.jsonc`,import.meta.url),'utf8');
+  const script=JSON.parse(source.replace(/^\s*\/\/.*$/gm,''));
+  for(const step of script.steps)if(step.call?.operation==='drawing_create_sheet')titleInputs.push({recipe,arguments:step.call.arguments});
+ }
+ const titlePage=await browser.newPage({viewport:{width:1280,height:800}});
+ try {
+  await titlePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  const titleBlocks=await titlePage.evaluate(async inputs=>{
+   const {checkDrawingTitleBlocks}=await import('/src/drawing/titleBlock.browser.test.tsx');
+   return checkDrawingTitleBlocks(inputs);
+  },titleInputs);
+  console.log('PASS production drawing title blocks: '+JSON.stringify(titleBlocks));
+ }finally{await titlePage.close();}
  const controlPage=await browser.newPage();
  await controlPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const controls=await controlPage.evaluate(async()=>{
