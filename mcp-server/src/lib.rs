@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 mod desktop;
 mod disclosure;
 mod drawing_tools;
+mod inbox;
 mod interface;
 mod knowledge;
 mod session;
