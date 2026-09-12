@@ -68,6 +68,8 @@ struct Author {
     joint_names: Vec<String>,
     sketch_visibility: Option<String>,
     last_build_scene: Option<Value>,
+    present_construction: bool,
+    profile_view: &'static str,
 }
 #[derive(Clone)]
 struct Clamp {
@@ -92,6 +94,8 @@ impl Author {
             joint_names: vec![],
             sketch_visibility: None,
             last_build_scene: None,
+            present_construction: false,
+            profile_view: "current",
         }
     }
     fn call(&mut self, id: &str, _group: &str, op: &str, args: Value) {
@@ -164,6 +168,12 @@ impl Author {
             }),
         );
         self.sketch_visibility = Some(visibility);
+        self.profile_view = match plane {
+            "xy" => "top",
+            "xz" => "front",
+            "yz" => "right",
+            _ => panic!("Unknown sketch plane {plane}"),
+        };
         let datum = self.uid("datum");
         self.call(&datum,"construct/planes","construction_plane_offset",json!({"name":format!("{name} / datum"),"reference":{"type":"origin_plane","plane":plane},"distance":z}));
         let id = self.uid("begin");
@@ -255,8 +265,13 @@ impl Author {
         operation: &str,
         target: Option<&str>,
     ) -> String {
+        let view = if self.present_construction {
+            self.profile_view
+        } else {
+            "current"
+        };
         self.steps
-            .push(json!({"view":"current","fit":true,"target":"active_sketch","duration_ms":300}));
+            .push(json!({"view":view,"fit":true,"target":"active_sketch","duration_ms":300}));
         let finish = self.uid("finish");
         self.call(&finish, "sketch/draw", "sketch_finish", json!({}));
         let id = self.uid("extrude");
@@ -280,6 +295,12 @@ impl Author {
             "construction_set_visibility",
             json!({"visible":false}),
         );
+        if self.present_construction {
+            let body = target
+                .map(body_ref)
+                .unwrap_or_else(|| select(r(&id), "/scene/bodies", json!({}), "last", "/id"));
+            turbine_demo::construction(self, name, body);
+        }
         id
     }
     fn cylinder(
@@ -499,7 +520,18 @@ impl Author {
         self.call(&format!("{name}_placement"),"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":occ_ref(name),"local_pose":{"translation":pose,"rotation":[0,0,0,1]}}));
         self.poses.insert(name.into(), (pose, [0., 0., 0., 1.]));
         self.occurrences.insert(name.into(), occ_ref(name));
-        self.steps.push(json!({"view":"isometric","fit":true,"component_id":at(&format!("{name}_component"),"/id"),"duration_ms":450}));
+        if self.present_construction && printable {
+            turbine_demo::show_body(
+                self,
+                &format!("completed_{name}"),
+                body_ref(name),
+                &format!(
+                    "{title}. Inspect the completed editable part before continuing the assembly."
+                ),
+            );
+        } else {
+            self.steps.push(json!({"view":"isometric","fit":true,"component_id":at(&format!("{name}_component"),"/id"),"duration_ms":450}));
+        }
         self.parts.push(json!({"id":name,"name":title,"body_id":body_ref(name),"component_id":at(&format!("{name}_component"),"/id"),"occurrence_id":occ_ref(name),"printable":printable,"material":if printable{"PETG"}else{"purchased — drawing/specimen confirmation required"},"print_pose":{"translation":[0,0,0],"rotation":[0,0,0,1]}}));
     }
     fn repeat(&mut self, name: &str, source: &str, pose: [f64; 3]) {
@@ -628,6 +660,7 @@ impl Author {
 
 fn main() {
     let mut a = Author::new();
+    a.present_construction = true;
     a.note("The experiment","Two 198 mm rotor discs, 200 mm combined bucket height, an 8 x 300 mm shaft and a 4:1 generator drive. The printed design and representative hardware still need physical fit and output testing.");
     a.note("Repeated rotor stage","Concentric driving diameters define a bottom disc, shaft hub and two semicircular bucket walls. The clamp hub ends at 18 mm so only the 8 mm shaft divides the overlap above it. One stage definition appears twice, staggered by 90 degrees. Print each stage upright and the final cap separately.");
     let stage_plate = a.cylinder("stage", [0., 0.], 198., 0., 3., "new_body", None);

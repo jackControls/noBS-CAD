@@ -1,6 +1,63 @@
 //! Reveal and drive the real gear relation without changing assembly placement.
 use super::*;
 
+/// Explicit stock framing prevents Finish Sketch from returning construction
+/// to an old, distant assembly camera. IDs never consume the geometry serial.
+pub(super) fn construction(a: &mut Author, name: &str, body: Value) {
+    let caption = match name {
+        "stage" => "The 198 mm rotor disc is extruded from its driving diameter. The shaft hub and bucket walls are added to this plate.",
+        "stage_hub" => "The 24 mm hub stops at 18 mm height, leaving the bucket overlap open above it.",
+        "bucket_half" => "A hollow cylinder becomes a 2 mm semicircular bucket wall. The second bucket is patterned about the shaft axis.",
+        "stage_shaft_fit" => "Both bucket walls join the stage plate. An 8.3 mm bore provides nominal clearance for the 8 mm shaft.",
+        "base" => "The base starts as printable stock. Bearing support, mounting holes and service access are added next.",
+        "tower" => "The bearing carrier starts with its flange. The upper support and bearing seats share the same shaft axis.",
+        "motor_mount_cavity" => "The generator cartridge has an open case cavity. Its provisional fit must be checked against the delivered motor.",
+        "guard_wire_exit" => "The guard has a dedicated pointed wire exit, separate from the moving gears and clamp split.",
+        "rotor_gear" => "The rotor gear starts with its root disc. A patterned involute will form the 72 teeth.",
+        "pinion" => "The generator pinion starts with its smaller root disc. Its 18 teeth will share module 1 with the rotor gear.",
+        _ => return,
+    };
+    show_body(a, name, body, caption);
+}
+
+pub(super) fn show_body(a: &mut Author, id: &str, body: Value, caption: &str) {
+    let saved = format!("{id}_presentation_visibility");
+    a.call(
+        &saved,
+        "document/appearance",
+        "project_visibility",
+        json!({}),
+    );
+    // Registered components are the previously placed assembly. The temporary
+    // bucket is the one pre-registration part that overlaps another body.
+    let mut hidden: Vec<_> = a.parts.iter().map(|part| part["body_id"].clone()).collect();
+    if id == "bucket_half" {
+        hidden.push(body_ref("stage"));
+    }
+    a.call(
+        &format!("{id}_presentation_isolate"),
+        "document/appearance",
+        "project_set_visibility",
+        json!({
+            "hidden_body_ids":hidden,
+            "hidden_sketch_names":at(&saved,"/hidden_sketch_names"),
+            "hidden_datum_plane_ids":at(&saved,"/hidden_datum_plane_ids")
+        }),
+    );
+    a.steps.push(
+        json!({"id":format!("{id}_presentation_fit"),"view":"isometric","fit":true,
+        "body_id":body,"duration_ms":600}),
+    );
+    a.steps
+        .push(json!({"id":format!("{id}_presentation_read"),"note":caption,"duration_ms":1200}));
+    a.call(
+        &format!("{id}_presentation_restore"),
+        "document/appearance",
+        "project_set_visibility",
+        r(&saved),
+    );
+}
+
 pub(super) fn run(a: &mut Author) {
     a.call(
         "turbine_demo_home",

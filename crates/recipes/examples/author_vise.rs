@@ -142,6 +142,8 @@ struct Author {
     sketches: usize,
     sketch_visibility: Option<String>,
     last_build_scene: Option<Value>,
+    present_construction: bool,
+    profile_view: &'static str,
 }
 impl Author {
     fn call(&mut self, id: &str, group: &str, operation: &str, arguments: Value) {
@@ -203,6 +205,12 @@ impl Author {
             "hidden_datum_plane_ids":reference(&visibility,"/hidden_datum_plane_ids")
         }));
         self.sketch_visibility = Some(visibility);
+        self.profile_view = match axis {
+            "xy" => "top",
+            "xz" => "front",
+            "yz" => "right",
+            _ => panic!("Unknown sketch plane {axis}"),
+        };
         let plane = self.plane(axis, distance);
         self.call(
             &format!("{id}_begin"),
@@ -264,8 +272,14 @@ impl Author {
         }));
     }
     fn extrude(&mut self, id: &str, distance: f64, operation: &str, part: &str) {
+        let view = if self.present_construction {
+            self.profile_view
+        } else {
+            "current"
+        };
+        let duration = if self.present_construction { 400 } else { 180 };
         self.steps
-            .push(json!({"view":"current","fit":true,"target":"active_sketch","duration_ms":180}));
+            .push(json!({"view":view,"fit":true,"target":"active_sketch","duration_ms":duration}));
         self.call(
             &format!("{id}_finish"),
             "sketch/draw",
@@ -323,6 +337,9 @@ impl Author {
             "construction_set_visibility",
             json!({"visible":false}),
         );
+        if self.present_construction {
+            vise_demo::construction(self, id, part);
+        }
     }
     fn body_id(&self, part: &str) -> Value {
         reference(&format!("{part}_body_id"), "")
@@ -396,9 +413,16 @@ impl Author {
         self.call(&format!("{id}_close"),"sketch/constrain","sketch_add_constraint",json!({"type":"coincident","a":point_on_edge(count-1,"/end_id"),"b":point_on_edge(0,"/start_id")}));
     }
     fn show(&mut self, part: &str) {
-        self.steps.push(
-            json!({"view":"isometric","fit":true,"body_id":self.body_id(part),"duration_ms":400}),
-        );
+        if self.present_construction {
+            vise_demo::show_part(
+                self,
+                &format!("completed_{part}"),
+                part,
+                "Inspect the completed part before it joins the assembly.",
+            );
+        } else {
+            self.steps.push(json!({"view":"isometric","fit":true,"body_id":self.body_id(part),"duration_ms":400}));
+        }
     }
     fn component(&mut self, part: &str, title: &str) {
         self.bind(&format!("{part}_body"), self.bodies[part].clone());
@@ -462,6 +486,8 @@ impl Author {
             sketches: 0,
             sketch_visibility: None,
             last_build_scene: None,
+            present_construction: false,
+            profile_view: "current",
         }
     }
     fn refresh_body(&mut self, id: &str, part: &str) {
@@ -730,6 +756,7 @@ fn write_script(
 
 fn main() {
     let mut a = Author::fresh();
+    a.present_construction = true;
     a.note("A larger workholding vise", "100 mm jaws, 90 mm opening and a 230 x 160 mm frame. Six printed parts use a 24 x 4 mm screw and purchased hardware. Physical fit and load qualification remain pending.");
     a.call(
         "name",
@@ -1563,6 +1590,8 @@ fn main() {
         "screw",
     );
     a.show("screw");
+    // Print plates already isolate their part and retain their own framing.
+    a.present_construction = false;
 
     let printed = [
         ("frame", "Reinforced frame and fixed jaw"),

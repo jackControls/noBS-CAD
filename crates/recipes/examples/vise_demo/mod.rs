@@ -1,6 +1,67 @@
 //! Demonstrate the authored mechanism through its actual screw joint.
 use super::*;
 
+/// Sketch Finish restores the previous solid camera. Reframe important stock
+/// explicitly, and isolate internal parts that an assembled jaw would obscure.
+pub(super) fn construction(a: &mut Author, id: &str, part: &str) {
+    let caption = match id {
+        "Frame deck / 230 by 160 by 14" => "The 230 by 160 mm deck is 14 mm thick. This is the base for the fixed jaw and two captured guides.",
+        "Fixed jaw / 100 mm face and 25 mm stock" => "The fixed jaw grows from the deck. Its 100 mm face and 25 mm stock carry the closing load.",
+        "Captured rail right / 45 degree flanks" => "Both captured rails are now joined to the deck. Their 45 degree flanks retain the moving carriage.",
+        "Carriage / 72 mm captured bearing length" => "The moving carriage begins as separate stock with 72 mm of bearing length.",
+        "Moving jaw / 100 mm gripping face" => "The 100 mm gripping face joins the carriage. The next features add support and running clearance.",
+        "Jaw dovetail right / profile clearance" => "The paired channels retain the carriage on its guides, with 0.4 mm nominal profile clearance to qualify in print.",
+        "Threaded bridge / central housing" => "This separate bridge will carry the wear thread. Its keyed feet and retaining bolts come next.",
+        "Screw / 24 mm rounded-thread blank" => "The 24 mm screw blank establishes the drive axis. The printed thread and shallow flat are added later.",
+        "Screw grip / thick comfortable T profile" => "The compact T-grip joins the shaft as one printed part. Its upper transitions and touched rims are rounded next.",
+        "Thrust fitting / 32 mm load head" => "The removable thrust fitting has a full round load head. Its keyed socket and captive-nut support are still to be cut.",
+        "Keeper / 11.2 mm cross plate" => "The keeper starts as a separate cross plate. It will drop over the thrust sleeve and bear on the jaw shoulders.",
+        "Keeper / downward installation throat" => "The open throat lets the keeper lower over the sleeve. The cross-pin retains it after the bearing faces seat.",
+        _ => return,
+    };
+    show_part(a, id, part, caption);
+}
+
+pub(super) fn show_part(a: &mut Author, id: &str, part: &str, caption: &str) {
+    let saved = format!("{id}_presentation_visibility");
+    a.call(
+        &saved,
+        "document/appearance",
+        "project_visibility",
+        json!({}),
+    );
+    let hidden: Vec<_> = a
+        .bodies
+        .keys()
+        .filter(|name| name.as_str() != part)
+        .map(|name| a.body_id(name))
+        .collect();
+    a.call(
+        &format!("{id}_presentation_isolate"),
+        "document/appearance",
+        "project_set_visibility",
+        json!({
+            "hidden_body_ids":hidden,
+            "hidden_sketch_names":reference(&saved,"/hidden_sketch_names"),
+            "hidden_datum_plane_ids":reference(&saved,"/hidden_datum_plane_ids")
+        }),
+    );
+    a.steps.push(
+        json!({"id":format!("{id}_presentation_fit"),"view":"isometric","fit":true,
+        "body_id":a.body_id(part),"duration_ms":600}),
+    );
+    // A note owns the playback hold. A current-view read with fit:false has
+    // no camera motion and does not itself wait for duration_ms.
+    a.steps
+        .push(json!({"id":format!("{id}_presentation_read"),"note":caption,"duration_ms":1200}));
+    a.call(
+        &format!("{id}_presentation_restore"),
+        "document/appearance",
+        "project_set_visibility",
+        reference(&saved, ""),
+    );
+}
+
 pub(super) fn run(a: &mut Author) {
     a.call(
         "vise_demo_home",

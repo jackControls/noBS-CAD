@@ -4069,7 +4069,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -4119,6 +4119,64 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_11"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "stage_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [],
+          "hidden_datum_plane_ids": {
+            "$ref": "stage_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "stage_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$select": {
+          "from": {
+            "$ref": "extrude_10"
+          },
+          "path": "/scene/bodies",
+          "pointer": "/id",
+          "take": "last",
+          "where": {}
+        }
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "stage_presentation_read",
+      "note": "The 198 mm rotor disc is extruded from its driving diameter. The shaft hub and bucket walls are added to this plate."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "stage_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_presentation_restore"
     },
     {
       "let": {
@@ -4316,7 +4374,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -4371,6 +4429,57 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_22"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "stage_hub_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [],
+          "hidden_datum_plane_ids": {
+            "$ref": "stage_hub_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "stage_hub_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_hub_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "stage_body",
+        "pointer": "/id"
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_hub_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "stage_hub_presentation_read",
+      "note": "The 24 mm hub stops at 18 mm height, leaving the bucket overlap open above it."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "stage_hub_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_hub_presentation_restore"
     },
     {
       "call": {
@@ -4539,7 +4648,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -4771,7 +4880,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -5125,7 +5234,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -5180,6 +5289,62 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_59"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bucket_half_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "bucket_half_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bucket_half_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bucket_half_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "bucket_body",
+        "pointer": "/id"
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "bucket_half_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "bucket_half_presentation_read",
+      "note": "A hollow cylinder becomes a 2 mm semicircular bucket wall. The second bucket is patterned about the shaft axis."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "bucket_half_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bucket_half_presentation_restore"
     },
     {
       "call": {
@@ -5423,7 +5588,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -5478,6 +5643,57 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_70"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "stage_shaft_fit_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [],
+          "hidden_datum_plane_ids": {
+            "$ref": "stage_shaft_fit_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "stage_shaft_fit_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_shaft_fit_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "stage_body",
+        "pointer": "/id"
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_shaft_fit_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "stage_shaft_fit_presentation_read",
+      "note": "Both bucket walls join the stage plate. An 8.3 mm bore provides nominal clearance for the 8 mm shaft."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "stage_shaft_fit_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "stage_shaft_fit_presentation_restore"
     },
     {
       "call": {
@@ -5777,7 +5993,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -6000,7 +6216,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -6223,7 +6439,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -6673,7 +6889,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -7164,13 +7380,55 @@
       "id": "stage_placement"
     },
     {
-      "component_id": {
-        "$ref": "stage_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_stage_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_stage_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_stage_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_stage_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "stage_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_stage_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_stage_presentation_read",
+      "note": "Savonius stage / print twice. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_stage_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_stage_presentation_restore"
     },
     {
       "let": {
@@ -7399,7 +7657,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -7631,7 +7889,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -7917,13 +8175,60 @@
       "id": "cap_placement"
     },
     {
-      "component_id": {
-        "$ref": "cap_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_cap_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_cap_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_cap_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_cap_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "cap_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_cap_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_cap_presentation_read",
+      "note": "Rounded rotor top endplate. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_cap_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_cap_presentation_restore"
     },
     {
       "chapter": "A supported axial stack",
@@ -8228,7 +8533,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -8278,6 +8583,73 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_172"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "base_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "base_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "base_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "base_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$select": {
+          "from": {
+            "$ref": "extrude_171"
+          },
+          "path": "/scene/bodies",
+          "pointer": "/id",
+          "take": "last",
+          "where": {}
+        }
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "base_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "base_presentation_read",
+      "note": "The base starts as printable stock. Bearing support, mounting holes and service access are added next."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "base_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "base_presentation_restore"
     },
     {
       "let": {
@@ -8460,7 +8832,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -8683,7 +9055,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -9037,7 +9409,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -9260,7 +9632,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -9483,7 +9855,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -9706,7 +10078,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -9929,7 +10301,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -10152,7 +10524,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -10375,7 +10747,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -10598,7 +10970,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -10821,7 +11193,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -11044,7 +11416,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -11267,7 +11639,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -11490,7 +11862,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -11713,7 +12085,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -11936,7 +12308,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -12159,7 +12531,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -12382,7 +12754,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -12605,7 +12977,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -12828,7 +13200,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -13051,7 +13423,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -13274,7 +13646,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -13497,7 +13869,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -13796,13 +14168,64 @@
       "id": "base_placement"
     },
     {
-      "component_id": {
-        "$ref": "base_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_base_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_base_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_base_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_base_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "base_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_base_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_base_presentation_read",
+      "note": "Base / accessible collar / optional M5 bench anchors. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_base_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_base_presentation_restore"
     },
     {
       "call": {
@@ -13971,7 +14394,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -14021,6 +14444,77 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_462"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "tower_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "tower_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "tower_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "tower_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$select": {
+          "from": {
+            "$ref": "extrude_461"
+          },
+          "path": "/scene/bodies",
+          "pointer": "/id",
+          "take": "last",
+          "where": {}
+        }
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "tower_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "tower_presentation_read",
+      "note": "The bearing carrier starts with its flange. The upper support and bearing seats share the same shaft axis."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "tower_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "tower_presentation_restore"
     },
     {
       "let": {
@@ -14203,7 +14697,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -14426,7 +14920,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -14649,7 +15143,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -14872,7 +15366,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -15226,7 +15720,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -15449,7 +15943,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -15672,7 +16166,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -16122,7 +16616,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -16345,7 +16839,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -16568,7 +17062,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -17018,7 +17512,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -17241,7 +17735,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -17464,7 +17958,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -17614,13 +18108,68 @@
       "id": "tower_placement"
     },
     {
-      "component_id": {
-        "$ref": "tower_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_tower_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_tower_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_tower_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_tower_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "tower_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_tower_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_tower_presentation_read",
+      "note": "Split 608ZZ bearing carrier / captive M3 nuts. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_tower_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_tower_presentation_restore"
     },
     {
       "call": {
@@ -17789,7 +18338,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -18021,7 +18570,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -18380,7 +18929,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -18612,7 +19161,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -18971,7 +19520,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -19203,7 +19752,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -19630,7 +20179,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -19964,7 +20513,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -20196,7 +20745,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -20555,7 +21104,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -20787,7 +21336,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -21010,7 +21559,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -21369,7 +21918,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -21601,7 +22150,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -21819,13 +22368,96 @@
       "id": "rotor_support_sleeve_placement"
     },
     {
-      "component_id": {
-        "$ref": "rotor_support_sleeve_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_rotor_support_sleeve_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_rotor_support_sleeve_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_rotor_support_sleeve_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_rotor_support_sleeve_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "rotor_support_sleeve_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_rotor_support_sleeve_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_rotor_support_sleeve_presentation_read",
+      "note": "Positive rotor support sleeve / print upright. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_rotor_support_sleeve_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_rotor_support_sleeve_presentation_restore"
     },
     {
       "chapter": "A measurable generator cartridge",
@@ -22130,7 +22762,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -22362,7 +22994,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -22585,7 +23217,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -22808,7 +23440,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -23031,7 +23663,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -23385,7 +24017,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -23608,7 +24240,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -23831,7 +24463,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -24185,7 +24817,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -24408,7 +25040,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -24631,7 +25263,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -24985,7 +25617,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -25284,13 +25916,100 @@
       "id": "motor_bracket_placement"
     },
     {
-      "component_id": {
-        "$ref": "motor_bracket_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_motor_bracket_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_motor_bracket_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_motor_bracket_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_motor_bracket_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "motor_bracket_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_motor_bracket_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_motor_bracket_presentation_read",
+      "note": "Fixed generator bracket / 12 mm axial slot travel. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_motor_bracket_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_motor_bracket_presentation_restore"
     },
     {
       "call": {
@@ -25459,7 +26178,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -25691,7 +26410,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -25746,6 +26465,106 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_976"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_mount_cavity_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_mount_cavity_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_mount_cavity_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_cavity_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "motor_mount_body",
+        "pointer": "/id"
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "motor_mount_cavity_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "motor_mount_cavity_presentation_read",
+      "note": "The generator cartridge has an open case cavity. Its provisional fit must be checked against the delivered motor."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "motor_mount_cavity_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_cavity_presentation_restore"
     },
     {
       "call": {
@@ -26045,7 +26864,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -26399,7 +27218,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -26753,7 +27572,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -27107,7 +27926,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -27330,7 +28149,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -27684,7 +28503,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -27907,7 +28726,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -28130,7 +28949,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -28580,7 +29399,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -28803,7 +29622,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -29253,7 +30072,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -29476,7 +30295,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -29926,7 +30745,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "front"
     },
     {
       "call": {
@@ -30144,13 +30963,104 @@
       "id": "motor_mount_placement"
     },
     {
-      "component_id": {
-        "$ref": "motor_mount_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_motor_mount_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_motor_mount_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_motor_mount_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_motor_mount_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "motor_mount_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_motor_mount_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_motor_mount_presentation_read",
+      "note": "Replaceable generator cartridge / terminal relief. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_motor_mount_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_motor_mount_presentation_restore"
     },
     {
       "call": {
@@ -30319,7 +31229,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -30653,7 +31563,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -31013,7 +31923,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -31245,7 +32155,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -31468,7 +32378,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -31691,7 +32601,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -32141,7 +33051,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -32591,7 +33501,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -32814,7 +33724,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -33037,7 +33947,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -33487,7 +34397,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -33937,7 +34847,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -34160,7 +35070,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -34383,7 +35293,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -34833,7 +35743,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -35283,7 +36193,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -35506,7 +36416,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -35729,7 +36639,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -36179,7 +37089,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -36629,7 +37539,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -37031,7 +37941,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -37086,6 +37996,118 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_1491"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "guard_wire_exit_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "guard_wire_exit_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "guard_wire_exit_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "guard_wire_exit_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "guard_body",
+        "pointer": "/id"
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "guard_wire_exit_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "guard_wire_exit_presentation_read",
+      "note": "The guard has a dedicated pointed wire exit, separate from the moving gears and clamp split."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "guard_wire_exit_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "guard_wire_exit_presentation_restore"
     },
     {
       "call": {
@@ -37254,7 +38276,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -37477,7 +38499,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -37695,13 +38717,116 @@
       "id": "guard_placement"
     },
     {
-      "component_id": {
-        "$ref": "guard_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_guard_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_guard_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_guard_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_guard_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "guard_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_guard_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_guard_presentation_read",
+      "note": "Guard / captive nuts / separate wire exit and tie holes. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_guard_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_guard_presentation_restore"
     },
     {
       "call": {
@@ -37870,7 +38995,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -38102,7 +39227,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -38325,7 +39450,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -38548,7 +39673,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -38771,7 +39896,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -38994,7 +40119,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -39280,13 +40405,120 @@
       "id": "guard_lid_placement"
     },
     {
-      "component_id": {
-        "$ref": "guard_lid_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_guard_lid_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_guard_lid_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_guard_lid_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_guard_lid_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "guard_lid_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_guard_lid_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_guard_lid_presentation_read",
+      "note": "Removable rounded transmission lid. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_guard_lid_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_guard_lid_presentation_restore"
     },
     {
       "chapter": "A real 4:1 spur pair",
@@ -39460,7 +40692,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -39510,6 +40742,133 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_1601"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "rotor_gear_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_lid_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "rotor_gear_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "rotor_gear_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "rotor_gear_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$select": {
+          "from": {
+            "$ref": "extrude_1600"
+          },
+          "path": "/scene/bodies",
+          "pointer": "/id",
+          "take": "last",
+          "where": {}
+        }
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "rotor_gear_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "rotor_gear_presentation_read",
+      "note": "The rotor gear starts with its root disc. A patterned involute will form the 72 teeth."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "rotor_gear_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "rotor_gear_presentation_restore"
     },
     {
       "let": {
@@ -40591,7 +41950,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -40898,7 +42257,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -41121,7 +42480,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -41475,7 +42834,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -41698,7 +43057,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -41921,7 +43280,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -42371,7 +43730,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -42521,13 +43880,124 @@
       "id": "rotor_gear_placement"
     },
     {
-      "component_id": {
-        "$ref": "rotor_gear_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_rotor_gear_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_lid_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_rotor_gear_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_rotor_gear_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_rotor_gear_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "rotor_gear_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_rotor_gear_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_rotor_gear_presentation_read",
+      "note": "72 tooth rotor gear / captive M3 split hub. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_rotor_gear_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_rotor_gear_presentation_restore"
     },
     {
       "call": {
@@ -42696,7 +44166,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -42746,6 +44216,137 @@
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_1740"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_lid_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_gear_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$select": {
+          "from": {
+            "$ref": "extrude_1739"
+          },
+          "path": "/scene/bodies",
+          "pointer": "/id",
+          "take": "last",
+          "where": {}
+        }
+      },
+      "duration_ms": 600,
+      "fit": true,
+      "id": "pinion_presentation_fit",
+      "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "pinion_presentation_read",
+      "note": "The generator pinion starts with its smaller root disc. Its 18 teeth will share module 1 with the rotor gear."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "pinion_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_presentation_restore"
     },
     {
       "let": {
@@ -43827,7 +45428,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -44134,7 +45735,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -44357,7 +45958,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -44711,7 +46312,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -44934,7 +46535,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -45157,7 +46758,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -45607,7 +47208,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "right"
     },
     {
       "call": {
@@ -45757,13 +47358,128 @@
       "id": "pinion_placement"
     },
     {
-      "component_id": {
-        "$ref": "pinion_component",
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "completed_pinion_presentation_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": [
+            {
+              "$ref": "stage_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "cap_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "base_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "tower_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_inner_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "bearing_shield_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "washer_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "collar_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_support_sleeve_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_bracket_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_mount_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "motor_shaft_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "guard_lid_body",
+              "pointer": "/id"
+            },
+            {
+              "$ref": "rotor_gear_body",
+              "pointer": "/id"
+            }
+          ],
+          "hidden_datum_plane_ids": {
+            "$ref": "completed_pinion_presentation_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "completed_pinion_presentation_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_pinion_presentation_isolate"
+    },
+    {
+      "body_id": {
+        "$ref": "pinion_body",
         "pointer": "/id"
       },
-      "duration_ms": 450,
+      "duration_ms": 600,
       "fit": true,
+      "id": "completed_pinion_presentation_fit",
       "view": "isometric"
+    },
+    {
+      "duration_ms": 1200,
+      "id": "completed_pinion_presentation_read",
+      "note": "18 tooth generator pinion / captive M2 split hub. Inspect the completed editable part before continuing the assembly."
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "completed_pinion_presentation_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "completed_pinion_presentation_restore"
     },
     {
       "call": {
@@ -45963,7 +47679,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -46195,7 +47911,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -46645,7 +48361,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -46970,7 +48686,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -47202,7 +48918,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -47652,7 +49368,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -47977,7 +49693,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -48209,7 +49925,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -48659,7 +50375,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -48984,7 +50700,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -49216,7 +50932,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -49666,7 +51382,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -49991,7 +51707,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -50223,7 +51939,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -50673,7 +52389,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -51225,7 +52941,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -51457,7 +53173,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -52009,7 +53725,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -52241,7 +53957,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -52566,7 +54282,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
@@ -53025,7 +54741,7 @@
       "duration_ms": 300,
       "fit": true,
       "target": "active_sketch",
-      "view": "current"
+      "view": "top"
     },
     {
       "call": {
