@@ -2,9 +2,11 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::PathBuf,
-    process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+#[path = "desktop_process.rs"]
+mod desktop_process;
 
 fn unique_recipe_window(sessions: &Value) -> Option<&str> {
     let windows = sessions["windows"].as_array()?;
@@ -86,17 +88,8 @@ pub fn launch(arguments: &Value) -> Result<Value, String> {
     if !path.is_file() {
         return Err("CAD executable is not a file".into());
     }
-    let mut command = Command::new(&path);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(parent) = path.parent() {
-        command.current_dir(parent);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Could not launch CAD: {e}"))?;
+    let mut child =
+        desktop_process::spawn(&path).map_err(|e| format!("Could not launch CAD: {e}"))?;
     let pid = child.id();
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
