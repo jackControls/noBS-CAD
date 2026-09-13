@@ -4,8 +4,13 @@
 
 | File | Role |
 |------|------|
-| [INDEX.md](INDEX.md) | This file |
-| [OKRs.md](OKRs.md) | Pointer to manufacturing OKRs |
-| `catalog.json` | Brand filament presets (synced to `src/materials/catalog.json` by `build.rs`) |
+| [Manufacturing objectives](../../../docs/manufacturing/OKRs.md) | Material catalog contract |
+| `catalog.json` | Brand filament presets; source for `src/materials/catalog.json` |
 
-Do not invent a second catalog schema. Add rows here; cargo build of `nbcad-export` mirrors to the UI.
+After editing the catalog, sync the UI mirror explicitly:
+
+```sh
+cargo test -p nbcad-export --lib materials::tests::regen_frontend_catalog_mirror -- --ignored --exact
+```
+
+Normal builds do not modify the mirror; export tests check that it matches.

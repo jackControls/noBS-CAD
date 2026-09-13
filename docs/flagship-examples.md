@@ -1,17 +1,22 @@
 # Flagship parametric examples
 
-These are development targets, not released or fabrication-qualified designs.
+These runnable examples are engineering development candidates. Their digital
+validation is separate from physical fabrication and functional qualification.
 The three examples are a printable vertical-axis wind turbine with an integrated
 motor used as a generator, a timber garden bench, and a functional screw vise.
 The vise adds screw-driven linear motion, load calculations and replaceable wear
 surfaces to the rotating turbine and static timber assembly.
 
-The bench is accepted at its current development milestone; it is not finished
-or fabrication-qualified. The active example work now moves to the turbine and
-vise. The user's 10 September decisions, proposed starting designs, material
-implications and calculation assumptions are recorded in
-[the engineering brief](flagship-engineering.md). Keep those decisions with the
-recipes and distinguish them from untested engineering proposals.
+The bench is accepted at its current development milestone; full drafting and
+fabrication qualification remain open. The original 10 September design
+decisions, material implications and calculation assumptions are retained in
+[the engineering brief](flagship-engineering.md). The individual design pages
+below describe the later implementations and source-specific evidence.
+
+For immediate inspection, the [showcase preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
+includes editable `bench.nbcad`, `vise.nbcad` and `turbine.nbcad` projects. Use
+**File → Open** in CAD. To watch construction or open a recipe for replay, use
+the [README showcase](../README.md#made-in-nobs-cad).
 
 All three now have executable native construction sources in the
 [recipe library](../examples/scripts/README.md). The [turbine](vertical-axis-turbine.md)
@@ -23,15 +28,15 @@ four-part thread/guide coupon. M5/M6 hardware envelopes bring the assembly to
 30 bodies including optional mounts. Their
 recipe layers include Rust authors, JSONC sources and native lifecycle checks.
 Software validation results must identify the current source and build; earlier
-vise records do not qualify its replacement. None is a released, physically
-qualified or load-rated product.
+vise records do not qualify its replacement. None has a physical load or
+durability rating.
 
 The product purpose is one source that does the work, teaches the process and
 shows it: fast execution, controlled step-through inspection and paced rendering
 use the same operation sequence. Feature lessons are part of that capability,
 not sidecar demos maintained in a different language.
 
-## Order of work
+## Open engineering scope
 
 1. Resolve component-context editing with Jack in issue #94, then validate a
    translated and rotated occurrence and its repeated sibling through MCP.
@@ -129,9 +134,9 @@ clamping force, creep and wear before publishing a working load or service life.
 
 The [native recipe library](../examples/scripts/README.md) carries the short
 fillet lesson, plate, spacer, bracket, repeated assembly and complete bench sources.
-Future feature lessons extend that same collection. Run a source with
-`cargo xtask run-script FILE --server MCP`; the same Rust interpreter supports
-headless comparison and live presentation. The older `cargo xtask test-mcp`
+Future feature lessons extend that same collection. The
+[developer replay guide](DEVELOPMENT.md#replay-a-recipe) covers headless comparison
+and live presentation through the same Rust interpreter. The older `cargo xtask test-mcp`
 workshop, drawing, live, controls and contracts drivers remain focused test entry
 points, not a second recommended authoring format.
 

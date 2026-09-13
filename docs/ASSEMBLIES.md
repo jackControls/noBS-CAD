@@ -1,5 +1,20 @@
 # Assemblies, components, and joints
 
+Build reusable parts, place copies in an assembly, and connect them with joints.
+Part features and assembly placement stay editable in the same `.nbcad` file.
+The [repeated bracket lesson](../examples/scripts/README.md) is a small starting
+example; the [vise](d-screw-vise.md) and [turbine](vertical-axis-turbine.md)
+demonstrate screw-driven motion and geared rotation.
+
+An occurrence is a placed copy of a part definition. Editing the definition
+updates its copies; moving one occurrence changes only its assembly placement.
+The current project stores those definitions internally. Associative links to
+external part-library files remain future work.
+
+Joints and gear relations provide deterministic kinematics. They do not model
+forces, friction, material flexibility or gear-tooth contact. Use the native
+interference checks to inspect geometry and physical tests to qualify a mechanism.
+
 ## Production boundary
 
 Part design and assembly placement are separate persisted model layers.
@@ -15,7 +30,7 @@ Part design and assembly placement are separate persisted model layers.
   an assembly authority.
 
 This boundary keeps the model deterministic in native desktop, browser
-development, CAM, file export, and headless tests.
+development, file export and headless tests, and preserves it for future CAM work.
 
 ## Persisted component structure
 
@@ -285,7 +300,7 @@ rollback does not destroy assembly intent.
 
 This is deterministic rigid-body kinematics, not a physics engine. Flexible
 bodies, force/torque integration, mass and inertia, friction, bounce, compliant
-contact, gears/cams, continuous analytic swept volumes, associative external
+contact, cam followers and gear-tooth contact simulation, continuous analytic swept volumes, associative external
 component-library links, AP242/XCAF product hierarchy, and direct CAM operation
 generation remain later slices. The pose representation, exact placed STEP
 geometry, and exported motion paths are host-neutral so those systems can

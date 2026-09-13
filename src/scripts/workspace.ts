@@ -4,6 +4,7 @@ import { isTauriRuntime } from '../engine';
 import { trackEngineOperation } from '../engine/activity';
 import { chooseOpenFile, chooseSaveTarget, writeSaveTarget } from '../files/fileIO';
 import { newProject } from '../files/projectFiles';
+import { requestUnsavedDecision } from '../files/unsavedChanges';
 import { presentation } from '../operationPlayback';
 import { publishCurrentSession } from '../sessionBridge';
 import { useAppStore } from '../store/appStore';
@@ -12,7 +13,7 @@ export interface ScriptExample {
   id: string;
   name: string;
   summary: string;
-  kind: 'lesson' | 'assembly' | 'flagship-candidate';
+  kind: 'lesson' | 'assembly' | 'flagship-candidate' | 'manufacturing-coupon' | 'calibration';
   focus_operations: string[];
   operations: string[];
   preview: boolean;
@@ -24,7 +25,7 @@ export interface ScriptInfo {
   check_count: number;
   source: string;
   path?: string;
-  chapters?: Array<{ chapter?: string; text: string }>;
+  chapters?: Array<{ chapter?: string; text: string; step_index?: number }>;
 }
 export interface ScriptPreviewFrame { caption: string; previewId: string; frameIndex: number }
 interface ScriptWorkspace {
@@ -35,6 +36,7 @@ interface ScriptWorkspace {
   selectedExample: ScriptExample | null;
   info: ScriptInfo | null;
   source: string;
+  sourceBaseline: string;
   path: string;
   error: string | null;
   completed: boolean;
@@ -44,7 +46,7 @@ interface ScriptWorkspace {
 }
 export const useScriptWorkspace = create<ScriptWorkspace>(() => ({
   open: false, loading: false, running: false, examples: [], selectedExample: null,
-  info: null, source: '', path: '', error: null, completed: false,
+  info: null, source: '', sourceBaseline: '', path: '', error: null, completed: false,
   tab: 'overview', mode: 'present', speed: 2,
 }));
 
@@ -94,22 +96,33 @@ async function inspect(source: string): Promise<ScriptInfo> {
   requireDesktop();
   return invoke<ScriptInfo>('native_script_inspect', { source });
 }
-function acceptScript(info: ScriptInfo, example: ScriptExample | null = null, path = ''): void {
-  useScriptWorkspace.setState({ info, source: info.source, selectedExample: example,
+function acceptScript(info: ScriptInfo, example: ScriptExample | null = null, path = '', tab: 'overview' | 'source' = 'overview'): void {
+  useScriptWorkspace.setState({ info, source: info.source, sourceBaseline: info.source, selectedExample: example,
     // Loading opened the panel already. A later Close must survive this reply.
-    path: info.path ?? path, error: null, completed: false, tab: 'overview' });
+    path: info.path ?? path, error: null, completed: false, tab });
 }
-async function load(action: () => Promise<void>): Promise<void> {
+async function preserveSourceBeforeReplace(): Promise<boolean> {
+  const state = useScriptWorkspace.getState();
+  if (state.source === state.sourceBaseline) return true;
+  const decision = await requestUnsavedDecision('replace-script', state.info?.name ?? 'Edited script');
+  if (decision === 'cancel') return false;
+  if (decision === 'save') return saveSource();
+  return true;
+}
+async function load(action: () => Promise<void>, replacing = false): Promise<void> {
   showScripts();
   const state = useScriptWorkspace.getState();
   if (state.loading || state.running) return;
   useScriptWorkspace.setState({ loading: true, error: null, open: true });
-  try { await action(); }
+  try {
+    if (replacing && !await preserveSourceBeforeReplace()) return;
+    await action();
+  }
   catch (error) { useScriptWorkspace.setState({ error: errorMessage(error) }); }
   finally { useScriptWorkspace.setState({ loading: false }); }
 }
-export async function showScriptExample(example: ScriptExample): Promise<void> {
-  await load(async () => acceptScript(await inspect(example.source), example));
+export async function showScriptExample(example: ScriptExample, tab: 'overview' | 'source' = 'overview'): Promise<void> {
+  await load(async () => acceptScript(await inspect(example.source), example, '', tab), true);
 }
 export async function openScriptFile(): Promise<void> {
   await load(async () => {
@@ -117,19 +130,21 @@ export async function openScriptFile(): Promise<void> {
     const file = await chooseOpenFile({ description: 'noBS CAD command script', extension: '.jsonc',
       alternateExtensions: ['.json'], mime: 'application/json' });
     if (!file) return;
-    if (file.bytes.length > 2 * 1024 * 1024) throw new Error('Script files must be smaller than 2 MB.');
+    // The shared Rust parser enforces the same 16 MiB limit as path/MCP loading.
     const source = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes);
     const path = file.writableTarget?.kind === 'native' ? file.writableTarget.path : file.name;
     acceptScript(await inspect(source), null, path);
-  });
+  }, true);
 }
 export async function loadScriptPath(): Promise<void> {
+  // Save-before-replace can change the workspace path. Keep the requested
+  // file identity separate from the destination used to preserve old edits.
+  const path = useScriptWorkspace.getState().path.trim();
   await load(async () => {
     requireDesktop();
-    const path = useScriptWorkspace.getState().path.trim();
     if (!path) throw new Error('Choose a script file or enter its path.');
     acceptScript(await invoke<ScriptInfo>('native_script_inspect', { path }), null, path);
-  });
+  }, true);
 }
 export async function validateScriptSource(): Promise<void> {
   await load(async () => {
@@ -139,18 +154,21 @@ export async function validateScriptSource(): Promise<void> {
   });
 }
 
-export async function saveScriptSource(): Promise<void> {
-  await load(async () => {
+async function saveSource(): Promise<boolean> {
     const state = useScriptWorkspace.getState();
-    const info = await inspect(state.source);
-    const name = state.path.split(/[\\/]/).pop() || `${info.name.replace(/[<>:"/\\|?*]/g, '-')}.nbcad.jsonc`;
+    // Save an unfinished/invalid edit too. Validation is a separate operation;
+    // it must never prevent the user from preserving work before replacement.
+    const name = state.path.split(/[\\/]/).pop() || `${(state.info?.name ?? 'Edited script').replace(/[<>:"/\\|?*]/g, '-')}.nbcad.jsonc`;
     const target = await chooseSaveTarget(name, {
       description: 'noBS CAD command script', extension: '.jsonc', mime: 'application/json',
     });
-    if (!target) return;
+    if (!target) return false;
     await writeSaveTarget(target, new TextEncoder().encode(state.source));
-    useScriptWorkspace.setState({ info, path: target.kind === 'native' ? target.path : target.name });
-  });
+    useScriptWorkspace.setState({ sourceBaseline: state.source, path: target.kind === 'native' ? target.path : target.name });
+    return true;
+}
+export async function saveScriptSource(): Promise<void> {
+  await load(async () => { await saveSource(); });
 }
 
 /** File loading never runs commands. Run explicitly creates a retained new tab. */

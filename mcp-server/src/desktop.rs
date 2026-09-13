@@ -2,9 +2,76 @@ use serde_json::{json, Value};
 use std::{
     fs,
     path::PathBuf,
-    process::{Command, Stdio},
     time::{Duration, Instant},
 };
+
+#[path = "desktop_process.rs"]
+mod desktop_process;
+
+fn unique_recipe_window(sessions: &Value) -> Option<&str> {
+    let windows = sessions["windows"].as_array()?;
+    if windows.len() != 1 {
+        return None;
+    }
+    windows[0]["active_session_id"].as_str()
+}
+
+pub fn open_recipe(recipe: &str) -> Result<bool, String> {
+    let sessions = crate::session::sessions_list_json();
+    let Some(session_id) = unique_recipe_window(&sessions) else {
+        return Ok(false);
+    };
+    let reply = crate::session::request_ui(
+        &json!({
+            "action":"open_recipe", "recipe":recipe, "session_id":session_id
+        }),
+        None,
+    )?;
+    // A queued receipt acknowledges delivery, not source replacement or playback.
+    Ok(recipe_was_queued(&reply))
+}
+
+fn recipe_was_queued(reply: &Value) -> bool {
+    reply["status"] == "applied" && reply["recipe"]["status"] == "queued"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipe_handoff_never_guesses_between_windows() {
+        assert_eq!(unique_recipe_window(&json!({"windows":[]})), None);
+        assert_eq!(
+            unique_recipe_window(&json!({"windows":[{"active_session_id":"a"}]})),
+            Some("a")
+        );
+        assert_eq!(
+            unique_recipe_window(
+                &json!({"windows":[{"active_session_id":"a"},{"active_session_id":"b"}]})
+            ),
+            None
+        );
+        assert_eq!(unique_recipe_window(&json!({"windows":[{}]})), None);
+    }
+
+    #[test]
+    fn older_desktop_rejection_falls_back_to_the_current_recipe_window() {
+        for reply in [
+            json!({"status":"failed","error":"Unknown UI action: open_recipe"}),
+            json!({"status":"applied","ui":{}}),
+            json!({"status":"timeout"}),
+        ] {
+            assert!(
+                !recipe_was_queued(&reply),
+                "No queued receipt: the launcher must retain the URL for a new window"
+            );
+        }
+        assert!(recipe_was_queued(
+            &json!({"status":"applied","recipe":{"status":"queued"}})
+        ));
+    }
+}
 
 /// Launch only the explicitly configured CAD executable, without a shell or
 /// inherited stdio handles. Correlate readiness with the child's PID lease.
@@ -21,17 +88,8 @@ pub fn launch(arguments: &Value) -> Result<Value, String> {
     if !path.is_file() {
         return Err("CAD executable is not a file".into());
     }
-    let mut command = Command::new(&path);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if let Some(parent) = path.parent() {
-        command.current_dir(parent);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Could not launch CAD: {e}"))?;
+    let mut child =
+        desktop_process::spawn(&path).map_err(|e| format!("Could not launch CAD: {e}"))?;
     let pid = child.id();
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {

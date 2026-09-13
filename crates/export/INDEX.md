@@ -4,10 +4,9 @@ Manufacturing mesh writers + filament catalog + slicer Metadata.
 
 | Path | Role |
 |------|------|
-| [INDEX.md](INDEX.md) | This file |
-| [OKRs.md](OKRs.md) | Pointer → docs/manufacturing/OKRs.md |
+| [Manufacturing objectives](../../docs/manufacturing/OKRs.md) | Export, materials and slicer contracts |
 | [presets/INDEX.md](presets/INDEX.md) | Catalog folder index |
-| `build.rs` | Mirrors `presets/catalog.json` → `src/materials/catalog.json` |
+| `build.rs` | Tracks changes to `presets/catalog.json` |
 | `src/lib.rs` | Public API + tests |
 | `src/facade.rs` | `ExportFacade` |
 | `src/threemf.rs` | 3MF ZIP + slicer Metadata |

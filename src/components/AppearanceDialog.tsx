@@ -1,3 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { isTauriRuntime } from '../engine';
 import { Check, Monitor, Moon, Sun, X } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { LOCALE_NAMES, SUPPORTED_LOCALES } from '../i18n/locales';
@@ -48,6 +51,53 @@ export function AppearanceDialog() {
   const setOpen = useAppStore((s) => s.setSettingsOpen);
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
+  const dialog = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closing = dialog.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const controls = () => [...(dialog.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter(control => !control.closest('[hidden],[inert]') && control.getClientRects().length > 0);
+    controls()[0]?.focus({preventScroll: true});
+    const keydown = (event: KeyboardEvent) => {
+      // A later save/discard prompt owns its own modal keyboard interaction.
+      if (event.defaultPrevented || document.querySelector('[role="alertdialog"]')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setOpen(false);
+      } else if (event.key === 'Tab') {
+        const available = controls();
+        const index = available.indexOf(document.activeElement as HTMLElement);
+        const next = index < 0 ? (event.shiftKey ? available.length - 1 : 0)
+          : (index + (event.shiftKey ? -1 : 1) + available.length) % available.length;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        (available[next] ?? dialog.current)?.focus();
+      }
+    };
+    window.addEventListener('keydown', keydown, true);
+    return () => {
+      window.removeEventListener('keydown', keydown, true);
+      // Closing must not steal focus after another action deliberately moved it.
+      if (document.activeElement !== document.body && !closing?.contains(document.activeElement)) return;
+      if (previous?.isConnected && previous !== document.body && previous.getClientRects().length) previous.focus({preventScroll: true});
+      else document.querySelector<HTMLElement>('[data-testid="file-menu-button"]')?.focus({preventScroll: true});
+    };
+  }, [open, setOpen]);
+
+  const [build, setBuild] = useState<{version: string; revision: string; channel: string; modified: boolean} | null>(null);
+  const [buildError, setBuildError] = useState(false);
+  useEffect(() => {
+    if (!open || !isTauriRuntime()) return;
+    let current = true;
+    void invoke<NonNullable<typeof build>>('native_build_info')
+      .then(info => { if (current) { setBuild(info); setBuildError(false); } })
+      .catch(() => { if (current) setBuildError(true); });
+    return () => { current = false; };
+  }, [open]);
 
   if (!open) return null;
 
@@ -58,11 +108,14 @@ export function AppearanceDialog() {
       onClick={() => setOpen(false)}
     >
       <section
+        ref={dialog}
+        tabIndex={-1}
+        data-settings-dialog
         role="dialog"
         aria-modal="true"
         aria-labelledby="appearance-title"
         data-testid="appearance-dialog"
-        className="feature-dialog w-[430px] max-w-full overflow-hidden border border-edge bg-panel text-ink"
+        className="feature-dialog max-h-[95vh] w-[430px] max-w-full overflow-y-auto border border-edge bg-panel text-ink"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="feature-dialog-header flex h-11 items-center gap-2 border-b border-edge px-4">
@@ -81,6 +134,13 @@ export function AppearanceDialog() {
         </header>
 
         <div className="p-4">
+          <section aria-label="About noBS CAD" className="mb-4 border-b border-edge pb-3">
+            <h3 className="text-xs font-semibold">About noBS CAD</h3>
+            <p className="mt-1 select-text break-all text-xs text-mute">{build
+              ? `${build.version} · ${build.channel} · ${build.revision}${build.modified ? ' (modified source)' : ''}`
+              : isTauriRuntime() ? buildError ? 'Build identity unavailable' : 'Reading build identity…' : 'Browser development workspace'}</p>
+            <p className="mt-1 text-[11px] text-mute">Free, open and local. Include this build identity when reporting a problem.</p>
+          </section>
           <div className="mb-2 text-[10px] font-semibold tracking-widest text-mute">
             {t('appearance.theme')}
           </div>

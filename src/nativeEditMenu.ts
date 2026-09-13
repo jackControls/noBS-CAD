@@ -9,6 +9,7 @@ import {
   undoApplicationHistory,
 } from './engine/controller';
 import { useAppStore } from './store/appStore';
+import { isTextEditingTarget } from './modelKeyboard';
 
 type NativeEditCommand = 'undo' | 'redo';
 
@@ -22,10 +23,7 @@ export function nativeMacMenuOwnsUndoRedo(): boolean {
 
 function activeTextEditor(): HTMLElement | null {
   const active = document.activeElement;
-  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-    return active;
-  }
-  return active instanceof HTMLElement && active.isContentEditable ? active : null;
+  return isTextEditingTarget(active) ? active : null;
 }
 
 function availability(): { canUndo: boolean; canRedo: boolean } {
@@ -33,6 +31,7 @@ function availability(): { canUndo: boolean; canRedo: boolean } {
   // longer supplies the responder-chain Undo item after we replace it with a
   // CAD command, so the event handler below delegates back to WebKit.
   if (activeTextEditor()) return { canUndo: true, canRedo: true };
+  if (useAppStore.getState().settingsOpen) return { canUndo: false, canRedo: false };
 
   return {
     canUndo: canUndoApplicationHistory(),
@@ -40,11 +39,14 @@ function availability(): { canUndo: boolean; canRedo: boolean } {
   };
 }
 
-async function run(command: NativeEditCommand): Promise<void> {
+export async function runNativeEditCommand(command: NativeEditCommand): Promise<void> {
   if (activeTextEditor()) {
     document.execCommand(command);
     return;
   }
+  // Native menu events bypass the browser key router. Also guard execution:
+  // an event can already be queued when the modal disables its menu items.
+  if (useAppStore.getState().settingsOpen) return;
   if (command === 'undo') await undoApplicationHistory();
   else await redoApplicationHistory();
 }
@@ -79,7 +81,7 @@ export function installNativeEditMenu(): () => void {
   window.addEventListener('focusout', syncAfterFocusChange);
   void listen<NativeEditCommand>('native-edit-command', (event) => {
     if (event.payload === 'undo' || event.payload === 'redo') {
-      void run(event.payload);
+      void runNativeEditCommand(event.payload);
     }
   }).then((stop) => {
     if (disposed) stop();

@@ -25,6 +25,11 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["nbcad"] }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "app",

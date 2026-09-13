@@ -101,6 +101,24 @@ pub fn find(id: &str) -> Result<&'static Recipe, String> {
         .ok_or_else(|| format!("Unknown recipe '{id}'; list the recipe catalog first"))
 }
 
+/// Links select installed, authored source only. No URL decoding, paths,
+/// parameters, remote fetches or implicit execution cross this boundary.
+pub fn from_open_uri(uri: &str) -> Result<&'static Recipe, String> {
+    let id = uri
+        .strip_prefix("nbcad://recipe/")
+        .ok_or("Expected nbcad://recipe/<built-in recipe ID>")?;
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(
+            "Recipe links accept a built-in ID only, without parameters or extra paths".into(),
+        );
+    }
+    find(id)
+}
+
 /// Titles, chapters, actual calls and counts come from the source itself.
 /// A recipe has no pretend `cad_script` operation: that operation records traces.
 pub fn catalog(include_source: bool) -> Value {
@@ -130,6 +148,48 @@ pub fn catalog(include_source: bool) -> Value {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn recipe_links_select_only_installed_source() {
+        for recipe in RECIPES {
+            assert_eq!(
+                from_open_uri(&format!("nbcad://recipe/{}", recipe.id))
+                    .unwrap()
+                    .source,
+                recipe.source
+            );
+        }
+        for uri in [
+            "https://example.org/model.jsonc",
+            "nbcad://recipe/",
+            "nbcad://recipe/unknown",
+            "nbcad://recipe/garden-bench?run=true",
+            "nbcad://recipe/garden-bench#run",
+            "nbcad://recipe/garden-bench/",
+            "nbcad://recipe/../garden-bench",
+            "nbcad://recipe/%67arden-bench",
+            "nbcad://user@recipe/garden-bench",
+            "nbcad://recipe:80/garden-bench",
+            "nbcad://recipe/garden-bench\n",
+            "nbcad://recipe/C:\\model.jsonc",
+        ] {
+            assert!(from_open_uri(uri).is_err(), "accepted {uri:?}");
+        }
+    }
+
+    #[test]
+    fn showcase_landing_links_select_real_bundled_recipes() {
+        let page = include_str!("../../../knowledge/open.html");
+        let links = page
+            .split("href=\"nbcad:")
+            .skip(1)
+            .map(|tail| format!("nbcad:{}", tail.split('"').next().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!links.is_empty());
+        for uri in links {
+            from_open_uri(&uri).unwrap();
+        }
+    }
 
     #[test]
     fn recipes_have_distinct_ids_and_teach_operations_they_execute() {

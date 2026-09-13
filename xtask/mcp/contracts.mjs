@@ -146,6 +146,22 @@ try {
   notice.hidden=true;
   check(!inspectUi(context).surfaces.some(surface=>surface.name==='dialogs/notice'),'Hidden dialogs must not be advertised');
   notice.remove();
+  const longSource=document.createElement('textarea'); longSource.setAttribute('aria-label','Long editable recipe');
+  const chapter='A useful chapter near the end';
+  const originalSource='// earlier geometry\n'.repeat(120000)+chapter+'\n// retained tail';
+  longSource.value=originalSource; document.body.append(longSource);
+  const chapterStart=originalSource.indexOf(chapter);
+  longSource.setSelectionRange(chapterStart,chapterStart+chapter.length);
+  const sourceExcerpt=controls().find(c=>c.label==='Long editable recipe');
+  check(sourceExcerpt.value.length<=4096&&sourceExcerpt.value_truncated===true&&sourceExcerpt.value_length===originalSource.length,'Large source inspection must be bounded and explicitly identified as an excerpt');
+  check(sourceExcerpt.value===originalSource.slice(sourceExcerpt.value_start,sourceExcerpt.value_start+sourceExcerpt.value.length)&&sourceExcerpt.value.includes(chapter),'The excerpt must describe the selected chapter using correct original offsets');
+  check(sourceExcerpt.selection.start===chapterStart&&sourceExcerpt.selection.end===chapterStart+chapter.length&&longSource.value===originalSource,'Inspection must preserve source and its selection');
+  longSource.value='x'.repeat(903)+'😀'+'z'.repeat(4094)+'!';
+  longSource.setSelectionRange(longSource.value.length,longSource.value.length);
+  const endingExcerpt=controls().find(c=>c.label==='Long editable recipe');
+  check(endingExcerpt.value.length<=4096&&endingExcerpt.value.endsWith('!')&&!/^[\uDC00-\uDFFF]/.test(endingExcerpt.value),'A Unicode boundary near EOF must preserve the caret vicinity without splitting a surrogate pair');
+  check(endingExcerpt.value===longSource.value.slice(endingExcerpt.value_start),'End-of-document excerpt offsets must identify the complete retained suffix');
+  longSource.remove();
   list=controls();
   rejects(()=>operateUi({action:'click',target:list.find(c=>c.label==='Different action').id},context),/modal/);
   let accepted=false; modal.querySelector('button').onclick=()=>{accepted=true;};
@@ -210,6 +226,39 @@ try {
  console.log('PASS production Save-on-exit polling: '+JSON.stringify(exitSavePolling));
  await exitSavePage.close();
  console.log('PASS production presentation surfaces: '+JSON.stringify(await checkPresentationSurfaces(browser, server.resolvedUrls.local[0]+'mcp-contract')));
+ const settingsPage = await browser.newPage();
+ try {
+  await settingsPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  await settingsPage.evaluate(async () => {
+   const {mountSettingsContract} = await import('/src/components/AppearanceDialog.browser.test.tsx');
+   window.settingsContract = mountSettingsContract();
+  });
+  await settingsPage.getByRole('button', {name: 'Settings opener'}).click();
+  const settings = settingsPage.getByTestId('appearance-dialog');
+  await settings.getByText(/0123456789abcdef0123456789abcdef01234567ab.*modified source/).waitFor();
+  await settingsPage.waitForFunction(() => document.activeElement === document.querySelector('[data-settings-dialog] button'));
+  console.log('PASS production Settings native history: '+JSON.stringify(await settingsPage.evaluate(() => window.settingsContract.checkNativeHistory())));
+  await settingsPage.waitForFunction(() => document.activeElement === document.querySelector('[data-settings-dialog] button'));
+  await settingsPage.keyboard.press('Shift+Tab');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement === document.querySelector('[data-settings-dialog] footer button')), true, 'Settings Shift+Tab stays inside the modal');
+  await settingsPage.keyboard.press('Tab');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement === document.querySelector('[data-settings-dialog] button')), true, 'Settings Tab wraps to its first control');
+  await settingsPage.keyboard.press('Escape');
+  await settings.waitFor({state: 'detached'});
+  assert.equal(await settingsPage.evaluate(() => window.settingsContract.modelEscapes()), 0, 'Closing Settings must not cancel CAD through its earlier capture listener');
+  assert.equal(await settingsPage.evaluate(() => document.activeElement?.textContent), 'Settings opener');
+  await settingsPage.getByRole('button', {name: 'Settings opener'}).click();
+  await settings.waitFor();
+  await settingsPage.evaluate(() => {
+   document.querySelector('[data-settings-dialog] button').click();
+   document.querySelector('[aria-label="Newer focus"]').focus();
+  });
+  await settings.waitFor({state: 'detached'});
+  assert.equal(await settingsPage.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Newer focus', 'Settings dismissal preserves newer focus');
+  await settingsPage.keyboard.press('Escape');
+  assert.equal(await settingsPage.evaluate(() => window.settingsContract.modelEscapes()), 1, 'CAD keys resume after Settings closes');
+  console.log('PASS production Settings modal: full build identity, initial focus, Tab/Shift+Tab trap, Escape ownership, focus restoration and newer focus');
+ } finally { await settingsPage.close(); }
  const scriptPage=await browser.newPage();
  await scriptPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const scripts=await scriptPage.evaluate(async()=>{
@@ -290,6 +339,17 @@ try {
  });
  console.log('PASS production project-open/export recovery: '+JSON.stringify(recovery));
  await recoveryPage.close();
+ const openFramingPage=await browser.newPage();
+ const openFramingErrors=[];
+ openFramingPage.on('pageerror',error=>openFramingErrors.push(error.message));
+ await openFramingPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const openFraming=await openFramingPage.evaluate(async()=>{
+  const {checkOpenedProjectFraming}=await import('/src/files/openProjectFraming.browser.test.tsx');
+  return checkOpenedProjectFraming();
+ });
+ assert.deepEqual(openFramingErrors,[],'Open framing must not leave asynchronous errors');
+ console.log('PASS production Open framing: '+JSON.stringify(openFraming));
+ await openFramingPage.close();
  const stepPage=await browser.newPage();
  await stepPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const step=await stepPage.evaluate(async()=>{
@@ -353,6 +413,30 @@ try {
  });
  console.log('PASS production drawing projection publication: '+JSON.stringify(drawingPublication));
  await drawingPublicationPage.close();
+ const drawingFitPage=await browser.newPage({viewport:{width:1280,height:720}});
+ try {
+  await drawingFitPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  const drawingFit=await drawingFitPage.evaluate(async()=>{
+   const {checkDrawingSheetFit}=await import('/src/drawing/sheetFit.browser.test.tsx');
+   return checkDrawingSheetFit();
+  });
+  console.log('PASS production drawing sheet fit: '+JSON.stringify(drawingFit));
+ } finally { await drawingFitPage.close(); }
+ const titleInputs=[];
+ for(const recipe of ['garden-bench','d-screw-vise','vertical-axis-turbine','turbine-fit-coupons']) {
+  const source=await readFile(new URL(`../../examples/scripts/${recipe}.nbcad.jsonc`,import.meta.url),'utf8');
+  const script=JSON.parse(source.replace(/^\s*\/\/.*$/gm,''));
+  for(const step of script.steps)if(step.call?.operation==='drawing_create_sheet')titleInputs.push({recipe,arguments:step.call.arguments});
+ }
+ const titlePage=await browser.newPage({viewport:{width:1280,height:800}});
+ try {
+  await titlePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+  const titleBlocks=await titlePage.evaluate(async inputs=>{
+   const {checkDrawingTitleBlocks}=await import('/src/drawing/titleBlock.browser.test.tsx');
+   return checkDrawingTitleBlocks(inputs);
+  },titleInputs);
+  console.log('PASS production drawing title blocks: '+JSON.stringify(titleBlocks));
+ }finally{await titlePage.close();}
  const controlPage=await browser.newPage();
  await controlPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const controls=await controlPage.evaluate(async()=>{
@@ -361,6 +445,44 @@ try {
  });
  console.log('PASS production control document ownership: '+JSON.stringify(controls));
  await controlPage.close();
+ const palettePage=await browser.newPage();
+ await palettePage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ await palettePage.evaluate(async()=>{
+  const {mountSketchPaletteContract}=await import('/src/components/SketchPalette.browser.test.tsx');
+  window.paletteContract=mountSketchPaletteContract();
+ });
+ await palettePage.getByRole('checkbox',{name:'Sketch Grid',exact:true}).waitFor();
+ const palette=await palettePage.evaluate(async()=>{
+  const {inspectUi,operateUi}=await import('/src/uiControl.ts');
+  const snapshot=inspectUi();
+  const controls=snapshot.surfaces.flatMap(surface=>surface.controls);
+  const toggles=controls.filter(control=>control.role==='checkbox');
+  if(snapshot.unlabeled_controls.length||toggles.some(control=>typeof control.value!=='boolean'))
+   throw new Error('Every palette checkbox must expose its label and actual state');
+  const grid=toggles.find(control=>control.label==='Sketch Grid');
+  if(!grid||grid.value!==true)throw new Error('Initial grid state missing');
+  operateUi({action:'click',target:grid.id});
+  const disabled=toggles.find(control=>control.disabled);
+  if(!disabled)throw new Error('Unsupported options must stay disabled');
+  let blocked=false;
+  try{operateUi({action:'click',target:disabled.id});}catch(error){blocked=/disabled/.test(String(error));}
+  if(!blocked)throw new Error('MCP accepted a disabled palette control');
+  return {toggles:toggles.length,grid:window.paletteContract.grid()};
+ });
+ assert.equal(palette.grid,false,'MCP click must update the real grid preference');
+ const gridCheckbox=palettePage.getByRole('checkbox',{name:'Sketch Grid',exact:true});
+ await gridCheckbox.focus();
+ await palettePage.keyboard.press('Space');
+ await palettePage.waitForFunction(()=>window.paletteContract.grid()===true);
+ assert.equal(await gridCheckbox.isChecked(),true,'Keyboard and MCP must share the checked state');
+ await palettePage.keyboard.press('Control+s');
+ await palettePage.keyboard.press('Control+o');
+ await palettePage.keyboard.press('Control+n');
+ assert.deepEqual(await palettePage.evaluate(()=>window.paletteContract.fileCommands()),['save','open','new'],
+  'Focused native palette checkbox must retain application File shortcut routing');
+ const paletteHistory=await palettePage.evaluate(()=>window.paletteContract.checkNativeHistory());
+ await palettePage.evaluate(()=>window.paletteContract.unmount());
+ await palettePage.close();
+ console.log('PASS production sketch palette: '+JSON.stringify(palette));
+ console.log('PASS focused palette keyboard and native history routing: '+JSON.stringify(paletteHistory));
 } finally {await browser?.close();await server.close();}
-
-

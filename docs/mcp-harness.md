@@ -86,6 +86,12 @@ former `cad_ui`, `cad_view` and `cad_launch` aliases are retired. Native control
 can be inspected and operated by fresh opaque IDs. Hidden, disabled, stale and
 modal-blocked controls reject.
 
+Long field values in `inspect` are bounded to 4,096 UTF-16 code units. A truncated
+value includes `value_truncated`, `value_length` and `value_start`; textareas also
+report their original `selection` offsets. The excerpt follows the caret so
+chapter navigation stays useful without returning the entire multi-megabyte
+recipe on every click. Inspection never shortens or edits the actual source.
+
 Disclosure remains a discovery aid. Focus packs, soft TTL and LRU limits do not
 prevent calls to undisclosed tools. Results can contain `_disclosure` hints;
 `full_static` and `cad_list_all_tools` remain available. A timed worker sends
@@ -107,9 +113,13 @@ mutations and a restored baseline; it does not reconstruct parametric history
 from an imported B-rep. Use authored native scripts for new teaching examples.
 
 ```sh
-cargo xtask run-script FILE.nbcad.jsonc --server MCP --repeat 2 --out proof
-cargo xtask run-script FILE.nbcad.jsonc --server MCP --session UUID --new --present --speed 2 --compare proof/run-1.json --out live-proof
+cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --mcp --repeat 2 --out proof
+cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --mcp --session UUID --new --present --speed 2 --compare proof/run-1.json --out live-proof
 ```
+
+These examples use the packaged application. A standalone `nbcad-mcp` needs no
+`--server-arg`. [Developer replay setup](DEVELOPMENT.md#replay-a-recipe) covers
+executable paths, AppImage arguments and bounded initialization.
 
 Preserve the user's current document first. `--new` creates a design tab in the
 specified window. Omit it only when that tab is already blank. Use `--desktop`
@@ -130,6 +140,8 @@ deleting or moving a joint does not require replacing its other fields. Motion
 uses degrees and millimetres; inspect the solved assembly for diagnostics. STEP,
 STL and 3MF are exchange/export products, while `.nbcad` preserves editable history.
 
+The following regression driver uses the standalone `nbcad-mcp` developer server
+as `MCP`; see the [developer setup](DEVELOPMENT.md).
 `cargo xtask test-mcp controls --server MCP --session UUID --out controls.json`
 exercises camera and joint controls in an explicitly selected disposable document.
 The native live, drawing, playback and Scripts-workspace checks have separate

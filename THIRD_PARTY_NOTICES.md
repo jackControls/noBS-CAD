@@ -33,7 +33,7 @@ the Open CASCADE Technology software.
 | Earcut | Transient closed-profile triangulation | ISC |
 | zip (Rust) | 3MF package writer | MIT or Apache-2.0 |
 | Lucide | General-purpose interface icons | ISC |
-| Tauri and the dialog plugin | Native application shell | MIT or Apache-2.0 |
+| Tauri, dialog and deep-link plugins | Native application shell | MIT or Apache-2.0 |
 
 Build and test dependencies are listed in `package-lock.json`, `Cargo.lock`,
 `src-tauri/Cargo.lock`, and `mcp-server/Cargo.lock`. Their package archives

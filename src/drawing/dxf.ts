@@ -34,9 +34,7 @@ import {
   resolveDrawingLine,
 } from './annotations';
 import {
-  drawingFormatShortLabel,
   drawingSheetSize,
-  drawingToleranceNoteText,
   defaultDrawingSheetStyle,
 } from './sheet';
 import {
@@ -45,6 +43,7 @@ import {
   drawingDxfPattern,
   type DrawingLineRole,
 } from './styles';
+import {assertTitleBlockFits, drawingTitleBlock} from './titleBlock';
 
 type Point2 = [number, number];
 type DxfPair = [number, string | number];
@@ -252,6 +251,18 @@ class DrawingDxfWriter {
     const handle = this.handle();
     target.push(this.mtextEntity(handle, layer, position, text, height, attachment, rotation, owner));
     return handle;
+  }
+
+  /** Baseline Fit justification preserves height and constrains this single
+   * wrapped title line between two explicit endpoints, including custom fonts. */
+  fittedTitleText(position: Point2, text: string, height: number, width: number): void {
+    if (!text || width <= 0) return;
+    this.entities.push(entity([
+      [0, 'TEXT'], [5, this.handle()], [330, MODEL_SPACE_RECORD], [100, 'AcDbEntity'], [8, 'NOTES'],
+      [100, 'AcDbText'], ...pointPairs(10, position), [40, height], [1, text],
+      [7, 'STANDARD'], [72, 5], ...pointPairs(11, [position[0] + width, position[1]]),
+      [100, 'AcDbText'], [73, 0],
+    ]));
   }
 
   leader(
@@ -1095,29 +1106,15 @@ function addSheetFrame(
   const toDxf = (point: Point2) => paperToDxf(point, height);
   const sheetBorder: Point2[] = [[5, 5], [width - 5, 5], [width - 5, height - 5], [5, height - 5]];
   writer.polyline('BORDER', sheetBorder.map(toDxf), true);
-  const blockWidth = Math.min(180, width - 10);
-  const blockHeight = 44;
-  const x = width - 5 - blockWidth;
-  const y = height - 5 - blockHeight;
+  const layout = drawingTitleBlock(sheet, width, height);
+  assertTitleBlockFits(layout);
+  const {x, y, width: blockWidth, height: blockHeight} = layout;
   const titleBorder: Point2[] = [[x, y], [x + blockWidth, y], [x + blockWidth, y + blockHeight], [x, y + blockHeight]];
   writer.polyline('BORDER', titleBorder.map(toDxf), true);
-  for (const row of [15, 23, 31, 38]) writer.line('BORDER', toDxf([x, y + row]), toDxf([x + blockWidth, y + row]));
-  writer.line('BORDER', toDxf([x + blockWidth * 0.62, y]), toDxf([x + blockWidth * 0.62, y + 23]));
-  writer.line('BORDER', toDxf([x + blockWidth * 0.78, y + 23]), toDxf([x + blockWidth * 0.78, y + blockHeight]));
-  writer.line('BORDER', toDxf([x + blockWidth * 0.9, y + 31]), toDxf([x + blockWidth * 0.9, y + blockHeight]));
-  const small = sheet.style.small_text_height_mm;
-  writer.mtext('NOTES', toDxf([x + 3, y + 2.5]), sheet.title_block.title || sheet.name, sheet.style.text_height_mm + 0.8, 1);
-  writer.mtext('NOTES', toDxf([x + 3, y + 9]), `DRAWING: ${sheet.title_block.drawing_number || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.64, y + 2.5]), `SHEET: ${sheet.name}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.64, y + 9]), `${drawingFormatShortLabel(sheet.format)} · ${sheet.projection_method === 'first_angle' ? '1ST ANGLE' : '3RD ANGLE'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + 3, y + 17]), drawingToleranceNoteText(sheet.tolerance_note) || 'TOLERANCES: AS SPECIFIED', small, 1);
-  writer.mtext('NOTES', toDxf([x + 3, y + 25]), `COMPANY: ${sheet.title_block.company || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.8, y + 25]), `REV ${sheet.title_block.revision || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + 3, y + 33]), `MATERIAL: ${sheet.title_block.material || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.8, y + 33]), `FINISH: ${sheet.title_block.finish || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + 3, y + 40]), `DRAWN: ${sheet.title_block.author || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.4, y + 40]), `CHECKED: ${sheet.title_block.checked_by || '—'}`, small, 1);
-  writer.mtext('NOTES', toDxf([x + blockWidth * 0.79, y + 40]), `APPROVED: ${sheet.title_block.approved_by || '—'}`, small, 1);
+  for (const [a, b] of layout.segments) writer.line('BORDER', toDxf(a), toDxf(b));
+  for (const cell of layout.cells) for (const line of cell.lines) {
+    writer.fittedTitleText(toDxf([line.x, line.y]), line.text, cell.fontSize, line.width);
+  }
   addRevisionTable(writer, sheet, height);
   addBomTable(writer, sheet, height);
 }

@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mediaInputs } from './stage-showcase-media.mjs';
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -119,15 +120,46 @@ for (const file of files) {
   }
 }
 
-const homeFile = path.join(bundleRoot, 'home.html');
-const homeContent = await readFile(homeFile, 'utf8');
-for (const match of homeContent.matchAll(/href=["']([^"']+)["']/g)) {
-  const target = match[1].split('#', 1)[0];
-  if (!target || /^https?:\/\//.test(target) || target.startsWith('mailto:')) {
-    continue;
+// Pages are part of the public entry path. Check each local link/asset and
+// repository source link, including case so a Windows checkout cannot hide a
+// link that will fail on GitHub's Linux host. Release assets are verified by
+// the release promotion gate, after the draft is published.
+const pageFiles = (await readdir(bundleRoot)).filter(name => name.endsWith('.html'));
+async function exactFile(absolute) {
+  const relative = path.relative(repositoryRoot, absolute);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return false;
+  let current = repositoryRoot;
+  for (const part of relative.split(path.sep)) {
+    if (!(await readdir(current)).includes(part)) return false;
+    current = path.join(current, part);
   }
-  const absolute = path.resolve(bundleRoot, target);
-  if (!(await exists(absolute))) fail(homeFile, `broken local link: ${target}`);
+  return exists(current);
+}
+for (const name of pageFiles) {
+  const file = path.join(bundleRoot, name);
+  const content = await readFile(file, 'utf8');
+  let generatedMedia = new Set();
+  if (name === 'showcase.html') {
+    try { generatedMedia = new Set(mediaInputs(content).map(input => input.src)); }
+    catch (error) { fail(file, error.message); }
+  }
+  for (const match of content.matchAll(/(?:href|src|poster)=["']([^"']+)["']/g)) {
+    const [target, anchor] = match[1].split('#');
+    if (!anchor && generatedMedia.has(target)) continue;
+    let absolute;
+    if (!target) absolute = file;
+    else if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) absolute = path.resolve(bundleRoot, target);
+    else {
+      const repoPath = target.match(/^https:\/\/(?:github\.com\/jackControls\/noBS-CAD\/blob\/[^/]+|raw\.githubusercontent\.com\/jackControls\/noBS-CAD\/[^/]+)\/(.+)$/)?.[1];
+      if (!repoPath) continue;
+      absolute = path.resolve(repositoryRoot, repoPath);
+    }
+    if (!await exactFile(absolute)) { fail(file, `missing or incorrectly cased target: ${target}`); continue; }
+    if (anchor && absolute.endsWith('.html')) {
+      const linked = await readFile(absolute, 'utf8');
+      if (!linked.includes(`id="${anchor}"`) && !linked.includes(`id='${anchor}'`)) fail(file, `missing page anchor: ${match[1]}`);
+    }
+  }
 }
 
 if (failures.length > 0) {

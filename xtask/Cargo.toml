@@ -8,4 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 serde_json = { version = "1", features = ["float_roundtrip"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

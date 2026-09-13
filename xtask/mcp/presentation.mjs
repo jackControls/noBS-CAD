@@ -62,6 +62,11 @@ export async function checkPresentationSurfaces(browser, url) {
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Outside', 'Deferred dismissal must preserve a newer focus choice');
     await page.getByRole('button', {name: 'Scripts', exact: true}).click();
+    await page.getByRole('button', {name: /^Browse \d+ examples$/}).click();
+    await page.getByRole('button', {name: 'Fillet lesson', exact: true}).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.activeElement === document.querySelector('[data-script-title]'));
+    assert.equal(await page.getByRole('button', {name: 'Fillet lesson', exact: true}).count(), 0, 'Choosing an example collapses its library without dropping keyboard focus into CAD');
     await page.getByRole('button', {name: 'Run in new design'}).click();
     await page.getByRole('region', {name: 'Playback'}).waitFor();
     await page.getByRole('combobox', {name: 'Presentation speed'}).selectOption('8');
@@ -106,5 +111,5 @@ export async function checkPresentationSurfaces(browser, url) {
     assert.equal((await pending.evaluate(() => window.surfaces.snapshot())).escapedToCad, 1, 'Ordinary CAD Escape still reaches the model after dismissal');
   } finally { await pending.close(); }
   return ['cold-catalog-hover', 'departed-hover', 'keyboard-open', 'disabled-opener-focus',
-    'hover-Escape', 'preview-workspace-focus', 'scoped-Escape', 'live-speed-agreement', 'paused-dismissal', 'retained-design', 'launch-preferences'];
+    'hover-Escape', 'preview-workspace-focus', 'library-lesson-focus', 'scoped-Escape', 'live-speed-agreement', 'paused-dismissal', 'retained-design', 'launch-preferences'];
 }

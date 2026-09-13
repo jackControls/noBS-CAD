@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+mod title_block;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DrawingExportFormat {
@@ -36,6 +38,7 @@ enum Primitive {
         height: f64,
         centered: bool,
         rotation_deg: f64,
+        fitted_width: Option<f64>,
     },
     Triangle {
         points: [P; 3],
@@ -75,6 +78,7 @@ impl Paper {
                 height,
                 centered,
                 rotation_deg,
+                fitted_width: None,
             });
         }
     }
@@ -85,6 +89,7 @@ impl Paper {
             height,
             centered: true,
             rotation_deg: 0.,
+            fitted_width: None,
         });
     }
     fn fitted_text(&mut self, point: P, value: impl Into<String>, height: f64, width: f64) {
@@ -97,6 +102,38 @@ impl Paper {
             .max(1);
         // Conservative font advance avoids adjacent title fields running together.
         self.text(point, value, height.min(width / (count as f64 * 0.65)));
+    }
+
+    fn title_cell(
+        &mut self,
+        field: &str,
+        value: &str,
+        origin: P,
+        size: P,
+        requested_height: f64,
+    ) -> Result<(), String> {
+        let fitted =
+            title_block::fit_text(field, value, requested_height, size[0] - 3., size[1] - 2.)?;
+        for (index, line) in fitted.lines.into_iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let width = title_block::text_width(&line, fitted.height);
+            self.items.push(Primitive::Text {
+                point: [
+                    origin[0] + 1.5,
+                    origin[1]
+                        + 1.
+                        + fitted.height * (0.85 + index as f64 * title_block::LINE_SPACING),
+                ],
+                value: line,
+                height: fitted.height,
+                centered: false,
+                rotation_deg: 0.,
+                fitted_width: Some(width),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -515,86 +552,94 @@ fn draw_title_and_revisions(paper: &mut Paper, sheet: &DrawingSheetDto) -> Resul
     let small = sheet.style.small_text_height_mm;
     paper.line(vec![[x, y], [w - 10., y]], "BORDER", &sheet.style.dimension);
     paper.line(vec![[x, y], [x, h - 10.]], "BORDER", &sheet.style.dimension);
-    for offset in [16., 24., 32.] {
+    for offset in [7., 12., 16., 23., 30., 34., 39.] {
         paper.line(
             vec![[x, y + offset], [w - 10., y + offset]],
             "BORDER",
             &sheet.style.dimension,
         );
     }
-    paper.fitted_text(
-        [x + 3., y + 5.5],
+    paper.title_cell(
+        "title",
         if title.title.is_empty() {
             &sheet.name
         } else {
             &title.title
         },
+        [x, y],
+        [width, 7.],
         sheet.style.text_height_mm,
-        width - 6.,
-    );
-    paper.fitted_text(
-        [x + 3., y + 10.],
-        format!(
+    )?;
+    paper.title_cell(
+        "drawing number / revision / sheet name",
+        &format!(
             "DRAWING: {}   REV: {}   SHEET: {}",
             title.drawing_number, title.revision, sheet.name
         ),
+        [x, y + 7.],
+        [width, 5.],
         small,
-        width - 6.,
-    );
+    )?;
     let method = match sheet.projection_method {
         DrawingProjectionMethod::FirstAngle => "FIRST ANGLE",
         DrawingProjectionMethod::ThirdAngle => "THIRD ANGLE",
     };
-    paper.fitted_text(
-        [x + 3., y + 14.],
-        format!(
+    paper.title_cell(
+        "standard / projection / release status",
+        &format!(
             "DIMENSIONS: mm   {:?}   {method}   RELEASE: {:?}",
             sheet.standard, sheet.release.status
         ),
+        [x, y + 12.],
+        [width, 4.],
         small,
-        width - 6.,
-    );
-    paper.fitted_text(
-        [x + 3., y + 19.5],
-        format!("MATERIAL: {}   FINISH: {}", title.material, title.finish),
+    )?;
+    paper.title_cell(
+        "material / finish",
+        &format!("MATERIAL: {}   FINISH: {}", title.material, title.finish),
+        [x, y + 16.],
+        [width, 7.],
         small,
-        width - 6.,
-    );
+    )?;
     let tolerance = tolerance_note(&sheet.tolerance_note);
-    paper.fitted_text(
-        [x + 3., y + 23.],
+    paper.title_cell(
+        "tolerance note",
         if tolerance.is_empty() {
-            "TOLERANCES: AS SPECIFIED".into()
+            "TOLERANCES: AS SPECIFIED"
         } else {
-            tolerance
+            &tolerance
         },
+        [x, y + 23.],
+        [width, 7.],
         small,
-        width - 6.,
-    );
-    paper.fitted_text(
-        [x + 3., y + 28.],
-        format!("COMPANY: {}", title.company),
+    )?;
+    paper.title_cell(
+        "company",
+        &format!("COMPANY: {}", title.company),
+        [x, y + 30.],
+        [width, 4.],
         small,
-        width - 6.,
-    );
-    paper.fitted_text(
-        [x + 3., y + 36.],
-        format!(
+    )?;
+    paper.title_cell(
+        "author / checked by / approved by",
+        &format!(
             "DRAWN: {}   CHECKED: {}   APPROVED: {}",
             title.author, title.checked_by, title.approved_by
         ),
+        [x, y + 34.],
+        [width, 5.],
         small,
-        width - 6.,
-    );
-    paper.fitted_text(
-        [x + 3., y + 41.],
-        format!(
+    )?;
+    paper.title_cell(
+        "released revision / date",
+        &format!(
             "RELEASED REVISION: {}   DATE: {}",
             sheet.release.released_revision, sheet.release.released_at
         ),
+        [x, y + 39.],
+        [width, 5.],
         small,
-        width - 6.,
-    );
+    )?;
 
     if let Some([rx, ry]) = sheet.revision_table_position {
         let rw = 220_f64.min(w - 10. - rx);
@@ -1305,6 +1350,7 @@ fn svg(p: &Paper, font: &str) -> String {
                 height,
                 centered,
                 rotation_deg,
+                fitted_width,
             } => {
                 let anchor = if *centered {
                     " text-anchor=\"middle\""
@@ -1319,7 +1365,10 @@ fn svg(p: &Paper, font: &str) -> String {
                 } else {
                     String::new()
                 };
-                writeln!(s,"<text x=\"{:.5}\" y=\"{:.5}\" font-family=\"{}\" font-size=\"{height}\" fill=\"#111\"{anchor}{rotation}>{}</text>",point[0],point[1],xml(font),xml(value)).unwrap();
+                let fit = fitted_width.map_or_else(String::new, |width| {
+                    format!(" textLength=\"{width:.5}\" lengthAdjust=\"spacingAndGlyphs\"")
+                });
+                writeln!(s,"<text x=\"{:.5}\" y=\"{:.5}\" font-family=\"{}\" font-size=\"{height}\" fill=\"#111\"{anchor}{rotation}{fit}>{}</text>",point[0],point[1],xml(font),xml(value)).unwrap();
             }
             Primitive::Triangle { points, layer } => {
                 let points = points
@@ -1397,6 +1446,7 @@ fn dxf(p: &Paper) -> String {
                 height,
                 centered,
                 rotation_deg,
+                fitted_width,
             } => {
                 writeln!(
                     s,
@@ -1406,7 +1456,17 @@ fn dxf(p: &Paper) -> String {
                     dxf_text(value)
                 )
                 .unwrap();
-                if *centered {
+                if let Some(width) = fitted_width {
+                    // DXF TEXT Fit preserves its height while fitting the two
+                    // baseline endpoints. Only bounded title-block lines opt in.
+                    writeln!(
+                        s,
+                        "72\n5\n73\n0\n11\n{:.5}\n21\n{:.5}",
+                        point[0] + width,
+                        p.size[1] - point[1]
+                    )
+                    .unwrap();
+                } else if *centered {
                     writeln!(
                         s,
                         "72\n1\n11\n{:.5}\n21\n{:.5}",
@@ -1761,6 +1821,150 @@ mod tests {
         )
         .unwrap_err()
         .contains("does not fit"));
+    }
+
+    #[test]
+    fn title_block_rejects_overflow_in_both_formats_before_projecting_geometry() {
+        let (mut document, scene, _) = fixture(20.);
+        document.sheets[0].title_block.finish = "W".repeat(4096);
+        for format in [DrawingExportFormat::Svg, DrawingExportFormat::Dxf] {
+            let error = export_sheet(
+                &document,
+                &scene,
+                &AssemblyDocumentDto::default(),
+                &DrawingExportRequest {
+                    sheet_id: 1,
+                    format,
+                },
+                |_| panic!("an overflowing title block must fail before geometry projection"),
+            )
+            .unwrap_err();
+            assert!(error.contains("material / finish"));
+            assert!(error.contains("minimum readable height"));
+        }
+    }
+
+    #[test]
+    fn title_block_preserves_actual_flagship_metadata_with_bounded_svg_and_dxf() {
+        // Read the authored inputs rather than maintaining a second, stale
+        // copy of their longest titles, finishes and tolerance qualifications.
+        let recipes = [
+            (
+                include_str!("../../../examples/scripts/garden-bench.nbcad.jsonc"),
+                0,
+            ),
+            (
+                include_str!("../../../examples/scripts/d-screw-vise.nbcad.jsonc"),
+                7,
+            ),
+            (
+                include_str!("../../../examples/scripts/vertical-axis-turbine.nbcad.jsonc"),
+                14,
+            ),
+            (
+                include_str!("../../../examples/scripts/turbine-fit-coupons.nbcad.jsonc"),
+                4,
+            ),
+        ];
+        for (source, expected_sheets) in recipes {
+            // These fixtures use whole-line comments. Keep quoted URLs and
+            // every other comment-like character inside text values intact.
+            let json = source
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let recipe: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let mut found = 0;
+            for step in recipe["steps"].as_array().unwrap() {
+                if step["call"]["operation"] != "drawing_create_sheet" {
+                    continue;
+                }
+                found += 1;
+                let arguments = &step["call"]["arguments"];
+                let (mut document, scene, projection) = fixture(20.);
+                let sheet = &mut document.sheets[0];
+                sheet.name = arguments["name"].as_str().unwrap().into();
+                sheet.title_block =
+                    serde_json::from_value(arguments["title_block"].clone()).unwrap();
+                if let Some(tolerance) = arguments.get("tolerance_note") {
+                    sheet.tolerance_note = serde_json::from_value(tolerance.clone()).unwrap();
+                }
+                let mut paper = Paper {
+                    size: [420., 297.],
+                    items: Vec::new(),
+                };
+                draw_title_and_revisions(&mut paper, sheet)
+                    .unwrap_or_else(|error| panic!("{}: {error}", sheet.name));
+                let text = paper
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Primitive::Text {
+                            value,
+                            height,
+                            point,
+                            fitted_width: Some(width),
+                            ..
+                        } => {
+                            assert!(*height >= title_block::MIN_HEIGHT);
+                            assert!(*width <= 177. + 1e-9);
+                            assert!(point[0] >= 231.5 && point[0] + width <= 408.5 + 1e-9);
+                            assert!(point[1] >= 244. && point[1] <= 286.);
+                            Some(value.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let compact = |value: &str| {
+                    value
+                        .chars()
+                        .filter(|ch| !ch.is_whitespace())
+                        .collect::<String>()
+                };
+                for value in [
+                    sheet.name.as_str(),
+                    sheet.title_block.title.as_str(),
+                    sheet.title_block.drawing_number.as_str(),
+                    sheet.title_block.revision.as_str(),
+                    sheet.title_block.material.as_str(),
+                    sheet.title_block.finish.as_str(),
+                    sheet.tolerance_note.custom.as_str(),
+                ] {
+                    assert!(
+                        compact(&text).contains(&compact(value)),
+                        "Missing field: {value}"
+                    );
+                }
+                document.sheets[0].style.font_family = "A custom wider font".into();
+                let exported = |format| {
+                    export_sheet(
+                        &document,
+                        &scene,
+                        &AssemblyDocumentDto::default(),
+                        &DrawingExportRequest {
+                            sheet_id: 1,
+                            format,
+                        },
+                        |_| Ok(projection.clone()),
+                    )
+                    .unwrap()
+                };
+                let svg = exported(DrawingExportFormat::Svg);
+                assert!(svg.contains("textLength="));
+                assert!(svg.contains("lengthAdjust=\"spacingAndGlyphs\""));
+                let dxf = exported(DrawingExportFormat::Dxf);
+                assert!(dxf.contains("72\n5\n73\n0\n11\n"));
+                for item in &paper.items {
+                    if let Primitive::Text { value, .. } = item {
+                        assert!(svg.contains(&format!(">{}</text>", xml(value))));
+                        assert!(dxf.contains(&format!("\n1\n{}\n", dxf_text(value))));
+                    }
+                }
+            }
+            assert_eq!(found, expected_sheets);
+        }
     }
     #[test]
     fn stale_dimensions_fail_instead_of_exporting_fallback_values() {

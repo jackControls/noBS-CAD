@@ -475,6 +475,16 @@ pub fn add(a: &mut Author, parts: &[Value]) -> Vec<String> {
             _ => unreachable!(),
         }
         export(a, &sheet, part, &mut exports);
+        if part == "jaw" {
+            a.call(
+                "vise_demo_jaw_sheet",
+                "drawing/sheet",
+                "drawing_select_sheet",
+                json!({"sheet_id":sheet}),
+            );
+            a.note("Read the carriage drawing", "The projected views locate the 100 mm jaw, 72 mm carriage and captured guide channels. Drawing notes distinguish nominal running gaps from fits that still need measurement.");
+            a.steps.push(json!({"note":"Use the end view to inspect the guide profile and the top view for carriage length.","duration_ms":3500}));
+        }
     }
     exports
 }

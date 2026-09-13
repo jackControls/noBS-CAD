@@ -1,4 +1,4 @@
-// A first native part: dimensioned sketch → stock extrusion → top-edge roundover.
+// A first native part: dimensioned sketch → stock extrusion → top-edge roundover → edit and restore.
 // The same commands build the editable project, a visible lesson or isolated preview frames.
 // All dimensions are millimetres. Returned references locate geometry without recorded IDs.
 {
@@ -110,6 +110,50 @@
       }
     },
     {"view": "isometric", "fit": true, "body_id": {"$ref": "stock_body", "pointer": "/id"}, "duration_ms": 350},
+    {
+      "chapter": "Change a feature, keep its dependants",
+      "note": "Change the original extrusion from 12 to 18 mm. The block grows taller and its existing 2 mm top fillet rebuilds with it.",
+      "duration_ms": 2200
+    },
+    {
+      "id": "stock_grow",
+      "call": {
+        "group": "solid/build", "operation": "solid_edit_extrude",
+        "arguments": {
+          "feature_id": {"$ref": "stock_feature"},
+          "extrude": {
+            "sketch_name": "Block / stock from A-B-C", "profile_indices": [0], "operation": "new_body",
+            "extent": {"type": "distance", "distance": 18}, "taper_angle_deg": 0, "flip": false, "target_body_ids": []
+          }
+        }
+      },
+      "expect": {"/scene/errors": []}
+    },
+    {"id": "grown_model", "call": {"group": "document/files", "operation": "cad_project_model", "arguments": {}}},
+    {"assert": {"$ref": "grown_model", "pointer": "/extrudes/0/extent/distance"}, "equals": 18},
+    {"assert": {"$ref": "grown_model", "pointer": "/fillets/0/radius"}, "equals": 2},
+    {"assert": {"$count": {"$ref": "grown_model", "pointer": "/document/history/features"}}, "equals": 3},
+    {"view": "current", "fit": false, "duration_ms": 1700},
+    {
+      "chapter": "Restore the 12 mm design",
+      "note": "Return the same extrusion to 12 mm. No replacement sketch or body is created; the saved part keeps the original three-feature history.",
+      "duration_ms": 1800
+    },
+    {
+      "id": "stock_restore",
+      "call": {
+        "group": "solid/build", "operation": "solid_edit_extrude",
+        "arguments": {
+          "feature_id": {"$ref": "stock_feature"},
+          "extrude": {
+            "sketch_name": "Block / stock from A-B-C", "profile_indices": [0], "operation": "new_body",
+            "extent": {"type": "distance", "distance": 12}, "taper_angle_deg": 0, "flip": false, "target_body_ids": []
+          }
+        }
+      },
+      "expect": {"/scene/errors": []}
+    },
+    {"view": "current", "fit": false, "duration_ms": 1200},
     {
       "chapter": "Three editable features",
       "note": "The result retains one fully constrained sketch, one extrusion and one edge fillet. The roundover is a design feature you can change or remove later.",

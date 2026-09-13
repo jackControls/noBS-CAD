@@ -1,9 +1,8 @@
 # Native command scripts
 
-The Rust interpreter, desktop integration and bundled recipes share one
-construction format. See [the demo guide](demo-presentation.md) for the current
-collection and presentation priorities, and [the interface review](script-interface-review.md)
-for integration evidence and remaining product work.
+Recipes build editable parts and assemblies, explain their construction and
+present the result. Start with [your first part](INSTALL.md#make-your-first-part)
+or choose from the [recipe library](../examples/scripts/README.md).
 
 A `.nbcad.jsonc` file is the reproducible construction source for a native design.
 A `.nbcad` file is the editable project produced by those commands. Keep both when
@@ -20,31 +19,9 @@ runtime.
 
 ## Open and run scripts in CAD
 
-The **Reference → Construction** button shows or hides retained sketches and datum
-planes together. It uses the same `solid/reference` operation as a script:
-
-```json
-{"call":{"group":"solid/reference","operation":"construction_set_visibility","arguments":{"visible":false}}}
-```
-
-Omit both selectors to affect all current references. To select particular sets,
-provide `sketch_names` and/or `datum_plane_ids`; an omitted category stays unchanged,
-and an explicit empty array is a no-op. Unknown references reject the whole call.
-Visibility is saved in the project and leaves body visibility and parametric
-geometry unchanged. The active unfinished sketch stays visible, and references
-created later start visible. Construction entities inside a sketch are a separate
-sketch-editing setting.
-
-The Browser's individual visibility choices are available in
-`document/appearance`: `project_visibility` reads the saved snapshot and
-`project_set_visibility` replaces its `hidden_body_ids`, `hidden_datum_plane_ids`
-and `hidden_sketch_names` arrays. Preserve the other arrays when isolating a part,
-and restore the original snapshot after a presentation or print-layout step.
-These are the same project settings the Browser uses. Hiding a body changes its
-display; it does not remove geometry or substitute for explicit export selection.
 The **Scripts** button opens the script workspace beside the current design.
 Load a commented source file to inspect its chapter notes and grouped commands.
-The recipe-library layer adds the bundled collection using this same adapter.
+The bundled examples appear in that same workspace.
 
 The Source tab supports editing, validation through the Rust parser, and **Save
 script as…**. The file-path disclosure exposes the same loader to the semantic
@@ -102,8 +79,12 @@ to run that committed source. Exactly one source selector is accepted. The app
 uses the same collection; titles, chapters and actual operations are derived from
 the script. A selected recipe is not the legacy `cad_script` trace-export command.
 
-`cargo xtask run-script FILE --server MCP_EXECUTABLE` uses a Rust MCP client to invoke
-the same entry point. With no desktop session it runs headlessly at maximum rate.
+`cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --mcp` uses a Rust
+MCP client to invoke the packaged server. A standalone `nbcad-mcp` needs no
+`--server-arg`; AppImage launch flags are also passed as separate server arguments.
+See [developer replay setup](DEVELOPMENT.md#replay-a-recipe) for complete examples
+and initialization deadlines. With no desktop session, replay runs headlessly
+at maximum rate.
 `--recipe ID` selects the shared bundled source instead of a file. A file or ID is
 required; the runner does not silently select an example.
 Add `--session UUID --new --present --speed 2` to create a blank design tab and
@@ -117,6 +98,30 @@ exported model, sketches, solved assembly and scene data. It writes the individu
 run reports and native model JSON for inspection. A repeated run with identical
 output is the determinism evidence; successful commands alone do not establish it.
 
+## Reference visibility
+
+The **Reference → Construction** button shows or hides retained sketches and datum
+planes together. It uses the same `solid/reference` operation as a script:
+
+```json
+{"call":{"group":"solid/reference","operation":"construction_set_visibility","arguments":{"visible":false}}}
+```
+
+Omit both selectors to affect all current references. To select particular sets,
+provide `sketch_names` and/or `datum_plane_ids`; an omitted category stays unchanged,
+and an explicit empty array is a no-op. Unknown references reject the whole call.
+Visibility is saved in the project and leaves body visibility and parametric
+geometry unchanged. The active unfinished sketch stays visible, and references
+created later start visible. Construction entities inside a sketch are a separate
+sketch-editing setting.
+
+The Browser's individual visibility choices are available in
+`document/appearance`: `project_visibility` reads the saved snapshot and
+`project_set_visibility` replaces its `hidden_body_ids`, `hidden_datum_plane_ids`
+and `hidden_sketch_names` arrays. Preserve the other arrays when isolating a part,
+and restore the original snapshot after a presentation or print-layout step.
+These are the same project settings the Browser uses. Hiding a body changes its
+display; it does not remove geometry or substitute for explicit export selection.
 ## File structure
 
 A script has `version: 1`, a human-readable `name`, ordered `steps`, optional final
@@ -246,7 +251,7 @@ Golden examples should export `final_model`, `final_scene`, `final_solution` and
 and returned geometry references, never captured numeric entity IDs, cached solid
 snapshots or imported tessellation as a construction shortcut.
 
-Use `cargo xtask run-script FILE --server MCP --repeat 2 --out DIRECTORY` to compare
+Use `cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --mcp --repeat 2 --out DIRECTORY` to compare
 independent fresh processes. A later live run can add `--compare DIRECTORY/run-1.json`;
 the comparison excludes tool-disclosure hints, editing undo availability and
 regenerated midpoint snap candidates. It retains persisted sketch constraints and
@@ -257,6 +262,9 @@ not normalized across different kernel versions or platforms.
 `--session UUID --new --present --speed 2` reuses an existing CAD
 window and creates a blank design tab. Save or preserve the current document first.
 Do not pass `--desktop` when the intended window is already open.
+
+The regression harness commands below use the standalone `nbcad-mcp` developer
+server as `MCP`; see the [developer setup](DEVELOPMENT.md).
 
 `cargo xtask test-mcp playback --server MCP --session UUID --out DIRECTORY` checks
 the actual native caption, speed selector, pause, Step, Resume, Stop and Maximum

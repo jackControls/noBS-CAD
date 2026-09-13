@@ -1,15 +1,19 @@
 # Native recipe library
 
-The CAD program **does the work, teaches the process and shows the result** from
-one committed construction source. Maximum speed executes its native commands;
-Pause and Step let you inspect the same sequence; paced presentation renders its
-chapter notes and authored camera moves. These are modes of one Rust interpreter,
-not separate modeling, tutorial and animation scripts.
+Open **Scripts** in CAD and select a bundled example, then choose **Run in new
+design**. Start with **Sketch, extrude, ease the edges**: it builds a small part,
+changes its extrusion from 12 to 18 mm while retaining the fillet, and restores
+the 12 mm reference. Follow [the first-part guide](../../docs/INSTALL.md#make-your-first-part)
+to edit, save and reopen the result yourself.
+
+Maximum rate builds the same model without presentation waits. Pause and Step
+let you inspect the sequence; paced presentation adds chapter notes and camera
+moves. All modes use the same Rust interpreter and construction source.
 
 - [Sketch, extrude, ease the edges](fillet-basics.nbcad.jsonc): a first-part lesson
   for Solid → Refine → Fillet. Builds a fully located 60 × 30 mm sketch, extrudes
-  12 mm of stock and rounds the four top edges by 2 mm. Exports two captioned
-  scene frames for an isolated preview, plus the editable final model.
+  12 mm of stock and rounds the four top edges by 2 mm. Demonstrates an 18 mm
+  extrusion edit and restoration, with captioned preview frames and final checks.
 - [Four-hole mounting plate](mounting-plate.nbcad.jsonc): fully located 60 × 40 × 5 mm
   stock, four 5 mm through bores and face-basis projection after each cut.
 - [Revolved annular spacer](revolved-spacer.nbcad.jsonc): a located radial section,
@@ -41,9 +45,8 @@ not separate modeling, tutorial and animation scripts.
   for JSONC-aware editors. The Rust interpreter validates references, and the
   shared interface owns each modeling operation’s argument schema.
 
-Run the commented file with `cargo xtask run-script FILE --server MCP_EXECUTABLE`.
-Alternatively, select a bundled source by its stable ID:
-`cargo xtask run-script --recipe mounting-plate --server MCP_EXECUTABLE`.
+For command-line replay, use the [developer guide](../../docs/DEVELOPMENT.md#replay-a-recipe).
+It covers packaged CAD (`--server-arg --mcp`), standalone servers and AppImage arguments.
 MCP lists the same collection with `cad_interface {"action":"recipes"}` and runs
 one with `{"action":"script","recipe":"mounting-plate","mode":"fast"}`.
 The app's example list is supplied by that same Rust catalog in `crates/recipes`.
