@@ -38,23 +38,17 @@ or `../../mcp-server/` identify supporting paths in a checkout of the same sourc
 revision; they are not additional MCP resources. External HTTPS sources can be
 opened separately when network access is available.
 
-## Machine design (domain help)
+## Mechanical design guidance
 
-Open design-time help (GD&T, elements, mechanisms, materials, DFM).
-Prefer **seeded** pages before web search; see taxonomy for **planned** gaps.
+- [GD&T intro](machine-design/concepts/gdt-intro.md) - Function, datums and inspectable tolerances.
+- [Fits and clearances](machine-design/concepts/fits-clearances.md) - Worst-case limits and measured fit coupons.
+- [Design for manufacturing and assembly](machine-design/concepts/dfm-overview.md) - Process, material, hardware and assembly decisions.
+- [Manufacturing process checks](machine-design/concepts/dfm-process-guidelines.md) - Tool access, mold release, print orientation and qualification.
+- [Sources and attribution](machine-design/SOURCES.md) - References used by these pages.
 
-- [Taxonomy](machine-design/taxonomy.md) - Seeded vs planned topic map.
-- [SOURCES](machine-design/SOURCES.md) - Provenance ids and licenses.
-- [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums, FCF, Rule #1 teaching.
-- [Fits and clearances](machine-design/concepts/fits-clearances.md) - Class-level fits (no designation charts).
-- [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
-- [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
-- [Fasteners and joints](machine-design/concepts/fasteners-joints.md) - Stub — threaded joints overview.
-- [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Stub — property words, not allowables.
-
-Notes: [machine-design KB](../docs/machine-design-kb.md),
-[distill vs link](../docs/machine-design-distill-vs-link.md),
-[help search ADR](../docs/machine-design-help-search.md).
+Use the listed resources for their stated scope, then consult the cited sources
+for more detail. The bundle is guidance for design decisions; it does not supply
+certified material allowables, standards tables or physical qualification.
 
 ## Hosted page
 
