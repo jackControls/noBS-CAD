@@ -933,15 +933,14 @@ fn verify_desktop(options: &Options) -> Result<Value> {
     desktop.close_input();
     let stdout_eof = desktop.require_stdout_eof(Duration::from_secs(10));
     #[cfg(target_os = "linux")]
-    let stdout_eof =
-        stdout_eof.with_context(|| {
-            format!(
-                "Owned stdout EOF evidence: {}",
-                stdout_diagnostics::inspect(Path::new("/proc"), &original_stdout, |path| {
-                    fs::read_link(path)
-                })
-            )
-        });
+    let stdout_eof = stdout_eof.with_context(|| {
+        format!(
+            "Owned stdout EOF evidence: {}",
+            stdout_diagnostics::inspect(Path::new("/proc"), &original_stdout, |path| {
+                fs::read_link(path)
+            })
+        )
+    });
     stdout_eof?;
     let survival_deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < survival_deadline {
