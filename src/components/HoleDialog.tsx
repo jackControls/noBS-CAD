@@ -24,10 +24,15 @@ import {
   presetsForSeries,
   THREAD_PRESETS,
   threadDtoFromPreset,
+  initialRoundedThreadProfile,
+  roundedThreadInputs,
+  roundedThreadInputsFinite,
+  roundedThreadProfile,
 } from '../lib/threadStandards';
-import type { ThreadPreset } from '../lib/threadStandards';
+import type { RoundedThreadInputs, ThreadPreset } from '../lib/threadStandards';
 import { useAppStore } from '../store/appStore';
 import { DimensionInput } from './DimensionInput';
+import { RoundedThreadFields } from './RoundedThreadFields';
 import { ViewportSelectionField } from './ViewportSelectionField';
 
 const INPUT_CLASS = 'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
@@ -164,6 +169,11 @@ export function HoleDialog() {
   const [threadSeries, setThreadSeries] = useState<HoleThreadSeries>(defaultThread.series);
   const [threadPresetId, setThreadPresetId] = useState(defaultThread.id);
   const [customThreadPreset, setCustomThreadPreset] = useState<ThreadPreset | null>(null);
+  const [customNominal, setCustomNominal] = useState('6');
+  const [customPitch, setCustomPitch] = useState('1');
+  const [customProfile, setCustomProfile] = useState<RoundedThreadInputs>(
+    roundedThreadInputs(initialRoundedThreadProfile(1)),
+  );
   const [threadRepresentation, setThreadRepresentation] =
     useState<HoleThreadRepresentation>('modeled');
   const [threadHand, setThreadHand] = useState<HoleThreadHand>('right');
@@ -183,12 +193,14 @@ export function HoleDialog() {
       ? [customThreadPreset, ...catalog]
       : catalog;
   }, [customThreadPreset, threadSeries]);
-  const selectedThreadPreset = useMemo(
-    () => threadPresets.find((preset) => preset.id === threadPresetId)
-      ?? threadPresets[0]
-      ?? defaultThreadPreset(),
-    [threadPresetId, threadPresets],
-  );
+  const selectedThreadPreset = useMemo(() => {
+    const preset = threadPresets.find((candidate) => candidate.id === threadPresetId)
+      ?? threadPresets[0] ?? defaultThreadPreset();
+    return preset.standard === 'custom_trapezoidal'
+      ? {...preset, nominalDiameterMm: Number(customNominal), pitchMm: Number(customPitch),
+          roundedProfile: roundedThreadProfile(customProfile)}
+      : preset;
+  }, [threadPresetId, threadPresets, customNominal, customPitch, customProfile]);
 
   useEffect(() => {
     if (featureId === null) return;
@@ -279,10 +291,14 @@ export function HoleDialog() {
             pitchMm: editThread.pitch,
             threadsPerInch: editThread.threads_per_inch,
             tapDrillDiameterMm: edit.diameter,
-            tapDrillDesignation: editThread.tap_drill_designation
-              ?? `${edit.diameter} mm`,
+            tapDrillDesignation: editThread.tap_drill_designation,
+            roundedProfile: editThread.rounded_profile,
           };
           setCustomThreadPreset(customPreset);
+          setCustomNominal(String(editThread.nominal_diameter));
+          setCustomPitch(String(editThread.pitch));
+          setCustomProfile(roundedThreadInputs(editThread.rounded_profile
+            ?? initialRoundedThreadProfile(editThread.pitch)));
           setThreadPresetId(customPreset.id);
         }
         setThreadRepresentation(editThread.representation);
@@ -467,8 +483,13 @@ export function HoleDialog() {
       && values.threadDepth > 0
       && (extentType !== 'distance' || values.threadDepth <= values.depth)
     ))
-    && (threadRepresentation !== 'modeled'
-      || threadInnerHalfWidth < selectedThreadPreset.pitchMm * 0.499)
+    && (threadStandard === 'custom_trapezoidal'
+      ? roundedThreadInputsFinite(customProfile) && selectedThreadPreset.class === 'custom'
+        && Number.isFinite(selectedThreadPreset.nominalDiameterMm)
+        && selectedThreadPreset.nominalDiameterMm > 0
+        && Number.isFinite(selectedThreadPreset.pitchMm) && selectedThreadPreset.pitchMm > 0
+      : threadRepresentation !== 'modeled'
+        || threadInnerHalfWidth < selectedThreadPreset.pitchMm * 0.499)
   );
   const canSubmit = !loading && !busy && !error
     && commonValid && styleValid && bottomValid && threadValid;
@@ -480,6 +501,20 @@ export function HoleDialog() {
     setDiameter(String(Number(preset.tapDrillDiameterMm.toFixed(6))));
   };
   const chooseThreadStandard = (standard: HoleThreadStandard) => {
+    if (standard === 'custom_trapezoidal') {
+      const nominal = selectedThreadPreset.nominalDiameterMm;
+      const pitch = selectedThreadPreset.pitchMm;
+      const profile = initialRoundedThreadProfile(pitch);
+      const preset: ThreadPreset = {id: 'custom-rounded', label: 'Custom rounded trapezoidal',
+        standard, series: 'rounded', designation: 'Custom rounded trapezoidal', class: 'custom',
+        nominalDiameterMm: nominal, pitchMm: pitch, threadsPerInch: null,
+        tapDrillDiameterMm: values.diameter, tapDrillDesignation: null, roundedProfile: profile};
+      setCustomThreadPreset(preset);
+      setThreadStandard(standard); setThreadSeries('rounded'); setThreadPresetId(preset.id);
+      setCustomNominal(String(nominal)); setCustomPitch(String(pitch));
+      setCustomProfile(roundedThreadInputs(profile)); setThreadRepresentation('modeled');
+      return;
+    }
     const series: HoleThreadSeries = standard === 'iso_metric' ? 'metric_coarse' : 'unc';
     const preset = presetsForSeries(series)[0] ?? defaultThreadPreset();
     setCustomThreadPreset(null);
@@ -636,18 +671,22 @@ export function HoleDialog() {
                           >
                             <option value="iso_metric">{t('hole.isoMetric')}</option>
                             <option value="unified_inch">{t('hole.asmeUnified')}</option>
+                            <option value="custom_trapezoidal">Custom rounded trapezoidal</option>
                           </select>
                         </label>
                         <label>
                           <span className={LABEL_CLASS}>{t('hole.threadSeries')}</span>
                           <select
                             value={threadSeries}
+                            disabled={threadStandard === 'custom_trapezoidal'}
                             onChange={(event) => chooseThreadSeries(
                               event.target.value as HoleThreadSeries,
                             )}
                             className={INPUT_CLASS}
                           >
-                            {threadStandard === 'iso_metric' ? (
+                            {threadStandard === 'custom_trapezoidal' ? (
+                              <option value="rounded">Rounded profile</option>
+                            ) : threadStandard === 'iso_metric' ? (
                               <>
                                 <option value="metric_coarse">{t('hole.metricCoarse')}</option>
                                 <option value="metric_fine">{t('hole.metricFine')}</option>
@@ -744,6 +783,17 @@ export function HoleDialog() {
                         <dt className="text-mute">{t('hole.threadClass')}</dt>
                         <dd className="font-mono text-ink">{selectedThreadPreset.class}</dd>
                       </dl>
+                      {threadStandard === 'custom_trapezoidal' && <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label><span className={LABEL_CLASS}>Thread nominal diameter (mm)</span>
+                            <DimensionInput data-testid="hole-thread-nominal" min="0.000001" step="any"
+                              value={customNominal} onValueChange={setCustomNominal} /></label>
+                          <label><span className={LABEL_CLASS}>Thread pitch (mm)</span>
+                            <DimensionInput data-testid="hole-thread-pitch" min="0.000001" step="any"
+                              value={customPitch} onValueChange={setCustomPitch} /></label>
+                        </div>
+                        <RoundedThreadFields prefix="hole" values={customProfile} onChange={setCustomProfile} />
+                      </>}
                     </section>
                   )}
                   <label><span className={LABEL_CLASS}>{t(threaded ? 'hole.predrillDiameter' : 'hole.diameter')}</span><DimensionInput autoSelectKey={faceId > 0 ? `${bodyId}:${faceId}` : null} data-testid="hole-diameter" min="0.000001" step="any" value={diameter} onValueChange={setDiameter} /></label>

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'mcp-server/**'
+      - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
@@ -25,6 +26,7 @@ on:
   pull_request:
     paths:
       - 'mcp-server/**'
+      - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
       - 'crates/sketch/**'
@@ -154,13 +156,56 @@ jobs:
           key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
 
       - name: MCP server tests
+        id: native-tests
         shell: pwsh
         env:
           OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+          NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
         run: |
           $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
-          cargo test --locked --manifest-path mcp-server/Cargo.toml
+          # Full native vise/turbine replays compete for CPU and memory when
+          # libtest starts them together. Keep the existing request deadlines
+          # and all assertions, but run acceptance cases one at a time.
+          cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
+
+      # Keep the last operation and useful completed models on failure only.
+      # Both hosts use this same bounded collector; tests write flat files here.
+      - &retain-recipe-failure
+        name: Collect bounded native recipe failure evidence
+        if: failure() && steps.native-tests.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE 'target/mcp-recipe-evidence'
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/mcp-recipe-failure'
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          $files = @(if (Test-Path -LiteralPath $source) {
+            Get-ChildItem -LiteralPath $source -File |
+              Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+              Sort-Object @{Expression = { $_.Name -notlike 'last-request-*' }}, @{Expression = 'LastWriteTimeUtc'; Descending = $true}
+          })
+          $total = 0L
+          $index = @($files | Select-Object -First 512 | ForEach-Object {
+            $reason = 'copied'
+            if ($_.Length -gt 64MB) { $reason = 'exceeds 64 MiB per-file limit' }
+            elseif ($total + $_.Length -gt 128MB) { $reason = 'exceeds 128 MiB total limit' }
+            else {
+              Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $destination $_.Name)
+              $total += $_.Length
+            }
+            @{ name = $_.Name; bytes = $_.Length; result = $reason }
+          })
+          @{ discovered_files = $files.Count; considered_files = $index.Count; copied_bytes = $total; files = $index } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'artifact-index.json') -Encoding utf8
+
+      - name: Upload native recipe failure evidence
+        if: failure() && steps.native-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-recipe-failure-windows
+          path: target/mcp-recipe-failure/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install Node for MCP plans
         uses: actions/setup-node@v4
@@ -205,7 +250,9 @@ jobs:
   mcp-tests-linux:
     name: MCP tests (Ubuntu)
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    # Include cold compilation, full vise/turbine acceptance and the workshop.
+    # The turbine gate alone took 46 minutes in the recorded Windows dev build.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -239,11 +286,26 @@ jobs:
           popd
 
       - name: MCP server tests
+        id: native-tests
         shell: bash
         # build.rs probes /usr when OCCT_ROOT is unset; set it explicitly.
         env:
           OCCT_ROOT: /usr
-        run: cargo test --locked --manifest-path mcp-server/Cargo.toml
+          NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
+        # Match Windows: each full native acceptance case owns the runner's
+        # geometry resources instead of competing with the other flagship.
+        run: cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
+
+      - *retain-recipe-failure
+
+      - name: Upload native recipe failure evidence
+        if: failure() && steps.native-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-recipe-failure-linux
+          path: target/mcp-recipe-failure/
+          if-no-files-found: error
+          retention-days: 7
 
       - uses: actions/setup-node@v4
         with:

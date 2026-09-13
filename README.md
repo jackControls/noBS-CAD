@@ -1,23 +1,82 @@
 # noBS CAD
 
-**noBS means no cloud, no BS.** noBS CAD is fully local,
-fully free, and fully open source. It is designed first for mechanical parts,
-around the familiar sketch-and-extrude workflow.
+**Mechanical CAD you can build with — and learn from.**
 
-> noBS CAD is currently pre-alpha. Download the current macOS, Windows, and
-> Ubuntu desktop snapshots from [GitHub Releases](https://github.com/jackControls/noBS-CAD/releases).
-> These builds are for testing and feedback, not production-critical work.
+Sketch a part, build an assembly, and make its drawings on your own computer.
+noBS CAD is free, open-source mechanical CAD built around the familiar
+sketch-and-extrude workflow. Replay an authored design to see how it was made,
+pause to inspect a step, and keep the result as an editable project.
 
-![testPiece modeled in noBS CAD](docs/assets/testPiece.png)
+**noBS means no cloud, no BS:** no account, subscription, or cloud backend.
+Your designs stay on your computer.
 
-*A simple test piece modeled in noBS CAD. Download the editable
-[`testPiece.nbcad`](examples/testPiece.nbcad) project or its
-[`testPiece.step`](examples/testPiece.step) geometry backup.*
+[Download desktop snapshots](https://github.com/jackControls/noBS-CAD/releases)
+· [Try a demo](#build-learn-and-demonstrate)
+· [Build locally](#build-locally)
+
+> **Pre-alpha:** macOS, Windows, and Ubuntu snapshots are for testing and
+> feedback, not production-critical work. The capabilities and demos below
+> describe the **current development branch**; downloadable snapshots may
+> predate them.
 
 ![Fillet, chamfer, and a modeled threaded hole in noBS CAD](docs/assets/fillet-chamfer-threaded-hole.png)
 
 *Fillet, chamfer, and a modeled M12 threaded hole shown together in the
 editable feature history.*
+
+## Build, learn and demonstrate
+
+The demos construct real, editable designs using the same native modeling
+operations as the app. Each `.nbcad.jsonc` recipe contains the construction
+sequence, chapter notes, camera cues, and final checks. **Presentation** plays
+the sequence with captions and camera transitions; **Maximum speed** builds it
+without the authored pauses. Both produce the same editable design.
+
+Start with a short feature lesson in the desktop app:
+
+1. Open **Scripts** beside the document tabs and choose
+   **Sketch, extrude, ease the edges**.
+2. Set **Mode** to **Presentation**, choose **Speed** **1×**, then click
+   **Run in new design**.
+3. Use **Pause**, **Step**, and **Resume** in the playback bar to inspect the
+   construction. Choose **Maximum** from its **Speed** menu to finish at full
+   rate, then **Resume** if paused.
+4. When playback shows **Complete**, use **File → Save** to keep the result as
+   an editable `.nbcad` project.
+
+Running creates a new design tab and retains your existing design. Choosing an
+example or opening a source file does not run it in your active design. The **Overview**
+and **Source** tabs let you read the lesson and its commands before running.
+
+Three larger designs are also runnable from **Scripts**:
+
+- **[Crown garden bench](examples/scripts/garden-bench.nbcad.jsonc):** build
+  dimensioned timber parts, repeated components, and a connected assembly.
+- **[Vertical-axis turbine](examples/scripts/vertical-axis-turbine.nbcad.jsonc):**
+  build two Savonius rotor stages, a constrained 4:1 generator drive, and native
+  part and assembly drawings.
+- **[Captured-slide D-screw vise](examples/scripts/d-screw-vise.nbcad.jsonc):**
+  build six printed parts with 100 mm gripping faces, 90 mm jaw travel and a
+  custom rounded Ø24 × 4 mm screw. Includes seven drawing sheets, a print layout
+  for each part and simplified M5/M6 hardware; 30 bodies with optional mounts.
+
+These development candidates include automated geometry and replay checks;
+validation evidence must match the current source revision.
+Physical fit, load, wear, and durability qualification remain open; generator
+output still needs measurement. None has a working-load rating, and the bench's
+full drawing package is unfinished. See [flagship status](docs/flagship-examples.md)
+for the design-specific limits.
+
+The [recipe library](examples/scripts/README.md) also includes a mounting plate,
+revolved spacer, angle bracket, repeated-part assembly, and fit coupons. Follow
+the [demo guide](docs/demo-presentation.md) for suggested viewing and inspection,
+or [the script guide](docs/native-scripts.md) to load and edit your own source.
+
+Prefer to open a finished part first? This small example includes an editable
+[`testPiece.nbcad`](examples/testPiece.nbcad) project and a
+[`testPiece.step`](examples/testPiece.step) geometry backup:
+
+![A small mechanical test piece modeled in noBS CAD](docs/assets/testPiece.png)
 
 ## Why this project exists
 
@@ -51,7 +110,8 @@ The current application includes:
   construction geometry, patterns, trim/extend, and fillet/chamfer tools;
 - extrude, revolve, sweep, loft, rib, hole, fillet, chamfer, shell, combine,
   split-body, mirror, pattern, and construction-plane features;
-- modeled hole threads for common ISO metric and Unified standards;
+- modeled internal and external threads for common ISO metric and Unified
+  standards, plus editable custom rounded trapezoidal profiles in the native app;
 - live feature previews, direct viewport manipulators, body/component
   Move/Copy, stable topology references, and an editable design history;
 - ISO and ANSI/ASME drawing sheets with aligned projected and derived views,
@@ -88,8 +148,8 @@ noBS CAD feature history.
 > **🐞 Edge-case hunters wanted.** Pre-alpha CAD gets reliable by breaking on
 > purpose. Model something real — or work the
 > [challenge list](docs/EDGE_CASE_HUNT.md) of nasty geometry (thin walls,
-> tangent faces, grazing fillets, self-intersecting sweeps). Every report
-> becomes a regression test. Join the
+> tangent faces, grazing fillets, self-intersecting sweeps). Reproducible reports
+> help us add regression tests and improve the modeling tools. Join the
 > [Edge-case hunt](https://github.com/jackControls/noBS-CAD/issues/45).
 
 ## Local automation (MCP)
@@ -113,18 +173,7 @@ remain diagnostic tools; ordinary attached modeling handles that transport.
 
 Details: [docs/mcp-harness.md](docs/mcp-harness.md).
 
-## Build, learn and demonstrate
-
-An authored `.nbcad.jsonc` recipe is a readable sequence of the same modeling
-operations used interactively. **Build** runs it at maximum rate. **Teach** adds
-chapter notes and stepping through the editable feature history. **Show** renders
-the construction with captions and camera transitions. The source and final
-checks stay the same across these modes.
-
-Open **Scripts** in the app to choose a recipe or load a source file. The
-[recipe library](examples/scripts/README.md) includes the garden bench and short
-sketch, extrusion, hole, revolve, fillet and repeated-part assembly examples.
-The same Rust runner supports independent headless checks:
+The same Rust recipe runner supports independent headless checks:
 
 ```sh
 cargo xtask run-script --recipe mounting-plate --server MCP_EXECUTABLE --repeat 2
@@ -133,13 +182,6 @@ cargo xtask run-script --recipe mounting-plate --server MCP_EXECUTABLE --repeat 
 Use `--session SESSION_ID --new --present --speed 2` with a matching desktop/MCP
 build to watch construction in a new design tab while retaining the current one.
 The generated `.nbcad` remains an editable parametric project.
-
-The bench, printable vertical-axis turbine with integrated generator, and
-functional screw vise are
-the [three reference targets](docs/recipe-development.md). The bench is runnable;
-the windmill and vise currently have design briefs. Full flagship drafting and
-the learning interface are still in development. See the
-[native review stack](docs/development-stack.md) for the implementation layers.
 
 ## 3D mouse compatibility
 

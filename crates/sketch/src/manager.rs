@@ -2010,6 +2010,11 @@ impl SketchManager {
         request: SolidFilletRequest,
     ) -> Result<RecomputePlanDto, SessionError> {
         self.ensure_no_active_sketch("creating a solid Fillet")?;
+        if request.edge_ids.is_empty() {
+            return Err(SessionError::Solid(
+                nbcad_solid::SolidError::EmptyEdgeSelection.to_string(),
+            ));
+        }
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.fillet_count + 1;
         let name = format!("Fillet{next_number}");
@@ -2043,6 +2048,11 @@ impl SketchManager {
         request: SolidChamferRequest,
     ) -> Result<RecomputePlanDto, SessionError> {
         self.ensure_no_active_sketch("creating a solid Chamfer")?;
+        if request.edge_ids.is_empty() {
+            return Err(SessionError::Solid(
+                nbcad_solid::SolidError::EmptyEdgeSelection.to_string(),
+            ));
+        }
         let feature_id = self.document.alloc_feature_id();
         let next_number = self.chamfer_count + 1;
         let name = format!("Chamfer{next_number}");
@@ -4193,6 +4203,48 @@ fn ordered_profile_curves(
 #[cfg(test)]
 mod project_tests {
     use super::*;
+
+    #[test]
+    fn empty_edge_refinements_report_edges_without_mutating_the_document() {
+        let mut manager = SketchManager::new();
+        let original = manager.export_project_model().unwrap();
+        let fillet = SolidFilletRequest {
+            body_id: nbcad_core::BodyId(1),
+            edge_ids: vec![],
+            radius: 1.0,
+            tangent_chain: false,
+        };
+        let chamfer = SolidChamferRequest {
+            body_id: nbcad_core::BodyId(1),
+            edge_ids: vec![],
+            distance: 1.0,
+            tangent_chain: false,
+        };
+        for rejected in [
+            manager.prepare_solid_fillet(fillet.clone()),
+            manager.prepare_solid_chamfer(chamfer.clone()),
+            manager.prepare_edit_solid_fillet(EditSolidFilletRequest {
+                feature_id: nbcad_core::FeatureId(1),
+                fillet,
+            }),
+            manager.prepare_edit_solid_chamfer(EditSolidChamferRequest {
+                feature_id: nbcad_core::FeatureId(1),
+                chamfer,
+            }),
+        ] {
+            assert!(
+                matches!(rejected, Err(SessionError::Solid(ref message))
+                if message == "select at least one edge"),
+                "{rejected:?}"
+            );
+            assert_eq!(manager.export_project_model().unwrap(), original);
+        }
+        assert_eq!(
+            manager.document.alloc_feature_id(),
+            nbcad_core::FeatureId(1),
+            "rejected selection must not consume a feature identity"
+        );
+    }
     use crate::{
         DrawingAnnotationDto, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLineRefDto,
         DrawingLinearDimensionMode, DrawingProjectionMethod, DrawingSheetDto, DrawingSheetFormat,
@@ -6088,6 +6140,7 @@ mod project_tests {
                     depth: None,
                     representation: nbcad_solid::HoleThreadRepresentation::Modeled,
                     tap_drill_designation: Some("2.5 mm".to_string()),
+                    rounded_profile: None,
                 }),
                 flip: false,
             })

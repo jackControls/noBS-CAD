@@ -16,11 +16,15 @@ recipes and distinguish them from untested engineering proposals.
 All three now have executable native construction sources in the
 [recipe library](../examples/scripts/README.md). The [turbine](vertical-axis-turbine.md)
 includes the generator drive, reusable rotor stages, assembly and part drawings;
-the [D-screw vise](d-screw-vise.md) includes its retained printed screw, coupled
-jaw travel, six drawing sheets, print layout and paired thread coupon. Their
+the [D-screw vise](d-screw-vise.md) has six printed parts, 100 mm gripping faces,
+90 mm captured-jaw travel and a custom rounded Ø24 × 4 mm screw with a shallow
+print flat. Its seven drawing sheets and per-part print layouts accompany a
+four-part thread/guide coupon. M5/M6 hardware envelopes bring the assembly to
+30 bodies including optional mounts. Their
 recipe layers include Rust authors, JSONC sources and native lifecycle checks.
-They are software-validated manufacturing candidates awaiting physical qualification;
-none is a released or load-rated product.
+Software validation results must identify the current source and build; earlier
+vise records do not qualify its replacement. None is a released, physically
+qualified or load-rated product.
 
 The product purpose is one source that does the work, teaches the process and
 shows it: fast execution, controlled step-through inspection and paced rendering
@@ -108,11 +112,12 @@ moving jaw, retained printed lead screw/handle and replaceable wear surfaces for
 the starting architecture; a purchased metal screw is not silently substituted
 for the requested printable screw.
 
-The default is the user's selected single-piece D-shaped screw, printed on its
-flat side. Keep its remaining section and thread engagement explicit in the
-calculations, and provide a circular rotating envelope through the nut and guides.
-A flat underside alone does not establish that the complete thread prints unsupported.
-Validate a short thread and guide-fit coupon before a full-length screw/frame.
+The active vise uses a screw with an integral grip, a shallow bed-facing flat,
+and a detachable full-round thrust fitting. The keyed stub passes through the
+threaded bridge before the fitting is installed. Keep remaining shaft section,
+thread engagement, captured guide clearances and hardware access explicit in the
+design review. A flat underside alone does not establish support-free printing.
+Validate the four-part thread and guide-fit coupon before the full screw/frame.
 
 CNC and molded versions should preserve functional dimensions and interfaces,
 with process-specific variants for cutter access, draft, shrinkage and undercuts.

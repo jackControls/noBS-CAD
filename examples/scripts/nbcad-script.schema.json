@@ -283,6 +283,12 @@
           "minimum": 0,
           "maximum": 10000
         },
+        "orbit_degrees": {
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360,
+          "description": "With view current, rotate around the current target/up axis at fixed radius and elevation; optional framing happens first."
+        },
         "view": {
           "enum": [
             "current",
@@ -336,6 +342,10 @@
         }
       ],
       "allOf": [
+        {
+          "if": {"required": ["orbit_degrees"]},
+          "then": {"required": ["view"], "properties": {"view": {"const": "current"}}}
+        },
         {
           "if": {
             "required": [
@@ -404,7 +414,8 @@
                 "target",
                 "body_id",
                 "component_id",
-                "duration_ms"
+                "duration_ms",
+                "orbit_degrees"
               ]
             }
           }

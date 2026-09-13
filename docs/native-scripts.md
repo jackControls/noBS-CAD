@@ -1,9 +1,9 @@
 # Native command scripts
 
-The interpreter is reviewed separately from the app/preview integration in
-PR #99, which remains draft. Bundled construction recipes and their checks form
-the next layer. See [the interface review](script-interface-review.md) for the
-tested evidence and remaining work before promotion.
+The Rust interpreter, desktop integration and bundled recipes share one
+construction format. See [the demo guide](demo-presentation.md) for the current
+collection and presentation priorities, and [the interface review](script-interface-review.md)
+for integration evidence and remaining product work.
 
 A `.nbcad.jsonc` file is the reproducible construction source for a native design.
 A `.nbcad` file is the editable project produced by those commands. Keep both when
@@ -35,6 +35,13 @@ geometry unchanged. The active unfinished sketch stays visible, and references
 created later start visible. Construction entities inside a sketch are a separate
 sketch-editing setting.
 
+The Browser's individual visibility choices are available in
+`document/appearance`: `project_visibility` reads the saved snapshot and
+`project_set_visibility` replaces its `hidden_body_ids`, `hidden_datum_plane_ids`
+and `hidden_sketch_names` arrays. Preserve the other arrays when isolating a part,
+and restore the original snapshot after a presentation or print-layout step.
+These are the same project settings the Browser uses. Hiding a body changes its
+display; it does not remove geometry or substitute for explicit export selection.
 The **Scripts** button opens the script workspace beside the current design.
 Load a commented source file to inspect its chapter notes and grouped commands.
 The recipe-library layer adds the bundled collection using this same adapter.
@@ -190,6 +197,16 @@ A view can use `current`, `isometric`, `front`, `back`, `left`, `right`, `top` o
 `bottom`. `fit: true` frames the model; one optional focal target narrows it:
 `body_id`, `component_id`, or `target: "active_sketch"`. `duration_ms` controls the
 camera transition. Targets use the same named result expressions as modeling calls.
+
+For a continuous turn around the finished part, use
+`{"view":"current","orbit_degrees":120,"duration_ms":3000}`. The signed angle
+can range from -360 to 360 degrees, including a complete revolution. The camera
+keeps its distance, elevation and up direction around its current target. Optional
+`fit` or a focal target establishes framing before the orbit; for a smooth framing
+transition, put a normal view step before it. Orbit requires `view: "current"`.
+The same fields work directly with `cad_interface` action `view` on a loaded
+document; a script still starts from a blank document. Completion acknowledges the
+actual camera animation. Presentation speed and reduced-motion preferences apply.
 
 The shared presentation interface exposes `configure`, `note`, `pause`, `resume`,
 `step`, `status`, `finish`, `stop`, `dismiss` and `show`. Configuration chooses `mode: "fast"` or

@@ -1,7 +1,19 @@
 //! Deterministic authoring of an ordinary native recipe. This does not run CAD.
 //! `cargo run -p nbcad-recipes --example author_turbine` updates the reviewed JSONC.
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::f64::consts::PI;
+#[path = "turbine/design.rs"]
+mod turbine_design;
+#[path = "turbine/drawings.rs"]
+mod turbine_drawings;
+#[path = "turbine/hardware.rs"]
+mod turbine_hardware;
+#[path = "turbine/parts.rs"]
+mod turbine_parts;
+#[path = "turbine/printing.rs"]
+mod turbine_printing;
+use turbine_design::D;
 
 fn p(x: f64, y: f64) -> Value {
     json!({"x":x,"y":y})
@@ -47,6 +59,20 @@ struct Author {
     parts: Vec<Value>,
     drawings: Vec<Value>,
     serial: usize,
+    occurrences: BTreeMap<String, Value>,
+    poses: BTreeMap<String, ([f64; 3], [f64; 4])>,
+    hardware: Vec<Value>,
+    clamps: Vec<Clamp>,
+    joint_names: Vec<String>,
+}
+#[derive(Clone)]
+struct Clamp {
+    name: String,
+    target: String,
+    y: f64,
+    z: f64,
+    diameter: f64,
+    half_grip: f64,
 }
 impl Author {
     fn new() -> Self {
@@ -55,6 +81,11 @@ impl Author {
             parts: vec![],
             drawings: vec![],
             serial: 0,
+            occurrences: BTreeMap::new(),
+            poses: BTreeMap::new(),
+            hardware: vec![],
+            clamps: vec![],
+            joint_names: vec![],
         }
     }
     fn call(&mut self, id: &str, _group: &str, op: &str, args: Value) {
@@ -197,6 +228,13 @@ impl Author {
         self.call(&finish, "sketch/draw", "sketch_finish", json!({}));
         let id = self.uid("extrude");
         self.call(&id,"solid/build","solid_extrude",json!({"sketch_name":name,"profile_indices":[0],"operation":operation,"extent":{"type":"distance","distance":height},"taper_angle_deg":0,"flip":false,"target_body_ids":target.map(|n|vec![body_ref(n)]).unwrap_or_default()}));
+        let visibility = self.uid("completed_feature_references");
+        self.call(
+            &visibility,
+            "solid/reference",
+            "construction_set_visibility",
+            json!({"visible":false}),
+        );
         id
     }
     fn cylinder(
@@ -262,13 +300,25 @@ impl Author {
         seat_diameter: f64,
     ) {
         self.cross_bore(name, target, y, z, diameter);
-        // Counterbores provide real, flat head/nut seats on the round hub.
-        for x in [-35., half_grip] {
-            let n = self.uid("clamp_spotface");
-            self.begin(&n, "yz", x);
-            self.circle([y, z], seat_diameter);
-            self.extrude(&n, 35. - half_grip, "cut", Some(target));
-        }
+        // Head-side counterbore and an actually captive nut on the other side.
+        // A round pocket only 0.05 mm wider than the nut's corners cannot admit
+        // a nut driver and cannot prevent the nut from spinning.
+        let n = self.uid("clamp_head_seat");
+        self.begin(&n, "yz", half_grip);
+        self.circle([y, z], seat_diameter);
+        self.extrude(&n, 35. - half_grip, "cut", Some(target));
+        let n = self.uid("clamp_hex_capture");
+        self.begin(&n, "yz", -35.);
+        self.hex_profile([y, z], if diameter > 3. { 5.8 } else { 4.3 }, 30.);
+        self.extrude(&n, 35. - half_grip, "cut", Some(target));
+        self.clamps.push(Clamp {
+            name: name.into(),
+            target: target.into(),
+            y,
+            z,
+            diameter,
+            half_grip,
+        });
     }
     fn nut_pocket(&mut self, name: &str, target: &str, center: [f64; 2], z: f64) {
         let radius = 5.8 / (2. * (PI / 6.).cos());
@@ -285,261 +335,32 @@ impl Author {
         self.polygon(&points);
         self.extrude(name, 3., "cut", Some(target));
     }
-    fn part_drawing(&mut self, name: &str, height: f64, diameters: &[f64], note: &str) {
-        let title = self.parts.iter().find(|p| p["id"] == name).unwrap()["name"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let sheet = format!("{name}_sheet");
-        self.call(&sheet,"drawing/sheet","drawing_create_sheet",json!({"name":title,"format":"a3","orientation":"landscape","title_block":{"title":title,"drawing_number":format!("TUR-{name}"),"revision":"A-candidate","material":"PETG unless purchased part","finish":"Deburr; inspect clamp and rotating clearances"},"tolerance_note":{"preset":"custom","custom":"Millimetres. Fits are design allowances pending coupon and specimen measurement. No qualified printer tolerance is claimed."}}));
-        let sheet_id = format!("{name}_sheet_id");
-        self.bind(
-            &sheet_id,
-            select(r(&sheet), "/sheets", json!({}), "last", "/id"),
-        );
-        let scale = match name {
-            "stage" | "cap" | "shaft" => 0.65,
-            "base" => 0.8,
-            "pinion" => 4.,
-            "rotor_gear" => 1.8,
-            "motor_mount" => 2.4,
-            "tower" => 2.,
-            _ => 1.2,
-        };
-        let mut views = vec![];
-        for (kind, direction, up, position) in [
-            ("top", [0., 0., 1.], [0., 1., 0.], [110., 90.]),
-            ("front", [0., -1., 0.], [0., 0., 1.], [290., 105.]),
-        ] {
-            let view = format!("{name}_{kind}_view");
-            self.call(&view,"drawing/views","drawing_add_view",json!({"sheet_id":r(&sheet_id),"view":{"name":kind,"kind":kind,"direction":direction,"up":up,"position":position,"scale":scale,"body_ids":[body_ref(name)],"show_hidden_lines":true}}));
-            let view_id = format!("{view}_id");
-            self.bind(
-                &view_id,
-                select(
-                    select(r(&view), "/sheets", json!({"/id":r(&sheet_id)}), "one", ""),
-                    "/views",
-                    json!({}),
-                    "last",
-                    "/id",
-                ),
-            );
-            let projection = format!("{name}_{kind}_projection");
-            // Match the native sheet export's paper-space curve tolerance so
-            // the exact projection serves both association picks and output.
-            self.call(&projection,"drawing/views","drawing_projection",json!({"body_ids":[body_ref(name)],"direction":direction,"up":up,"include_hidden":true,"deflection":(0.08_f64/scale).max(0.01)}));
-            views.push((view_id, projection));
-        }
-        for (i, diameter) in diameters.iter().enumerate() {
-            let circle = format!("{name}_dimension_circle_{i}");
-            self.bind(
-                &circle,
-                select(
-                    r(&views[0].1),
-                    "/circles",
-                    json!({"/radius":diameter/2.}),
-                    "first",
-                    "",
-                ),
-            );
-            let id = self.uid("diameter");
-            self.call(&id,"drawing/dimensions","drawing_add_radial_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[0].0),"feature":{"body_id":body_ref(name),"edge_id":at(&circle,"/edge_id"),"edge_key":at(&circle,"/edge_key"),"fallback_center":at(&circle,"/center_model"),"fallback_normal":at(&circle,"/normal_model"),"fallback_radius":at(&circle,"/radius"),"closed":at(&circle,"/closed")},"mode":"diameter","leader_angle_deg":30.+i as f64*80.,"offset":12.+i as f64*3.,"precision":2}));
-        }
-        let make_anchor = |z: f64| {
-            let source = r(&views[1].1);
-            let pred = if z == 0. {
-                json!({"/model_point/2":z,"/point/0":at(&views[1].1,"/bounds/2")})
-            } else {
-                json!({"/model_point/2":z})
-            };
-            json!({"body_id":body_ref(name),"edge_id":select(source.clone(),"/anchors",pred.clone(),"first","/edge_id"),"edge_key":select(source.clone(),"/anchors",pred.clone(),"first","/edge_key"),"endpoint":select(source.clone(),"/anchors",pred.clone(),"first","/endpoint"),"fallback_point":select(source,"/anchors",pred,"first","/model_point")})
-        };
-        let id = self.uid("height");
-        self.call(&id,"drawing/dimensions","drawing_add_linear_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[1].0),"first":make_anchor(0.),"second":make_anchor(height),"mode":"vertical","offset":14.,"precision":2}));
-        if name == "base" {
-            let corner = |x: f64, y: f64| {
-                let pred = json!({"/model_point/0":x,"/model_point/1":y,"/model_point/2":0.});
-                json!({"body_id":body_ref(name),"edge_id":select(r(&views[0].1),"/anchors",pred.clone(),"first","/edge_id"),"edge_key":select(r(&views[0].1),"/anchors",pred.clone(),"first","/edge_key"),"endpoint":select(r(&views[0].1),"/anchors",pred.clone(),"first","/endpoint"),"fallback_point":select(r(&views[0].1),"/anchors",pred,"first","/model_point")})
-            };
-            for (label, first, second, mode) in [
-                ("width", corner(-70., -65.), corner(90., -65.), "horizontal"),
-                ("depth", corner(90., -65.), corner(90., 65.), "vertical"),
-            ] {
-                self.call(&format!("base_{label}_dimension"),"drawing/dimensions","drawing_add_linear_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[0].0),"first":first,"second":second,"mode":mode,"offset":14.,"precision":2}));
-            }
-            let centre = |x: f64, y: f64, radius: f64| {
-                let pred = json!({"/center_model/0":x,"/center_model/1":y,"/radius":radius});
-                json!({"body_id":body_ref(name),"edge_id":select(r(&views[0].1),"/circles",pred.clone(),"first","/edge_id"),"edge_key":select(r(&views[0].1),"/circles",pred.clone(),"first","/edge_key"),"endpoint":"start","circle_center":true,"fallback_point":select(r(&views[0].1),"/circles",pred,"first","/center_model")})
-            };
-            self.call("base_shaft_spacing","drawing/dimensions","drawing_add_linear_dimension",json!({"sheet_id":r(&sheet_id),"view_id":r(&views[0].0),"first":centre(0.,0.,9.),"second":centre(45.25,23.,1.7),"mode":"horizontal","offset":35.,"precision":2,"suffix":" shaft spacing"}));
-        }
-        let id = self.uid("drawing_note");
-        self.call(
-            &id,
-            "drawing/annotate",
-            "drawing_add_note",
-            json!({"sheet_id":r(&sheet_id),"text":wrapped(note),"position":[22.,228.]}),
-        );
-        let mut export = json!({"part":name,"sheet_id":r(&sheet_id)});
-        for format in ["svg", "dxf"] {
-            let id = format!("{name}_{format}");
-            self.call(
-                &id,
-                "drawing/output",
-                "drawing_export",
-                json!({"sheet_id":r(&sheet_id),"format":format}),
-            );
-            export[format] = at(&id, "/content");
-        }
-        self.drawings.push(export);
-    }
-    fn assembly_drawing(&mut self) {
-        self.call("assembly_sheet","drawing/sheet","drawing_create_sheet",json!({"name":"Turbine assembly","format":"a3","orientation":"landscape","title_block":{"title":"Savonius experiment / assembly","drawing_number":"TUR-000","revision":"A-candidate"}}));
-        self.bind(
-            "assembly_sheet_id",
-            select(r("assembly_sheet"), "/sheets", json!({}), "last", "/id"),
-        );
-        for (kind, direction, up, position, scale) in [
-            ("front", [0., -1., 0.], [0., 0., 1.], [105., 132.], 0.75),
-            ("top", [0., 0., 1.], [0., 1., 0.], [300., 108.], 0.65),
-        ] {
-            let id = self.uid("assembly_view");
-            self.call(&id,"drawing/views","drawing_add_view",json!({"sheet_id":r("assembly_sheet_id"),"view":{"name":format!("Assembly {kind}"),"kind":kind,"scope":"assembly","direction":direction,"up":up,"position":position,"scale":scale,"show_hidden_lines":false}}));
-            let view_id = format!("assembly_{kind}_view_id");
-            self.bind(
-                &view_id,
-                select(
-                    select(
-                        r(&id),
-                        "/sheets",
-                        json!({"/id":r("assembly_sheet_id")}),
-                        "one",
-                        "",
-                    ),
-                    "/views",
-                    json!({}),
-                    "last",
-                    "/id",
-                ),
-            );
-            let projection = format!("assembly_{kind}_projection");
-            self.call(
-                &projection,
-                "drawing/views",
-                "drawing_projection",
-                json!({"scope":"assembly","direction":direction,"up":up,"include_hidden":false,"deflection":(0.08_f64/scale).max(0.01)}),
-            );
-            if kind == "front" {
-                let anchor = |part: &str, point: Value| {
-                    let mut pred = point;
-                    pred["/body_id"] = body_ref(part);
-                    pred["/occurrence_id"] = occ_ref(part);
-                    json!({"body_id":body_ref(part),"occurrence_id":occ_ref(part),"edge_id":select(r(&projection),"/anchors",pred.clone(),"first","/edge_id"),"edge_key":select(r(&projection),"/anchors",pred.clone(),"first","/edge_key"),"endpoint":select(r(&projection),"/anchors",pred.clone(),"first","/endpoint"),"fallback_point":select(r(&projection),"/anchors",pred,"first","/model_point")})
-                };
-                self.call("assembly_height","drawing/dimensions","drawing_add_linear_dimension",json!({"sheet_id":r("assembly_sheet_id"),"view_id":r(&view_id),"first":anchor("base",json!({"/model_point/0":90.,"/model_point/2":0.})),"second":anchor("shaft",json!({"/model_point/2":281.})),"mode":"vertical","offset":14.,"precision":2}));
-            } else {
-                let pred = json!({"/body_id":body_ref("cap"),"/occurrence_id":occ_ref("cap"),"/radius":99.});
-                let field =
-                    |path: &str| select(r(&projection), "/circles", pred.clone(), "first", path);
-                self.call("assembly_diameter","drawing/dimensions","drawing_add_radial_dimension",json!({"sheet_id":r("assembly_sheet_id"),"view_id":r(&view_id),"feature":{"body_id":body_ref("cap"),"occurrence_id":occ_ref("cap"),"edge_id":field("/edge_id"),"edge_key":field("/edge_key"),"fallback_center":field("/center_model"),"fallback_normal":field("/normal_model"),"fallback_radius":field("/radius"),"closed":field("/closed")},"mode":"diameter","leader_angle_deg":35.,"offset":12.,"precision":2}));
-            }
-        }
-        self.call("assembly_note","drawing/annotate","drawing_add_note",json!({"sheet_id":r("assembly_sheet_id"),"position":[20.,254.],"text":"Two identical stages staggered 90 degrees.\nRotor and generator shafts use separate supports.\nSee TUR-BOM and individual part sheets for assembly and fits."}));
-        let mut export = json!({"part":"assembly","sheet_id":r("assembly_sheet_id")});
-        for format in ["svg", "dxf"] {
-            let id = format!("assembly_{format}");
-            self.call(
-                &id,
-                "drawing/output",
-                "drawing_export",
-                json!({"sheet_id":r("assembly_sheet_id"),"format":format}),
-            );
-            export[format] = at(&id, "/content");
-        }
-        self.drawings.push(export);
-        self.call("bom_sheet","drawing/sheet","drawing_create_sheet",json!({"name":"Turbine procurement and assembly","format":"a3","orientation":"landscape","title_block":{"title":"Turbine parts and hardware","drawing_number":"TUR-BOM","revision":"A-candidate"}}));
-        self.bind(
-            "bom_sheet_id",
-            select(r("bom_sheet"), "/sheets", json!({}), "last", "/id"),
-        );
-        let mut items=self.parts.iter().enumerate().map(|(i,p)|json!({"item_number":(i+1).to_string(),"body_id":p["body_id"],"part_number":format!("TUR-{}",p["id"].as_str().unwrap()),"description":p["name"],"quantity":p.get("quantity").cloned().unwrap_or(json!(1)),"material":p["material"]})).collect::<Vec<_>>();
-        for (number, description, quantity) in [
-            (
-                "M3-12",
-                "M3 x12 socket screw /2stage,2cradle base,4guard base",
-                8,
-            ),
-            (
-                "M3-16",
-                "M3 x16 socket screw /2carrier base,2carrier clamp,1rotor hub",
-                5,
-            ),
-            ("M3-20", "M3 x20 socket screw /generator cradle clamp", 1),
-            (
-                "M3-8-low",
-                "M3 x8 low profile screw /head height <=1.65 /guard lid",
-                4,
-            ),
-            (
-                "M3-nut",
-                "M3 hex nut /5.5 AF x2.4 nominal; confirm purchased fastener",
-                18,
-            ),
-            ("M2-8", "M2 x8 socket screw /pinion clamp", 1),
-            (
-                "M2-nut",
-                "M2 hex nut /4 AF x1.6 nominal; confirm purchased fastener",
-                1,
-            ),
-        ] {
-            items.push(json!({"item_number":(items.len()+1).to_string(),"part_number":number,"description":description,"quantity":quantity,"material":"purchased steel"}));
-        }
-        self.call(
-            "turbine_bom",
-            "drawing/sheet",
-            "drawing_set_bom",
-            json!({"sheet_id":r("bom_sheet_id"),"position":[16.,22.],"items":items}),
-        );
-        self.call("procurement_note","drawing/annotate","drawing_add_note",json!({"sheet_id":r("bom_sheet_id"),"position":[22.,207.],"text":wrapped("Hardware is a procurement list, not hidden printable geometry. Verify actual head, nut and shaft dimensions before purchase/printing. PETG baseline. Fits, motor projection, hub slip, rotor startup, bearing clamp load and guard access require physical qualification. Ages8-12 with adult guidance; age5 only with closer hands-on adult guidance.")}));
-        let mut export = json!({"part":"bom","sheet_id":r("bom_sheet_id")});
-        for format in ["svg", "dxf"] {
-            let id = format!("bom_{format}");
-            self.call(
-                &id,
-                "drawing/output",
-                "drawing_export",
-                json!({"sheet_id":r("bom_sheet_id"),"format":format}),
-            );
-            export[format] = at(&id, "/content");
-        }
-        self.drawings.push(export);
-    }
     fn motor_cradle(&mut self) {
-        self.cylinder("motor_mount", [0., 0.], 37., 0., 32., "new_body", None);
+        self.cylinder("motor_mount", [0., 0.], 37., 0., 24., "new_body", None);
         self.cylinder(
             "motor_mount_cavity",
             [0., 0.],
             32.6,
-            14.,
-            18.,
+            D.motor_rear_clearance,
+            24. - D.motor_rear_clearance,
             "cut",
             Some("motor_mount"),
         );
         self.block(
-            "motor_wire_slot",
+            "motor_clamp_split",
             [-0.6, -20.],
             [0.6, -13.],
-            14.,
-            18.,
+            D.motor_rear_clearance,
+            24. - D.motor_rear_clearance,
             "cut",
             Some("motor_mount"),
         );
         self.block(
             "motor_clamp_left",
-            [-8., -23.],
+            [-11., -23.],
             [-0.6, -16.5],
-            23.,
-            8.,
+            0.,
+            20.,
             "join",
             Some("motor_mount"),
         );
@@ -547,18 +368,60 @@ impl Author {
             "motor_clamp_right",
             [0.6, -23.],
             [8., -16.5],
-            23.,
-            8.,
+            0.,
+            20.,
             "join",
             Some("motor_mount"),
         );
-        self.cross_bore("motor_cradle_clamp", "motor_mount", -19.75, 27., 3.2);
-        for y in [-23., 23.] {
-            let n = self.uid("cradle_ear");
-            self.cylinder(&n, [0., y], 13., 0., 4., "join", Some("motor_mount"));
-            let n = self.uid("cradle_mount");
-            self.cylinder(&n, [0., y], 3.4, 0., 4., "cut", Some("motor_mount"));
+        self.block(
+            "motor_adjustment_backtab",
+            [-13.5, 16.],
+            [13.5, 23.],
+            0.,
+            20.,
+            "join",
+            Some("motor_mount"),
+        );
+        self.cylinder(
+            "motor_rear_terminal_opening",
+            [0., 0.],
+            28.,
+            0.,
+            D.motor_rear_clearance,
+            "cut",
+            Some("motor_mount"),
+        );
+        self.block(
+            "motor_independent_wire_channel",
+            [12., -4.],
+            [22., 4.],
+            0.,
+            D.motor_rear_clearance,
+            "cut",
+            Some("motor_mount"),
+        );
+        self.clamp(
+            "motor_cradle_clamp",
+            "motor_mount",
+            -19.75,
+            16.,
+            3.2,
+            8.,
+            6.4,
+        );
+        for x in [-10., 10.] {
+            let n = self.uid("cradle_adjuster_bore");
+            self.begin(&n, "xz", -23.);
+            self.circle([x, 12.], 3.4);
+            self.extrude(&n, 7., "cut", Some("motor_mount"));
+            let n = self.uid("cradle_adjuster_hex");
+            self.begin(&n, "xz", -20.);
+            self.hex_profile([x, 12.], 5.8, 30.);
+            // Continue through the curved case wall into the empty cradle;
+            // stopping at Y16 traps the nut behind the wall near X+/-10.
+            self.extrude(&n, 10., "cut", Some("motor_mount"));
         }
+        self.round_rim("motor_mount", 18.5, 24., 0.5);
     }
     fn component(&mut self, name: &str, title: &str, printable: bool, pose: [f64; 3]) {
         let (color, color_name) = match name {
@@ -589,71 +452,18 @@ impl Author {
             ),
         );
         self.call(&format!("{name}_placement"),"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":occ_ref(name),"local_pose":{"translation":pose,"rotation":[0,0,0,1]}}));
+        self.poses.insert(name.into(), (pose, [0., 0., 0., 1.]));
+        self.occurrences.insert(name.into(), occ_ref(name));
         self.steps.push(json!({"view":"isometric","fit":true,"component_id":at(&format!("{name}_component"),"/id"),"duration_ms":450}));
         self.parts.push(json!({"id":name,"name":title,"body_id":body_ref(name),"component_id":at(&format!("{name}_component"),"/id"),"occurrence_id":occ_ref(name),"printable":printable,"material":if printable{"PETG"}else{"purchased — drawing/specimen confirmation required"},"print_pose":{"translation":[0,0,0],"rotation":[0,0,0,1]}}));
-    }
-    fn face(&mut self, name: &str, z: f64, normal: f64) -> String {
-        let face = self.uid("face");
-        let body = select(
-            r("joint_geometry"),
-            "/bodies",
-            json!({"/id":body_ref(name)}),
-            "one",
-            "",
-        );
-        self.bind(
-            &face,
-            select(
-                body,
-                "/faces",
-                json!({"/plane/normal/2":normal,"/plane/origin/2":z}),
-                "first",
-                "",
-            ),
-        );
-        face
-    }
-    fn joint(
-        &mut self,
-        id: &str,
-        a: &str,
-        b: &str,
-        origin_a: [f64; 3],
-        za: f64,
-        zb: f64,
-        angle: f64,
-        kind: &str,
-    ) {
-        self.joint_offset(id, a, b, origin_a, za, zb, angle, kind, 0.);
-    }
-    fn joint_offset(
-        &mut self,
-        id: &str,
-        a: &str,
-        b: &str,
-        origin_a: [f64; 3],
-        za: f64,
-        zb: f64,
-        angle: f64,
-        kind: &str,
-        offset: f64,
-    ) {
-        let af = self.face(a, za, 1.);
-        let bf = self.face(b, zb, -1.);
-        // Both declared axes point up: the underside face remains the topology
-        // anchor, while its custom connector frame preserves an upright part.
-        let connector = |name: &str, face: &str, origin: [f64; 3]| json!({"body_id":body_ref(name),"face_id":at(face,"/id"),"face_key":at(face,"/key"),"kind":"planar_face","frame":{"origin":origin,"primary_axis":[0,0,1],"secondary_axis":[1,0,0]},"source_surface_frame":{"origin":at(face,"/plane/origin"),"primary_axis":at(face,"/plane/normal"),"secondary_axis":at(face,"/plane/u")}});
-        // Fixed separation/stagger belong to the connector home transform;
-        // rigid joints have no motion coordinates, and revolute angles do.
-        let anchor_a = [origin_a[0], origin_a[1], origin_a[2] + offset];
-        let rigid = kind == "rigid";
-        self.call(id,"assembly/joints","assembly_create_joint",json!({"name":id.replace('_'," "),"kind":kind,"connector_a":connector(a,&af,anchor_a),"connector_b":connector(b,&bf,[0.,0.,zb]),"flipped":true,"angle_offset_deg":if rigid{0.}else{angle},"linear_offset_mm":0.,"advanced":{"connector_a_occurrence_id":occ_ref(a),"connector_b_occurrence_id":occ_ref(b),"connector_a_twist_deg":if rigid{angle}else{0.}}}));
     }
     fn repeat(&mut self, name: &str, source: &str, pose: [f64; 3]) {
         self.bind(&format!("{name}_body"), r(&format!("{source}_body")));
         self.call(&format!("{name}_occurrence"),"assembly/joints","assembly_create_occurrence",json!({"name":name.replace('_'," "),"component_id":at(&format!("{source}_component"),"/id"),"local_pose":{"translation":pose,"rotation":[0,0,0,1]}}));
         let part = self.parts.iter_mut().find(|p| p["id"] == source).unwrap();
-        part["quantity"] = json!(2);
+        part["quantity"] = json!(part.get("quantity").and_then(Value::as_u64).unwrap_or(1) + 1);
+        self.poses.insert(name.into(), (pose, [0., 0., 0., 1.]));
+        self.occurrences.insert(name.into(), occ_ref(name));
     }
     fn gear(&mut self, name: &str, teeth: usize, bore: f64, hub: f64) {
         let m = 1.;
@@ -773,7 +583,6 @@ impl Author {
 
 fn main() {
     let mut a = Author::new();
-    let g = 54.5 * std::f64::consts::FRAC_1_SQRT_2;
     a.note("The experiment","Build a two-stage vertical-axis Savonius turbine. PETG baseline; 180 mm bucket diameter and 200 mm combined bucket height. Generator and hardware are native representative parts pending specimen fit and physical testing.");
     a.note("Repeated rotor stage","Concentric driving diameters define a bottom disc, shaft hub and two semicircular bucket walls. The clamp hub ends at 18 mm so only the 8 mm shaft divides the overlap above it. One stage definition appears twice, staggered by 90 degrees. Print each stage upright and the final cap separately.");
     let stage_plate = a.cylinder("stage", [0., 0.], 198., 0., 3., "new_body", None);
@@ -828,219 +637,66 @@ fn main() {
         Some("stage"),
     );
     a.clamp("stage_clamp_bolt", "stage", -8., 10., 3.2, 4., 6.4);
-    a.component("stage", "Savonius stage / print twice", true, [0., 0., 73.]);
+    // Soften the reachable vertical lips, retaining the 2 mm wall's central
+    // thickness and flat top/bottom mating surfaces for the repeated stages.
+    a.round_vertical_corners(
+        "stage",
+        &[
+            [-90., 0.],
+            [-88., 0.],
+            [-9., 0.],
+            [-7., 0.],
+            [7., 0.],
+            [9., 0.],
+            [88., 0.],
+            [90., 0.],
+        ],
+        0.4,
+    );
+    a.round_rim("stage", 99., 3., 0.6);
+    a.component(
+        "stage",
+        "Savonius stage / print twice",
+        true,
+        [0., 0., D.stage()],
+    );
+    a.repeat("stage_upper", "stage", [0., 0., D.upper_stage()]);
+    a.set_pose(
+        "stage_upper",
+        [0., 0., D.upper_stage()],
+        turbine_hardware::rz(90.),
+    );
     a.cylinder("cap", [0., 0.], 198., 0., 3., "new_body", None);
     a.cylinder("cap_bore", [0., 0.], 8.4, 0., 3., "cut", Some("cap"));
-    a.component("cap", "Rotor top endplate", true, [0., 0., 273.]);
-    a.note("Separate rotor bearings","Two spaced 608 bearing seats support the 8 mm shaft. The generator carries no rotor weight. Named clearances are provisional diametral allowances; print the coupons before the full assembly.");
-    a.block("base", [-70., -65.], [90., 65.], 0., 8., "new_body", None);
-    a.cylinder(
-        "base_shaft_clearance",
-        [0., 0.],
-        18.,
-        0.,
-        8.,
-        "cut",
-        Some("base"),
-    );
-    for (x, y) in [
-        (-22., 0.),
-        (22., 0.),
-        (45.25, -23.),
-        (45.25, 23.),
-        (10. + g, g),
-        (10. - g, g),
-        (10. + g, -g),
-        (10. - g, -g),
-    ] {
-        let n = a.uid("base_fastener");
-        a.cylinder(&n, [x, y], 3.4, 0., 8., "cut", Some("base"));
-        let n = a.uid("base_head_recess");
-        a.cylinder(&n, [x, y], 6.4, 0., 3.2, "cut", Some("base"));
-    }
-    a.component(
-        "base",
-        "Base / bearing and generator datum",
-        true,
-        [0., 0., 0.],
-    );
-    a.cylinder("tower", [0., 0.], 52., 0., 6., "new_body", None);
-    a.cylinder(
-        "tower_column",
-        [0., 0.],
-        36.,
-        0.,
-        42.,
-        "join",
-        Some("tower"),
-    );
-    a.cylinder(
-        "tower_relief",
-        [0., 0.],
-        17.8,
-        0.,
-        42.,
-        "cut",
-        Some("tower"),
-    );
-    a.cylinder(
-        "tower_lower_seat",
-        [0., 0.],
-        22.3,
-        0.,
-        7.,
-        "cut",
-        Some("tower"),
-    );
-    a.cylinder(
-        "tower_upper_seat",
-        [0., 0.],
-        22.3,
-        35.,
-        7.,
-        "cut",
-        Some("tower"),
-    );
-    a.block(
-        "tower_split",
-        [-0.6, -27.],
-        [0.6, 0.],
-        0.,
-        42.,
-        "cut",
-        Some("tower"),
-    );
-    a.clamp("tower_clamp_lower", "tower", -14., 12., 3.2, 5., 6.4);
-    a.clamp("tower_clamp_upper", "tower", -14., 32., 3.2, 5., 6.4);
-    for x in [-22., 22.] {
-        let n = a.uid("tower_mount");
-        a.cylinder(&n, [x, 0.], 3.4, 0., 6., "cut", Some("tower"));
-    }
-    a.component(
-        "tower",
-        "Split bearing carrier / 608 seats",
-        true,
-        [0., 0., 8.],
-    );
-    a.cylinder("bearing", [0., 0.], 22., 0., 7., "new_body", None);
-    a.cylinder("bearing_bore", [0., 0.], 8., 0., 7., "cut", Some("bearing"));
-    a.component(
-        "bearing",
-        "608 bearing / purchased envelope",
-        false,
-        [0., 0., 8.],
-    );
-    a.cylinder("shaft", [0., 0.], 8., 0., 278., "new_body", None);
-    a.component(
-        "shaft",
-        "8 mm steel shaft / cut to length",
-        false,
-        [0., 0., 3.],
-    );
-    a.cylinder("spacer", [0., 0.], 13., 0., 28., "new_body", None);
-    a.cylinder("spacer_bore", [0., 0.], 8.2, 0., 28., "cut", Some("spacer"));
-    a.component("spacer", "Inner race spacer", false, [0., 0., 15.]);
-    a.cylinder("washer", [0., 0.], 13., 0., 0.6, "new_body", None);
-    a.cylinder("washer_bore", [0., 0.], 8.2, 0., 0.6, "cut", Some("washer"));
-    a.component(
-        "washer",
-        "Upper inner-race thrust washer",
-        false,
-        [0., 0., 50.],
-    );
-    a.cylinder("collar", [0., 0.], 16., 0., 5., "new_body", None);
-    a.cylinder("collar_bore", [0., 0.], 8., 0., 5., "cut", Some("collar"));
-    a.component(
-        "collar",
-        "Lower shaft collar / purchased",
-        false,
-        [0., 0., 3.],
-    );
-    a.note("Generator cartridge","The KW-GEN3 case is nominally 32 mm diameter. Its 28 mm case and 6 mm projecting round shaft are provisional, derived from the approximately 34 mm total envelope; measure the specimen before printing the cartridge and pinion.");
-    a.motor_cradle();
-    a.component(
-        "motor_mount",
-        "Removable KW-GEN3 cradle / specimen fit pending",
-        true,
-        [45.25, 0., 8.],
-    );
-    a.cylinder("motor", [0., 0.], 32., 0., 28., "new_body", None);
-    a.component(
-        "motor",
-        "KW-GEN3 stator case / purchased envelope",
-        false,
-        [45.25, 0., 22.],
-    );
-    a.cylinder("motor_shaft", [0., 0.], 2., 0., 6., "new_body", None);
-    a.component(
-        "motor_shaft",
-        "KW-GEN3 rotating shaft / provisional 6 mm projection",
-        false,
-        [45.25, 0., 50.],
-    );
-    a.note("Guard the transmission","A separately printed guard and lid cover the gear mesh. The rotor endplate overlaps the central opening. This is a supervised low-energy science model, not a child-safety-qualified product.");
-    a.cylinder("guard", [0., 0.], 120., 0., 57., "new_body", None);
-    a.cylinder(
-        "guard_inside",
-        [0., 0.],
-        114.,
-        0.,
-        57.,
-        "cut",
-        Some("guard"),
-    );
-    for (x, y) in [(g, g), (-g, g), (g, -g), (-g, -g)] {
-        let n = a.uid("guard_boss");
-        a.cylinder(&n, [x, y], 8., 0., 57., "join", Some("guard"));
-        let n = a.uid("guard_hole");
-        a.cylinder(&n, [x, y], 3.4, 0., 57., "cut", Some("guard"));
-        for z in [0., 54.] {
-            let n = a.uid("guard_captive_nut");
-            a.nut_pocket(&n, "guard", [x, y], z);
-        }
-    }
-    a.component(
-        "guard",
-        "Transmission guard / four screw bosses",
-        true,
-        [10., 0., 8.],
-    );
-    a.cylinder("guard_lid", [0., 0.], 120., 0., 3., "new_body", None);
-    a.cylinder(
-        "guard_lid_axis",
-        [-10., 0.],
-        30.,
-        0.,
-        3.,
-        "cut",
-        Some("guard_lid"),
-    );
-    for (x, y) in [(g, g), (-g, g), (g, -g), (-g, -g)] {
-        let n = a.uid("lid_hole");
-        a.cylinder(&n, [x, y], 3.4, 0., 3., "cut", Some("guard_lid"));
-    }
-    a.component(
-        "guard_lid",
-        "Removable transmission lid",
-        true,
-        [10., 0., 65.],
-    );
-    a.note("A real 4:1 spur pair","The tooth flanks sample the involute of the 20-degree base circle with bounded chord error. A native circular pattern repeats one driving tooth and fuses it to the root disc. Module 1, 72/18 teeth, 0.10 mm tooth thinning each and 45.25 mm centre distance are explicit design inputs.");
+    a.round_rim("cap", 99., 3., 0.6);
+    a.round_rim("cap", 4.2, 3., 0.3);
+    a.component("cap", "Rounded rotor top endplate", true, [0., 0., D.cap()]);
+    a.note("A supported axial stack", "Two 608ZZ bearings support a common uncut 300 mm shaft. Narrow purchased shims contact the inner rings only. An accessible lower collar sets 0.2 mm endplay without compressing a between-bearing spacer. A printed sleeve carries the rotor onto the gear hub and upper inner-ring shim.");
+    a.supports();
+    a.note("A measurable generator cartridge", "The replacement cradle provides 12 mm of actual axial adjustment, an open terminal recess, and an independent wire channel. Measure the delivered motor: the default 28 mm case and 6 mm projecting shaft are explicitly provisional, not dimensions inferred from a supplier envelope.");
+    a.adjustable_generator();
+    a.transmission_guard();
+    a.note("A real 4:1 spur pair", "A native patterned involute gives 72 and 18 teeth at module 1, 20 degrees, with 0.10 mm tooth thinning each and 45.25 mm shaft spacing. The generator pinion has a real captive M2 nut, and all screw envelopes participate in the assembly checks.");
     a.gear("rotor_gear", 72, 8.3, 24.);
     a.component(
         "rotor_gear",
-        "72 tooth rotor gear / M3 split hub",
+        "72 tooth rotor gear / captive M3 split hub",
         true,
-        [0., 0., 50.6],
+        [0., 0., D.gear()],
     );
     a.gear("pinion", 18, 2.2, 12.);
     a.component(
         "pinion",
-        "18 tooth generator pinion / M2 split hub",
+        "18 tooth generator pinion / captive M2 split hub",
         true,
-        [45.25, 0., 50.6],
+        [D.gear_spacing, 0., D.gear()],
     );
-    a.note("Native assembly relationships","Ground the base, place the carrier and generator cartridge, then constrain the rotor and generator with revolute joints. The second stage is a repeated occurrence of the original definition.");
+    a.set_pose(
+        "pinion",
+        [D.gear_spacing, 0., D.gear()],
+        turbine_hardware::rz(10.),
+    );
+    a.hardware_definitions();
     a.call("joint_geometry", "solid/check", "solid_scene", json!({}));
     a.call(
         "ground_base",
@@ -1048,210 +704,108 @@ fn main() {
         "assembly_set_occurrence_grounded",
         json!({"occurrence_id":occ_ref("base"),"grounded":true}),
     );
-    a.joint(
-        "carrier_to_base",
-        "base",
-        "tower",
-        [0., 0., 8.],
-        8.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "cradle_to_base",
-        "base",
-        "motor_mount",
-        [45.25, 0., 8.],
-        8.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "guard_to_base",
-        "base",
-        "guard",
-        [10., 0., 8.],
-        8.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "lid_to_guard",
-        "guard",
-        "guard_lid",
-        [0., 0., 57.],
-        57.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "motor_to_cradle",
-        "motor_mount",
-        "motor",
-        [0., 0., 14.],
-        14.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "generator_rotation",
-        "motor",
-        "motor_shaft",
-        [0., 0., 28.],
-        28.,
-        0.,
-        10.,
-        "revolute",
-    );
-    a.joint_offset(
-        "pinion_to_shaft",
-        "motor_shaft",
-        "pinion",
-        [0., 0., 6.],
-        6.,
-        0.,
-        0.,
-        "rigid",
-        -5.4,
-    );
-    a.joint_offset(
-        "rotor_rotation",
-        "tower",
-        "rotor_gear",
-        [0., 0., 42.],
-        42.,
-        0.,
-        0.,
-        "revolute",
-        0.6,
-    );
-    a.joint_offset(
-        "shaft_to_rotor_gear",
-        "rotor_gear",
-        "shaft",
-        [0., 0., 12.],
-        12.,
-        0.,
-        0.,
-        "rigid",
-        -59.6,
-    );
-    a.joint_offset(
-        "lower_stage_to_shaft",
-        "shaft",
-        "stage",
-        [0., 0., 278.],
-        278.,
-        0.,
-        0.,
-        "rigid",
-        -208.,
-    );
-    a.repeat("stage_upper", "stage", [0., 0., 173.]);
-    a.joint(
-        "staggered_second_stage",
-        "stage",
-        "stage_upper",
-        [0., 0., 100.],
-        100.,
-        0.,
-        90.,
-        "rigid",
-    );
-    a.joint(
-        "rotor_cap",
-        "stage_upper",
-        "cap",
-        [0., 0., 100.],
-        100.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint(
-        "lower_bearing_seat",
-        "base",
-        "bearing",
-        [0., 0., 8.],
-        8.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.repeat("bearing_upper", "bearing", [0., 0., 43.]);
-    a.joint(
-        "upper_bearing_seat",
-        "tower",
-        "bearing_upper",
-        [0., 0., 35.],
-        35.,
-        0.,
-        0.,
-        "rigid",
-    );
-    a.joint_offset(
-        "inner_race_spacer",
-        "shaft",
-        "spacer",
-        [0., 0., 278.],
-        278.,
-        0.,
-        0.,
-        "rigid",
-        -266.,
-    );
-    a.joint_offset(
-        "thrust_washer",
-        "shaft",
-        "washer",
-        [0., 0., 278.],
-        278.,
-        0.,
-        0.,
-        "rigid",
-        -231.,
-    );
-    a.joint_offset(
-        "shaft_retention",
-        "shaft",
-        "collar",
-        [0., 0., 278.],
-        278.,
-        0.,
-        0.,
-        "rigid",
-        -278.,
-    );
-    a.repeat("collar_upper", "collar", [0., 0., 276.]);
-    a.joint_offset(
-        "top_cap_retention",
-        "shaft",
-        "collar_upper",
-        [0., 0., 278.],
-        278.,
-        0.,
-        0.,
-        "rigid",
-        -5.,
-    );
+    for (id, parent, child, kind, angle) in [
+        ("carrier_to_base", "base", "tower", "rigid", 0.),
+        (
+            "cradle_bracket_to_base",
+            "base",
+            "motor_bracket",
+            "rigid",
+            0.,
+        ),
+        (
+            "adjustable_cartridge_home",
+            "motor_bracket",
+            "motor_mount",
+            "rigid",
+            0.,
+        ),
+        ("motor_to_cradle", "motor_mount", "motor", "rigid", 0.),
+        (
+            "generator_rotation",
+            "motor",
+            "motor_shaft",
+            "revolute",
+            10.,
+        ),
+        ("pinion_to_shaft", "motor_shaft", "pinion", "rigid", 0.),
+        ("rotor_rotation", "tower", "rotor_gear", "revolute", 0.),
+        ("shaft_to_rotor_gear", "rotor_gear", "shaft", "rigid", 0.),
+        (
+            "positive_rotor_support",
+            "rotor_gear",
+            "rotor_support_sleeve",
+            "rigid",
+            0.,
+        ),
+        ("lower_stage_to_shaft", "shaft", "stage", "rigid", 0.),
+        (
+            "staggered_second_stage",
+            "stage",
+            "stage_upper",
+            "rigid",
+            0.,
+        ),
+        ("rotor_cap", "stage_upper", "cap", "rigid", 0.),
+        ("lower_bearing_seat", "base", "bearing", "rigid", 0.),
+        ("upper_bearing_seat", "tower", "bearing_upper", "rigid", 0.),
+        ("lower_inner_ring", "shaft", "bearing_inner", "rigid", 0.),
+        (
+            "upper_inner_ring",
+            "shaft",
+            "bearing_inner_upper",
+            "rigid",
+            0.,
+        ),
+        ("lower_shield", "bearing", "bearing_shield", "rigid", 0.),
+        (
+            "lower_top_shield",
+            "bearing",
+            "bearing_shield_lower_top",
+            "rigid",
+            0.,
+        ),
+        (
+            "upper_shield",
+            "bearing_upper",
+            "bearing_shield_upper",
+            "rigid",
+            0.,
+        ),
+        (
+            "upper_top_shield",
+            "bearing_upper",
+            "bearing_shield_upper_top",
+            "rigid",
+            0.,
+        ),
+        ("thrust_washer", "shaft", "washer", "rigid", 0.),
+        ("lower_race_shim", "shaft", "washer_lower", "rigid", 0.),
+        ("shaft_retention", "shaft", "collar", "rigid", 0.),
+        ("top_cap_retention", "shaft", "collar_upper", "rigid", 0.),
+        ("guard_to_base", "base", "guard", "rigid", 0.),
+        ("lid_to_guard", "guard", "guard_lid", "rigid", 0.),
+    ] {
+        a.mount_placed(id, parent, child, kind, angle);
+    }
     a.call("gear_coupling","assembly/joints","assembly_create_gear_relation",json!({"name":"Printed 72:18 spur pair","joint_a":at("rotor_rotation","/id"),"joint_b":at("generator_rotation","/id"),"teeth_a":72,"teeth_b":18,"reverse":true,"phase_deg":10}));
-    a.note("Read the manufacturing intent","Each native part carries its own editable drawing with actual projected edges, diameter and height dimensions. Fits are provisional. Ages 8–12 with adult guidance; age 5 requires closer hands-on adult guidance. Keep fingers away from the rotor and use only supervised low-energy airflow.");
+    a.install_clamps();
+    a.install_remaining_hardware();
+    let print_plates = a.print_plates();
+    a.note("Read the manufacturing intent","Each native part carries its own editable drawing with actual projected edges, diameter and height dimensions. Fits are provisional. Ages 8–12 with adult guidance; age 5 requires closer hands-on adult guidance. Anchor the base before any fan or wind test. Keep fingers away from the rotor and use only supervised low-energy airflow.");
     for (name,height,diameters,note) in [
-        ("stage",100.,vec![198.,8.3],"PRINT 2 / PETG / flat disc on bed. Bucket sweep 180 mm; walls 2 mm; overlap 18 mm. The 18 mm hub leaves airflow around the 8 mm shaft above. M3 clamp center at 10 mm; hub and walls join the 3 mm disc. Print the fit coupon first. Stagger the second stage 90 degrees."),
-        ("cap",3.,vec![198.,8.4],"PRINT 1 / flat on bed. Retain between the upper stage and purchased upper 8 mm shaft collar; no adhesive."),
-        ("base",8.,vec![18.,3.4],"PRINT 1 / bottom on bed. 160 x 130 mm. M3 clearance 3.4 mm; underside head recesses 6.4 x 3.2 mm. Carrier centers +/-22; cradle (45.25, +/-23); guard bolt circle 109, center (10,0), holes staggered 45 degrees. Deburr recesses; keep heads below the base."),
-        ("tower",42.,vec![52.,22.3,17.8],"PRINT 1 / flange down. Two 608 seats, 22.3 x 7 mm, at heights 0 and 35 mm; relief 17.8 mm between. Insert the lower bearing from below before fastening the base. Two M3 transverse split clamps. Clamp lightly; verify bearing rotation after fastening."),
-        ("motor_mount",32.,vec![37.,32.6],"PRINT 1 / flange down. Cavity begins 14 mm above the base. Nominal 32 mm motor: measure the specimen, including shaft projection, before printing. Two M3 flange bolts and one transverse clamp. Route wires through the split before closing the guard."),
-        ("guard",57.,vec![120.,114.,3.4],"PRINT 1 / upright. Four M3 clearance bores and eight hex nut traps: 5.8 mm across flats, 3 mm deep, open at bottom/top. Capture nuts before mounting. Bottom M3 x 12 socket screws; lid M3 x 8 low-profile heads no higher than 1.65 mm above the lid."),
-        ("guard_lid",3.,vec![120.,30.,3.4],"PRINT 1 / flat. Axis opening offset (-10,0). Four M3 x 8 low-profile screws. Rotor disc is 5 mm above the lid, leaving 3.35 mm above heads no higher than 1.65 mm. Check that the rotor clears every screw before motion."),
-        ("rotor_gear",12.,vec![8.3,24.],"PRINT 1 / teeth flat. Module 1; 72 teeth; 20 degree pressure angle; pitch diameter 72 mm; face 3 mm. Tooth thinning 0.10 mm. Split hub with M3 screw/nut; center distance 45.25 mm. Do not glue to the shaft."),
-        ("pinion",6.,vec![2.2,12.],"PRINT 1 / teeth flat. Module 1; 18 teeth; 20 degree pressure angle; pitch diameter 18 mm; nominal face 3 mm. Tooth thinning 0.10 mm. M2 split clamp at 4.5 mm. Round 2 mm motor shaft: verify specimen projection and fit before printing."),
-        ("shaft",278.,vec![8.],"PURCHASE / 8 mm straight steel shaft cut 278 mm long; deburr both ends. Separate 608 bearings carry rotor loads. This is a representative purchased envelope; straightness and surface finish must suit the actual bearings."),
+        ("stage",100.,vec![198.,8.3],"PRINT 2 / disc down. 180 mm bucket sweep, 2 mm walls, 18 mm overlap. Rounded touch rim and R0.4 vertical bucket lips. Actual captive M3 nut and accessible head. The printed sleeve supports the lower stage; set the repeated stage 90 degrees and inspect the assembly before operation."),
+        ("cap",3.,vec![198.,8.4],"PRINT 1 / flat. Rounded top rim. Retain above the repeated stage with the purchased 8 x16 x8 upper shaft collar; no adhesive. This is not a rated child-safe rotor."),
+        ("base",D.base_height,vec![18.,3.4],"PRINT 1 / bottom down. 170 x140 x12 mm. M5 bench-anchor clearance holes. Front 6 mm tool corridor reaches the lower collar after assembly. Use narrow bearing shims, not generic M8 washers; set 0.2 mm axial float."),
+        ("tower",42.,vec![52.,22.3,17.8],"PRINT 1 / flange down. 608ZZ seats 22.3 x7 mm at each end, 35 mm apart. Captive M3 nuts. Install bearings from opposite ends. Fit carrier mounting nuts before the rotor gear; set bearing clamps before the generator and check free rotation. Coupon and slicer qualification required."),
+        ("rotor_support_sleeve",D.support_length(),vec![18.,8.3],"PRINT 1 / upright. Positive axial support between gear hub and lower stage. This carries rotor weight without relying on the stage clamp's axial grip. Inspect end-face seating and creep; no load rating is claimed."),
+        ("motor_bracket",44.,vec![3.4],"PRINT 1 / feet down. Two vertical slots provide +/-6 mm axial cartridge travel. Two M3 base fasteners and two M3x12 cartridge adjusters. Set engagement with the measured motor, then tighten both adjusters."),
+        ("motor_mount",24.,vec![37.,32.6,28.],"PRINT 1 / lower rim down. Supported clamp ears, preloaded captive nuts, 4 mm rear-terminal seat and independent wire channel. Provisional 32 mm case; measure rear boss, leads, case length and shaft projection. Default 5.4 mm pinion engagement is not a supplier guarantee."),
+        ("guard",D.guard_height,vec![D.guard_diameter,D.guard_diameter-6.,3.4],"PRINT 1 / upright. Four captive nut columns. Separate pointed wire exit with tie holes for strain relief. Route leads before closing the lid and keep them below the gear plane. Gearbox access requires removal; the guard is not a safety certification."),
+        ("guard_lid",3.,vec![D.guard_diameter,30.,3.4],"PRINT 1 / flat. Rounded touch rim. Four M3x8 low-profile screws, maximum head height 1.65 mm. Install lid before the rotor stages; remove stages for straight top-driver access. Check runout and screw-head clearance before motion."),
+        ("rotor_gear",12.,vec![8.3,24.],"PRINT 1 / teeth down. Module1 /72 teeth /20 degree pressure angle /3 mm face /0.10 mm thinning. Captive M3 nut. Narrow shim bears only on the upper inner ring. Native geometry and coupons do not qualify strength or wear."),
+        ("pinion",6.,vec![2.2,12.],"PRINT 1 / teeth down. Module1 /18 teeth /20 degree pressure angle /3 mm face. Preload captive M2 nut before meshing; nominal 2 mm motor shaft. Check measured shaft engagement, clamp slip and backlash before applying electrical load."),
+        ("shaft",D.shaft_length,vec![8.],"PURCHASE / straight 8 x300 mm shaft, uncut. Deburr without shortening the bearing seats. Purchased 8 x16 x8 collars use M4x4 set screws. Verify shaft and bearing fits and inspect the exposed top before use."),
     ] { a.part_drawing(name,height,&diameters,note); }
     a.assembly_drawing();
     a.steps
@@ -1283,7 +837,7 @@ fn main() {
     checks.push(json!({"assert":at("final_solution","/diagnostics"),"equals":[]}));
     checks.push(json!({"assert":{"$count":select(r("final_sketches"),"",json!({"/dof/value":0}),"all","")},"equals":{"$count":r("final_sketches")}}));
     checks.push(json!({"assert":select(r("final_interference"),"/pairs",json!({"/interfering":true}),"all",""),"equals":[]}));
-    let source = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"Vertical-axis turbine / two-stage Savonius","starting_state":"empty","steps":a.steps,"checks":checks,"exports":{"final_scene":r("final_scene"),"final_sketches":r("final_sketches"),"final_model":r("final_model"),"final_solution":r("final_solution"),"final_assembly":r("final_assembly"),"parts":a.parts,"drawings":a.drawings,"stage_plate_feature":r("stage_plate_feature"),"rotor_joint_id":at("rotor_rotation","/id"),"generator_joint_id":at("generator_rotation","/id"),"design":{"diameter_mm":180,"bucket_height_mm":200,"stage_height_mm":100,"stage_angle_deg":90,"gear_module_mm":1,"rotor_teeth":72,"pinion_teeth":18,"pressure_angle_deg":20,"centre_distance_mm":45.25,"material":"PETG","individual_print_envelope_mm":[200,200,200],"motor_specimen_pending":true}}});
+    let source = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"Vertical-axis turbine / two-stage Savonius","starting_state":"empty","steps":a.steps,"checks":checks,"exports":{"final_scene":r("final_scene"),"final_sketches":r("final_sketches"),"final_model":r("final_model"),"final_solution":r("final_solution"),"final_assembly":r("final_assembly"),"parts":a.parts,"drawings":a.drawings,"print_plates":print_plates,"stage_plate_feature":r("stage_plate_feature"),"rotor_joint_id":at("rotor_rotation","/id"),"generator_joint_id":at("generator_rotation","/id"),"design":D.metadata(),"hardware":a.hardware,"occurrences":a.occurrences}});
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/scripts/vertical-axis-turbine.nbcad.jsonc");
     std::fs::write(path,format!("// Generated by the Rust author_turbine example; replay uses the one native interpreter.\n// Millimetres/degrees. Native editable construction; physical qualification remains pending.\n{}\n",serde_json::to_string_pretty(&source).unwrap())).unwrap();
@@ -1326,7 +880,7 @@ fn author_fit_coupons() {
         "shaft_coupon",
         "8 mm shaft / 8.3 bore / +0.3 diametral",
         true,
-        [0., 0., 0.],
+        [78., 70., 0.],
     );
     a.note("Bearing insertion and clamping", "The lower 608 seat opens at the bed side. Remove first-layer flare before measurement. Insert the bearing from below, then tighten the transverse M3 clamp lightly and check that the bearing still rotates freely.");
     a.cylinder("bearing_coupon", [0., 0.], 52., 0., 6., "new_body", None);
@@ -1370,7 +924,7 @@ fn author_fit_coupons() {
         "bearing_coupon_clamp",
         "bearing_coupon",
         -14.,
-        12.,
+        4.5,
         3.2,
         5.,
         6.4,
@@ -1379,15 +933,15 @@ fn author_fit_coupons() {
         "bearing_coupon",
         "608 bearing / 22.3 seat / +0.3 diametral",
         true,
-        [60., 0., 0.],
+        [138., 70., 0.],
     );
-    a.note("Measure the generator specimen", "The case and projecting shaft need separate checks. The complete small cradle reuses the exact turbine construction, including its 32.6 mm cavity, flat M3 clamp ears and wire slot. Nominal case 32 mm and shaft 2 mm must be checked against the delivered motor.");
+    a.note("Measure the generator specimen", "The case and projecting shaft need separate checks. The complete small cradle reuses the exact turbine construction, including its 32.6 mm cavity, supported M3 clamp ears, hex nut captures and independent wire channel. Nominal case 32 mm and shaft 2 mm must be checked against the delivered motor.");
     a.motor_cradle();
     a.component(
         "motor_mount",
         "32 mm motor case / 32.6 cavity / +0.6 diametral",
         true,
-        [0., 70., 0.],
+        [78., 140., 0.],
     );
     // The actual small pinion is the coupon: its short shaft engagement and
     // reduced tooth face under the M2 seats must not be disguised by a tall ring.
@@ -1396,13 +950,29 @@ fn author_fit_coupons() {
         "pinion",
         "2 mm motor shaft / 2.2 bore / +0.2 diametral",
         true,
-        [55., 70., 0.],
+        [138., 140., 0.],
     );
+    a.call("joint_geometry", "solid/check", "solid_scene", json!({}));
+    a.call(
+        "ground_coupon_plate",
+        "assembly/joints",
+        "assembly_set_occurrence_grounded",
+        json!({"occurrence_id":occ_ref("shaft_coupon"),"grounded":true}),
+    );
+    for part in ["bearing_coupon", "motor_mount", "pinion"] {
+        a.mount_placed(
+            &format!("coupon_{part}_print_pose"),
+            "shaft_coupon",
+            part,
+            "rigid",
+            0.,
+        );
+    }
     for (name,height,diameters,note) in [
-        ("shaft_coupon",18.,vec![8.3,24.],"FIT S / 8 mm shaft; bore 8.3 mm gives 0.3 mm diametral allowance. Actual 18 mm stage hub, M3 clamp at 10 mm, 8 mm grip and 6.4 mm flat seats. Reduced 36 mm disc saves filament; it does not reproduce full rotor stiffness. Print disc down."),
-        ("bearing_coupon",18.,vec![22.3,17.8],"FIT B / 22 mm 608 bearing; seat 22.3 x 7 mm gives 0.3 mm diametral allowance. Actual lower carrier section, M3 clamp at 12 mm and 10 mm grip. Print flange down. Insert from underside; remove first-layer flare and check rotation after light clamping."),
-        ("motor_mount",32.,vec![32.6,37.],"FIT M / nominal 32 mm KW-GEN3 case; cavity 32.6 mm gives 0.6 mm diametral allowance. Exact complete small cradle. Print flange down. Measure the actual case, terminal locations and shaft projection before tightening the M3 clamp."),
-        ("pinion",6.,vec![2.2,12.],"FIT P / nominal 2 mm motor shaft; bore 2.2 mm gives 0.2 mm diametral allowance. Exact 18T pinion and M2 clamp, 4 mm grip. Print teeth down. Provisional 6 mm projection; seats leave 2.1 mm minimum tooth face locally. Check engagement, free rotation and slip under measured load."),
+        ("shaft_coupon",18.,vec![8.3,24.],"FIT S / 8 mm shaft; bore 8.3 mm gives 0.3 mm diametral allowance. Actual 18 mm stage hub, M3 clamp at 10 mm, 8 mm grip, 6.4 mm head recess and 5.8 mm AF captive nut. Reduced 36 mm disc saves filament; it does not reproduce full rotor stiffness. Print disc down."),
+        ("bearing_coupon",18.,vec![22.3,17.8],"FIT B / 22 mm 608 bearing; seat 22.3 x 7 mm gives 0.3 mm diametral allowance. Actual lower carrier section, M3 clamp at 4.5 mm and 10 mm grip. Print flange down. Insert from underside; remove first-layer flare and check rotation after light clamping."),
+        ("motor_mount",24.,vec![32.6,37.],"FIT M / nominal 32 mm KW-GEN3 case; cavity 32.6 mm gives 0.6 mm diametral allowance. Exact open-terminal cartridge with supported ears and captive nuts. Print lower rim down. Measure the actual case, terminal locations and shaft projection before tightening the M3 clamp."),
+        ("pinion",6.,vec![2.2,12.],"FIT P / nominal 2 mm motor shaft; bore 2.2 mm gives 0.2 mm diametral allowance. Exact 18T pinion and M2 clamp, 4 mm grip. Print teeth down. Provisional 6 mm projection; captive nut pocket leaves about 2.0 mm minimum tooth face locally. Check engagement, free rotation and slip under measured load."),
     ] { a.part_drawing(name,height,&diameters,note); }
     a.steps
         .push(json!({"view":"isometric","fit":true,"duration_ms":600}));
@@ -1417,8 +987,9 @@ fn author_fit_coupons() {
     }
     checks.push(json!({"assert":at("final_scene","/errors"),"equals":[]}));
     checks.push(json!({"assert":at("final_solution","/solved"),"equals":true}));
+    checks.push(json!({"assert":at("final_solution","/diagnostics"),"equals":[]}));
     checks.push(json!({"assert":{"$count":select(r("final_sketches"),"",json!({"/dof/value":0}),"all","")},"equals":{"$count":r("final_sketches")}}));
-    let source = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"Turbine fit coupons / measure before printing the rotor","starting_state":"empty","steps":a.steps,"checks":checks,"exports":{"parts":a.parts,"drawings":a.drawings,"final_scene":r("final_scene"),"final_sketches":r("final_sketches"),"final_model":r("final_model"),"final_solution":r("final_solution")}});
+    let source = json!({"$schema":"./nbcad-script.schema.json","version":1,"name":"Turbine fit coupons / measure before printing the rotor","starting_state":"empty","steps":a.steps,"checks":checks,"exports":{"parts":a.parts,"drawings":a.drawings,"final_scene":r("final_scene"),"final_sketches":r("final_sketches"),"final_model":r("final_model"),"final_solution":r("final_solution"),"occurrences":a.occurrences}});
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/scripts/turbine-fit-coupons.nbcad.jsonc");
     std::fs::write(path,format!("// Generated by the same Rust author_turbine example; one native replay interpreter.\n// Actual fit specimens in their intended print orientations. All sizes are millimetres.\n{}\n",serde_json::to_string_pretty(&source).unwrap())).unwrap();

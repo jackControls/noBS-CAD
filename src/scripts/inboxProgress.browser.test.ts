@@ -6,6 +6,11 @@ import type {DocumentDto} from '../engine/types';
 
 /** Exercise progress through actual solid and drawing inbox publication. */
 export async function checkInboxProgress() {
+  for (const mode of ['fast', 'present'] as const) await checkInboxProgressMode(mode);
+  return {solidProgress: true, drawingProgress: true, noExtraIpc: true, finalProgress: true, retiredOwner: true, modes: ['fast', 'present']};
+}
+
+async function checkInboxProgressMode(mode: 'fast' | 'present') {
   const check = (value: unknown, message: string) => { if (!value) throw new Error(message); };
   const initial = useAppStore.getState();
   const document: DocumentDto = {name: 'A', settings: {units: 'mm'}, features: [], rollback_index: 0, browser: []};
@@ -40,7 +45,8 @@ export async function checkInboxProgress() {
     useAppStore.setState({engineKind: 'tauri', activeProjectTabId: 'tab-A', solidBusy: false, projectBusy: false});
     setup(true, true);
     check(await publishCurrentSession(), 'Seed A publication');
-    presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
+    presentation.control({command: 'configure', mode, step_index: 0, step_count: 692});
+    if (mode === 'present') presentation.control({command: 'note', text: 'Sparse chapter', step_index: 3, duration_ms: 0});
     const version = presentation.documentVersion();
     for (const name of ['solid_extrude', 'drawing_add_view']) {
       const applied = {applied: true, name, ...(name === 'solid_extrude' ? {result: {document, scene}} : {})};
@@ -54,7 +60,7 @@ export async function checkInboxProgress() {
       reply = {...applied, script_progress: {steps_completed: completed, step_count: 692}};
       await applyInboxNow();
       check(presentation.snapshot().step_index === completed && !presentation.snapshot().finished,
-        `${name}: an in-flight fast run must report completed authored steps`);
+        `${name}: an in-flight ${mode} run must report completed authored steps between chapter notes`);
       check(JSON.stringify(calls) === JSON.stringify(ordinaryCalls), `${name}: progress must add no native calls or awaits`);
       check(JSON.stringify(useAppStore.getState().document) === ordinaryModel, `${name}: progress must not alter model data`);
     }
@@ -68,7 +74,7 @@ export async function checkInboxProgress() {
     await applyInboxNow();
     check(presentation.snapshot() === finished, 'Late ordinary work cannot overwrite final progress');
 
-    presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
+    presentation.control({command: 'configure', mode, step_index: 0, step_count: 692});
     let release!: (value: unknown) => void;
     reply = new Promise(resolve => { release = resolve; });
     calls.length = 0;
@@ -78,7 +84,7 @@ export async function checkInboxProgress() {
     const replacement = projectTransitions.begin();
     useAppStore.getState().loadProjectState({document: {...document, name: 'B'}, scene}, [], [], 'B.nbcad');
     replacement(true, true);
-    presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
+    presentation.control({command: 'configure', mode, step_index: 0, step_count: 692});
     const playbackB = presentation.snapshot();
     release({applied: true, name: 'solid_extrude', result: {document, scene}, script_progress: {steps_completed: 611, step_count: 692}});
     await pending;

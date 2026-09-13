@@ -700,6 +700,17 @@ impl AppState {
     }
 
     pub fn drawing_export(&self, payload: &str) -> String {
+        self.drawing_export_observing(payload, |_, _| {})
+    }
+
+    /// Observe the projections the normal exporter actually uses, including
+    /// resolved derived-view requests. The caller may present this linework;
+    /// it never starts a second projection or changes the export response.
+    pub(crate) fn drawing_export_observing(
+        &self,
+        payload: &str,
+        mut completed: impl FnMut(&DrawingProjectionRequest, &nbcad_occt::DrawingProjectionDto),
+    ) -> String {
         let request: nbcad_occt::drawing_export::DrawingExportRequest =
             match serde_json::from_str(payload) {
                 Ok(request) => request,
@@ -717,13 +728,15 @@ impl AppState {
             &inner.manager.assembly_document(),
             &request,
             |r| {
-                nbcad_occt::project_drawing(
+                let projection = nbcad_occt::project_drawing(
                     &inner.kernel,
                     &scene,
                     &inner.manager.assembly_document(),
                     r,
                 )
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+                completed(r, &projection);
+                Ok(projection)
             },
         );
         match content {

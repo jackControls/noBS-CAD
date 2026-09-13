@@ -17,6 +17,12 @@ disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
 `body_appearances` / `set_body_appearance`, `solid_export_preflight`, and
 `demo_export_pip_3mf`.
 
+**Engineering knowledge:** standard `resources/list` discovers the existing
+Markdown knowledge bundle; `resources/read` returns a listed URI such as
+`nbcad://knowledge/concepts/gears.md`. Start with `nbcad://knowledge/index.md`
+for design and workholding guidance. The corpus is compiled into the server,
+available offline, and read-only; rebuild after updating `knowledge/`.
+
 ## Build and verify
 
 ```sh

@@ -5,7 +5,7 @@ use nbcad_core::{BodyId, EdgeId, FaceId, FeatureId, PlaneBasis};
 
 use crate::dto::*;
 use crate::stable;
-use crate::thread::{iso_metric_thread_envelope, ThreadFit};
+use crate::thread::{iso_metric_thread_envelope, rounded_thread_diameters, ThreadFit};
 
 const MAX_EXTENT_MM: f64 = 1_000_000.0;
 const MAX_STEP_BASE64_LENGTH: usize = 128 * 1024 * 1024;
@@ -19,6 +19,7 @@ pub enum SolidError {
     SketchNotFound(String),
     ProfileNotFound { sketch: String, index: u32 },
     EmptySelection,
+    EmptyEdgeSelection,
     InvalidExtent(String),
     InvalidTaper,
     InvalidAxis(String),
@@ -43,6 +44,7 @@ impl fmt::Display for SolidError {
                 write!(f, "profile {index} was not found in '{sketch}'")
             }
             SolidError::EmptySelection => write!(f, "select at least one closed profile"),
+            SolidError::EmptyEdgeSelection => write!(f, "select at least one edge"),
             SolidError::InvalidExtent(message) => write!(f, "{message}"),
             SolidError::InvalidTaper => write!(f, "taper angle must be between -89° and 89°"),
             SolidError::InvalidAxis(message) => write!(f, "{message}"),
@@ -3965,7 +3967,7 @@ fn edge_keys_for(
     edge_ids: &[EdgeId],
 ) -> Result<Vec<String>, SolidError> {
     if edge_ids.is_empty() {
-        return Err(SolidError::EmptySelection);
+        return Err(SolidError::EmptyEdgeSelection);
     }
     let body = scene
         .bodies
@@ -4200,6 +4202,15 @@ fn validate_hole_thread(
     hole_extent: HoleExtent,
 ) -> Result<(), SolidError> {
     validate_thread_spec(thread)?;
+    let rounded =
+        rounded_thread_diameters(thread, ThreadFit::Internal).map_err(SolidError::InvalidExtent)?;
+    if let Some([_, _, minor]) = rounded {
+        if predrill_diameter > minor + EPS {
+            return Err(SolidError::InvalidExtent(
+                "predrill exceeds rounded thread minor diameter".into(),
+            ));
+        }
+    }
     if thread.nominal_diameter <= predrill_diameter + EPS {
         return Err(SolidError::InvalidExtent(
             "thread nominal diameter must exceed the predrill diameter".to_string(),
@@ -4225,7 +4236,10 @@ fn validate_hole_thread(
             }
         }
     }
-    if thread.representation == HoleThreadRepresentation::Modeled && iso_limits.is_none() {
+    if thread.representation == HoleThreadRepresentation::Modeled
+        && iso_limits.is_none()
+        && rounded.is_none()
+    {
         // Start with the P/8 basic root flat at the major diameter, then
         // widen toward the actual predrill along 60° flanks. An excessively
         // small custom predrill would make adjacent turns overlap.
@@ -4269,6 +4283,7 @@ fn validate_external_thread(
 }
 
 fn validate_thread_spec(thread: &HoleThreadDto) -> Result<(), SolidError> {
+    rounded_thread_diameters(thread, ThreadFit::External).map_err(SolidError::InvalidExtent)?;
     validate_positive(thread.nominal_diameter, "thread nominal diameter")?;
     validate_positive(thread.pitch, "thread pitch")?;
     if thread.designation.trim().is_empty() {
@@ -4286,7 +4301,8 @@ fn validate_thread_spec(thread: &HoleThreadDto) -> Result<(), SolidError> {
             HoleThreadStandard::IsoMetric,
             HoleThreadSeries::MetricCoarse | HoleThreadSeries::MetricFine,
         )
-        | (HoleThreadStandard::UnifiedInch, HoleThreadSeries::Unc | HoleThreadSeries::Unf) => {}
+        | (HoleThreadStandard::UnifiedInch, HoleThreadSeries::Unc | HoleThreadSeries::Unf)
+        | (HoleThreadStandard::CustomTrapezoidal, HoleThreadSeries::Rounded) => {}
         _ => {
             return Err(SolidError::InvalidExtent(
                 "thread series does not match its standard".to_string(),
@@ -4294,7 +4310,7 @@ fn validate_thread_spec(thread: &HoleThreadDto) -> Result<(), SolidError> {
         }
     }
     match thread.standard {
-        HoleThreadStandard::IsoMetric => {
+        HoleThreadStandard::IsoMetric | HoleThreadStandard::CustomTrapezoidal => {
             if thread.threads_per_inch.is_some() {
                 return Err(SolidError::InvalidExtent(
                     "ISO metric threads must not specify threads per inch".to_string(),
@@ -4701,7 +4717,27 @@ mod tests {
             depth: Some(7.0),
             representation: HoleThreadRepresentation::Modeled,
             tap_drill_designation: Some("5 mm".to_string()),
+            rounded_profile: None,
         }
+    }
+
+    #[test]
+    fn rounded_thread_validates_the_same_profile_for_hole_and_external_features() {
+        let thread: HoleThreadDto = serde_json::from_value(serde_json::json!({
+            "standard":"custom_trapezoidal", "series":"rounded", "class":"custom",
+            "designation":"CUSTOM rounded 30 degree 24 x 4", "nominal_diameter":24.0,
+            "pitch":4.0, "rounded_profile":{"radial_depth":2.0,"corner_radius":0.3,
+                "radial_clearance":0.25,"axial_clearance":0.2}
+        }))
+        .unwrap();
+        assert!(validate_hole_thread(&thread, 20.0, HoleExtent::ThroughAll).is_ok());
+        assert!(validate_external_thread(&thread, 24.0).is_ok());
+        assert!(validate_hole_thread(&thread, 20.6, HoleExtent::ThroughAll).is_err());
+        assert!(validate_external_thread(&thread, 23.0).is_err());
+        let mut invalid = thread.clone();
+        invalid.rounded_profile.as_mut().unwrap().corner_radius = 1.4;
+        assert!(validate_hole_thread(&invalid, 20.0, HoleExtent::ThroughAll).is_err());
+        assert!(validate_external_thread(&invalid, 24.0).is_err());
     }
 
     #[test]

@@ -35,6 +35,7 @@ enum Primitive {
         value: String,
         height: f64,
         centered: bool,
+        rotation_deg: f64,
     },
     Triangle {
         points: [P; 3],
@@ -55,12 +56,25 @@ impl Paper {
         });
     }
     fn text(&mut self, point: P, value: impl Into<String>, height: f64) {
+        self.aligned_text(point, value, height, false, 0.);
+    }
+    fn aligned_text(
+        &mut self,
+        point: P,
+        value: impl Into<String>,
+        height: f64,
+        centered: bool,
+        rotation_deg: f64,
+    ) {
+        let angle = rotation_deg.to_radians();
         for (i, line) in value.into().lines().enumerate() {
+            let down = i as f64 * height * 1.4;
             self.items.push(Primitive::Text {
-                point: [point[0], point[1] + i as f64 * height * 1.4],
+                point: [point[0] - down * angle.sin(), point[1] + down * angle.cos()],
                 value: line.into(),
                 height,
-                centered: false,
+                centered,
+                rotation_deg,
             });
         }
     }
@@ -70,6 +84,7 @@ impl Paper {
             value: value.into(),
             height,
             centered: true,
+            rotation_deg: 0.,
         });
     }
     fn fitted_text(&mut self, point: P, value: impl Into<String>, height: f64, width: f64) {
@@ -1069,24 +1084,45 @@ fn dimension_label(
     value: String,
     presentation: &DrawingDimensionPresentationDto,
     style: &DrawingSheetStyleDto,
+    centered_angle: Option<f64>,
 ) {
     let height = style.text_height_mm;
+    let angle = centered_angle.unwrap_or(0.).to_radians();
     if presentation.basic {
         let width = value.chars().count() as f64 * height * 0.65;
-        let [x, y] = point;
+        let left = if centered_angle.is_some() {
+            -width / 2.
+        } else {
+            0.
+        };
+        let on_paper = |[x, y]: P| {
+            [
+                point[0] + x * angle.cos() - y * angle.sin(),
+                point[1] + x * angle.sin() + y * angle.cos(),
+            ]
+        };
         p.line(
             vec![
-                [x - 1., y - height - 1.],
-                [x + width + 1., y - height - 1.],
-                [x + width + 1., y + 1.],
-                [x - 1., y + 1.],
-                [x - 1., y - height - 1.],
-            ],
+                [left - 1., -height - 1.],
+                [left + width + 1., -height - 1.],
+                [left + width + 1., 1.],
+                [left - 1., 1.],
+                [left - 1., -height - 1.],
+            ]
+            .into_iter()
+            .map(on_paper)
+            .collect(),
             "DIMENSION",
             &style.dimension,
         );
     }
-    p.text(point, value, height);
+    p.aligned_text(
+        point,
+        value,
+        height,
+        centered_angle.is_some(),
+        centered_angle.unwrap_or(0.),
+    );
 }
 fn arrow(p: &mut Paper, tip: P, toward: P, style: &DrawingSheetStyleDto) {
     let length = (toward[0] - tip[0]).hypot(toward[1] - tip[1]);
@@ -1151,9 +1187,17 @@ fn draw_annotation(
             paper.line(vec![b, d], "EXTENSION", &style.extension);
             paper.line(vec![c, d], "DIMENSION", &style.dimension);
             arrows(paper, c, d, style);
+            // Use the same centered, readable orientation as the editor.
+            // Offset the baseline perpendicular to the dimension, so vertical
+            // and oblique text cannot lie on top of the dimension line.
+            let mut angle = (d[1] - c[1]).atan2(d[0] - c[0]).to_degrees();
+            if angle > 90. { angle -= 180.; }
+            if angle < -90. { angle += 180.; }
+            let radians = angle.to_radians();
             dimension_label(
-                paper, [(c[0] + d[0]) * 0.5 + 1., (c[1] + d[1]) * 0.5 - 1.5],
+                paper, [(c[0] + d[0]) * 0.5 + 1.5 * radians.sin(), (c[1] + d[1]) * 0.5 - 1.5 * radians.cos()],
                 dimension_text(value, *precision, prefix, suffix, presentation)?, presentation, style,
+                Some(angle),
             );
         }
         DrawingAnnotationDto::RadialDimension {
@@ -1181,7 +1225,7 @@ fn draw_annotation(
             dimension_label(
                 paper, [label[0] + 1., label[1] - 1.],
                 dimension_text(value, *precision, &format!("{prefix}{symbol}"), suffix, presentation)?,
-                presentation, style,
+                presentation, style, None,
             );
         }
         DrawingAnnotationDto::AngularDimension {
@@ -1214,7 +1258,7 @@ fn draw_annotation(
             dimension_label(
                 paper, [middle[0] + 1., middle[1] - 1.],
                 dimension_text(sweep.abs().to_degrees(), *precision, prefix, &format!("°{suffix}"), presentation)?,
-                presentation, style,
+                presentation, style, None,
             );
         }
         _ => return Err(format!(
@@ -1260,13 +1304,22 @@ fn svg(p: &Paper, font: &str) -> String {
                 value,
                 height,
                 centered,
+                rotation_deg,
             } => {
                 let anchor = if *centered {
                     " text-anchor=\"middle\""
                 } else {
                     ""
                 };
-                writeln!(s,"<text x=\"{:.5}\" y=\"{:.5}\" font-family=\"{}\" font-size=\"{height}\" fill=\"#111\"{anchor}>{}</text>",point[0],point[1],xml(font),xml(value)).unwrap();
+                let rotation = if *rotation_deg != 0. {
+                    format!(
+                        " transform=\"rotate({rotation_deg:.5} {:.5} {:.5})\"",
+                        point[0], point[1]
+                    )
+                } else {
+                    String::new()
+                };
+                writeln!(s,"<text x=\"{:.5}\" y=\"{:.5}\" font-family=\"{}\" font-size=\"{height}\" fill=\"#111\"{anchor}{rotation}>{}</text>",point[0],point[1],xml(font),xml(value)).unwrap();
             }
             Primitive::Triangle { points, layer } => {
                 let points = points
@@ -1343,6 +1396,7 @@ fn dxf(p: &Paper) -> String {
                 value,
                 height,
                 centered,
+                rotation_deg,
             } => {
                 writeln!(
                     s,
@@ -1360,6 +1414,9 @@ fn dxf(p: &Paper) -> String {
                         p.size[1] - point[1]
                     )
                     .unwrap();
+                }
+                if *rotation_deg != 0. {
+                    writeln!(s, "50\n{:.5}", -rotation_deg).unwrap();
                 }
             }
             Primitive::Triangle { points, layer } => {
@@ -1414,6 +1471,167 @@ mod tests {
         let mut projection:DrawingProjectionDto=serde_json::from_value(json!({"visible":[{"points":[[10.,0.],[10.+length,0.]]}],"hidden":[],"section":[],"bounds":[10.,0.,10.+length,0.]})).unwrap();
         projection.anchors = crate::drawing_projection_anchors(&scene, &req, &projection).unwrap();
         (doc, scene, projection)
+    }
+    #[test]
+    fn linear_labels_center_and_rotate_in_both_native_formats() {
+        // Known paper-space expectations are independent of the renderer's
+        // midpoint/normal calculation. The oblique case is a 3-4-5 triangle.
+        for (mode, end, value, point, angle) in [
+            ("horizontal", [12.8, 0.], "12.80", [100., 78.5], 0.),
+            ("vertical", [0., 12.8], "12.80", [108.5, 70.], -90.),
+            (
+                "aligned",
+                [8., 6.],
+                "10.00",
+                [105.1, 76.8],
+                -36.86989764584402,
+            ),
+            (
+                "aligned",
+                [-8., -6.],
+                "10.00",
+                [93.1, 60.8],
+                -36.86989764584402,
+            ),
+        ] {
+            let (mut doc, scene, mut projection) = fixture(12.8);
+            let annotation: DrawingAnnotationDto = serde_json::from_value({
+                let mut value = serde_json::to_value(&doc.sheets[0].annotations[0]).unwrap();
+                value["mode"] = json!(mode);
+                value
+            })
+            .unwrap();
+            doc.sheets[0].annotations[0] = annotation;
+            projection.bounds = [
+                0_f64.min(end[0]),
+                0_f64.min(end[1]),
+                0_f64.max(end[0]),
+                0_f64.max(end[1]),
+            ];
+            for anchor in &mut projection.anchors {
+                anchor.point = match anchor.endpoint {
+                    crate::DrawingProjectionAnchorEndpoint::Start => [0., 0.],
+                    crate::DrawingProjectionAnchorEndpoint::End => end,
+                };
+            }
+            let export = |format| {
+                export_sheet(
+                    &doc,
+                    &scene,
+                    &AssemblyDocumentDto::default(),
+                    &DrawingExportRequest {
+                        sheet_id: 1,
+                        format,
+                    },
+                    |_| Ok(projection.clone()),
+                )
+                .unwrap()
+            };
+            let svg = export(DrawingExportFormat::Svg);
+            let label = svg
+                .lines()
+                .find(|line| line.ends_with(&format!(">{value}</text>")))
+                .unwrap();
+            assert!(label.contains("text-anchor=\"middle\""), "{mode}: {label}");
+            assert!(
+                label.contains(&format!("x=\"{:.5}\" y=\"{:.5}\"", point[0], point[1])),
+                "{mode}: {label}"
+            );
+            if angle != 0. {
+                assert!(
+                    label.contains(&format!(
+                        "rotate({angle:.5} {:.5} {:.5})",
+                        point[0], point[1]
+                    )),
+                    "{mode}: {label}"
+                );
+            }
+            let note = svg
+                .lines()
+                .find(|line| line.contains("&lt;check &amp; fit&gt;"))
+                .unwrap();
+            assert!(
+                !note.contains("text-anchor"),
+                "ordinary notes remain left aligned"
+            );
+            assert!(!note.contains("transform"));
+            let dxf = export(DrawingExportFormat::Dxf);
+            let texts: Vec<BTreeMap<&str, &str>> = dxf
+                .split("0\nTEXT\n")
+                .skip(1)
+                .map(|entity| {
+                    let lines: Vec<_> = entity.split("\n0\n").next().unwrap().lines().collect();
+                    lines
+                        .chunks_exact(2)
+                        .map(|pair| (pair[0], pair[1]))
+                        .collect()
+                })
+                .collect();
+            let text = texts
+                .iter()
+                .find(|text| text.get("1") == Some(&value))
+                .unwrap();
+            assert_eq!(text.get("72"), Some(&"1"), "{mode}: {text:?}");
+            for (code, expected) in [
+                ("10", point[0]),
+                ("11", point[0]),
+                ("20", 210. - point[1]),
+                ("21", 210. - point[1]),
+            ] {
+                assert!(
+                    (text[code].parse::<f64>().unwrap() - expected).abs() < 1e-5,
+                    "{mode}: {text:?}"
+                );
+            }
+            let dxf_angle = text.get("50").map_or(0., |v| v.parse::<f64>().unwrap());
+            assert!(
+                (dxf_angle + angle).abs() < 1e-5,
+                "DXF Y-up rotation: {mode}: {text:?}"
+            );
+            let note = texts
+                .iter()
+                .find(|text| text.get("1").is_some_and(|v| v.contains("<check & fit>")))
+                .unwrap();
+            assert!(!note.contains_key("72"));
+            assert!(!note.contains_key("50"));
+        }
+    }
+    #[test]
+    fn centered_basic_dimension_frame_follows_vertical_text() {
+        let mut paper = Paper {
+            size: [297., 210.],
+            items: Vec::new(),
+        };
+        dimension_label(
+            &mut paper,
+            [100., 70.],
+            "20.00".into(),
+            &DrawingDimensionPresentationDto {
+                basic: true,
+                ..Default::default()
+            },
+            &DrawingSheetStyleDto::default(),
+            Some(-90.),
+        );
+        let Primitive::Line { points, .. } = &paper.items[0] else {
+            panic!("missing basic frame")
+        };
+        // The vertical label's longitudinal center stays at y70. Its frame
+        // extends symmetrically along that axis and rotates with the baseline.
+        assert_eq!(points.len(), 5);
+        assert_eq!(points.first(), points.last());
+        assert!((points[0][1] + points[1][1] - 140.).abs() < 1e-9);
+        assert!((points[0][0] - 95.5).abs() < 1e-9);
+        assert!((points[2][0] - 101.).abs() < 1e-9);
+        assert!(matches!(
+            &paper.items[1],
+            Primitive::Text {
+                point: [100., 70.],
+                centered: true,
+                rotation_deg: -90.,
+                ..
+            }
+        ));
     }
     #[test]
     fn export_measures_current_topology_and_centers_views_like_the_editor() {
@@ -1525,6 +1743,7 @@ mod tests {
                 ..Default::default()
             },
             &document.sheets[0].style,
+            None,
         );
         assert!(
             matches!(&paper.items[0], Primitive::Line { points, .. } if points.len() == 5 && points.first() == points.last())

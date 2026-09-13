@@ -1,185 +1,183 @@
-# D-screw vise manufacturing candidate
+# Captured-slide printed vise
 
-The committed source is `examples/scripts/d-screw-vise.nbcad.jsonc`. Run it with
-`cargo xtask run-script --server PATH_TO_NBCAD_MCP --recipe d-screw-vise`, or choose the recipe in Scripts
-and use **Run in new design**. `d-screw-vise-fit` is the smaller paired thread
-coupon. Both use the ordinary native MCP operations and retain sketches,
-driving dimensions, datum planes, features and assembly joints. The Rust
-`author_vise` example writes these readable command files; it does not construct
-geometry outside the MCP interpreter.
+The active design has **100 mm gripping faces, 90 mm opening, a 230 × 160 × 14 mm
+base and a 24 × 4 mm printed lead screw**. It replaces the earlier 60 mm design,
+whose screw could not be assembled as prescribed and whose moving jaw could hit
+mounting hardware. Earlier replay records do not qualify the replacement.
 
-This is a light assembly fixture to qualify by printing, not a rated shop vise.
-The teaching target is ages 8–12 with adult guidance; a five-year-old can observe
-or help with an adult controlling assembly and motion. Keep the small purchased
-hardware under adult control. It is not a climbing support or a load-bearing toy.
-Its main screw is one continuous printed part with an integral paddle, a true
-M20 × 2.5 right-hand helical thread and a flat through its axis. It is not a
-stack of rings, a D-shaped female bore or an imported mesh.
+The source is [d-screw-vise.nbcad.jsonc](../examples/scripts/d-screw-vise.nbcad.jsonc).
+Choose it in **Scripts → Run in new design**, or run
+`cargo xtask run-script --server PATH_TO_NBCAD_MCP --recipe d-screw-vise`.
+The Rust [author](../crates/recipes/examples/author_vise.rs) emits readable JSONC;
+all geometry is constructed by the native MCP interpreter. Sketches, dimensions,
+datums, features, parts, joints and drawing sheets remain editable.
 
-## Assembly and load path
+This is a development candidate validated by native geometry, assembly, edit,
+independent replay and export tests, plus a rebuilt-desktop Open and exact model
+comparison. **300 N is a design load case, not a tested capacity.** Physical fit,
+load, fatigue and creep qualification remain open; the presentation PR stays draft.
 
-Five parts are printed: the slotted frame, guided jaw, replaceable threaded nut,
-D screw and keeper. A purchased M3 × 40 socket screw and M3 hex nut positively
-retain the keeper; an M3 × 25 socket screw and second M3 nut capture the wear
-cartridge. Their native bodies are explicitly simplified clearance
-envelopes; the print plate excludes them. Supplier dimensions must be checked
-before choosing hardware: the modeled head is Ø5.5 × 3 and the nut is 5.5 across
-flats × 2.4 thick, consistent with the [Bossard nut drawing](https://media.distrelec.com/Web/Downloads/_t/ds/1241613_eng_tds.pdf).
+## Mechanical design
 
-1. Seat the large threaded cartridge in the frame. Load its M3 nut into the
-   hex pocket from the rear (X8), then insert the M3 × 25 bolt from the front
-   (head seated at X32). Its axis is Y12/Z42, clear of the drive thread. Fit this
-   fastener before the drive and jaw, while both ends are accessible. The
-   cartridge's rectangular outside prevents rotation and its end shoulders
-   transfer axial force into the frame.
-2. Turn the D screw through the circular female thread. The screw's phase is
-   registered to the actual native helix, including its cutter start allowance.
-3. Load the small M3 nut from the underside of the jaw and hold it in its
-   hexagonal recess. Lower the jaw onto the rails 30 mm toward the fixed jaw
-   from its home position, clear of the screw head, then slide it left over
-   the head through its open rear chamber. It cannot drop directly over the
-   head through the closed chamber floor.
-4. Lower the keeper over the neck. Its U throat opens downward; the reverse
-   orientation cannot be installed through the top opening.
-5. Fit the M3 retainer from above. Its recessed seat is at Z49; the 40 mm shaft
-   ends at Z9, above the frame's Z8 top face. The nut seats against the pocket
-   roof at Z11.8. Tighten only enough to retain the cap; this fastener does not
-   supply the vise's clamping force.
+Six parts are printed: the frame, captured moving jaw, threaded rear bridge,
+screw with integral grip, detachable thrust fitting and keeper. The bridge itself
+is the replaceable wear nut. Its keyed feet enter recessed deck sockets; the
+socket shoulders carry the axial reaction and two M6 bolts retain the bridge.
 
-Closing thrust passes from screw head to the jaw's front shoulder and the
-workpiece, then through the fixed jaw, base, housing and large nut back to the
-screw. The keeper carries opening force and the M3 fastener prevents the keeper
-from lifting. The screw's rotating envelope is circular despite its printed D
-section. The handle is kept ahead of the base throughout the full 48 mm travel:
-its forward edge starts at X−49 and ends at X−1. Checking only one finished
-orientation would miss a handle sweeping through the base.
+The moving jaw has a 72 mm-long carriage and two 45° dovetail channels. Each rail
+is 8 mm high, 12 mm wide at the root and 28 mm at the head. The channel has
+0.4 mm side clearance at the deck and 0.4 mm roof clearance, with matching slopes.
+These are process allowances to qualify with a coupon. The carriage rests on the
+deck and stays captured against lifting; an ideal slider joint is not its only
+restraint. Broad jaw gussets and an 8 mm fixed-jaw root blend spread load. The
+carriage has matching front relief so it can approach full closure.
 
-The assembly has a Screw–Revolute–Slider loop. Only the screw angle is driven;
-the solver determines jaw travel and retention rotation. The nominal unloaded
-geometry uses 0.4 mm guide-side, guide-roof and axial gaps. The jaw bottom and
-frame top share the Z8 support datum in intended sliding contact, so gravity
-does not have to lower a suspended jaw and consume its neck clearance.
-Physical backlash and elastic seating
-under load are not simulated by this ideal kinematic joint.
+The screw axis is 50 mm above the mounting surface. The integral grip is 20 mm
+thick and approximately 44 mm wide, with 4 mm upper and 2.5 mm lower transition
+radii and 0.6 mm end-rim chamfers. The central bed flat remains intact. The shaft's
+print flat lies 7 mm below its axis: 5 mm is removed from the major-radius side,
+rather than half the shaft. The nominal 20 mm root retains about 91% of its full
+circular area before local holes. This area estimate is not a torsional rating;
+the interrupted thread, keyed neck, layer direction and nut pocket need separate
+strength assessment.
 
-The cartridge cross-bolt positively arrests lifting throughout a complete
-drive turn. Retention does not depend on gravity, friction or the orientation
-of the interrupted D-thread. A Ø3 shaft in the housing and cartridge's Ø3.4
-holes permits at most 0.4 mm relative radial float in rigid geometry. Native
-tests check the free gap at 0.38 mm, collision at 0.42 mm, and housing contact
-before ±1° rocking about the bolt axis. These are geometric limits, not a
-prediction of bolt bending or printed housing deformation under load. Remove
-the jaw and drive before undoing this bolt to replace the wear cartridge.
+The entire oversized thrust fitting detaches. The remaining 18 mm keyed stub
+passes through the bridge before the fitting is installed. Closing force passes
+from the stub end into the blind fitting floor, through the full round head into
+the jaw, workpiece, fixed jaw, frame and keyed bridge. An axial M5 fastener and
+captive nut retain the fitting during opening. The keeper retains the rotating
+head in the jaw. Its two 45° rear ears bear against matching jaw shoulders after
+0.4 mm of axial seating. A transverse M5 pin prevents the keeper from lifting;
+the keeper's pin opening has 1 mm of added axial slot travel so the bearing ears
+can seat before the pin takes the opening load. These are nominal clearances,
+not a tested load-sharing guarantee.
 
-Mount the frame on a sacrificial board using four M5 through-bolts, washers and
-nuts through the 18 × 6 mm slots; select bolt length for the board thickness.
-The slots are outside the jaw path and remain accessible from above. Snug the
-washers without crushing the printed base. This mounting hardware is installation
-equipment and is not part of the nine modeled component envelopes.
+## Assembly and mounting
 
-## Editing the design
+Purchased hardware is modeled as simplified clearance envelopes, not detailed
+fastener threads. Verify supplier dimensions against the pocket and head
+clearances before fabrication. The mechanism uses two M6 × 35 bolts and M6 nuts,
+one M5 × 25 bolt and M5 nut, and one M5 × 90 bolt and M5 nut. Four optional
+M6 × 45 mounting bolts, eight 18 mm-OD washers and four M6 nuts are included in
+assembly collision checks. Their illustrated length assumes an 18 mm board.
 
-The rectangles have real width and height driving dimensions and a single
-located corner. Circles have a driving diameter and a located center. They are
-not individually fixed collections of lines. Named datum planes locate the
-sketches; stock length is an editable extrusion distance. The hexagon's first
-edge length drives the other edge lengths through `d1` expressions, with
-explicit coincident endpoints closing the contour.
+1. Load the bridge's two M6 nuts through the underside of the frame. Leave the
+   bridge off while feeding the moving jaw onto the open rear ends of the rails.
+2. Move the jaw forward 85 mm to its service position, leaving a 5 mm gap to the
+   fixed jaw. Seat the keyed bridge and fit its two M6 bolts from above.
+3. Turn the bare screw through the bridge with the complete thrust fitting off.
+   Load the small M5 nut into the now-exposed keyed stub at the service position.
+4. Slide the thrust fitting onto the keyed stub from the jaw side. Its internal
+   ledge supports the nut in alignment as it covers the loading throat. Tighten
+   the axial M5 screw while the forward service position leaves driver access.
+5. Slide the jaw back over the secured head. Drop the keeper into its top slot,
+   load the keeper nut and insert the transverse M5 pin. Avoid clamping the
+   rotating fitting rigidly with its retaining hardware.
+6. Mount using the outboard slots or clamp the broad side lands to a tabletop
+   edge. Mounting fixtures must stay outside the carriage's complete sweep.
 
-For example, reopen **Moving jaw / 60 mm gripping face** and change its 60 mm
-dimension to change jaw width. **Jaw guide left / running clearance** has a
-4.8 mm channel dimension around a 4 mm rail; changing it changes the clearance
-cut. Finish the sketch and recompute the solids. The native regression test
-edits both dimensions and restores them, checking the intended volume changes.
+The assembly uses a screw–revolute–slider loop. Driving the screw by one turn
+advances the jaw 4 mm. Its 90 mm stroke requires 22.5 turns; permitted joint travel
+ends at zero opening. Physical clearance, elastic seating and backlash are not
+simulated by the ideal motion relation. Tightening the fitting seats its 0.4 mm
+assembly gap; the nominal keeper/head/chamber stack and keeper seating still
+allow about 1.4 mm of axial take-up on reversal before elastic effects. Measure
+thread play on the coupon and total reversal travel on the assembled prototype
+rather than describing the physical drive as zero-backlash.
+The larger jaw can still rack under
+off-centre clamping; qualify that use instead of inferring rigidity from a mate.
 
-The feature **male_thread** uses `solid_external_thread`; its persisted feature
-can be edited with `solid_edit_external_thread`. Thread pitch must be changed
-in both mating thread features and in the Screw joint's lead. Cartridge width
-and its housing pocket are separate manufacturing dimensions. This example
-does not pretend that every source constant is already a single global master
-parameter: coordinated fit changes must update the mating features together.
+## Thread and support-free print intent
 
-## Thread fit and printing
+The mating thread is a **custom rounded 30° trapezoidal form**, nominal Ø24 mm,
+4 mm single-start lead, 2 mm radial depth and 0.3 mm profile corner radii. The
+female feature adds 0.25 mm radial and 0.20 mm total axial relief. It is not an
+ISO Tr or ACME tolerance-class claim. Both mating features store the same profile
+parameters; the native engine applies female relief without changing the lead.
 
-The male is modeled at the ISO M20 × 2.5 / 6g maximum-material envelope. The
-female uses a **custom 20.5 × 2.5 ISO-derived 60° profile**. Increasing its nominal
-diameter supplies 0.25 mm radial process relief while retaining pitch and flank
-form; it is not a standard M20 6H nut. Native tests evaluate the resulting
-pitch-diameter clearance across the male tolerance envelope and sample exact
-solid interference during coupled motion. The closest unloaded surface
-clearance is not the same quantity as radial pitch-diameter relief.
+Native geometry uses circular root/crest blends in a true helical surface.
+The same native feature can be created and edited in the normal thread dialogs
+or through MCP. The browser fallback explicitly rejects this custom form rather
+than replacing it with a different thread shape.
 
-Start with the coupon, using the same material and intended print orientations
-as the full parts. Record nozzle, layer height, extrusion width, wall count,
-infill, material conditioning, dimensional results, turning torque and wear.
-An easy fit with severe rocking is not a successful fit. Do not increase a
-slicer compensation blindly to conceal an incorrect mating helix.
+Start with [d-screw-vise-fit](../examples/scripts/d-screw-vise-fit.nbcad.jsonc): a
+40 mm male screw, 28 mm female engagement, and male/female specimens of the actual
+captured guide. Use the intended nozzle, layer height, wall settings and material.
+Measure fit, rocking and turning effort before scaling up to the full parts.
 
-The full five-part plate fits within approximately 204 × 166 × 52 mm, inside
-the conservative 235.5 × 256 × 256 mm target. The D screw rests on its flat;
-the nut's thread axis is vertical; the jaw and keeper rest on their broad end
-faces. The frame has two 45° roof faces above its circular screw envelope,
-replacing the large horizontal bore bridge. Its apex is Z42.991, leaving about 9 mm
-of stock below the housing top. The small cartridge cross-hole and hex pocket
-still need approximately 3.4 mm short bridges qualified with the print profile.
-Try this layout without supports and inspect it
-before applying load; process success still depends on the extrusion profile.
-The standard 3MF retains
-separate manifold bodies and material assignments. It is an export of the
-print poses, not the assembled model scaled as one object.
+Each printed part has its own saved native print layout and selected-body 3MF.
+All target a conservative 235.5 × 256 × 256 mm usable envelope; the whole kit is
+not required to occupy one plate. Layouts hide the other assembly bodies but
+retain their editable geometry. Export selection is explicit: hidden bodies are
+not implicitly removed from CAD or from other exports.
 
-PETG is the provisional indoor material. The coupon and initial build use the
-existing Bambu PETG HF presets. A material tag or thicker dimensions do not
-prove resistance to creep, layer separation, thread wear or nut pullout. The
-[Prusa design guide](https://help.prusa3d.com/article/modeling-with-3d-printing-in-mind_164135)
-explains why overhangs, orientation and fit must be designed into the geometry;
-the [material guide](https://help.prusa3d.com/article/petg_2059) is useful for the
-initial process choice. Manufacturer test specimens are not a load rating for
-this interrupted printed screw.
+The screw rests on its shallow flat. The bridge prints with its thread axis
+vertical. The jaw rests on its gripping end with its long guide channels aligned
+with the print direction. Its keeper pocket opens through the central rear wall
+instead of closing with a broad unsupported ceiling; the remaining side seats
+and matching keeper ears have 45° slopes. Other parts have broad bearing faces on the
+bed, and horizontal fastener bores use print roofs where needed. **Zero supports
+is the design objective, not a qualification obtained by disabling supports in
+the slicer.** Check undersides, pocket ceilings, first contact and short bridges
+in the actual sliced layers, then print the coupon.
 
-PLA is appropriate for a fit and teaching prototype; changing to PETG for the
-functional candidate requires repeating the fit and wear checks. ASA is a
-separate outdoor or warmer-environment variant whose shrinkage, fits, orientation
-and layer adhesion need qualification. Different colors or a material preset
-do not substitute for a process-specific geometry check.
+The current recorded X2D/PETG HF slices contain no support paths or slicer
+warnings on any of the six plates. Layer review confirms that the revised jaw
+keeps its rear relief open instead of bridging the former keeper-pocket ceiling.
+The screw pocket roof, thread finish and keeper ear tips still need physical
+print inspection. Exact inputs, settings and coverage are in the
+[validation record](manufacturing/d-screw-vise.validation.json).
 
-## Visible calculation assumptions
+PETG is the provisional indoor process. PLA is useful for dimensional prototypes;
+ASA or other materials need their own shrinkage, adhesion, fit and sustained-load
+qualification. Material tags and thicker dimensions alone do not establish
+creep resistance. [Prusa's design guidance](https://help.prusa3d.com/article/modeling-with-3d-printing-in-mind_164135)
+explains the orientation, bridging and fit considerations behind these choices.
 
-For an illustrative 0.25 N·m input torque, 20% overall screw efficiency and
-2.5 mm lead, `F = 2π η T / lead` gives approximately **126 N**. A 600 mm² contact
-patch gives a nominal average pressure of **0.21 MPa**. These are sensitivity
-calculations, not an allowable clamp load: efficiency, actual contact area,
-layer strength, stress concentrations and long-term creep are unqualified.
-The half-round screw has an eccentric section; using a solid circular-shaft
-torsion formula would overstate its capability.
+## Editable intent and drawings
 
-A CNC counterpart should preserve jaw travel, mating axes and assembly order,
-while changing inaccessible pockets, cutter radii, screw material and nut
-details. A molded family needs draft, more uniform wall sections, shrinkage
-allowances and parting/tool access. The same function does not imply identical
-geometry across FDM, machining and molding.
+The author has one named set of design inputs. In a saved project, individual
+sketches are independently editable; they are not all linked to a global master
+parameter. Coordinated changes must update the relevant mating features.
 
-## Validation and remaining qualification
+**Moving jaw / 100 mm gripping face** controls gripping width. **Jaw dovetail
+left / profile clearance** controls the channel mouth. The external thread and
+female hole retain their custom parameters as editable features. A change of
+pitch also requires updating the screw joint's lead and regenerating the fit
+coupon. Diameter, guide and bridge changes require a complete fit review.
 
-The native MCP recipe tests cover independent deterministic replay, editable
-dimensions, thread edit/restore, native save/reload, closed and positive exported
-meshes, print-bed bounds and part separation, analytic stock/coupon volumes,
-joint travel and atomic rejection beyond travel, and exact interference at
-sampled driven positions. These checks run against actual OCCT geometry.
+Seven native drawing sheets cover the assembly and each printed part. The
+assembly includes a section view and purchased-hardware BOM. Dimensions come
+from native projected geometry. Nominal dimensions and stated process gaps do
+not claim qualified GD&T, interchangeability or a finished production drawing.
 
-Ordinary tests create and remove their own temporary files. To retain CAD,
-3MF, drawings and failure diagnostics, set `NBCAD_RECIPE_ARTIFACT_DIR` to an
-output directory before running
+## Calculations and qualification
+
+For 1 N·m input torque, an assumed 20% overall efficiency and 4 mm lead,
+`F = 2π η T / lead` gives about **314 N**. Across a 600 mm² contact patch, average
+pressure is about **0.52 MPa**. Varying assumed efficiency from 10% to 30% changes
+the same estimate from 157 N to 471 N. Applying 1 N·m at a 22 mm effective grip
+radius takes about 45 N tangential hand force. Neither these estimates nor a
+smooth unloaded CAD motion establish comfortable operation or a permitted load.
+
+The native acceptance tests exercise real MCP replay, dimension and thread
+edits, guide capture without ideal joints, assembly paths, motion with mounting
+hardware, independent rebuilds, save/reopen, native drawing exports and closed,
+positive print meshes. The full candidate test passed in 1,902.17 seconds. A
+subsequent label-placement correction passed focused native/MCP checks and
+visual review of all seven sheets; all 14 corrected SVG/DXF exports repeated
+exactly without changing the saved model. Results and source/artifact hashes are in the
+[validation record](manufacturing/d-screw-vise.validation.json). Retain artifacts
+by setting `NBCAD_RECIPE_ARTIFACT_DIR` before running
 `cargo test --manifest-path mcp-server/Cargo.toml --test recipes d_screw_vise`.
-The harness never deletes that explicitly selected directory.
 
-The committed [native validation snapshot](manufacturing/d-screw-vise.validation.json)
-records the reachable source revision, normalized source hashes and actual
-artifact hashes. Its headless baseline is separate from attached presentation
-qualification and from physical fabrication.
+Physical qualification must measure turning effort, backlash, off-centre jaw
+movement, retention, deformation during sustained clamping, and wear after
+repeated cycles. Record the actual print process and hardware. CNC and molded
+variants preserve the function and load path but require different tool access,
+corner radii, draft, wall sections and process allowances.
 
-Before promoting this candidate, print the coupon and the complete set, verify
-assembly access and hardware fit, measure play and turning effort, apply a
-controlled light load, then inspect deformation and wear after repeated use
-and a sustained hold. No physical validation, durability rating or safety
-factor is asserted by the current CAD result.
+The reusable engineering guidance is in
+[additive workholding](../knowledge/concepts/additive-workholding.md) and
+[gear pairs](../knowledge/concepts/gears.md), available to agents through the
+standard MCP knowledge resources.

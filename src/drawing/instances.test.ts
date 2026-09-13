@@ -46,6 +46,24 @@ const section: DrawingViewDto = {...view,id:2,name:'Section',kind:'section',deri
 const sectionRequest = drawingProjectionRequestForView(section,[view,section],scene,solution);
 check(Math.abs(sectionRequest.section_plane!.point[0]-100)<1e-8,'The section cutting plane must follow the placed source edge.');
 check(Math.abs(Math.abs(sectionRequest.direction[0])-1)<1e-8,'The section direction must follow the rotated source edge.');
+for (const sourceSection of [
+  {...section, derivation: {...section.derivation!, type: 'section' as const, depth: 4}},
+  {...section, derivation: {...section.derivation!, type: 'removed_section' as const}},
+] as DrawingViewDto[]) {
+  const detail: DrawingViewDto = {...view,id:3,scale:2,derivation:{type:'detail',parent_view_id:2,center:reference,radius:4,label:'B'}};
+  const broken: DrawingViewDto = {...view,id:4,scale:0.5,derivation:{type:'broken',parent_view_id:3,axis:'horizontal',first:1,second:2,gap_mm:1}};
+  const descendants = [view,sourceSection,detail,broken];
+  const expected = drawingProjectionRequestForView(sourceSection,descendants,scene,solution);
+  for (const child of [detail,broken]) {
+    const actual = drawingProjectionRequestForView(child,descendants,scene,solution);
+    check(JSON.stringify(actual.section_plane)===JSON.stringify(expected.section_plane),'Detail and nested broken views must inherit the actual placed section point, normal and finite depth.');
+    check(JSON.stringify(actual.direction)===JSON.stringify(expected.direction) && JSON.stringify(actual.up)===JSON.stringify(expected.up),'Nested section descendants retain the source projection basis.');
+    check(actual.deflection===Math.max(0.01,0.08/child.scale),'Derived child accuracy follows its own paper scale.');
+  }
+  const cyclic = {...broken,derivation:{...broken.derivation!,type:'broken' as const,parent_view_id:4,axis:'horizontal' as const,first:1,second:2,gap_mm:1}};
+  const fallback = drawingProjectionRequestForView(cyclic,[cyclic],scene,solution);
+  check(fallback.section_plane===null && JSON.stringify(fallback.direction)===JSON.stringify(cyclic.direction),'Invalid parent cycles preserve the existing bounded fallback without inventing a section.');
+}
 check(JSON.stringify(scene)===source,'Drawing presentation must not modify the part definition or mesh.');
 const guardedReference = {...reference,topology_signature:'feature:1:connectivity-v1:original'};
 const guardedProjection = {...projection,topology_signatures:{'1':guardedReference.topology_signature}};

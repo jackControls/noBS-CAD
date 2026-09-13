@@ -267,6 +267,7 @@ fn validate_presentation_step(step: &Value) -> Result<(), String> {
             "body_id",
             "component_id",
             "duration_ms",
+            "orbit_degrees",
         ]
     };
     for key in step
@@ -301,6 +302,18 @@ fn validate_presentation_step(step: &Value) -> Result<(), String> {
             }
         }
     } else {
+        if let Some(angle) = step.get("orbit_degrees") {
+            if !angle
+                .as_f64()
+                .is_some_and(|angle| angle.is_finite() && (-360.0..=360.0).contains(&angle))
+                || step["view"] != "current"
+            {
+                return Err(
+                    "orbit_degrees requires current view and a finite angle from -360 to 360"
+                        .into(),
+                );
+            }
+        }
         if !matches!(
             step["view"].as_str(),
             Some("current" | "isometric" | "top" | "bottom" | "front" | "back" | "left" | "right")
@@ -907,6 +920,10 @@ mod tests {
             json!({"view":"front","fit":"yes"}),
             json!({"view":"current","body_id":-1}),
             json!({"view":"current","body_id":1,"component_id":2}),
+            json!({"view":"current","orbit_degrees":361}),
+            json!({"view":"current","orbit_degrees":-361}),
+            json!({"view":"current","orbit_degrees":"120"}),
+            json!({"view":"isometric","orbit_degrees":120}),
             json!({"assert":null}),
         ] {
             let source = json!({"version":1,"name":"invalid late presentation","steps":[{"call":{"group":"g","operation":"make","arguments":{}}},step]}).to_string();
@@ -919,12 +936,13 @@ mod tests {
         let script = Script::parse(r#"{"version":1,"name":"two modes","steps":[
             {"note":"First body","chapter":"Create","duration_ms":300},
             {"id":"part","call":{"group":"solid/create","operation":"make","arguments":{}}},
-            {"view":"current","body_id":{"$ref":"part","pointer":"/id"}},
+            {"view":"current","body_id":{"$ref":"part","pointer":"/id"},"orbit_degrees":360,"duration_ms":3000},
             {"call":{"group":"solid/modify","operation":"edit","arguments":{"body_id":{"$ref":"part","pointer":"/id"}}}}
         ],"checks":[{"assert":{"$ref":"part","pointer":"/id"},"equals":7}],"exports":{"part":{"$ref":"part"}}}"#).unwrap();
         let mut runs = vec![];
         for presentation in [false, true] {
             let mut calls = vec![];
+            let mut orbits = vec![];
             let report = run(
                 &script,
                 |_, args| {
@@ -932,6 +950,9 @@ mod tests {
                         calls.push(args);
                         Ok(json!({"id":7}))
                     } else {
+                        if args.get("orbit_degrees").is_some() {
+                            orbits.push(args);
+                        }
                         Ok(json!({"status":"applied"}))
                     }
                 },
@@ -942,6 +963,13 @@ mod tests {
             )
             .unwrap();
             assert_eq!(report["exports"]["part"]["id"], 7);
+            assert_eq!(orbits.len(), usize::from(presentation));
+            if presentation {
+                assert_eq!(
+                    orbits[0],
+                    json!({"action":"view","view":"current","body_id":7,"orbit_degrees":360,"duration_ms":3000})
+                );
+            }
             runs.push(calls);
         }
         assert_eq!(runs[0], runs[1]);

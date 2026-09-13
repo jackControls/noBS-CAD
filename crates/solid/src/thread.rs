@@ -1,11 +1,12 @@
-//! ISO metric screw-thread limit dimensions used by the modeling kernels.
+//! Standard thread fit limits and custom rounded-profile dimensions.
 //!
 //! The persisted thread DTO keeps the standards-facing designation and
-//! tolerance class.  Derived diameters live here so native OCCT and browser
-//! OpenCascade can model the same maximum-material (GO) boundary without
-//! mistaking a shop tap-drill recommendation for a finished thread limit.
+//! tolerance class. Standard fit diameters give native OCCT and browser
+//! OpenCascade the same maximum-material (GO) boundary, distinct from a shop
+//! tap-drill recommendation. Custom rounded profiles use explicit dimensions
+//! and clearances and are modeled by the native kernel only.
 
-use crate::{HoleThreadDto, HoleThreadStandard};
+use crate::{HoleThreadDto, HoleThreadSeries, HoleThreadStandard};
 
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
@@ -13,6 +14,72 @@ const SQRT_3: f64 = 1.732_050_807_568_877_2;
 pub enum ThreadFit {
     Internal,
     External,
+}
+
+/// Validate the custom rounded profile and return (major, pitch, minor)
+/// diameters. Clearance enlarges only the female cavity; both requests retain
+/// the same nominal diameter so mating parameters cannot silently diverge.
+pub fn rounded_thread_diameters(
+    thread: &HoleThreadDto,
+    fit: ThreadFit,
+) -> Result<Option<[f64; 3]>, String> {
+    if thread.standard != HoleThreadStandard::CustomTrapezoidal {
+        if thread.rounded_profile.is_some() {
+            return Err("rounded_profile requires custom_trapezoidal standard".into());
+        }
+        return Ok(None);
+    }
+    if thread.series != HoleThreadSeries::Rounded
+        || thread.class != "custom"
+        || thread.threads_per_inch.is_some()
+    {
+        return Err(
+            "custom trapezoidal threads require rounded series, custom class and no TPI".into(),
+        );
+    }
+    let profile = thread
+        .rounded_profile
+        .as_ref()
+        .ok_or("custom trapezoidal threads require rounded_profile")?;
+    let d = thread.nominal_diameter;
+    let p = thread.pitch;
+    let h = profile.radial_depth;
+    let r = profile.corner_radius;
+    let c = profile.radial_clearance;
+    let a = profile.axial_clearance;
+    if [d, p, h, r, c, a].iter().any(|x| !x.is_finite())
+        || d <= 0.0
+        || p <= 0.0
+        || h <= 0.0
+        || r <= 0.0
+        || c < 0.0
+        || a < 0.0
+        || h * 2.0 >= d
+        || c >= h * 0.5
+        || a >= p * 0.25
+    {
+        return Err("rounded thread dimensions or clearances are invalid".into());
+    }
+    let beta = 15_f64.to_radians();
+    let tangent_run = r * (1.0 - beta.sin());
+    let corner_width = r * (1.0 / beta.cos() - beta.tan());
+    let root_half_width = p * 0.25 - h * 0.5 * beta.tan() - corner_width;
+    // Preserve nonzero root/crest flats and a straight flank between its arcs.
+    if tangent_run * 2.0 >= h || root_half_width <= a * 0.5 + p * 1e-4 {
+        return Err(
+            "rounded thread radius/depth leaves overlapping rounds or no thread crest".into(),
+        );
+    }
+    let clearance = if fit == ThreadFit::Internal {
+        2.0 * c
+    } else {
+        0.0
+    };
+    Ok(Some([
+        d + clearance,
+        d - h + clearance,
+        d - 2.0 * h + clearance,
+    ]))
 }
 
 /// Diametral ISO tolerance envelope, in millimetres.
@@ -312,5 +379,97 @@ mod tests {
         assert_eq!(limits.modeled_major, limits.major_max);
         assert_eq!(limits.modeled_pitch, limits.pitch_max);
         assert_eq!(limits.modeled_minor, limits.minor_max);
+    }
+
+    fn rounded_spec() -> HoleThreadDto {
+        serde_json::from_value(serde_json::json!({
+            "standard":"custom_trapezoidal", "series":"rounded", "class":"custom",
+            "designation":"CUSTOM rounded 30 degree 24 x 4", "nominal_diameter":24.0,
+            "pitch":4.0, "rounded_profile":{"radial_depth":2.0,"corner_radius":0.3,
+                "radial_clearance":0.25,"axial_clearance":0.2}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn rounded_mates_share_nominal_profile_and_enlarge_only_the_female() {
+        let spec = rounded_spec();
+        assert_eq!(
+            rounded_thread_diameters(&spec, ThreadFit::External).unwrap(),
+            Some([24.0, 22.0, 20.0])
+        );
+        assert_eq!(
+            rounded_thread_diameters(&spec, ThreadFit::Internal).unwrap(),
+            Some([24.5, 22.5, 20.5])
+        );
+        let saved = serde_json::to_string(&spec).unwrap();
+        assert_eq!(serde_json::from_str::<HoleThreadDto>(&saved).unwrap(), spec);
+    }
+
+    #[test]
+    fn rounded_profile_rejects_missing_mismatched_and_overlapping_geometry() {
+        let good = rounded_spec();
+        for field in [
+            "radial_depth",
+            "corner_radius",
+            "radial_clearance",
+            "axial_clearance",
+        ] {
+            let mut value = serde_json::to_value(&good).unwrap();
+            value["rounded_profile"][field] = serde_json::json!(-1.0);
+            let bad = serde_json::from_value(value).unwrap();
+            assert!(
+                rounded_thread_diameters(&bad, ThreadFit::External).is_err(),
+                "{field}"
+            );
+        }
+        for (field, value) in [
+            ("radial_depth", 12.0),
+            ("corner_radius", 1.4),
+            ("radial_clearance", 1.0),
+            ("axial_clearance", 1.0),
+        ] {
+            let mut json = serde_json::to_value(&good).unwrap();
+            json["rounded_profile"][field] = serde_json::json!(value);
+            assert!(
+                rounded_thread_diameters(
+                    &serde_json::from_value(json).unwrap(),
+                    ThreadFit::Internal
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        let mut bad = good.clone();
+        bad.rounded_profile = None;
+        assert!(rounded_thread_diameters(&bad, ThreadFit::Internal).is_err());
+        let mut bad = good.clone();
+        bad.standard = HoleThreadStandard::IsoMetric;
+        assert!(rounded_thread_diameters(&bad, ThreadFit::Internal).is_err());
+        let mut bad = good.clone();
+        bad.class = "6H".into();
+        assert!(rounded_thread_diameters(&bad, ThreadFit::Internal).is_err());
+        let mut bad = good;
+        bad.rounded_profile.as_mut().unwrap().corner_radius = f64::NAN;
+        assert!(rounded_thread_diameters(&bad, ThreadFit::External).is_err());
+    }
+
+    #[test]
+    fn legacy_thread_json_does_not_acquire_custom_profile_metadata() {
+        for (standard, series, class) in [
+            ("iso_metric", "metric_coarse", "6H"),
+            ("unified_inch", "unc", "2B"),
+        ] {
+            let json = serde_json::json!({"standard":standard,"series":series,"class":class,
+                "designation":"legacy", "nominal_diameter":6.0,"pitch":1.0});
+            let dto: HoleThreadDto = serde_json::from_value(json).unwrap();
+            assert!(rounded_thread_diameters(&dto, ThreadFit::Internal)
+                .unwrap()
+                .is_none());
+            assert!(serde_json::to_value(dto)
+                .unwrap()
+                .get("rounded_profile")
+                .is_none());
+        }
     }
 }

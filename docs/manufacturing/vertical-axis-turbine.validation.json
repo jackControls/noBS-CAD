@@ -1,396 +1,1289 @@
 {
   "schema_version": 1,
   "kind": "manufacturing-candidate-validation-snapshot",
-  "date": "2026-09-10",
+  "status": "validated-development-candidate-physical-qualification-pending",
+  "date": "2026-09-11",
+  "decision": "The frozen stable-underside source passed the complete native mechanical/edit/assembly gate. The delivered source changes only four drawing leaders; its two independent blank replays per recipe, non-drawing parity, corrected sheet equality and reviewed print-input equality are recorded separately. No physical print, fit, retention, startup, output or durability rating is claimed.",
+  "superseded_previous_record": {
+    "date": "2026-09-10",
+    "revision": "1ab7eef78fe4b9a25d30c100ba9783646609f24e",
+    "path": "docs/manufacturing/vertical-axis-turbine.validation.json",
+    "sha256_file": "09692687694a4d5e487613554f53feae3b3a82ec23a3da323b42a138d7e82121",
+    "retained_audit_copy": "demo-presentation-2026-09-11/turbine-redesign/turbine-validation-2026-09-10-superseded.json",
+    "reason": "Historical 1622-step, 9-printed-definition, 19-occurrence turbine and its live replay predate the 11-definition, 71-occurrence bearing/generator/assembly redesign. That evidence does not qualify this candidate."
+  },
   "platform": "Windows x64; native OCCT 7.9.3",
-  "engine_revision": "0cf567c0afcf9b1a00c030035ed90d63ed0e9178",
   "model_schema": 6,
+  "source_revision": "f56db8672e46930cff8e5224b1199ee22f5f6ab9",
+  "source_revision_note": "The sources array identifies the delivered drawing-only revision. The full mechanical wrapper ran on the separately listed frozen recipe and test revisions. Final-source replay/parity connects the delivered files to that baseline; it does not relabel the older wrapper as rerun on the final source.",
   "source_hash_encoding": "UTF-8 with LF line endings",
   "sources": [
     {
       "path": "examples/scripts/vertical-axis-turbine.nbcad.jsonc",
-      "sha256_utf8_lf": "83899609dbf960843c472539c9c360d15e9de4242c27c6e3569e3ea7f5af17fa"
+      "sha256_utf8_lf": "5c56da320a5512846db02f75f366416e3ce5bfa13ba4e6c57d821388ccd2aacd"
     },
     {
       "path": "examples/scripts/turbine-fit-coupons.nbcad.jsonc",
-      "sha256_utf8_lf": "2a406ef9569aa45ecec9aa0031bfeb4f673c390ae10460c50d6fd2e7d3e9373e"
+      "sha256_utf8_lf": "cd865dd24baf39f95a7ea5dc2184646ab4844e47e17e8a6d5f0608860ddca5e1"
     },
     {
       "path": "crates/recipes/examples/author_turbine.rs",
-      "sha256_utf8_lf": "42424fe44d282e5231979e07d0bb453fee1e0b37145493c0737c336d6a190852"
+      "sha256_utf8_lf": "6471a61eda1873c45ee8e9060a59e0bc46ff1d1c7cd477baf905d3ac44d6394d"
+    },
+    {
+      "path": "crates/recipes/examples/turbine/design.rs",
+      "sha256_utf8_lf": "ef4834fa3e8da85de0ae8761b0dd4fe20c1cecf5a5bb3440276c3c05ef0dfe0d"
+    },
+    {
+      "path": "crates/recipes/examples/turbine/drawings.rs",
+      "sha256_utf8_lf": "4df8cb9152b29fda48352e994a62a2b9a04329a3c5943c10d1e6ea660f95659d"
+    },
+    {
+      "path": "crates/recipes/examples/turbine/hardware.rs",
+      "sha256_utf8_lf": "db616ee479939fa5ad36b7dc5f8e38f081a1cba84a79a46ce11a49f851153474"
+    },
+    {
+      "path": "crates/recipes/examples/turbine/parts.rs",
+      "sha256_utf8_lf": "4a4cc3e22fae758c0e2691d296d10a9302a7452b25e726ac1fb1f4b5fb4a6e20"
+    },
+    {
+      "path": "crates/recipes/examples/turbine/printing.rs",
+      "sha256_utf8_lf": "3f47978f9584315cbee9c1e94f0787b65362c85261f520e27e612f9b25f44e14"
     },
     {
       "path": "mcp-server/tests/recipes.rs",
-      "sha256_utf8_lf": "10621969dcddcbc462a94b3776a8859f550b18eb95a556463fe810675bc68ebc"
+      "sha256_utf8_lf": "51bbee0a261b27465c39f12691b5b9a614c0b9499dfb3956b753d8e595ae21e3"
+    },
+    {
+      "path": "mcp-server/tests/recipes/turbine.rs",
+      "sha256_utf8_lf": "ccf181e5dc820bf8e46993942e1b249c7dbbfae499c5c68c6a6090f0e31a6b87"
+    },
+    {
+      "path": "mcp-server/tests/recipes/turbine_assembly.rs",
+      "sha256_utf8_lf": "7d2f52240b00346de72f9c8e6ca4655ac6fdbf34d8df00c44ae8fb6dbdfd6df3"
     }
   ],
-  "artifact_directory": "nobs-cad-fixed-demos/flagships-final-2026-09-10/turbine",
+  "artifact_directory": "nobs-cad-fixed-demos/demo-presentation-2026-09-11/turbine-redesign",
   "validation": {
-    "command": "cargo test --locked --manifest-path mcp-server/Cargo.toml --test recipes turbine -- --nocapture --test-threads=1",
-    "artifact_option": "Set NBCAD_RECIPE_ARTIFACT_DIR to a separate output directory to retain native projects, meshes and drawings.",
-    "tests_passed": 2,
-    "elapsed_seconds": 556.97,
-    "first_replay_elapsed_ms": 184226,
-    "steps_completed": 1622,
-    "final_checks_completed": 11,
-    "native_bodies": 16,
-    "printed_definitions": 9,
-    "component_definitions": 16,
-    "component_occurrences": 19,
-    "solved_occurrences": 19,
-    "fully_constrained_sketches": 105,
-    "datum_planes": 105,
-    "persistent_history_features": 321,
-    "drawing_sheets": 12,
-    "svg_and_dxf_exports": 24,
-    "independent_blank_replay": "Exact native model, scene, sketches, assembly, solved placement and drawing export values on this build.",
-    "native_reload": "Retained native geometry, sketches, assembly, drawings and solved placement verified in a fresh native process.",
-    "checks": [
-      "Each selected printed definition exports once as a native manifold 3MF in its original Z=0 print coordinates, within 200mm per axis; repeated rotor stages remain one reusable definition.",
-      "A stage-plate edit from 3 to 4 mm changes the real volume and both occurrences; edited reload and restored geometry are checked.",
-      "Quarter- and half-tooth-pitch native gear interference samples, 810degree multi-turn drive, reverse relation and home restoration.",
-      "Native continuous witness solids verify the open passage above the short rotor hub; actual guard-head clearance is 3.35mm nominal.",
-      "No component definition references a consumed construction body after final native recompute.",
-      "Four native fit coupons reuse the shaft clamp, lower bearing seat, complete motor cradle and actual pinion; driving bores 8.3/22.3/32.6/2.2mm, each mesh within 60mm, four drawing pairs, exact repeat and reload."
-    ]
+    "frozen_mechanical": {
+      "status": "passed",
+      "source_revision": "81ae7cde250a2cf695ab64fbbff19d2a1f27f258",
+      "recipe_sha256_utf8_lf": "47008f739af8cc2a441d29ddd257df26ae96bc56adbae349ba2c6824e92f27c6",
+      "acceptance_test_revision": "80942b4cb5f611a5ce16820d5d24821a93dc4755",
+      "sources": [
+        {
+          "path": "examples/scripts/vertical-axis-turbine.nbcad.jsonc",
+          "sha256_utf8_lf": "47008f739af8cc2a441d29ddd257df26ae96bc56adbae349ba2c6824e92f27c6"
+        },
+        {
+          "path": "examples/scripts/turbine-fit-coupons.nbcad.jsonc",
+          "sha256_utf8_lf": "00282b6ec0975036cec74e90814b3a0646a964bd2acec180d8f5b8155e55616c"
+        },
+        {
+          "path": "crates/recipes/examples/author_turbine.rs",
+          "sha256_utf8_lf": "6471a61eda1873c45ee8e9060a59e0bc46ff1d1c7cd477baf905d3ac44d6394d"
+        },
+        {
+          "path": "crates/recipes/examples/turbine/design.rs",
+          "sha256_utf8_lf": "ef4834fa3e8da85de0ae8761b0dd4fe20c1cecf5a5bb3440276c3c05ef0dfe0d"
+        },
+        {
+          "path": "crates/recipes/examples/turbine/drawings.rs",
+          "sha256_utf8_lf": "286f6d8d1ec135a8a6466e5664f8bb022c776b07c6f7f240ef51869e5563d52d"
+        },
+        {
+          "path": "crates/recipes/examples/turbine/hardware.rs",
+          "sha256_utf8_lf": "db616ee479939fa5ad36b7dc5f8e38f081a1cba84a79a46ce11a49f851153474"
+        },
+        {
+          "path": "crates/recipes/examples/turbine/parts.rs",
+          "sha256_utf8_lf": "4a4cc3e22fae758c0e2691d296d10a9302a7452b25e726ac1fb1f4b5fb4a6e20"
+        },
+        {
+          "path": "crates/recipes/examples/turbine/printing.rs",
+          "sha256_utf8_lf": "3f47978f9584315cbee9c1e94f0787b65362c85261f520e27e612f9b25f44e14"
+        },
+        {
+          "path": "mcp-server/tests/recipes.rs",
+          "sha256_utf8_lf": "51bbee0a261b27465c39f12691b5b9a614c0b9499dfb3956b753d8e595ae21e3"
+        },
+        {
+          "path": "mcp-server/tests/recipes/turbine.rs",
+          "sha256_utf8_lf": "ccf181e5dc820bf8e46993942e1b249c7dbbfae499c5c68c6a6090f0e31a6b87"
+        },
+        {
+          "path": "mcp-server/tests/recipes/turbine_assembly.rs",
+          "sha256_utf8_lf": "7d2f52240b00346de72f9c8e6ca4655ac6fdbf34d8df00c44ae8fb6dbdfd6df3"
+        }
+      ],
+      "test": "turbine_replays_edits_restores_prints_and_drives_native_geometry",
+      "elapsed_seconds": 2787.54,
+      "first_replay": {
+        "status": "passed",
+        "steps": 3179,
+        "checks": 11,
+        "elapsed_ms": 547053,
+        "bodies": 27,
+        "occurrences": 71,
+        "hardware_instances": 44,
+        "native_print_plates": 11,
+        "diagnostics": [],
+        "report": "turbine-run-1.json"
+      },
+      "artifact_directory": "acceptance-anchor-final",
+      "checks": [
+        "Two independent blank native replays compare complete exports, including models, scenes, sketches, assembly and drawings.",
+        "Stage plate thickness 3 to 4 mm preserves both occurrence placements through stable underside references; cold reload and restoration agree.",
+        "Driving shaft-bore edits update actual geometry and associative drawing dimensions, then restore.",
+        "The 4:1 relation moves actual rigid groups and hardware from either shaft, including forward, reverse and multi-turn poses.",
+        "Native interference covers home, 20 quarter-degree sub-tooth samples through 5 degrees, 24 fifteen-degree full-turn samples, additional turns and reverse drive.",
+        "Forty-four modeled fastener insertion routes, nut preload order, tool access, bearing contact/endplay/stops, wire route and enclosure sequence use actual native geometry, with wrong-order and interference negative controls.",
+        "Selected print meshes are closed and consistently oriented, contact the bed, and match solved native placements; a mirrored-surface negative control rejects false equivalence."
+      ],
+      "boundary": "Motion and insertion paths are discrete native samples; they do not prove continuous contact, deformed behavior or physical durability."
+    },
+    "frozen_coupon_fit": {
+      "status": "passed",
+      "recipe_sha256_utf8_lf": "00282b6ec0975036cec74e90814b3a0646a964bd2acec180d8f5b8155e55616c",
+      "test": "turbine_fit_coupons_have_driving_fits_and_replay_as_closed_prints",
+      "elapsed_seconds": 61.7,
+      "artifact_directory": "acceptance-final/fit-coupons",
+      "log": "acceptance-final/coupon-acceptance-final.log",
+      "checks": [
+        "Independent native source/catalog replay and cold geometry",
+        "Driving fit diameters",
+        "Four individual positive native poses and canonical four-part layout",
+        "Closed meshes and oriented surface matching"
+      ],
+      "final_source_boundary": "The final coupon source changes one radial leader; independent replays and non-drawing parity are recorded separately."
+    },
+    "final_source_replays": {
+      "status": "passed",
+      "source_revision": "f56db8672e46930cff8e5224b1199ee22f5f6ab9",
+      "main": {
+        "status": "passed",
+        "repeat": 2,
+        "steps_each": 3179,
+        "checks_each": 11,
+        "elapsed_ms": [
+          401582,
+          384805
+        ],
+        "full_export_records_identical_between_repeats": true,
+        "model_identical_to_frozen_baseline_except_declared_radial_placements": true,
+        "changed_annotations": [
+          {
+            "sheet_id": 1,
+            "annotation_id": 2,
+            "placement": {
+              "leader_angle_deg": 180,
+              "offset": 22
+            }
+          },
+          {
+            "sheet_id": 4,
+            "annotation_id": 17,
+            "placement": {
+              "leader_angle_deg": 110,
+              "offset": 22
+            }
+          },
+          {
+            "sheet_id": 11,
+            "annotation_id": 48,
+            "placement": {
+              "leader_angle_deg": 110,
+              "offset": 26
+            }
+          }
+        ],
+        "unchanged_export_fields_compared_exactly": [
+          "design",
+          "final_assembly",
+          "final_scene",
+          "final_sketches",
+          "final_solution",
+          "generator_joint_id",
+          "hardware",
+          "occurrences",
+          "parts",
+          "print_plates",
+          "rotor_joint_id",
+          "stage_plate_feature"
+        ],
+        "print_plates_byte_identical_to_mechanically_accepted_and_sliced_baseline": true,
+        "unchanged_drawing_exports_byte_identical_to_baseline": true,
+        "changed_drawing_exports_byte_identical_to_native_visually_reviewed_proof": true,
+        "native_zip_writer": "Production src/files/nbcad.ts createNbcadArchive/readNbcadArchive; every model payload roundtripped exactly. JSON serialization preserves signed zero.",
+        "native_archive_helper": {
+          "path": "../../../noBS-CAD-demo-presentation/src/files/nbcad.ts",
+          "bytes": 4316,
+          "sha256": "e1fabb3bd61492b20015f96504166568b59de29e63e9f4ef3eb117fb161a6f5b"
+        },
+        "reports": [
+          {
+            "path": "final-drawing-source/main/run-1.json",
+            "bytes": 52623543,
+            "sha256": "4813469f9956d08aa6741d8fc5405466086d12bc3deffdfefa30b9613ace644d"
+          },
+          {
+            "path": "final-drawing-source/main/run-2.json",
+            "bytes": 52623543,
+            "sha256": "e47928f1f6a7c7812c308b3c38deb45010d3dfb8ba5aa97d263efe4e821789a3"
+          }
+        ],
+        "frozen_report": {
+          "path": "acceptance-anchor-final/turbine-run-1.json",
+          "bytes": 52623547,
+          "sha256": "5e916b4c570da22c88b9de06ff6942f0ec0ae57bf9aa70cdc553f357d35ac303"
+        },
+        "native_projects": [
+          {
+            "path": "final-drawing-source/main/vertical-axis-turbine.nbcad",
+            "bytes": 59128,
+            "sha256": "08b3229b08796097836601119ba00f7e4ec9c6e72d595e140e2b362cb0744ecd"
+          },
+          {
+            "path": "final-drawing-source/main/stage.nbcad",
+            "bytes": 49699,
+            "sha256": "f8ce71cf0d7e34517854a2205442e027387686dfe67017de3b2bd3a7a8e409e8"
+          },
+          {
+            "path": "final-drawing-source/main/cap.nbcad",
+            "bytes": 49685,
+            "sha256": "df4a68c7e4985ae936d0034399c197c72ef97c464f41a782f68c53bcdd42dace"
+          },
+          {
+            "path": "final-drawing-source/main/base.nbcad",
+            "bytes": 49688,
+            "sha256": "21feb874e48d014b69590faa834fc405bef57119034306dd9100217948695161"
+          },
+          {
+            "path": "final-drawing-source/main/tower.nbcad",
+            "bytes": 49701,
+            "sha256": "ce21d6a958f1e046154da27ac77be280d9f0a1c9c9df4d90bc92ed4319811f34"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_support_sleeve.nbcad",
+            "bytes": 49685,
+            "sha256": "3aae2ba768fd400c0eb33b24e0e9985a4656fdce80b9714e4892dfe2c2169338"
+          },
+          {
+            "path": "final-drawing-source/main/motor_bracket.nbcad",
+            "bytes": 49684,
+            "sha256": "40d2c4ea9b521e434fd6635851720d5357931e3d02280dfc7de4dcc91d127ab3"
+          },
+          {
+            "path": "final-drawing-source/main/motor_mount.nbcad",
+            "bytes": 49685,
+            "sha256": "73294eff398f42a4dc35df190c2a7f7925760aa3647404459d051552c9e8578a"
+          },
+          {
+            "path": "final-drawing-source/main/guard.nbcad",
+            "bytes": 49688,
+            "sha256": "6f18082fa2cede09a0bf2633efe00d9ab206a813b6a2d5144ab8d05d4df94192"
+          },
+          {
+            "path": "final-drawing-source/main/guard_lid.nbcad",
+            "bytes": 49682,
+            "sha256": "2c883503b17cf23a7559fada2b5610ef337c7d41c688cfce09c96c9c65a55e6f"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_gear.nbcad",
+            "bytes": 49685,
+            "sha256": "02b5c329714da2d7362f42c586448eb0b37f32258b26e72a16fb219b4afe5c51"
+          },
+          {
+            "path": "final-drawing-source/main/pinion.nbcad",
+            "bytes": 49684,
+            "sha256": "74bca504c3d7926d36f093040d93e4bda8cd101fd8cdce0e44f761f4d0534f06"
+          }
+        ],
+        "print_exports": [
+          {
+            "path": "final-drawing-source/main/stage.3mf",
+            "bytes": 38502,
+            "sha256": "f8d37b5d2db2eb50e6d2fdebb22c5129dcf9a3ee111be580613f9a8782d5617b",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/cap.3mf",
+            "bytes": 27597,
+            "sha256": "4b370a0707743e502692c8d05256b111339d41c610a7b96673801435550ad785",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/base.3mf",
+            "bytes": 32385,
+            "sha256": "3b55f10045c82416626c738e2568bc7f3a5594b6a92072f95f6e945770db61d8",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/tower.3mf",
+            "bytes": 21518,
+            "sha256": "afe241aab979b03227b6d33e9c0cf8bb1ba4cae526cf3f0d8c31f17095a6869c",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/rotor_support_sleeve.3mf",
+            "bytes": 9525,
+            "sha256": "3866358b24c6174a5a75a3657c1b619d8016925b091a55edc206801418af580e",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/motor_bracket.3mf",
+            "bytes": 9691,
+            "sha256": "d1155bbf5e4d4b5c997bf0e8ebd0ce660411d14dcea3da162ca4fd5f805e3bc9",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/motor_mount.3mf",
+            "bytes": 20721,
+            "sha256": "af55dbb37423dac5cb7ea723ac96207a1855c53d658a22aff5d68927c014a049",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/guard.3mf",
+            "bytes": 33844,
+            "sha256": "5a2674dbd50b5bd049e587b6f085bb39c12a1b4d7e0f93aa3fa6dc523655df23",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/guard_lid.3mf",
+            "bytes": 28106,
+            "sha256": "ff4b3a6154288cfae71d033c4eac1b56db5c526f7c4a7fc7d2e3fe18bba0e2d5",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/rotor_gear.3mf",
+            "bytes": 69081,
+            "sha256": "b1456a8c883b2fd559ec2553958fc074413847d4e76a07679574a473e3bf100e",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/main/pinion.3mf",
+            "bytes": 25738,
+            "sha256": "1fc2d50d7c79f8f96c99ed82920208597358ec8091e60c267e14d269fb829cf0",
+            "baseline_byte_identical": true
+          }
+        ],
+        "drawings": [
+          {
+            "path": "final-drawing-source/main/stage.svg",
+            "bytes": 61649,
+            "sha256": "cf6fb083073a2efba67e0c07c3c2d822a4e9e92c129589e4a8d62192e8e4b718"
+          },
+          {
+            "path": "final-drawing-source/main/stage.dxf",
+            "bytes": 142090,
+            "sha256": "aa52b8c71b5cdb12717ce501aa02878fe72e55a66c175aca23c4b8fa80c15c9f"
+          },
+          {
+            "path": "final-drawing-source/main/cap.svg",
+            "bytes": 9540,
+            "sha256": "68ed244287ab49bb580c877827aaaded09ed242e7b719b4c53bf5ed56d3f8729"
+          },
+          {
+            "path": "final-drawing-source/main/cap.dxf",
+            "bytes": 16546,
+            "sha256": "8d664b567a607af806dad1bb22c6260c891d9627efba269424f068f9ae5bde5f"
+          },
+          {
+            "path": "final-drawing-source/main/base.svg",
+            "bytes": 43836,
+            "sha256": "32f2d855a84d32df74f6f4fa71f91fd096396ed39df659b32858f404186205ea"
+          },
+          {
+            "path": "final-drawing-source/main/base.dxf",
+            "bytes": 90288,
+            "sha256": "b1d61d97f57f9c7673fde24143df36f855fd0ad42be5cff3ba39ef075f748682"
+          },
+          {
+            "path": "final-drawing-source/main/tower.svg",
+            "bytes": 68865,
+            "sha256": "709574bbd30f3b2e31b1f0146e2735689b48c97bf39d1e61cf7b8f0355c7729a"
+          },
+          {
+            "path": "final-drawing-source/main/tower.dxf",
+            "bytes": 154440,
+            "sha256": "bed457a8da41ebca1c5a829562cd999d620af188ebc78d71dedd9e3796b92ded"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_support_sleeve.svg",
+            "bytes": 8746,
+            "sha256": "77a4a9615b5b9e55b9a386c7a8e55d43b4d89e9b5c5501c8c95a21010b22cf59"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_support_sleeve.dxf",
+            "bytes": 13462,
+            "sha256": "cf0e2b1aa46040eb6b2fba55ada9735dc4564053aef79d99a564f965ff3f2b93"
+          },
+          {
+            "path": "final-drawing-source/main/motor_bracket.svg",
+            "bytes": 23618,
+            "sha256": "61ab7d522347649a0499cf4b2b82e41b21e23d3e02471f5abe171338954af455"
+          },
+          {
+            "path": "final-drawing-source/main/motor_bracket.dxf",
+            "bytes": 44733,
+            "sha256": "b3b64419d2d6099973c206ed5c253337757027ddfb41533243e72efb6e99c094"
+          },
+          {
+            "path": "final-drawing-source/main/motor_mount.svg",
+            "bytes": 65479,
+            "sha256": "07813e8809637411dff8caa3742f756ea41b542ece16ed7121de7801945fadfe"
+          },
+          {
+            "path": "final-drawing-source/main/motor_mount.dxf",
+            "bytes": 134030,
+            "sha256": "e99582e5f078422c93c9d0f036e78e3aea16ed0fafafc3624cc176d2873f6b8e"
+          },
+          {
+            "path": "final-drawing-source/main/guard.svg",
+            "bytes": 46737,
+            "sha256": "b9986942c974c3e1e6a1dab8b347cbd34366b12976a99cdf7052b226fafe28eb"
+          },
+          {
+            "path": "final-drawing-source/main/guard.dxf",
+            "bytes": 87465,
+            "sha256": "9d24cdf1532745f2ef090512276fb01c477995cba2ada7f9232d395bd692b590"
+          },
+          {
+            "path": "final-drawing-source/main/guard_lid.svg",
+            "bytes": 15643,
+            "sha256": "cbaafcec396aa1c5bb4fe5881c46e9de13f8d93a15e48200dfbf5da6b8581139"
+          },
+          {
+            "path": "final-drawing-source/main/guard_lid.dxf",
+            "bytes": 32948,
+            "sha256": "fa393a5980000f9f0c7ace7debc250a4295f2327549eace059352deac72c2738"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_gear.svg",
+            "bytes": 549900,
+            "sha256": "b844fd26ef20fe3ea40dc92b25bb342102dcf596a92e05a4b44327ad8edc039c"
+          },
+          {
+            "path": "final-drawing-source/main/rotor_gear.dxf",
+            "bytes": 479752,
+            "sha256": "17a529e1499ec6e2674b40461e57b6840a219499c802182c02f70369ef150979"
+          },
+          {
+            "path": "final-drawing-source/main/pinion.svg",
+            "bytes": 217012,
+            "sha256": "92c2f99935fae03724abc95be15fdd384b3b55d63cbf1864e526cc13f5767379"
+          },
+          {
+            "path": "final-drawing-source/main/pinion.dxf",
+            "bytes": 269760,
+            "sha256": "d841d998d2343ced6ff006532d74a059ad2722de35f7215679b0c9963304d59f"
+          },
+          {
+            "path": "final-drawing-source/main/shaft.svg",
+            "bytes": 6131,
+            "sha256": "b474e96f8bfcc35dec741e00dc1d3dd57474195156c0548fbe4c879f22d15175"
+          },
+          {
+            "path": "final-drawing-source/main/shaft.dxf",
+            "bytes": 7234,
+            "sha256": "10745c425adb706fc29f2fae09bdcde2376990bf70e3b5bfefa05e618be0cb9a"
+          },
+          {
+            "path": "final-drawing-source/main/assembly.svg",
+            "bytes": 33006,
+            "sha256": "b487458a3ce6f1e1566735613f7ef8c8d324ac43f616d10213ceafcb5cacd3df"
+          },
+          {
+            "path": "final-drawing-source/main/assembly.dxf",
+            "bytes": 62213,
+            "sha256": "2336950ef417a9a34d67fe32e1bbe53149a8679f3b317bd4ff7fade85ec0765f"
+          },
+          {
+            "path": "final-drawing-source/main/bom.svg",
+            "bytes": 8512,
+            "sha256": "92386e6fa111f04fa52fd0531410ed0770b70388143ad0d05beca67986387024"
+          },
+          {
+            "path": "final-drawing-source/main/bom.dxf",
+            "bytes": 6351,
+            "sha256": "c1c3ea539eab21d58baf53db1abe913f3c63cc5a068afd0af2d20fc9871c1b2c"
+          }
+        ],
+        "full_mechanical_wrapper_rerun_on_this_source": false,
+        "scope": "Complete new-source blank native replay repeated twice, exact baseline geometric/assembly/print identity, and separately reviewed radial-label-only drawing change. Frozen-source full mechanical wrapper remains separate.",
+        "physical_qualification": "not performed"
+      },
+      "coupon": {
+        "status": "passed",
+        "repeat": 2,
+        "steps_each": 647,
+        "checks_each": 8,
+        "elapsed_ms": [
+          26757,
+          25680
+        ],
+        "full_export_records_identical_between_repeats": true,
+        "model_identical_to_frozen_baseline_except_declared_radial_placements": true,
+        "changed_annotations": [
+          {
+            "sheet_id": 4,
+            "annotation_id": 14,
+            "placement": {
+              "leader_angle_deg": 110,
+              "offset": 26
+            }
+          }
+        ],
+        "unchanged_export_fields_compared_exactly": [
+          "final_scene",
+          "final_sketches",
+          "final_solution",
+          "occurrences",
+          "parts"
+        ],
+        "print_plates_byte_identical_to_mechanically_accepted_and_sliced_baseline": true,
+        "unchanged_drawing_exports_byte_identical_to_baseline": true,
+        "changed_drawing_exports_byte_identical_to_native_visually_reviewed_proof": true,
+        "native_zip_writer": "Production src/files/nbcad.ts createNbcadArchive/readNbcadArchive; every model payload roundtripped exactly. JSON serialization preserves signed zero.",
+        "native_archive_helper": {
+          "path": "../../../noBS-CAD-demo-presentation/src/files/nbcad.ts",
+          "bytes": 4316,
+          "sha256": "e1fabb3bd61492b20015f96504166568b59de29e63e9f4ef3eb117fb161a6f5b"
+        },
+        "reports": [
+          {
+            "path": "final-drawing-source/coupon/run-1.json",
+            "bytes": 7186574,
+            "sha256": "c15ebb145411f6dc171267100689c5ed5243af98ad28251350d5d1680f6fc459"
+          },
+          {
+            "path": "final-drawing-source/coupon/run-2.json",
+            "bytes": 7186574,
+            "sha256": "b68f33f75894e846539cd5701e14872123d6d3230ff983f3c76c72f663ea03b3"
+          }
+        ],
+        "frozen_report": {
+          "path": "acceptance-final/fit-coupons/run-1.json",
+          "bytes": 7186574,
+          "sha256": "670c2172680663dd8f43de86eb8a31c5dafdc2fcdb2769eaa37e2def2951d5c4"
+        },
+        "native_projects": [
+          {
+            "path": "final-drawing-source/coupon/turbine-fit-coupons.nbcad",
+            "bytes": 19004,
+            "sha256": "d2a2cf4e3952fd3111bae684a96afac485cdca7482d6509b8a4bd3f005077016"
+          }
+        ],
+        "print_exports": [
+          {
+            "path": "final-drawing-source/coupon/shaft_coupon.3mf",
+            "bytes": 10309,
+            "sha256": "bde47a1c9dffa2aff285c106a0a38fbc329b6f159bc7128ed204199822911bcd",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/coupon/bearing_coupon.3mf",
+            "bytes": 12664,
+            "sha256": "8340dcd6ba37602c2a7c05bbfbda5274d099b73f8eea231e8da58f8906fd2762",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/coupon/motor_mount.3mf",
+            "bytes": 20663,
+            "sha256": "85ec32846dbf6dbbd77ea65045f28ca8db06823dedd647fad9e06e108273daad",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/coupon/pinion.3mf",
+            "bytes": 25575,
+            "sha256": "9d92a7d5d5b5d3f2e44b77b33f5ee97906b1a1b0e0f195ca51c21091856677f0",
+            "baseline_byte_identical": true
+          },
+          {
+            "path": "final-drawing-source/coupon/turbine-fit-coupons.3mf",
+            "bytes": 65994,
+            "sha256": "3fbb96c076176fcb38009303e928d75fb61a776a58dc2403cc229e355b2501da",
+            "baseline_byte_identical": true
+          }
+        ],
+        "drawings": [
+          {
+            "path": "final-drawing-source/coupon/shaft_coupon.svg",
+            "bytes": 33668,
+            "sha256": "78e4fd209fb188c84d7fd2cc7e848e82c79727493b45f65188dfeaa334737dcf"
+          },
+          {
+            "path": "final-drawing-source/coupon/shaft_coupon.dxf",
+            "bytes": 69653,
+            "sha256": "e48493cc910b177fea97ac875a9d28761916ad78b4956509b35d72eb8ea9291f"
+          },
+          {
+            "path": "final-drawing-source/coupon/bearing_coupon.svg",
+            "bytes": 45576,
+            "sha256": "6f0dbc671113e1d7f2d0395524c25520c47fd40c6052eea24c2016e64278a8f2"
+          },
+          {
+            "path": "final-drawing-source/coupon/bearing_coupon.dxf",
+            "bytes": 101404,
+            "sha256": "fa737cd7a0b5255bc52608fdd38abf80f308e32005259a8ab32c986c995a55b5"
+          },
+          {
+            "path": "final-drawing-source/coupon/motor_mount.svg",
+            "bytes": 65047,
+            "sha256": "a8c2e84ded1059e280ef95cacdad106d499af2a654b9252954f966e47ffdbc34"
+          },
+          {
+            "path": "final-drawing-source/coupon/motor_mount.dxf",
+            "bytes": 133692,
+            "sha256": "42587f3b58056d3dbfc82350eef380bb077ae40e18721a1a805683916da34175"
+          },
+          {
+            "path": "final-drawing-source/coupon/pinion.svg",
+            "bytes": 217180,
+            "sha256": "80fae5a67f0000bcbe0068325f1ba085141fa4ec15e252b19aa0e05c06d76d98"
+          },
+          {
+            "path": "final-drawing-source/coupon/pinion.dxf",
+            "bytes": 269870,
+            "sha256": "f5447cc3a746970a8e43d30880269fdedd02d6b8c72c3ffe942bf20216bca57a"
+          }
+        ],
+        "coupon_export_proof": {
+          "path": "final-drawing-source/coupon-export-proof/run-1.json",
+          "bytes": 6094471,
+          "sha256": "17353a1e43dc1acb4ff78e5d39bcf3042ec209a212d07cf5bf0af5cd23f6327a",
+          "elapsed_ms": 2530,
+          "model_scene_solution_exact": true,
+          "native_export_calls": 5
+        },
+        "full_mechanical_wrapper_rerun_on_this_source": false,
+        "scope": "Complete new-source blank native replay repeated twice, exact baseline geometric/assembly/print identity, and separately reviewed radial-label-only drawing change. Frozen-source full mechanical wrapper remains separate.",
+        "physical_qualification": "not performed"
+      },
+      "qualification": "final-drawing-source/qualification.json",
+      "source_parity": "radial-label-source-parity.json",
+      "scope": "Complete independent blank replays of both final recipes and exact non-drawing model, scene, assembly and print parity to the frozen baseline. This is separate from the frozen full mechanical wrapper."
+    },
+    "drawings": {
+      "status": "passed-and-bound-to-final-source-files",
+      "main_sheets": 14,
+      "coupon_sheets": 4,
+      "review": "drawing-radial-label-proof/visual-qa.json",
+      "native_annotation_proof": "drawing-radial-label-proof/native-parity.json",
+      "final_source_equivalence": "final-drawing-source/visual-equivalence.json",
+      "scope": "All 18 native SVG sheets were visually reviewed. Four leader positions were corrected without changing dimensions, feature associations, meshes or poses. The 36 final SVG/DXF files must match those reviewed exports exactly."
+    },
+    "slicer": {
+      "status": "passed-for-all-final-source-exported-surfaces",
+      "report": "bambu-cli/slice-qualification-current.json",
+      "equivalence": "bambu-cli/final-input-equivalence.json",
+      "main_print_definitions": 11,
+      "main_physical_prints": 12,
+      "stage_quantity": 2,
+      "coupon_files": 5,
+      "support_features": 0,
+      "warnings": 0,
+      "process": "Bambu Studio 02.08.02.61; X2D main 0.4 mm; PETG HF; 0.2 mm standard; 2 walls; 15% infill; support disabled; arrange 0",
+      "surface_equivalence": "The 16 final archives must match actual reviewed G-code inputs by exact numeric coordinates and oriented triangles, allowing only index order and cyclic triangle rotation; no alignment, rounding or geometry edit.",
+      "base_roof": "The rejected circular roof left an unsupported wall. Corrected circle-preserving 45-degree relief and a 1 mm ceiling provide 0.220 to 0.224 mm direct prior-layer wall overlap in 96 samples, followed by a 2.930 mm maximum bridge move including anchors. Physical bridging remains unqualified."
+    }
   },
-  "live_boundary": "The original headless lifecycle snapshot remains identified above. The attached replay below qualifies the integrated material, output, camera and visibility fixes; later presentation/error-recovery changes have separate focused regressions.",
+  "live_validation": {
+    "status": "passed-native-model-inspection-restoration-and-close",
+    "source_revision": "81ae7cde250a2cf695ab64fbbff19d2a1f27f258",
+    "scope": "The frozen stable-underside native model was opened, saved as an owned review copy, visually inspected in complete and isolated-drive views, restored exactly, saved with its expected filename, then closed. This is a native-model review, not a new script replay or physical turbine test. The later four drawing leaders were not part of this live build; final-source parity is recorded separately.",
+    "ownership": {
+      "closed_owned_cad_pid": 26564,
+      "process_absent_verified_utc": "2026-09-11T18:29:56.225152+00:00",
+      "preserved_user_bambu_pid": 22224,
+      "preserved_user_bambu_start_time": "2026-09-09T21:34:56.4258444-05:00"
+    },
+    "artifacts": [
+      {
+        "path": "live-final/turbine-complete.png",
+        "bytes": 274872,
+        "sha256": "21af5a0be513ba0f9ba143ca88a323741c6a6f63bfd5a34e77a66d7d8ded5f6c"
+      },
+      {
+        "path": "live-final/turbine-complete.capture.json",
+        "bytes": 247,
+        "sha256": "03362b785baa1873360e69ce68163b5c5775883efcafadf7bebeb96ea9ea7e43"
+      },
+      {
+        "path": "live-final/turbine-transmission.png",
+        "bytes": 328246,
+        "sha256": "7da3984c40f557f3b83227a662031c4ce4a0cc60ea013e869c021b182b1cbf3c"
+      },
+      {
+        "path": "live-final/turbine-transmission.capture.json",
+        "bytes": 251,
+        "sha256": "f8e3a7ba8f9bf387421bd4867640128031aed8e38a62e891857ab8d88933a02d"
+      },
+      {
+        "path": "live-final/model-comparison.json",
+        "bytes": 172,
+        "sha256": "e4130bf871eb46d2d817b6df9323b660a0c40e8dd6896a961222253c0c3a4b5a"
+      },
+      {
+        "path": "live-final/restoration-comparison-final.json",
+        "bytes": 870,
+        "sha256": "0b19c275cc9b776a08ee72f37d2d902cba6e3ba99500ee4d956682c8b7943e9d"
+      },
+      {
+        "path": "live-final/build-manifest.json",
+        "bytes": 293,
+        "sha256": "2b9a987900ff3b984ec5fdb104ab015be0b958bd1d11c1001d3fb62ce4ac012f"
+      },
+      {
+        "path": "live-final/window-identity.json",
+        "bytes": 276,
+        "sha256": "a85e777c86d5ccadf952021386535d0695c9a8abbfd74fcc156d16a2df2b43b0"
+      },
+      {
+        "path": "live-final/restored-save.json",
+        "bytes": 179211,
+        "sha256": "da2985a28823492f503774d55540c31ca0c53ad64a84bbec0da970e7d2e9b279"
+      },
+      {
+        "path": "live-final/close.json",
+        "bytes": 179237,
+        "sha256": "4c5e204197f4bad594644b1a90667b7990013dcfd9b435cbd94bca038be29cd6"
+      },
+      {
+        "path": "live-final/curated-kit-proof.json",
+        "bytes": 4022,
+        "sha256": "d826a7f635833a2e35ba5e6d441bb326069d067b18dab5eed5a6cf2a367ed019"
+      }
+    ],
+    "referenced_native_models": [
+      {
+        "path": "live-final/live-model.json",
+        "bytes": 1428058,
+        "sha256": "6ac787e678fd73ead4784cfa9f804b3b7ae7f90940122d61ce1868c0c2e5b02a"
+      },
+      {
+        "path": "live-final/restored-active-live-model.json",
+        "bytes": 1428058,
+        "sha256": "4f2c3d1503948cbdc5b659f1f418f3892cc515e6075c1259867e9c96c95db7ea"
+      }
+    ],
+    "historical_boundary": "The September 10 attached replay applies only to its superseded source. This live review opened the mechanical baseline; it is not a full attached construction replay of the final drawing-only source."
+  },
   "physical_qualification": {
     "status": "not performed",
     "load_rating": null,
     "remaining": [
-      "Measure the actual generator case, terminals and shaft projection.",
-      "Print and measure the four fit coupons with the intended filament/profile.",
-      "Verify purchased fasteners, bearing fit, retention, runout, assembly access and clamp slip.",
-      "Measure startup, speed, voltage/current under known loads, fatigue and wear before claiming performance.",
-      "Outdoor variants additionally require hardware weather resistance, drainage, anchoring and overspeed retention qualification."
+      "Measure generator case length, terminals, shaft projection and actual hardware.",
+      "Print and measure fit coupons and roof/bridge features on the intended material/profile.",
+      "Qualify bearing retention, clamp slip, runout, assembly access and rotor balance.",
+      "Anchor the base and measure startup at multiple angles, RPM and simultaneous voltage/current under known electrical loads.",
+      "Qualify creep, fatigue, wear and weather/overspeed measures before any outdoor variant."
     ]
   },
   "artifacts": [
     {
-      "file": "assembly.dxf",
-      "bytes": 29697,
-      "sha256": "358f98bc19601f7e4a4e761c37649ffaa6b75ef27e0e314eaa81bd517434daf7"
+      "path": "acceptance-anchor-final/acceptance-status.json",
+      "bytes": 3076,
+      "sha256": "9866dc86b9ec271ff5a292a2ccb810a1e4ba8094f383812f71b033d7b1753f2e"
     },
     {
-      "file": "assembly.png",
-      "bytes": 347525,
-      "sha256": "0a0e884a930bca4c89e6469e9e595bc88406a1428694b77cd8db34d7d211984e"
+      "path": "acceptance-anchor-final/binary-hashes.json",
+      "bytes": 553,
+      "sha256": "592e2f5c916a6a2c2a8b79f1b88fdc06fb58cd017490ee4c71c230d5fb17e3c9"
     },
     {
-      "file": "assembly.svg",
-      "bytes": 16759,
-      "sha256": "55345ab6b58a4fd4ca84a5dcb5313b1eaaae1160d07cc33abedb1c54d2c0eb8c"
+      "path": "acceptance-anchor-final/interference.json",
+      "bytes": 79718,
+      "sha256": "536d444ea14c54fc6deb88c1fb547b11bc2fd253c674db4ba3a970756133e8bf"
     },
     {
-      "file": "base.3mf",
-      "bytes": 22526,
-      "sha256": "5cb913e287eeed27b97ab777570f276a5f46ae7e6edc331f67f1c4624f67ca09"
+      "path": "acceptance-anchor-final/main-acceptance-final.log",
+      "bytes": 2803,
+      "sha256": "f5d298877b22ea32d7e8c2206cd57d93935e9d8a71e547aeb6a77561dcb4496f"
     },
     {
-      "file": "base.dxf",
-      "bytes": 53769,
-      "sha256": "54d0a6352b8f1872a7f44614e103ecf626ccadca8edb8d17f927462c3896594c"
+      "path": "acceptance-anchor-final/model.json",
+      "bytes": 1289327,
+      "sha256": "a63b7f17bd3251396ae8d46a34fe016fbc8c88018091d46dfdebeffad7705a71"
     },
     {
-      "file": "base.png",
-      "bytes": 370843,
-      "sha256": "331e79b7f0b45b87ae22ec8acdef25fd6a11ee090fe803ea61babbbcad3577b2"
+      "path": "acceptance-anchor-final/tested-source-hashes.json",
+      "bytes": 1156,
+      "sha256": "54e780b27a1ab3649840ecf061440b99280d5fc2d851ec2ab0e8c2f9489fd588"
     },
     {
-      "file": "base.svg",
-      "bytes": 27354,
-      "sha256": "d127629a64815a6783973857f2e29009b4e108e53e382bcc669fbf273d19b95f"
+      "path": "acceptance-anchor-final/turbine-run-1.json",
+      "bytes": 52623547,
+      "sha256": "5e916b4c570da22c88b9de06ff6942f0ec0ae57bf9aa70cdc553f357d35ac303"
     },
     {
-      "file": "bom.dxf",
-      "bytes": 5740,
-      "sha256": "9dd0afec0d0aa270f712be24c7bb6866d603a0a334894da78b4477649281af2f"
+      "path": "acceptance-final/coupon-acceptance-final.log",
+      "bytes": 307,
+      "sha256": "7feefc01152cf5956dd39eecf66f9207575059857628c5c2edce02775cabd25e"
     },
     {
-      "file": "bom.png",
-      "bytes": 646689,
-      "sha256": "ad472e28f6047483f0f329abbe1f9a323e20a690dba178f4c062c429c3534344"
+      "path": "acceptance-final/coupon-validated-binary-hashes.json",
+      "bytes": 539,
+      "sha256": "a2b2222686d558a106b00f943e6955b9d321d159dabe3cf6724ec1eecaf01092"
     },
     {
-      "file": "bom.svg",
-      "bytes": 7817,
-      "sha256": "83d9b185fb3c2856451d4e3b2b9a1626db1a75cba07bd01c6e2f9c4ef6c9fcff"
+      "path": "acceptance-final/main-stage-anchor-red.log",
+      "bytes": 1772,
+      "sha256": "03b12ff8989f7a3ae85f90c952dc836fd97efc576a749891a48104f70c47bdb5"
     },
     {
-      "file": "cap.3mf",
-      "bytes": 5244,
-      "sha256": "3d395ca5df6ddc485aa48e367b3424654678f08997de2f28fb62436d335bd417"
+      "path": "bambu-cli/final-input-equivalence.json",
+      "bytes": 26531,
+      "sha256": "d71d7209871818b7a0a32e4d293d806dee8cde050f5b7f0a00276143b306abf0"
     },
     {
-      "file": "cap.dxf",
-      "bytes": 15631,
-      "sha256": "4e135b37fc64d9d32056b3c0466f6cb27337e549c6b5e4b97c5fcfcd2bede076"
+      "path": "bambu-cli/slice-qualification-current.json",
+      "bytes": 28540,
+      "sha256": "f8d82d2c7a3d6cf7012aa72c1c4aec7bbe88b94a02de58720855d4a200f34378"
     },
     {
-      "file": "cap.png",
-      "bytes": 316820,
-      "sha256": "e3b06de8d8aa950d67c322e1a86156a9d2acc0aab0d78be329975967e75c5833"
+      "path": "drawing-radial-label-proof/native-parity.json",
+      "bytes": 1802,
+      "sha256": "9745c34de9625fe5f03d0886fa2eef9a431c4745d2e99f535cc75d9d33d23a66"
     },
     {
-      "file": "cap.svg",
-      "bytes": 8701,
-      "sha256": "cbd68ad1a0f32c6f1084a6672a8de314b41d8c1a7842cfc198aaa7ee47f35822"
+      "path": "drawing-radial-label-proof/visual-qa.json",
+      "bytes": 12332,
+      "sha256": "1452e18a53e875b872ca27f953c401e2bda2921d0c238d3d243dcce9fcc11033"
     },
     {
-      "file": "fit-coupons/bearing_coupon.3mf",
-      "bytes": 13500,
-      "sha256": "e9e379d6e9ca962dc3be38f91cd185acdaa935708913d1b0f61588aced490b87"
+      "path": "final-drawing-source/coupon/bearing_coupon.3mf",
+      "bytes": 12664,
+      "sha256": "8340dcd6ba37602c2a7c05bbfbda5274d099b73f8eea231e8da58f8906fd2762"
     },
     {
-      "file": "fit-coupons/bearing_coupon.dxf",
-      "bytes": 86242,
-      "sha256": "b9c405bd784fa165e1b80a1f223b44e682224fa6896048a308876fb432bbf4bc"
+      "path": "final-drawing-source/coupon/bearing_coupon.dxf",
+      "bytes": 101404,
+      "sha256": "fa737cd7a0b5255bc52608fdd38abf80f308e32005259a8ab32c986c995a55b5"
     },
     {
-      "file": "fit-coupons/bearing_coupon.svg",
-      "bytes": 37083,
-      "sha256": "d2a9a002032cd90a5133163d6c16f54e1e14e2057cb4af17ef0e80dc4a240019"
+      "path": "final-drawing-source/coupon/bearing_coupon.svg",
+      "bytes": 45576,
+      "sha256": "6f0dbc671113e1d7f2d0395524c25520c47fd40c6052eea24c2016e64278a8f2"
     },
     {
-      "file": "fit-coupons/motor_mount.3mf",
-      "bytes": 11566,
-      "sha256": "354e78b77482727f586cd19cd3540fa75af8e49bae3ccd4700bff0049423f006"
+      "path": "final-drawing-source/coupon/model-1.json",
+      "bytes": 297010,
+      "sha256": "d5b7052d98b683b7614c64b6920495207b56ccdd1a0a5d946c1ec471d70b5256"
     },
     {
-      "file": "fit-coupons/motor_mount.dxf",
-      "bytes": 88508,
-      "sha256": "1c0dc48359d583d4314badb35902ec6902c07161b17c6175ab7a3029a5b63a5f"
+      "path": "final-drawing-source/coupon/model-2.json",
+      "bytes": 297010,
+      "sha256": "d5b7052d98b683b7614c64b6920495207b56ccdd1a0a5d946c1ec471d70b5256"
     },
     {
-      "file": "fit-coupons/motor_mount.svg",
-      "bytes": 37569,
-      "sha256": "68274c653b76c73acfb8b226dc3b900a9a67deeae7c441b184d355ccf866b85d"
+      "path": "final-drawing-source/coupon/motor_mount.3mf",
+      "bytes": 20663,
+      "sha256": "85ec32846dbf6dbbd77ea65045f28ca8db06823dedd647fad9e06e108273daad"
     },
     {
-      "file": "fit-coupons/pinion.3mf",
-      "bytes": 25943,
-      "sha256": "a7ff259887aea5e6e16e2efd4384277ea8296c1a4dc4ffed2823beeb55d8f273"
+      "path": "final-drawing-source/coupon/motor_mount.dxf",
+      "bytes": 133692,
+      "sha256": "42587f3b58056d3dbfc82350eef380bb077ae40e18721a1a805683916da34175"
     },
     {
-      "file": "fit-coupons/pinion.dxf",
-      "bytes": 324164,
-      "sha256": "f8821b34b9ed4a7cc18eea4a2cad53107e0f35a8cb86e0512685be38aa9ab85e"
+      "path": "final-drawing-source/coupon/motor_mount.svg",
+      "bytes": 65047,
+      "sha256": "a8c2e84ded1059e280ef95cacdad106d499af2a654b9252954f966e47ffdbc34"
     },
     {
-      "file": "fit-coupons/pinion.svg",
-      "bytes": 231350,
-      "sha256": "c9bf37ad2c0f667d93d64816b2215551ed8bd6acbb7666e251d80f2c98c2a65a"
+      "path": "final-drawing-source/coupon/pinion.3mf",
+      "bytes": 25575,
+      "sha256": "9d92a7d5d5b5d3f2e44b77b33f5ee97906b1a1b0e0f195ca51c21091856677f0"
     },
     {
-      "file": "fit-coupons/shaft_coupon.3mf",
-      "bytes": 11200,
-      "sha256": "9414eea00b74bf062c5e8ce0ba708f42ac7abf067a8b7845ccb571834ba2751f"
+      "path": "final-drawing-source/coupon/pinion.dxf",
+      "bytes": 269870,
+      "sha256": "f5447cc3a746970a8e43d30880269fdedd02d6b8c72c3ffe942bf20216bca57a"
     },
     {
-      "file": "fit-coupons/shaft_coupon.dxf",
-      "bytes": 70527,
-      "sha256": "eac9fac97be0893c78fb0bab2fbf83ae4a64286c5277b6bac9ca2293e91de228"
+      "path": "final-drawing-source/coupon/pinion.svg",
+      "bytes": 217180,
+      "sha256": "80fae5a67f0000bcbe0068325f1ba085141fa4ec15e252b19aa0e05c06d76d98"
     },
     {
-      "file": "fit-coupons/shaft_coupon.svg",
-      "bytes": 33907,
-      "sha256": "b0806d8a8ccde0e225f2d6ec2250a5734404cca5af901ddd0efc8613d2da0f1a"
+      "path": "final-drawing-source/coupon/run-1.json",
+      "bytes": 7186574,
+      "sha256": "c15ebb145411f6dc171267100689c5ed5243af98ad28251350d5d1680f6fc459"
     },
     {
-      "file": "fit-coupons/turbine-fit-coupons.nbcad",
-      "bytes": 13477,
-      "sha256": "a9159213246c6b1eadcfb9243f73fb1618f433e5451fca5e97c54ce4478fd96a"
+      "path": "final-drawing-source/coupon/run-2.json",
+      "bytes": 7186574,
+      "sha256": "b68f33f75894e846539cd5701e14872123d6d3230ff983f3c76c72f663ea03b3"
     },
     {
-      "file": "guard.3mf",
-      "bytes": 15168,
-      "sha256": "4ad67080d7f270b2c1f54a4dfe562718d21c2767a09353f6826e157d5f749422"
+      "path": "final-drawing-source/coupon/shaft_coupon.3mf",
+      "bytes": 10309,
+      "sha256": "bde47a1c9dffa2aff285c106a0a38fbc329b6f159bc7128ed204199822911bcd"
     },
     {
-      "file": "guard.dxf",
-      "bytes": 56058,
-      "sha256": "c376f48fb1dff6e165144da79e4fa0a11447f196075eb2845f50e119c236b599"
+      "path": "final-drawing-source/coupon/shaft_coupon.dxf",
+      "bytes": 69653,
+      "sha256": "e48493cc910b177fea97ac875a9d28761916ad78b4956509b35d72eb8ea9291f"
     },
     {
-      "file": "guard.png",
-      "bytes": 471887,
-      "sha256": "6325107523dcba2a3e7e3fe87a68c683b42eb70fcc9dccac64cdf423cfa6ecd2"
+      "path": "final-drawing-source/coupon/shaft_coupon.svg",
+      "bytes": 33668,
+      "sha256": "78e4fd209fb188c84d7fd2cc7e848e82c79727493b45f65188dfeaa334737dcf"
     },
     {
-      "file": "guard.svg",
-      "bytes": 31085,
-      "sha256": "c6c008f38362df9a57222a99023ec5302176e23f671414f2c7fbd972d85c3267"
+      "path": "final-drawing-source/coupon/turbine-fit-coupons.3mf",
+      "bytes": 65994,
+      "sha256": "3fbb96c076176fcb38009303e928d75fb61a776a58dc2403cc229e355b2501da"
     },
     {
-      "file": "guard_lid.3mf",
-      "bytes": 9476,
-      "sha256": "d86fc9dd3c72b0711940561f6be934849652b8656365ac09d192b7f51e7d5e89"
+      "path": "final-drawing-source/coupon/turbine-fit-coupons.nbcad",
+      "bytes": 19004,
+      "sha256": "d2a2cf4e3952fd3111bae684a96afac485cdca7482d6509b8a4bd3f005077016"
     },
     {
-      "file": "guard_lid.dxf",
-      "bytes": 27830,
-      "sha256": "e24e851fb54863500b172b9cb3ea952d7d0740b5c397d9f75cd0208f1cc3f5dc"
+      "path": "final-drawing-source/coupon-repeat.log",
+      "bytes": 422,
+      "sha256": "aa8707fd6c325bec96e5b33aa3e5059fc0b857711459aafcc8f01ae970e9cb78"
     },
     {
-      "file": "guard_lid.png",
-      "bytes": 384265,
-      "sha256": "4cd51af58ab3d460dd547750309c862994aef1b91ee8c970677361bc967251a3"
+      "path": "final-drawing-source/main/assembly.dxf",
+      "bytes": 62213,
+      "sha256": "2336950ef417a9a34d67fe32e1bbe53149a8679f3b317bd4ff7fade85ec0765f"
     },
     {
-      "file": "guard_lid.svg",
-      "bytes": 13489,
-      "sha256": "2460a19353c58be8ec2134d013e3b0cb2472fb6236b2c9b358c503eea2840c99"
+      "path": "final-drawing-source/main/assembly.svg",
+      "bytes": 33006,
+      "sha256": "b487458a3ce6f1e1566735613f7ef8c8d324ac43f616d10213ceafcb5cacd3df"
     },
     {
-      "file": "motor_mount.3mf",
-      "bytes": 11565,
-      "sha256": "96d29df983e638c976f2ee62a02c4b4479a47dd5346825e38b8f640f54711ef9"
+      "path": "final-drawing-source/main/base.3mf",
+      "bytes": 32385,
+      "sha256": "3b55f10045c82416626c738e2568bc7f3a5594b6a92072f95f6e945770db61d8"
     },
     {
-      "file": "motor_mount.dxf",
-      "bytes": 88527,
-      "sha256": "7197ed2ce8e269b956478387a22244e1d7a242200f0b649a13abf491eb335ad6"
+      "path": "final-drawing-source/main/base.dxf",
+      "bytes": 90288,
+      "sha256": "b1d61d97f57f9c7673fde24143df36f855fd0ad42be5cff3ba39ef075f748682"
     },
     {
-      "file": "motor_mount.png",
-      "bytes": 433560,
-      "sha256": "270d61ccb9bcd699d3cf001a068e7130f84faa50c7c9b2a8052292d0916a45d3"
+      "path": "final-drawing-source/main/base.nbcad",
+      "bytes": 49688,
+      "sha256": "21feb874e48d014b69590faa834fc405bef57119034306dd9100217948695161"
     },
     {
-      "file": "motor_mount.svg",
-      "bytes": 37588,
-      "sha256": "5279f01fa546948fc4ebeb31f28fd1b0982f76dc3be8a20b95904c0d604e24af"
+      "path": "final-drawing-source/main/base.svg",
+      "bytes": 43836,
+      "sha256": "32f2d855a84d32df74f6f4fa71f91fd096396ed39df659b32858f404186205ea"
     },
     {
-      "file": "pinion.3mf",
-      "bytes": 25943,
-      "sha256": "c059b7938960b109dc6bb8f0590d5776166043ac1aeda372d4e48bbbab7aea3d"
+      "path": "final-drawing-source/main/bom.dxf",
+      "bytes": 6351,
+      "sha256": "c1c3ea539eab21d58baf53db1abe913f3c63cc5a068afd0af2d20fc9871c1b2c"
     },
     {
-      "file": "pinion.dxf",
-      "bytes": 324060,
-      "sha256": "c16a1d4357ade6afefa3b0331983d6a4b50a4dd930ab14f08dc929516577201e"
+      "path": "final-drawing-source/main/bom.svg",
+      "bytes": 8512,
+      "sha256": "92386e6fa111f04fa52fd0531410ed0770b70388143ad0d05beca67986387024"
     },
     {
-      "file": "pinion.png",
-      "bytes": 420126,
-      "sha256": "28a45225c6a4e7e27e2872880be8b75c774b6b95094f83374b08a4d7b3d1faac"
+      "path": "final-drawing-source/main/cap.3mf",
+      "bytes": 27597,
+      "sha256": "4b370a0707743e502692c8d05256b111339d41c610a7b96673801435550ad785"
     },
     {
-      "file": "pinion.svg",
-      "bytes": 231188,
-      "sha256": "35f13e0fa9c64c071b2c3c200f508a034e59bc7884dfac7c4a444b62c63f091b"
+      "path": "final-drawing-source/main/cap.dxf",
+      "bytes": 16546,
+      "sha256": "8d664b567a607af806dad1bb22c6260c891d9627efba269424f068f9ae5bde5f"
     },
     {
-      "file": "rotor_gear.3mf",
-      "bytes": 65337,
-      "sha256": "fe6a65f3ab292ba67aeb83986906a828a09cd861bf4dca75f57d0dc5b2a7d388"
+      "path": "final-drawing-source/main/cap.nbcad",
+      "bytes": 49685,
+      "sha256": "df4a68c7e4985ae936d0034399c197c72ef97c464f41a782f68c53bcdd42dace"
     },
     {
-      "file": "rotor_gear.dxf",
-      "bytes": 479766,
-      "sha256": "9c2d2e7e56e8fcfb057f02407392032309eb0d71dc538581927649ef2f2acae7"
+      "path": "final-drawing-source/main/cap.svg",
+      "bytes": 9540,
+      "sha256": "68ed244287ab49bb580c877827aaaded09ed242e7b719b4c53bf5ed56d3f8729"
     },
     {
-      "file": "rotor_gear.png",
-      "bytes": 487068,
-      "sha256": "8f4dd1da5a72e2420a8ec06a08554cb670f51582e000936e8890d6b4296bf39d"
+      "path": "final-drawing-source/main/guard.3mf",
+      "bytes": 33844,
+      "sha256": "5a2674dbd50b5bd049e587b6f085bb39c12a1b4d7e0f93aa3fa6dc523655df23"
     },
     {
-      "file": "rotor_gear.svg",
-      "bytes": 548682,
-      "sha256": "f96589ba5d40df47c90a491062990ae491507c7b4848dd2be2c6d6e757529056"
+      "path": "final-drawing-source/main/guard.dxf",
+      "bytes": 87465,
+      "sha256": "9d24cdf1532745f2ef090512276fb01c477995cba2ada7f9232d395bd692b590"
     },
     {
-      "file": "shaft.dxf",
-      "bytes": 7226,
-      "sha256": "10236a23e1194f5424faca0316808399e674fb415c21c93e3535ab0562d0035d"
+      "path": "final-drawing-source/main/guard.nbcad",
+      "bytes": 49688,
+      "sha256": "6f18082fa2cede09a0bf2633efe00d9ab206a813b6a2d5144ab8d05d4df94192"
     },
     {
-      "file": "shaft.png",
-      "bytes": 302975,
-      "sha256": "45176871ab3843d56f7c1fa374ce8a457663b4d96dee1a1f0e55d9eda9def8c1"
+      "path": "final-drawing-source/main/guard.svg",
+      "bytes": 46737,
+      "sha256": "b9986942c974c3e1e6a1dab8b347cbd34366b12976a99cdf7052b226fafe28eb"
     },
     {
-      "file": "shaft.svg",
-      "bytes": 6058,
-      "sha256": "021dfe1873ac78a79814498f96e5e70aad5984c075014e68b19880faea0cbe85"
+      "path": "final-drawing-source/main/guard_lid.3mf",
+      "bytes": 28106,
+      "sha256": "ff4b3a6154288cfae71d033c4eac1b56db5c526f7c4a7fc7d2e3fe18bba0e2d5"
     },
     {
-      "file": "stage.3mf",
-      "bytes": 19490,
-      "sha256": "d236236f08f0acf8e9a1098a088cce6232cb807e278a7416c13180ece5aa6342"
+      "path": "final-drawing-source/main/guard_lid.dxf",
+      "bytes": 32948,
+      "sha256": "fa393a5980000f9f0c7ace7debc250a4295f2327549eace059352deac72c2738"
     },
     {
-      "file": "stage.dxf",
-      "bytes": 112399,
-      "sha256": "b3235877695b227a0eb1b85fd86334b309e8e1a203b2fc0dc40372056ec05898"
+      "path": "final-drawing-source/main/guard_lid.nbcad",
+      "bytes": 49682,
+      "sha256": "2c883503b17cf23a7559fada2b5610ef337c7d41c688cfce09c96c9c65a55e6f"
     },
     {
-      "file": "stage.png",
-      "bytes": 440980,
-      "sha256": "40cc62ac8543d0d2ec6ab419559b5fa43bad98f81bb537556554db6ba09ea040"
+      "path": "final-drawing-source/main/guard_lid.svg",
+      "bytes": 15643,
+      "sha256": "cbaafcec396aa1c5bb4fe5881c46e9de13f8d93a15e48200dfbf5da6b8581139"
     },
     {
-      "file": "stage.svg",
-      "bytes": 51188,
-      "sha256": "bd308d50c19285f341081981353d39493329a3167b325171a51693804c3ce499"
+      "path": "final-drawing-source/main/model-1.json",
+      "bytes": 1289327,
+      "sha256": "36c8e4b8dde3fefd11b303e73250b50551d2a0aebd2524a6ee2ea53cceb2beaf"
     },
     {
-      "file": "tower.3mf",
-      "bytes": 22786,
-      "sha256": "00fc05c6d4472c2abc7903ede420d0c8a38ba8ed084679099ea5ac5b0be97af3"
+      "path": "final-drawing-source/main/model-2.json",
+      "bytes": 1289327,
+      "sha256": "36c8e4b8dde3fefd11b303e73250b50551d2a0aebd2524a6ee2ea53cceb2beaf"
     },
     {
-      "file": "tower.dxf",
-      "bytes": 134164,
-      "sha256": "06e778c6a1d98cc997d80e96868cc2644fdeb60f5af5392788ca879298bada9e"
+      "path": "final-drawing-source/main/motor_bracket.3mf",
+      "bytes": 9691,
+      "sha256": "d1155bbf5e4d4b5c997bf0e8ebd0ce660411d14dcea3da162ca4fd5f805e3bc9"
     },
     {
-      "file": "tower.png",
-      "bytes": 475121,
-      "sha256": "698db7aefab2f1b1d6a7312ecf39853461d47852ab94b12589e8088dd07e7fd5"
+      "path": "final-drawing-source/main/motor_bracket.dxf",
+      "bytes": 44733,
+      "sha256": "b3b64419d2d6099973c206ed5c253337757027ddfb41533243e72efb6e99c094"
     },
     {
-      "file": "tower.svg",
-      "bytes": 54550,
-      "sha256": "99d8fbccfc579ca3998227f349866ef1690d0b1ba946df54e2bf80c22b1ff66d"
+      "path": "final-drawing-source/main/motor_bracket.nbcad",
+      "bytes": 49684,
+      "sha256": "40d2c4ea9b521e434fd6635851720d5357931e3d02280dfc7de4dcc91d127ab3"
     },
     {
-      "file": "vertical-axis-turbine.nbcad",
-      "bytes": 35148,
-      "sha256": "6c42e485e0a0262da1a56dbf2d536f062c2b48a0495b83d79fcf72b9cfcbb961"
+      "path": "final-drawing-source/main/motor_bracket.svg",
+      "bytes": 23618,
+      "sha256": "61ab7d522347649a0499cf4b2b82e41b21e23d3e02471f5abe171338954af455"
+    },
+    {
+      "path": "final-drawing-source/main/motor_mount.3mf",
+      "bytes": 20721,
+      "sha256": "af55dbb37423dac5cb7ea723ac96207a1855c53d658a22aff5d68927c014a049"
+    },
+    {
+      "path": "final-drawing-source/main/motor_mount.dxf",
+      "bytes": 134030,
+      "sha256": "e99582e5f078422c93c9d0f036e78e3aea16ed0fafafc3624cc176d2873f6b8e"
+    },
+    {
+      "path": "final-drawing-source/main/motor_mount.nbcad",
+      "bytes": 49685,
+      "sha256": "73294eff398f42a4dc35df190c2a7f7925760aa3647404459d051552c9e8578a"
+    },
+    {
+      "path": "final-drawing-source/main/motor_mount.svg",
+      "bytes": 65479,
+      "sha256": "07813e8809637411dff8caa3742f756ea41b542ece16ed7121de7801945fadfe"
+    },
+    {
+      "path": "final-drawing-source/main/pinion.3mf",
+      "bytes": 25738,
+      "sha256": "1fc2d50d7c79f8f96c99ed82920208597358ec8091e60c267e14d269fb829cf0"
+    },
+    {
+      "path": "final-drawing-source/main/pinion.dxf",
+      "bytes": 269760,
+      "sha256": "d841d998d2343ced6ff006532d74a059ad2722de35f7215679b0c9963304d59f"
+    },
+    {
+      "path": "final-drawing-source/main/pinion.nbcad",
+      "bytes": 49684,
+      "sha256": "74bca504c3d7926d36f093040d93e4bda8cd101fd8cdce0e44f761f4d0534f06"
+    },
+    {
+      "path": "final-drawing-source/main/pinion.svg",
+      "bytes": 217012,
+      "sha256": "92c2f99935fae03724abc95be15fdd384b3b55d63cbf1864e526cc13f5767379"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_gear.3mf",
+      "bytes": 69081,
+      "sha256": "b1456a8c883b2fd559ec2553958fc074413847d4e76a07679574a473e3bf100e"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_gear.dxf",
+      "bytes": 479752,
+      "sha256": "17a529e1499ec6e2674b40461e57b6840a219499c802182c02f70369ef150979"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_gear.nbcad",
+      "bytes": 49685,
+      "sha256": "02b5c329714da2d7362f42c586448eb0b37f32258b26e72a16fb219b4afe5c51"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_gear.svg",
+      "bytes": 549900,
+      "sha256": "b844fd26ef20fe3ea40dc92b25bb342102dcf596a92e05a4b44327ad8edc039c"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_support_sleeve.3mf",
+      "bytes": 9525,
+      "sha256": "3866358b24c6174a5a75a3657c1b619d8016925b091a55edc206801418af580e"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_support_sleeve.dxf",
+      "bytes": 13462,
+      "sha256": "cf0e2b1aa46040eb6b2fba55ada9735dc4564053aef79d99a564f965ff3f2b93"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_support_sleeve.nbcad",
+      "bytes": 49685,
+      "sha256": "3aae2ba768fd400c0eb33b24e0e9985a4656fdce80b9714e4892dfe2c2169338"
+    },
+    {
+      "path": "final-drawing-source/main/rotor_support_sleeve.svg",
+      "bytes": 8746,
+      "sha256": "77a4a9615b5b9e55b9a386c7a8e55d43b4d89e9b5c5501c8c95a21010b22cf59"
+    },
+    {
+      "path": "final-drawing-source/main/run-1.json",
+      "bytes": 52623543,
+      "sha256": "4813469f9956d08aa6741d8fc5405466086d12bc3deffdfefa30b9613ace644d"
+    },
+    {
+      "path": "final-drawing-source/main/run-2.json",
+      "bytes": 52623543,
+      "sha256": "e47928f1f6a7c7812c308b3c38deb45010d3dfb8ba5aa97d263efe4e821789a3"
+    },
+    {
+      "path": "final-drawing-source/main/shaft.dxf",
+      "bytes": 7234,
+      "sha256": "10745c425adb706fc29f2fae09bdcde2376990bf70e3b5bfefa05e618be0cb9a"
+    },
+    {
+      "path": "final-drawing-source/main/shaft.svg",
+      "bytes": 6131,
+      "sha256": "b474e96f8bfcc35dec741e00dc1d3dd57474195156c0548fbe4c879f22d15175"
+    },
+    {
+      "path": "final-drawing-source/main/stage.3mf",
+      "bytes": 38502,
+      "sha256": "f8d37b5d2db2eb50e6d2fdebb22c5129dcf9a3ee111be580613f9a8782d5617b"
+    },
+    {
+      "path": "final-drawing-source/main/stage.dxf",
+      "bytes": 142090,
+      "sha256": "aa52b8c71b5cdb12717ce501aa02878fe72e55a66c175aca23c4b8fa80c15c9f"
+    },
+    {
+      "path": "final-drawing-source/main/stage.nbcad",
+      "bytes": 49699,
+      "sha256": "f8ce71cf0d7e34517854a2205442e027387686dfe67017de3b2bd3a7a8e409e8"
+    },
+    {
+      "path": "final-drawing-source/main/stage.svg",
+      "bytes": 61649,
+      "sha256": "cf6fb083073a2efba67e0c07c3c2d822a4e9e92c129589e4a8d62192e8e4b718"
+    },
+    {
+      "path": "final-drawing-source/main/tower.3mf",
+      "bytes": 21518,
+      "sha256": "afe241aab979b03227b6d33e9c0cf8bb1ba4cae526cf3f0d8c31f17095a6869c"
+    },
+    {
+      "path": "final-drawing-source/main/tower.dxf",
+      "bytes": 154440,
+      "sha256": "bed457a8da41ebca1c5a829562cd999d620af188ebc78d71dedd9e3796b92ded"
+    },
+    {
+      "path": "final-drawing-source/main/tower.nbcad",
+      "bytes": 49701,
+      "sha256": "ce21d6a958f1e046154da27ac77be280d9f0a1c9c9df4d90bc92ed4319811f34"
+    },
+    {
+      "path": "final-drawing-source/main/tower.svg",
+      "bytes": 68865,
+      "sha256": "709574bbd30f3b2e31b1f0146e2735689b48c97bf39d1e61cf7b8f0355c7729a"
+    },
+    {
+      "path": "final-drawing-source/main/vertical-axis-turbine.nbcad",
+      "bytes": 59128,
+      "sha256": "08b3229b08796097836601119ba00f7e4ec9c6e72d595e140e2b362cb0744ecd"
+    },
+    {
+      "path": "final-drawing-source/main-repeat.log",
+      "bytes": 2018,
+      "sha256": "588c8fc7a1f4ab81b81177a6173af07f692622d065b838063f8ff0687572d9b4"
+    },
+    {
+      "path": "final-drawing-source/qualification.json",
+      "bytes": 29172,
+      "sha256": "2c871d5c42b2329c50df7253afb11fb5e4e190f0da6439087124065d8feff7f8"
+    },
+    {
+      "path": "final-drawing-source/visual-equivalence.json",
+      "bytes": 22758,
+      "sha256": "13b38f75ce074034c833b9664b5d5043a809bad7aea5a55cac2e602a4034e54e"
+    },
+    {
+      "path": "mechanical-validation-sources.json",
+      "bytes": 2006,
+      "sha256": "17702378548df4b50a09f772ea94f608fb24ac184e917995725bf992f5d7fa64"
+    },
+    {
+      "path": "radial-label-source-parity.json",
+      "bytes": 2616,
+      "sha256": "8cfc8e143bf8199c2d30645dd949c21bbd2a0647238678edae28811d2fb8530a"
     }
   ],
-  "live_validation": {
-    "engine_revision": "6f7e5e6bcd0c55257407c753ddc64c9a59e7dcc6",
-    "recipe": "vertical-axis-turbine",
-    "steps_completed": 1622,
-    "final_checks_completed": 11,
-    "elapsed_ms": 959059,
-    "exact_comparison": "PASS: native model, scene, sketches and solved assembly matched the independent headless reference before Save As.",
-    "camera_completion": "The final authored isometric request returned after leaving Drawings, mounting the actual viewport and completing its animation.",
-    "save": "The Rust runner prepared output directories, retained the report and model, and saved the editable native project.",
-    "construction_visibility": {
-      "hidden_sketches": 105,
-      "hidden_datums": 105,
-      "verification": "Saved clean copy differs only in reference visibility and the intentional Save As document name; body visibility and every other model field are unchanged."
+  "design": {
+    "printed_definitions": 11,
+    "printed_pieces": 12,
+    "stage_quantity": 2,
+    "component_definitions": 27,
+    "occurrences": 71,
+    "modeled_fastener_instances": 44,
+    "history_features": 488,
+    "sketches": 157,
+    "datum_planes": 157,
+    "main_drawing_sheets": 14,
+    "coupon_drawing_sheets": 4,
+    "bucket_swept_diameter_mm": 180,
+    "bucket_height_mm": 200,
+    "uncut_shaft_mm": {
+      "diameter": 8,
+      "length": 300
     },
-    "artifacts": [
-      {
-        "path": "live-final/turbine/run-1.json",
-        "sha256": "0654d347bb4c03759c3d01c94c97bb203551bfd60079157874984d576863d103"
-      },
-      {
-        "path": "live-final/turbine/vertical-axis-turbine-live.nbcad",
-        "sha256": "45d40e4362ced1815da15930b508219b3bd3cc641e18fdd2c9b6a703e1a712f7"
-      },
-      {
-        "path": "live-final/turbine/vertical-axis-turbine-clean.nbcad",
-        "sha256": "8780678bfdb423b52b2fa89f8f5eea550cf14881be4afdca9081426a961f10a1"
-      }
+    "gear_teeth": [
+      72,
+      18
     ],
-    "physical_qualification": "Not performed; manufacturing notes retain print/fit, material-specific load/wear and generator-output requirements."
+    "nominal_module_mm": 1,
+    "shaft_spacing_mm": 45.25,
+    "generator": "Vernier KW-GEN3 reference; case, terminals and shaft projection require specimen measurement."
+  },
+  "rejected_previous_run": {
+    "source_sha256_utf8_lf": "9fd93d4b2028f1c4fc08c65d0a1a5d3437c70dd5a2d846bca56ba0a2887f075b",
+    "log": "acceptance-final/main-stage-anchor-red.log",
+    "elapsed_seconds": 507.82,
+    "finding": "Changing the stage plate from 3 to 4 mm moved both top-face-attached occurrences by -1 mm. Stable underside references corrected the attachment; initial printable geometry was unchanged."
+  },
+  "local_development_kit": {
+    "status": "ready for checksum-verified packaging",
+    "name": "printed-turbine-development-kit-2026-09-11",
+    "verification": "printed-turbine-development-kit-2026-09-11-verification.json",
+    "upload_status": "not uploaded",
+    "scope": "Editable assembly, 11 native plates and 3MFs, four coupons and native four-part layout, 14 main and four coupon SVG/DXF pairs, official recipes, engineering notes, knowledge, curated live images and compact proof."
   }
 }

@@ -9,9 +9,13 @@ import {pendingEngineOperations} from './engine/activity';
 import { applicationExitBarrier } from './files/applicationExit';
 import { leaveDrawingWorkspace } from './drawing/document';
 import { applyView, type ViewRequest as CameraViewRequest } from './viewControl';
+import {acceptDrawingProjection, captureDrawingProjectionScope, holdAutomaticDrawingProjections, type CompletedDrawingProjection} from './drawing/projectionPresentation';
 
 let applying = false;
 interface ViewRequest extends CameraViewRequest { id: string; session_id: string;
+  drawing_projections?: CompletedDrawingProjection['drawing_projections'];
+  document_id?: string;
+  engine_revision?: number;
   ui?: Omit<UiAction, 'action'> & Omit<UiFileRequest, 'command'> & Omit<PresentationRequest, 'mode' | 'command'> & {
     action: UiAction['action'] | 'window' | 'file' | 'viewport' | 'presentation'; command?: string;
     pace_ms?: number; mode?: string; canvas?: 'viewport' | 'drawing'; gesture?: UiGesture;
@@ -24,13 +28,21 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
   if (applying || useAppStore.getState().engineKind !== 'tauri') return;
   applying = true;
   const releaseExit = applicationExitBarrier.hold();
+  const releaseProjections = holdAutomaticDrawingProjections();
   try {
     const before = useAppStore.getState();
     const document = before.document;
     const ownerRevision = presentation.documentVersion();
+    const projectionScope = captureDrawingProjectionScope();
     const ownsDocument = () => ownerRevision === presentation.documentVersion();
     const request = await invoke<ViewRequest | null>('mcp_session_bridge_control');
     if (!request) return;
+    if (request.drawing_projections) {
+      // The native query already wrote its receipt. This is a read-only
+      // linework handoff in the same poll, not another control to acknowledge.
+      if (ownsDocument()) acceptDrawingProjection(request as CompletedDrawingProjection, projectionScope);
+      return;
+    }
     const response: Record<string, unknown> = { request_id: request.id, session_id: request.session_id };
     try {
       // Native can deliver A's control just before Open and its IPC reply can
@@ -110,5 +122,5 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
     await invoke('mcp_session_bridge_control', { response });
   } catch (error) {
     console.debug('[sessionBridge] view request failed', error);
-  } finally { applying = false; releaseExit(); }
+  } finally { applying = false; releaseExit(); releaseProjections(); }
 }
