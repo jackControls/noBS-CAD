@@ -4,11 +4,11 @@ use nbcad_export::{self, MeshExportRequest, TriangleMesh};
 #[cfg(test)]
 use nbcad_solid::StepOccurrencePlacementDto;
 use nbcad_solid::{
-    iso_metric_thread_envelope, CombineOperation, ExtrudeOperation, HoleBottomStyle, HoleExtent,
-    HoleStyle, HoleThreadHand, HoleThreadRepresentation, KernelBodyDto, KernelCurveDto,
-    KernelEdgeDto, KernelFaceDto, KernelFeatureErrorDto, KernelJobDto, KernelProfileDto,
-    KernelSceneDto, KernelTransformDto, LoftContinuity, Point3Dto, RecomputePlanDto,
-    StepExportRequest, SweepOrientation, SweepTransition, ThreadFit,
+    iso_metric_thread_envelope, rounded_thread_diameters, CombineOperation, ExtrudeOperation,
+    HoleBottomStyle, HoleExtent, HoleStyle, HoleThreadHand, HoleThreadRepresentation,
+    KernelBodyDto, KernelCurveDto, KernelEdgeDto, KernelFaceDto, KernelFeatureErrorDto,
+    KernelJobDto, KernelProfileDto, KernelSceneDto, KernelTransformDto, LoftContinuity, Point3Dto,
+    RecomputePlanDto, StepExportRequest, SweepOrientation, SweepTransition, ThreadFit,
 };
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -82,6 +82,9 @@ mod ffi {
         drill_point_angle_deg: f64,
         hole_bottom_style: u8,
         thread_mode: u8,
+        thread_form: u8,
+        thread_corner_radius: f64,
+        thread_axial_clearance: f64,
         thread_nominal_diameter: f64,
         /// Finished ISO class diameters used by the B-rep, not tap-drill data.
         thread_major_diameter: f64,
@@ -926,6 +929,9 @@ fn empty_ffi_job(feature_id: u64, kind: u8) -> ffi::FfiJob {
         drill_point_angle_deg: 0.0,
         hole_bottom_style: 0,
         thread_mode: 0,
+        thread_form: 0,
+        thread_corner_radius: 0.0,
+        thread_axial_clearance: 0.0,
         thread_nominal_diameter: 0.0,
         thread_major_diameter: 0.0,
         thread_pitch_diameter: 0.0,
@@ -1127,7 +1133,22 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                     HoleThreadRepresentation::Modeled => 2,
                 };
                 job.thread_nominal_diameter = thread.nominal_diameter;
-                if let Some(limits) =
+                if let Some([major, pitch, minor]) =
+                    rounded_thread_diameters(thread, ThreadFit::Internal).map_err(OcctError)?
+                {
+                    let profile = thread.rounded_profile.as_ref().unwrap();
+                    job.thread_form = 1;
+                    job.thread_corner_radius = profile.corner_radius;
+                    job.thread_axial_clearance = profile.axial_clearance;
+                    job.thread_major_diameter = major;
+                    job.thread_pitch_diameter = pitch;
+                    job.thread_minor_diameter = minor;
+                    if source.diameter > minor + 1e-9 {
+                        return Err(OcctError(
+                            "predrill exceeds rounded thread minor diameter".into(),
+                        ));
+                    }
+                } else if let Some(limits) =
                     iso_metric_thread_envelope(thread, ThreadFit::Internal).map_err(OcctError)?
                 {
                     job.thread_major_diameter = limits.modeled_major;
@@ -1164,8 +1185,18 @@ fn to_ffi_job(job: &KernelJobDto) -> Result<ffi::FfiJob, OcctError> {
                 HoleThreadRepresentation::Modeled => 2,
             };
             job.thread_nominal_diameter = source.thread.nominal_diameter;
-            if let Some(limits) = iso_metric_thread_envelope(&source.thread, ThreadFit::External)
-                .map_err(OcctError)?
+            if let Some([major, pitch, minor]) =
+                rounded_thread_diameters(&source.thread, ThreadFit::External).map_err(OcctError)?
+            {
+                let profile = source.thread.rounded_profile.as_ref().unwrap();
+                job.thread_form = 1;
+                job.thread_corner_radius = profile.corner_radius;
+                job.thread_major_diameter = major;
+                job.thread_pitch_diameter = pitch;
+                job.thread_minor_diameter = minor;
+            } else if let Some(limits) =
+                iso_metric_thread_envelope(&source.thread, ThreadFit::External)
+                    .map_err(OcctError)?
             {
                 job.thread_major_diameter = limits.modeled_major;
                 job.thread_pitch_diameter = limits.modeled_pitch;
@@ -1936,6 +1967,7 @@ mod tests {
                         depth: None,
                         representation: HoleThreadRepresentation::Modeled,
                         tap_drill_designation: Some("5 mm".to_string()),
+                        rounded_profile: None,
                     },
                 }],
                 occurrences: Vec::new(),
@@ -2958,6 +2990,7 @@ mod tests {
                 depth: None,
                 representation: HoleThreadRepresentation::Modeled,
                 tap_drill_designation: Some("5 mm".to_string()),
+                rounded_profile: None,
             }),
         });
         let scene = kernel
@@ -3122,6 +3155,7 @@ mod tests {
                             depth: None,
                             representation: HoleThreadRepresentation::Modeled,
                             tap_drill_designation: None,
+                            rounded_profile: None,
                         },
                         flip: false,
                     }),
@@ -3224,6 +3258,7 @@ mod tests {
                             depth: None,
                             representation: HoleThreadRepresentation::Modeled,
                             tap_drill_designation: None,
+                            rounded_profile: None,
                         },
                         flip: false,
                     }),
@@ -3367,6 +3402,7 @@ mod tests {
                             depth: None,
                             representation: HoleThreadRepresentation::Modeled,
                             tap_drill_designation: None,
+                            rounded_profile: None,
                         },
                         flip: false,
                     }),
@@ -3594,6 +3630,7 @@ mod tests {
                     depth: Some(7.0),
                     representation: HoleThreadRepresentation::Modeled,
                     tap_drill_designation: Some("5 mm".to_string()),
+                    rounded_profile: None,
                 }),
             }),
         ];
@@ -3889,3 +3926,6 @@ mod tests {
         assert!(!scene.bodies[0].indices.is_empty());
     }
 }
+
+#[cfg(test)]
+mod rounded_thread_tests;

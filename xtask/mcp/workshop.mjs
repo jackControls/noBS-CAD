@@ -117,7 +117,9 @@ export async function workshop(call, empty, report) {
   });
   await check('swept handrail and edit',async()=>{
     await begin();await call('sketch_add_rectangle',{mode:'two_point',p1:{x:-2,y:-2},p2:{x:2,y:2},ctrl_held:true});await call('sketch_finish');
-    await call('sketch_begin',{plane:{type:'origin_plane',plane:'yz'}});await call('sketch_add_arc_center',{center:{x:0,y:20},start:{x:0,y:0},sweep:{x:20,y:20},ctrl_held:true});
+    // The XY profile must cross the path at its start. In YZ coordinates,
+    // this quarter-circle starts along +Z, normal to that profile.
+    await call('sketch_begin',{plane:{type:'origin_plane',plane:'yz'}});await call('sketch_add_arc_center',{center:{x:-20,y:0},start:{x:0,y:0},sweep:{x:-20,y:20},ctrl_held:true});
     const arc=(await active()).entities.find(e=>e.kind==='arc').id;await call('sketch_finish');
     await feature('solid_sweep',{profile:{sketch_name:'Sketch1',profile_index:0},path_sketch_name:'Sketch2',path_entity_ids:[arc],operation:'new_body',target_body_ids:[],guide_rail:null,orientation:'corrected_frenet',transition:'round_corner',force_c1:true},1);
   });

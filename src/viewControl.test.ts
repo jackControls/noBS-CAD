@@ -3,6 +3,8 @@ import { presentation } from './operationPlayback';
 import {
   getSessionCamera, notifySessionCameraChanged, registerSessionCamera, subscribeSessionCamera,
   unregisterSessionCamera, type CameraSnapshot, type ViewportCameraApi,
+  orbitCameraSnapshot,
+  CameraAnimationLifecycle,
 } from './components/viewport/cameraApi';
 
 function same(actual: unknown, expected: unknown, message: string) {
@@ -17,7 +19,7 @@ async function rejects(promise: Promise<unknown>, expected: RegExp) {
 }
 function fixture() {
   let time = 100;
-  let animating = false;
+  const animation = new CameraAnimationLifecycle();
   let animate = true;
   const timers = new Map<() => void, number>();
   const listeners = new Set<() => void>();
@@ -27,14 +29,22 @@ function fixture() {
   const owner = {document: state.document, activeProjectTabId: state.activeProjectTabId};
   const calls: unknown[] = [];
   const snapshot: CameraSnapshot = {position: [1, -1, 1], target: [0, 0, 0], up: [0, 0, 1]};
+  const start = (duration?: number) => {
+    const id = animation.begin();
+    if (!animate || duration === 0) animation.complete(id);
+    notifySessionCameraChanged();
+    return id;
+  };
   // Only the camera navigation contract is relevant to this lifecycle test.
   const camera = {
-    focus(target, duration, direction) { calls.push(['focus', target, duration, direction]); animating = animate; },
-    home(duration) { calls.push(['home', duration]); animating = animate; },
-    snapToDirection(direction, duration) { calls.push(['direction', direction, duration]); animating = animate; },
-    isAnimating() { return animating; },
+    focus(target, duration, direction) { calls.push(['focus', target, duration, direction]); return start(duration); },
+    home(duration) { calls.push(['home', duration]); return start(duration); },
+    snapToDirection(direction, duration) { calls.push(['direction', direction, duration]); return start(duration); },
+    orbit(degrees, duration) { calls.push(['orbit', degrees, duration]); return start(duration); },
+    isAnimating() { return animation.snapshot().status === 'running'; },
+    getAnimationState() { return animation.snapshot(); },
     getSnapshot() { return snapshot; },
-  } satisfies Pick<ViewportCameraApi, 'focus' | 'home' | 'snapToDirection' | 'isAnimating' | 'getSnapshot'>;
+  } satisfies Pick<ViewportCameraApi, 'focus' | 'home' | 'snapToDirection' | 'orbit' | 'isAnimating' | 'getAnimationState' | 'getSnapshot'>;
   const api = camera as ViewportCameraApi;
   const changed = () => { for (const listener of [...listeners]) listener(); };
   const control: ViewControl = {
@@ -57,7 +67,8 @@ function fixture() {
   return {state, owner, calls, request, api, control, snapshot,
     run: (override: Partial<ViewRequest> = {}) => applyView({...request, ...override}, owner, control),
     mount() { registerSessionCamera(api); },
-    finish() { animating = false; notifySessionCameraChanged(); },
+    finish() { animation.complete(animation.snapshot().id); notifySessionCameraChanged(); },
+    cancel() { animation.cancel(); notifySessionCameraChanged(); },
     instant() { animate = false; },
     change(update: Partial<ViewState>) { Object.assign(state, update); changed(); },
     time(value: number) {
@@ -96,6 +107,10 @@ async function main() {
     {view: '__proto__'}, {duration_ms: -1}, {duration_ms: 10_001}, {body_id: -1},
     {body_id: 2, component_id: 3}, {fit: 'yes' as unknown as boolean}, {expires_ms: NaN},
     {target: 'active_sketch' as const},
+    {view: 'current', orbit_degrees: NaN}, {view: 'current', orbit_degrees: Infinity},
+    {view: 'current', orbit_degrees: 361}, {view: 'current', orbit_degrees: -361},
+    {view: 'current', orbit_degrees: '120' as unknown as number},
+    {view: 'isometric', orbit_degrees: 120},
   ]) {
     const invalidRequest = fixture();
     await rejects(invalidRequest.run(invalid), /Unknown view|Invalid view|one view target|boolean|active sketch/);
@@ -190,6 +205,96 @@ async function main() {
   same(oriented.calls, [['direction', [0, -1, 0], 650], ['home', 650]],
     'Existing orientation, home and current-view semantics must stay intact');
   oriented.clean();
+
+  const orbit = fixture();
+  orbit.state.activeTab = 'solid';
+  orbit.mount();
+  const orbitRequest = {...orbit.request, view: 'current', orbit_degrees: 120, duration_ms: 3000};
+  const orbitResult = orbit.run(orbitRequest);
+  await Promise.resolve();
+  same(orbit.calls, [['focus', orbitRequest, 0, undefined], ['orbit', 120, 3000]],
+    'Optional framing happens before one continuous orbit, without interpolating the radius');
+  let orbitCompleted = false;
+  void orbitResult.then(() => { orbitCompleted = true; });
+  await Promise.resolve();
+  same(orbitCompleted, false, 'An orbit must not acknowledge before its animation completes');
+  orbit.finish();
+  same(await orbitResult, orbit.snapshot, 'Orbit returns the completed camera snapshot');
+  orbit.clean();
+
+  for (const interruption of ['cancel', 'replacement', 'instant replacement', 'replace after completion', 'input after completion']) {
+    const interruptedOrbit = fixture();
+    interruptedOrbit.state.activeTab = 'solid';
+    interruptedOrbit.mount();
+    const previousFeedback = presentation.snapshot().operation;
+    const pendingOrbit = interruptedOrbit.run({view: 'current', fit: false, orbit_degrees: 120, duration_ms: 3000});
+    await Promise.resolve();
+    if (interruption === 'cancel') interruptedOrbit.cancel();
+    else if (interruption === 'input after completion') {
+      interruptedOrbit.finish();
+      interruptedOrbit.cancel();
+    }
+    else {
+      if (interruption === 'replace after completion') interruptedOrbit.finish();
+      interruptedOrbit.api.home(interruption === 'instant replacement' ? 0 : 650);
+    }
+    await rejects(pendingOrbit, /Camera animation was cancelled|Camera animation was replaced/);
+    same(presentation.snapshot().operation, previousFeedback, 'Interrupted or replaced motion must never publish successful orbit feedback');
+    interruptedOrbit.finish();
+    await interruptedOrbit.run({view: 'current', fit: false});
+    interruptedOrbit.clean();
+  }
+
+  const lifecycle = new CameraAnimationLifecycle();
+  const abandonedId = lifecycle.begin();
+  lifecycle.cancel();
+  same(lifecycle.complete(abandonedId), false, 'Late completion must not turn a cancellation into success');
+  same(lifecycle.snapshot().status, 'cancelled', 'Cancellation remains distinguishable from completion');
+  const supersededId = lifecycle.begin();
+  const replacementId = lifecycle.begin();
+  same(lifecycle.complete(supersededId), false, 'An old animation cannot complete its replacement');
+  same(lifecycle.snapshot(), {id: replacementId, status: 'running'}, 'Replacement retains its own pending completion');
+  same(lifecycle.complete(replacementId), true, 'Only the active animation can finish');
+  lifecycle.cancel();
+  if (lifecycle.snapshot().id === replacementId) throw new Error('Manual input after completion must invalidate its pending receipt');
+
+  const orbitWithoutFit = fixture();
+  orbitWithoutFit.state.activeTab = 'solid';
+  orbitWithoutFit.instant();
+  orbitWithoutFit.mount();
+  await orbitWithoutFit.run({view: 'current', fit: false, orbit_degrees: -360});
+  same(orbitWithoutFit.calls, [['orbit', -360, 650]], 'Existing current framing can orbit without an extra camera move');
+  orbitWithoutFit.clean();
+
+  // Geometric properties, not an endpoint-only comparison: a full turn must
+  // visibly leave home and preserve radius/elevation at every intermediate pose.
+  const start: CameraSnapshot = {position: [12, -4, 19], target: [2, 3, 5], up: [1, 2, 3]};
+  const initial = JSON.stringify(start);
+  const offset = (pose: CameraSnapshot) => pose.position.map((value, index) => value - pose.target[index]);
+  const radius = Math.hypot(...offset(start));
+  const height = (pose: CameraSnapshot) => offset(pose).reduce((sum, value, index) => sum + value * start.up[index], 0);
+  const near = (actual: number, expected: number, message: string) => {
+    if (Math.abs(actual - expected) > 1e-10) throw new Error(message);
+  };
+  for (const degrees of [-360, -120, 0, 120, 360]) {
+    for (let frame = 0; frame <= 90; frame++) {
+      const pose = orbitCameraSnapshot(start, degrees, frame / 90);
+      near(Math.hypot(...offset(pose)), radius, 'Orbit radius must remain constant');
+      near(height(pose), height(start), 'Orbit elevation about an arbitrary up axis must remain constant');
+      same(pose.target, start.target, 'Orbit target must remain fixed');
+      same(pose.up, start.up, 'Orbit must not roll the camera');
+    }
+  }
+  const quarterTurn = orbitCameraSnapshot(start, 360, .25);
+  if (Math.hypot(...quarterTurn.position.map((value, index) => value - start.position[index])) < 1) {
+    throw new Error('A 360-degree orbit must move through intermediate viewpoints');
+  }
+  const fullTurn = orbitCameraSnapshot(start, 360, 1);
+  fullTurn.position.forEach((value, index) => near(value, start.position[index], 'A full orbit must return home'));
+  const clockwise: CameraSnapshot = {position: [5, 0, 2], target: [0, 0, 0], up: [0, 0, 1]};
+  near(orbitCameraSnapshot(clockwise, 90, 1).position[1], 5, 'Positive angles must have a defined direction');
+  near(orbitCameraSnapshot(clockwise, -90, 1).position[1], -5, 'Negative angles must reverse direction');
+  same(JSON.stringify(start), initial, 'Sampling an orbit must not mutate its starting pose');
 
   const first = fixture();
   const replacement = fixture();

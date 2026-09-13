@@ -1,9 +1,9 @@
 ---
 type: Concept
 title: MCP harness
-description: Current local MCP behavior and proposed UI co-link milestones.
+description: Local headless and live-document MCP routing, engineering resources and replay boundaries.
 status: stable
-updated: 2026-08-21
+updated: 2026-09-11
 ---
 
 # MCP harness
@@ -14,17 +14,22 @@ automation and testing (no required cloud).
 Canonical notes: [MCP harness](../../docs/mcp-harness.md).
 Proposals: [proposed architecture](../../docs/proposed-architecture.md).
 
-## Honest today
+## Development branch
 
-| Fact | Meaning |
-|------|---------|
-| Soft focus-scoped tools, `listChanged: true` | Guidance, not a jail. Out-of-focus tools stay callable. [#10](https://github.com/jackControls/noBS-CAD/issues/10) |
-| Independent document per MCP process | **Fork of truth** vs the visible UI. `cad_submit` is UI-owned apply (inbox); still not in-process shared memory; `model.json` writeback forbidden. [#11](https://github.com/jackControls/noBS-CAD/issues/11) |
-| Same Rust planner + native OCCT as desktop | Shared crates; separate instances |
-| No multi-window routing | One process, one document. [#12](https://github.com/jackControls/noBS-CAD/issues/12) |
-| No in-the-loop UI+MCP on the same doc | Blocked on co-link. [#15](https://github.com/jackControls/noBS-CAD/issues/15) |
+- Soft focus-scoped tools advertise `listChanged: true`; out-of-focus tools stay callable.
+- An unattached MCP process owns a headless document using the shared Rust planner
+  and native OCCT. It does not silently edit a visible desktop document.
+- Discover live windows with `cad_list_sessions`, attach explicitly, submit
+  changes through the owning UI's inbox and await their apply/publication receipt.
+  Never write session `model.json` directly or reuse a retired session as a new owner.
+- `cad_interface` supplies guarded application, UI and script control; use its
+  inspected controls and returned state rather than a second UI-specific model API.
+- Standard `resources/list` and `resources/read` expose this offline Markdown
+  knowledge bundle. Read `nbcad://knowledge/index.md`, then select concepts by
+  their titles/descriptions before designing; guidance is not an execution tool.
 
-Use MCP as an engine/automation probe until UI co-link exists.
+These notes describe the branch that bundles them. Older snapshots may predate
+live routing or resource discovery; inspect the running server's capabilities.
 
 `solid_import_step` imports a STEP file as a **reference solid** (dumb body).
 `cad_script` dumps the successful **forward** MCP tool sequence for this
@@ -34,12 +39,6 @@ with `cad_load_project_model` + loaded `model_json` (refresh replaces the
 baseline). We do **not** reverse-engineer feature history from STEP B-rep.
 `cad_compare_solids` summarizes existing `solid_scene` bbox/mesh counts so a
 rebuilt history can be checked against that imported reference.
-
-## Proposed next
-
-1. Attach MCP to **one** live UI document ([#11](https://github.com/jackControls/noBS-CAD/issues/11))
-2. Multi-window routing ([#12](https://github.com/jackControls/noBS-CAD/issues/12))
-3. In-the-loop browser+MCP CI ([#15](https://github.com/jackControls/noBS-CAD/issues/15))
 
 See also the [MCP playbook](../../docs/agent-mcp.md) and
 [server documentation](../../mcp-server/README.md).

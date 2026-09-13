@@ -2581,6 +2581,9 @@ export class BrowserOcctKernel {
           continue;
         }
         if (operation.kind === 'hole') {
+          if (operation.job.thread?.standard === 'custom_trapezoidal') {
+            throw new Error('Custom rounded trapezoidal threads require the native desktop kernel');
+          }
           const target = this.bodies.get(operation.job.target_body_id);
           if (!target) throw new Error('Hole target body is missing');
           const result = applyHole(this.oc, target, operation.job);
@@ -2589,6 +2592,9 @@ export class BrowserOcctKernel {
           continue;
         }
         if (operation.kind === 'external_thread') {
+          if (operation.job.thread.standard === 'custom_trapezoidal') {
+            throw new Error('Custom rounded trapezoidal threads require the native desktop kernel');
+          }
           const target = this.bodies.get(operation.job.target_body_id);
           if (!target) throw new Error('External Thread target body is missing');
           if (operation.job.thread.representation === 'simplified') continue;

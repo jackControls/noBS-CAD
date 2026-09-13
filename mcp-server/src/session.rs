@@ -12,8 +12,8 @@
 //! Session ids must be UUID v4 strings.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -95,6 +95,18 @@ fn validate_presentation(arguments: &Value) -> Result<(), String> {
 }
 
 fn validate_view(arguments: &Value) -> Result<(), String> {
+    if let Some(angle) = arguments.get("orbit_degrees") {
+        if !angle
+            .as_f64()
+            .is_some_and(|angle| angle.is_finite() && (-360.0..=360.0).contains(&angle))
+            || arguments.get("view").is_some_and(|view| view != "current")
+        {
+            return Err(
+                "view orbit_degrees requires current view and a finite angle from -360 to 360"
+                    .into(),
+            );
+        }
+    }
     if let Some(duration) = arguments.get("duration_ms") {
         if !duration.as_u64().is_some_and(|duration| duration <= 10_000) {
             return Err("view duration_ms must be an integer from 0 to 10000".into());
@@ -232,9 +244,23 @@ fn request_control(
     );
     let request_name = format!("controls/{id}.request.json");
     let result_name = format!("controls/{id}.result.json");
-    // Effective camera motion is capped at ten seconds by the shared
-    // presentation controller, including a slow playback speed.
-    let lifetime = if ui || arguments.get("duration_ms").is_some() {
+    // File reconstruction and precise native drawing projection can exceed an
+    // ordinary control's deadline. The caller and desktop must retain the same
+    // bounded request while that work finishes, including a document replacement.
+    // Camera motion remains capped at ten seconds by the presentation controller.
+    let slow_drawing = query.as_ref().is_some_and(|query| {
+        matches!(
+            query["method"].as_str(),
+            Some("drawing_projection" | "drawing_export")
+        )
+    });
+    let lifetime = if slow_drawing
+        || (ui
+            && arguments["action"] == "file"
+            && matches!(arguments["command"].as_str(), Some("open" | "save")))
+    {
+        300_000
+    } else if ui || arguments.get("duration_ms").is_some() {
         30_000
     } else {
         5_000
@@ -244,7 +270,13 @@ fn request_control(
         "expires_ms":now_ms()+lifetime,
     });
     if !ui {
-        for field in ["duration_ms", "target", "body_id", "component_id"] {
+        for field in [
+            "duration_ms",
+            "target",
+            "body_id",
+            "component_id",
+            "orbit_degrees",
+        ] {
             if let Some(value) = arguments.get(field) {
                 request[field] = value.clone();
             }
@@ -1175,93 +1207,28 @@ pub fn not_attached_error() -> String {
     })
 }
 
-fn parse_inbox_seq(name: &str) -> Option<u64> {
-    name.strip_suffix(".json")?.parse().ok()
-}
-
-fn inbox_seqs_in(dir: &std::path::Path) -> Vec<u64> {
-    let mut seqs = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else {
-        return seqs;
-    };
-    for entry in entries.flatten() {
-        if !entry
-            .file_type()
-            .map(|kind| kind.is_file())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if let Some(seq) = parse_inbox_seq(&entry.file_name().to_string_lossy()) {
-            seqs.push(seq);
-        }
-    }
-    seqs.sort_unstable();
-    seqs
-}
-
-/// Next inbox sequence (1-based), considering pending, applied, and failed ops.
-pub fn next_inbox_seq(session_id: &str) -> Result<u64, String> {
-    require_valid_session_id(session_id)?;
-    let root = session_dir().join(session_id);
-    let inbox = root.join("inbox");
-    let mut max = 0u64;
-    for seq in inbox_seqs_in(&inbox) {
-        max = max.max(seq);
-    }
-    for seq in inbox_seqs_in(&inbox.join("applied")) {
-        max = max.max(seq);
-    }
-    for seq in inbox_seqs_in(&inbox.join("failed")) {
-        max = max.max(seq);
-    }
-    Ok(max.saturating_add(1))
-}
-
 /// Pending inbox seqs, lowest first.
 pub fn pending_inbox_seqs(session_id: &str) -> Result<Vec<u64>, String> {
     require_valid_session_id(session_id)?;
-    Ok(inbox_seqs_in(&session_dir().join(session_id).join("inbox")))
+    crate::inbox::sequences(&session_dir().join(session_id).join("inbox"))
+        .map_err(|error| format!("could not read pending inbox: {error}"))
 }
 
-/// Write `inbox/<seq>.json` with an exclusive sequence reservation.
+/// Publish a complete `inbox/<seq>.json` with exclusive sequence allocation.
 ///
-/// `next_inbox_seq` is only a hint. The durable allocation is `create_new` on
-/// `inbox/<seq>.json` so two `cad_submit` callers cannot share a sequence or
-/// overwrite each other while both report success. On collision the loser
-/// retries the next free sequence.
+/// Numeric paths are visible to desktop polling, so never create one before
+/// its JSON is complete. An OS publisher lock protects allocation/publication;
+/// the reader remains lock-free and rejects genuinely malformed commands.
 pub fn write_inbox_op(session_id: &str, op: &InboxOp) -> Result<u64, String> {
     require_valid_session_id(session_id)?;
     require_open_session(session_id)?;
     let body = serde_json::to_string_pretty(&op.to_json())
         .map_err(|error| format!("encode inbox op: {error}"))?;
-    const MAX_ATTEMPTS: u32 = 1024;
-    for _ in 0..MAX_ATTEMPTS {
-        let seq = next_inbox_seq(session_id)?;
-        let path = session_path(session_id, &format!("inbox/{seq}.json"))?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        match exclusive_create_file(&path, &body) {
-            Ok(()) => return Ok(seq),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!("could not create inbox/{seq}.json: {error}"));
-            }
-        }
-    }
-    Err("could not reserve an exclusive inbox sequence".to_string())
-}
-
-fn exclusive_create_file(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    let result = file
-        .write_all(content.as_bytes())
-        .and_then(|_| file.sync_all());
-    if result.is_err() {
-        let _ = fs::remove_file(path);
-    }
-    result
+    crate::inbox::publish(
+        &session_dir().join(session_id).join("inbox"),
+        body.as_bytes(),
+    )
+    .map_err(|error| format!("could not publish inbox command: {error}"))
 }
 
 #[cfg(test)]
@@ -1419,11 +1386,18 @@ fn read_optional_string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn parse_receipt_file(path: &Path) -> Value {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|body| serde_json::from_str(&body).ok())
-        .unwrap_or(json!({}))
+fn parse_receipt_file(path: &Path) -> Result<Value, String> {
+    let body = fs::read_to_string(path)
+        .map_err(|error| format!("could not read inbox receipt {}: {error}", path.display()))?;
+    let parsed: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid inbox receipt {}: {error}", path.display()))?;
+    if !parsed.is_object() {
+        return Err(format!(
+            "invalid inbox receipt {}: expected object",
+            path.display()
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Observe whether `inbox/<seq>.json` was archived (`applied/`) or dead-lettered
@@ -1433,7 +1407,13 @@ pub fn inbox_op_receipt(session_id: &str, seq: u64) -> Result<InboxReceipt, Stri
     require_valid_session_id(session_id)?;
     let applied = session_path(session_id, &format!("inbox/applied/{seq}.json"))?;
     if applied.is_file() {
-        let parsed = parse_receipt_file(&applied);
+        let parsed = parse_receipt_file(&applied)?;
+        let base_generation = read_optional_u64(&parsed, "base_generation").ok_or_else(|| {
+            format!("invalid applied inbox receipt {seq}: missing base_generation")
+        })?;
+        let name = read_optional_string(&parsed, "name")
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| format!("invalid applied inbox receipt {seq}: missing name"))?;
         let replacement_session_id = if parsed["project_replaced"] == true {
             if parsed["previous_session_id"] != session_id
                 || !matches!(
@@ -1456,14 +1436,14 @@ pub fn inbox_op_receipt(session_id: &str, seq: u64) -> Result<InboxReceipt, Stri
             None
         };
         return Ok(InboxReceipt::Applied {
-            base_generation: read_optional_u64(&parsed, "base_generation").unwrap_or(0),
-            name: read_optional_string(&parsed, "name"),
+            base_generation,
+            name: Some(name),
             replacement_session_id,
         });
     }
     let failed = session_path(session_id, &format!("inbox/failed/{seq}.json"))?;
     if failed.is_file() {
-        let parsed = parse_receipt_file(&failed);
+        let parsed = parse_receipt_file(&failed)?;
         return Ok(InboxReceipt::Failed {
             error: read_optional_string(&parsed, "error"),
             name: read_optional_string(&parsed, "name"),
@@ -1831,8 +1811,14 @@ pub fn not_attached_status_json() -> Value {
 pub fn last_apply_receipt(session_id: &str) -> Result<Option<Value>, String> {
     require_valid_session_id(session_id)?;
     let inbox = session_dir().join(session_id).join("inbox");
-    let max_applied = inbox_seqs_in(&inbox.join("applied")).into_iter().max();
-    let max_failed = inbox_seqs_in(&inbox.join("failed")).into_iter().max();
+    let max_applied = crate::inbox::sequences(&inbox.join("applied"))
+        .map_err(|error| format!("could not read applied inbox receipts: {error}"))?
+        .into_iter()
+        .max();
+    let max_failed = crate::inbox::sequences(&inbox.join("failed"))
+        .map_err(|error| format!("could not read failed inbox receipts: {error}"))?
+        .into_iter()
+        .max();
     let seq = match (max_applied, max_failed) {
         (Some(a), Some(f)) => a.max(f),
         (Some(a), None) => a,
@@ -2064,6 +2050,8 @@ mod tests {
             json!({"target":"active_sketch"}),
             json!({"body_id":5,"duration_ms":0}),
             json!({"component_id":3,"duration_ms":10000}),
+            json!({"view":"current","orbit_degrees":360,"duration_ms":3000,"fit":true}),
+            json!({"orbit_degrees":-120.5}),
         ] {
             validate_view(&arguments).unwrap();
         }
@@ -2073,6 +2061,11 @@ mod tests {
             json!({"component_id":"3"}),
             json!({"body_id":1,"component_id":3}),
             json!({"duration_ms":10001}),
+            json!({"orbit_degrees":361}),
+            json!({"orbit_degrees":-361}),
+            json!({"orbit_degrees":"120"}),
+            json!({"orbit_degrees":null}),
+            json!({"view":"isometric","orbit_degrees":120}),
         ] {
             assert!(validate_view(&arguments).is_err(), "{arguments}");
         }
@@ -2107,10 +2100,11 @@ mod tests {
                         let body: Value =
                             serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
                                 .unwrap();
-                        assert_eq!(body["view"], "top");
+                        assert_eq!(body["view"], "current");
                         assert_eq!(body["fit"], true);
                         assert_eq!(body["body_id"], 7);
                         assert_eq!(body["duration_ms"], 450);
+                        assert_eq!(body["orbit_degrees"], 120);
                         let result =
                             ui_dir.join(format!("{}.result.json", body["id"].as_str().unwrap()));
                         let temporary = result.with_extension("tmp");
@@ -2128,7 +2122,7 @@ mod tests {
             panic!("UI did not receive view request");
         });
         let result = request_ui(
-            &json!({"action":"view","session_id":id,"view":"top","fit":true,"body_id":7,"duration_ms":450}),
+            &json!({"action":"view","session_id":id,"view":"current","fit":true,"body_id":7,"duration_ms":450,"orbit_degrees":120}),
             None,
         )
         .unwrap();
@@ -2149,6 +2143,82 @@ mod tests {
             std::env::remove_var("NBCAD_SESSION_DIR");
         }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn slow_drawing_queries_retain_the_live_result() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let id = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-slow-drawing-{id}"));
+        let previous = std::env::var_os("NBCAD_SESSION_DIR");
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let mut results = Vec::new();
+        for method in ["drawing_projection", "drawing_export"] {
+            write_session(
+                &id,
+                "heartbeat.json",
+                &json!({"updated_ms":now_ms(),"generation":1}).to_string(),
+            )
+            .unwrap();
+            let controls = dir.join(&id).join("controls");
+            let responder = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                while std::time::Instant::now() < deadline {
+                    if let Ok(entries) = fs::read_dir(&controls) {
+                        for entry in entries.flatten() {
+                            if !entry
+                                .file_name()
+                                .to_string_lossy()
+                                .ends_with(".request.json")
+                            {
+                                continue;
+                            }
+                            let request: Value =
+                                serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
+                                    .unwrap();
+                            assert_eq!(request["sketch_query"]["method"], method);
+                            // Precise helical hidden-line removal can exceed a normal
+                            // control's deadline. Exercise the real transport wait.
+                            std::thread::sleep(std::time::Duration::from_secs(32));
+                            let still_pending = entry.path().is_file()
+                                && request["expires_ms"].as_u64().unwrap() > now_ms();
+                            if still_pending {
+                                let result = controls.join(format!(
+                                    "{}.result.json",
+                                    request["id"].as_str().unwrap()
+                                ));
+                                let temporary = result.with_extension("tmp");
+                                fs::write(&temporary, json!({
+                                    "status":"applied", "value":{"method":method,"content":"finished"}
+                                }).to_string()).unwrap();
+                                fs::rename(temporary, result).unwrap();
+                            }
+                            return still_pending;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                false
+            });
+            let result = request_engine_query(&id, method, "{}");
+            results.push((method, result, responder.join().unwrap()));
+        }
+        if let Some(previous) = previous {
+            std::env::set_var("NBCAD_SESSION_DIR", previous);
+        } else {
+            std::env::remove_var("NBCAD_SESSION_DIR");
+        }
+        let _ = fs::remove_dir_all(&dir);
+        for (method, result, still_pending) in results {
+            assert!(
+                still_pending,
+                "{method} expired while its native query was running"
+            );
+            assert_eq!(
+                result.unwrap(),
+                json!({"method":method,"content":"finished"})
+            );
+        }
     }
 
     fn write_process_lease(root: &Path, process_id: &str, updated_ms: u64, windows: Value) {
@@ -3318,6 +3388,72 @@ mod tests {
         assert!(applied.op.session_id.is_none());
         assert!(applied.op.window_id.is_none());
 
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_inbox_receipts_cannot_acknowledge_published_work() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-corrupt-receipt-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_session(
+            &unique,
+            "heartbeat.json",
+            &json!({
+                "updated_ms": now_ms(), "generation": 2, "published_generation": 2,
+                "model_generation": 2, "session_id": unique,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        // Even a fresh, fully published snapshot cannot make missing command
+        // metadata or a corrupt receipt evidence that this operation applied.
+        for invalid in [
+            "",
+            "{\"name\":",
+            "null",
+            "[]",
+            "{}",
+            r#"{"name":"solid_fillet"}"#,
+            r#"{"base_generation":1}"#,
+            r#"{"name":"","base_generation":1}"#,
+            r#"{"name":42,"base_generation":1}"#,
+            r#"{"name":"solid_fillet","base_generation":-1}"#,
+            r#"{"name":"solid_fillet","base_generation":"1"}"#,
+        ] {
+            write_session(&unique, "inbox/applied/1.json", invalid).unwrap();
+            assert!(
+                inbox_op_receipt(&unique, 1).is_err(),
+                "accepted {invalid:?}"
+            );
+            assert!(
+                await_inbox_apply(&unique, 1, 0, 1).is_err(),
+                "acknowledged {invalid:?}"
+            );
+        }
+        assert!(parse_receipt_file(&dir.join("missing.json")).is_err());
+        for invalid in ["", "{", "null", "[]"] {
+            write_session(&unique, "inbox/failed/2.json", invalid).unwrap();
+            assert!(inbox_op_receipt(&unique, 2).is_err());
+        }
+        // A dead-letter for malformed input legitimately has no command name
+        // or generation. Preserve that failure instead of hiding its reason.
+        write_session(
+            &unique,
+            "inbox/failed/2.json",
+            r#"{"error":"invalid inbox JSON"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            inbox_op_receipt(&unique, 2).unwrap(),
+            InboxReceipt::Failed {
+                error: Some("invalid inbox JSON".into()),
+                name: None,
+                base_generation: None,
+            }
+        );
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }

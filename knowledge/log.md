@@ -9,6 +9,12 @@
   (Rust `nbcad-help` + in-process Tantivy; Node help scripts transitional).
 - **Validation**: `check:help-sources` + `build:help-index` (to be replaced by
   Rust `nbcad-help check|export` — see ADR).
+- **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone do not establish printability.
+- **Update**: Added small-generator/rotor/load matching and bearing/axial-retention guidance, with manufacturer and experimental references. Both use the existing automatic MCP resource inventory.
+- **Update**: Added sourced gear-identification/pair-design and additive-workholding guidance.
+- **Integration**: Native MCP resources expose the same Markdown corpus offline; no separate knowledge store or modeling tool.
+- **Maintenance**: Updated MCP and export concepts to distinguish implemented development-branch behavior from physical qualification.
+- **Validation**: Existing OKF/link checks and native resource discovery/read/error tests.
 
 ## 2026-07-29
 

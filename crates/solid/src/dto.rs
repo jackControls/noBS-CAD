@@ -487,6 +487,7 @@ impl Default for HoleBottomStyle {
 pub enum HoleThreadStandard {
     IsoMetric,
     UnifiedInch,
+    CustomTrapezoidal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -496,6 +497,7 @@ pub enum HoleThreadSeries {
     MetricFine,
     Unc,
     Unf,
+    Rounded,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -512,6 +514,18 @@ pub enum HoleThreadRepresentation {
     #[default]
     Modeled,
     Simplified,
+}
+
+/// Explicit custom single-start 30-degree profile, not an ISO Tr tolerance class.
+/// Both mating parts use identical values. Only the internal thread receives
+/// the radial enlargement and total axial groove enlargement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoundedThreadProfile {
+    pub radial_depth: f64,
+    pub corner_radius: f64,
+    pub radial_clearance: f64,
+    pub axial_clearance: f64,
 }
 
 /// Manufacturing and geometry data for a screw thread.
@@ -548,6 +562,8 @@ pub struct HoleThreadDto {
     /// Optional shop drill label such as `5.0 mm` or `#7`.
     #[serde(default)]
     pub tap_drill_designation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rounded_profile: Option<RoundedThreadProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

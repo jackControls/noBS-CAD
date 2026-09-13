@@ -575,10 +575,18 @@ export interface SolidChamferDefinitionDto extends SolidChamferRequest {
 export type HoleExtent = { type: 'distance'; depth: number } | { type: 'through_all' };
 export type HoleStyle = 'simple' | 'counterbore' | 'countersink';
 export type HoleBottomStyle = 'flat' | 'drill_point';
-export type HoleThreadStandard = 'iso_metric' | 'unified_inch';
-export type HoleThreadSeries = 'metric_coarse' | 'metric_fine' | 'unc' | 'unf';
+export type HoleThreadStandard = 'iso_metric' | 'unified_inch' | 'custom_trapezoidal';
+export type HoleThreadSeries = 'metric_coarse' | 'metric_fine' | 'unc' | 'unf' | 'rounded';
 export type HoleThreadHand = 'right' | 'left';
 export type HoleThreadRepresentation = 'modeled' | 'simplified';
+
+/** Custom native thread profile; clearances enlarge the female cavity only. */
+export interface RoundedThreadProfileDto {
+  radial_depth: number;
+  corner_radius: number;
+  radial_clearance: number;
+  axial_clearance: number;
+}
 
 export interface HoleThreadDto {
   standard: HoleThreadStandard;
@@ -595,6 +603,7 @@ export interface HoleThreadDto {
   depth: number | null;
   representation: HoleThreadRepresentation;
   tap_drill_designation: string | null;
+  rounded_profile?: RoundedThreadProfileDto | null;
 }
 
 export interface HolePositionDto {

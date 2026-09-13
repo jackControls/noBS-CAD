@@ -123,6 +123,8 @@ import {
 } from '../../drawing/chamfer';
 import { exportManufacturingProfileDxf, printActiveDrawing } from '../../drawing/export';
 import { drawingProjectionRequestForView, drawingSourceAnchorPoint, drawingSectionSourceExtent } from '../../drawing/projection';
+import {captureDrawingProjectionScope, isDrawingProjectionScopeCurrent, observeDrawingProjection} from '../../drawing/projectionPresentation';
+import {presentation} from '../../operationPlayback';
 import {
   defaultDrawingFormat,
   defaultDrawingSheetStyle,
@@ -1349,7 +1351,8 @@ function ProjectedDrawingView({
 }) {
   const scene = useAppStore((state) => state.solidScene);
   const globallySelectedViewId = useAppStore((state) => state.selectedDrawingViewId);
-  const [projection, setProjection] = useState<DrawingProjectionDto | null>(null);
+  const [projected, setProjection] = useState<{value: DrawingProjectionDto; requestKey: string;
+    scope: ReturnType<typeof captureDrawingProjectionScope>} | null>(null);
   const [error, setError] = useState<string | null>(null);
   const drag = useRef<{ pointerId: number; start: [number, number]; origin: [number, number] } | null>(null);
   const [dragPosition, setDragPosition] = useState<[number, number] | null>(null);
@@ -1357,6 +1360,9 @@ function ProjectedDrawingView({
   const [hoveredCircleKey, setHoveredCircleKey] = useState<string | null>(null);
   const [hoveredCenterlineEdgeKey, setHoveredCenterlineEdgeKey] = useState<string | null>(null);
   const assemblySolution = useAppStore((state) => state.assemblySolution);
+  const projectDocument = useAppStore((state) => state.document);
+  const projectTab = useAppStore((state) => state.activeProjectTabId);
+  const documentVersion = presentation.documentVersion();
   let requestError: string | null = null;
   let projectionRequest: ReturnType<typeof drawingProjectionRequestForView> | null = null;
   try {
@@ -1365,17 +1371,19 @@ function ProjectedDrawingView({
     requestError = reason instanceof Error ? reason.message : String(reason);
   }
   const requestKey = JSON.stringify(projectionRequest) + (requestError ?? '');
+  // Suppress predecessor pixels during the render itself, before the effect
+  // cleanup runs for a replacement document, changed pose or changed request.
+  const projection = projected?.requestKey === requestKey && isDrawingProjectionScopeCurrent(projected.scope)
+    ? projected.value : null;
 
   useEffect(() => {
-    let cancelled = false;
     setError(null);
     setProjection(null);
     if (!projectionRequest) return;
-    void getEngine().then((engine) => engine.drawingProjection(projectionRequest))
-      .then((result) => { if (!cancelled) setProjection(result); })
-      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); });
-    return () => { cancelled = true; };
-  }, [requestKey, scene, assemblySolution]);
+    const scope = captureDrawingProjectionScope();
+    return observeDrawingProjection(projectionRequest, value => setProjection({value, scope, requestKey}),
+      reason => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [requestKey, scene, assemblySolution, projectDocument, projectTab, documentVersion]);
 
   const style = useDrawingStyle();
   const visibleLine = drawingSvgLineAttributes(style, 'visible');

@@ -68,8 +68,8 @@ jobs:
                 reason: "application or native source",
               },
               {
-                pattern: /^(mcp-server|interface|examples\/scripts)\//,
-                reason: "embedded MCP library, interface catalog, or native script",
+                pattern: /^(mcp-server|knowledge|interface|examples\/scripts)\//,
+                reason: "embedded MCP library or knowledge, interface catalog, or native script",
               },
               {
                 pattern: /^\.github\/actions\//,

@@ -13,6 +13,7 @@ pub fn is_live_engine_query(method: &str) -> bool {
     matches!(
         method,
         "active_sketch"
+            | "project_visibility"
             | "drawing_export"
             | "drawing_projection"
             | "assembly_document"
@@ -53,6 +54,12 @@ pub struct MutateSpec {
 
 /// Every modeling mutate that `cad_submit` may enqueue and the UI inbox may apply.
 pub static MUTATES: &[MutateSpec] = &[
+    MutateSpec {
+        name: "project_set_visibility",
+        engine_method: "project_set_visibility",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
     MutateSpec {
         name: "construction_set_visibility",
         engine_method: "construction_set_visibility",

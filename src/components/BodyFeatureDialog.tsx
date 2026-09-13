@@ -43,9 +43,15 @@ import {
   defaultThreadPreset,
   presetsForSeries,
   threadDtoFromPreset,
+  initialRoundedThreadProfile,
+  roundedThreadInputs,
+  roundedThreadInputsFinite,
+  roundedThreadProfile,
+  type RoundedThreadInputs,
 } from '../lib/threadStandards';
 import { isStraightSolidEdge } from '../solidEdgeEligibility';
 import { DimensionInput } from './DimensionInput';
+import { RoundedThreadFields } from './RoundedThreadFields';
 import { ViewportSelectionField } from './ViewportSelectionField';
 import { MoveCopyManipulator } from './viewport/MoveCopyManipulator';
 
@@ -555,6 +561,7 @@ export function BodyFeatureDialog() {
   );
   const [threadPitch, setThreadPitch] = useState(String(initialThreadPreset.pitchMm));
   const [threadClass, setThreadClass] = useState('6g');
+  const [threadRoundedProfile, setThreadRoundedProfile] = useState<RoundedThreadInputs | null>(null);
   const [threadDesignation, setThreadDesignation] = useState(
     initialThreadPreset.designation.replace(/6H$/, '6g'),
   );
@@ -745,6 +752,16 @@ export function BodyFeatureDialog() {
           }
         }
         if (!edit) {
+          if (initializeSelection && dialog.kind === 'external_thread'
+            && threadStandard === 'custom_trapezoidal') {
+            setThreadStandard(initialThreadPreset.standard);
+            setThreadSeries(initialThreadPreset.series);
+            setThreadPresetId(initialThreadPreset.id);
+            setThreadRoundedProfile(null);
+            setThreadClass('6g');
+            setThreadDesignation(initialThreadPreset.designation.replace(/6H$/, '6g'));
+            threadFaceKeyRef.current = null;
+          }
           if (dialog.kind === 'move_copy') {
             if (initializeSelection) {
               setMoveMode('free');
@@ -845,13 +862,14 @@ export function BodyFeatureDialog() {
           setThreadNominalDiameter(String(edit.thread.nominal_diameter));
           setThreadPitch(String(edit.thread.pitch));
           setThreadClass(edit.thread.class);
+          setThreadRoundedProfile(edit.thread.rounded_profile ? roundedThreadInputs(edit.thread.rounded_profile) : null);
           setThreadDesignation(edit.thread.designation);
           setThreadHand(edit.thread.hand);
           setThreadRepresentation(edit.thread.representation);
           setThreadFullLength(edit.thread.depth === null);
           setThreadDepth(String(edit.thread.depth ?? 10));
           setThreadFlip(edit.flip);
-          threadFaceKeyRef.current = `${edit.body_id}:${edit.face_id}`;
+          threadFaceKeyRef.current = `${edit.body_id}:${edit.face_id}:${edit.thread.standard}`;
           syncFaces(edit.body_id, [edit.face_id]);
         } else if (edit.type === 'move_copy') {
           setMoveObjectType('bodies');
@@ -1112,11 +1130,15 @@ export function BodyFeatureDialog() {
     const targetBody = bodies.find((candidate) => candidate.id === bodyId);
     const face = targetBody?.faces.find((candidate) => candidate.id === faceId);
     if (!face?.cylinder) return;
-    const key = `${bodyId}:${faceId}`;
+    const key = `${bodyId}:${faceId}:${threadStandard}`;
     if (threadFaceKeyRef.current === key) return;
     threadFaceKeyRef.current = key;
 
     const diameter = face.cylinder.radius * 2;
+    if (threadStandard === 'custom_trapezoidal') {
+      setThreadNominalDiameter(String(Number(diameter.toFixed(6))));
+      return;
+    }
     const tolerance = Math.max(0.01, diameter * 0.002);
     const matches = THREAD_PRESETS.filter(
       (preset) => Math.abs(preset.nominalDiameterMm - diameter) <= tolerance,
@@ -1136,6 +1158,7 @@ export function BodyFeatureDialog() {
       setThreadNominalDiameter(String(preset.nominalDiameterMm));
       setThreadPitch(String(preset.pitchMm));
       setThreadClass(thread.class);
+      setThreadRoundedProfile(null);
       setThreadDesignation(thread.designation);
     } else {
       const pitch = Number(threadPitch) > 0 ? Number(threadPitch) : 1;
@@ -1206,6 +1229,7 @@ export function BodyFeatureDialog() {
         depth: threadFullLength ? null : threadDepthValue,
         representation: threadRepresentation,
         tap_drill_designation: null,
+        ...(threadRoundedProfile != null ? { rounded_profile: roundedThreadProfile(threadRoundedProfile) } : {}),
       };
   const threadDiameterTolerance = Number.isFinite(threadNominalValue)
     ? Math.max(0.01, threadNominalValue * 0.002)
@@ -1213,7 +1237,9 @@ export function BodyFeatureDialog() {
   const threadDiameterMatches = threadCylinder !== null
     && Number.isFinite(threadNominalValue)
     && Math.abs(threadNominalValue - threadCylinder.radius * 2) <= threadDiameterTolerance;
-  const threadSeriesMatchesStandard = threadStandard === 'iso_metric'
+  const threadSeriesMatchesStandard = threadStandard === 'custom_trapezoidal'
+    ? threadSeries === 'rounded' && roundedThreadInputsFinite(threadRoundedProfile) && threadClass === 'custom'
+    : threadStandard === 'iso_metric'
     ? threadSeries === 'metric_coarse' || threadSeries === 'metric_fine'
     : threadSeries === 'unc' || threadSeries === 'unf';
   const threadValuesValid = bodyId > 0
@@ -1353,9 +1379,21 @@ export function BodyFeatureDialog() {
     setThreadNominalDiameter(String(preset.nominalDiameterMm));
     setThreadPitch(String(preset.pitchMm));
     setThreadClass(next.class);
+    setThreadRoundedProfile(null);
     setThreadDesignation(next.designation);
   };
   const chooseThreadStandard = (standard: HoleThreadStandard) => {
+    if (standard === 'custom_trapezoidal') {
+      const diameter = threadCylinder?.radius ? threadCylinder.radius * 2 : threadNominalValue;
+      const pitch = Number.isFinite(threadPitchValue) && threadPitchValue > 0 ? threadPitchValue : 1;
+      setThreadStandard(standard); setThreadSeries('rounded'); setThreadPresetId('custom');
+      setThreadNominalDiameter(String(diameter)); setThreadPitch(String(pitch));
+      setThreadClass('custom'); setThreadDesignation('Custom rounded trapezoidal');
+      setThreadRoundedProfile(roundedThreadInputs(initialRoundedThreadProfile(pitch)));
+      setThreadRepresentation('modeled');
+      return;
+    }
+    setThreadRoundedProfile(null);
     const series: HoleThreadSeries = standard === 'iso_metric' ? 'metric_coarse' : 'unc';
     setThreadStandard(standard);
     setThreadSeries(series);
@@ -2042,17 +2080,21 @@ export function BodyFeatureDialog() {
                   >
                     <option value="iso_metric">ISO metric</option>
                     <option value="unified_inch">Unified inch</option>
+                    <option value="custom_trapezoidal">Custom rounded trapezoidal</option>
                   </select>
                 </label>
                 <label>
                   <span className={LABEL}>Series</span>
                   <select
                     data-testid="external-thread-series"
+                    disabled={threadStandard === 'custom_trapezoidal'}
                     value={threadSeries}
                     onChange={(event) => chooseThreadSeries(event.target.value as HoleThreadSeries)}
                     className={INPUT}
                   >
-                    {threadStandard === 'iso_metric' ? (
+                    {threadStandard === 'custom_trapezoidal' ? (
+                      <option value="rounded">Rounded profile</option>
+                    ) : threadStandard === 'iso_metric' ? (
                       <>
                         <option value="metric_coarse">Metric coarse</option>
                         <option value="metric_fine">Metric fine</option>
@@ -2094,6 +2136,7 @@ export function BodyFeatureDialog() {
                     <label>
                       <span className={LABEL}>Major diameter (mm)</span>
                       <DimensionInput
+                        data-testid="external-thread-nominal"
                         autoSelectKey={faceIds.length === 1 ? `${bodyId}:${faceIds[0]}` : null}
                         min="0.000001"
                         step="any"
@@ -2104,6 +2147,7 @@ export function BodyFeatureDialog() {
                     <label>
                       <span className={LABEL}>Pitch (mm)</span>
                       <DimensionInput
+                        data-testid="external-thread-pitch"
                         min="0.000001"
                         step="any"
                         value={threadPitch}
@@ -2116,6 +2160,7 @@ export function BodyFeatureDialog() {
                       <span className={LABEL}>Tolerance class</span>
                       <input
                         value={threadClass}
+                        disabled={threadStandard === 'custom_trapezoidal'}
                         onChange={(event) => setThreadClass(event.target.value)}
                         className={INPUT}
                       />
@@ -2136,6 +2181,9 @@ export function BodyFeatureDialog() {
                   {threadValue.nominal_diameter.toFixed(3)} mm · pitch {threadValue.pitch.toFixed(3)} mm
                 </div>
               )}
+
+              {threadRoundedProfile && <RoundedThreadFields prefix="external" values={threadRoundedProfile}
+                onChange={setThreadRoundedProfile} />}
 
               {!threadDiameterMatches && threadCylinder && (
                 <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">

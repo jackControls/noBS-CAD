@@ -14,7 +14,9 @@ use serde_json::{json, Map, Value};
 mod desktop;
 mod disclosure;
 mod drawing_tools;
+mod inbox;
 mod interface;
+mod knowledge;
 mod session;
 
 use disclosure::{
@@ -211,7 +213,7 @@ struct CadServer {
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
-    /// Interpreter-owned progress transported with fast replay's existing inbox
+    /// Interpreter-owned progress transported with both modes' existing inbox
     /// operations, never counted independently by the host or UI.
     script_progress: Option<nbcad_script::RunProgress>,
     live_snapshot_dirty: bool,
@@ -632,7 +634,7 @@ impl CadServer {
         let mut result = nbcad_script::run_with_progress(
             &script,
             |name, arguments, progress| {
-                self.script_progress = (mode == "fast").then_some(progress);
+                self.script_progress = Some(progress);
                 let is_note =
                     arguments["action"] == "presentation" && arguments["command"] == "note";
                 let result = self.call_tool(name, arguments)?;
@@ -1381,6 +1383,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_session_status"
             | "cad_document"
             | "cad_project_model"
+            | "project_visibility"
             | "sketch_active"
             | "sketch_finished"
             | "sketch_profiles"
@@ -1669,10 +1672,10 @@ fn tool_specs() -> Vec<ToolSpec> {
     );
     let hole_thread = object_schema(
         json!({
-            "standard": { "type": "string", "enum": ["iso_metric", "unified_inch"] },
+            "standard": { "type": "string", "enum": ["iso_metric", "unified_inch", "custom_trapezoidal"] },
             "series": {
                 "type": "string",
-                "enum": ["metric_coarse", "metric_fine", "unc", "unf"]
+                "enum": ["metric_coarse", "metric_fine", "unc", "unf", "rounded"]
             },
             "designation": { "type": "string", "minLength": 1 },
             "class": { "type": "string", "minLength": 1 },
@@ -1700,7 +1703,16 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "type": "string",
                 "enum": ["modeled", "simplified"]
             },
-            "tap_drill_designation": { "type": ["string", "null"] }
+            "tap_drill_designation": { "type": ["string", "null"] },
+            "rounded_profile": {
+                "description": "Required only for custom_trapezoidal / rounded / custom class. Native single-start 30-degree profile with circular root/crest rounds, NOT an ISO Tr fit. Both mating parts use identical nominal/profile values; radial clearance enlarges only female radii, axial clearance enlarges its groove by the total given amount.",
+                "oneOf": [object_schema(json!({
+                    "radial_depth": {"type":"number", "exclusiveMinimum":0},
+                    "corner_radius": {"type":"number", "exclusiveMinimum":0},
+                    "radial_clearance": {"type":"number", "minimum":0},
+                    "axial_clearance": {"type":"number", "minimum":0}
+                }), &["radial_depth", "corner_radius", "radial_clearance", "axial_clearance"]), {"type":"null"}]
+            }
         }),
         &[
             "standard",
@@ -2691,6 +2703,26 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "sketch_names":{"type":"array","items":{"type":"string","minLength":1}},
                 "datum_plane_ids":{"type":"array","items":{"type":"integer","minimum":1}}
             }), &["visible"]),
+        ),
+        ToolSpec::direct(
+            "project_visibility",
+            "Read saved model visibility",
+            "Return the Browser's saved hidden body IDs, datum plane IDs, and retained sketch names. Geometry and exports are unaffected by visibility.",
+            "project_visibility",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "project_set_visibility",
+            "Set saved model visibility",
+            "Replace the Browser's complete saved visibility snapshot. Read project_visibility first to preserve other choices. All three arrays are required; empty arrays show everything. Like the app, this normalizes duplicates and removes stale references. It does not remove geometry or exclude hidden bodies from exports; use export body selection for that.",
+            "project_set_visibility",
+            Payload::Object,
+            object_schema(json!({
+                "hidden_body_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                "hidden_datum_plane_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                "hidden_sketch_names":{"type":"array","items":{"type":"string","minLength":1}}
+            }), &["hidden_body_ids", "hidden_datum_plane_ids", "hidden_sketch_names"]),
         ),
         ToolSpec::direct(
             "construction_plane_offset",
@@ -3714,6 +3746,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "fit":{"type":"boolean"},
                 "body_id":{"type":"integer","minimum":0},"component_id":{"type":"integer","minimum":0},
                 "duration_ms":{"type":"integer","minimum":0,"maximum":10000},
+                "orbit_degrees":{"type":"number","minimum":-360,"maximum":360,"description":"For action view with view current: rotate about the current camera target/up axis at fixed radius and elevation. Optional fit/focal target frames first. Positive angles turn counterclockwise viewed along the up axis toward the target."},
                 "source":{"type":"string","description":"Version 1 JSONC command script; mutually exclusive with path"},
                 "validate":{"type":"boolean","default":true},
                 "speed":{"type":"number","minimum":0.1,"maximum":16},
@@ -3900,6 +3933,7 @@ fn records_in_script(name: &str) -> bool {
             | "solid_export_preflight"
             | "material_catalog"
             | "body_appearances"
+            | "project_visibility"
             | "demo_export_pip_3mf"
     ) {
         return false;
@@ -4018,18 +4052,53 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                 id.unwrap_or(Value::Null),
                 json!({
                     "protocolVersion": protocol,
-                    "capabilities": { "tools": { "listChanged": true } },
+                    "capabilities": {
+                        "tools": { "listChanged": true },
+                        "resources": { "subscribe": false, "listChanged": false }
+                    },
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable."
+                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md."
                 }),
             )]
         }
         "notifications/initialized" | "notifications/cancelled" => Vec::new(),
         "ping" => id.map(|id| response(id, json!({}))).into_iter().collect(),
+        "resources/list" => {
+            let id = id.unwrap_or(Value::Null);
+            if message
+                .get("params")
+                .is_some_and(|params| !params.is_null() && !params.is_object())
+                || message
+                    .pointer("/params/cursor")
+                    .is_some_and(|cursor| !cursor.is_null())
+            {
+                vec![error_response(
+                    id,
+                    -32602,
+                    "resources/list has no pagination cursor",
+                )]
+            } else {
+                vec![response(id, knowledge::list())]
+            }
+        }
+        "resources/read" => {
+            let id = id.unwrap_or(Value::Null);
+            match message.pointer("/params/uri").and_then(Value::as_str) {
+                None => vec![error_response(
+                    id,
+                    -32602,
+                    "resources/read requires params.uri",
+                )],
+                Some(uri) => match knowledge::read(uri) {
+                    Some(contents) => vec![response(id, contents)],
+                    None => vec![error_response(id, -32002, "knowledge resource not found")],
+                },
+            }
+        }
         "tools/list" => vec![response(
             id.unwrap_or(Value::Null),
             tool_list_result(&mut server.disclosure),
@@ -5152,6 +5221,121 @@ mod tests {
             initialized["result"]["capabilities"]["tools"]["listChanged"],
             true
         );
+    }
+
+    #[test]
+    fn knowledge_resources_are_advertised_readable_and_leave_the_document_unchanged() {
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "sketch_begin",
+                json!({"plane": {"type": "origin_plane", "plane": "xy"}}),
+            )
+            .unwrap();
+        server
+            .call_tool(
+                "sketch_add_circle",
+                json!({
+                    "mode": "center_diameter", "p1": {"x": 0.0, "y": 0.0},
+                    "p2": {"x": 10.0, "y": 0.0}, "ctrl_held": true
+                }),
+            )
+            .unwrap();
+        server.call_tool("sketch_finish", json!({})).unwrap();
+        let before = server.manager.export_project_model().unwrap();
+        let initialized = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize"
+            }),
+        );
+        assert_eq!(
+            initialized[0]["result"]["capabilities"]["resources"],
+            json!({"subscribe": false, "listChanged": false})
+        );
+        let listed = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "resources/list"
+            }),
+        );
+        let resources = listed[0]["result"]["resources"].as_array().unwrap();
+        assert!(resources
+            .iter()
+            .any(|resource| resource["uri"] == "nbcad://knowledge/index.md"));
+        for name in ["gears", "additive-workholding"] {
+            let uri = format!("nbcad://knowledge/concepts/{name}.md");
+            let resource = resources
+                .iter()
+                .find(|resource| resource["uri"] == uri)
+                .unwrap();
+            assert!(!resource["description"].as_str().unwrap().is_empty());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for resource in resources {
+            let uri = resource["uri"].as_str().unwrap();
+            assert!(seen.insert(uri), "duplicate resource: {uri}");
+            assert!(!resource["title"].as_str().unwrap().is_empty());
+            assert_eq!(resource["mimeType"], "text/markdown");
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": uri}
+                }),
+            );
+            assert_eq!(reply[0]["id"], 3);
+            let contents = reply[0]["result"]["contents"].as_array().unwrap();
+            assert_eq!(contents.len(), 1);
+            assert_eq!(contents[0]["uri"], uri);
+            assert_eq!(contents[0]["mimeType"], "text/markdown");
+            let text = contents[0]["text"].as_str().unwrap();
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../knowledge")
+                .join(resource["name"].as_str().unwrap());
+            assert_eq!(text, std::fs::read_to_string(path).unwrap());
+            assert_eq!(resource["size"].as_u64(), Some(text.len() as u64));
+        }
+        assert_eq!(server.manager.export_project_model().unwrap(), before);
+    }
+
+    #[test]
+    fn knowledge_resources_reject_invalid_params_and_unlisted_uris() {
+        let mut server = CadServer::new().unwrap();
+        for uri in [
+            "nbcad://knowledge/missing.md",
+            "nbcad://knowledge/../README.md",
+            "nbcad://knowledge/concepts/%2e%2e/index.md",
+            "file:///etc/passwd",
+            "https://example.com/knowledge/index.md",
+            "nbcad://knowledge/INDEX.md",
+        ] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": {"uri": uri}
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32002, "{uri}");
+            assert!(reply[0].get("result").is_none());
+        }
+        for params in [json!(null), json!({}), json!({"uri": 12}), json!([])] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": params
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32602);
+        }
+        for params in [json!({"cursor": "unknown"}), json!(12)] {
+            let reply = handle_message(
+                &mut server,
+                json!({
+                    "jsonrpc": "2.0", "id": 6, "method": "resources/list", "params": params
+                }),
+            );
+            assert_eq!(reply[0]["error"]["code"], -32602);
+        }
     }
 
     #[test]
@@ -6840,6 +7024,80 @@ mod tests {
     }
 
     #[test]
+    fn project_visibility_uses_browser_state_without_changing_geometry() {
+        assert!(is_read_safe_while_attached("project_visibility"));
+        assert!(nbcad_mcp_mutate::is_live_engine_query("project_visibility"));
+        fn state(mut value: Value) -> Value {
+            value.as_object_mut().unwrap().remove("_disclosure");
+            value
+        }
+        let (mut server, update) = mcp_box();
+        let body = update["scene"]["bodies"][0]["id"].clone();
+        let scene = server.call_tool("solid_scene", json!({})).unwrap();
+        let requested = json!({
+            "hidden_body_ids":[body, body, 999999],
+            "hidden_datum_plane_ids":[],
+            "hidden_sketch_names":["Sketch1"]
+        });
+        let expected = parse_engine_envelope(host::handle(
+            &mut server.manager,
+            "project_set_visibility",
+            &requested.to_string(),
+        ))
+        .unwrap();
+        server
+            .manager
+            .set_project_visibility(Default::default())
+            .unwrap();
+        assert_eq!(
+            interface::group_for("project_visibility"),
+            Some("document/appearance")
+        );
+        let hidden = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"execute", "group":"document/appearance",
+                    "operation":"project_set_visibility", "arguments":requested
+                }),
+            )
+            .unwrap();
+        let hidden = state(hidden);
+        assert_eq!(hidden, expected);
+        assert_eq!(hidden["hidden_body_ids"], json!([body]));
+        let script_before_read = server.call_tool("cad_script", json!({})).unwrap();
+        assert_eq!(
+            state(server.call_tool("project_visibility", json!({})).unwrap()),
+            hidden
+        );
+        assert_eq!(
+            server.call_tool("cad_script", json!({})).unwrap(),
+            script_before_read,
+            "reading Browser visibility must not append a replay operation"
+        );
+        assert_eq!(server.call_tool("solid_scene", json!({})).unwrap(), scene);
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool("cad_load_project_model", json!({"model_json":model}))
+            .unwrap();
+        assert_eq!(
+            state(restored.call_tool("project_visibility", json!({})).unwrap()),
+            hidden
+        );
+        assert_eq!(restored.call_tool("solid_scene", json!({})).unwrap(), scene);
+        let shown = restored
+            .call_tool(
+                "project_set_visibility",
+                json!({
+                    "hidden_body_ids":[], "hidden_datum_plane_ids":[], "hidden_sketch_names":[]
+                }),
+            )
+            .unwrap();
+        assert_eq!(shown["hidden_body_ids"], json!([]));
+        assert_eq!(shown["hidden_sketch_names"], json!([]));
+    }
+    #[test]
     fn construction_visibility_matches_host_and_preserves_native_model() {
         fn visibility(value: Value) -> Value {
             serde_json::to_value(
@@ -8078,9 +8336,9 @@ mod tests {
             .call_tool(
                 "sketch_add_arc_center",
                 json!({
-                    "center": {"x": 10.0, "y": 20.0},
-                    "start": {"x": 10.0, "y": 0.0},
-                    "sweep": {"x": 30.0, "y": 20.0},
+                    "center": {"x": -20.0, "y": 0.0},
+                    "start": {"x": 0.0, "y": 0.0},
+                    "sweep": {"x": -20.0, "y": 20.0},
                     "ctrl_held": false
                 }),
             )
@@ -8102,13 +8360,40 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(arcs.len(), 2);
 
+        // The first arc starts along Y, within the XY profile plane. It used
+        // to report success despite producing an invalid zero-volume BRep.
+        let invalid = server
+            .call_tool(
+                "solid_sweep",
+                json!({
+                    "profile": {"sketch_name":"Sketch1", "profile_index":0},
+                    "path_sketch_name":"Sketch2", "path_entity_ids":[arcs[0].clone()],
+                    "operation":"new_body", "target_body_ids":[], "guide_rail":null,
+                    "orientation":"corrected_frenet", "transition":"round_corner", "force_c1":true
+                }),
+            )
+            .unwrap();
+        let failure = &invalid["scene"]["errors"][0];
+        assert!(failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("Place the profile across the path"));
+        assert!(invalid["scene"]["bodies"].as_array().unwrap().is_empty());
+        server
+            .call_tool(
+                "solid_delete_feature",
+                json!({"feature_id":failure["feature_id"]}),
+            )
+            .unwrap();
+
+        // The second arc starts along Z, normal to the retained XY profile.
         let update = server
             .call_tool(
                 "solid_sweep",
                 json!({
                     "profile": {"sketch_name": "Sketch1", "profile_index": 0},
                     "path_sketch_name": "Sketch2",
-                    "path_entity_ids": [arcs[0].clone()],
+                    "path_entity_ids": [arcs[1].clone()],
                     "operation": "new_body",
                     "target_body_ids": [],
                     "guide_rail": null,
@@ -8134,6 +8419,10 @@ mod tests {
         assert_eq!(definitions[0]["transition"], "round_corner");
         assert_eq!(definitions[0]["force_c1"], true);
         assert!(definitions[0]["guide_rail"].is_null());
+        let print = server
+            .call_tool("solid_export_3mf", json!({"slicer_target":"standard"}))
+            .expect("curved sweep boundaries must form a closed printable mesh");
+        assert!(print["bytes_base64"].as_str().unwrap().len() > 32);
 
         server
             .call_tool(
@@ -8207,6 +8496,10 @@ mod tests {
             .unwrap();
         assert_eq!(definitions.as_array().unwrap().len(), 2);
         assert!(definitions[1]["guide_rail"].is_object());
+        let print = server
+            .call_tool("solid_export_3mf", json!({"slicer_target":"standard"}))
+            .expect("guided and retained curved sweeps must both remain closed");
+        assert!(print["bytes_base64"].as_str().unwrap().len() > 32);
     }
 
     #[test]
@@ -9273,6 +9566,128 @@ mod tests {
     }
 
     #[test]
+    fn slow_file_open_acknowledges_and_attaches_replacement_session() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let original = session::test_session_uuid();
+        let replacement = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-slow-open-{original}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_box_session(&original);
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool("cad_attach", json!({"session_id":original}))
+            .unwrap();
+        let mut opened = CadServer::new().unwrap();
+        opened
+            .call_tool(
+                "cad_set_document_name",
+                json!({"name":"Slow opened replacement"}),
+            )
+            .unwrap();
+        let model = opened.call_tool("cad_project_model", json!({})).unwrap();
+        let source = original.clone();
+        let target = replacement.clone();
+        let expected_model = model.clone();
+        let host = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Ok(entries) =
+                    std::fs::read_dir(session::session_dir().join(&source).join("controls"))
+                {
+                    for entry in entries.flatten() {
+                        if !entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                        {
+                            continue;
+                        }
+                        let request: Value =
+                            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        assert_eq!(request["ui"]["command"], "open");
+                        // The native Open retires A before hydration and publication
+                        // finish. Its own delivered receipt must survive that change.
+                        session::write_closed_tombstone(&source).unwrap();
+                        // Intentionally exceed the old 30s expiry AND its 1s MCP
+                        // grace. This real wait exercises request retention and the
+                        // production request loop, not a duplicate timeout formula.
+                        std::thread::sleep(std::time::Duration::from_secs(32));
+                        session::write_session(
+                            &target,
+                            "model.json",
+                            expected_model.as_str().unwrap(),
+                        )
+                        .unwrap();
+                        session::write_session(
+                            &target,
+                            "heartbeat.json",
+                            &json!({
+                                "updated_ms":session::now_ms(),"generation":1,
+                                "session_id":target,"session_mode":"read_only_snapshot"
+                            })
+                            .to_string(),
+                        )
+                        .unwrap();
+                        let retained = entry.path().is_file()
+                            && request["expires_ms"].as_u64().unwrap() >= session::now_ms();
+                        if retained {
+                            session::write_session(
+                                &source,
+                                &format!(
+                                    "controls/{}.result.json",
+                                    request["id"].as_str().unwrap()
+                                ),
+                                &json!({"request_id":request["id"],"session_id":source,
+                                    "status":"applied","active_session_id":target,"completed":true})
+                                .to_string(),
+                            )
+                            .unwrap();
+                        }
+                        return retained;
+                    }
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let reply = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"file","command":"open","path":"C:/fixtures/slow-replacement.nbcad"
+                }),
+            )
+            .unwrap();
+        let retained = host.join().unwrap();
+        // Clean up before assertions so a red run leaves no stale test session.
+        let controls_empty = std::fs::read_dir(dir.join(&original).join("controls"))
+            .unwrap()
+            .next()
+            .is_none();
+        let loaded_model = server.manager.export_project_model().unwrap();
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            reply["status"], "applied",
+            "Completed slow Open lost its acknowledgement: {reply}"
+        );
+        assert!(
+            retained,
+            "The native reply must remain eligible after slow reconstruction"
+        );
+        assert_eq!(reply["session_id"], original);
+        assert_eq!(reply["active_session_id"], replacement);
+        assert_eq!(reply["attached_session_id"], replacement);
+        assert_eq!(loaded_model, model.as_str().unwrap());
+        assert!(server.manager.solid_scene().bodies.is_empty());
+        assert!(
+            controls_empty,
+            "Completed request and result files must be removed"
+        );
+    }
+
+    #[test]
     fn acknowledged_document_transitions_track_completed_model_fences() {
         let _guard = session::ENV_LOCK.lock().unwrap();
         let first = session::test_session_uuid();
@@ -9528,18 +9943,15 @@ mod tests {
             let (controls, progress, live_model) = host.join().unwrap();
             assert_eq!(
                 progress,
-                if mode == "fast" {
-                    [2, 5]
-                        .map(|steps_completed| {
-                            Some(nbcad_script::RunProgress {
-                                steps_completed,
-                                step_count: 6,
-                            })
+                [2, 5]
+                    .map(|steps_completed| {
+                        Some(nbcad_script::RunProgress {
+                            steps_completed,
+                            step_count: 6,
                         })
-                        .to_vec()
-                } else {
-                    vec![None, None]
-                }
+                    })
+                    .to_vec(),
+                "Both modes report operations between sparse chapter notes"
             );
             assert!(
                 server.script_progress.is_none(),

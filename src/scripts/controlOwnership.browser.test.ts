@@ -29,6 +29,7 @@ export async function checkControlDocumentOwnership() {
     pointer: async () => { effects++; }, focus: () => { effects++; },
     home: () => { effects++; }, snapToDirection: () => { effects++; },
     isAnimating: () => false, bounds: () => ({x: 0, y: 0, width: 100, height: 100}),
+    getAnimationState: () => ({id: 0, status: 'completed'}),
     getSnapshot: () => ({position: [0, 0, 10], target: [0, 0, 0], up: [0, 1, 0]}),
   } as unknown as ViewportCameraApi;
   registerSessionCamera(testCamera);

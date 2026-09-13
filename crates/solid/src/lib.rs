@@ -18,5 +18,6 @@ pub use profile::{
     ProfileError, Segment2,
 };
 pub use thread::{
-    iso_metric_grade6_envelope, iso_metric_thread_envelope, IsoMetricThreadEnvelope, ThreadFit,
+    iso_metric_grade6_envelope, iso_metric_thread_envelope, rounded_thread_diameters,
+    IsoMetricThreadEnvelope, ThreadFit,
 };

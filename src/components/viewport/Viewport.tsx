@@ -109,6 +109,8 @@ import { isStraightSolidEdge } from '../../solidEdgeEligibility';
 import type { BrowserNode } from '../../types/document';
 import {
   easeInOutCubic,
+  orbitCameraSnapshot,
+  CameraAnimationLifecycle,
   type CameraSnapshot,
   type ViewportCameraApi,
 } from './cameraApi';
@@ -820,6 +822,7 @@ export function Viewport() {
 
     // --- Camera animation (all view changes ease ~250-400 ms, D7) ---
     interface CamAnim {
+      id: number;
       t0: number;
       dur: number;
       fromPos: CAD.Vector3;
@@ -828,27 +831,35 @@ export function Viewport() {
       toTarget: CAD.Vector3;
       fromUp: CAD.Vector3;
       toUp: CAD.Vector3;
+      orbit?: { from: CameraSnapshot; degrees: number };
     }
     let camAnim: CamAnim | null = null;
+    const cameraAnimation = new CameraAnimationLifecycle();
 
     function animateCamera(
       toPos: CAD.Vector3,
       toTarget: CAD.Vector3,
       toUp: CAD.Vector3,
       dur = 300,
-    ) {
+      orbit?: CamAnim['orbit'],
+    ): number {
       dur = presentation.motionDuration(dur);
+      const id = cameraAnimation.begin();
       if (dur <= 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        cancelCameraAnimation();
+        camAnim = null;
+        controls.enabled = true;
         camera.position.copy(toPos);
         controls.target.copy(toTarget);
         camera.up.copy(toUp).normalize();
         camera.lookAt(controls.target);
         syncNativeViewportCamera(camera, controls.target);
+        cameraAnimation.complete(id);
+        notifySessionCameraChanged();
         wakeControllerFrame();
-        return;
+        return id;
       }
       camAnim = {
+        id,
         t0: performance.now(),
         dur,
         fromPos: camera.position.clone(),
@@ -857,27 +868,41 @@ export function Viewport() {
         toTarget,
         fromUp: camera.up.clone(),
         toUp: toUp.clone().normalize(),
+        orbit,
       };
       controls.enabled = false;
+      notifySessionCameraChanged();
       wakeControllerFrame();
+      return id;
     }
 
     function cancelCameraAnimation() {
-      if (camAnim) {
-        camAnim = null;
-        controls.enabled = true;
-        notifySessionCameraChanged();
-      }
+      const interrupted = cameraAnimation.cancel();
+      camAnim = null;
+      controls.enabled = true;
+      if (interrupted) notifySessionCameraChanged();
     }
 
     function stepCameraAnimation(now: number) {
       if (!camAnim) return;
       const k = easeInOutCubic(Math.min(1, (now - camAnim.t0) / camAnim.dur));
-      camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, k);
-      controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, k);
-      camera.up.lerpVectors(camAnim.fromUp, camAnim.toUp, k).normalize();
+      if (camAnim.orbit) {
+        const pose = orbitCameraSnapshot(camAnim.orbit.from, camAnim.orbit.degrees, k);
+        camera.position.fromArray(pose.position);
+        controls.target.fromArray(pose.target);
+        camera.up.fromArray(pose.up);
+      } else {
+        camera.position.lerpVectors(camAnim.fromPos, camAnim.toPos, k);
+        controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, k);
+        camera.up.lerpVectors(camAnim.fromUp, camAnim.toUp, k).normalize();
+      }
       camera.lookAt(controls.target);
-      if (k >= 1) cancelCameraAnimation();
+      if (k >= 1) {
+        cameraAnimation.complete(camAnim.id);
+        camAnim = null;
+        controls.enabled = true;
+        notifySessionCameraChanged();
+      }
     }
 
     // --- Ground grid (adaptive two-level, XY plane) ---
@@ -11615,8 +11640,7 @@ export function Viewport() {
 
     const fitGeometryBounds = (bounds: CAD.Box3, direction?: CAD.Vector3, up?: CAD.Vector3, duration = 300) => {
       if (bounds.isEmpty()) {
-        animateCamera(HOME_POSITION.clone(), HOME_TARGET.clone(), WORLD_UP.clone(), duration);
-        return;
+        return animateCamera(HOME_POSITION.clone(), HOME_TARGET.clone(), WORLD_UP.clone(), duration);
       }
       const sphere = bounds.getBoundingSphere(new CAD.Sphere());
       const radius = Math.max(1, sphere.radius);
@@ -11626,7 +11650,7 @@ export function Viewport() {
       const distance = Math.min(10000, Math.max(2, (radius / Math.sin(halfFov)) * 1.15));
       const viewDirection = direction?.clone() ?? camera.position.clone().sub(controls.target).normalize();
       if (viewDirection.lengthSq() < 1e-12) viewDirection.set(1, -1, 1).normalize();
-      animateCamera(
+      return animateCamera(
         sphere.center.clone().addScaledVector(viewDirection, distance),
         sphere.center,
         up?.clone() ?? camera.up.clone(),
@@ -11634,7 +11658,7 @@ export function Viewport() {
       );
     };
     const fitVisibleGeometry = (direction?: CAD.Vector3, up?: CAD.Vector3, duration = 300) => {
-      fitGeometryBounds(getVisibleBounds(), direction, up, duration);
+      return fitGeometryBounds(getVisibleBounds(), direction, up, duration);
     };
 
     let sixDofDriverMotion = false;
@@ -11819,6 +11843,7 @@ export function Viewport() {
       },
       pointer: (action, point, shift = false, to) => drivePointer(surface.domElement, action, point, shift, to),
       isAnimating: () => camAnim !== null,
+      getAnimationState: () => cameraAnimation.snapshot(),
       advanceAnimation: () => {
         if (camAnim) {
           stepCameraAnimation(performance.now());
@@ -11835,7 +11860,7 @@ export function Viewport() {
         const distance = camera.position.distanceTo(controls.target);
         const up =
           Math.abs(n.z) > 0.99 ? new CAD.Vector3(0, n.z > 0 ? 1 : -1, 0) : WORLD_UP.clone();
-        animateCamera(
+        return animateCamera(
           controls.target.clone().addScaledVector(n, distance),
           controls.target.clone(),
           up,
@@ -11843,7 +11868,7 @@ export function Viewport() {
         );
       },
       home: (durationMs = 300) => {
-        fitVisibleGeometry(HOME_POSITION.clone().sub(HOME_TARGET).normalize(), WORLD_UP, durationMs);
+        return fitVisibleGeometry(HOME_POSITION.clone().sub(HOME_TARGET).normalize(), WORLD_UP, durationMs);
       },
       fit: (durationMs = 300) => fitVisibleGeometry(undefined, undefined, durationMs),
       focus: (target, durationMs = 300, direction) => {
@@ -11874,7 +11899,15 @@ export function Viewport() {
           : direction ? new CAD.Vector3(...direction).normalize() : undefined;
         const up = viewDirection ? (Math.abs(viewDirection.z) > 0.99
           ? new CAD.Vector3(0, viewDirection.z > 0 ? 1 : -1, 0) : WORLD_UP) : undefined;
-        fitGeometryBounds(bounds, viewDirection, up, durationMs);
+        return fitGeometryBounds(bounds, viewDirection, up, durationMs);
+      },
+      orbit: (degrees, durationMs = 300) => {
+        const from = api.getSnapshot();
+        const final = orbitCameraSnapshot(from, degrees, 1);
+        // Reuse duration/speed, reduced-motion, wakeup and completion handling.
+        // The animation samples the full angle instead of its equal endpoints.
+        return animateCamera(new CAD.Vector3(...final.position), new CAD.Vector3(...final.target),
+          new CAD.Vector3(...final.up), durationMs, { from, degrees });
       },
       orbitBy: (dx, dy) => {
         const bounded = CAD.boundedPointerDelta(

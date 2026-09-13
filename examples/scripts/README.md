@@ -26,10 +26,14 @@ not separate modeling, tutorial and animation scripts.
 - [Vertical-axis turbine](vertical-axis-turbine.nbcad.jsonc): two reused Savonius
   stages, constrained 72:18 generator gearing, native part and assembly drawings,
   printable definition exports and explicit physical qualification inputs.
-- [D-screw vise](d-screw-vise.nbcad.jsonc): five printed parts, retained D-shaped
-  screw, coupled 48 mm jaw travel, six drawing sheets and a separate print layout.
-- [D-screw fit coupon](d-screw-vise-fit.nbcad.jsonc): short paired native threads
-  for qualifying the actual material, printer profile and fit before a full vise.
+- [D-screw vise](d-screw-vise.nbcad.jsonc): six printed parts, 100 mm gripping
+  faces and 90 mm captured-jaw travel. Its custom rounded Ø24 × 4 mm screw has a
+  shallow print flat and detachable thrust fitting. Includes seven drawing
+  sheets, a print layout for each part and simplified M5/M6 hardware envelopes;
+  30 bodies including optional mounting hardware.
+- [D-screw fit coupon](d-screw-vise-fit.nbcad.jsonc): four specimens for the actual
+  print process: the custom rounded screw, matching female thread and a
+  male/female captured-guide pair. Qualify their fit before making a full vise.
 - [Turbine fit coupons](turbine-fit-coupons.nbcad.jsonc): four native specimens
   reuse the shaft clamp, bearing seat, motor cradle and pinion geometry, with
   driving fit dimensions, print orientations and associative drawings.
