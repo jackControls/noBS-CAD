@@ -49,10 +49,8 @@ struct SystemMemoryStatus {
     pressure: &'static str,
 }
 
-/// Native authority for the application-wide unsaved-work guard. Window
-/// close requests are handled by the frontend so it can show the platform
-/// confirmation dialog; `ExitRequested` additionally covers application-menu
-/// Quit and Cmd/Ctrl+Q, which can bypass a webview's close callback.
+/// Native authority for the application-wide unsaved-work guard. Approved
+/// frontend exits also drain the embedded stdio response before termination.
 #[derive(Default)]
 struct NativeQuitState {
     unsaved: AtomicBool,
@@ -65,8 +63,19 @@ fn native_unsaved_set(state: tauri::State<'_, NativeQuitState>, unsaved: bool) {
 }
 
 #[tauri::command]
-fn native_force_quit(app: tauri::AppHandle, state: tauri::State<'_, NativeQuitState>) {
-    state.approved.store(true, Ordering::Release);
+async fn native_force_quit(app: tauri::AppHandle) {
+    // The frontend's control receipt must reach the caller's actual stdio pipe,
+    // not just its inbox file. Keep the event loop free while that response
+    // finishes; a host that stops reading must not prevent the user from exiting.
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+        nbcad_mcp::shutdown_desktop_stdio(std::time::Duration::from_secs(3))
+    })
+    .await;
+    // Do not log to a potentially blocked pipe on the timeout path: exiting
+    // must remain bounded even when the host has stopped reading both streams.
+    app.state::<NativeQuitState>()
+        .approved
+        .store(true, Ordering::Release);
     app.exit(0);
 }
 

@@ -1,6 +1,3 @@
-use std::io::{self, BufRead, Write};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -18,6 +15,9 @@ mod inbox;
 mod interface;
 mod knowledge;
 mod session;
+mod stdio;
+
+pub use stdio::{run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
@@ -229,6 +229,14 @@ struct CadServer {
     /// operations, never counted independently by the host or UI.
     script_progress: Option<nbcad_script::RunProgress>,
     live_snapshot_dirty: bool,
+    /// Desktop stdio starts with this process's live document, never an
+    /// invisible independent model. After detach, selection must be explicit.
+    desktop_binding: Option<DesktopBinding>,
+}
+
+struct DesktopBinding {
+    process_id: u32,
+    initial_selection_pending: bool,
 }
 
 impl CadServer {
@@ -245,10 +253,12 @@ impl CadServer {
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
+            desktop_binding: None,
         })
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        self.ensure_desktop_target(name, &arguments)?;
         let live_mutation = self.attached_document_id.is_some() && is_modeling_mutate(name);
         let trace_args = arguments.clone();
         let result = self.dispatch_tool(name, arguments);
@@ -259,6 +269,23 @@ impl CadServer {
             }));
         }
         result
+    }
+
+    fn ensure_desktop_target(&mut self, name: &str, arguments: &Value) -> Result<(), String> {
+        let Some(binding) = &self.desktop_binding else {
+            return Ok(());
+        };
+        if self.attached_document_id.is_some()
+            || stdio::independent_of_default_document(name, arguments)
+        {
+            return Ok(());
+        }
+        if !binding.initial_selection_pending {
+            return Err("Desktop MCP has no selected document. Use cad_attach or an explicit interface session_id; use --headless for an independent document.".into());
+        }
+        let session_id = session::desktop_default_session(binding.process_id)?;
+        self.attach_read_only_snapshot(&json!({"session_id":session_id}))?;
+        Ok(())
     }
 
     fn dispatch_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
@@ -547,6 +574,9 @@ impl CadServer {
             "cad_detach" => {
                 let previous = self.attached_document_id.take();
                 self.attached_generation = None;
+                if let Some(binding) = &mut self.desktop_binding {
+                    binding.initial_selection_pending = false;
+                }
                 json!({
                     "detached": true,
                     "session_id": previous,
@@ -822,6 +852,9 @@ impl CadServer {
         self.load_snapshot_model(session_id, false)?;
         self.apply_snapshot_focus(session_id);
         self.attached_document_id = Some(session_id.to_string());
+        if let Some(binding) = &mut self.desktop_binding {
+            binding.initial_selection_pending = false;
+        }
         let heartbeat = session::heartbeat_meta(session_id);
         Ok(json!({
             "attached": true,
@@ -2087,7 +2120,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "cad_set_document_name",
             "Set document name",
-            "Rename the active headless noBS CAD document.",
+            "Rename the selected noBS CAD document.",
             "document_set_name",
             Payload::Field("name"),
             object_schema(json!({"name": {"type": "string", "minLength": 1}}), &["name"]),
@@ -4079,7 +4112,7 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                         "version": nbcad_core::build_info().display_version(),
                         "_meta": {"nbcad/build": nbcad_core::build_info()}
                     },
-                    "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md."
+                    "instructions": stdio::instructions(server.desktop_binding.is_some())
                 }),
             )]
         }
@@ -4165,102 +4198,6 @@ fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
         outgoing.push(notification);
     }
     outgoing
-}
-
-fn write_jsonrpc_messages(stdout: &mut impl Write, messages: &[Value]) -> bool {
-    for message in messages {
-        if serde_json::to_writer(&mut *stdout, message).is_err()
-            || writeln!(stdout).is_err()
-            || stdout.flush().is_err()
-        {
-            return false;
-        }
-    }
-    true
-}
-
-enum StdinEvent {
-    Line(String),
-    Eof,
-}
-
-/// Run the external MCP stdio transport using the same interface embedded by the desktop.
-pub fn run_stdio() {
-    let mut server = match CadServer::new() {
-        Ok(server) => server,
-        Err(error) => {
-            eprintln!("noBS CAD MCP startup failed: {error}");
-            std::process::exit(1);
-        }
-    };
-
-    // Jack §2: do not block forever on stdin. A reader thread feeds lines;
-    // the main loop wakes on the next disclosure deadline so list_changed /
-    // soft-TTL can flush with no later client ping.
-    let (tx, rx) = mpsc::channel::<StdinEvent>();
-    thread::spawn(move || {
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(line) => {
-                    if tx.send(StdinEvent::Line(line)).is_err() {
-                        return;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send(StdinEvent::Eof);
-    });
-
-    let mut stdout = io::stdout().lock();
-    loop {
-        let due = idle_due_messages(&mut server);
-        if !due.is_empty() {
-            if !write_jsonrpc_messages(&mut stdout, &due) {
-                break;
-            }
-            continue;
-        }
-
-        let event = match server.disclosure.ms_until_wake() {
-            Some(ms) => match rx.recv_timeout(Duration::from_millis(ms.max(1))) {
-                Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => {
-                    let due = idle_due_messages(&mut server);
-                    if !write_jsonrpc_messages(&mut stdout, &due) {
-                        break;
-                    }
-                    continue;
-                }
-                Err(RecvTimeoutError::Disconnected) => break,
-            },
-            None => match rx.recv() {
-                Ok(event) => event,
-                Err(_) => break,
-            },
-        };
-
-        match event {
-            StdinEvent::Eof => break,
-            StdinEvent::Line(line) => {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let outgoing = match serde_json::from_str::<Value>(&line) {
-                    Ok(message) => handle_message(&mut server, message),
-                    Err(error) => vec![error_response(
-                        Value::Null,
-                        -32700,
-                        format!("parse error: {error}"),
-                    )],
-                };
-                if !write_jsonrpc_messages(&mut stdout, &outgoing) {
-                    break;
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

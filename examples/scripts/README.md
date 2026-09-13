@@ -46,7 +46,7 @@ moves. All modes use the same Rust interpreter and construction source.
   shared interface owns each modeling operation’s argument schema.
 
 For command-line replay, use the [developer guide](../../docs/DEVELOPMENT.md#replay-a-recipe).
-It covers packaged CAD (`--server-arg --mcp`), standalone servers and AppImage arguments.
+It covers packaged CAD (`--server-arg --headless`), standalone servers and AppImage arguments.
 MCP lists the same collection with `cad_interface {"action":"recipes"}` and runs
 one with `{"action":"script","recipe":"mounting-plate","mode":"fast"}`.
 The app's example list is supplied by that same Rust catalog in `crates/recipes`.

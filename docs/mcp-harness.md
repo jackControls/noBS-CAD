@@ -9,9 +9,23 @@ See [the product interface](interface.md) for the complete contract and
 
 ## Choose the document owner
 
-An unattached `nbcad-mcp` process owns an independent headless document. It does
-not modify an open CAD window. This is the supported path for offline examples,
-CI and independent repeatability checks.
+The application always exposes local stdio MCP. A normal launch opens a CAD
+window. Use `nbcad --headless` for an independent worker without a window; the
+standalone developer executable `nbcad-mcp` is already headless. An unattached
+worker owns an independent document and does not modify an open CAD window.
+Use this path for offline examples, CI and independent repeatability checks.
+
+Closing stdin ends a headless worker. For a visible CAD app it only disconnects
+the transport, leaving the window and its documents open. Replay and package
+checks use a headless worker so their owned process can finish on stdin EOF,
+including when that worker targets a separate live desktop.
+
+When an agent starts CAD normally, its stdio tools automatically bind to that
+process's visible active document once it is ready. Startup requests that need a
+document report not ready until it is published; they never create invisible
+headless work. Explicit `cad_attach` can select a different document. After
+`cad_detach`, a desktop transport requires an explicit target rather than
+silently selecting another document or starting headless work.
 
 For a running desktop, call `cad_list_sessions`, select its explicit session or
 window/document identity, and call `cad_attach`. Ordinary modeling tools and
@@ -113,8 +127,8 @@ mutations and a restored baseline; it does not reconstruct parametric history
 from an imported B-rep. Use authored native scripts for new teaching examples.
 
 ```sh
-cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --mcp --repeat 2 --out proof
-cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --mcp --session UUID --new --present --speed 2 --compare proof/run-1.json --out live-proof
+cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --headless --repeat 2 --out proof
+cargo xtask run-script FILE.nbcad.jsonc --server CAD_EXECUTABLE --server-arg --headless --session UUID --new --present --speed 2 --compare proof/run-1.json --out live-proof
 ```
 
 These examples use the packaged application. A standalone `nbcad-mcp` needs no

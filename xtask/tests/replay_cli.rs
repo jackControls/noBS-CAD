@@ -91,7 +91,7 @@ fn packaged_replay_arguments_initialization_deadline_and_owned_cleanup() {
 
     let captured = temp.0.join("arguments.txt");
     let literal = "a path with spaces / \"quotes\" ; $literal Ω";
-    let forwarded = ["--appimage-extract-and-run", "--mcp", literal, ""];
+    let forwarded = ["--appimage-extract-and-run", "--headless", literal, ""];
     let mut run = command(env!("CARGO_BIN_EXE_xtask"));
     run.args([
         "run-script",
@@ -134,7 +134,7 @@ fn packaged_replay_arguments_initialization_deadline_and_owned_cleanup() {
         .arg(&fixture)
         .args([
             "--server-arg",
-            "--mcp",
+            "--headless",
             "--args",
             "{\"action\":\"catalog\"}",
         ])
@@ -142,7 +142,7 @@ fn packaged_replay_arguments_initialization_deadline_and_owned_cleanup() {
         .output()
         .unwrap();
     succeeded(&output);
-    assert_eq!(fs::read_to_string(&cad_call).unwrap(), "--mcp\n");
+    assert_eq!(fs::read_to_string(&cad_call).unwrap(), "--headless\n");
 
     // A response slower than the initialization bound still succeeds once the
     // handshake has finished; long native construction must retain that behavior.

@@ -83,7 +83,7 @@ impl Client {
         };
         client.initialization = client.rpc("initialize",json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nbcad-rust-replay","version":"1"}}))
             .with_context(|| format!(
-                "MCP initialization failed (deadline {initialization_timeout:?}). The executable must run a stdio MCP server; for packaged CAD, pass --server-arg --mcp"
+                "MCP initialization failed (deadline {initialization_timeout:?}). The executable must expose stdio MCP; use --server-arg --headless for packaged CAD workers without a window"
             ))?;
         if !client.initialization["protocolVersion"].is_string()
             || !client.initialization["capabilities"].is_object()
@@ -110,6 +110,35 @@ impl Client {
     pub(crate) fn initialization(&self) -> &Value {
         &self.initialization
     }
+    pub(crate) fn process_id(&self) -> u32 {
+        self.child.id()
+    }
+    pub(crate) fn close_input(&mut self) {
+        drop(self.input.take());
+    }
+    pub(crate) fn is_running(&mut self) -> Result<bool> {
+        Ok(self.child.try_wait()?.is_none())
+    }
+    /// Observe transport EOF separately from process exit: a visible app must
+    /// retire its agent's pipe while preserving the user's open document.
+    pub(crate) fn require_stdout_eof(&mut self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!("MCP stdout did not close before its EOF deadline");
+            }
+            match self.replies.recv_timeout(remaining) {
+                Ok(Ok(reply)) if reply.get("method").is_some() => {}
+                Ok(Ok(reply)) => bail!("Unexpected MCP response after final request: {reply}"),
+                Ok(Err(error)) => bail!("Invalid MCP output before EOF: {error}"),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    bail!("MCP stdout did not close before its EOF deadline")
+                }
+            }
+        }
+    }
     pub(crate) fn rpc(&mut self, method: &str, params: Value) -> Result<Value> {
         let deadline = self.request_timeout.map(|timeout| Instant::now() + timeout);
         self.id += 1;
@@ -126,6 +155,17 @@ impl Client {
             self.terminate();
         }
         response
+    }
+    pub(crate) fn rpc_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
+        let previous = self.request_timeout.replace(timeout);
+        let result = self.rpc(method, params);
+        self.request_timeout = previous;
+        result
     }
     fn receive_reply(&mut self, id: u64, deadline: Option<Instant>, method: &str) -> Result<Value> {
         loop {
@@ -155,7 +195,7 @@ impl Client {
     /// Closing the agent's input must let the stdio server exit normally. Drop
     /// still kills/reaps this owned child on any failure, including a deadline.
     pub(crate) fn finish(mut self, timeout: Duration) -> Result<()> {
-        drop(self.input.take());
+        self.close_input();
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(status) = self.child.try_wait()? {
@@ -164,23 +204,7 @@ impl Client {
                 }
                 // The pipe reader can still be processing the final stdout
                 // bytes. Drain until EOF so late logs cannot pass as valid MCP.
-                loop {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        bail!("MCP stdout did not close after process exit");
-                    }
-                    match self.replies.recv_timeout(remaining) {
-                        Ok(Ok(reply)) if reply.get("method").is_some() => {}
-                        Ok(Ok(reply)) => {
-                            bail!("Unexpected MCP response after final request: {reply}")
-                        }
-                        Ok(Err(error)) => bail!("Invalid MCP output before EOF: {error}"),
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            bail!("MCP stdout did not close after process exit")
-                        }
-                    }
-                }
+                return self.require_stdout_eof(deadline.saturating_duration_since(Instant::now()));
             }
             if Instant::now() >= deadline {
                 bail!("MCP did not exit within {timeout:?} after EOF");
@@ -195,6 +219,9 @@ impl Client {
     }
     pub(crate) fn call(&mut self, name: &str, args: Value) -> Result<Value> {
         let result = self.rpc("tools/call", json!({"name":name,"arguments":args}))?;
+        Self::decode_call_result(name, result)
+    }
+    pub(crate) fn decode_call_result(name: &str, result: Value) -> Result<Value> {
         if result["isError"] == true {
             bail!("{name}: {}", result["content"]);
         }
@@ -273,7 +300,7 @@ fn options(args: impl Iterator<Item = String>) -> Result<Options> {
         }
         if arg == "--server-arg" {
             // Consume exactly one literal argument, including flag-shaped
-            // values such as --mcp and --appimage-extract-and-run.
+            // values such as --headless and --appimage-extract-and-run.
             server_arguments.push(
                 args.next()
                     .ok_or_else(|| anyhow!("Missing value for --server-arg"))?,
@@ -741,8 +768,8 @@ fn print_usage(script: bool) {
   --server-arg ARG                Pass one literal argument to the server; repeat to preserve order.\n\
   --init-timeout-seconds N        Bound MCP initialization only (1–600, default: 30).\n\
                                  Modeling and presentation waits remain unbounded.\n\
-\nPackaged CAD: --server PATH --server-arg --mcp\n\
-AppImage without FUSE: --server PATH --server-arg --appimage-extract-and-run --server-arg --mcp\n\
+\nPackaged CAD worker (no extra window): --server PATH --server-arg --headless\n\
+AppImage without FUSE: --server PATH --server-arg --appimage-extract-and-run --server-arg --headless\n\
 Standalone nbcad-mcp: --server PATH (no server argument required)");
 }
 
@@ -921,6 +948,35 @@ mod tests {
             error.to_string().contains("Invalid MCP output before EOF"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn stdout_eof_is_observed_without_requiring_process_exit() {
+        let (mut client, sender) = transport_client(None);
+        sender
+            .send(Ok(
+                json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"}),
+            ))
+            .unwrap();
+        drop(sender);
+        client.require_stdout_eof(Duration::from_secs(1)).unwrap();
+        assert!(
+            client.is_running().unwrap(),
+            "Observing transport EOF must not terminate the GUI owner"
+        );
+        client.finish(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn stdout_eof_rejects_a_pipe_retained_by_a_live_process() {
+        let (mut client, sender) = transport_client(None);
+        let error = client
+            .require_stdout_eof(Duration::from_millis(25))
+            .unwrap_err();
+        assert!(error.to_string().contains("stdout did not close"));
+        assert!(client.is_running().unwrap());
+        drop(sender);
+        client.finish(Duration::from_secs(5)).unwrap();
     }
 
     struct TestDirectory(PathBuf);
@@ -1148,7 +1204,7 @@ mod tests {
                 "--server",
                 "CAD folder/noBS-CAD.exe",
                 "--server-arg",
-                "--mcp",
+                "--headless",
                 "--server-arg",
                 "--appimage-extract-and-run",
                 "--server-arg",
@@ -1164,7 +1220,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             options.server_arguments,
-            ["--mcp", "--appimage-extract-and-run", "a b", ""]
+            ["--headless", "--appimage-extract-and-run", "a b", ""]
         );
         assert_eq!(options.values["--recipe"], "fillet-basics");
         assert_eq!(

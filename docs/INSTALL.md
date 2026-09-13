@@ -148,9 +148,21 @@ before using those browser links, so it can register its `nbcad` handler.
 
 ## Connect an MCP agent
 
-Agent setup is optional. Add a local **stdio MCP server** to your agent. Set the command to the installed
-application executable and pass `--mcp`. This starts the Rust server without
-opening a desktop window. A normal launch opens CAD for live work.
+Local **stdio MCP is always available** in the application. A normal launch opens
+CAD with the same interface available to an agent; `--headless` suppresses the
+window. No separate MCP mode or server installation is needed.
+
+Agent setup is optional. Set your agent's server command to the installed
+application executable. The configurations below use `--headless` to start an
+independent worker without opening a window every time the agent connects.
+That worker can attach to an existing CAD document for live work. Closing its
+stdio input ends a headless worker; closing the same input on a visible app
+leaves the CAD window and its documents open.
+
+To have the agent open and drive its own visible CAD window, omit `args` instead.
+Once that window is ready, ordinary tools target its visible document. They do
+not silently create a separate headless model. `cad_attach` can explicitly select
+another document; after `cad_detach`, the agent must select a target again.
 
 ### Cursor
 
@@ -163,7 +175,7 @@ any existing servers. This Windows example uses the extracted application:
   "mcpServers": {
     "nobs-cad": {
       "command": "C:/YOUR/EXTRACTED/FOLDER/noBS-CAD.exe",
-      "args": ["--mcp"]
+      "args": ["--headless"]
     }
   }
 }
@@ -186,7 +198,7 @@ VS Code uses **`servers`**, with a `stdio` entry:
     "nobs-cad": {
       "type": "stdio",
       "command": "C:/YOUR/EXTRACTED/FOLDER/noBS-CAD.exe",
-      "args": ["--mcp"]
+      "args": ["--headless"]
     }
   }
 }
@@ -199,7 +211,7 @@ for custom profiles and configuration options.
 ### Choose the executable and try it
 
 Use the absolute path to your installed executable. On other platforms, keep
-`"args": ["--mcp"]` and change `command`:
+`"args": ["--headless"]` and change `command`:
 
 - **macOS:** `/Applications/noBS CAD.app/Contents/MacOS/nbcad`
 - **Ubuntu DEB:** `/usr/bin/nbcad`
@@ -214,7 +226,8 @@ CAD normally, then ask your agent:
 The expected reference and save/reopen steps are in
 [Make your first part](#make-your-first-part). The agent should discover and
 attach to the intended live design; an unattached MCP server owns a separate
-headless document. Keep the desktop and MCP modes on the same release when updating.
+headless document. Keep the application and any separate worker on the same release
+when updating.
 
 The server runs locally and needs no cloud account. Your agent/model provider
 has its own setup and data-handling choices.
@@ -228,7 +241,7 @@ together. Packaged MCP does not require an OCCT SDK or developer `PATH` setup.
 In Windows JSON paths, use forward slashes or escape backslashes.
 
 For AppImage, use its absolute path as the command. If FUSE is unavailable,
-use `"args": ["--appimage-extract-and-run", "--mcp"]`.
+use `"args": ["--appimage-extract-and-run", "--headless"]`.
 
 Stdout carries MCP JSON-RPC; diagnostics go to stderr. See the
 [server guide](../mcp-server/README.md) and [live-control contract](mcp-harness.md)

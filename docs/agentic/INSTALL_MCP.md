@@ -1,7 +1,7 @@
 # Configure a standalone development MCP server
 
 For a downloaded application, follow [Install → Connect an MCP agent](../INSTALL.md#connect-an-mcp-agent).
-That setup uses the installed CAD executable with `--mcp` and needs no source build.
+That setup uses the installed CAD executable with `--headless` and needs no source build.
 
 This page describes `cargo xtask install-mcp`, the developer utility for a
 separate `nbcad-mcp` binary. It updates selected clients' user configurations,
@@ -75,7 +75,7 @@ can be reused without rebuilding. On write, the binary is copied to
 
 The generated entry includes the discovered `NBCAD_REPO_ROOT`, `OCCT_ROOT` and
 OCCT `bin` addition to `PATH`. The SDK runtime remains necessary for this
-standalone development installation. Packaged CAD's `--mcp` mode bundles its
+standalone development installation. Packaged CAD already bundles its
 runtime separately.
 
 ## Existing configurations

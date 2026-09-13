@@ -1,14 +1,14 @@
 //! Exercise the shipped executable and its runtime libraries over the ordinary
-//! Rust MCP client. This creates only an independent headless document.
+//! Rust MCP client. Optional desktop checks exercise one isolated, owned window.
 use crate::replay::Client;
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     io::{Cursor, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,6 +19,7 @@ struct Options {
     arguments: Vec<String>,
     out: Option<PathBuf>,
     timeout: Duration,
+    desktop: bool,
 }
 impl Options {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self> {
@@ -26,13 +27,19 @@ impl Options {
         let mut arguments = Vec::new();
         let mut out = None;
         let mut timeout = None;
+        let mut desktop = false;
         while let Some(option) = args.next() {
+            if option == "--desktop" {
+                ensure!(!desktop, "Duplicate --desktop option");
+                desktop = true;
+                continue;
+            }
             let value = args
                 .next()
                 .with_context(|| format!("Missing value for {option}"))?;
             match option.as_str() {
                 "--server" if server.is_none() => server = Some(value),
-                // Flag-shaped values are intentional: --server-arg --mcp.
+                // Flag-shaped values are intentional: --server-arg --headless.
                 "--server-arg" => arguments.push(value),
                 "--out" if out.is_none() => out = Some(PathBuf::from(value)),
                 "--timeout-seconds" if timeout.is_none() => {
@@ -46,11 +53,17 @@ impl Options {
                 _ => bail!("Unknown or duplicate option {option}"),
             }
         }
+        if desktop {
+            ensure!(arguments.iter().filter(|argument| *argument == "--headless").count() == 1
+                && arguments.iter().all(|argument| matches!(argument.as_str(), "--headless" | "--appimage-extract-and-run")),
+                "--desktop requires --server-arg --headless; only an optional AppImage runtime argument may accompany it");
+        }
         Ok(Self {
             server: server.context("Supply --server PATH")?,
             arguments,
             out,
             timeout: timeout.unwrap_or(Duration::from_secs(120)),
+            desktop,
         })
     }
 }
@@ -95,7 +108,12 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         }
     }
     let started = Instant::now();
-    let result = verify(&options);
+    let result = verify(&options).and_then(|mut report| {
+        if options.desktop {
+            report["desktop"] = verify_desktop(&options)?;
+        }
+        Ok(report)
+    });
     let report = match &result {
         Ok(report) => report.clone(),
         Err(error) => json!({"passed":false,"error":format!("{error:#}")}),
@@ -103,6 +121,7 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let mut report = report;
     report["executable"] = json!(options.server);
     report["arguments"] = json!(options.arguments);
+    report["desktop_requested"] = json!(options.desktop);
     report["elapsed_ms"] = json!(started.elapsed().as_millis());
     if let Some(path) = options.out {
         fs::write(&path, serde_json::to_vec_pretty(&report)?)
@@ -112,18 +131,56 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     result.map(|_| ())
 }
 
-fn verify(options: &Options) -> Result<Value> {
-    let sessions = SessionDirectory::create()?;
+fn package_command(
+    options: &Options,
+    sessions: &SessionDirectory,
+    desktop: bool,
+) -> Result<Command> {
     let mut command = Command::new(&options.server);
     command
-        .args(&options.arguments)
+        .args(
+            options
+                .arguments
+                .iter()
+                .filter(|arg| !desktop || *arg != "--headless"),
+        )
         .current_dir(&sessions.0)
         .env("NBCAD_SESSION_DIR", &sessions.0);
-    // Package runtime discovery must not depend on a graphical login or these
-    // development SDK overrides. Windows resolves shipped DLLs beside its EXE.
+    if desktop {
+        // Session publication is not browser storage. Give every GUI case a
+        // fresh profile so localStorage recovery/settings never touch the
+        // user's normal CAD profile or leak into the next lifecycle case.
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT_PROFILE: AtomicU64 = AtomicU64::new(0);
+            let profile = sessions.0.join(format!(
+                "webview-{}",
+                NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&profile).context("Create isolated desktop browser profile")?;
+            #[cfg(windows)]
+            command.env("WEBVIEW2_USER_DATA_FOLDER", &profile);
+            #[cfg(target_os = "linux")]
+            for (name, directory) in [
+                ("XDG_DATA_HOME", "data"),
+                ("XDG_CACHE_HOME", "cache"),
+                ("XDG_CONFIG_HOME", "config"),
+            ] {
+                let path = profile.join(directory);
+                // xdg-mime writes mimeapps.list directly into XDG_CONFIG_HOME;
+                // unlike WebKit, it does not create this parent directory.
+                fs::create_dir(&path).context("Create isolated desktop XDG directory")?;
+                command.env(name, path);
+            }
+        }
+    }
+    // Headless startup must not depend on a graphical login. Desktop checks
+    // retain the caller's graphical session while rejecting developer SDK help.
+    if !desktop {
+        command.env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY");
+    }
     for name in [
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
         "OCCT_ROOT",
         "NBCAD_OCCT_LIB_DIR",
         "NBCAD_PROJECT_ROOT",
@@ -146,6 +203,12 @@ fn verify(options: &Options) -> Result<Value> {
     }
     #[cfg(not(windows))]
     command.env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+    Ok(command)
+}
+
+fn verify(options: &Options) -> Result<Value> {
+    let sessions = SessionDirectory::create()?;
+    let command = package_command(options, &sessions, false)?;
     let mut client = Client::start_command(command, Some(options.timeout))?;
     let initialization = client.initialization().clone();
     ensure!(
@@ -255,6 +318,438 @@ fn verify(options: &Options) -> Result<Value> {
     )
 }
 
+/// A private registry and the owned child's PID must agree before any live
+/// request is sent. Never select an arbitrary existing window by its label.
+fn owned_window(sessions: &SessionDirectory, pid: u32) -> Result<Option<Value>> {
+    let directory = sessions.0.join("_ui/processes");
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut leases: BTreeMap<String, (u64, Value)> = BTreeMap::new();
+    for entry in entries {
+        let entry = entry?;
+        // An atomic publication's temporary file can disappear between this
+        // directory enumeration and metadata/read. The final lease will follow.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(body) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(lease) = serde_json::from_slice::<Value>(&body) else {
+            continue;
+        };
+        if lease["pid"].as_u64() != Some(u64::from(pid)) {
+            continue;
+        }
+        let Some(instance) = lease["process_instance_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let Some(updated) = lease["updated_ms"].as_u64() else {
+            continue;
+        };
+        // Match the production process registry: atomic temp/final snapshots
+        // of one process are a single lease, with the newest publication winning.
+        if leases
+            .get(instance)
+            .is_none_or(|(previous, _)| *previous < updated)
+        {
+            leases.insert(instance.to_owned(), (updated, lease));
+        }
+    }
+    ensure!(
+        leases.len() <= 1,
+        "Owned desktop PID published multiple process instances"
+    );
+    let Some((_, lease)) = leases.into_values().next() else {
+        return Ok(None);
+    };
+    let mut windows = BTreeMap::new();
+    for window in lease["windows"].as_array().into_iter().flatten() {
+        if let (Some(window_id), Some(_)) = (
+            window["window_id"].as_str(),
+            window["active_session_id"].as_str(),
+        ) {
+            windows.insert(window_id.to_owned(), window.clone());
+        }
+    }
+    ensure!(
+        windows.len() <= 1,
+        "Owned desktop published multiple active windows"
+    );
+    Ok(windows.into_values().next())
+}
+
+fn grouped_call(
+    client: &mut Client,
+    catalog: &Value,
+    operation: &str,
+    arguments: Value,
+) -> Result<Value> {
+    let group = catalog["groups"]
+        .as_array()
+        .context("Missing product groups")?
+        .iter()
+        .find(|group| {
+            group["operations"]
+                .as_array()
+                .is_some_and(|operations| operations.iter().any(|name| name == operation))
+        })
+        .and_then(|group| group["id"].as_str())
+        .with_context(|| format!("Missing product operation {operation}"))?;
+    client.call(
+        "cad_interface",
+        json!({"action":"execute","group":group,"operation":operation,"arguments":arguments}),
+    )
+}
+
+fn project_model(client: &mut Client) -> Result<Value> {
+    let text = client.call("cad_project_model", json!({}))?;
+    serde_json::from_str(text.as_str().context("Project model is not JSON text")?)
+        .context("Read project model")
+}
+
+fn desktop_not_ready(reply: &Value) -> bool {
+    if reply["isError"] != true {
+        return false;
+    }
+    let Some(content) = reply["content"].as_array() else {
+        return false;
+    };
+    let [message] = content.as_slice() else {
+        return false;
+    };
+    if message["type"] != "text" {
+        return false;
+    }
+    message["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .is_some_and(|error| error["code"] == "desktop_not_ready")
+}
+
+/// Keep startup failures useful on CI without copying a browser profile or an
+/// entire CAD model. Read only this fixture's private publication directory.
+fn startup_diagnostics(sessions: &SessionDirectory, pid: u32) -> Value {
+    const MAX_ENTRIES: usize = 8;
+    fn read_json(path: &Path) -> Value {
+        const MAX_BYTES: u64 = 16 * 1024;
+        let result = (|| -> Result<Value> {
+            let mut bytes = Vec::new();
+            fs::File::open(path)?
+                .take(MAX_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() as u64 <= MAX_BYTES,
+                "Publication exceeds diagnostic byte limit"
+            );
+            Ok(serde_json::from_slice(&bytes)?)
+        })();
+        result.unwrap_or_else(|error| json!({"read_error":format!("{error:#}")}))
+    }
+    let registry_path = sessions.0.join("_ui/processes");
+    let registry = fs::read_dir(&registry_path).map(|entries| {
+        entries
+            .take(MAX_ENTRIES)
+            .map(|entry| match entry {
+                Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_file()) => json!({
+                    "file":entry.file_name().to_string_lossy(),
+                    "publication":read_json(&entry.path()),
+                }),
+                Ok(entry) => json!({"file":entry.file_name().to_string_lossy(),"skipped":true}),
+                Err(error) => json!({"read_error":error.to_string()}),
+            })
+            .collect::<Vec<_>>()
+    });
+    let registry = match registry {
+        Ok(entries) => json!({"entries":entries,"entry_limit":MAX_ENTRIES}),
+        Err(error) => json!({"read_error":error.to_string()}),
+    };
+    let documents: Vec<_> = fs::read_dir(&sessions.0)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name != "_ui"
+                && !name.starts_with("webview-")
+                && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        })
+        .take(MAX_ENTRIES)
+        .map(|entry| {
+            json!({
+                "session":entry.file_name().to_string_lossy(),
+                "model_present":entry.path().join("model.json").is_file(),
+                "heartbeat":read_json(&entry.path().join("heartbeat.json")),
+            })
+        })
+        .collect();
+    json!({"owned_pid":pid,"private_session_root":sessions.0,"registry":registry,
+        "documents":documents,"entry_limit":MAX_ENTRIES})
+}
+
+/// The process lease can appear before its matching heartbeat/model identity
+/// finishes publishing. Retry that specific startup state, never modeling errors.
+fn initial_project_model(client: &mut Client, timeout: Duration) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        ensure!(
+            !remaining.is_zero(),
+            "Desktop initial document did not become ready before deadline"
+        );
+        ensure!(
+            client.is_running()?,
+            "Desktop exited before its initial document became ready"
+        );
+        let reply = client.rpc_with_timeout(
+            "tools/call",
+            json!({"name":"cad_project_model","arguments":{}}),
+            remaining,
+        )?;
+        if !desktop_not_ready(&reply) {
+            let text = Client::decode_call_result("cad_project_model", reply)?;
+            return serde_json::from_str(text.as_str().context("Project model is not JSON text")?)
+                .context("Read initial project model");
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
+fn wait_for_owned_window(
+    desktop: &mut Client,
+    sessions: &SessionDirectory,
+    timeout: Duration,
+) -> Result<Value> {
+    let pid = desktop.process_id();
+    eprintln!(
+        "Verifying owned desktop PID {pid}; lifecycle evidence: {}",
+        sessions.0.display()
+    );
+    let deadline = Instant::now() + timeout;
+    loop {
+        ensure!(desktop.is_running()?, "Desktop exited before UI readiness");
+        if let Some(window) = owned_window(&sessions, pid)? {
+            let session = window["active_session_id"].as_str().unwrap();
+            if sessions.0.join(session).join("model.json").is_file() {
+                return Ok(window);
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "Desktop did not publish an owned document before deadline; startup evidence: {}",
+                startup_diagnostics(sessions, pid)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn verify_desktop(options: &Options) -> Result<Value> {
+    // WKWebView's default data store cannot be redirected by a child-process
+    // environment override. Do not run this fixture against a developer's
+    // ordinary macOS profile until the app supports an isolated store.
+    #[cfg(target_os = "macos")]
+    ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+        "--desktop on macOS currently requires a disposable GitHub-hosted runner; ordinary WKWebView profiles are not isolated");
+    let sessions = SessionDirectory::create()?;
+    let started = Instant::now();
+    let mut desktop = Client::start_command(
+        package_command(options, &sessions, true)?,
+        Some(options.timeout),
+    )?;
+    let pid = desktop.process_id();
+    let initialization = desktop.initialization().clone();
+    let listing = desktop.rpc("tools/list", json!({}))?;
+    ensure!(
+        listing["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "cad_interface")),
+        "Default desktop launch did not advertise MCP tools"
+    );
+    let catalog = desktop.call("cad_interface", json!({"action":"catalog"}))?;
+    let window = wait_for_owned_window(&mut desktop, &sessions, options.timeout)?;
+    let session = window["active_session_id"].as_str().unwrap();
+    // Deliberately omit attach/session selectors: this verifies the default
+    // transport binds its own visible document, never an invisible model.
+    let initial = initial_project_model(&mut desktop, options.timeout)?;
+    ensure!(
+        initial
+            .pointer("/document/history/features")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "Owned lifecycle fixture did not start with a blank document"
+    );
+    let inspected = desktop.call("cad_interface", json!({"action":"inspect"}))?;
+    ensure!(
+        inspected["status"] == "applied" && inspected["active_session_id"] == session,
+        "Default stdio did not inspect its own visible session: {inspected}"
+    );
+    grouped_call(
+        &mut desktop,
+        &catalog,
+        "sketch_begin",
+        json!({"plane":{"type":"origin_plane","plane":"xy"}}),
+    )?;
+    let rectangle = grouped_call(
+        &mut desktop,
+        &catalog,
+        "sketch_add_rectangle_locked",
+        json!({"mode":"two_point","anchor":{"x":0,"y":0},"corner_hint":{"x":24,"y":16},"width_mm":24,"height_mm":16,"ctrl_held":true}),
+    )?;
+    // Ctrl intentionally suppresses inferred anchoring. Locate the corner by
+    // geometry in the returned sketch, then constrain its actual entity ID.
+    let corners: Vec<_> = rectangle
+        .pointer("/sketch/entities")
+        .and_then(Value::as_array)
+        .context("Rectangle response has no sketch entities")?
+        .iter()
+        .filter(|entity| {
+            entity["kind"] == "point"
+                && entity.pointer("/position/x").and_then(Value::as_f64) == Some(0.)
+                && entity.pointer("/position/y").and_then(Value::as_f64) == Some(0.)
+        })
+        .collect();
+    ensure!(
+        corners.len() == 1,
+        "Rectangle response did not locate exactly one origin corner: {rectangle}"
+    );
+    let corner = corners[0]["id"]
+        .as_u64()
+        .context("Rectangle corner has no entity ID")?;
+    grouped_call(
+        &mut desktop,
+        &catalog,
+        "sketch_add_constraint",
+        json!({"type":"fix","entity":corner}),
+    )?;
+    grouped_call(&mut desktop, &catalog, "sketch_finish", json!({}))?;
+    let sketches = desktop.call("sketch_finished", json!({}))?;
+    ensure!(
+        sketches.as_array().is_some_and(|items| items.len() == 1)
+            && sketches.pointer("/0/dof/value") == Some(&json!(0)),
+        "Default desktop stdio did not create one fully constrained editable sketch: {sketches}"
+    );
+    let saved_path = sessions.0.join("stdio-lifecycle.nbcad");
+    let saved = desktop.call(
+        "cad_interface",
+        json!({"action":"file","command":"save","path":saved_path}),
+    )?;
+    ensure!(
+        saved["status"] == "applied" && fs::metadata(&saved_path)?.len() > 0,
+        "Lifecycle fixture was not saved through the normal file operation: {saved}"
+    );
+    let saved_model = project_model(&mut desktop)?;
+    ensure!(
+        saved_model["sketches"]
+            .as_array()
+            .is_some_and(|sketches| sketches.len() == 1),
+        "Saved document did not retain the sketch"
+    );
+    let saved_bytes = fs::read(&saved_path)?;
+    grouped_call(
+        &mut desktop,
+        &catalog,
+        "cad_set_document_name",
+        json!({"name":"stdio-lifecycle-unsaved"}),
+    )?;
+    let unsaved_model = project_model(&mut desktop)?;
+    ensure!(
+        unsaved_model != saved_model
+            && unsaved_model.pointer("/document/name") == Some(&json!("stdio-lifecycle-unsaved")),
+        "Fixture did not create an unsaved edit after Save"
+    );
+    desktop.close_input();
+    desktop.require_stdout_eof(Duration::from_secs(10))?;
+    let survival_deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < survival_deadline {
+        ensure!(
+            desktop.is_running()?,
+            "Closing agent stdin terminated the visible CAD app"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let mut observer = Client::start_command(
+        package_command(options, &sessions, false)?,
+        Some(options.timeout),
+    )?;
+    observer.call("cad_attach", json!({"session_id":session}))?;
+    let after_eof = observer.call(
+        "cad_interface",
+        json!({"action":"inspect","session_id":session}),
+    )?;
+    ensure!(
+        after_eof["status"] == "applied" && after_eof["active_session_id"] == session,
+        "Saved desktop stopped responding after its stdio disconnected: {after_eof}"
+    );
+    ensure!(
+        project_model(&mut observer)? == unsaved_model && fs::read(&saved_path)? == saved_bytes,
+        "Unsaved desktop stdio edits were lost or silently saved during disconnect"
+    );
+    let retained_path = sessions.0.join("stdio-lifecycle-unsaved.nbcad");
+    let saved_after_eof = observer.call(
+        "cad_interface",
+        json!({"action":"file","command":"save","path":retained_path,"session_id":session}),
+    )?;
+    ensure!(
+        saved_after_eof["status"] == "applied" && fs::metadata(&retained_path)?.len() > 0,
+        "Observer could not save the retained unsaved model after disconnect: {saved_after_eof}"
+    );
+    let closed = observer.call(
+        "cad_interface",
+        json!({"action":"window","mode":"close","session_id":session}),
+    )?;
+    ensure!(
+        closed["status"] == "applied"
+            && closed.pointer("/window/close_requested") == Some(&json!(true)),
+        "Normal guarded window close was not acknowledged: {closed}"
+    );
+    desktop.finish(Duration::from_secs(10))?;
+    observer.finish(Duration::from_secs(10))?;
+
+    // The first owned window is fully gone before creating this empty one.
+    // A close issued on this process's own stdio must flush its acknowledgement
+    // before GUI shutdown terminates the process and its transport thread.
+    let mut self_closing = Client::start_command(
+        package_command(options, &sessions, true)?,
+        Some(options.timeout),
+    )?;
+    let self_close_window = wait_for_owned_window(&mut self_closing, &sessions, options.timeout)?;
+    let empty_model = initial_project_model(&mut self_closing, options.timeout)?;
+    ensure!(
+        empty_model
+            .pointer("/document/history/features")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "Self-close fixture did not start with a blank document"
+    );
+    let self_closed =
+        self_closing.call("cad_interface", json!({"action":"window","mode":"close"}))?;
+    ensure!(
+        self_closed["status"] == "applied"
+            && self_closed.pointer("/window/close_requested") == Some(&json!(true))
+            && self_closed["active_session_id"] == self_close_window["active_session_id"],
+        "The desktop exited before its own stdio acknowledged guarded close: {self_closed}"
+    );
+    self_closing.finish(Duration::from_secs(10))?;
+    Ok(
+        json!({"passed":true,"pid":pid,"window":window,"initialization":initialization,
+        "baseline_project":saved_path,"saved_project":retained_path,"saved_model":unsaved_model,"session_directory":sessions.0,"elapsed_ms":started.elapsed().as_millis(),
+        "default_stdio":true,"automatic_live_document_binding":true,"fully_constrained_sketches":1,
+        "survived_stdio_eof":true,"stdout_eof_before_gui_exit":true,"retained_unsaved_model":true,"retained_live_model":true,"guarded_close":true,"clean_exit_and_stdout":true,
+        "self_stdio_close_acknowledged":true,"self_close_window":self_close_window}),
+    )
+}
+
 fn check_export(exported: &Value) -> Result<usize> {
     ensure!(
         exported["format"] == "3mf" && exported["encoding"] == "base64",
@@ -311,13 +806,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn initial_readiness_retry_requires_the_exact_structured_tool_error() {
+        let reply = |text: &str| json!({"isError":true,"content":[{"type":"text","text":text}]});
+        assert!(desktop_not_ready(&reply(
+            r#"{"code":"desktop_not_ready","writeback":false}"#
+        )));
+        for text in [
+            "desktop_not_ready",
+            r#"{"code":"model_invalid","hint":"desktop_not_ready"}"#,
+            r#"{"code":"desktop_not_ready_later"}"#,
+            "not JSON",
+        ] {
+            assert!(!desktop_not_ready(&reply(text)));
+        }
+        let mut success = reply(r#"{"code":"desktop_not_ready"}"#);
+        success["isError"] = json!(false);
+        assert!(!desktop_not_ready(&success));
+        let mut multiple = reply(r#"{"code":"desktop_not_ready"}"#);
+        multiple["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"text","text":"another failure"}));
+        assert!(!desktop_not_ready(&multiple));
+    }
+
+    #[test]
     fn server_arguments_keep_flag_values_and_reject_bad_timeout() {
         let options = Options::parse(
             [
                 "--server",
                 "desktop",
                 "--server-arg",
-                "--mcp",
+                "--headless",
                 "--server-arg",
                 "literal",
             ]
@@ -325,7 +845,7 @@ mod tests {
             .map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(options.arguments, ["--mcp", "literal"]);
+        assert_eq!(options.arguments, ["--headless", "literal"]);
         assert!(Options::parse(
             ["--server", "desktop", "--timeout-seconds", "0"]
                 .into_iter()
@@ -346,5 +866,229 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("byte count"));
+    }
+
+    #[test]
+    fn desktop_verification_requires_headless_worker_and_rejects_ignored_app_flags() {
+        let parse = |args: &[&str]| Options::parse(args.iter().map(|arg| (*arg).to_owned()));
+        assert!(parse(&["--server", "cad", "--desktop"]).is_err());
+        assert!(parse(&[
+            "--server",
+            "cad",
+            "--desktop",
+            "--server-arg",
+            "--headless",
+            "--desktop"
+        ])
+        .is_err());
+        assert!(parse(&[
+            "--server",
+            "cad",
+            "--desktop",
+            "--server-arg",
+            "--headless",
+            "--server-arg",
+            "other"
+        ])
+        .is_err());
+        let options = parse(&[
+            "--server",
+            "cad",
+            "--desktop",
+            "--server-arg",
+            "--appimage-extract-and-run",
+            "--server-arg",
+            "--headless",
+        ])
+        .unwrap();
+        let sessions = SessionDirectory::create().unwrap();
+        let visible = package_command(&options, &sessions, true).unwrap();
+        assert_eq!(
+            visible.get_args().collect::<Vec<_>>(),
+            ["--appimage-extract-and-run"]
+        );
+        let worker = package_command(&options, &sessions, false).unwrap();
+        assert_eq!(
+            worker.get_args().collect::<Vec<_>>(),
+            ["--appimage-extract-and-run", "--headless"]
+        );
+    }
+
+    #[test]
+    fn desktop_owner_selection_requires_exact_child_and_one_active_window() {
+        let sessions = SessionDirectory::create().unwrap();
+        let registry = sessions.0.join("_ui/processes");
+        fs::create_dir_all(&registry).unwrap();
+        let foreign = registry.join("foreign.json");
+        let owned = registry.join("owned.json");
+        let publishing = registry.join("owned.json.tmp");
+        let lease = |pid, instance, updated, windows| json!({"pid":pid,"process_instance_id":instance,"updated_ms":updated,"windows":windows});
+        let window = |id, session| json!({"window_id":id,"active_session_id":session});
+        fs::write(
+            &foreign,
+            lease(11, "foreign", 1, json!([window("main", "foreign")])).to_string(),
+        )
+        .unwrap();
+        assert!(owned_window(&sessions, 12).unwrap().is_none());
+        fs::write(
+            &owned,
+            lease(
+                12,
+                "own",
+                1,
+                json!([window("main", "own"), window("main", "own")]),
+            )
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            owned_window(&sessions, 12).unwrap().unwrap()["active_session_id"],
+            "own"
+        );
+        fs::copy(&owned, &publishing).unwrap();
+        assert_eq!(
+            owned_window(&sessions, 12).unwrap().unwrap()["active_session_id"],
+            "own",
+            "Atomic temp and final copies are one process/window"
+        );
+        fs::write(
+            &publishing,
+            lease(12, "own", 2, json!([window("main", "new")])).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            owned_window(&sessions, 12).unwrap().unwrap()["active_session_id"],
+            "new",
+            "Newest publication of the same instance wins"
+        );
+        fs::write(
+            &publishing,
+            lease(
+                12,
+                "another-instance",
+                3,
+                json!([window("main", "foreign")]),
+            )
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            owned_window(&sessions, 12).is_err(),
+            "A distinct process instance must remain ambiguous even with the same PID"
+        );
+        fs::remove_file(publishing).unwrap();
+        fs::write(
+            &owned,
+            lease(
+                12,
+                "own",
+                4,
+                json!([window("main", "own"), window("second", "ambiguous")]),
+            )
+            .to_string(),
+        )
+        .unwrap();
+        assert!(owned_window(&sessions, 12).is_err());
+        fs::remove_file(owned).unwrap();
+        fs::remove_file(foreign).unwrap();
+        fs::remove_dir(registry).unwrap();
+        fs::remove_dir(sessions.0.join("_ui")).unwrap();
+    }
+
+    #[test]
+    fn startup_evidence_distinguishes_missing_registry_foreign_pid_and_unpublished_model() {
+        let sessions = SessionDirectory::create().unwrap();
+        assert!(startup_diagnostics(&sessions, 12)["registry"]["read_error"].is_string());
+        let registry = sessions.0.join("_ui/processes");
+        fs::create_dir_all(&registry).unwrap();
+        let lease = registry.join("foreign.json");
+        fs::write(&lease, json!({"pid":11,"windows":[]}).to_string()).unwrap();
+        let document = sessions.0.join("own-session");
+        fs::create_dir(&document).unwrap();
+        fs::write(
+            document.join("heartbeat.json"),
+            json!({"session_id":"own-session"}).to_string(),
+        )
+        .unwrap();
+        let evidence = startup_diagnostics(&sessions, 12);
+        assert_eq!(evidence["owned_pid"], 12);
+        assert_eq!(evidence["registry"]["entries"][0]["publication"]["pid"], 11);
+        assert_eq!(evidence["documents"][0]["model_present"], false);
+        assert_eq!(
+            evidence["documents"][0]["heartbeat"]["session_id"],
+            "own-session"
+        );
+        fs::write(document.join("model.json"), "private model contents").unwrap();
+        fs::write(&lease, vec![b'x'; 16 * 1024 + 1]).unwrap();
+        let evidence = startup_diagnostics(&sessions, 12);
+        assert_eq!(evidence["documents"][0]["model_present"], true);
+        assert!(
+            evidence["registry"]["entries"][0]["publication"]["read_error"]
+                .as_str()
+                .unwrap()
+                .contains("byte limit")
+        );
+        assert!(!evidence.to_string().contains("private model contents"));
+        fs::remove_file(document.join("model.json")).unwrap();
+        fs::remove_file(document.join("heartbeat.json")).unwrap();
+        fs::remove_dir(document).unwrap();
+        fs::remove_file(lease).unwrap();
+        fs::remove_dir(registry).unwrap();
+        fs::remove_dir(sessions.0.join("_ui")).unwrap();
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[test]
+    fn desktop_cases_use_distinct_private_browser_profiles() {
+        let options = Options::parse(
+            ["--server", "cad", "--server-arg", "--headless", "--desktop"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        let sessions = SessionDirectory::create().unwrap();
+        let first = package_command(&options, &sessions, true).unwrap();
+        let second = package_command(&options, &sessions, true).unwrap();
+        for command in [&first, &second] {
+            for (key, path) in command
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value)))
+            {
+                if matches!(
+                    key.to_str(),
+                    Some(
+                        "WEBVIEW2_USER_DATA_FOLDER"
+                            | "XDG_DATA_HOME"
+                            | "XDG_CACHE_HOME"
+                            | "XDG_CONFIG_HOME"
+                    )
+                ) {
+                    assert!(
+                        Path::new(path).is_dir(),
+                        "The browser and xdg-mime need {key:?} to exist before launch"
+                    );
+                }
+            }
+        }
+        #[cfg(windows)]
+        let key = "WEBVIEW2_USER_DATA_FOLDER";
+        #[cfg(target_os = "linux")]
+        let key = "XDG_DATA_HOME";
+        let profile = |command: &Command| {
+            command
+                .get_envs()
+                .find(|(name, _)| *name == key)
+                .and_then(|(_, value)| value)
+                .map(PathBuf::from)
+                .unwrap()
+        };
+        let first = profile(&first);
+        let second = profile(&second);
+        assert!(first.starts_with(&sessions.0));
+        assert!(second.starts_with(&sessions.0));
+        assert_ne!(
+            first, second,
+            "Sequential GUI cases must not recover one another's state"
+        );
     }
 }

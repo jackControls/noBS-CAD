@@ -3,47 +3,45 @@
 // Prevents an extra console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-fn main() {
-    // The packaged application is also the standalone MCP executable. Branch
-    // before any platform, window, or renderer initialization and retain the
-    // pipes supplied by the agent (including Windows GUI-subsystem builds).
-    let mut arguments = std::env::args_os().skip(1);
-    let first = arguments.next();
-    if first.as_ref().is_some_and(|argument| argument == "--mcp") {
-        if arguments.next().is_some() {
-            eprintln!("Usage: noBS CAD --mcp (no additional arguments)");
-            std::process::exit(2);
+mod startup;
+
+fn main() -> std::process::ExitCode {
+    use startup::Startup;
+    let startup = match startup::parse(std::env::args_os().skip(1)) {
+        Ok(startup) => startup,
+        Err(error) => {
+            eprintln!("{error}");
+            return std::process::ExitCode::from(2);
         }
-        if std::env::var_os("NBCAD_DESKTOP_BIN").is_none() {
-            if let Ok(executable) = std::env::current_exe() {
-                std::env::set_var("NBCAD_DESKTOP_BIN", executable);
-            }
-        }
-        nbcad_mcp::run_stdio();
-        return;
+    };
+    if startup == Startup::Help {
+        println!("{}", startup::USAGE);
+        return std::process::ExitCode::SUCCESS;
     }
 
     // Browser URL launches may reuse one live window without loading its model
     // or suppressing ordinary independent launches. Validate before GUI init.
-    if let Some(uri) = first
-        .as_ref()
-        .and_then(|argument| argument.to_str())
-        .filter(|argument| argument.starts_with("nbcad:"))
-    {
-        let recipe = match nbcad_mcp::recipe_id_from_uri(uri) {
-            Ok(recipe) if arguments.next().is_none() => recipe,
-            Ok(_) => {
-                eprintln!("A recipe URL must be the only argument");
-                std::process::exit(2);
-            }
+    if let Startup::Recipe(recipe) = startup {
+        if matches!(nbcad_mcp::open_recipe_in_running_desktop(recipe), Ok(true)) {
+            return std::process::ExitCode::SUCCESS;
+        }
+    }
+
+    if std::env::var_os("NBCAD_DESKTOP_BIN").is_none() {
+        if let Ok(executable) = std::env::current_exe() {
+            std::env::set_var("NBCAD_DESKTOP_BIN", executable);
+        }
+    }
+    // Suppress the entire GUI/platform initialization, not the MCP interface.
+    // Retain agent-supplied pipes, including Windows GUI-subsystem builds.
+    if startup == Startup::Headless {
+        return match nbcad_mcp::run_stdio() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
+                eprintln!("noBS CAD MCP failed: {error}");
+                std::process::ExitCode::FAILURE
             }
         };
-        if matches!(nbcad_mcp::open_recipe_in_running_desktop(recipe), Ok(true)) {
-            return;
-        }
     }
 
     #[cfg(target_os = "linux")]
@@ -55,5 +53,18 @@ fn main() {
         // Wayland desktop supplies XWayland for this compatibility path.
         std::env::set_var("GDK_BACKEND", "x11");
     }
+    // Tauri owns the main thread and application lifetime. Agent disconnects
+    // retire only this worker; never join its potentially blocked stdin reader.
+    if let Err(error) = std::thread::Builder::new()
+        .name("cad-stdio".into())
+        .spawn(|| {
+            if let Err(error) = nbcad_mcp::run_desktop_stdio() {
+                eprintln!("noBS CAD stdio MCP disconnected: {error}");
+            }
+        })
+    {
+        eprintln!("Could not start local stdio MCP: {error}");
+    }
     nbcad_lib::run();
+    std::process::ExitCode::SUCCESS
 }
