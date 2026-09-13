@@ -3171,9 +3171,18 @@ impl CamDocumentDto {
             .max()
             .unwrap_or(0);
         let max_tool_id = self.tools.iter().map(|tool| tool.id).max().unwrap_or(0);
-        self.next_setup_id = self.next_setup_id.max(max_setup_id + 1).max(1);
-        self.next_operation_id = self.next_operation_id.max(max_operation_id + 1).max(1);
-        self.next_tool_id = self.next_tool_id.max(max_tool_id + 1).max(1);
+        // Exhausted ids must stay inspectable on load, without a panic or
+        // wraparound that could alias another entity. Strict validation still
+        // rejects counters that cannot advance past the preserved saved ids.
+        self.next_setup_id = self
+            .next_setup_id
+            .max(max_setup_id.saturating_add(1))
+            .max(1);
+        self.next_operation_id = self
+            .next_operation_id
+            .max(max_operation_id.saturating_add(1))
+            .max(1);
+        self.next_tool_id = self.next_tool_id.max(max_tool_id.saturating_add(1)).max(1);
         let tools = self.tools.clone();
         for setup in &mut self.setups {
             // Validate with an immutable borrow, then park the failures.
@@ -3252,6 +3261,28 @@ impl CamDocumentDto {
             operation_id: None,
             message,
         };
+        for (kind, exhausted) in [
+            (
+                "setup",
+                self.setups.iter().any(|setup| setup.id == u64::MAX),
+            ),
+            (
+                "operation",
+                self.setups.iter().any(|setup| {
+                    setup
+                        .operations
+                        .iter()
+                        .any(|operation| operation.id() == u64::MAX)
+                }),
+            ),
+            ("tool", self.tools.iter().any(|tool| tool.id == u64::MAX)),
+        ] {
+            if exhausted {
+                warnings.push(document_warning(format!(
+                    "CAM {kind} id space is exhausted; repair the saved ids and references before editing or machining"
+                )));
+            }
+        }
         let mut tool_ids = HashSet::new();
         let mut tool_numbers = HashSet::new();
         for tool in &self.tools {
@@ -4100,5 +4131,77 @@ mod tests {
         assert_eq!(document.active_setup_id, Some(1));
         assert!(document.next_setup_id > 1);
         document.validate().unwrap();
+    }
+
+    #[test]
+    fn load_preserves_exhausted_ids_and_rejects_them_for_machining() {
+        for kind in ["setup", "operation", "tool"] {
+            let mut document = saved_document_with_boundary_id(kind, u64::MAX);
+            document.soften_for_load();
+            let saved = serde_json::to_value(&document).unwrap();
+            let (id, next_id) = match kind {
+                "setup" => (saved["setups"][0]["id"].as_u64(), document.next_setup_id),
+                "operation" => (
+                    saved["setups"][0]["operations"][0]["id"].as_u64(),
+                    document.next_operation_id,
+                ),
+                "tool" => (saved["tools"][0]["id"].as_u64(), document.next_tool_id),
+                _ => unreachable!(),
+            };
+            assert_eq!(id, Some(u64::MAX), "must not renumber {kind} identity");
+            assert_eq!(next_id, u64::MAX, "must not wrap {kind} allocation");
+            assert!(document.load_warnings.iter().any(|warning| {
+                warning
+                    .message
+                    .contains(&format!("{kind} id space is exhausted"))
+            }));
+            assert!(document
+                .validate_for_editing()
+                .unwrap_err()
+                .contains("id counters must be greater"));
+            assert!(crate::planner::plan_setup(&document, document.setups[0].id).is_err());
+        }
+    }
+
+    #[test]
+    fn load_advances_last_available_ids_without_rejecting_valid_documents() {
+        for kind in ["setup", "operation", "tool"] {
+            let mut document = saved_document_with_boundary_id(kind, u64::MAX - 1);
+            document.soften_for_load();
+            let next_id = match kind {
+                "setup" => document.next_setup_id,
+                "operation" => document.next_operation_id,
+                "tool" => document.next_tool_id,
+                _ => unreachable!(),
+            };
+            assert_eq!(next_id, u64::MAX, "must retain the final {kind} counter");
+            document.validate_for_editing().unwrap();
+            assert!(document.load_warnings.is_empty());
+            assert!(crate::planner::plan_setup(&document, document.setups[0].id).is_ok());
+        }
+    }
+
+    /// Exercise the actual saved DTO shape, keeping references consistent so
+    /// the only corruption at MAX is the exhausted allocation space.
+    fn saved_document_with_boundary_id(kind: &str, id: u64) -> CamDocumentDto {
+        let document = document_with(vec![setup(
+            1,
+            CamStockSpecDto::LegacyBox,
+            CamResolvedStockDto::Box,
+        )]);
+        let mut saved = serde_json::to_value(document).unwrap();
+        match kind {
+            "setup" => {
+                saved["setups"][0]["id"] = id.into();
+                saved["active_setup_id"] = id.into();
+            }
+            "operation" => saved["setups"][0]["operations"][0]["id"] = id.into(),
+            "tool" => {
+                saved["tools"][0]["id"] = id.into();
+                saved["setups"][0]["operations"][0]["tool_id"] = id.into();
+            }
+            _ => unreachable!(),
+        }
+        serde_json::from_value(saved).unwrap()
     }
 }

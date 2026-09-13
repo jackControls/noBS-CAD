@@ -17,6 +17,10 @@ pub struct PostEventStreamDto {
     pub program_name: String,
     pub tools: Vec<CamToolDto>,
     pub events: Vec<PostEventDto>,
+    /// Planning and pre-post verification findings travel with the exported
+    /// motion, including any limits on what was actually checked.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,6 +153,7 @@ pub fn post_event_stream(document: &CamDocumentDto, program: &CamProgramDto) -> 
         program_name: program.name.clone(),
         tools: document.tools.clone(),
         events,
+        warnings: program.warnings.clone(),
     }
 }
 
@@ -179,7 +184,7 @@ mod tests {
             stats: Default::default(),
             per_operation: vec![],
             work_offsets: vec![WorkOffset::G54],
-            warnings: vec![],
+            warnings: vec!["Part-gouge clearance is UNVERIFIED".into()],
         };
         let events = post_event_stream(&CamDocumentDto::default(), &program);
         assert_eq!(events.format, "nbcad-post-events");
@@ -199,5 +204,15 @@ mod tests {
         let serialized = serde_json::to_value(&events).unwrap();
         assert_eq!(serialized["events"][0]["callback"], "onOpen");
         assert_eq!(serialized["events"][1]["callback"], "onRapid");
+        assert_eq!(events.warnings, program.warnings);
+        assert_eq!(serialized["warnings"][0], program.warnings[0]);
+
+        // Existing version-1 streams remain readable; newly exported streams
+        // always disclose the findings rather than losing them at projection.
+        let mut legacy = serialized;
+        legacy.as_object_mut().unwrap().remove("warnings");
+        let legacy: PostEventStreamDto = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.warnings.is_empty());
+        assert_eq!(legacy.events.len(), events.events.len());
     }
 }

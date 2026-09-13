@@ -170,9 +170,70 @@ export async function checkCamDocumentOwnership() {
     check(!exitEvents.length, 'Quit cannot miss queued CAM edits while they wait to paint');
     await queued; await closing; exit.dispose();
     check(exitEvents.join(',') === 'unsaved,exit', 'Quit must observe the dirty result before deciding'); idle();
+    // Browser/WebView animation frames can stop when hidden or minimized.
+    // Test real queued mutation + Quit, not only a paint helper's resolution.
+    for (const mode of ['no-frames', 'one-frame', 'hidden', 'hides-during-paint', 'foreground'] as const) {
+      replace('A');
+      const originalRequest = window.requestAnimationFrame;
+      const originalCancel = window.cancelAnimationFrame;
+      const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      const frames = new Map<number, FrameRequestCallback>();
+      const scheduled = deferred<void>();
+      let visibility = mode === 'hidden' ? 'hidden' : 'visible';
+      let frameId = 0, cancelled = 0;
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+      window.requestAnimationFrame = callback => {
+        frames.set(++frameId, callback); scheduled.resolve(); return frameId;
+      };
+      window.cancelAnimationFrame = id => { if (frames.delete(id)) cancelled++; };
+      const events: string[] = [];
+      const exit = createExitController({ dirty: () => useAppStore.getState().dirty,
+        decide: async () => { events.push('unsaved'); return 'discard'; }, save: async () => true,
+        exit: async () => { events.push('exit'); }, error: error => { throw error; } });
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const mutation = setCamUnits('inches');
+        const closing = exit.request();
+        check(!events.length, `${mode}: Quit must wait for the queued mutation`);
+        const drive = async () => {
+          if (mode !== 'hidden') await scheduled.promise;
+          const presentFrame = () => {
+            const entry = frames.entries().next().value;
+            check(entry, `${mode}: visible paint must schedule a frame`);
+            const [id, callback] = entry!;
+            frames.delete(id); callback(performance.now());
+          };
+          if (mode === 'one-frame' || mode === 'foreground') presentFrame();
+          if (mode === 'foreground') presentFrame();
+          if (mode === 'hides-during-paint') {
+            visibility = 'hidden'; document.dispatchEvent(new Event('visibilitychange'));
+          }
+          await Promise.all([mutation, closing]);
+        };
+        await Promise.race([drive(), new Promise<void>((_, reject) => {
+          deadline = setTimeout(() => reject(new Error(`${mode}: CAM/exit waited for unavailable animation frames`)), 2000);
+        })]);
+        check(events.join(',') === 'unsaved,exit' && useAppStore.getState().camDocument.units === 'inches',
+          `${mode}: CAM must publish and Quit must decide on the completed result`);
+        check(frames.size === 0, `${mode}: completed paint must retire pending frame callbacks`);
+        if (mode === 'hidden') check(frameId === 0, 'Hidden documents must not request unnecessary paint');
+        else if (mode !== 'foreground') check(cancelled > 0, `${mode}: stalled paint must cancel its outstanding callback`);
+        idle();
+      } finally {
+        clearTimeout(deadline);
+        window.requestAnimationFrame = originalRequest;
+        window.cancelAnimationFrame = originalCancel;
+        if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility);
+        else delete (document as unknown as { visibilityState?: string }).visibilityState;
+        // Let a broken implementation retire its queue before this page closes.
+        for (const callback of frames.values()) callback(performance.now());
+        exit.dispose();
+      }
+    }
     return { checks: ['queued-tab-switch', 'queued-same-tab-open', 'late-edit-reply', 'late-regeneration-reply',
       'metadata-owner', 'store-replacement-owner', 'snapshot-publication-fence', 'central-library-owner',
-      'selection-owner', 'failure-recovery', 'queued-exit-barrier'], nativeWrites: writes.length };
+      'selection-owner', 'failure-recovery', 'queued-exit-barrier', 'suspended-frames-exit',
+      'suspended-second-frame-exit', 'hidden-queue-exit', 'hidden-during-paint-exit', 'foreground-paint-cleanup'], nativeWrites: writes.length };
   } finally {
     useAppStore.setState(initial); presentation.documentChanged();
     if (previousNative) w.__TAURI_INTERNALS__ = previousNative; else delete w.__TAURI_INTERNALS__;

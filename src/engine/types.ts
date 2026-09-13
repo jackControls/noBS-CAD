@@ -3161,6 +3161,7 @@ export interface PostEventStreamDto {
   program_name: string;
   tools: CamToolDto[];
   events: Array<Record<string, unknown> & { callback: string }>;
+  warnings: string[];
 }
 
 export interface StepThreadMetadataDto {

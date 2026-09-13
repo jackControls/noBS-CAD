@@ -257,6 +257,18 @@ fn nc_simulation_and_post_events_use_the_advertised_grouped_contract() {
     checked_call(&mut server, "cam_regenerate_setup", json!({"setup_id":1})).unwrap();
     let events = checked_call(&mut server, "cam_post_events", json!({"setup_id":1})).unwrap();
     assert_eq!(events["format"], "nbcad-post-events");
+    assert!(
+        events["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning
+                    .as_str()
+                    .is_some_and(|message| message.contains("part-gouge clearance is UNVERIFIED"))
+            }),
+        "the grouped export must disclose that the fixture has no target bodies"
+    );
     assert!(events["events"]
         .as_array()
         .unwrap()

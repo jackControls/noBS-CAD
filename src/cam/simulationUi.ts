@@ -55,6 +55,29 @@ export function requestCamSimulation(kind: 'cam' | 'nc', setupId: number, operat
   useCamActivity.setState({ ribbonSection: 'simulate', intent: { serial: ++sequence, kind, setupId, operationId } });
 }
 
-/** Give the browser one paint before a fallback WASM call can monopolize it. */
-export const paintCamActivity = () => new Promise<void>((resolve) =>
-  requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+/** Give visible UI a paint opportunity before a fallback WASM call can
+ * monopolize it. Hidden/minimized views may suspend animation frames; paint
+ * feedback must never hold document work or guarded application exit hostage. */
+export function paintCamActivity(): Promise<void> {
+  if (document.visibilityState !== 'visible') return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let frame = 0;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', visibilityChanged);
+      resolve();
+    };
+    const visibilityChanged = () => {
+      if (document.visibilityState !== 'visible') finish();
+    };
+    const timer = window.setTimeout(finish, 100);
+    document.addEventListener('visibilitychange', visibilityChanged);
+    frame = requestAnimationFrame(() => {
+      if (!finished) frame = requestAnimationFrame(finish);
+    });
+  });
+}
