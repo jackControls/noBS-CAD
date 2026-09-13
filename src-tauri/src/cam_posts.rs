@@ -159,9 +159,17 @@ fn entry(path: &Path, bytes: &[u8]) -> Entry {
         match parsed {
             Ok(machine) => {
                 result.kind = "native_profile".into();
-                result.message = if let Some(name) = machine.profile.post.siemens_828d.as_ref().and_then(|s| s.spindle_stop_subprogram.as_deref()) {
+                result.message = if let Some(name) = machine
+                    .profile
+                    .post
+                    .siemens_828d
+                    .as_ref()
+                    .and_then(|s| s.spindle_stop_subprogram.as_deref())
+                {
                     format!("Native private profile: {name} before each spindle stop. Controller-side verification required; the subprogram is not simulated.")
-                } else { "Built-in renderer with a private machine snapshot. Review machine settings before output.".into() };
+                } else {
+                    "Built-in renderer with a private machine snapshot. Review machine settings before output.".into()
+                };
                 result.machine = Some(machine);
             }
             Err(error) => {
@@ -344,25 +352,36 @@ mod tests {
         let machine = nbcad_cam::CamMachineAssignmentDto::three_axis(nbcad_cam::CamPostConfigDto {
             dialect: nbcad_cam::PostDialect::Siemens828d,
             siemens_828d: Some(nbcad_cam::Siemens828dPostConfigDto {
-                spindle_stop_subprogram: Some("SHOP_STOP".into()), ..Default::default()
-            }), ..Default::default()
+                spindle_stop_subprogram: Some("SHOP_STOP".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
         });
         let result = save_profile(&dir.0, "private.nbpost", machine.clone()).unwrap();
         assert_eq!(result.entries[0].kind, "native_profile");
         assert_eq!(result.entries[0].machine.as_ref(), Some(&machine));
         assert!(result.entries[0].message.contains("SHOP_STOP"));
-        let mut raw: serde_json::Value = serde_json::from_slice(&read(&dir.0.join("cam-posts/private.nbpost")).unwrap()).unwrap();
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&read(&dir.0.join("cam-posts/private.nbpost")).unwrap())
+                .unwrap();
         assert_eq!(raw["schema_version"], 2);
         raw["schema_version"] = 1.into();
-        assert_eq!(entry(Path::new("bad.nbpost"), &serde_json::to_vec(&raw).unwrap()).kind, "invalid");
+        assert_eq!(
+            entry(Path::new("bad.nbpost"), &serde_json::to_vec(&raw).unwrap()).kind,
+            "invalid"
+        );
         raw["machine"]["profile"]["schema_version"] = 1.into();
-        assert_eq!(entry(Path::new("bad.nbpost"), &serde_json::to_vec(&raw).unwrap()).kind, "invalid");
+        assert_eq!(
+            entry(Path::new("bad.nbpost"), &serde_json::to_vec(&raw).unwrap()).kind,
+            "invalid"
+        );
     }
 
     #[test]
     #[ignore = "operator-supplied file; set NBCAD_PRIVATE_POST_PATH"]
     fn inspect_operator_private_profile() {
-        let path = PathBuf::from(std::env::var("NBCAD_PRIVATE_POST_PATH").expect("private profile path"));
+        let path =
+            PathBuf::from(std::env::var("NBCAD_PRIVATE_POST_PATH").expect("private profile path"));
         let inspected = entry(&path, &read(&path).unwrap());
         assert_eq!(inspected.kind, "native_profile", "{}", inspected.message);
         println!("{}: {}", inspected.file_name, inspected.message);

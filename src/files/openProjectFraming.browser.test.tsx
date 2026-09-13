@@ -54,6 +54,7 @@ export async function checkOpenedProjectFraming() {
         'engine_hole_definitions', 'engine_body_feature_definitions'].includes(command)) return ok([]);
       if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
       if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+      if (command === 'engine_cam_document') return ok(initial.camDocument);
       if (command === 'engine_project_visibility') return ok(initial.projectVisibility);
       if (command === 'engine_project_export_model') return ok(model());
       if (command === 'engine_project_session_bind' || command === 'engine_set_grid_step') return ok(null);

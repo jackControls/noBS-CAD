@@ -406,6 +406,17 @@ try {
  });
  console.log('PASS production script document ownership: '+JSON.stringify(ownership));
  await ownershipPage.close();
+ const camOwnershipPage=await browser.newPage();
+ await camOwnershipPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const camOwnership=await camOwnershipPage.evaluate(async()=>{
+  const {checkCamDocumentOwnership}=await import('/src/cam/documentOwnership.browser.test.ts');
+  let timer;
+  try{return await Promise.race([checkCamDocumentOwnership(),new Promise((_,reject)=>{
+   timer=setTimeout(()=>reject(new Error('CAM document ownership contract timed out')),15000);
+  })]);}finally{clearTimeout(timer);}
+ });
+ console.log('PASS production CAM document ownership: '+JSON.stringify(camOwnership));
+ await camOwnershipPage.close();
  const drawingPublicationPage=await browser.newPage();
  await drawingPublicationPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const drawingPublication=await drawingPublicationPage.evaluate(async()=>{

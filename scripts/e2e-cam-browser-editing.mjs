@@ -41,7 +41,16 @@ try {
     const update = await engine.extrude({ source_face: null, sketch_name: catalog[0].sketch_name,
       profile_indices: [catalog[0].profiles[0].index], operation: 'new_body',
       extent: { type: 'distance', distance: 3.013 }, taper_angle_deg: 0, flip: true, target_body_ids: [] });
+    const syncRevision = window.__appStore.getState().assemblySolidSyncRevision;
     store.applySolidUpdate(update);
+    // Fixture construction bypasses the modeling UI. Finish its asynchronous
+    // assembly hydration before submitting a document-owned CAM edit.
+    await new Promise(resolve => {
+      const unsubscribe = window.__appStore.subscribe(state => {
+        if (state.assemblySolidSyncRevision <= syncRevision) return;
+        unsubscribe(); resolve();
+      });
+    });
     const cam = await engine.camDocument();
     const cutting = { spindle_rpm: 8000, feed_xy: 600, feed_z: 100, coolant: 'flood' };
     cam.tools = [{ id: 1, number: 1, name: 'EM4', kind: 'flat_end_mill', diameter: 4, flute_length: 10,

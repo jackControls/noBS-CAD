@@ -8,8 +8,8 @@
 //! All modeling logic lives in the engine crates, never here.
 
 mod cam_library;
-mod cam_posts;
 mod cam_playback;
+mod cam_posts;
 mod native_menu;
 pub mod native_viewport;
 mod recipe_links;
@@ -1064,19 +1064,34 @@ fn cam_library_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 async fn cam_posts_list(app: tauri::AppHandle) -> Result<cam_posts::Catalog, String> {
     let config = cam_library_config_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || cam_posts::list(&config)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || cam_posts::list(&config))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn cam_posts_import(app: tauri::AppHandle, source: String) -> Result<cam_posts::Catalog, String> {
+async fn cam_posts_import(
+    app: tauri::AppHandle,
+    source: String,
+) -> Result<cam_posts::Catalog, String> {
     let config = cam_library_config_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || cam_posts::import(&config, Path::new(&source))).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || cam_posts::import(&config, Path::new(&source)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-async fn cam_posts_save_profile(app: tauri::AppHandle, file_name: String, machine: nbcad_cam::CamMachineAssignmentDto) -> Result<cam_posts::Catalog, String> {
+async fn cam_posts_save_profile(
+    app: tauri::AppHandle,
+    file_name: String,
+    machine: nbcad_cam::CamMachineAssignmentDto,
+) -> Result<cam_posts::Catalog, String> {
     let config = cam_library_config_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || cam_posts::save_profile(&config, &file_name, machine)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        cam_posts::save_profile(&config, &file_name, machine)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1090,9 +1105,14 @@ async fn cam_posts_open_folder(app: tauri::AppHandle) -> Result<(), String> {
         let mut command = std::process::Command::new("explorer");
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let mut command = std::process::Command::new("xdg-open");
-        command.arg(path).spawn().map_err(|e| format!("Could not open post folder: {e}"))?;
+        command
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("Could not open post folder: {e}"))?;
         Ok(())
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

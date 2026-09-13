@@ -80,7 +80,8 @@ enum CamPlanPayload {
     Setup(u64),
     Through {
         setup_id: u64,
-        through_operation_id: u64,
+        #[serde(default)]
+        through_operation_id: Option<u64>,
     },
 }
 
@@ -316,7 +317,10 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
             CamPlanPayload::Through {
                 setup_id,
                 through_operation_id,
-            } => manager.cam_plan_through(setup_id, through_operation_id),
+            } => match through_operation_id {
+                Some(operation_id) => manager.cam_plan_through(setup_id, operation_id),
+                None => manager.cam_plan(setup_id),
+            },
         }),
         "cam_post" => with_payload(payload, |request| manager.cam_post(request)),
         "cam_analyze_nbpost" => {

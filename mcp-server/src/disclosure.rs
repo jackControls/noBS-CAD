@@ -651,7 +651,9 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "cam_regenerate_setup"
         | "cam_plan_setup"
         | "cam_post_setup"
-        | "cam_simulate_setup" => FocusPack::Cam,
+        | "cam_simulate_setup"
+        | "cam_simulate_gcode"
+        | "cam_post_events" => FocusPack::Cam,
         _ => FocusPack::Document,
     };
     (pack, false)
@@ -741,6 +743,8 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
             | "cam_plan_setup"
             | "cam_post_setup"
             | "cam_simulate_setup"
+            | "cam_simulate_gcode"
+            | "cam_post_events"
     ) {
         return Some(FocusPack::Cam);
     }
@@ -996,8 +1000,10 @@ mod tests {
             "cam_plan_setup",
             "cam_post_setup",
             "cam_simulate_setup",
+            "cam_simulate_gcode",
+            "cam_post_events",
         ];
-        assert_eq!(modeling.len(), 127);
+        assert_eq!(modeling.len(), 129);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(

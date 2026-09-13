@@ -2129,7 +2129,8 @@
             }
           ],
           "operations": [
-            "cam_simulate_setup"
+            "cam_simulate_setup",
+            "cam_simulate_gcode"
           ]
         }
       ]
@@ -2169,7 +2170,7 @@
               "action": "camExportEvents"
             }
           ],
-          "operations": []
+          "operations": ["cam_post_events"]
         }
       ]
     }

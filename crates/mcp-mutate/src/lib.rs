@@ -763,7 +763,7 @@ pub static MUTATES: &[MutateSpec] = &[
     MutateSpec {
         name: "cam_plan_setup",
         engine_method: "cam_plan",
-        payload: PayloadKind::Field("setup_id"),
+        payload: PayloadKind::Object,
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
@@ -776,6 +776,18 @@ pub static MUTATES: &[MutateSpec] = &[
         name: "cam_simulate_setup",
         engine_method: "cam_simulate",
         payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "cam_simulate_gcode",
+        engine_method: "cam_simulate_gcode",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "cam_post_events",
+        engine_method: "cam_post_events",
+        payload: PayloadKind::Field("setup_id"),
         execution: ExecutionKind::Direct,
     },
 ];

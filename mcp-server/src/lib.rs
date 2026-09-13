@@ -11,6 +11,7 @@ use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod cam_tools;
 mod desktop;
 mod disclosure;
 mod drawing_tools;
@@ -3684,121 +3685,6 @@ fn tool_specs() -> Vec<ToolSpec> {
                 &[],
             ),
         ),
-        ToolSpec::direct(
-            "cam_get_document",
-            "Inspect CAM document",
-            "Return the machining document: tool library (geometry plus default cutting data), manually configured setups (WCS, stock, operations), and the mm/inch display unit.",
-            "cam_document",
-            Payload::Empty,
-            empty_schema(),
-        ),
-        ToolSpec::direct(
-            "cam_toolpath_statuses",
-            "Inspect CAM toolpath safety",
-            "Compare every enabled toolpath's saved generation signature with the current CAD model, setup/WCS/stock, operation, tool, upstream rest stock, and planner revision. Returns current, never_generated, or stale with actionable reasons.",
-            "cam_toolpath_statuses",
-            Payload::Empty,
-            empty_schema(),
-        ),
-        ToolSpec::direct(
-            "cam_set_document",
-            "Write CAM document",
-            "Replace the machining document after full validation. Build it from cam_get_document: add tool-library entries, create a setup with an explicit WCS origin (stock/model box point or sketch point), then append face/contour2d/pocket2d/chamfer2d/drill/thread operations. Drill operations carry a cycle (drill, chip_breaking, deep_hole, tapping_right/left, reaming, boring) with its matching fields (peck_depth/peck_retract, thread_pitch, feed_out). Thread operations mill internal threads with a thread mill: hole-center points, pitch, major/minor diameters (resolved by the host from the thread designation and stored explicitly), hand (right/left), direction (climb/conventional), and optional radial passes with step_over. Nothing is auto-created.",
-            "cam_set_document",
-            Payload::Object,
-            object_schema(
-                json!({
-                    "setups": {
-                        "type": "array",
-                        "items": {"type": "object", "additionalProperties": true},
-                        "description": "Manually configured setups: WCS frame + wcs_origin spec, stock spec (box/cylinder/hex, modeled body, or remaining stock from an earlier setup) with its resolved shape, first work offset plus repetition count, and the operations programmed against them. Safe heights live on each operation."
-                    },
-                    "active_setup_id": {"type": ["integer", "null"]},
-                    "tools": {
-                        "type": "array",
-                        "items": {"type": "object", "additionalProperties": true},
-                        "description": "Tool library entries: internal id (the primary key operations reference), optional machine number (number-based posts fail closed without it; the Siemens 828D post calls tools by name), name, kind (flat/ball/face mill, drill, chamfer mill, tap, reamer, boring bar, thread mill), diameter, flute length/count, default cutting data (rpm, feeds, coolant) plus optional named cutting-data profiles (cutting_presets: per-material alternates an operation can copy instead of the default)."
-                    },
-                    "units": {
-                        "type": "string",
-                        "enum": ["millimeters", "inches"],
-                        "default": "millimeters",
-                        "description": "Operator-facing units; stored geometry stays canonical mm, posts convert output words."
-                    },
-                    "next_setup_id": {"type": "integer", "minimum": 1},
-                    "next_operation_id": {"type": "integer", "minimum": 1},
-                    "next_tool_id": {"type": "integer", "minimum": 1}
-                }),
-                &[],
-            ),
-        ),
-        ToolSpec::direct(
-            "cam_regenerate_operation",
-            "Regenerate CAM toolpath",
-            "Plan one enabled operation against the current project inputs and record its generation signature only after planning succeeds.",
-            "cam_regenerate_operation",
-            Payload::Field("operation_id"),
-            object_schema(
-                json!({"operation_id": {"type": "integer", "minimum": 1}}),
-                &["operation_id"],
-            ),
-        ),
-        ToolSpec::direct(
-            "cam_regenerate_setup",
-            "Regenerate CAM setup",
-            "Plan every enabled operation in a setup as one coherent program and refresh all generation signatures only after the complete plan succeeds.",
-            "cam_regenerate_setup",
-            Payload::Field("setup_id"),
-            object_schema(
-                json!({"setup_id": {"type": "integer", "minimum": 1}}),
-                &["setup_id"],
-            ),
-        ),
-        ToolSpec::direct(
-            "cam_plan_setup",
-            "Plan CAM setup",
-            "Plan every enabled operation in a setup and return the toolpath program with warnings. Validates tools, geometry, and heights; incomplete manual input is rejected.",
-            "cam_plan",
-            Payload::Field("setup_id"),
-            object_schema(
-                json!({"setup_id": {"type": "integer", "minimum": 1}}),
-                &["setup_id"],
-            ),
-        ),
-        ToolSpec::direct(
-            "cam_post_setup",
-            "Post CAM setup",
-            "Render a setup's planned program as controller-ready NC text (GRBL, LinuxCNC, generic Fanuc, or Siemens 828D). Posting is blocked while any enabled path is stale or never generated; inspect cam_toolpath_statuses and regenerate first. The post is chosen at export time: pass `post`, or the document's remembered defaults apply. Output words follow the document's mm/inch unit setting.",
-            "cam_post",
-            Payload::Object,
-            object_schema(
-                json!({
-                    "setup_id": {"type": "integer", "minimum": 1},
-                    "post": {
-                        "type": ["object", "null"],
-                        "additionalProperties": true,
-                        "description": "Export-time post config: dialect (grbl/linux_cnc/fanuc/siemens828d), program_number, sequence_numbers, and siemens_828d machine profile when required."
-                    },
-                    "program_name": {"type": ["string", "null"]}
-                }),
-                &["setup_id"],
-            ),
-        ),
-        ToolSpec::direct(
-            "cam_simulate_setup",
-            "Simulate CAM setup",
-            "Run the volumetric stock simulation for a setup and return the remaining-stock mesh plus rapid-collision reports.",
-            "cam_simulate",
-            Payload::Object,
-            object_schema(
-                json!({
-                    "setup_id": {"type": "integer", "minimum": 1},
-                    "voxel_size": {"type": ["number", "null"], "exclusiveMinimum": 0},
-                    "max_voxels": {"type": ["integer", "null"], "minimum": 1}
-                }),
-                &["setup_id"],
-            ),
-        ),
         ToolSpec::control(
             "cad_get_focus",
             "Get focus state",
@@ -4020,6 +3906,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
     ];
     tools.extend(drawing_tools::specs());
+    tools.extend(cam_tools::specs());
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
         tool.pack = pack;
@@ -10345,6 +10232,8 @@ mod tests {
             ("cam_regenerate_setup", "cam/toolpaths"),
             ("cam_plan_setup", "cam/toolpaths"),
             ("cam_simulate_setup", "cam-simulate/simulation"),
+            ("cam_simulate_gcode", "cam-simulate/simulation"),
+            ("cam_post_events", "cam-output/advanced"),
             ("cam_post_setup", "cam-output/output"),
         ];
         let tools = tool_specs();

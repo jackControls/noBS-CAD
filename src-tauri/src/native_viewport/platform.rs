@@ -3688,28 +3688,43 @@ fn update_native_cam_stock_visibility(
 fn update_native_cam_tool(
     mut commands: Commands,
     presentation: Res<PresentationResource>,
-    mut existing: Query<(&mut NativeCamToolPart, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut existing: Query<(
+        &mut NativeCamToolPart,
+        &Mesh3d,
+        &mut Transform,
+        &mut Visibility,
+    )>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if !presentation.is_changed() { return; }
+    if !presentation.is_changed() {
+        return;
+    }
     let Some(tool) = presentation.0.cam_tool else {
-        for (_, _, _, mut visibility) in &mut existing { *visibility = Visibility::Hidden; }
+        for (_, _, _, mut visibility) in &mut existing {
+            *visibility = Visibility::Hidden;
+        }
         return;
     };
     // Geometry identity excludes pose: no tessellation or asset allocation
     // during playback/orbit. Reuse two mesh handles across tool changes.
     let needs_mesh = existing.iter().count() < 2
-        || existing.iter().any(|(part, _, _, _)| part.geometry != tool.geometry);
+        || existing
+            .iter()
+            .any(|(part, _, _, _)| part.geometry != tool.geometry);
     let shape = if needs_mesh {
         match nbcad_cam::cutter_mesh(tool.geometry) {
             Ok(shape) => Some(shape),
             Err(_) => {
-                for (_, _, _, mut visibility) in &mut existing { *visibility = Visibility::Hidden; }
+                for (_, _, _, mut visibility) in &mut existing {
+                    *visibility = Visibility::Hidden;
+                }
                 return;
             }
         }
-    } else { None };
+    } else {
+        None
+    };
     let mut found_flute = false;
     let mut found_shank = false;
     for (mut part, handle, mut transform, mut visibility) in &mut existing {
@@ -3723,55 +3738,110 @@ fn update_native_cam_tool(
                     NativeCamToolPartKind::Flute => &shape.cutter,
                     NativeCamToolPartKind::Shank => &shape.shank,
                 };
-                if let Some(mut mesh) = meshes.get_mut(&handle.0) { *mesh = cam_cutter_mesh(source); }
+                if let Some(mut mesh) = meshes.get_mut(&handle.0) {
+                    *mesh = cam_cutter_mesh(source);
+                }
             }
             part.geometry = tool.geometry;
         }
         if let Some(next) = cam_tool_part_transform(tool, part.kind) {
             *transform = next;
             *visibility = Visibility::Inherited;
-        } else { *visibility = Visibility::Hidden; }
+        } else {
+            *visibility = Visibility::Hidden;
+        }
     }
-    if found_flute && found_shank { return; }
-    let Some(shape) = shape else { return; };
+    if found_flute && found_shank {
+        return;
+    }
+    let Some(shape) = shape else {
+        return;
+    };
     for (kind, color, name, source) in [
-        (NativeCamToolPartKind::Flute, Color::srgba(0.78, 0.80, 0.84, 0.85), "CAM cutter", &shape.cutter),
-        (NativeCamToolPartKind::Shank, Color::srgba(0.62, 0.65, 0.70, 0.42), "CAM shank", &shape.shank),
+        (
+            NativeCamToolPartKind::Flute,
+            Color::srgba(0.78, 0.80, 0.84, 0.85),
+            "CAM cutter",
+            &shape.cutter,
+        ),
+        (
+            NativeCamToolPartKind::Shank,
+            Color::srgba(0.62, 0.65, 0.70, 0.42),
+            "CAM shank",
+            &shape.shank,
+        ),
     ] {
         if (kind == NativeCamToolPartKind::Flute && found_flute)
-            || (kind == NativeCamToolPartKind::Shank && found_shank) { continue; }
+            || (kind == NativeCamToolPartKind::Shank && found_shank)
+        {
+            continue;
+        }
         let transform = cam_tool_part_transform(tool, kind);
         commands.spawn((
             Name::new(name),
-            NativeCamToolPart { kind, geometry: tool.geometry },
+            NativeCamToolPart {
+                kind,
+                geometry: tool.geometry,
+            },
             Mesh3d(meshes.add(cam_cutter_mesh(source))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color, alpha_mode: AlphaMode::Blend,
-                metallic: 0.65, perceptual_roughness: 0.32, cull_mode: None, ..default()
+                base_color: color,
+                alpha_mode: AlphaMode::Blend,
+                metallic: 0.65,
+                perceptual_roughness: 0.32,
+                cull_mode: None,
+                ..default()
             })),
             transform.unwrap_or_default(),
-            if transform.is_some() { Visibility::Inherited } else { Visibility::Hidden },
-            NotShadowCaster, NotShadowReceiver,
+            if transform.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            NotShadowCaster,
+            NotShadowReceiver,
         ));
     }
 }
 
 fn cam_cutter_mesh(source: &nbcad_cam::CamCutterMeshPartDto) -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION,
-        source.positions.chunks_exact(3).map(|p| [p[0],p[1],p[2]]).collect::<Vec<_>>());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,
-        source.normals.chunks_exact(3).map(|n| [n[0],n[1],n[2]]).collect::<Vec<_>>());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        source
+            .positions
+            .chunks_exact(3)
+            .map(|p| [p[0], p[1], p[2]])
+            .collect::<Vec<_>>(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        source
+            .normals
+            .chunks_exact(3)
+            .map(|n| [n[0], n[1], n[2]])
+            .collect::<Vec<_>>(),
+    );
     mesh
 }
 
-fn cam_tool_part_transform(tool: ViewportCamTool, kind: NativeCamToolPartKind) -> Option<Transform> {
+fn cam_tool_part_transform(
+    tool: ViewportCamTool,
+    kind: NativeCamToolPartKind,
+) -> Option<Transform> {
     let tip = Vec3::from_array(tool.tip);
     let axis = Vec3::from_array(tool.axis).normalize_or_zero();
-    if !tip.is_finite() || !axis.is_finite() || axis == Vec3::ZERO
-        || (kind == NativeCamToolPartKind::Shank && tool.geometry.overall_length <= tool.geometry.flute_length)
-    { return None; }
+    if !tip.is_finite()
+        || !axis.is_finite()
+        || axis == Vec3::ZERO
+        || (kind == NativeCamToolPartKind::Shank
+            && tool.geometry.overall_length <= tool.geometry.flute_length)
+    {
+        return None;
+    }
     // Meshes carry real dimensions and are tip-anchored along +Z.
     Some(Transform::from_translation(tip).with_rotation(Quat::from_rotation_arc(Vec3::Z, axis)))
 }
@@ -6838,22 +6908,34 @@ mod tests {
     #[test]
     fn retained_cam_tool_places_flute_and_shank_from_the_tip_axis() {
         let geometry = nbcad_cam::CamCutterGeometryDto {
-            kind: nbcad_cam::CamToolKind::Drill, diameter: 6., flute_length: 20., overall_length: 50.,
-            point_angle_degrees: Some(118.), corner_radius: None, corner_chamfer: None,
+            kind: nbcad_cam::CamToolKind::Drill,
+            diameter: 6.,
+            flute_length: 20.,
+            overall_length: 50.,
+            point_angle_degrees: Some(118.),
+            corner_radius: None,
+            corner_chamfer: None,
         };
-        let tool = ViewportCamTool { tip: [1.,2.,3.], axis: [1.,0.,0.], geometry };
+        let tool = ViewportCamTool {
+            tip: [1., 2., 3.],
+            axis: [1., 0., 0.],
+            geometry,
+        };
         let flute = cam_tool_part_transform(tool, NativeCamToolPartKind::Flute).unwrap();
         let shank = cam_tool_part_transform(tool, NativeCamToolPartKind::Shank).unwrap();
         assert_eq!(flute, shank);
-        assert!(flute.translation.abs_diff_eq(Vec3::new(1.,2.,3.), 1e-6));
+        assert!(flute.translation.abs_diff_eq(Vec3::new(1., 2., 3.), 1e-6));
         assert!(flute.scale.abs_diff_eq(Vec3::ONE, 1e-6));
         assert!((flute.rotation * Vec3::Z).abs_diff_eq(Vec3::X, 1e-6));
         let source = nbcad_cam::cutter_mesh(geometry).unwrap();
         let mesh = cam_cutter_mesh(&source.cutter);
-        assert_eq!(mesh.count_vertices(), source.cutter.positions.len()/3);
+        assert_eq!(mesh.count_vertices(), source.cutter.positions.len() / 3);
         assert!(mesh.contains_attribute(Mesh::ATTRIBUTE_NORMAL));
         // A pose change has identical geometry and therefore reuses handles.
-        let moved = ViewportCamTool { tip: [3.,4.,5.], ..tool };
+        let moved = ViewportCamTool {
+            tip: [3., 4., 5.],
+            ..tool
+        };
         assert_eq!(moved.geometry, tool.geometry);
     }
 
@@ -6862,14 +6944,30 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<StandardMaterial>>();
-        let mut tool = ViewportCamTool { tip: [0.;3], axis: [0.,0.,1.], geometry: nbcad_cam::CamCutterGeometryDto {
-            kind: nbcad_cam::CamToolKind::Drill, diameter: 6., flute_length: 20., overall_length: 50.,
-            point_angle_degrees: Some(118.), corner_radius: None, corner_chamfer: None,
-        }};
-        app.insert_resource(PresentationResource(ViewportPresentation { cam_tool: Some(tool), ..default() }));
+        let mut tool = ViewportCamTool {
+            tip: [0.; 3],
+            axis: [0., 0., 1.],
+            geometry: nbcad_cam::CamCutterGeometryDto {
+                kind: nbcad_cam::CamToolKind::Drill,
+                diameter: 6.,
+                flute_length: 20.,
+                overall_length: 50.,
+                point_angle_degrees: Some(118.),
+                corner_radius: None,
+                corner_chamfer: None,
+            },
+        };
+        app.insert_resource(PresentationResource(ViewportPresentation {
+            cam_tool: Some(tool),
+            ..default()
+        }));
         app.add_systems(Update, update_native_cam_tool);
         app.update();
-        let handles = app.world().resource::<Assets<Mesh>>().ids().collect::<Vec<_>>();
+        let handles = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .ids()
+            .collect::<Vec<_>>();
         assert_eq!(handles.len(), 2);
         for i in 0..120 {
             tool.tip = [i as f32, (i as f32 / 10.).sin(), -1.];
@@ -6878,16 +6976,31 @@ mod tests {
                 tool.geometry.point_angle_degrees = None;
                 tool.geometry.corner_radius = Some(1.);
             }
-            app.world_mut().resource_mut::<PresentationResource>().0.cam_tool = Some(tool);
+            app.world_mut()
+                .resource_mut::<PresentationResource>()
+                .0
+                .cam_tool = Some(tool);
             app.update();
-            assert_eq!(app.world().resource::<Assets<Mesh>>().ids().collect::<Vec<_>>(), handles);
+            assert_eq!(
+                app.world()
+                    .resource::<Assets<Mesh>>()
+                    .ids()
+                    .collect::<Vec<_>>(),
+                handles
+            );
             assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
         }
         tool.geometry.corner_radius = Some(f64::NAN);
-        app.world_mut().resource_mut::<PresentationResource>().0.cam_tool = Some(tool);
+        app.world_mut()
+            .resource_mut::<PresentationResource>()
+            .0
+            .cam_tool = Some(tool);
         app.update();
-        assert!(app.world_mut().query_filtered::<&Visibility, With<NativeCamToolPart>>()
-            .iter(app.world()).all(|v| *v == Visibility::Hidden));
+        assert!(app
+            .world_mut()
+            .query_filtered::<&Visibility, With<NativeCamToolPart>>()
+            .iter(app.world())
+            .all(|v| *v == Visibility::Hidden));
     }
 
     #[test]

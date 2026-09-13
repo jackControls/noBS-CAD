@@ -13,6 +13,7 @@ import { presentation } from '../operationPlayback';
 import { projectTransitions } from '../files/projectTransitions';
 import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
 import { camOperationPlacement, type CamOperationPlacement } from '../cam/editing';
+import { writeCamDocument } from '../cam/documentMutation';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
@@ -2419,11 +2420,7 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setDrawingProfileExportOpen: (drawingProfileExportOpen) => set({ drawingProfileExportOpen }),
 
-  setCamDocument: async (cam) => {
-    const engine = await getEngine();
-    const camDocument = await engine.setCamDocument(cam);
-    set({ camDocument, dirty: true });
-  },
+  setCamDocument: writeCamDocument,
 
   setSelectedCamSetupId: (selectedCamSetupId) => set({ selectedCamSetupId }),
 

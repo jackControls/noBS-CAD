@@ -1,4 +1,4 @@
-import { getEngine, type Engine } from '../engine';
+import type { Engine } from '../engine';
 import type {
   CamDocumentDto,
   CamDrillCycle,
@@ -17,7 +17,7 @@ import type {
 import { useAppStore } from '../store/appStore';
 import { reorderedCamDocument } from './reorder';
 import { duplicatedCamOperation, duplicatedCamSetup, insertCamOperation, type CamOperationPlacement } from './editing';
-import { beginCamActivity, inheritCamSimulationInputs, paintCamActivity } from './simulationUi';
+import { enqueueCamMutation, type CamSelection } from './documentMutation';
 import {
   addCentralLibraryTool,
   centralLibraryTool,
@@ -34,8 +34,6 @@ import {
 type CamOperationKind = CamOperationDto['kind'];
 type MutableCamSetup = CamSetupDto;
 type MutableCamOperation = CamOperationDto;
-
-let writeQueue: Promise<void> = Promise.resolve();
 
 /**
  * Entering the manufacturing workspace never creates or edits anything. The
@@ -116,9 +114,9 @@ export type CamToolDraft = Omit<CamToolDto, 'id'>;
  *  project's own counter allocates. Nothing is created implicitly — the
  *  library is the only source of tools for operations. */
 export async function addCamTool(draft: CamToolDraft): Promise<number> {
-  const centralTool = await addCentralLibraryTool(draft);
   let createdId = 0;
-  await enqueueCamUpdate((cam) => {
+  await enqueueCamUpdate(async (cam) => {
+    const centralTool = await addCentralLibraryTool(draft);
     const next = structuredClone(cam);
     let id = centralTool?.id ?? next.next_tool_id;
     // Defensive: never collide with a snapshot the project already holds.
@@ -139,9 +137,9 @@ export async function addCamTool(draft: CamToolDraft): Promise<number> {
  *  cutting data, and geometry edits are exactly what the operator asked for
  *  by pulling the update in. */
 export async function importCamToolFromCentral(toolId: number): Promise<void> {
-  const central = await centralLibraryTool(toolId);
-  if (!central) throw new Error('That tool is no longer in the central library.');
-  await enqueueCamUpdate((cam) => {
+  await enqueueCamUpdate(async (cam) => {
+    const central = await centralLibraryTool(toolId);
+    if (!central) throw new Error('That tool is no longer in the central library.');
     const next = structuredClone(cam);
     const index = next.tools.findIndex((candidate) => candidate.id === toolId);
     if (index >= 0) next.tools[index] = structuredClone(central);
@@ -187,8 +185,7 @@ export async function duplicateCamSetup(setupId: number): Promise<void> {
     const result = duplicatedCamSetup(cam, setupId);
     createdId = result.setupId;
     return result.document;
-  });
-  useAppStore.setState({ selectedCamSetupId: createdId, selectedCamOperationId: null });
+  }, false, () => ({ selectedCamSetupId: createdId, selectedCamOperationId: null }));
 }
 
 export async function duplicateCamOperation(operationId: number): Promise<void> {
@@ -198,8 +195,7 @@ export async function duplicateCamOperation(operationId: number): Promise<void> 
     createdId = result.operationId;
     setupId = result.setupId;
     return result.document;
-  });
-  useAppStore.setState({ selectedCamSetupId: setupId, selectedCamOperationId: createdId });
+  }, false, () => ({ selectedCamSetupId: setupId, selectedCamOperationId: createdId }));
 }
 
 export interface CamSetupDraft {
@@ -281,12 +277,8 @@ export function createCamSetup(draft: CamSetupDraft): Promise<number> {
     next.next_setup_id += 1;
     createdId = setup.id;
     return next;
-  }).then(() => {
-    const state = useAppStore.getState();
-    state.setSelectedCamSetupId(createdId);
-    state.setSelectedCamOperationId(null);
-    return createdId;
-  });
+  }, false, () => ({ selectedCamSetupId: createdId, selectedCamOperationId: null }))
+    .then(() => createdId);
 }
 
 export function deleteCamSetup(setupId: number): Promise<void> {
@@ -310,13 +302,8 @@ export function deleteCamSetup(setupId: number): Promise<void> {
     if (next.active_setup_id === setupId) {
       next.active_setup_id = next.setups[0]?.id ?? null;
     }
-    queueMicrotask(() => {
-      const state = useAppStore.getState();
-      state.setSelectedCamSetupId(next.active_setup_id);
-      state.setSelectedCamOperationId(null);
-    });
     return next;
-  });
+  }, false, (cam) => ({ selectedCamSetupId: cam.active_setup_id, selectedCamOperationId: null }));
 }
 
 export function setActiveCamSetup(setupId: number): Promise<void> {
@@ -363,10 +350,8 @@ export function addCamOperation(
     }
     next.next_operation_id += 1;
     return next;
-  }).then(() => {
-    useAppStore.setState({ selectedCamSetupId: createdSetupId, selectedCamOperationId: createdId });
-    return createdId;
-  });
+  }, false, () => ({ selectedCamSetupId: createdSetupId, selectedCamOperationId: createdId }))
+    .then(() => createdId);
 }
 
 /** Re-plan one stored operation and capture a fresh dependency signature only
@@ -405,9 +390,8 @@ export function deleteCamOperation(operationId: number): Promise<void> {
     next.height_expressions = (next.height_expressions ?? []).filter(
       (expressions) => expressions.operation_id !== operationId,
     );
-    queueMicrotask(() => useAppStore.getState().setSelectedCamOperationId(null));
     return next;
-  });
+  }, false, () => ({ selectedCamOperationId: null }));
 }
 
 export function updateCamSetup(
@@ -656,45 +640,29 @@ function enqueueCamUpdate(
   mutate: (
     cam: CamDocumentDto,
     state: ReturnType<typeof useAppStore.getState>,
-  ) => CamDocumentDto,
+  ) => CamDocumentDto | Promise<CamDocumentDto>,
   preserveSimulationInputs: boolean | 'metadata' = false,
+  selection?: (document: CamDocumentDto) => Partial<CamSelection>,
 ): Promise<void> {
-  const finish = beginCamActivity('Updating CAM…');
-  const operation = writeQueue.then(async () => {
-    await paintCamActivity();
-    const state = useAppStore.getState();
-    const next = mutate(state.camDocument, state);
+  return enqueueCamMutation('Updating CAM…', async ({ engine, state, assertCurrent, publish }) => {
+    const next = await mutate(state.camDocument, state);
+    assertCurrent();
     if (next === state.camDocument) return;
-    if (preserveSimulationInputs) {
-      const engine = await getEngine();
-      const camDocument = await engine.setCamDocument(next);
-      // Carry identity BEFORE publishing: React must not observe a transient
-      // new geometry key just because the browser's active setup changed.
-      inheritCamSimulationInputs(state.camDocument, camDocument);
-      useAppStore.setState({ camDocument, dirty: true,
-        ...(preserveSimulationInputs === true
-          ? { selectedCamSetupId: camDocument.active_setup_id, selectedCamOperationId: null }
-          : {}) });
-    } else {
-      await state.setCamDocument(next);
-    }
+    const camDocument = await engine.setCamDocument(next);
+    publish(camDocument, selection?.(camDocument) ?? (preserveSimulationInputs === true
+      ? { selectedCamSetupId: camDocument.active_setup_id, selectedCamOperationId: null } : {}),
+      !!preserveSimulationInputs);
   });
-  writeQueue = operation.catch(() => undefined);
-  return operation.finally(finish);
 }
 
 function enqueueCamEngineMutation(
   mutate: (engine: Engine) => Promise<CamDocumentDto>,
 ): Promise<void> {
-  const finish = beginCamActivity('Generating toolpaths…');
-  const operation = writeQueue.then(async () => {
-    await paintCamActivity();
-    const engine = await getEngine();
+  return enqueueCamMutation('Generating toolpaths…', async ({ engine, assertCurrent, publish }) => {
+    assertCurrent();
     const camDocument = await mutate(engine);
     // The engine has already validated and installed this exact document;
     // avoid sending it back through a second host round trip.
-    useAppStore.setState({ camDocument, dirty: true });
+    publish(camDocument);
   });
-  writeQueue = operation.catch(() => undefined);
-  return operation.finally(finish);
 }
